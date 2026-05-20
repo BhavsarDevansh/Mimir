@@ -1,0 +1,45 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Agent data (local-first storage)
+/data/
+/cache/
+/logs/
+*.db
+*.db-journal
+*.db-wal
+
+# Config with secrets
+config.toml
+*.key
+*.pem
+
+# Build artifacts
+dist/
+build/
+
+# Testing
+*.profraw
+coverage/
+
+# Documentation build
+docs/book/

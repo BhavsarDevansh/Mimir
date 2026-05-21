@@ -1,6 +1,7 @@
 pub mod config;
 pub mod llm;
+pub mod memory;
 
 pub fn version() -> &'static str {
-    "0.1.0"
+    "0.2.0"
 }

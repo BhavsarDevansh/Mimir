@@ -1,4 +1,3 @@
-<INSTRUCTIONS>
 # Mimir Project Rules
 
 ## Context Sources
@@ -28,6 +27,7 @@
   - DRY compliance
   - Modern Design Patterns
   - Guideline compliance
+  - VISION compliance
 
 ## Commit & Authorship
 - Do not co-sign or co-author commits or pull requests.
@@ -61,9 +61,3 @@ After implementation is complete and all tests pass:
 6. Update `docs/` and `docs/wiki/`.
 7. Run code review.
 8. Proceed only after review is clean.
-
-## Completed Issues
-| Issue | Title | Status | Branch |
-|-------|-------|--------|--------|
-| #2 | Configuration System | ✅ Complete | `feat/configuration-system` |
-</INSTRUCTIONS>

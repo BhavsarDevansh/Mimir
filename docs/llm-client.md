@@ -6,7 +6,7 @@ The LLM client is Mimir's interface to OpenAI-compatible language-model APIs. It
 
 ## Module Structure
 
-```
+```text
 mimir-core/src/llm/
 ├── mod.rs      # Public exports
 ├── types.rs    # Request/response types and errors
@@ -30,21 +30,27 @@ mimir-core/src/llm/
 ## Types
 
 ### `ChatRequest`
+
 OpenAI-compatible chat completion request. Builder methods: `with_max_tokens`, `with_temperature`, `with_stream`.
 
 ### `Message`
+
 A chat message with `role` and `content`. Constructors: `Message::system()`, `Message::user()`, `Message::assistant()`.
 
 ### `ChatResponse`
+
 Non-streaming response containing `choices` and optional `usage` statistics.
 
 ### `Usage`
+
 Token counters: `prompt_tokens`, `completion_tokens`, `total_tokens`.
 
 ### `StreamChunk` / `StreamChoice` / `Delta`
+
 Streaming (SSE) response fragments. `Delta::content` holds the incremental text.
 
 ### `LlmError`
+
 Structured error enum:
 - `Network(reqwest::Error)` — timeouts, DNS, connection failures
 - `Api { status, body }` — non-success HTTP response
@@ -55,12 +61,15 @@ Structured error enum:
 ## Client (`LlmClient`)
 
 ### `new(config: LlmConfig) -> Self`
+
 Constructs a client from configuration.
 
 ### `chat(messages) -> Result<(String, Usage), LlmError>`
+
 Sends a non-streaming request and returns the assistant's reply plus token usage.
 
 ### `chat_stream(messages) -> Result<Pin<Box<dyn Stream<Item = Result<String, LlmError>> + Send>>, LlmError>`
+
 Sends a streaming request and returns a pinned stream of text chunks.
 
 ## Retry Policy
@@ -77,7 +86,8 @@ Retry is applied to the initial HTTP POST only. Individual SSE events are not re
 ## Data Flow
 
 Non-streaming:
-```
+
+```text
 User → LlmClient::chat()
        POST /chat/completions
        Retry loop (if transient)
@@ -86,7 +96,8 @@ User → LlmClient::chat()
 ```
 
 Streaming:
-```
+
+```text
 User → LlmClient::chat_stream()
        POST /chat/completions (stream=true)
        Retry loop (if transient)

@@ -21,7 +21,7 @@ pub struct LlmConfig {
     pub endpoint: String,
     pub api_key: String,
     pub model: String,
-    pub max_tokens: u16,
+    pub max_tokens: u32,
     pub temperature: f32,
 }
 
@@ -195,7 +195,7 @@ impl Config {
             self.llm.model = val;
         }
         if let Ok(val) = std::env::var("MIMIR_LLM_MAX_TOKENS")
-            && let Ok(parsed) = val.parse::<u16>()
+            && let Ok(parsed) = val.parse::<u32>()
         {
             self.llm.max_tokens = parsed;
         }

@@ -38,7 +38,7 @@ impl fmt::Debug for LlmClient {
 impl Clone for LlmClient {
     fn clone(&self) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: self.client.clone(),
             config: self.config.clone(),
         }
     }
@@ -146,7 +146,7 @@ impl LlmClient {
         stream: bool,
     ) -> ChatRequest {
         ChatRequest::new(self.config.model.clone(), messages)
-            .with_max_tokens(self.config.max_tokens as u32)
+            .with_max_tokens(self.config.max_tokens)
             .with_temperature(self.config.temperature)
             .with_stream(stream)
     }
@@ -169,17 +169,30 @@ impl LlmClient {
     }
 
     /// Send the HTTP request for a chat completion.
+    ///
+    /// Returns `Err(LlmError::Api)` for any non-success HTTP status so that
+    /// transient codes (429 / 502 / 503 / 504) are visible to the retry logic.
     async fn send_request(
         &self,
         request: &ChatRequest,
-    ) -> Result<reqwest::Response, reqwest::Error> {
-        self.client
+    ) -> Result<reqwest::Response, LlmError> {
+        let response = self
+            .client
             .post(format!("{}/chat/completions", self.config.endpoint))
             .header("Authorization", format!("Bearer {}", self.config.api_key))
             .header("Content-Type", "application/json")
             .json(request)
             .send()
             .await
+            .map_err(LlmError::Network)?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            return Err(LlmError::Api { status, body });
+        }
+
+        Ok(response)
     }
 
     /// Retry an async operation with exponential backoff.
@@ -189,7 +202,7 @@ impl LlmClient {
     ) -> Result<T, LlmError>
     where
         F: FnMut() -> Fut,
-        Fut: std::future::Future<Output = Result<T, reqwest::Error>>,
+        Fut: std::future::Future<Output = Result<T, LlmError>>,
     {
         let mut attempt = 0u32;
 
@@ -205,7 +218,7 @@ impl LlmClient {
                     }
 
                     if !Self::is_transient(&e) {
-                        return Err(LlmError::Network(e));
+                        return Err(e);
                     }
 
                     let backoff = Self::calculate_backoff(attempt);
@@ -221,21 +234,30 @@ impl LlmClient {
         }
     }
 
-    /// Determine whether a reqwest error is transient and should be retried.
-    fn is_transient(error: &reqwest::Error) -> bool {
-        if error.is_timeout() || error.is_connect() || error.is_request() {
-            return true;
+    /// Determine whether an error is transient and should be retried.
+    fn is_transient(error: &LlmError) -> bool {
+        match error {
+            LlmError::Network(e) => {
+                if e.is_timeout() || e.is_connect() || e.is_request() {
+                    return true;
+                }
+                if let Some(status) = e.status() {
+                    return matches!(
+                        status,
+                        StatusCode::TOO_MANY_REQUESTS
+                            | StatusCode::BAD_GATEWAY
+                            | StatusCode::SERVICE_UNAVAILABLE
+                            | StatusCode::GATEWAY_TIMEOUT
+                    );
+                }
+                false
+            }
+            LlmError::Api { status, .. } => matches!(
+                *status,
+                429 | 502 | 503 | 504
+            ),
+            _ => false,
         }
-        if let Some(status) = error.status() {
-            return matches!(
-                status,
-                StatusCode::TOO_MANY_REQUESTS
-                    | StatusCode::BAD_GATEWAY
-                    | StatusCode::SERVICE_UNAVAILABLE
-                    | StatusCode::GATEWAY_TIMEOUT
-            );
-        }
-        false
     }
 
     /// Calculate the backoff duration for a given attempt number.
@@ -326,6 +348,6 @@ mod tests {
         let mut events = stream.eventsource();
 
         let event = events.next().await.unwrap().unwrap();
-        assert_eq!(event.data.contains("\"content\":\"X\""), true);
+        assert!(event.data.contains("\"content\":\"X\""));
     }
 }

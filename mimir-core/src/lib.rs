@@ -1,4 +1,5 @@
 pub mod config;
+pub mod llm;
 
 pub fn version() -> &'static str {
     "0.1.0"

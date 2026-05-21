@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 
@@ -66,7 +67,7 @@ pub struct ConversationExport {
 #[derive(Debug, Clone)]
 pub struct ContextManager {
     pool: Arc<SqlitePool>,
-    sessions: Arc<std::sync::Mutex<HashSet<String>>>,
+    sessions: Arc<Mutex<HashSet<String>>>,
 }
 
 impl ContextManager {
@@ -106,7 +107,7 @@ impl ContextManager {
         info!(db_path = %path.display(), "ContextManager initialised");
         Ok(Self {
             pool: Arc::new(pool),
-            sessions: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            sessions: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
@@ -119,6 +120,8 @@ impl ContextManager {
         let now = Utc::now();
         let prompt = system_prompt.into();
 
+        let mut tx = self.pool.begin().await?;
+
         sqlx::query(
             r#"
             INSERT INTO sessions (id, system_prompt, created_at, updated_at)
@@ -128,7 +131,7 @@ impl ContextManager {
         .bind(&id)
         .bind(&prompt)
         .bind(now)
-        .execute(self.pool.as_ref())
+        .execute(&mut *tx)
         .await?;
 
         sqlx::query(
@@ -140,10 +143,12 @@ impl ContextManager {
         .bind(&id)
         .bind(&prompt)
         .bind(now)
-        .execute(self.pool.as_ref())
+        .execute(&mut *tx)
         .await?;
 
-        self.sessions.lock().unwrap().insert(id.clone());
+        tx.commit().await?;
+
+        self.sessions.lock().await.insert(id.clone());
         debug!(session_id = %id, "created session");
         Ok(id)
     }
@@ -421,7 +426,7 @@ impl ContextManager {
             .execute(self.pool.as_ref())
             .await?;
 
-        self.sessions.lock().unwrap().remove(session_id);
+        self.sessions.lock().await.remove(session_id);
         info!(session_id = %session_id, "deleted session");
         Ok(())
     }
@@ -506,7 +511,7 @@ impl ContextManager {
     }
 
     async fn ensure_session_exists(&self, session_id: &str) -> Result<(), ContextError> {
-        if self.sessions.lock().unwrap().contains(session_id) {
+        if self.sessions.lock().await.contains(session_id) {
             return Ok(());
         }
 
@@ -519,7 +524,7 @@ impl ContextManager {
             return Err(ContextError::SessionNotFound(session_id.to_string()));
         }
 
-        self.sessions.lock().unwrap().insert(session_id.to_string());
+        self.sessions.lock().await.insert(session_id.to_string());
         Ok(())
     }
 
@@ -653,6 +658,7 @@ fn expand_tilde(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     async fn setup_manager() -> (ContextManager, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -844,15 +850,21 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn db_path_with_tilde_expanded() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
 
         // Temporarily override HOME so tilde expansion points to tempdir.
         #[cfg(unix)]
+        let orig = std::env::var_os("HOME");
+        #[cfg(unix)]
         unsafe {
             std::env::set_var("HOME", home);
         }
+
+        #[cfg(windows)]
+        let orig = std::env::var_os("USERPROFILE");
         #[cfg(windows)]
         unsafe {
             std::env::set_var("USERPROFILE", home);
@@ -873,14 +885,24 @@ mod tests {
             let _ = m.delete_session("x").await;
         }
 
-        // Restore HOME.
+        // Restore HOME / USERPROFILE to original state.
         #[cfg(unix)]
-        unsafe {
-            std::env::remove_var("HOME");
+        match orig {
+            Some(val) => unsafe {
+                std::env::set_var("HOME", val);
+            },
+            None => unsafe {
+                std::env::remove_var("HOME");
+            },
         }
         #[cfg(windows)]
-        unsafe {
-            std::env::remove_var("USERPROFILE");
+        match orig {
+            Some(val) => unsafe {
+                std::env::set_var("USERPROFILE", val);
+            },
+            None => unsafe {
+                std::env::remove_var("USERPROFILE");
+            },
         }
     }
 }

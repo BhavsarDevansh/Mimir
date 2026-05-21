@@ -23,12 +23,13 @@ complexity of `sqlx-cli`, offline-mode schema files, and compile-time checking.
 The code is still type-safe via `query_as::<_, Struct>`.  If query coverage grows
 significantly we can migrate to macros later without changing the public API.
 
-### No `std::sync::Mutex`
+### Session cache
 
-A synchronous `Mutex` cannot be held across `.await` points in async Rust.
-Instead, `ContextManager` holds `Arc<SqlitePool>` directly — the pool itself is
-`Clone + Send + Sync` and provides safe concurrent access without explicit
-locking.
+`ContextManager` keeps an in-memory `Arc<tokio::sync::Mutex<HashSet<String>>>`
+that tracks known session IDs.  This avoids a DB round-trip on every
+`ensure_session_exists` check; the cache is updated on `create_session` and
+`delete_session`.  `tokio::sync::Mutex` is used because the guard may be held
+across `.await` points.
 
 ### No in-memory LRU cache
 
@@ -67,17 +68,17 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_
 
 ## Token Attribution
 
-The OpenAI-compatible API returns **total** `prompt_tokens` for the entire
-request (system prompt + full history + current user message).  We derive
-approximate per-message counts:
+`record_usage` expects **per-call delta values** — the number of tokens
+attributable to this single request:
 
-| Recording | `prompt_tokens` attribution | `completion_tokens` attribution |
-|-----------|----------------------------|--------------------------------|
-| First     | Full amount → most recent user message | Full amount → most recent assistant message |
-| Subsequent | `delta = new_prompt - previous_cumulative` → most recent user message | Full amount → most recent assistant message |
+| Token type | Attribution rule |
+|-----------|-----------------|
+| `prompt_tokens` | Per-call delta → most recent user message. |
+| `completion_tokens` | Full amount per call → most recent assistant message. |
 
-These approximations are stored on each message row as `token_count` and are
-used by the trimming algorithm.
+Deltas are added to the stored cumulative totals on the session row and to the
+`token_count` of the respective most recent message.  Zero or negative deltas
+are ignored so cumulative totals never decrease.
 
 ## Trimming Algorithm
 
@@ -141,16 +142,20 @@ ctx_mgr.trim_to_budget(&session_id, config.context.max_tokens, config.context.ma
 let messages = ctx_mgr.export_messages(&session_id).await?;
 let mut stream = llm_client.chat_stream_with_usage(messages).await?;
 let mut response_text = String::new();
+let mut usage: Option<Usage> = None;
 while let Some(item) = stream.next().await {
     match item? {
         StreamItem::Text(chunk) => { response_text.push_str(&chunk); }
-        StreamItem::Usage(usage) => {
-            ctx_mgr.record_usage(
-                &session_id, usage.prompt_tokens, usage.completion_tokens
-            ).await?;
-        }
+        StreamItem::Usage(u) => { usage = Some(u); }
     }
 }
 ctx_mgr.add_assistant_message(&session_id, &response_text).await?;
-ctx_mgr.trim_to_budget(&session_id, config.context.max_tokens, config.context.max_turns).await?;
+if let Some(u) = usage {
+    ctx_mgr.record_usage(
+        &session_id, u.prompt_tokens, u.completion_tokens
+    ).await?;
+}
+ctx_mgr.trim_to_budget(
+    &session_id, config.context.max_tokens, config.context.max_turns
+).await?;
 ```

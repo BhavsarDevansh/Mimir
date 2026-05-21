@@ -12,7 +12,10 @@ containing:
 - **Timestamps** for audit and debugging.
 
 All data lives in a single SQLite file on your device (`~/.local/share/mimir/context.db`
-by default).  Nothing is sent to the cloud.
+by default).  The context database itself never leaves your machine, but messages
+are transmitted to remote LLM endpoints depending on your provider and
+configuration.  Review your LLM endpoint settings and provider privacy policies
+before using remote models.
 
 ## How Window Sizing Works
 

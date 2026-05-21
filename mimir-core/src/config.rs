@@ -230,19 +230,25 @@ impl Config {
         {
             self.agent.proactivity = p;
         }
-        if let Ok(v) = std::env::var("MIMIR_AGENT_VERBOSE_REASONING") {
-            self.agent.verbose_reasoning = v.parse().unwrap_or(false);
+        if let Ok(v) = std::env::var("MIMIR_AGENT_VERBOSE_REASONING")
+            && let Ok(b) = v.parse::<bool>()
+        {
+            self.agent.verbose_reasoning = b;
         }
-        if let Ok(v) = std::env::var("MIMIR_MEMORY_ENABLED") {
-            self.memory.enabled = v.parse().unwrap_or(true);
+        if let Ok(v) = std::env::var("MIMIR_MEMORY_ENABLED")
+            && let Ok(b) = v.parse::<bool>()
+        {
+            self.memory.enabled = b;
         }
         if let Ok(v) = std::env::var("MIMIR_MEMORY_CHAR_LIMIT")
             && let Ok(n) = v.parse::<u16>()
         {
             self.memory.char_limit = n;
         }
-        if let Ok(v) = std::env::var("MIMIR_MEMORY_AUTO_MANAGE") {
-            self.memory.auto_manage = v.parse().unwrap_or(true);
+        if let Ok(v) = std::env::var("MIMIR_MEMORY_AUTO_MANAGE")
+            && let Ok(b) = v.parse::<bool>()
+        {
+            self.memory.auto_manage = b;
         }
         if let Ok(v) = std::env::var("MIMIR_MEMORY_TEMPORAL_HORIZON")
             && let Ok(n) = v.parse::<u8>()
@@ -428,8 +434,17 @@ db_path = "~/.local/share/mimir/context.db"
     }
 
     #[test]
+    #[serial]
     fn test_load_none_uses_defaults_when_file_missing() {
-        // Config::load(None) should succeed and return defaults when no file exists.
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+
+        // Save original XDG_CONFIG_HOME and override it to temp dir.
+        let orig = std::env::var_os("XDG_CONFIG_HOME");
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", home);
+        }
+
         let config = Config::load(None).unwrap();
         assert_eq!(config.llm.endpoint, "https://api.openai.com/v1");
         assert_eq!(config.llm.model, "gpt-4o");
@@ -437,6 +452,16 @@ db_path = "~/.local/share/mimir/context.db"
         assert_eq!(config.memory.char_limit, 2500);
         assert_eq!(config.context.max_tokens, 4096);
         assert_eq!(config.context.max_turns, 20);
+
+        // Restore original state.
+        match orig {
+            Some(val) => unsafe {
+                std::env::set_var("XDG_CONFIG_HOME", val);
+            },
+            None => unsafe {
+                std::env::remove_var("XDG_CONFIG_HOME");
+            },
+        }
     }
 
     #[test]

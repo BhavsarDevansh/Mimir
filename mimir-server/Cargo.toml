@@ -1,0 +1,7 @@
+[package]
+name = "mimir-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mimir-core = { path = "../mimir-core" }

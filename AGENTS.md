@@ -22,15 +22,26 @@
 - Create `docs/` and `docs/wiki/` if they do not exist.
 
 ## Code Review
-- After each set of changes (and after docs are updated), run a code review pass that checks for:
-  - Code quality
-  - Performance
-  - Security
-  - Doc comments
-  - DRY compliance
-  - Modern Design Patterns
-  - Guideline compliance
-  - VISION compliance
+**Code review is mandatory and non-negotiable.** It must be run after every set of changes, after documentation is updated, and before any commit is made.
+
+**Process:**
+1. Run the code review pass against every file touched in the change set.
+2. Produce findings in a structured table (dimension, finding, severity).
+3. **All findings must be actioned, no matter how trivial.** There are no "optional" or "minor" exceptions. If a finding exists, fix it before proceeding.
+4. Re-run tests, clippy, and fmt after every fix.
+5. Only proceed to commit when the review returns zero findings.
+
+**Checklist:**
+- Code quality
+- Performance
+- Security
+- Doc comments
+- DRY compliance
+- Modern Design Patterns
+- Guideline compliance
+- VISION compliance
+- Type consistency across the workspace
+- Public API surface changes documented
 
 ## Commit & Authorship
 - Do not co-sign or co-author commits or pull requests.
@@ -46,14 +57,30 @@
 
 ## Finishing Work
 After implementation is complete and all tests pass:
-1. Stage the changes (`git add ...`).
-2. Commit with a clear, descriptive message summarising what was done.
-3. Push the branch to the remote (`git push origin [branch-name]`).
-4. Create a Pull Request (PR) that links back to the original issue.
+1. **Run code review** and action **all** findings.
+2. Stage the changes (`git add ...`).
+3. Commit with a clear, descriptive message summarising what was done.
+4. Push the branch to the remote (`git push origin [branch-name]`).
+5. Create a Pull Request (PR) that links back to the original issue.
    - The PR description should contain a closing statement such as:  
      `Closes #2` or `Fixes #5`
    - Summarise the key changes and reference any updated documentation.
-5. Do not merge the PR yourself unless explicitly asked.
+6. Do not merge the PR yourself unless explicitly asked.
+
+## Semantic Versioning
+
+- After any work is done on the project — whether a feature, bugfix, refactor, or documentation update — bump the semantic version number in **all** workspace member `Cargo.toml` files (and the workspace root `Cargo.toml` if it declares a version) before committing.
+- Follow [Semantic Versioning 2.0.0](https://semver.org/):
+  - **PATCH** (`0.1.0` → `0.1.1`) for backwards-compatible bug fixes and minor documentation updates.
+  - **MINOR** (`0.1.0` → `0.2.0`) for backwards-compatible new features, refactors, or subsystem additions.
+  - **MAJOR** (`0.1.0` → `1.0.0`) for breaking changes to public APIs, configuration formats, or data models.
+- Keep all crate versions in the workspace in sync unless there is an explicit, documented reason to diverge.
+- Update `CHANGELOG.md` (or create it at the workspace root if absent) with a brief entry summarising the change for the new version.
+- If the change set includes multiple logical changes (e.g., a feature plus a bugfix), bump the highest applicable version component once for the entire change set.
+
+## Breaking Changes
+
+Mimir is **not a public library** — it is a personal, self-hosted application. Breaking changes to internal APIs, configuration formats, or data models are **fully acceptable** when they improve code quality, correctness, or maintainability. Do not preserve backwards compatibility at the expense of better design. Public-facing interfaces (e.g., the OpenAI-compatible chat endpoint) are the only surfaces where stability matters.
 
 ## Planning Standards
 - Every plan that introduces new dependencies must include version-checked dependency specifications.
@@ -70,5 +97,5 @@ After implementation is complete and all tests pass:
 4. Implement minimally and correctly.
 5. Verify tests pass.
 6. Update `docs/` and `docs/wiki/`.
-7. Run code review.
-8. Proceed only after review is clean.
+7. Run code review and action every finding.
+8. Proceed only after review returns **zero** findings.

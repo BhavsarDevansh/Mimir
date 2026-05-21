@@ -192,10 +192,55 @@ impl LlmClient {
 
     /// Build a `ChatRequest` from the stored configuration.
     fn build_request(&self, messages: Vec<Message>, stream: bool) -> ChatRequest {
-        ChatRequest::new(self.config.model.clone(), messages)
-            .with_max_tokens(self.config.max_tokens)
+        let mut req = ChatRequest::new(self.config.model.clone(), messages)
             .with_temperature(self.config.temperature)
-            .with_stream(stream)
+            .with_stream(stream);
+        if let Some(mt) = self.config.max_tokens {
+            req = req.with_max_tokens(mt);
+        }
+        req
+    }
+
+    /// Query the provider's `/models` endpoint for the configured model
+    /// and return its advertised context window (if any).
+    ///
+    /// Falls back to a small built-in mapping for well-known models when the
+    /// provider does not expose `context_window`.
+    pub async fn fetch_model_context_window(&self) -> Result<Option<u32>, LlmError> {
+        let url = format!("{}/models/{}", self.config.endpoint, self.config.model);
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .send()
+            .await
+            .map_err(LlmError::Network)?;
+
+        if !response.status().is_success() {
+            // Provider doesn't support model introspection — fall back to known mapping.
+            return Ok(Self::known_context_window(&self.config.model));
+        }
+
+        let info: crate::llm::types::ModelInfo =
+            response.json().await.map_err(LlmError::Network)?;
+        Ok(info
+            .context_window
+            .or_else(|| Self::known_context_window(&self.config.model)))
+    }
+
+    /// Built-in context-window sizes for popular models.
+    fn known_context_window(model: &str) -> Option<u32> {
+        match model {
+            "gpt-4o" | "gpt-4o-mini" => Some(128_000),
+            "gpt-4-turbo" => Some(128_000),
+            "gpt-4" | "gpt-4-32k" => Some(32_768),
+            "gpt-3.5-turbo" | "gpt-3.5-turbo-16k" => Some(16_384),
+            "claude-3-5-sonnet" | "claude-3-5-sonnet-20241022" => Some(200_000),
+            "claude-3-opus" | "claude-3-opus-20240229" => Some(200_000),
+            "claude-3-sonnet" | "claude-3-sonnet-20240229" => Some(200_000),
+            "claude-3-haiku" | "claude-3-haiku-20240307" => Some(200_000),
+            _ => None,
+        }
     }
 
     /// Check that the HTTP response status is successful; otherwise return an error.
@@ -316,7 +361,7 @@ mod tests {
             endpoint: "https://api.openai.com/v1".to_string(),
             api_key: "sk-super-secret".to_string(),
             model: "gpt-4o".to_string(),
-            max_tokens: 100,
+            max_tokens: Some(100),
             temperature: 0.2,
         };
         let client = LlmClient::new(config);
@@ -357,7 +402,7 @@ mod tests {
             endpoint: "http://127.0.0.1:1".to_string(),
             api_key: "test".to_string(),
             model: "gpt-4o".to_string(),
-            max_tokens: 10,
+            max_tokens: Some(10),
             temperature: 0.0,
         };
         let client = LlmClient::new(config);

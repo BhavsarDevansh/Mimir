@@ -22,7 +22,8 @@ pub struct LlmConfig {
     pub endpoint: String,
     pub api_key: String,
     pub model: String,
-    pub max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
     pub temperature: f32,
 }
 
@@ -49,7 +50,8 @@ pub struct MemoryConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ContextConfig {
-    pub max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
     pub max_turns: u16,
     pub db_path: Option<PathBuf>,
 }
@@ -116,7 +118,7 @@ impl Default for LlmConfig {
             endpoint: "https://api.openai.com/v1".to_string(),
             api_key: String::new(),
             model: "gpt-4o".to_string(),
-            max_tokens: 4096,
+            max_tokens: None,
             temperature: 0.2,
         }
     }
@@ -146,7 +148,7 @@ impl Default for MemoryConfig {
 impl Default for ContextConfig {
     fn default() -> Self {
         Self {
-            max_tokens: 4096,
+            max_tokens: None,
             max_turns: 20,
             db_path: Some(PathBuf::from("~/.local/share/mimir/context.db")),
         }
@@ -215,7 +217,7 @@ impl Config {
         if let Ok(v) = std::env::var("MIMIR_LLM_MAX_TOKENS")
             && let Ok(n) = v.parse::<u32>()
         {
-            self.llm.max_tokens = n;
+            self.llm.max_tokens = Some(n);
         }
         if let Ok(v) = std::env::var("MIMIR_LLM_TEMPERATURE")
             && let Ok(n) = v.parse::<f32>()
@@ -258,7 +260,7 @@ impl Config {
         if let Ok(v) = std::env::var("MIMIR_CONTEXT_MAX_TOKENS")
             && let Ok(n) = v.parse::<u32>()
         {
-            self.context.max_tokens = n;
+            self.context.max_tokens = Some(n);
         }
         if let Ok(v) = std::env::var("MIMIR_CONTEXT_MAX_TURNS")
             && let Ok(n) = v.parse::<u16>()
@@ -284,7 +286,8 @@ mod tests {
         assert_eq!(config.llm.model, "gpt-4o");
         assert_eq!(config.agent.name, "Mimir");
         assert_eq!(config.memory.char_limit, 2500);
-        assert_eq!(config.context.max_tokens, 4096);
+        assert_eq!(config.llm.max_tokens, None);
+        assert_eq!(config.context.max_tokens, None);
         assert_eq!(config.context.max_turns, 20);
         assert_eq!(
             config.context.db_path,
@@ -316,7 +319,7 @@ mod tests {
         }
         let mut config = Config::default();
         config.apply_env_overrides();
-        assert_eq!(config.context.max_tokens, 8192);
+        assert_eq!(config.context.max_tokens, Some(8192));
         assert_eq!(config.context.max_turns, 50);
         assert_eq!(
             config.context.db_path,
@@ -339,7 +342,7 @@ mod tests {
                 endpoint: "http://localhost:8080".to_string(),
                 api_key: "secret".to_string(),
                 model: "test-model".to_string(),
-                max_tokens: 100,
+                max_tokens: Some(100),
                 temperature: 0.5,
             },
             agent: AgentConfig {
@@ -354,7 +357,7 @@ mod tests {
                 temporal_horizon: 7,
             },
             context: ContextConfig {
-                max_tokens: 2048,
+                max_tokens: Some(2048),
                 max_turns: 10,
                 db_path: Some(PathBuf::from("~/.local/share/mimir/context.db")),
             },
@@ -393,7 +396,8 @@ db_path = "~/.local/share/mimir/context.db"
 "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.context.max_tokens, 4096);
+        assert_eq!(config.llm.max_tokens, Some(4096));
+        assert_eq!(config.context.max_tokens, Some(4096));
         assert_eq!(config.context.max_turns, 20);
         assert_eq!(
             config.context.db_path,
@@ -450,7 +454,8 @@ db_path = "~/.local/share/mimir/context.db"
         assert_eq!(config.llm.model, "gpt-4o");
         assert_eq!(config.agent.name, "Mimir");
         assert_eq!(config.memory.char_limit, 2500);
-        assert_eq!(config.context.max_tokens, 4096);
+        assert_eq!(config.llm.max_tokens, None);
+        assert_eq!(config.context.max_tokens, None);
         assert_eq!(config.context.max_turns, 20);
 
         // Restore original state.
@@ -508,6 +513,6 @@ max_turns = 5
         let config = Config::load(Some(&path)).unwrap();
         assert_eq!(config.llm.model, "custom-model");
         assert_eq!(config.context.max_turns, 5);
-        assert_eq!(config.context.max_tokens, 4096); // default
+        assert_eq!(config.context.max_tokens, None); // default
     }
 }

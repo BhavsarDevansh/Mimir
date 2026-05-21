@@ -259,19 +259,19 @@ impl ContextManager {
         Ok(())
     }
 
-    /// Trim the session to respect `max_turns` and `max_tokens`.
+    /// Trim the session to respect `max_turns` and an optional `max_tokens`.
     ///
     /// 1. **Turn cap (hard):** if non-system messages > `max_turns * 2`,
     ///    delete oldest complete (user, assistant) pairs.
-    /// 2. **Token budget (soft):** if cumulative tokens > `max_tokens`,
-    ///    delete oldest complete pairs whose `token_count` is known.
-    ///    If unknown, fall back to halving `max_turns`.
+    /// 2. **Token budget (soft):** if `max_tokens` is `Some` and cumulative
+    ///    tokens exceed it, delete oldest complete pairs whose `token_count`
+    ///    is known.  If unknown, fall back to halving `max_turns`.
     ///
     /// The system prompt is never removed.
     pub async fn trim_to_budget(
         &self,
         session_id: &str,
-        max_tokens: u32,
+        max_tokens: Option<u32>,
         max_turns: u16,
     ) -> Result<(), ContextError> {
         self.ensure_session_exists(session_id).await?;
@@ -297,6 +297,10 @@ impl ContextManager {
         }
 
         // ---- Soft token budget ----
+        let Some(budget) = max_tokens else {
+            return Ok(());
+        };
+
         let total_tokens: i64 = sqlx::query_scalar(
             "SELECT COALESCE(SUM(token_count), 0) FROM messages WHERE session_id = ?1",
         )
@@ -304,7 +308,7 @@ impl ContextManager {
         .fetch_one(self.pool.as_ref())
         .await?;
 
-        if total_tokens > (max_tokens as i64) {
+        if total_tokens > (budget as i64) {
             let unknown_count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND role != 'system' AND token_count IS NULL"
             )
@@ -328,7 +332,7 @@ impl ContextManager {
             } else {
                 // All messages have known token counts: trim by token sum.
                 let to_remove = self
-                    .count_pairs_to_remove_by_tokens(session_id, max_tokens)
+                    .count_pairs_to_remove_by_tokens(session_id, budget)
                     .await?;
                 if to_remove > 0 {
                     self.delete_oldest_pairs(session_id, to_remove).await?;
@@ -707,7 +711,7 @@ mod tests {
                 .unwrap();
         }
 
-        mgr.trim_to_budget(&sid, 4096, 20).await.unwrap();
+        mgr.trim_to_budget(&sid, Some(4096), 20).await.unwrap();
 
         let msgs = mgr.export_messages(&sid).await.unwrap();
         assert_eq!(msgs.len(), 41);
@@ -729,7 +733,7 @@ mod tests {
                 .unwrap();
         }
 
-        mgr.trim_to_budget(&sid, 2000, 100).await.unwrap();
+        mgr.trim_to_budget(&sid, Some(2000), 100).await.unwrap();
 
         let msgs = mgr.export_messages(&sid).await.unwrap();
         assert!(
@@ -752,7 +756,7 @@ mod tests {
                 .unwrap();
         }
 
-        mgr.trim_to_budget(&sid, 1, 1).await.unwrap();
+        mgr.trim_to_budget(&sid, Some(1), 1).await.unwrap();
         let msgs = mgr.export_messages(&sid).await.unwrap();
         assert_eq!(msgs[0].role, "system");
         assert_eq!(msgs[0].content, "precious system prompt");

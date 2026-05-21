@@ -2,8 +2,8 @@
 endpoint = "https://api.openai.com/v1"
 api_key = ""
 model = "gpt-4o"
-max_tokens = 4096
 temperature = 0.2
+# max_tokens = 4096  # Optional: limit tokens per generation
 
 [agent]
 name = "Mimir"
@@ -17,6 +17,6 @@ auto_manage = true
 temporal_horizon = 30
 
 [context]
-max_tokens = 4096
 max_turns = 20
 db_path = "~/.local/share/mimir/context.db"
+# max_tokens = 4096  # Optional: token budget for conversation history

@@ -114,7 +114,7 @@ impl ContextManager {
         &self, session_id: &str, prompt_tokens: u32, completion_tokens: u32
     ) -> Result<(), ContextError>;
     pub async fn trim_to_budget(
-        &self, session_id: &str, max_tokens: u32, max_turns: u16
+        &self, session_id: &str, max_tokens: Option<u32>, max_turns: u16
     ) -> Result<(), ContextError>;
     pub async fn export_messages(&self, session_id: &str
     ) -> Result<Vec<Message>, ContextError>;
@@ -133,7 +133,11 @@ let messages = ctx_mgr.export_messages(&session_id).await?;
 let (response, usage) = llm_client.chat(messages).await?;
 ctx_mgr.add_assistant_message(&session_id, &response).await?;
 ctx_mgr.record_usage(&session_id, usage.prompt_tokens, usage.completion_tokens).await?;
-ctx_mgr.trim_to_budget(&session_id, config.context.max_tokens, config.context.max_turns).await?;
+let budget = config.context.max_tokens.or_else(|| {
+    // Query the endpoint for the model's context window.
+    llm_client.fetch_model_context_window().ok()??
+});
+ctx_mgr.trim_to_budget(&session_id, budget, config.context.max_turns).await?;
 ```
 
 ### Streaming
@@ -155,7 +159,10 @@ if let Some(u) = usage {
         &session_id, u.prompt_tokens, u.completion_tokens
     ).await?;
 }
+let budget = config.context.max_tokens.or_else(|| {
+    llm_client.fetch_model_context_window().ok()??
+});
 ctx_mgr.trim_to_budget(
-    &session_id, config.context.max_tokens, config.context.max_turns
+    &session_id, budget, config.context.max_turns
 ).await?;
 ```

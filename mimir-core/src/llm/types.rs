@@ -22,6 +22,26 @@ pub struct Message {
     pub content: String,
 }
 
+/// Model metadata returned by the `/models` endpoint.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub object: Option<String>,
+    #[serde(default)]
+    pub created: Option<u64>,
+    pub owned_by: Option<String>,
+    /// Provider-specific context window size (tokens).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+}
+
+/// A list of models returned by the `/models` endpoint.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelList {
+    pub object: Option<String>,
+    pub data: Vec<ModelInfo>,
+}
+
 /// The response body from a non-streaming chat completion request.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatResponse {

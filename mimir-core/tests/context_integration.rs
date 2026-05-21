@@ -30,7 +30,7 @@ async fn full_lifecycle() {
     mgr.record_usage(&sid, 12, 5).await.unwrap();
 
     // 7. Trim.
-    mgr.trim_to_budget(&sid, 4096, 20).await.unwrap();
+    mgr.trim_to_budget(&sid, Some(4096), 20).await.unwrap();
 
     // 8. Verify DB state.
     let conv = mgr.export_conversation(&sid).await.unwrap();

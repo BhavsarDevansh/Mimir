@@ -36,6 +36,9 @@ impl MemoryManager {
     /// Load existing memory.md from `path` or create it with the default
     /// template if missing.
     pub async fn new(path: &Path, char_limit: u16) -> Result<Self> {
+        if char_limit == 0 {
+            anyhow::bail!("char_limit must be non-zero");
+        }
         let content = MemoryLoader::load(path).await?;
         Ok(Self {
             char_limit,
@@ -56,7 +59,7 @@ impl MemoryManager {
 
     /// Remaining capacity in characters.
     pub fn remaining_chars(&self) -> usize {
-        self.char_limit.saturating_sub(self.current_chars() as u16) as usize
+        (self.char_limit as usize).saturating_sub(self.current_chars())
     }
 
     /// Whether the memory is at or over capacity.
@@ -74,12 +77,11 @@ impl MemoryManager {
     /// Fails if the addition would exceed the character limit.
     pub async fn add(&mut self, entry: &str) -> Result<()> {
         let entry_chars = entry.chars().count();
-        let separator_chars =
-            if !self.content.is_empty() && !self.content.ends_with('\n') {
-                1
-            } else {
-                0
-            };
+        let separator_chars = if !self.content.is_empty() && !self.content.ends_with('\n') {
+            1
+        } else {
+            0
+        };
         if self.current_chars() + separator_chars + entry_chars > self.char_limit as usize {
             anyhow::bail!(
                 "Memory full: {}/{} chars. Cannot add {} chars.",
@@ -101,11 +103,7 @@ impl MemoryManager {
     ///
     /// Fails if the text is not found or occurs more than once, or if the
     /// replacement would exceed the character limit.
-    pub async fn replace(
-        &mut self,
-        old_text: &str,
-        new_text: &str,
-    ) -> Result<()> {
+    pub async fn replace(&mut self, old_text: &str, new_text: &str) -> Result<()> {
         self.assert_unique_match(old_text)?;
 
         let old_chars = old_text.chars().count();
@@ -263,7 +261,12 @@ mod tests {
         let mut manager = MemoryManager::new(&path, 100).await.unwrap();
         let result = manager.replace("cat", "dog").await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("matches 2 entries"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("matches 2 entries")
+        );
     }
 
     #[tokio::test]
@@ -275,7 +278,12 @@ mod tests {
         let mut manager = MemoryManager::new(&path, 10).await.unwrap();
         let result = manager.replace("ABCDE", "ABCDEFGHIJK").await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("exceed memory limit"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("exceed memory limit")
+        );
     }
 
     #[tokio::test]
@@ -311,7 +319,12 @@ mod tests {
         let mut manager = MemoryManager::new(&path, 100).await.unwrap();
         let result = manager.remove("dup").await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("matches 2 entries"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("matches 2 entries")
+        );
     }
 
     #[tokio::test]

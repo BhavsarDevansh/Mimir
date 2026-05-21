@@ -12,15 +12,25 @@ impl MemoryLoader {
     /// If the file does not exist, creates the parent directories, writes the
     /// default template, and returns it.
     pub async fn load(path: &Path) -> Result<String> {
-        if path.exists() {
-            Ok(fs::read_to_string(path).await?)
-        } else {
-            let default = Self::default_memory();
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).await?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .await
+        {
+            Ok(mut file) => {
+                let default = Self::default_memory();
+                tokio::io::AsyncWriteExt::write_all(&mut file, default.as_bytes()).await?;
+                Ok(default)
             }
-            fs::write(path, &default).await?;
-            Ok(default)
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                Ok(fs::read_to_string(path).await?)
+            }
+            Err(e) => Err(e.into()),
         }
     }
 

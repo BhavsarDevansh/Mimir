@@ -68,6 +68,7 @@ After implementation is complete and all tests pass:
 6. Do not merge the PR yourself unless explicitly asked.
 
 ## Semantic Versioning
+
 - After any work is done on the project — whether a feature, bugfix, refactor, or documentation update — bump the semantic version number in **all** workspace member `Cargo.toml` files (and the workspace root `Cargo.toml` if it declares a version) before committing.
 - Follow [Semantic Versioning 2.0.0](https://semver.org/):
   - **PATCH** (`0.1.0` → `0.1.1`) for backwards-compatible bug fixes and minor documentation updates.
@@ -78,6 +79,7 @@ After implementation is complete and all tests pass:
 - If the change set includes multiple logical changes (e.g., a feature plus a bugfix), bump the highest applicable version component once for the entire change set.
 
 ## Breaking Changes
+
 Mimir is **not a public library** — it is a personal, self-hosted application. Breaking changes to internal APIs, configuration formats, or data models are **fully acceptable** when they improve code quality, correctness, or maintainability. Do not preserve backwards compatibility at the expense of better design. Public-facing interfaces (e.g., the OpenAI-compatible chat endpoint) are the only surfaces where stability matters.
 
 ## Planning Standards

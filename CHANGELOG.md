@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-05-21
 
 ### Added
+
 - **memory.md working memory system** (`mimir-core::memory`):
   - `MemoryLoader` — loads `memory.md` from disk or creates a default template.
   - `MemoryManager` — live CRUD operations (`add`, `replace`, `remove`) with character-limit guards and immediate disk persistence.
@@ -22,12 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AGENTS.md rule: semantic version bumps required after every change set.
 
 ### Changed
+
 - Workspace crate versions bumped from `0.1.0` to `0.2.0`.
 - `tokio` feature flags extended with `fs` in `mimir-core`.
 
 ## [0.1.0] - 2026-05-20
 
 ### Added
+
 - Initial workspace scaffolding with three crates: `mimir-core`, `mimir-cli`, `mimir-server`.
 - Configuration system (`mimir-core::config`) with TOML, env overrides, and defaults.
 - LLM client (`mimir-core::llm`) with streaming and non-streaming OpenAI-compatible chat.

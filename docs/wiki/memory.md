@@ -8,7 +8,7 @@ Think of it as the index card on Mimir's desk, not the whole library.
 
 ## Where Does It Live?
 
-```
+```shell
 ~/.config/mimir/memory.md
 ```
 
@@ -19,6 +19,7 @@ If the file doesn't exist yet, Mimir creates it automatically with a friendly te
 The default template has five sections:
 
 ### 1. Identity
+
 Who you are and where you work.
 
 ```markdown
@@ -28,6 +29,7 @@ Machine: macOS 14, M3 MacBook Pro
 ```
 
 ### 2. Active Projects
+
 What you're working on right now, with quick commands Mimir can remind you of.
 
 ```markdown
@@ -36,6 +38,7 @@ Active Projects:
 ```
 
 ### 3. Preferences
+
 How you like to communicate and what Mimir should avoid.
 
 ```markdown
@@ -45,6 +48,7 @@ Preferences:
 ```
 
 ### 4. Temporal
+
 Time-sensitive things Mimir should know about.
 
 ```markdown
@@ -54,6 +58,7 @@ Temporal:
 ```
 
 ### 5. KB Pointers
+
 Where deeper information lives, so Mimir knows where to look.
 
 ```markdown

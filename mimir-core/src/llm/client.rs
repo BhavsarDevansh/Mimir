@@ -2,8 +2,8 @@ use std::fmt;
 use std::pin::Pin;
 use std::time::Duration;
 
-use futures::{Stream, StreamExt};
 use eventsource_stream::Eventsource;
+use futures::{Stream, StreamExt};
 use reqwest::StatusCode;
 use tracing::{debug, error, warn};
 
@@ -63,10 +63,7 @@ impl LlmClient {
     /// Send a non-streaming chat completion request.
     ///
     /// Returns the assistant's message content and token usage statistics.
-    pub async fn chat(
-        &self,
-        messages: Vec<Message>,
-    ) -> Result<(String, Usage), LlmError> {
+    pub async fn chat(&self, messages: Vec<Message>) -> Result<(String, Usage), LlmError> {
         let request = self.build_request(messages, false);
         debug!(endpoint = %self.config.endpoint, model = %self.config.model, "sending chat request");
 
@@ -85,7 +82,11 @@ impl LlmClient {
             .unwrap_or_default();
         let usage = body.usage.unwrap_or_default();
 
-        debug!(prompt_tokens = usage.prompt_tokens, completion_tokens = usage.completion_tokens, "chat complete");
+        debug!(
+            prompt_tokens = usage.prompt_tokens,
+            completion_tokens = usage.completion_tokens,
+            "chat complete"
+        );
         Ok((content, usage))
     }
 
@@ -111,16 +112,14 @@ impl LlmClient {
 
         let text_stream = events
             .map(|event| {
-                let event = event.map_err(|e| {
-                    LlmError::StreamError(e.to_string())
-                })?;
+                let event = event.map_err(|e| LlmError::StreamError(e.to_string()))?;
 
                 if event.data == "[DONE]" {
                     return Ok(String::new());
                 }
 
-                let chunk: StreamChunk = serde_json::from_str(&event.data)
-                    .map_err(LlmError::Parse)?;
+                let chunk: StreamChunk =
+                    serde_json::from_str(&event.data).map_err(LlmError::Parse)?;
 
                 let content = chunk
                     .choices
@@ -140,11 +139,7 @@ impl LlmClient {
     }
 
     /// Build a `ChatRequest` from the stored configuration.
-    fn build_request(
-        &self,
-        messages: Vec<Message>,
-        stream: bool,
-    ) -> ChatRequest {
+    fn build_request(&self, messages: Vec<Message>, stream: bool) -> ChatRequest {
         ChatRequest::new(self.config.model.clone(), messages)
             .with_max_tokens(self.config.max_tokens)
             .with_temperature(self.config.temperature)
@@ -172,10 +167,7 @@ impl LlmClient {
     ///
     /// Returns `Err(LlmError::Api)` for any non-success HTTP status so that
     /// transient codes (429 / 502 / 503 / 504) are visible to the retry logic.
-    async fn send_request(
-        &self,
-        request: &ChatRequest,
-    ) -> Result<reqwest::Response, LlmError> {
+    async fn send_request(&self, request: &ChatRequest) -> Result<reqwest::Response, LlmError> {
         let response = self
             .client
             .post(format!("{}/chat/completions", self.config.endpoint))
@@ -196,10 +188,7 @@ impl LlmClient {
     }
 
     /// Retry an async operation with exponential backoff.
-    async fn retry_with_backoff<F, Fut, T>(
-        &self,
-        mut operation: F,
-    ) -> Result<T, LlmError>
+    async fn retry_with_backoff<F, Fut, T>(&self, mut operation: F) -> Result<T, LlmError>
     where
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = Result<T, LlmError>>,
@@ -252,10 +241,7 @@ impl LlmClient {
                 }
                 false
             }
-            LlmError::Api { status, .. } => matches!(
-                *status,
-                429 | 502 | 503 | 504
-            ),
+            LlmError::Api { status, .. } => matches!(*status, 429 | 502 | 503 | 504),
             _ => false,
         }
     }
@@ -305,7 +291,11 @@ mod tests {
     #[test]
     fn test_calculate_backoff_capped() {
         let b10 = LlmClient::calculate_backoff(10);
-        assert!(b10 <= MAX_BACKOFF_MS, "backoff should be capped at {} ms", MAX_BACKOFF_MS);
+        assert!(
+            b10 <= MAX_BACKOFF_MS,
+            "backoff should be capped at {} ms",
+            MAX_BACKOFF_MS
+        );
     }
 
     #[tokio::test]
@@ -344,7 +334,9 @@ mod tests {
         // eventsource_stream expects a raw HTTP response body stream.
         // We simulate by creating a small byte stream with the SSE format.
         let body = format!("{}\n\n", sse_line);
-        let stream = futures::stream::iter(vec![Ok::<bytes::Bytes, reqwest::Error>(bytes::Bytes::from(body))]);
+        let stream = futures::stream::iter(vec![Ok::<bytes::Bytes, reqwest::Error>(
+            bytes::Bytes::from(body),
+        )]);
         let mut events = stream.eventsource();
 
         let event = events.next().await.unwrap().unwrap();

@@ -13,7 +13,7 @@
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────┐
 │  System Prompt (injected memory.md snapshot)  │
 └─────────────────────────────────────────────┘
@@ -78,7 +78,7 @@ The default `memory.md` includes five categories:
 
 ## File Location
 
-```
+```shell
 ~/.config/mimir/memory.md
 ```
 

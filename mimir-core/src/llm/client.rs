@@ -90,21 +90,51 @@ impl LlmClient {
         Ok((content, usage))
     }
 
-    /// Send a streaming chat completion request.
+    /// Send a streaming chat completion request that includes token usage.
     ///
-    /// Returns a pinned stream of text chunks. The stream yields `Result<String, LlmError>`
-    /// for each token chunk received from the server.
+    /// The returned stream yields `StreamItem::Text` for each content chunk and
+    /// `StreamItem::Usage` when the API emits a final usage block (OpenAI-style).
+    pub async fn chat_stream_with_usage(
+        &self,
+        messages: Vec<Message>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
+        let mut request = self.build_request(messages, true);
+        request.stream_options = Some(serde_json::json!({"include_usage": true}));
+        debug!(endpoint = %self.config.endpoint, model = %self.config.model, "sending streaming chat request with usage");
+
+        let response = self
+            .retry_with_backoff(|| self.send_request(&request))
+            .await?;
+        let response = self.check_response(response).await?;
+
+        let byte_stream = response.bytes_stream();
+        let events = byte_stream.eventsource();
+
+        let stream = events
+            .map(|event| {
+                let event = event.map_err(|e| LlmError::StreamError(e.to_string()))?;
+                Self::map_sse_event(&event.data)
+            })
+            .filter(|item| {
+                futures::future::ready(!matches!(item, Ok(StreamItem::Text(s)) if s.is_empty()))
+            });
+
+        Ok(Box::pin(stream))
+    }
+
+    /// Send a plain streaming chat completion request (no usage).
+    ///
+    /// Returns a pinned stream of text chunks.
     pub async fn chat_stream(
         &self,
         messages: Vec<Message>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String, LlmError>> + Send>>, LlmError> {
         let request = self.build_request(messages, true);
-        debug!(endpoint = %self.config.endpoint, model = %self.config.model, "sending streaming chat request");
+        debug!(endpoint = %self.config.endpoint, model = %self.config.model, "sending plain streaming chat request");
 
         let response = self
             .retry_with_backoff(|| self.send_request(&request))
             .await?;
-
         let response = self.check_response(response).await?;
 
         let byte_stream = response.bytes_stream();
@@ -130,20 +160,87 @@ impl LlmClient {
 
                 Ok(content)
             })
-            .filter(|item| {
-                // Filter out empty chunks and the [DONE] sentinel
-                futures::future::ready(!matches!(item, Ok(s) if s.is_empty()))
-            });
+            .filter(|item| futures::future::ready(!matches!(item, Ok(s) if s.is_empty())));
 
         Ok(Box::pin(text_stream))
     }
 
+    /// Map a single SSE event data payload to a `StreamItem`.
+    fn map_sse_event(data: &str) -> Result<StreamItem, LlmError> {
+        if data == "[DONE]" {
+            return Ok(StreamItem::Text(String::new()));
+        }
+
+        let chunk: StreamChunk = serde_json::from_str(data).map_err(LlmError::Parse)?;
+
+        // Some providers emit usage as a final chunk with empty choices.
+        if let Some(usage) = chunk.usage
+            && chunk.choices.is_empty()
+        {
+            return Ok(StreamItem::Usage(usage));
+        }
+
+        let content = chunk
+            .choices
+            .into_iter()
+            .next()
+            .and_then(|c| c.delta.content)
+            .unwrap_or_default();
+
+        Ok(StreamItem::Text(content))
+    }
+
     /// Build a `ChatRequest` from the stored configuration.
     fn build_request(&self, messages: Vec<Message>, stream: bool) -> ChatRequest {
-        ChatRequest::new(self.config.model.clone(), messages)
-            .with_max_tokens(self.config.max_tokens)
+        let mut req = ChatRequest::new(self.config.model.clone(), messages)
             .with_temperature(self.config.temperature)
-            .with_stream(stream)
+            .with_stream(stream);
+        if let Some(mt) = self.config.max_tokens {
+            req = req.with_max_tokens(mt);
+        }
+        req
+    }
+
+    /// Query the provider's `/models` endpoint for the configured model
+    /// and return its advertised context window (if any).
+    ///
+    /// Falls back to a small built-in mapping for well-known models when the
+    /// provider does not expose `context_window`.
+    pub async fn fetch_model_context_window(&self) -> Result<Option<u32>, LlmError> {
+        let url = format!("{}/models/{}", self.config.endpoint, self.config.model);
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .send()
+            .await
+            .map_err(LlmError::Network)?;
+
+        if !response.status().is_success() {
+            // Provider doesn't support model introspection — fall back to known mapping.
+            return Ok(Self::known_context_window(&self.config.model));
+        }
+
+        let info: crate::llm::types::ModelInfo =
+            response.json().await.map_err(LlmError::Network)?;
+        Ok(info
+            .context_window
+            .or_else(|| Self::known_context_window(&self.config.model)))
+    }
+
+    /// Built-in context-window sizes for popular models.
+    fn known_context_window(model: &str) -> Option<u32> {
+        match model {
+            "gpt-4o" | "gpt-4o-mini" => Some(128_000),
+            "gpt-4-turbo" => Some(128_000),
+            "gpt-4" | "gpt-4-32k" => Some(32_768),
+            "gpt-3.5-turbo" | "gpt-3.5-turbo-16k" => Some(16_384),
+            "claude-3-5-sonnet" | "claude-3-5-sonnet-20241022" => Some(200_000),
+            "claude-3-opus" | "claude-3-opus-20240229" => Some(200_000),
+            "claude-3-sonnet" | "claude-3-sonnet-20240229" => Some(200_000),
+            "claude-3-haiku" | "claude-3-haiku-20240307" => Some(200_000),
+            _ => None,
+        }
     }
 
     /// Check that the HTTP response status is successful; otherwise return an error.
@@ -264,7 +361,7 @@ mod tests {
             endpoint: "https://api.openai.com/v1".to_string(),
             api_key: "sk-super-secret".to_string(),
             model: "gpt-4o".to_string(),
-            max_tokens: 100,
+            max_tokens: Some(100),
             temperature: 0.2,
         };
         let client = LlmClient::new(config);
@@ -305,7 +402,7 @@ mod tests {
             endpoint: "http://127.0.0.1:1".to_string(),
             api_key: "test".to_string(),
             model: "gpt-4o".to_string(),
-            max_tokens: 10,
+            max_tokens: Some(10),
             temperature: 0.0,
         };
         let client = LlmClient::new(config);
@@ -341,5 +438,28 @@ mod tests {
 
         let event = events.next().await.unwrap().unwrap();
         assert!(event.data.contains("\"content\":\"X\""));
+    }
+
+    #[tokio::test]
+    async fn test_chat_stream_with_usage_yields_text_and_usage() {
+        let text_sse = r#"data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}"#;
+        let usage_sse = r#"data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"m","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}"#;
+
+        let body = format!("{}\n\n{}\n\n", text_sse, usage_sse);
+        let stream = futures::stream::iter(vec![Ok::<bytes::Bytes, reqwest::Error>(
+            bytes::Bytes::from(body),
+        )]);
+        let mut events = stream.eventsource();
+
+        let event1 = events.next().await.unwrap().unwrap();
+        let chunk1: StreamChunk = serde_json::from_str(&event1.data).unwrap();
+        assert_eq!(chunk1.choices[0].delta.content.as_deref(), Some("Hello"));
+
+        let event2 = events.next().await.unwrap().unwrap();
+        let chunk2: StreamChunk = serde_json::from_str(&event2.data).unwrap();
+        assert!(chunk2.choices.is_empty());
+        let usage = chunk2.usage.expect("usage present");
+        assert_eq!(usage.prompt_tokens, 3);
+        assert_eq!(usage.completion_tokens, 1);
     }
 }

@@ -7,7 +7,10 @@
 ## Development Standards
 - Use **Don't Repeat Yourself (DRY)** development.
 - Use **Test Driven Development (TDD)** — write failing tests first, then implement.
-- Use **Context7** to fetch current documentation for libraries, frameworks, SDKs, APIs, CLI tools, or cloud services before using them — even well-known ones. Use the official library name with proper punctuation (e.g., "tokio" not "tokio-rs", "axum" not "axum-rs").
+- Use **Context7** (and crates.io if needed) to fetch current documentation for libraries, frameworks, SDKs, APIs, CLI tools, or cloud services **before designing or planning** — even well-known ones. Use the official library name with proper punctuation (e.g., "tokio" not "tokio-rs", "axum" not "axum-rs").
+  - **Verify versions:** Check the latest stable version and correct feature flags on crates.io before adding any dependency. Do not rely on training-data version knowledge.
+  - **Verify patterns:** Confirm current best practices, recommended APIs, and common pitfalls from Context7 docs before writing implementation code or plans.
+  - **Verify alternatives:** Check if simpler or more modern alternatives exist before committing to a library or pattern.
 - Ensure **performance and security** are at the forefront of all decisions.
 - Use the **smallest data type needed** for efficient memory utilization. Be smart at initialization (e.g., prefer `u8` over `u16` when sufficient), but do not cast existing values defined by libraries unless absolutely necessary.
 
@@ -52,9 +55,17 @@ After implementation is complete and all tests pass:
    - Summarise the key changes and reference any updated documentation.
 5. Do not merge the PR yourself unless explicitly asked.
 
+## Planning Standards
+- Every plan that introduces new dependencies must include version-checked dependency specifications.
+- Every plan that uses a library API must cite the current best-practice pattern (e.g., "per reqwest 0.13 docs, use `bytes_stream()` with `stream` feature").
+- If a library is well-known (tokio, axum, serde), still verify the latest guidance — training data may be stale.
+
 ## Workflow
 1. Read `Mimir-Implementation-Context.md` and relevant `VISION/` docs.
-2. Use Context7 for any library/framework/API guidance.
+2. Use Context7 (and crates.io if applicable) to verify:
+   - Latest versions, feature flags, and compatibility of all proposed dependencies.
+   - Current best practices and patterns for every library, framework, or API being introduced.
+   - Do not proceed to planning until this check is complete and reflected in the plan.
 3. Write failing tests (TDD).
 4. Implement minimally and correctly.
 5. Verify tests pass.

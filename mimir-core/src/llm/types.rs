@@ -11,6 +11,8 @@ pub struct ChatRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "stream_options")]
+    pub stream_options: Option<serde_json::Value>,
 }
 
 /// A single message in a chat conversation.
@@ -40,7 +42,7 @@ pub struct Choice {
 }
 
 /// Token usage statistics for a completion request.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
@@ -55,6 +57,7 @@ pub struct StreamChunk {
     pub created: Option<u64>,
     pub model: Option<String>,
     pub choices: Vec<StreamChoice>,
+    pub usage: Option<Usage>,
 }
 
 /// A single choice within a streaming chunk.
@@ -70,6 +73,13 @@ pub struct StreamChoice {
 pub struct Delta {
     pub role: Option<String>,
     pub content: Option<String>,
+}
+
+/// An item yielded by the usage-aware streaming chat method.
+#[derive(Debug, Clone)]
+pub enum StreamItem {
+    Text(String),
+    Usage(Usage),
 }
 
 /// Errors that can occur when interacting with an LLM API.
@@ -105,6 +115,7 @@ impl ChatRequest {
             max_tokens: None,
             temperature: None,
             stream: false,
+            stream_options: None,
         }
     }
 
@@ -123,6 +134,12 @@ impl ChatRequest {
     /// Enable or disable streaming.
     pub fn with_stream(mut self, stream: bool) -> Self {
         self.stream = stream;
+        self
+    }
+
+    /// Set stream options (e.g. `{"include_usage": true}`).
+    pub fn with_stream_options(mut self, options: serde_json::Value) -> Self {
+        self.stream_options = Some(options);
         self
     }
 }
@@ -174,6 +191,17 @@ mod tests {
     }
 
     #[test]
+    fn test_chat_request_serializes_stream_options() {
+        let req = ChatRequest::new("gpt-4o", vec![Message::user("hello")])
+            .with_stream(true)
+            .with_stream_options(serde_json::json!({"include_usage": true}));
+
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"stream_options\""));
+        assert!(json.contains("\"include_usage\":true"));
+    }
+
+    #[test]
     fn test_message_constructors() {
         let sys = Message::system("You are helpful");
         assert_eq!(sys.role, "system");
@@ -206,6 +234,25 @@ mod tests {
         assert_eq!(chunk.id.as_deref(), Some("chatcmpl-123"));
         assert_eq!(chunk.choices.len(), 1);
         assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn test_stream_chunk_parses_with_usage() {
+        let json = r#"{
+            "id": "chatcmpl-123",
+            "object": "chat.completion.chunk",
+            "created": 1677652288,
+            "model": "gpt-4o",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        }"#;
+
+        let chunk: StreamChunk = serde_json::from_str(json).unwrap();
+        assert!(chunk.choices.is_empty());
+        let usage = chunk.usage.expect("usage present");
+        assert_eq!(usage.prompt_tokens, 10);
+        assert_eq!(usage.completion_tokens, 5);
+        assert_eq!(usage.total_tokens, 15);
     }
 
     #[test]

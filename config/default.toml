@@ -15,3 +15,8 @@ enabled = true
 char_limit = 2500
 auto_manage = true
 temporal_horizon = 30
+
+[context]
+max_tokens = 4096
+max_turns = 20
+db_path = "~/.local/share/mimir/context.db"

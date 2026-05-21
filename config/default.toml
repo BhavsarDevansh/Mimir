@@ -1,0 +1,17 @@
+[llm]
+endpoint = "https://api.openai.com/v1"
+api_key = ""
+model = "gpt-4o"
+max_tokens = 4096
+temperature = 0.2
+
+[agent]
+name = "Mimir"
+proactivity = "important_only"
+verbose_reasoning = false
+
+[memory]
+enabled = true
+char_limit = 2500
+auto_manage = true
+temporal_horizon = 30

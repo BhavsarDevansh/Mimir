@@ -32,6 +32,26 @@
 ## Commit & Authorship
 - Do not co-sign or co-author commits or pull requests.
 
+## Branching Workflow
+- **Always create a new branch before starting work.** Never commit directly to `main`.
+- Use the following branch naming conventions:
+  - Features / enhancements: `feat/[task-name]`  
+    Example: `feat/configuration-system`, `feat/issue-2-config`
+  - Bug fixes: `bugfix/[bug-description]`  
+    Example: `bugfix/config-parse-error`, `bugfix/issue-5-env-override`
+- Branch names should be lowercase, use hyphens instead of spaces, and be descriptive enough to identify the issue or task.
+
+## Finishing Work
+After implementation is complete and all tests pass:
+1. Stage the changes (`git add ...`).
+2. Commit with a clear, descriptive message summarising what was done.
+3. Push the branch to the remote (`git push origin [branch-name]`).
+4. Create a Pull Request (PR) that links back to the original issue.
+   - The PR description should contain a closing statement such as:  
+     `Closes #2` or `Fixes #5`
+   - Summarise the key changes and reference any updated documentation.
+5. Do not merge the PR yourself unless explicitly asked.
+
 ## Workflow
 1. Read `Mimir-Implementation-Context.md` and relevant `VISION/` docs.
 2. Use Context7 for any library/framework/API guidance.
@@ -41,4 +61,9 @@
 6. Update `docs/` and `docs/wiki/`.
 7. Run code review.
 8. Proceed only after review is clean.
+
+## Completed Issues
+| Issue | Title | Status | Branch |
+|-------|-------|--------|--------|
+| #2 | Configuration System | ✅ Complete | `feat/configuration-system` |
 </INSTRUCTIONS>

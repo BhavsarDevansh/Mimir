@@ -2,3 +2,13 @@
 name = "mimir-core"
 version = "0.1.0"
 edition = "2024"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+anyhow = "1.0"
+dirs = "6.0"
+thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3"

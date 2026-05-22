@@ -20,3 +20,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - System-generated skill scaffolding: `SessionSummary` and `should_generate_skill()` trigger detector.
   - CLI commands: `mimir skill list`, `show`, `add`, `delete`, `enable`, `disable`.
   - `SkillRegistry::export_openai_tools()` for OpenAI-compatible function-calling exposure.
+
+## [0.7.0] - 2026-05-22
+
+### Added
+
+- **HTTP Chat Server** (`mimir-server`): Axum-based HTTP daemon on `127.0.0.1:8080`.
+  - `POST /chat` — blocking chat completion with server-managed sessions.
+  - `POST /chat/stream` — SSE streaming chat completion with server-managed sessions.
+  - `GET /status` — health and runtime state (queue depth, worker count).
+  - `GET /memory` — current `memory.md` contents.
+  - CORS middleware allowing `localhost` and `127.0.0.1` origins.
+  - Unified `ApiError` type with JSON error responses and appropriate HTTP status codes.
+
+- **LLM Worker Pool** (`mimir-core/src/llm/pool.rs`): dual priority queue system.
+  - `LlmWorkerPool` with separate bounded user and system queues.
+  - Workers always drain user queue before system queue.
+  - `LlmError::QueueFull` returned when both queues are at capacity, mapped to HTTP 503 with `Retry-After: 5`.
+  - `LlmClient::new()` now creates a default pool with 1 worker.
+  - `LlmClient::with_pool()` for test injection.
+
+### Changed
+
+- `LlmClient` refactored to delegate all calls through the worker pool by default.
+  - Direct HTTP methods kept as `pub(crate)` for internal worker use.

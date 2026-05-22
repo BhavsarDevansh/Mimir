@@ -27,7 +27,7 @@ pub struct AppState {
 impl AppState {
     /// Build `AppState` from the global Mimir [`Config`].
     pub async fn from_config(config: Config) -> anyhow::Result<Self> {
-        let llm_client = Arc::new(LlmClient::new(config.llm.clone()));
+        let llm_client = Arc::new(LlmClient::new(config.llm.clone()).await);
 
         let db_path = config
             .context

@@ -54,7 +54,15 @@ impl LlmWorkerPool {
     /// Create a new worker pool with the given LLM configuration and pool settings.
     ///
     /// Spawns `worker_threads` background tasks that consume jobs from the queues.
-    pub fn new(llm_config: LlmConfig, config: WorkerPoolConfig) -> Result<Self, &'static str> {
+    ///
+    /// # Async
+    ///
+    /// Must be called from within a Tokio runtime context because it spawns
+    /// the background worker tasks via [`tokio::spawn`].
+    pub async fn new(
+        llm_config: LlmConfig,
+        config: WorkerPoolConfig,
+    ) -> Result<Self, &'static str> {
         if config.worker_threads == 0 {
             return Err("WorkerPoolConfig.worker_threads must be > 0");
         }
@@ -280,7 +288,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_pool_enqueues_chat_job() {
-        let pool = LlmWorkerPool::new(test_config(), tiny_pool_config()).unwrap();
+        let pool = LlmWorkerPool::new(test_config(), tiny_pool_config())
+            .await
+            .unwrap();
 
         // This will fail with a network error, but it proves the job was
         // dequeued and processed by the worker.
@@ -327,7 +337,9 @@ mod tests {
             temperature: 0.0,
         };
 
-        let pool = LlmWorkerPool::new(config, tiny_pool_config()).unwrap();
+        let pool = LlmWorkerPool::new(config, tiny_pool_config())
+            .await
+            .unwrap();
 
         // Enqueue system first — it should sit in the system queue.
         let system_job = pool.enqueue_system_chat(vec![Message::system("system-first")]);
@@ -353,7 +365,7 @@ mod tests {
         config.user_queue_size = 0;
         config.system_queue_size = 0;
 
-        let pool = LlmWorkerPool::new(test_config(), config).unwrap();
+        let pool = LlmWorkerPool::new(test_config(), config).await.unwrap();
 
         let result = pool.enqueue_chat(vec![Message::user("overflow")]).await;
         assert!(matches!(result, Err(LlmError::QueueFull)));
@@ -392,7 +404,9 @@ mod tests {
             temperature: 0.0,
         };
 
-        let pool = LlmWorkerPool::new(config, tiny_pool_config()).unwrap();
+        let pool = LlmWorkerPool::new(config, tiny_pool_config())
+            .await
+            .unwrap();
 
         let mut stream = pool
             .enqueue_chat_stream(vec![Message::user("hello")])

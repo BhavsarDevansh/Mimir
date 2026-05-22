@@ -49,7 +49,7 @@ pub enum Job {
 
 `LlmClient` is the public enqueue interface:
 
-- `LlmClient::new(config)` — creates a default pool with 1 worker.
+- `LlmClient::new(config)` — async constructor that creates a default pool with 1 worker (spawned inside the Tokio runtime).
 - `LlmClient::with_pool(pool)` — injects a custom pool (useful in tests).
 - `LlmClient::new_direct(config)` — crate-internal constructor that bypasses the pool (used by workers).
 

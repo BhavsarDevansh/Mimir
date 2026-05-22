@@ -7,7 +7,7 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
 };
 use futures::{Stream, StreamExt};
-use mimir_core::llm::types::{LlmError, StreamItem};
+use mimir_core::llm::types::StreamItem;
 
 use tracing::error;
 
@@ -121,15 +121,8 @@ pub async fn chat_stream_handler(
         }
     };
 
-    // Check queue capacity before committing to a 200 response.
-    // A concurrent request can still race ahead, in which case the spawned
-    // task handles QueueFull gracefully; this check reduces the probability.
-    if !state.llm_client.user_queue_has_capacity().await {
-        return Err(error::llm_error(LlmError::QueueFull));
-    }
-
-    // Acquire the session lock synchronously so QueueFull is returned before
-    // the 200 SSE response is committed to the wire.
+    // Acquire the session lock synchronously so the enqueue and stream
+    // processing are serialised per-session.
     let permit = state
         .session_semaphore(&session_id)
         .acquire_owned()
@@ -139,91 +132,75 @@ pub async fn chat_stream_handler(
             error::internal("internal server error")
         })?;
 
+    // Persist the user message before enqueuing so the 200 response is
+    // only committed after both the message is stored and the stream
+    // handle is obtained (real enqueue, no TOCTOU race).
+    state
+        .context_manager
+        .add_user_message(&session_id, &req.message)
+        .await
+        .map_err(error::context_error)?;
+
+    // Export messages and enqueue the stream immediately.
+    // If the queue is full we return a proper 503 error response instead
+    // of committing a 200 and sending an error event later.
+    let messages = state
+        .context_manager
+        .export_messages(&session_id)
+        .await
+        .map_err(error::context_error)?;
+
+    let mut stream = state
+        .llm_client
+        .chat_stream_with_usage(messages)
+        .await
+        .map_err(error::llm_error)?;
+
     // Build the SSE channel and spawn the streaming task.
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<Event>(16);
     let state_clone = Arc::clone(&state);
     let session_id_clone = session_id.clone();
-    let message_clone = req.message.clone();
 
     tokio::spawn(async move {
         // Keep the session permit alive for the entire stream lifetime.
         let _permit = permit;
 
-        if let Err(e) = state_clone
-            .context_manager
-            .add_user_message(&session_id_clone, &message_clone)
-            .await
-        {
-            error!("failed to persist user message: {e}");
-            let _ = event_tx
-                .send(
-                    Event::default()
-                        .event("error")
-                        .data("internal server error"),
-                )
-                .await;
-            return;
-        }
+        let mut full_response = String::new();
+        let mut all_sends_ok = true;
+        let mut assistant_persisted = false;
 
-        let messages = match state_clone
-            .context_manager
-            .export_messages(&session_id_clone)
-            .await
-        {
-            Ok(msgs) => msgs,
-            Err(e) => {
-                error!("failed to export messages: {e}");
-                let _ = event_tx
-                    .send(
-                        Event::default()
-                            .event("error")
-                            .data("internal server error"),
-                    )
-                    .await;
-                return;
-            }
-        };
-
-        match state_clone
-            .llm_client
-            .chat_stream_with_usage(messages)
-            .await
-        {
-            Ok(mut stream) => {
-                let mut full_response = String::new();
-                let mut all_sends_ok = true;
-                let mut assistant_persisted = false;
-
-                while let Some(item) = stream.next().await {
-                    match item {
-                        Ok(StreamItem::Text(text)) => {
-                            full_response.push_str(&text);
-                            let event = Event::default().data(text);
-                            if event_tx.send(event).await.is_err() {
-                                // Client disconnected — stop streaming but continue
-                                // accumulating for potential persistence.
-                                all_sends_ok = false;
-                                // Drain the rest of the stream silently.
-                                while stream.next().await.is_some() {}
-                                break;
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(StreamItem::Text(text)) => {
+                    full_response.push_str(&text);
+                    let event = Event::default().data(text);
+                    if event_tx.send(event).await.is_err() {
+                        all_sends_ok = false;
+                        // Drop the stream immediately so the upstream provider
+                        // can be cancelled, instead of silently draining it.
+                        drop(stream);
+                        break;
+                    }
+                }
+                Ok(StreamItem::Usage(usage)) => {
+                    let json = serde_json::to_string(&usage).unwrap_or_default();
+                    let event = Event::default().event("usage").data(json);
+                    let send_ok = event_tx.send(event).await.is_ok();
+                    if !send_ok {
+                        all_sends_ok = false;
+                    }
+                    // Persist the assistant message only when the client
+                    // received all data and the context write succeeds.
+                    if all_sends_ok && !full_response.is_empty() {
+                        match state_clone
+                            .context_manager
+                            .add_assistant_message(&session_id_clone, &full_response)
+                            .await
+                        {
+                            Ok(()) => {
+                                assistant_persisted = true;
                             }
-                        }
-                        Ok(StreamItem::Usage(usage)) => {
-                            assistant_persisted = true;
-                            let json = serde_json::to_string(&usage).unwrap_or_default();
-                            let event = Event::default().event("usage").data(json);
-                            let send_ok = event_tx.send(event).await.is_ok();
-                            if !send_ok {
-                                all_sends_ok = false;
-                            }
-                            // Only persist when the client received all data.
-                            if all_sends_ok
-                                && !full_response.is_empty()
-                                && let Err(e) = state_clone
-                                    .context_manager
-                                    .add_assistant_message(&session_id_clone, &full_response)
-                                    .await
-                            {
+                            Err(e) => {
                                 error!("failed to persist assistant message: {e}");
                                 let _ = event_tx
                                     .send(
@@ -234,52 +211,38 @@ pub async fn chat_stream_handler(
                                     .await;
                             }
                         }
-                        Err(e) => {
-                            error!("LLM stream error: {e}");
-                            let event = Event::default()
-                                .event("error")
-                                .data("internal server error");
-                            let _ = event_tx.send(event).await;
-                            break;
-                        }
                     }
                 }
-
-                // If the provider never emitted a usage block, and all sends
-                // succeeded, persist the accumulated response so the session
-                // is not left incomplete.
-                if !assistant_persisted
-                    && all_sends_ok
-                    && !full_response.is_empty()
-                    && let Err(e) = state_clone
-                        .context_manager
-                        .add_assistant_message(&session_id_clone, &full_response)
-                        .await
-                {
-                    error!("failed to persist assistant message: {e}");
-                    let _ = event_tx
-                        .send(
-                            Event::default()
-                                .event("error")
-                                .data("internal server error"),
-                        )
-                        .await;
+                Err(e) => {
+                    error!("LLM stream error: {e}");
+                    let event = Event::default()
+                        .event("error")
+                        .data("internal server error");
+                    let _ = event_tx.send(event).await;
+                    break;
                 }
             }
-            Err(LlmError::QueueFull) => {
-                error!("queue full on enqueue (race after capacity check)");
-                let event = Event::default()
-                    .event("error")
-                    .data("server busy, try again later");
-                let _ = event_tx.send(event).await;
-            }
-            Err(e) => {
-                error!("LLM stream setup error: {e}");
-                let event = Event::default()
-                    .event("error")
-                    .data("internal server error");
-                let _ = event_tx.send(event).await;
-            }
+        }
+
+        // If the provider never emitted a usage block, and all sends
+        // succeeded, persist the accumulated response so the session
+        // is not left incomplete.
+        if !assistant_persisted
+            && all_sends_ok
+            && !full_response.is_empty()
+            && let Err(e) = state_clone
+                .context_manager
+                .add_assistant_message(&session_id_clone, &full_response)
+                .await
+        {
+            error!("failed to persist assistant message: {e}");
+            let _ = event_tx
+                .send(
+                    Event::default()
+                        .event("error")
+                        .data("internal server error"),
+                )
+                .await;
         }
     });
 

@@ -113,7 +113,7 @@ mod tests {
             max_tokens: Some(10),
             temperature: 0.0,
         };
-        let llm_client = Arc::new(LlmClient::new(llm_config));
+        let llm_client = Arc::new(LlmClient::new(llm_config).await);
 
         let context_manager = Arc::new(ContextManager::new(&db_path).await.unwrap());
 

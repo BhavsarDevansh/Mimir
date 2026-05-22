@@ -97,14 +97,23 @@ impl LlmClient {
     ///
     /// Internally creates a default [`LlmWorkerPool`] with one worker thread
     /// and bounded queues of size 100.
-    pub fn new(config: LlmConfig) -> Self {
+    ///
+    /// # Async
+    ///
+    /// Must be called from within a Tokio runtime context because it spawns
+    /// the internal worker pool tasks. The client uses
+    /// [`connect_timeout`](reqwest::ClientBuilder::connect_timeout) rather than
+    /// a global request timeout so that long-lived SSE streams are not
+    /// prematurely aborted.
+    pub async fn new(config: LlmConfig) -> Self {
         let pool = Arc::new(
             LlmWorkerPool::new(config.clone(), WorkerPoolConfig::default())
+                .await
                 .expect("default WorkerPoolConfig has worker_threads=1"),
         );
         Self {
             client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
+                .connect_timeout(Duration::from_secs(30))
                 .build()
                 .expect("valid reqwest client"),
             config,
@@ -118,7 +127,7 @@ impl LlmClient {
     pub(crate) fn new_direct(config: LlmConfig) -> Self {
         Self {
             client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
+                .connect_timeout(Duration::from_secs(30))
                 .build()
                 .expect("valid reqwest client"),
             config,
@@ -486,7 +495,7 @@ mod tests {
             max_tokens: Some(10),
             temperature: 0.0,
         };
-        let client = LlmClient::new(config);
+        let client = LlmClient::new(config).await;
 
         let result = client.chat(vec![Message::user("hi")]).await;
         assert!(result.is_err());

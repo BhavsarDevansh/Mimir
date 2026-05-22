@@ -44,3 +44,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `LlmClient` refactored to delegate all calls through the worker pool by default.
   - Direct HTTP methods kept as `pub(crate)` for internal worker use.
+
+## [0.7.1] - 2026-05-22
+
+### Fixed
+
+- **SSE streaming timeout**: Changed `reqwest::Client` from global `timeout(30s)` to `connect_timeout(30s)` so long-lived SSE streams are not prematurely aborted.
+- **Queue-full race in `/chat/stream`**: The stream is now enqueued before the 200 SSE response is committed, so `503` is returned immediately when the pool is full instead of a 200 followed by an error event.
+- **`assistant_persisted` flag ordering**: Moved `assistant_persisted = true` to after a successful `add_assistant_message` call, so the end-of-stream fallback can still persist the response on failure.
+- **Stream drain replaced with drop**: The send-failure path now drops the upstream provider stream immediately (via `drop(stream)`) instead of draining it, allowing faster cancellation.
+- **`LlmWorkerPool::new` panic outside Tokio runtime**: Changed constructor to `async fn` so worker tasks are spawned inside a runtime context.
+- **`LlmClient` doc comments**: Updated to document async requirements and `connect_timeout` usage.
+
+### Changed
+
+- `LlmClient::new` and `LlmWorkerPool::new` are now `async fn` (breaking change to internal API; acceptable per project policy).
+

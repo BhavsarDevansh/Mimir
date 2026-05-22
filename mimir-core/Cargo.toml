@@ -1,6 +1,6 @@
 [package]
 name = "mimir-core"
-version = "0.6.0"
+version = "0.7.1"
 edition = "2024"
 
 [dependencies]
@@ -26,3 +26,4 @@ async-trait = "0.1"
 tempfile = "3"
 serial_test = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "process"] }
+dashmap = "6.2"

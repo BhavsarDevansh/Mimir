@@ -60,9 +60,11 @@ Structured error enum:
 
 ## Client (`LlmClient`)
 
-### `new(config: LlmConfig) -> Self`
+### `async fn new(config: LlmConfig) -> Self`
 
-Constructs a client from configuration.
+Constructs a client from configuration. Must be called from within a Tokio runtime context because it spawns the internal worker pool.
+
+The underlying `reqwest::Client` uses a 30-second **connect timeout** rather than a global request timeout, so that long-lived SSE streaming responses are not prematurely aborted.
 
 ### `chat(messages) -> Result<(String, Usage), LlmError>`
 

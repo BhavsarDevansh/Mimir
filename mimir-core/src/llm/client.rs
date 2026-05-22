@@ -1,5 +1,6 @@
 use std::fmt;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use eventsource_stream::Eventsource;
@@ -8,6 +9,7 @@ use reqwest::StatusCode;
 use tracing::{debug, error, warn};
 
 use crate::config::LlmConfig;
+use crate::llm::pool::{LlmWorkerPool, WorkerPoolConfig};
 use crate::llm::types::*;
 
 const MAX_RETRIES: u32 = 3;
@@ -18,9 +20,14 @@ const MAX_BACKOFF_MS: u64 = 10_000;
 ///
 /// Supports both streaming (SSE) and non-streaming chat completion requests
 /// with automatic exponential-backoff retry on transient failures.
+///
+/// By default all requests are routed through an internal [`LlmWorkerPool`]
+/// so that background tasks can coexist with user-facing requests without
+/// degrading latency. The pool can be replaced in tests via [`Self::with_pool`].
 pub struct LlmClient {
     client: reqwest::Client,
     config: LlmConfig,
+    pool: Option<Arc<LlmWorkerPool>>,
 }
 
 impl fmt::Debug for LlmClient {
@@ -31,6 +38,7 @@ impl fmt::Debug for LlmClient {
             .field("max_tokens", &self.config.max_tokens)
             .field("temperature", &self.config.temperature)
             .field("api_key", &"***REDACTED***")
+            .field("has_pool", &self.pool.is_some())
             .finish()
     }
 }
@@ -40,17 +48,99 @@ impl Clone for LlmClient {
         Self {
             client: self.client.clone(),
             config: self.config.clone(),
+            pool: self.pool.clone(),
         }
     }
 }
 
 impl LlmClient {
-    /// Create a new client from the provided LLM configuration.
-    pub fn new(config: LlmConfig) -> Self {
-        Self {
-            client: reqwest::Client::new(),
-            config,
+    // ------------------------------------------------------------------
+    // Runtime introspection helpers
+    // ------------------------------------------------------------------
+
+    /// Current depth of the user-facing queue.
+    pub async fn user_queue_depth(&self) -> usize {
+        match &self.pool {
+            Some(pool) => pool.user_queue_depth().await,
+            None => 0,
         }
+    }
+
+    /// Current depth of the system queue.
+    pub async fn system_queue_depth(&self) -> usize {
+        match &self.pool {
+            Some(pool) => pool.system_queue_depth().await,
+            None => 0,
+        }
+    }
+
+    /// Number of worker threads in the backing pool.
+    pub fn worker_threads(&self) -> u8 {
+        match &self.pool {
+            Some(pool) => pool.worker_threads(),
+            None => 0,
+        }
+    }
+
+    /// Best-effort check whether the user queue has capacity.
+    ///
+    /// A concurrent request can fill the gap between this check and the actual
+    /// enqueue, so callers must still handle [`LlmError::QueueFull`].
+    pub async fn user_queue_has_capacity(&self) -> bool {
+        match &self.pool {
+            Some(pool) => pool.user_queue_has_capacity().await,
+            None => true,
+        }
+    }
+
+    /// Create a new client from the provided LLM configuration.
+    ///
+    /// Internally creates a default [`LlmWorkerPool`] with one worker thread
+    /// and bounded queues of size 100.
+    ///
+    /// # Async
+    ///
+    /// Must be called from within a Tokio runtime context because it spawns
+    /// the internal worker pool tasks. The client uses
+    /// [`connect_timeout`](reqwest::ClientBuilder::connect_timeout) rather than
+    /// a global request timeout so that long-lived SSE streams are not
+    /// prematurely aborted.
+    pub async fn new(config: LlmConfig) -> Self {
+        let pool = Arc::new(
+            LlmWorkerPool::new(config.clone(), WorkerPoolConfig::default())
+                .await
+                .expect("default WorkerPoolConfig has worker_threads=1"),
+        );
+        Self {
+            client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(30))
+                .build()
+                .expect("valid reqwest client"),
+            config,
+            pool: Some(pool),
+        }
+    }
+
+    /// Create a client that bypasses the worker pool and makes direct HTTP calls.
+    ///
+    /// This is used internally by pool workers; external callers should use [`Self::new`].
+    pub(crate) fn new_direct(config: LlmConfig) -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(30))
+                .build()
+                .expect("valid reqwest client"),
+            config,
+            pool: None,
+        }
+    }
+
+    /// Replace the default worker pool with a custom one (test injection).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn with_pool(mut self, pool: Arc<LlmWorkerPool>) -> Self {
+        self.pool = Some(pool);
+        self
     }
 
     /// Create a new client with a custom HTTP client.
@@ -64,6 +154,51 @@ impl LlmClient {
     ///
     /// Returns the assistant's message content and token usage statistics.
     pub async fn chat(&self, messages: Vec<Message>) -> Result<(String, Usage), LlmError> {
+        if let Some(pool) = &self.pool {
+            pool.enqueue_chat(messages).await
+        } else {
+            self.chat_direct(messages).await
+        }
+    }
+
+    /// Send a streaming chat completion request that includes token usage.
+    ///
+    /// The returned stream yields `StreamItem::Text` for each content chunk and
+    /// `StreamItem::Usage` when the API emits a final usage block (OpenAI-style).
+    pub async fn chat_stream_with_usage(
+        &self,
+        messages: Vec<Message>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
+        if let Some(pool) = &self.pool {
+            pool.enqueue_chat_stream(messages).await
+        } else {
+            self.chat_stream_with_usage_direct(messages).await
+        }
+    }
+
+    /// Send a plain streaming chat completion request (no usage).
+    ///
+    /// Returns a pinned stream of text chunks.
+    pub async fn chat_stream(
+        &self,
+        messages: Vec<Message>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, LlmError>> + Send>>, LlmError> {
+        let stream = self.chat_stream_with_usage(messages).await?;
+        let text_stream = stream
+            .map(|item| match item {
+                Ok(StreamItem::Text(text)) => Ok(text),
+                Ok(StreamItem::Usage(_)) => Ok(String::new()),
+                Err(e) => Err(e),
+            })
+            .filter(|item| futures::future::ready(!matches!(item, Ok(s) if s.is_empty())));
+        Ok(Box::pin(text_stream))
+    }
+
+    /// Direct (non-pooled) non-streaming chat completion.
+    pub(crate) async fn chat_direct(
+        &self,
+        messages: Vec<Message>,
+    ) -> Result<(String, Usage), LlmError> {
         let request = self.build_request(messages, false);
         debug!(endpoint = %self.config.endpoint, model = %self.config.model, "sending chat request");
 
@@ -90,11 +225,8 @@ impl LlmClient {
         Ok((content, usage))
     }
 
-    /// Send a streaming chat completion request that includes token usage.
-    ///
-    /// The returned stream yields `StreamItem::Text` for each content chunk and
-    /// `StreamItem::Usage` when the API emits a final usage block (OpenAI-style).
-    pub async fn chat_stream_with_usage(
+    /// Direct (non-pooled) streaming chat completion with usage.
+    pub(crate) async fn chat_stream_with_usage_direct(
         &self,
         messages: Vec<Message>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
@@ -122,50 +254,8 @@ impl LlmClient {
         Ok(Box::pin(stream))
     }
 
-    /// Send a plain streaming chat completion request (no usage).
-    ///
-    /// Returns a pinned stream of text chunks.
-    pub async fn chat_stream(
-        &self,
-        messages: Vec<Message>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, LlmError>> + Send>>, LlmError> {
-        let request = self.build_request(messages, true);
-        debug!(endpoint = %self.config.endpoint, model = %self.config.model, "sending plain streaming chat request");
-
-        let response = self
-            .retry_with_backoff(|| self.send_request(&request))
-            .await?;
-        let response = self.check_response(response).await?;
-
-        let byte_stream = response.bytes_stream();
-        let events = byte_stream.eventsource();
-
-        let text_stream = events
-            .map(|event| {
-                let event = event.map_err(|e| LlmError::StreamError(e.to_string()))?;
-
-                if event.data == "[DONE]" {
-                    return Ok(String::new());
-                }
-
-                let chunk: StreamChunk =
-                    serde_json::from_str(&event.data).map_err(LlmError::Parse)?;
-
-                let content = chunk
-                    .choices
-                    .into_iter()
-                    .next()
-                    .and_then(|c| c.delta.content)
-                    .unwrap_or_default();
-
-                Ok(content)
-            })
-            .filter(|item| futures::future::ready(!matches!(item, Ok(s) if s.is_empty())));
-
-        Ok(Box::pin(text_stream))
-    }
-
-    /// Map a single SSE event data payload to a `StreamItem`.
+    /// Direct (non-pooled) plain streaming chat completion.
+    /// Map an SSE data line to a [`StreamItem`].
     fn map_sse_event(data: &str) -> Result<StreamItem, LlmError> {
         if data == "[DONE]" {
             return Ok(StreamItem::Text(String::new()));
@@ -364,7 +454,7 @@ mod tests {
             max_tokens: Some(100),
             temperature: 0.2,
         };
-        let client = LlmClient::new(config);
+        let client = LlmClient::new_direct(config);
         let debug = format!("{:?}", client);
         assert!(
             !debug.contains("sk-super-secret"),
@@ -405,7 +495,7 @@ mod tests {
             max_tokens: Some(10),
             temperature: 0.0,
         };
-        let client = LlmClient::new(config);
+        let client = LlmClient::new(config).await;
 
         let result = client.chat(vec![Message::user("hi")]).await;
         assert!(result.is_err());

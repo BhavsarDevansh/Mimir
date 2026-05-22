@@ -124,6 +124,10 @@ pub enum LlmError {
     /// The SSE stream produced an invalid event.
     #[error("SSE stream error: {0}")]
     StreamError(String),
+
+    /// The worker pool queues are full.
+    #[error("worker pool queue full")]
+    QueueFull,
 }
 
 impl ChatRequest {
@@ -294,4 +298,22 @@ mod tests {
         let err2 = LlmError::RetryExhausted { attempts: 4 };
         assert_eq!(err2.to_string(), "retry exhausted after 4 attempts");
     }
+}
+
+/// A job dispatched to the LLM worker pool.
+pub enum Job {
+    /// Non-streaming chat completion.
+    Chat {
+        /// Conversation messages.
+        messages: Vec<Message>,
+        /// Channel to send the result back.
+        respond: tokio::sync::oneshot::Sender<Result<(String, Usage), LlmError>>,
+    },
+    /// Streaming chat completion.
+    ChatStream {
+        /// Conversation messages.
+        messages: Vec<Message>,
+        /// Channel to stream items back.
+        respond: tokio::sync::mpsc::Sender<Result<StreamItem, LlmError>>,
+    },
 }

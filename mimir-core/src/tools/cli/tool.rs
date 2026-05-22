@@ -1,30 +1,10 @@
-use super::{Tool, ToolError, ToolOutput, ToolPermission};
+use super::super::{Tool, ToolError, ToolOutput, ToolPermission};
+use super::config::CliToolConfig;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
-
-/// Configuration for a CLI tool loaded from `tools.toml`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct CliToolConfig {
-    pub name: String,
-    pub description: String,
-    pub executable: PathBuf,
-    #[serde(default)]
-    pub args: Vec<String>,
-    pub schema: Value,
-    #[serde(default = "default_cli_timeout")]
-    pub timeout_secs: u64,
-    #[serde(default)]
-    pub permission: ToolPermission,
-}
-
-fn default_cli_timeout() -> u64 {
-    30
-}
 
 /// A tool that wraps a CLI executable.
 pub struct CliTool {
@@ -132,4 +112,19 @@ impl Tool for CliTool {
             Err(_) => Err(ToolError::timeout(&self.config.name, dur)),
         }
     }
+}
+
+/// Load CLI tool configurations from a TOML value.
+pub fn load_cli_tools(toml_value: &toml::Value) -> Vec<CliToolConfig> {
+    let mut configs = Vec::new();
+
+    if let Some(array) = toml_value.get("tool").and_then(|v| v.as_array()) {
+        for item in array {
+            if let Ok(config) = item.clone().try_into::<CliToolConfig>() {
+                configs.push(config);
+            }
+        }
+    }
+
+    configs
 }

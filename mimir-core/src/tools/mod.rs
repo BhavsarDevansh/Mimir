@@ -3,14 +3,16 @@ mod cli;
 mod config;
 mod error;
 mod output;
+mod permission;
 mod registry;
 
-pub use builtins::*;
-pub use cli::*;
-pub use config::*;
-pub use error::*;
-pub use output::*;
-pub use registry::*;
+pub use builtins::{EchoTool, GetCurrentTimeTool};
+pub use cli::{CliTool, CliToolConfig, load_cli_tools};
+pub use config::ToolsConfig;
+pub use error::ToolError;
+pub use output::ToolOutput;
+pub use permission::ToolPermission;
+pub use registry::{ToolEntry, ToolMetadata, ToolRegistry, ToolSource};
 
 use async_trait::async_trait;
 use serde_json::Value;

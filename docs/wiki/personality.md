@@ -7,15 +7,19 @@ A personality shapes how Mimir speaks — how much detail it gives, how warm or 
 ## Built-In Presets
 
 ### Transparent (Default)
+
 Mimir shows its work briefly, admits uncertainty, and speaks as a collaborator. Good for most users.
 
 ### Concise
+
 Short answers, bullet points, no reasoning unless asked. Good when you want speed.
 
 ### Warm
+
 More conversational and companion-like. Acknowledges context naturally. Good when you want an emotional connection.
 
 ### Formal
+
 Structured, full sentences, no contractions, precise terminology. Good for professional contexts.
 
 ## How to Select a Preset
@@ -47,7 +51,7 @@ export MIMIR_PERSONALITY_PRESET="concise"
    PROMPT
    ```
 
-3. Reference it in your config:
+   3. Reference it in your config:
    ```toml
    [personality]
    preset = "cheery"

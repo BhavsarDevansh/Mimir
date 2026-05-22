@@ -18,7 +18,11 @@ impl Personality {
     pub fn new(config: &PersonalityConfig) -> Self {
         let presets_dir = dirs::config_dir()
             .map(|p| p.join("mimir/personalities"))
-            .unwrap_or_else(|| PathBuf::from("~/.config/mimir/personalities"));
+            .unwrap_or_else(|| {
+                dirs::home_dir()
+                    .map(|p| p.join(".config/mimir/personalities"))
+                    .unwrap_or_else(|| PathBuf::from(".config/mimir/personalities"))
+            });
         Self::from_path(&presets_dir, &config.preset)
     }
 

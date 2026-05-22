@@ -40,7 +40,7 @@ pub fn system_prompt(&self, memory_content: &str) -> String
 
 - If `memory_content` is empty, returns only the preset prompt.
 - Otherwise, appends the memory section:
-  ```
+  ```text
   {preset_system_prompt}
 
   ## Persistent Memory Context

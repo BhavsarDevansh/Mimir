@@ -26,6 +26,9 @@ pub enum ToolError {
 
     #[error("schema error for tool '{0}': {1}")]
     SchemaError(String, String),
+
+    #[error("tool '{0}' is already registered")]
+    AlreadyRegistered(String),
 }
 
 impl ToolError {
@@ -59,5 +62,9 @@ impl ToolError {
 
     pub fn schema_error(name: impl Into<String>, message: impl Into<String>) -> Self {
         Self::SchemaError(name.into(), message.into())
+    }
+
+    pub fn already_registered(name: impl Into<String>) -> Self {
+        Self::AlreadyRegistered(name.into())
     }
 }

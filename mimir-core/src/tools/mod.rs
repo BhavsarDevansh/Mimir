@@ -7,7 +7,7 @@ mod permission;
 mod registry;
 
 pub use builtins::{EchoTool, GetCurrentTimeTool};
-pub use cli::{CliTool, CliToolConfig, load_cli_tools};
+pub use cli::{CliTool, CliToolConfig};
 pub use config::ToolsConfig;
 pub use error::ToolError;
 pub use output::ToolOutput;

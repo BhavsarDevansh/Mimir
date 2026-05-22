@@ -6,7 +6,7 @@ The tool registry (`mimir-core::tools`) provides dynamic discovery, registration
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────┐
 │           ToolRegistry                  │
 │  ┌─────────────┐  ┌─────────────────┐  │
@@ -166,7 +166,7 @@ get_current_time = "auto"
 | `mimir tool list` | Show name, source, permission |
 | `mimir tool enable <name>` | Set `Auto` |
 | `mimir tool disable <name>` | Set `Disabled` |
-| `mimir tool permission <name> <auto|ask|disabled>` | Explicit set |
+| `mimir tool permission <name> <auto&#124;ask&#124;disabled>` | Explicit set |
 
 Changes are persisted to `tools.toml` immediately.
 

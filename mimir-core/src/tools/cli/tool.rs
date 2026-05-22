@@ -95,15 +95,22 @@ impl Tool for CliTool {
                 let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
                 let exit_code = output.status.code().unwrap_or(-1);
 
-                let tool_output = ToolOutput {
+                if exit_code != 0 {
+                    return Err(ToolError::execution_failed(
+                        &self.config.name,
+                        format!(
+                            "process exited with code {exit_code}\nstdout: {stdout}\nstderr: {stderr}"
+                        ),
+                    ));
+                }
+
+                Ok(ToolOutput {
                     result: Some(Value::String(stdout.trim().to_string())),
                     stdout: Some(stdout),
                     stderr: Some(stderr),
                     exit_code: Some(exit_code),
                     ..Default::default()
-                };
-
-                Ok(tool_output)
+                })
             }
             Ok(Err(e)) => Err(ToolError::cli_process_error(
                 &self.config.name,
@@ -112,19 +119,4 @@ impl Tool for CliTool {
             Err(_) => Err(ToolError::timeout(&self.config.name, dur)),
         }
     }
-}
-
-/// Load CLI tool configurations from a TOML value.
-pub fn load_cli_tools(toml_value: &toml::Value) -> Vec<CliToolConfig> {
-    let mut configs = Vec::new();
-
-    if let Some(array) = toml_value.get("tool").and_then(|v| v.as_array()) {
-        for item in array {
-            if let Ok(config) = item.clone().try_into::<CliToolConfig>() {
-                configs.push(config);
-            }
-        }
-    }
-
-    configs
 }

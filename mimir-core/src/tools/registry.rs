@@ -55,25 +55,31 @@ impl ToolRegistry {
 
     /// Register native built-in tools.
     pub fn register_builtins(&self) {
-        self.register_native(Arc::new(super::GetCurrentTimeTool));
-        self.register_native(Arc::new(super::EchoTool));
+        // Built-in names are hardcoded and guaranteed unique; unwrap is safe.
+        let _ = self.register_native(Arc::new(super::GetCurrentTimeTool));
+        let _ = self.register_native(Arc::new(super::EchoTool));
     }
 
     /// Register a native tool with its default permission.
-    pub fn register_native(&self, tool: Arc<dyn Tool>) {
-        self.register(tool, ToolSource::Native, ToolPermission::Auto);
+    pub fn register_native(&self, tool: Arc<dyn Tool>) -> Result<(), ToolError> {
+        self.register(tool, ToolSource::Native, ToolPermission::Auto)
     }
 
     /// Register a CLI tool with its config and default permission.
-    pub fn register_cli(&self, config: CliToolConfig) {
+    pub fn register_cli(&self, config: CliToolConfig) -> Result<(), ToolError> {
         let permission = config.permission;
         let tool = Arc::new(CliTool::new(config.clone()));
-        self.register_with_cli_config(tool, ToolSource::Cli, permission, Some(config));
+        self.register_with_cli_config(tool, ToolSource::Cli, permission, Some(config))
     }
 
     /// Register a tool.
-    pub fn register(&self, tool: Arc<dyn Tool>, source: ToolSource, permission: ToolPermission) {
-        self.register_with_cli_config(tool, source, permission, None);
+    pub fn register(
+        &self,
+        tool: Arc<dyn Tool>,
+        source: ToolSource,
+        permission: ToolPermission,
+    ) -> Result<(), ToolError> {
+        self.register_with_cli_config(tool, source, permission, None)
     }
 
     fn register_with_cli_config(
@@ -82,9 +88,12 @@ impl ToolRegistry {
         source: ToolSource,
         permission: ToolPermission,
         cli_config: Option<CliToolConfig>,
-    ) {
+    ) -> Result<(), ToolError> {
         let mut entries = self.entries.write().unwrap();
         let name = tool.name().to_string();
+        if entries.contains_key(&name) {
+            return Err(ToolError::already_registered(&name));
+        }
         let metadata = ToolMetadata {
             name: name.clone(),
             description: tool.description().to_string(),
@@ -99,6 +108,7 @@ impl ToolRegistry {
                 cli_config,
             },
         );
+        Ok(())
     }
 
     /// Retrieve a tool by name.
@@ -132,10 +142,12 @@ impl ToolRegistry {
     }
 
     /// Export all tools in OpenAI-compatible function-calling format.
+    /// Disabled tools are skipped so the model does not see them.
     pub fn export_openai_tools(&self) -> Vec<Value> {
         let entries = self.entries.read().unwrap();
         entries
             .values()
+            .filter(|entry| entry.metadata.permission != ToolPermission::Disabled)
             .map(|entry| {
                 serde_json::json!({
                     "type": "function",
@@ -168,15 +180,11 @@ impl ToolRegistry {
         let config = super::ToolsConfig::load(path)?;
 
         for cli_config in config.tools {
-            self.register_cli(cli_config);
+            self.register_cli(cli_config)?;
         }
 
         for (name, permission) in config.permissions {
-            if let Err(e) = self.set_permission(&name, permission) {
-                // If the tool doesn't exist, log and skip. We don't have a logger yet,
-                // so we silently ignore. In the future, use tracing::warn! here.
-                let _ = e;
-            }
+            self.set_permission(&name, permission)?;
         }
 
         Ok(())

@@ -6,7 +6,9 @@ use std::sync::Arc;
 async fn test_register_native_tool_and_retrieve() {
     let registry = ToolRegistry::new();
     let tool = Arc::new(GetCurrentTimeTool);
-    registry.register(tool.clone(), ToolSource::Native, ToolPermission::Auto);
+    registry
+        .register(tool.clone(), ToolSource::Native, ToolPermission::Auto)
+        .unwrap();
 
     let (retrieved, metadata) = registry.get("get_current_time").unwrap();
     assert_eq!(retrieved.name(), "get_current_time");
@@ -17,12 +19,16 @@ async fn test_register_native_tool_and_retrieve() {
 #[tokio::test]
 async fn test_export_openai_schema() {
     let registry = ToolRegistry::new();
-    registry.register(
-        Arc::new(GetCurrentTimeTool),
-        ToolSource::Native,
-        ToolPermission::Auto,
-    );
-    registry.register(Arc::new(EchoTool), ToolSource::Native, ToolPermission::Auto);
+    registry
+        .register(
+            Arc::new(GetCurrentTimeTool),
+            ToolSource::Native,
+            ToolPermission::Auto,
+        )
+        .unwrap();
+    registry
+        .register(Arc::new(EchoTool), ToolSource::Native, ToolPermission::Auto)
+        .unwrap();
 
     let schemas = registry.export_openai_tools();
     assert_eq!(schemas.len(), 2);
@@ -42,13 +48,41 @@ async fn test_export_openai_schema() {
 }
 
 #[tokio::test]
+async fn test_disabled_tools_not_exported() {
+    let registry = ToolRegistry::new();
+    registry
+        .register(
+            Arc::new(EchoTool),
+            ToolSource::Native,
+            ToolPermission::Disabled,
+        )
+        .unwrap();
+    registry
+        .register(
+            Arc::new(GetCurrentTimeTool),
+            ToolSource::Native,
+            ToolPermission::Auto,
+        )
+        .unwrap();
+
+    let schemas = registry.export_openai_tools();
+    assert_eq!(schemas.len(), 1);
+    assert_eq!(
+        schemas[0]["function"]["name"].as_str(),
+        Some("get_current_time")
+    );
+}
+
+#[tokio::test]
 async fn test_get_current_time_execution() {
     let registry = ToolRegistry::new();
-    registry.register(
-        Arc::new(GetCurrentTimeTool),
-        ToolSource::Native,
-        ToolPermission::Auto,
-    );
+    registry
+        .register(
+            Arc::new(GetCurrentTimeTool),
+            ToolSource::Native,
+            ToolPermission::Auto,
+        )
+        .unwrap();
 
     let output = registry
         .execute("get_current_time", json!({}))
@@ -56,14 +90,20 @@ async fn test_get_current_time_execution() {
         .unwrap();
     assert!(output.result.is_some());
     let result = output.result.unwrap().as_str().unwrap().to_string();
-    // RFC 3339 contains a 'T'
-    assert!(result.contains('T'));
+    // Verify valid RFC 3339 by parsing with chrono.
+    let parsed = chrono::DateTime::parse_from_rfc3339(&result);
+    assert!(
+        parsed.is_ok(),
+        "expected valid RFC 3339 timestamp, got: {result}"
+    );
 }
 
 #[tokio::test]
 async fn test_echo_execution() {
     let registry = ToolRegistry::new();
-    registry.register(Arc::new(EchoTool), ToolSource::Native, ToolPermission::Auto);
+    registry
+        .register(Arc::new(EchoTool), ToolSource::Native, ToolPermission::Auto)
+        .unwrap();
 
     let output = registry
         .execute("echo", json!({"message": "hello world"}))
@@ -75,11 +115,13 @@ async fn test_echo_execution() {
 #[tokio::test]
 async fn test_permission_disabled_rejects() {
     let registry = ToolRegistry::new();
-    registry.register(
-        Arc::new(EchoTool),
-        ToolSource::Native,
-        ToolPermission::Disabled,
-    );
+    registry
+        .register(
+            Arc::new(EchoTool),
+            ToolSource::Native,
+            ToolPermission::Disabled,
+        )
+        .unwrap();
 
     let err = registry
         .execute("echo", json!({"message": "hi"}))
@@ -91,7 +133,9 @@ async fn test_permission_disabled_rejects() {
 #[tokio::test]
 async fn test_permission_ask_rejects() {
     let registry = ToolRegistry::new();
-    registry.register(Arc::new(EchoTool), ToolSource::Native, ToolPermission::Ask);
+    registry
+        .register(Arc::new(EchoTool), ToolSource::Native, ToolPermission::Ask)
+        .unwrap();
 
     let err = registry
         .execute("echo", json!({"message": "hi"}))
@@ -103,7 +147,9 @@ async fn test_permission_ask_rejects() {
 #[tokio::test]
 async fn test_permission_override() {
     let registry = ToolRegistry::new();
-    registry.register(Arc::new(EchoTool), ToolSource::Native, ToolPermission::Ask);
+    registry
+        .register(Arc::new(EchoTool), ToolSource::Native, ToolPermission::Ask)
+        .unwrap();
     registry
         .set_permission("echo", ToolPermission::Auto)
         .unwrap();
@@ -117,12 +163,27 @@ async fn test_permission_override() {
 
 #[tokio::test]
 async fn test_cli_tool_mock_execution() {
-    // Use /bin/echo as a universally available CLI tool.
+    let (executable, args) = if cfg!(windows) {
+        (
+            std::path::PathBuf::from("cmd.exe"),
+            vec![
+                "/C".to_string(),
+                "echo".to_string(),
+                "{{message}}".to_string(),
+            ],
+        )
+    } else {
+        (
+            std::path::PathBuf::from("/bin/echo"),
+            vec!["{{message}}".to_string()],
+        )
+    };
+
     let config = CliToolConfig {
         name: "mock_echo".to_string(),
-        description: "Echoes args via /bin/echo".to_string(),
-        executable: std::path::PathBuf::from("/bin/echo"),
-        args: vec!["{{message}}".to_string()],
+        description: "Echoes args via system echo".to_string(),
+        executable,
+        args,
         schema: json!({
             "type": "object",
             "properties": {
@@ -142,8 +203,8 @@ async fn test_cli_tool_mock_execution() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
 async fn test_cli_tool_timeout() {
-    // Use /bin/sleep to test timeout.
     let config = CliToolConfig {
         name: "slow_sleep".to_string(),
         description: "Sleeps for a long time".to_string(),
@@ -160,6 +221,7 @@ async fn test_cli_tool_timeout() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
 async fn test_cli_tool_invalid_executable_path() {
     let config = CliToolConfig {
         name: "bad_path".to_string(),
@@ -177,6 +239,7 @@ async fn test_cli_tool_invalid_executable_path() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
 async fn test_cli_tool_missing_template_arg() {
     let config = CliToolConfig {
         name: "templated".to_string(),
@@ -220,12 +283,16 @@ async fn test_tool_output_to_llm_text() {
 #[tokio::test]
 async fn test_tool_registry_list() {
     let registry = ToolRegistry::new();
-    registry.register(
-        Arc::new(GetCurrentTimeTool),
-        ToolSource::Native,
-        ToolPermission::Auto,
-    );
-    registry.register(Arc::new(EchoTool), ToolSource::Native, ToolPermission::Ask);
+    registry
+        .register(
+            Arc::new(GetCurrentTimeTool),
+            ToolSource::Native,
+            ToolPermission::Auto,
+        )
+        .unwrap();
+    registry
+        .register(Arc::new(EchoTool), ToolSource::Native, ToolPermission::Ask)
+        .unwrap();
 
     let list = registry.list();
     assert_eq!(list.len(), 2);
@@ -253,20 +320,22 @@ async fn test_tools_config_roundtrip() {
     let path = dir.path().join("tools.toml");
 
     let registry = ToolRegistry::with_builtins();
-    registry.register_cli(CliToolConfig {
-        name: "mock_cli".to_string(),
-        description: "A mock CLI".to_string(),
-        executable: std::path::PathBuf::from("/bin/echo"),
-        args: vec!["{{message}}".to_string()],
-        schema: serde_json::json!({
-            "type": "object",
-            "properties": { "message": { "type": "string" } },
-            "required": ["message"],
-            "additionalProperties": false,
-        }),
-        timeout_secs: 10,
-        permission: ToolPermission::Ask,
-    });
+    registry
+        .register_cli(CliToolConfig {
+            name: "mock_cli".to_string(),
+            description: "A mock CLI".to_string(),
+            executable: std::path::PathBuf::from("/bin/echo"),
+            args: vec!["{{message}}".to_string()],
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": { "message": { "type": "string" } },
+                "required": ["message"],
+                "additionalProperties": false,
+            }),
+            timeout_secs: 10,
+            permission: ToolPermission::Ask,
+        })
+        .unwrap();
 
     registry
         .set_permission("echo", ToolPermission::Disabled)
@@ -320,4 +389,14 @@ async fn test_tools_config_default_path() {
     if let Some(p) = path {
         assert!(p.to_string_lossy().ends_with("tools.toml"));
     }
+}
+
+#[tokio::test]
+async fn test_register_duplicate_fails() {
+    let registry = ToolRegistry::new();
+    registry
+        .register(Arc::new(EchoTool), ToolSource::Native, ToolPermission::Auto)
+        .unwrap();
+    let result = registry.register(Arc::new(EchoTool), ToolSource::Native, ToolPermission::Auto);
+    assert!(matches!(result, Err(ToolError::AlreadyRegistered(_))));
 }

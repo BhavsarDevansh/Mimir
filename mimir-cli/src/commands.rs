@@ -4,12 +4,13 @@ use mimir_core::tools::{ToolPermission, ToolRegistry, ToolSource, ToolsConfig};
 pub async fn handle_tool_command(command: ToolCommands) {
     let registry = ToolRegistry::with_builtins();
 
-    // Load tools.toml if it exists.
+    // Load tools.toml if it exists; abort on any parse/load error.
     if let Some(path) = ToolsConfig::default_path()
         && path.exists()
         && let Err(e) = registry.load_tools_config(&path)
     {
-        eprintln!("Warning: failed to load tools config: {e}");
+        eprintln!("Error: failed to load tools config: {e}");
+        std::process::exit(1);
     }
 
     match command {

@@ -1,6 +1,6 @@
 # Tools
 
-Mimir can use **tools** — deterministic functions that perform specific tasks like telling the time, running a script, or querying data. Tools are exposed to the LLM in OpenAI-compatible format so the agent can decide when to invoke them.
+Mimir can use **tools** — deterministic functions that perform specific tasks like telling the time, running a script, or querying data. Tools are exposed to the LLM in OpenAI-compatible format, so the agent can decide when to invoke them.
 
 ## Built-in Tools
 

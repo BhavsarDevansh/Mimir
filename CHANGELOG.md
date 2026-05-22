@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-22
+
+### Added
+
+- **Personality System** (`mimir-core::personality`):
+  - `Personality` — resolves active preset from built-ins and custom files.
+  - Four built-in presets: `transparent` (default), `concise`, `warm`, `formal`.
+  - Custom preset loading from `~/.config/mimir/personalities/*.personality.md`.
+  - Custom presets override built-ins with the same name.
+  - Graceful fallback to `transparent` for unknown preset names.
+  - `system_prompt(memory_content)` composes preset prompt with persistent memory context.
+  - `list_presets()` returns all available preset names.
+- **Config extended** (`mimir-core::config`):
+  - `PersonalityConfig` with `preset` field (default `"transparent"`).
+  - Environment override: `MIMIR_PERSONALITY_PRESET`.
+- Documentation:
+  - `docs/personality-system.md` — technical design and API reference.
+  - `docs/wiki/personality.md` — user-facing guide to personalities.
+
+### Changed
+
+- Workspace crate versions bumped from `0.3.0` to `0.4.0`.
+- `config/default.toml` now includes `[personality]` section.
+- `mimir-core/src/lib.rs::version()` returns `"0.4.0"`.
+
 ## [0.3.0] - 2026-05-21
 
 ### Added

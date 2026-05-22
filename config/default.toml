@@ -20,3 +20,6 @@ temporal_horizon = 30
 max_turns = 20
 db_path = "~/.local/share/mimir/context.db"
 # max_tokens = 4096  # Optional: token budget for conversation history
+
+[personality]
+preset = "transparent"

@@ -13,6 +13,7 @@ pub struct Config {
     pub agent: AgentConfig,
     pub memory: MemoryConfig,
     pub context: ContextConfig,
+    pub personality: PersonalityConfig,
 }
 
 /// LLM provider settings.
@@ -54,6 +55,13 @@ pub struct ContextConfig {
     pub max_tokens: Option<u32>,
     pub max_turns: u16,
     pub db_path: Option<PathBuf>,
+}
+
+/// Personality subsystem settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PersonalityConfig {
+    pub preset: String,
 }
 
 /// How eagerly the agent initiates actions on its own.
@@ -151,6 +159,14 @@ impl Default for ContextConfig {
             max_tokens: None,
             max_turns: 20,
             db_path: Some(PathBuf::from("~/.local/share/mimir/context.db")),
+        }
+    }
+}
+
+impl Default for PersonalityConfig {
+    fn default() -> Self {
+        Self {
+            preset: "transparent".to_string(),
         }
     }
 }
@@ -270,6 +286,9 @@ impl Config {
         if let Ok(v) = std::env::var("MIMIR_CONTEXT_DB_PATH") {
             self.context.db_path = Some(PathBuf::from(v));
         }
+        if let Ok(v) = std::env::var("MIMIR_PERSONALITY_PRESET") {
+            self.personality.preset = v;
+        }
     }
 }
 
@@ -360,6 +379,9 @@ mod tests {
                 max_tokens: Some(2048),
                 max_turns: 10,
                 db_path: Some(PathBuf::from("~/.local/share/mimir/context.db")),
+            },
+            personality: PersonalityConfig {
+                preset: "transparent".to_string(),
             },
         };
 
@@ -514,5 +536,29 @@ max_turns = 5
         assert_eq!(config.llm.model, "custom-model");
         assert_eq!(config.context.max_turns, 5);
         assert_eq!(config.context.max_tokens, None); // default
+    }
+
+    #[test]
+    fn test_personality_config_toml_roundtrip() {
+        let toml_str = r#"
+[personality]
+preset = "formal"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.personality.preset, "formal");
+    }
+
+    #[test]
+    #[serial]
+    fn test_personality_preset_env_override() {
+        unsafe {
+            std::env::set_var("MIMIR_PERSONALITY_PRESET", "concise");
+        }
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        assert_eq!(config.personality.preset, "concise");
+        unsafe {
+            std::env::remove_var("MIMIR_PERSONALITY_PRESET");
+        }
     }
 }

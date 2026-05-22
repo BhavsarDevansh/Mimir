@@ -1,5 +1,6 @@
 [workspace]
 resolver = "3"
 members = ["mimir-cli", "mimir-core", "mimir-server"]
+default-members = ["mimir-cli"]
 
 [workspace.dependencies]

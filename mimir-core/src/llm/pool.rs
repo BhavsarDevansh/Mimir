@@ -54,7 +54,11 @@ impl LlmWorkerPool {
     /// Create a new worker pool with the given LLM configuration and pool settings.
     ///
     /// Spawns `worker_threads` background tasks that consume jobs from the queues.
-    pub fn new(llm_config: LlmConfig, config: WorkerPoolConfig) -> Self {
+    pub fn new(llm_config: LlmConfig, config: WorkerPoolConfig) -> Result<Self, &'static str> {
+        if config.worker_threads == 0 {
+            return Err("WorkerPoolConfig.worker_threads must be > 0");
+        }
+
         let inner = Arc::new(PoolInner {
             user_queue: Mutex::new(VecDeque::new()),
             system_queue: Mutex::new(VecDeque::new()),
@@ -75,7 +79,7 @@ impl LlmWorkerPool {
             });
         }
 
-        Self { inner, config }
+        Ok(Self { inner, config })
     }
 
     /// Enqueue a non-streaming chat job to the **user** queue.
@@ -232,6 +236,23 @@ impl LlmWorkerPool {
     }
 }
 
+// Accessor methods for runtime introspection
+impl LlmWorkerPool {
+    /// Number of worker threads configured for this pool.
+    pub fn worker_threads(&self) -> u8 {
+        self.config.worker_threads
+    }
+
+    /// Returns `true` if the user queue has capacity for at least one more job.
+    ///
+    /// This is a best-effort check — a concurrent enqueue can fill the gap before
+    /// the caller actually enqueues.
+    pub async fn user_queue_has_capacity(&self) -> bool {
+        let len = self.inner.user_queue.lock().await.len();
+        len < self.config.user_queue_size as usize
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,7 +280,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pool_enqueues_chat_job() {
-        let pool = LlmWorkerPool::new(test_config(), tiny_pool_config());
+        let pool = LlmWorkerPool::new(test_config(), tiny_pool_config()).unwrap();
 
         // This will fail with a network error, but it proves the job was
         // dequeued and processed by the worker.
@@ -306,7 +327,7 @@ mod tests {
             temperature: 0.0,
         };
 
-        let pool = LlmWorkerPool::new(config, tiny_pool_config());
+        let pool = LlmWorkerPool::new(config, tiny_pool_config()).unwrap();
 
         // Enqueue system first — it should sit in the system queue.
         let system_job = pool.enqueue_system_chat(vec![Message::system("system-first")]);
@@ -332,7 +353,7 @@ mod tests {
         config.user_queue_size = 0;
         config.system_queue_size = 0;
 
-        let pool = LlmWorkerPool::new(test_config(), config);
+        let pool = LlmWorkerPool::new(test_config(), config).unwrap();
 
         let result = pool.enqueue_chat(vec![Message::user("overflow")]).await;
         assert!(matches!(result, Err(LlmError::QueueFull)));
@@ -371,7 +392,7 @@ mod tests {
             temperature: 0.0,
         };
 
-        let pool = LlmWorkerPool::new(config, tiny_pool_config());
+        let pool = LlmWorkerPool::new(config, tiny_pool_config()).unwrap();
 
         let mut stream = pool
             .enqueue_chat_stream(vec![Message::user("hello")])
@@ -386,13 +407,5 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert!(matches!(&items[0], StreamItem::Text(t) if t == "Hello"));
         assert!(matches!(&items[1], StreamItem::Usage(u) if u.total_tokens == 4));
-    }
-}
-
-// Accessor methods for runtime introspection
-impl LlmWorkerPool {
-    /// Number of worker threads configured for this pool.
-    pub fn worker_threads(&self) -> u8 {
-        self.config.worker_threads
     }
 }

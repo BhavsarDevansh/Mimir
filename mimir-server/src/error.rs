@@ -4,6 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
+use tracing::error;
 
 /// Unified API error type for the HTTP server.
 #[derive(Debug, Serialize)]
@@ -35,7 +36,8 @@ pub fn session_not_found() -> Response {
 
 /// Convert a context error into an HTTP response.
 pub fn context_error(e: mimir_core::context::ContextError) -> Response {
-    let body = Json(ApiError::new(e.to_string(), "CONTEXT_ERROR"));
+    error!("context error: {e}");
+    let body = Json(ApiError::new("internal server error", "CONTEXT_ERROR"));
     (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
 }
 
@@ -54,7 +56,8 @@ pub fn llm_error(e: mimir_core::llm::types::LlmError) -> Response {
                 .into_response()
         }
         _ => {
-            let body = Json(ApiError::new(e.to_string(), "LLM_ERROR"));
+            error!("LLM error: {e}");
+            let body = Json(ApiError::new("internal server error", "LLM_ERROR"));
             (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
         }
     }
@@ -62,7 +65,8 @@ pub fn llm_error(e: mimir_core::llm::types::LlmError) -> Response {
 
 /// Convert a memory I/O error into an HTTP response.
 pub fn memory_error(e: anyhow::Error) -> Response {
-    let body = Json(ApiError::new(e.to_string(), "MEMORY_ERROR"));
+    error!("memory error: {e}");
+    let body = Json(ApiError::new("internal server error", "MEMORY_ERROR"));
     (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
 }
 

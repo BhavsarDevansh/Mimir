@@ -9,6 +9,8 @@ use axum::{
 use futures::{Stream, StreamExt};
 use mimir_core::llm::types::{LlmError, StreamItem};
 
+use tracing::error;
+
 use crate::error;
 use crate::state::AppState;
 use crate::types::{ChatRequest, ChatResponse};
@@ -119,26 +121,46 @@ pub async fn chat_stream_handler(
         }
     };
 
-    // The spawned task owns the session lock for the entire stream lifetime.
+    // Check queue capacity before committing to a 200 response.
+    // A concurrent request can still race ahead, in which case the spawned
+    // task handles QueueFull gracefully; this check reduces the probability.
+    if !state.llm_client.user_queue_has_capacity().await {
+        return Err(error::llm_error(LlmError::QueueFull));
+    }
+
+    // Acquire the session lock synchronously so QueueFull is returned before
+    // the 200 SSE response is committed to the wire.
+    let permit = state
+        .session_semaphore(&session_id)
+        .acquire_owned()
+        .await
+        .map_err(|_| {
+            error!("session semaphore closed");
+            error::internal("internal server error")
+        })?;
+
+    // Build the SSE channel and spawn the streaming task.
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<Event>(16);
     let state_clone = Arc::clone(&state);
     let session_id_clone = session_id.clone();
     let message_clone = req.message.clone();
 
     tokio::spawn(async move {
-        let sem = state_clone.session_semaphore(&session_id_clone);
-        let _permit = match sem.acquire().await {
-            Ok(p) => p,
-            Err(_) => return,
-        };
+        // Keep the session permit alive for the entire stream lifetime.
+        let _permit = permit;
 
         if let Err(e) = state_clone
             .context_manager
             .add_user_message(&session_id_clone, &message_clone)
             .await
         {
+            error!("failed to persist user message: {e}");
             let _ = event_tx
-                .send(Event::default().event("error").data(e.to_string()))
+                .send(
+                    Event::default()
+                        .event("error")
+                        .data("internal server error"),
+                )
                 .await;
             return;
         }
@@ -150,8 +172,13 @@ pub async fn chat_stream_handler(
         {
             Ok(msgs) => msgs,
             Err(e) => {
+                error!("failed to export messages: {e}");
                 let _ = event_tx
-                    .send(Event::default().event("error").data(e.to_string()))
+                    .send(
+                        Event::default()
+                            .event("error")
+                            .data("internal server error"),
+                    )
                     .await;
                 return;
             }
@@ -164,63 +191,93 @@ pub async fn chat_stream_handler(
         {
             Ok(mut stream) => {
                 let mut full_response = String::new();
+                let mut all_sends_ok = true;
                 let mut assistant_persisted = false;
+
                 while let Some(item) = stream.next().await {
                     match item {
                         Ok(StreamItem::Text(text)) => {
                             full_response.push_str(&text);
                             let event = Event::default().data(text);
                             if event_tx.send(event).await.is_err() {
-                                // Client disconnected.
+                                // Client disconnected — stop streaming but continue
+                                // accumulating for potential persistence.
+                                all_sends_ok = false;
+                                // Drain the rest of the stream silently.
+                                while stream.next().await.is_some() {}
                                 break;
                             }
                         }
                         Ok(StreamItem::Usage(usage)) => {
-                            // Persist assistant message before sending usage event.
-                            if let Err(e) = state_clone
-                                .context_manager
-                                .add_assistant_message(&session_id_clone, &full_response)
-                                .await
-                            {
-                                let _ = event_tx
-                                    .send(Event::default().event("error").data(e.to_string()))
-                                    .await;
-                                break;
-                            }
                             assistant_persisted = true;
                             let json = serde_json::to_string(&usage).unwrap_or_default();
                             let event = Event::default().event("usage").data(json);
-                            let _ = event_tx.send(event).await;
+                            let send_ok = event_tx.send(event).await.is_ok();
+                            if !send_ok {
+                                all_sends_ok = false;
+                            }
+                            // Only persist when the client received all data.
+                            if all_sends_ok
+                                && !full_response.is_empty()
+                                && let Err(e) = state_clone
+                                    .context_manager
+                                    .add_assistant_message(&session_id_clone, &full_response)
+                                    .await
+                            {
+                                error!("failed to persist assistant message: {e}");
+                                let _ = event_tx
+                                    .send(
+                                        Event::default()
+                                            .event("error")
+                                            .data("internal server error"),
+                                    )
+                                    .await;
+                            }
                         }
                         Err(e) => {
-                            let event = Event::default().event("error").data(e.to_string());
+                            error!("LLM stream error: {e}");
+                            let event = Event::default()
+                                .event("error")
+                                .data("internal server error");
                             let _ = event_tx.send(event).await;
                             break;
                         }
                     }
                 }
-                // If the provider never emitted a usage block, persist the
-                // accumulated response now so the session is not left incomplete.
+
+                // If the provider never emitted a usage block, and all sends
+                // succeeded, persist the accumulated response so the session
+                // is not left incomplete.
                 if !assistant_persisted
+                    && all_sends_ok
                     && !full_response.is_empty()
                     && let Err(e) = state_clone
                         .context_manager
                         .add_assistant_message(&session_id_clone, &full_response)
                         .await
                 {
+                    error!("failed to persist assistant message: {e}");
                     let _ = event_tx
-                        .send(Event::default().event("error").data(e.to_string()))
+                        .send(
+                            Event::default()
+                                .event("error")
+                                .data("internal server error"),
+                        )
                         .await;
                 }
             }
             Err(LlmError::QueueFull) => {
+                error!("queue full on enqueue (race after capacity check)");
                 let event = Event::default()
                     .event("error")
                     .data("server busy, try again later");
                 let _ = event_tx.send(event).await;
             }
             Err(e) => {
-                let event = Event::default().event("error").data(e.to_string());
+                error!("LLM stream setup error: {e}");
+                let event = Event::default()
+                    .event("error")
+                    .data("internal server error");
                 let _ = event_tx.send(event).await;
             }
         }

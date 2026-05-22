@@ -82,17 +82,31 @@ impl LlmClient {
         }
     }
 
+    /// Best-effort check whether the user queue has capacity.
+    ///
+    /// A concurrent request can fill the gap between this check and the actual
+    /// enqueue, so callers must still handle [`LlmError::QueueFull`].
+    pub async fn user_queue_has_capacity(&self) -> bool {
+        match &self.pool {
+            Some(pool) => pool.user_queue_has_capacity().await,
+            None => true,
+        }
+    }
+
     /// Create a new client from the provided LLM configuration.
     ///
     /// Internally creates a default [`LlmWorkerPool`] with one worker thread
     /// and bounded queues of size 100.
     pub fn new(config: LlmConfig) -> Self {
-        let pool = Arc::new(LlmWorkerPool::new(
-            config.clone(),
-            WorkerPoolConfig::default(),
-        ));
+        let pool = Arc::new(
+            LlmWorkerPool::new(config.clone(), WorkerPoolConfig::default())
+                .expect("default WorkerPoolConfig has worker_threads=1"),
+        );
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .expect("valid reqwest client"),
             config,
             pool: Some(pool),
         }
@@ -103,14 +117,19 @@ impl LlmClient {
     /// This is used internally by pool workers; external callers should use [`Self::new`].
     pub(crate) fn new_direct(config: LlmConfig) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .expect("valid reqwest client"),
             config,
             pool: None,
         }
     }
 
     /// Replace the default worker pool with a custom one (test injection).
-    pub fn with_pool(mut self, pool: Arc<LlmWorkerPool>) -> Self {
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn with_pool(mut self, pool: Arc<LlmWorkerPool>) -> Self {
         self.pool = Some(pool);
         self
     }

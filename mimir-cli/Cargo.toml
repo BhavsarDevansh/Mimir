@@ -1,8 +1,10 @@
 [package]
 name = "mimir"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 
 [dependencies]
 mimir-server = { path = "../mimir-server" }
 mimir-core = { path = "../mimir-core" }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

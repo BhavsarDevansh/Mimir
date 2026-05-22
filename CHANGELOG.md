@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-22
+
+### Added
+
+- **Tool Registry** (`mimir-core::tools`):
+  - `Tool` trait — object-safe async trait for native and CLI tools.
+  - `ToolRegistry` — thread-safe registry with `RwLock<HashMap>` for fast lookups.
+  - `ToolPermission` — `Auto`, `Ask`, `Disabled` levels.
+  - `ToolOutput` — structured result with `to_llm_text()` for compact LLM context.
+  - `ToolError` — centralised error covering permissions, timeouts, invalid args, CLI failures.
+  - Built-in tools: `GetCurrentTimeTool` (RFC 3339), `EchoTool` (message echo).
+  - `CliTool` wrapper — spawns `tokio::process::Command` with absolute-path enforcement, `kill_on_drop`, and configurable timeout.
+  - Template argument replacement: `{{key}}` in CLI args replaced from JSON arguments.
+  - `tools.toml` configuration at `~/.config/mimir/tools.toml` — array-of-tables for CLI tools, `[permissions]` table for overrides.
+  - OpenAI-compatible schema export (`export_openai_tools`) with `type: "function"`, `strict: true`.
+- **CLI tool management** (`mimir tool`):
+  - `mimir tool list` — table of name, source, permission.
+  - `mimir tool enable <name>` — set permission to `Auto`.
+  - `mimir tool disable <name>` — set permission to `Disabled`.
+  - `mimir tool permission <name> <level>` — explicit permission set.
+  - All changes persisted to `tools.toml`.
+- Documentation:
+  - `docs/tools-registry.md` — technical design and API reference.
+  - `docs/wiki/tools.md` — user-facing guide to tools and permissions.
+
+### Changed
+
+- Workspace crate versions bumped from `0.4.0` to `0.5.0`.
+- `mimir-core/Cargo.toml` — added `async-trait` and `process` feature to `tokio`.
+- `mimir-cli/Cargo.toml` — added `clap` and `tokio` dependencies.
+- `mimir-core/src/lib.rs::version()` returns `"0.5.0"`.
+
+
 ## [0.4.0] - 2026-05-22
 
 ### Added

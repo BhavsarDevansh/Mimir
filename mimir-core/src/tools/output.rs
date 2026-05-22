@@ -23,34 +23,51 @@ pub struct ToolOutput {
 impl ToolOutput {
     /// Render a compact plaintext representation for the LLM context.
     pub fn to_llm_text(&self) -> String {
-        let mut parts = Vec::new();
+        output_to_llm_text(
+            self.result.as_ref(),
+            self.error.as_ref(),
+            self.stdout.as_ref(),
+            self.stderr.as_ref(),
+            self.exit_code,
+        )
+    }
+}
 
-        if let Some(ref result) = self.result {
-            parts.push(format!("result: {result}"));
-        }
-        if let Some(ref error) = self.error {
-            parts.push(format!("error: {error}"));
-        }
-        if let Some(ref stdout) = self.stdout {
-            let trimmed = stdout.trim();
-            if !trimmed.is_empty() {
-                parts.push(format!("stdout: {trimmed}"));
-            }
-        }
-        if let Some(ref stderr) = self.stderr {
-            let trimmed = stderr.trim();
-            if !trimmed.is_empty() {
-                parts.push(format!("stderr: {trimmed}"));
-            }
-        }
-        if let Some(code) = self.exit_code {
-            parts.push(format!("exit_code: {code}"));
-        }
+/// Shared helper to render structured output fields as plaintext for LLM consumption.
+pub fn output_to_llm_text(
+    result: Option<&serde_json::Value>,
+    error: Option<&String>,
+    stdout: Option<&String>,
+    stderr: Option<&String>,
+    exit_code: Option<i32>,
+) -> String {
+    let mut parts = Vec::new();
 
-        if parts.is_empty() {
-            String::from("(no output)")
-        } else {
-            parts.join("\n")
+    if let Some(result) = result {
+        parts.push(format!("result: {result}"));
+    }
+    if let Some(error) = error {
+        parts.push(format!("error: {error}"));
+    }
+    if let Some(stdout) = stdout {
+        let trimmed = stdout.trim();
+        if !trimmed.is_empty() {
+            parts.push(format!("stdout: {trimmed}"));
         }
+    }
+    if let Some(stderr) = stderr {
+        let trimmed = stderr.trim();
+        if !trimmed.is_empty() {
+            parts.push(format!("stderr: {trimmed}"));
+        }
+    }
+    if let Some(code) = exit_code {
+        parts.push(format!("exit_code: {code}"));
+    }
+
+    if parts.is_empty() {
+        String::from("(no output)")
+    } else {
+        parts.join("\n")
     }
 }

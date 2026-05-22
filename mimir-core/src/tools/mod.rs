@@ -11,6 +11,7 @@ pub use cli::{CliTool, CliToolConfig};
 pub use config::ToolsConfig;
 pub use error::ToolError;
 pub use output::ToolOutput;
+pub use output::output_to_llm_text;
 pub use permission::ToolPermission;
 pub use registry::{ToolEntry, ToolMetadata, ToolRegistry, ToolSource};
 

@@ -14,16 +14,43 @@ You can also pass a custom path when starting Mimir (feature coming in a future 
 
 ## Creating the Config File
 
-If the file does not exist, Mimir starts with safe compiled-in defaults. To create one manually:
+If the file does not exist, Mimir automatically creates the directory structure and a default config on first run. You can also run the following command to initialise explicitly:
+
+```bash
+mkdir -p ~/.config/mimir
+cat > ~/.config/mimir/config.toml << 'TOML'   # not needed — `mimir init` does this for you
+[llm]
+endpoint = "https://api.openai.com/v1"
+# Set your API key here, or use the MIMIR_LLM_API_KEY environment variable.
+api_key = ""
+model = "gpt-4o"
+temperature = 0.2
+TOML
+```
+
+Or simply:
+
+```bash
+mimir init
+```
+
+This creates:
+- `~/.config/mimir/` — config directory
+- `~/.local/share/mimir/` — data directory
+- `~/.config/mimir/config.toml` — default config with helpful comments
+- `~/.config/mimir/memory.md` — working memory template
+
+Existing files are never overwritten. Running `mimir init` again prints "Mimir is already initialized."
+
+If you prefer to create the file manually:
 
 ```bash
 mkdir -p ~/.config/mimir
 cat > ~/.config/mimir/config.toml << 'TOML'
 [llm]
 endpoint = "https://api.openai.com/v1"
-api_key = "sk-..."
+api_key = ""
 model = "gpt-4o"
-max_tokens = 4096
 temperature = 0.2
 
 [agent]
@@ -37,6 +64,18 @@ char_limit = 2500
 auto_manage = true
 temporal_horizon = 30
 TOML
+```
+
+### Setting Your API Key
+
+The default config has `api_key = ""`. You must set it before using Mimir:
+
+```bash
+# Option 1: environment variable (recommended for security)
+export MIMIR_LLM_API_KEY="sk-..."
+
+# Option 2: edit the config file directly
+# Open ~/.config/mimir/config.toml and set api_key = "sk-..."
 ```
 
 ## Environment Variables

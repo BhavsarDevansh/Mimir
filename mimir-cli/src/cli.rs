@@ -22,6 +22,8 @@ pub enum Commands {
     },
     /// Start the Mimir HTTP server in the background.
     Start,
+    /// Initialise Mimir directories and default configuration.
+    Init,
     /// Send a single query to the LLM.
     Ask {
         /// The query to send.

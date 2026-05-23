@@ -2,6 +2,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use crate::paths;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -14,6 +16,29 @@ pub struct Config {
     pub memory: MemoryConfig,
     pub context: ContextConfig,
     pub personality: PersonalityConfig,
+}
+
+/// Result of an initialisation attempt.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InitResult {
+    /// All artefacts were created fresh.
+    Created {
+        /// Path to the configuration directory.
+        config_dir: PathBuf,
+        /// Path to the data directory.
+        data_dir: PathBuf,
+        /// Path to the generated default config file.
+        config_file: PathBuf,
+    },
+    /// Everything already existed; nothing was written.
+    AlreadyInitialized,
+}
+
+impl InitResult {
+    /// Returns `true` if this result indicates new files were created.
+    pub fn is_created(&self) -> bool {
+        matches!(self, InitResult::Created { .. })
+    }
 }
 
 /// LLM provider settings.
@@ -111,13 +136,13 @@ pub enum ConfigError {
     #[error("TOML parse error: {0}")]
     Parse(#[from] toml::de::Error),
 
+    /// A path resolution error occurred.
+    #[error("Path error: {0}")]
+    Paths(#[from] paths::PathsError),
+
     /// The supplied proactivity value is not recognised.
     #[error("Invalid proactivity value: '{0}'. Expected 'never', 'important_only', or 'always'.")]
     InvalidProactivity(String),
-
-    /// The platform configuration directory could not be determined.
-    #[error("Could not determine config directory")]
-    MissingConfigDir,
 }
 
 impl Default for LlmConfig {
@@ -158,7 +183,7 @@ impl Default for ContextConfig {
         Self {
             max_tokens: None,
             max_turns: 20,
-            db_path: Some(PathBuf::from("~/.local/share/mimir/context.db")),
+            db_path: paths::default_db_path().ok(),
         }
     }
 }
@@ -174,12 +199,11 @@ impl Default for PersonalityConfig {
 impl Config {
     /// Load configuration, applying the precedence:
     /// 1. Compiled defaults
-    /// 2. TOML file (optional path or default location)
-    /// 3. `MIMIR_*` environment variables
+    /// 2. Auto-initialised directories and default config (if no file exists)
+    /// 3. TOML file (optional path or default location)
+    /// 4. `MIMIR_*` environment variables
     ///
     /// If `path` is `Some`, the file must exist or an error is returned.
-    /// If `path` is `None`, the default platform config path is tried; if the file
-    /// does not exist the compiled defaults are used.
     pub fn load(path: Option<&Path>) -> Result<Self, ConfigError> {
         let mut config = Config::default();
 
@@ -189,11 +213,13 @@ impl Config {
                 config = toml::from_str(&contents)?;
             }
             None => {
-                if let Some(config_path) = Self::config_path()
-                    && config_path.exists()
-                {
+                let config_path = paths::config_path()?;
+                if config_path.exists() {
                     let contents = std::fs::read_to_string(&config_path)?;
                     config = toml::from_str(&contents)?;
+                } else {
+                    // First run: bootstrap directories and write default config.
+                    Self::init()?;
                 }
             }
         }
@@ -216,7 +242,82 @@ impl Config {
 
     /// Return the default platform configuration file path.
     pub fn config_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|p| p.join("mimir").join("config.toml"))
+        paths::config_path().ok()
+    }
+
+    /// Initialise the Mimir environment: create config and data directories,
+    /// write a default `config.toml` if it does not already exist.
+    ///
+    /// This is idempotent — subsequent calls return `AlreadyInitialized`
+    /// without overwriting existing files.
+    pub fn init() -> Result<InitResult, ConfigError> {
+        let cfg_dir = paths::config_dir()?;
+        let dat_dir = paths::data_dir()?;
+
+        paths::ensure_dir(&cfg_dir)?;
+        paths::ensure_dir(dat_dir.as_path())?;
+
+        let cfg_path = cfg_dir.join("config.toml");
+
+        // Use create_new for atomic "write only if not exists" semantics.
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&cfg_path)
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                let default_toml = Self::default_config_toml();
+                file.write_all(default_toml.as_bytes())?;
+                tracing::info!("Created default config at {}", cfg_path.display());
+                Ok(InitResult::Created {
+                    config_dir: cfg_dir,
+                    data_dir: dat_dir,
+                    config_file: cfg_path,
+                })
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                Ok(InitResult::AlreadyInitialized)
+            }
+            Err(e) => Err(ConfigError::Io(e)),
+        }
+    }
+
+    /// Generate the default `config.toml` contents with helpful comments.
+    fn default_config_toml() -> String {
+        r#"# Mimir Configuration
+# Edit this file to customise Mimir's behaviour.
+# You can also override any setting with MIMIR_* environment variables.
+
+[llm]
+endpoint = "https://api.openai.com/v1"
+# Set your API key here, or use the MIMIR_LLM_API_KEY environment variable.
+api_key = ""
+model = "gpt-4o"
+temperature = 0.2
+# max_tokens = 4096  # Optional: limit tokens per generation
+
+[agent]
+name = "Mimir"
+proactivity = "important_only"
+verbose_reasoning = false
+
+[memory]
+enabled = true
+char_limit = 2500
+auto_manage = true
+temporal_horizon = 30
+
+[context]
+max_turns = 20
+# db_path is resolved automatically; override only if needed.
+# db_path = "~/.local/share/mimir/context.db"
+# max_tokens = 4096  # Optional: token budget for conversation history
+
+[personality]
+preset = "transparent"
+"#
+        .to_string()
     }
 
     /// Apply environment variable overrides.
@@ -308,10 +409,7 @@ mod tests {
         assert_eq!(config.llm.max_tokens, None);
         assert_eq!(config.context.max_tokens, None);
         assert_eq!(config.context.max_turns, 20);
-        assert_eq!(
-            config.context.db_path,
-            Some(PathBuf::from("~/.local/share/mimir/context.db"))
-        );
+        assert_eq!(config.context.db_path, paths::default_db_path().ok());
     }
 
     #[test]
@@ -559,6 +657,206 @@ preset = "formal"
         assert_eq!(config.personality.preset, "concise");
         unsafe {
             std::env::remove_var("MIMIR_PERSONALITY_PRESET");
+        }
+    }
+
+    #[test]
+    fn test_init_creates_config_dir_and_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_home = dir.path().join("config");
+        let data_home = dir.path().join("data");
+
+        let orig_cfg = std::env::var_os("XDG_CONFIG_HOME");
+        let orig_data = std::env::var_os("XDG_DATA_HOME");
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", &cfg_home);
+            std::env::set_var("XDG_DATA_HOME", &data_home);
+        }
+
+        let result = Config::init().unwrap();
+        match result {
+            InitResult::Created {
+                config_dir,
+                data_dir,
+                config_file,
+            } => {
+                assert!(config_dir.exists());
+                assert!(data_dir.exists());
+                assert!(config_file.exists());
+                assert!(config_file.ends_with("config.toml"));
+            }
+            InitResult::AlreadyInitialized => {
+                panic!("first init should report Created");
+            }
+        }
+
+        // Verify config.toml content is valid TOML.
+        let contents = std::fs::read_to_string(cfg_home.join("mimir").join("config.toml")).unwrap();
+        let parsed: Config = toml::from_str(&contents).unwrap();
+        assert_eq!(parsed.llm.model, "gpt-4o");
+
+        match orig_cfg {
+            Some(v) => unsafe {
+                std::env::set_var("XDG_CONFIG_HOME", v);
+            },
+            None => unsafe {
+                std::env::remove_var("XDG_CONFIG_HOME");
+            },
+        }
+        match orig_data {
+            Some(v) => unsafe {
+                std::env::set_var("XDG_DATA_HOME", v);
+            },
+            None => unsafe {
+                std::env::remove_var("XDG_DATA_HOME");
+            },
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_init_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_home = dir.path().join("config");
+        let data_home = dir.path().join("data");
+
+        let orig_cfg = std::env::var_os("XDG_CONFIG_HOME");
+        let orig_data = std::env::var_os("XDG_DATA_HOME");
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", &cfg_home);
+            std::env::set_var("XDG_DATA_HOME", &data_home);
+        }
+
+        let result1 = Config::init().unwrap();
+        assert!(matches!(result1, InitResult::Created { .. }));
+
+        let result2 = Config::init().unwrap();
+        assert!(matches!(result2, InitResult::AlreadyInitialized));
+
+        // Config file should not have been overwritten.
+        let contents = std::fs::read_to_string(cfg_home.join("mimir").join("config.toml")).unwrap();
+        // Default TOML should still parse cleanly.
+        let parsed: Config = toml::from_str(&contents).unwrap();
+        assert_eq!(parsed.llm.model, "gpt-4o");
+
+        match orig_cfg {
+            Some(v) => unsafe {
+                std::env::set_var("XDG_CONFIG_HOME", v);
+            },
+            None => unsafe {
+                std::env::remove_var("XDG_CONFIG_HOME");
+            },
+        }
+        match orig_data {
+            Some(v) => unsafe {
+                std::env::set_var("XDG_DATA_HOME", v);
+            },
+            None => unsafe {
+                std::env::remove_var("XDG_DATA_HOME");
+            },
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_none_bootstraps_on_first_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_home = dir.path().join("config");
+        let data_home = dir.path().join("data");
+
+        let orig_cfg = std::env::var_os("XDG_CONFIG_HOME");
+        let orig_data = std::env::var_os("XDG_DATA_HOME");
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", &cfg_home);
+            std::env::set_var("XDG_DATA_HOME", &data_home);
+        }
+
+        // No config file exists yet.
+        let cfg_path = cfg_home.join("mimir").join("config.toml");
+        assert!(!cfg_path.exists());
+
+        let config = Config::load(None).unwrap();
+
+        // Config file should now exist on disk.
+        assert!(cfg_path.exists());
+
+        // Returned config should be defaults.
+        assert_eq!(config.llm.model, "gpt-4o");
+        assert_eq!(config.agent.name, "Mimir");
+
+        match orig_cfg {
+            Some(v) => unsafe {
+                std::env::set_var("XDG_CONFIG_HOME", v);
+            },
+            None => unsafe {
+                std::env::remove_var("XDG_CONFIG_HOME");
+            },
+        }
+        match orig_data {
+            Some(v) => unsafe {
+                std::env::set_var("XDG_DATA_HOME", v);
+            },
+            None => unsafe {
+                std::env::remove_var("XDG_DATA_HOME");
+            },
+        }
+    }
+
+    #[test]
+    fn test_default_config_toml_is_valid() {
+        let toml_str = Config::default_config_toml();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.llm.endpoint, "https://api.openai.com/v1");
+        assert_eq!(parsed.llm.api_key, "");
+        assert_eq!(parsed.llm.model, "gpt-4o");
+        assert_eq!(parsed.agent.name, "Mimir");
+    }
+
+    #[test]
+    #[serial]
+    fn test_init_does_not_overwrite_existing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_home = dir.path().join("config");
+        let data_home = dir.path().join("data");
+
+        let orig_cfg = std::env::var_os("XDG_CONFIG_HOME");
+        let orig_data = std::env::var_os("XDG_DATA_HOME");
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", &cfg_home);
+            std::env::set_var("XDG_DATA_HOME", &data_home);
+        }
+
+        // Write a custom config first.
+        Config::init().unwrap();
+        let cfg_path = cfg_home.join("mimir").join("config.toml");
+        let custom = r#"
+[llm]
+model = "custom-model"
+"#;
+        std::fs::write(&cfg_path, custom).unwrap();
+
+        // init again — should not overwrite.
+        let result = Config::init().unwrap();
+        assert!(matches!(result, InitResult::AlreadyInitialized));
+
+        let contents = std::fs::read_to_string(&cfg_path).unwrap();
+        assert!(contents.contains("custom-model"));
+
+        match orig_cfg {
+            Some(v) => unsafe {
+                std::env::set_var("XDG_CONFIG_HOME", v);
+            },
+            None => unsafe {
+                std::env::remove_var("XDG_CONFIG_HOME");
+            },
+        }
+        match orig_data {
+            Some(v) => unsafe {
+                std::env::set_var("XDG_DATA_HOME", v);
+            },
+            None => unsafe {
+                std::env::remove_var("XDG_DATA_HOME");
+            },
         }
     }
 }

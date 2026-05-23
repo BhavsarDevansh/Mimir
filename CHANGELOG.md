@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-05-23
+
+### Added
+
+- **First-run initialisation**: Mimir now auto-creates directories and default configuration on first run.
+  - `mimir init` CLI subcommand explicitly bootstraps the environment.
+  - `~/.config/mimir/` and `~/.local/share/mimir/` are created automatically on first access.
+  - Default `config.toml` is written with sensible defaults and helpful comments (API key guidance, commented-out overrides).
+  - Default `memory.md` is written with the standard template if missing.
+  - `Config::load(None)` now implicitly calls `Config::init()` when no config file exists, writing the default to disk.
+  - All file creation uses `create_new` for atomic write-only-if-not-exists semantics — existing files are never overwritten.
+  - `InitResult` enum reports what was created vs. what already existed.
+- **`paths` module** (`mimir-core/src/paths.rs`): centralised XDG-aware path resolution.
+  - `config_dir()`, `data_dir()`, `cache_dir()` — return `Result<PathBuf>` with clear error messages when platform directories cannot be determined.
+  - `config_path()`, `memory_path()`, `default_db_path()` — convenience helpers for well-known file paths.
+  - `ensure_dir()` — idempotent directory creation with descriptive errors.
+  - `PathsError` variants explain how to troubleshoot (set `$HOME`, `$XDG_CONFIG_HOME`, etc.).
+
+### Changed
+
+- `ContextConfig::default().db_path` now resolves via `paths::default_db_path()` instead of hardcoded `~/.local/share/mimir/context.db`.
+- `Config::config_path()` now delegates to `paths::config_path()` internally.
+- `MemoryLoader::get_memory_path()` now delegates to `paths::memory_path()` with a graceful fallback.
+- `ConfigError` now includes a `Paths` variant wrapping `PathsError`.
+- Version bumped across all workspace crates: `0.8.1` → `0.9.0` (minor: new feature).
+
 ## [0.8.1] - 2026-05-23
 
 ### Fixed

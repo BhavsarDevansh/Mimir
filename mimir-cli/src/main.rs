@@ -2,6 +2,7 @@ mod ask;
 mod chat;
 mod cli;
 mod commands;
+mod init;
 mod memory_cmd;
 mod skills_permissions_config;
 mod start;
@@ -18,6 +19,7 @@ async fn main() {
     match cli.command {
         cli::Commands::Tool { command } => handle_tool_command(command).await,
         cli::Commands::Skill { command } => handle_skill_command(command).await,
+        cli::Commands::Init => init::handle_init().await,
         cli::Commands::Start => start::handle_start(),
         cli::Commands::Ask {
             query,

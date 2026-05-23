@@ -1,12 +1,44 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tokio::fs;
+
+use crate::paths;
 
 /// Utility for loading `memory.md` from disk.
 pub struct MemoryLoader;
 
 impl MemoryLoader {
+    /// Initialise memory.md at the default platform path.
+    ///
+    /// Creates the config directory and writes the default template if the file
+    /// does not already exist. Returns `true` if the file was created, `false`
+    /// if it already existed.
+    pub async fn init() -> Result<bool> {
+        let path = paths::memory_path()
+            .context("Cannot initialise memory.md: unable to resolve platform path")?;
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .await
+        {
+            Ok(mut file) => {
+                let default = Self::default_memory();
+                tokio::io::AsyncWriteExt::write_all(&mut file, default.as_bytes()).await?;
+                tracing::info!("Created default memory.md at {}", path.display());
+                Ok(true)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Load memory.md from `path`.
     ///
     /// If the file does not exist, creates the parent directories, writes the
@@ -53,10 +85,7 @@ KB Pointers: (none)
 
     /// Return the platform-specific path for memory.md.
     pub fn get_memory_path() -> std::path::PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("mimir")
-            .join("memory.md")
+        paths::memory_path().unwrap_or_else(|_| std::path::PathBuf::from("memory.md"))
     }
 }
 

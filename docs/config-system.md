@@ -1,6 +1,7 @@
 # Configuration System
 
 > **Scope:** `mimir-core/src/config.rs`, `config/default.toml`
+> **Scope:** `mimir-core/src/config.rs`, `mimir-core/src/paths.rs`, `config/default.toml`
 > **Last updated:** 2026-05-21
 
 ## Architecture
@@ -11,16 +12,39 @@ Precedence (highest wins):
 
 1. `MIMIR_*` environment variables
 2. User TOML file (`~/.config/mimir/config.toml`)
-3. Compiled-in defaults (`config/default.toml`)
+3. Auto-initialised default config (if no file exists)
+4. Compiled-in defaults (`config/default.toml`)
 
 ## API Reference
 
 ### `Config::load(path: Option<&Path>) -> Result<Self, ConfigError>`
 
 - **`path = Some(p)`** — reads `p` as TOML. File must exist or an error is returned.
-- **`path = None`** — resolves the platform config directory via `dirs::config_dir()`, appends `mimir/config.toml`, and reads it if present. If the file is missing, compiled defaults are used silently.
+- **`path = None`** — resolves the platform config directory via `paths::config_path()`, reads the file if it exists. If the file is missing, `Config::init()` is called to bootstrap directories and write the default `config.toml`, then compiled defaults are returned.
 
 After file loading, all `MIMIR_*` environment variables are applied.
+
+### `Config::init() -> Result<InitResult, ConfigError>`
+
+Creates the Mimir directory structure and default configuration files. Idempotent — subsequent calls return `InitResult::AlreadyInitialized` without overwriting existing files.
+
+Returns `InitResult::Created { config_dir, data_dir, config_file }` on first call, or `InitResult::AlreadyInitialized` if everything already exists.
+
+### `paths` module
+
+Centralised XDG-aware path resolution in `mimir-core/src/paths.rs`:
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `config_dir()` | `Result<PathBuf, PathsError>` | `~/.config/mimir` |
+| `data_dir()` | `Result<PathBuf, PathsError>` | `~/.local/share/mimir` |
+| `cache_dir()` | `Result<PathBuf, PathsError>` | `~/.cache/mimir` |
+| `config_path()` | `Result<PathBuf, PathsError>` | `config_dir()/config.toml` |
+| `memory_path()` | `Result<PathBuf, PathsError>` | `config_dir()/memory.md` |
+| `default_db_path()` | `Result<PathBuf, PathsError>` | `data_dir()/context.db` |
+| `ensure_dir()` | `Result<(), PathsError>` | Idempotent `create_dir_all` |
+
+All functions return `Result` with descriptive `PathsError` variants that explain how to troubleshoot (set `$HOME`, `$XDG_CONFIG_HOME`, etc.).
 
 ### `Config::save(&self, path: &Path) -> Result<(), anyhow::Error>`
 
@@ -66,12 +90,21 @@ Invalid numeric or boolean values are ignored silently. Invalid `MIMIR_AGENT_PRO
 
 ## Error Type
 
-`ConfigError` (via `thiserror`) exposes three variants:
+`ConfigError` (via `thiserror`) exposes four variants:
 
-- `Io(std::io::Error)` — file read/write failures
-- `Parse(toml::de::Error)` — malformed TOML
-- `InvalidProactivity(String)` — illegal proactivity string
-- `MissingConfigDir` — platform config directory unavailable
+- `Io(std::io::Error)` -- file read/write failures
+- `Parse(toml::de::Error)` -- malformed TOML
+- `Paths(PathsError)` -- platform path resolution failure
+- `InvalidProactivity(String)` -- illegal proactivity string
+
+`PathsError` (via `thiserror`) exposes four variants:
+
+- `MissingConfigDir` -- platform config directory unavailable
+- `MissingDataDir` -- platform data directory unavailable
+- `MissingCacheDir` -- platform cache directory unavailable
+- `Io { path, source }` -- directory creation failure with path context
+
+All `PathsError` variants include troubleshooting guidance in their error messages (e.g., "Ensure $HOME is set, or set $XDG_CONFIG_HOME to a valid path.").
 
 ## Extending the Configuration
 

@@ -5,6 +5,9 @@ Mimir provides a command-line interface for direct interaction with the LLM and 
 ## Quick Start
 
 ```bash
+# First-time setup (creates directories and default config)
+mimir init
+
 # Start the background server
 mimir start
 
@@ -95,6 +98,35 @@ Mimir> What are the key differences between \
 ### History
 
 Chat history is saved to `~/.config/mimir/history.txt` and loaded automatically between sessions.
+
+## `mimir init` — First-Run Setup
+
+Create the Mimir directory structure and default configuration files. This happens automatically on first use, but you can also run it explicitly.
+
+```bash
+mimir init
+```
+
+Output:
+Linux (XDG) example:
+
+```text
+Created config directory: ~/.config/mimir
+Created data directory:    ~/.local/share/mimir
+Created default config:    ~/.config/mimir/config.toml
+Created default memory:    ~/.config/mimir/memory.md
+
+Next: set your API key in the config file or via MIMIR_LLM_API_KEY.
+Then run: mimir ask hello
+```
+
+If everything already exists, it prints:
+
+```text
+Mimir is already initialized.
+```
+
+Existing files are never overwritten.
 
 ## `mimir start` — Launch Server
 

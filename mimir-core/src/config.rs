@@ -424,7 +424,9 @@ bind_addr = "127.0.0.1:8080"
             self.server.bind_addr = v;
         }
         if let Ok(v) = std::env::var("MIMIR_SERVER_SOCKET_PATH") {
-            self.server.socket_path = Some(v);
+            if !v.trim().is_empty() {
+                self.server.socket_path = Some(v);
+            }
         }
     }
 }

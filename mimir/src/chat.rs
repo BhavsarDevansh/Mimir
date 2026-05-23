@@ -31,11 +31,11 @@ pub async fn handle_chat() {
 
     let system_prompt = personality.system_prompt(&memory_content);
 
-    let db_path = config
-        .context
-        .db_path
-        .clone()
-        .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share/mimir/context.db"));
+    let db_path = config.context.db_path.clone().unwrap_or_else(|| {
+        dirs::data_dir()
+            .map(|d| d.join("mimir").join("context.db"))
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/mimir/context.db"))
+    });
     let ctx = match ContextManager::new(&db_path).await {
         Ok(ctx) => ctx,
         Err(e) => {
@@ -107,7 +107,7 @@ pub async fn handle_chat() {
                     println!("  /memory - Show memory.md contents");
                     println!("  /status - Quick health check");
                     println!();
-                    println!("Multi-line input: end a line with \\\\ to continue.");
+                    println!("Multi-line input: end a line with \\ to continue.");
                     editor.add_history_entry(&line).ok();
                     continue;
                 }

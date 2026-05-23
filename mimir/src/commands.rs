@@ -190,6 +190,15 @@ pub async fn handle_skill_command(command: SkillCommands) {
             }
         }
         SkillCommands::Add { path } => {
+            let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+            if file_name.contains('/')
+                || file_name.contains('\\')
+                || file_name.contains("..")
+                || file_name.is_empty()
+            {
+                eprintln!("Error: invalid skill file name: '{}'", file_name);
+                std::process::exit(1);
+            }
             if path.extension().and_then(|s| s.to_str()) != Some("md") {
                 eprintln!("Error: skill file must have a .md extension");
                 std::process::exit(1);
@@ -246,6 +255,10 @@ pub async fn handle_skill_command(command: SkillCommands) {
             println!("Skill '{name}' added successfully.");
         }
         SkillCommands::Delete { name } => {
+            if name.contains('/') || name.contains('\\') || name.contains("..") || name.is_empty() {
+                eprintln!("Error: invalid skill name: '{}'", name);
+                std::process::exit(1);
+            }
             let meta = registry.metadata(&name);
             let path = meta
                 .as_ref()
@@ -266,6 +279,10 @@ pub async fn handle_skill_command(command: SkillCommands) {
             println!("Skill '{name}' deleted.");
         }
         SkillCommands::Enable { name } => {
+            if name.contains('/') || name.contains('\\') || name.contains("..") || name.is_empty() {
+                eprintln!("Error: invalid skill name: '{}'", name);
+                std::process::exit(1);
+            }
             if let Err(e) = registry.set_permission(&name, ToolPermission::Auto) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
@@ -277,6 +294,10 @@ pub async fn handle_skill_command(command: SkillCommands) {
             println!("Skill '{name}' enabled (permission: auto).");
         }
         SkillCommands::Disable { name } => {
+            if name.contains('/') || name.contains('\\') || name.contains("..") || name.is_empty() {
+                eprintln!("Error: invalid skill name: '{}'", name);
+                std::process::exit(1);
+            }
             if let Err(e) = registry.set_permission(&name, ToolPermission::Disabled) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);

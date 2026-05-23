@@ -37,8 +37,8 @@ Library crates provide code organisation but produce one binary:
 - `mimir` — binary crate (dispatches daemon vs client)
 
 **Transport:**
-- Primary: Unix domain socket (`~/.local/share/mimir/mimir.sock`)
-- Fallback: TCP localhost (`127.0.0.1:8080`) for remote clients, web UI, and Windows
+- **Active:** TCP localhost (`127.0.0.1:8080`) — used for all clients (local and remote)
+- **Planned (#25):** Unix domain socket (`~/.local/share/mimir/mimir.sock`) — will offer faster local IPC, instant daemon detection, and filesystem-level access control
 - Daemon detection: check socket file existence (instant, no network)
 
 **Daemon-down handling:**
@@ -47,7 +47,7 @@ When a CLI command cannot reach the daemon, the user is prompted:
 Error: Mimir is not running.
 Start the server now? [y/N]:
 ```
-If the user agrees, the daemon is started in-process or as a child process, and the command is retried.
+If the user agrees, the daemon is started in-process and the command is retried.
 
 **Storage:**
 - Config: `~/.config/mimir/`

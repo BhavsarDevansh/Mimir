@@ -30,8 +30,8 @@ Library crates provide code organisation without separate binaries:
 
 The daemon exposes its API over two transports simultaneously:
 
-1. **Unix domain socket** (`~/.local/share/mimir/mimir.sock`) — primary, local-only, instant daemon detection, filesystem permissions
-2. **TCP** (`127.0.0.1:8080`) — fallback for remote clients, web UI, and Windows
+1. **TCP** (`127.0.0.1:8080`) — active transport for all clients (local and remote)
+2. **Unix domain socket** (`~/.local/share/mimir/mimir.sock`) — planned for local CLI (see #25); will offer instant daemon detection, filesystem permissions, and lower latency
 
 The CLI prefers the Unix socket and falls back to TCP if the socket file is not present.
 
@@ -42,7 +42,7 @@ When a CLI command cannot connect to the daemon, the user is prompted:
 Error: Mimir is not running.
 Start the server now? [y/N]:
 ```
-If the user agrees, the daemon is started (either in-process or as a child process) and the command is retried.
+If the user agrees, the daemon is started in-process and the command is retried.
 
 ## Components
 

@@ -20,7 +20,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: SkillCommands,
     },
-    /// Start the Mimir HTTP server in the background.
+    /// Start the Mimir HTTP server (foreground daemon).
     Start,
     /// Initialise Mimir directories and default configuration.
     Init,

@@ -22,7 +22,7 @@ Build the foundational interaction layer: CLI, chat interface, LLM orchestration
 ### 1.2 Mono-Binary Architecture
 - [x] Consolidate `mimir-cli` and `mimir-server` into a single `mimir` binary
 - [ ] CLI commands (`ask`, `chat`, `status`, `memory`) talk to the daemon via HTTP, not directly to `mimir-core`
-- [ ] `mimir start` runs the Axum server in-process (foreground, systemd manages backgrounding)
+- [x] `mimir start` runs the Axum server in-process (foreground, systemd manages backgrounding)
 - [ ] Daemon-down detection: CLI prompts user to start the daemon if it is not running
 - [x] `mimir-server` becomes a library crate (no `main.rs`)
 - [ ] New `mimir-client` library crate for HTTP client logic

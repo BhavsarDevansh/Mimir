@@ -9,7 +9,7 @@ The primary interface for power users. The agent runs as a persistent background
 # Start the daemon (runs in foreground; systemd manages backgrounding)
 $ mimir start
 
-# Ask a question (talks to daemon via Unix socket or TCP)
+# Ask a question (talks to daemon via TCP (Unix socket planned — see #25))
 $ mimir ask "When was I last in Rome?"
 
 # Chat mode (interactive, talks to daemon)

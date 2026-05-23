@@ -61,7 +61,7 @@ mimir (single binary)
 ### Transport
 
 The daemon exposes its API over two transports simultaneously:
-1. **Unix domain socket** (`~/.local/share/mimir/mimir.sock`) — preferred for local CLI
+1. **Unix domain socket** (`~/.local/share/mimir/mimir.sock`) — planned for local CLI (see #25; not yet implemented)
 2. **TCP** (`127.0.0.1:8080`) — fallback for remote clients, web UI, and Windows
 
 ### Daemon-down Handling
@@ -157,7 +157,7 @@ All state lives in the daemon process. CLI commands are thin HTTP clients:
 
 ### Unix Domain Socket Transport
 
-The daemon listens on both a Unix domain socket and a TCP socket. The CLI prefers the Unix socket (faster, more secure, instant daemon detection) and falls back to TCP (for remote clients, web UI, Windows). See issue #25.
+The daemon will listen on both a Unix domain socket and a TCP socket once UDS is implemented (see #25). Currently, only TCP localhost (`127.0.0.1:8080`) is active. The CLI will prefer the Unix socket (faster, more secure, instant daemon detection) and fall back to TCP (for remote clients, web UI, Windows) when UDS is available.
 
 ### systemd Integration
 

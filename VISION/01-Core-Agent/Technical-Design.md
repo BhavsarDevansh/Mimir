@@ -33,7 +33,7 @@ The daemon exposes its API over two transports simultaneously:
 1. **TCP** (`127.0.0.1:8080`) — active transport for all clients (local and remote)
 2. **Unix domain socket** (`~/.local/share/mimir/mimir.sock`) — planned for local CLI (see #25); will offer instant daemon detection, filesystem permissions, and lower latency
 
-The CLI prefers the Unix socket and falls back to TCP if the socket file is not present.
+The CLI will prefer the Unix socket and fall back to TCP if the socket file is not present (planned, see #25).
 
 ### Daemon-down Handling
 

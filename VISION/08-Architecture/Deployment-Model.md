@@ -39,7 +39,7 @@ Library crates provide code organisation but produce one binary:
 **Transport:**
 - **Active:** TCP localhost (`127.0.0.1:8080`) — used for all clients (local and remote)
 - **Planned (#25):** Unix domain socket (`~/.local/share/mimir/mimir.sock`) — will offer faster local IPC, instant daemon detection, and filesystem-level access control
-- Daemon detection: check socket file existence (instant, no network)
+- Planned: Daemon detection — check socket file existence (instant, no network; not yet implemented, tracked as `#25`)
 
 **Daemon-down handling:**
 When a CLI command cannot reach the daemon, the user is prompted:

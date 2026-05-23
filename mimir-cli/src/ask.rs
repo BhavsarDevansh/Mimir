@@ -142,19 +142,36 @@ pub async fn handle_ask(opts: AskOptions) {
             .db_path
             .clone()
             .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share/mimir/context.db"));
-        if let Ok(ctx) = ContextManager::new(&db_path).await
-            && let Ok(sid) = ctx.create_session(&system_prompt).await {
-                let _ = ctx.add_user_message(&sid, &user_content).await;
-                if let Some(ref text) = response_text {
-                    let _ = ctx.add_assistant_message(&sid, text).await;
-                }
-                if let Some(ref usage) = usage {
-                    let _ = ctx
-                        .record_usage(&sid, usage.prompt_tokens, usage.completion_tokens)
-                        .await;
-                }
-                // Don't delete the session — let it persist for future context.
+        let ctx = match ContextManager::new(&db_path).await {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                eprintln!("Warning: failed to open context database: {}", e);
+                return;
             }
+        };
+        let sid = match ctx.create_session(&system_prompt).await {
+            Ok(sid) => sid,
+            Err(e) => {
+                eprintln!("Warning: failed to create context session: {}", e);
+                return;
+            }
+        };
+        if let Err(e) = ctx.add_user_message(&sid, &user_content).await {
+            eprintln!("Warning: failed to persist user message: {}", e);
+        }
+        if let Some(ref text) = response_text
+            && let Err(e) = ctx.add_assistant_message(&sid, text).await
+        {
+            eprintln!("Warning: failed to persist assistant message: {}", e);
+        }
+        if let Some(ref usage) = usage
+            && let Err(e) = ctx
+                .record_usage(&sid, usage.prompt_tokens, usage.completion_tokens)
+                .await
+        {
+            eprintln!("Warning: failed to record usage: {}", e);
+        }
+        // Don't delete the session — let it persist for future context.
     }
 }
 

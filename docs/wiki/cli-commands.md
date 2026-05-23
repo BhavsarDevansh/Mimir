@@ -81,7 +81,7 @@ mimir chat
 
 End a line with `\` to continue on the next line:
 
-```
+```text
 Mimir> What are the key differences between \
 ... Rust and Go for systems programming?
 ```

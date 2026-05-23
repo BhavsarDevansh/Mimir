@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-05-23
+
+### Fixed
+
+- **Review feedback**: Addressed PR review findings for CLI integration.
+  - Removed `colored` from CHANGELOG dependency list (was never added to Cargo.toml).
+  - Fixed Markdown lint issues in `docs/cli.md` and `docs/wiki/cli-commands.md` (missing language specifiers, blank lines after headings).
+  - `ask.rs`: Persistence failures (ContextManager, session, messages, usage) are now surfaced via `eprintln!` instead of being silently discarded.
+  - `chat.rs`: History directory is created via `create_dir_all`; load/save history errors are reported; truncated stream output is no longer persisted.
+  - `cli_tests.rs`: All tests now assert `status.success()` where applicable; `test_start_binary_not_found` covers both success and failure branches; `test_ask_piped_input_detection` now properly exercises piped-stdin detection without a query argument.
+
 ## [0.8.0] - 2026-05-22
 
 ### Added
@@ -76,3 +87,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - System-generated skill scaffolding: `SessionSummary` and `should_generate_skill()` trigger detector.
   - CLI commands: `mimir skill list`, `show`, `add`, `delete`, `enable`, `disable`.
   - `SkillRegistry::export_openai_tools()` for OpenAI-compatible function-calling exposure.
+ Dependencies added: `rustyline` (REPL with file history), `is-terminal` (TTY detection), `which` (server binary discovery), `futures` (stream processing).

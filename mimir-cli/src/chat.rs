@@ -56,6 +56,12 @@ pub async fn handle_chat() {
         .join("mimir")
         .join("history.txt");
 
+    if let Some(parent) = history_path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!("Warning: failed to create history directory: {}", e);
+    }
+
     let mut editor = match DefaultEditor::new() {
         Ok(e) => e,
         Err(e) => {
@@ -64,7 +70,11 @@ pub async fn handle_chat() {
         }
     };
 
-    let _ = editor.load_history(&history_path);
+    if history_path.exists()
+        && let Err(e) = editor.load_history(&history_path)
+    {
+        eprintln!("Warning: failed to load history: {}", e);
+    }
 
     println!("Mimir chat. Type /help for commands, /exit to quit.");
     println!("Press Ctrl+C during input to exit, Ctrl+C during streaming to abort.");
@@ -180,6 +190,7 @@ pub async fn handle_chat() {
             Ok(mut stream) => {
                 let mut full_response = String::new();
                 let mut total_usage = mimir_core::llm::types::Usage::default();
+                let mut stream_completed = true;
                 while let Some(item) = stream.next().await {
                     match item {
                         Ok(mimir_core::llm::StreamItem::Text(text)) => {
@@ -193,24 +204,30 @@ pub async fn handle_chat() {
                         }
                         Err(e) => {
                             eprintln!("\nStream error: {}", e);
+                            stream_completed = false;
                             break;
                         }
                     }
                 }
                 println!();
 
-                if !full_response.is_empty() {
+                if stream_completed && !full_response.is_empty() {
                     conversation.push(Message::assistant(&full_response));
-                    let _ = ctx.add_assistant_message(&session_id, &full_response).await;
+                    if let Err(e) = ctx.add_assistant_message(&session_id, &full_response).await {
+                        eprintln!("Warning: failed to persist assistant message: {}", e);
+                    }
                 }
-                if total_usage.total_tokens > 0 {
-                    let _ = ctx
+                if stream_completed
+                    && total_usage.total_tokens > 0
+                    && let Err(e) = ctx
                         .record_usage(
                             &session_id,
                             total_usage.prompt_tokens,
                             total_usage.completion_tokens,
                         )
-                        .await;
+                        .await
+                {
+                    eprintln!("Warning: failed to record usage: {}", e);
                 }
             }
             Err(e) => {
@@ -219,5 +236,7 @@ pub async fn handle_chat() {
         }
     }
 
-    let _ = editor.save_history(&history_path);
+    if let Err(e) = editor.save_history(&history_path) {
+        eprintln!("Warning: failed to save history: {}", e);
+    }
 }

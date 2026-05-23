@@ -6,7 +6,7 @@ The `mimir` binary provides a command-line interface for interacting with Mimir'
 
 ## Architecture
 
-```
+```text
 mimir-cli (binary)
 ├── cli.rs          — Command definitions (clap)
 ├── main.rs         — Dispatch
@@ -22,9 +22,11 @@ mimir-cli (binary)
 ## Subcommands
 
 ### `mimir start`
+
 Locates the `mimir-server` binary adjacent to the current executable or on `PATH`, and spawns it as a detached background process. Stdout and stderr are discarded.
 
 ### `mimir ask <query>`
+
 Sends a single query to the configured LLM. Supports:
 - `--no-stream` / `-n`: Non-streaming response
 - `--model <model>`: Model override
@@ -34,6 +36,7 @@ Sends a single query to the configured LLM. Supports:
 - Piped stdin: Prepended as context
 
 ### `mimir chat`
+
 Interactive REPL with:
 - Persistent history at `~/.config/mimir/history.txt`
 - Multi-line input (trailing `\` to continue)
@@ -42,6 +45,7 @@ Interactive REPL with:
 - Conversation context managed via `ContextManager`
 
 ### `mimir status`
+
 Displays:
 - Config path and existence
 - LLM endpoint and model
@@ -49,6 +53,7 @@ Displays:
 - Memory.md path, character count, and usage percentage
 
 ### `mimir memory`
+
 Loads and prints `memory.md` content to stdout.
 
 ## Key Design Decisions

@@ -40,7 +40,8 @@ fn write_temp_memory(dir: &tempfile::TempDir, content: &str) -> std::path::PathB
 
 #[test]
 fn test_status_output_contains_expected_sections() {
-    let (stdout, stderr, _status) = run_mimir(&["status"]);
+    let (stdout, stderr, status) = run_mimir(&["status"]);
+    assert!(status.success(), "mimir status exited with non-zero status");
     let combined = format!("{}{}", stdout, stderr);
     assert!(combined.contains("Config path"), "missing 'Config path'");
     assert!(combined.contains("LLM endpoint"), "missing 'LLM endpoint'");
@@ -72,6 +73,10 @@ char_limit = 1000
         .output()
         .unwrap();
 
+    assert!(
+        output.status.success(),
+        "mimir status exited with non-zero status"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let combined = format!("{}{}", stdout, stderr);
@@ -85,7 +90,8 @@ char_limit = 1000
 
 #[test]
 fn test_memory_command_output() {
-    let (stdout, stderr, _status) = run_mimir(&["memory"]);
+    let (stdout, stderr, status) = run_mimir(&["memory"]);
+    assert!(status.success(), "mimir memory exited with non-zero status");
     let combined = format!("{}{}", stdout, stderr);
     assert!(
         combined.contains("Mimir Working Memory") || combined.contains("Failed to load memory"),
@@ -105,6 +111,10 @@ fn test_memory_with_temp_file() {
         .output()
         .unwrap();
 
+    assert!(
+        output.status.success(),
+        "mimir memory exited with non-zero status"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let combined = format!("{}{}", stdout, stderr);
@@ -121,13 +131,20 @@ fn test_memory_with_temp_file() {
 
 #[test]
 fn test_ask_piped_input_detection() {
-    let output = Command::new(env!("CARGO_BIN_EXE_mimir"))
-        .args(["ask", "hello"])
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mimir"))
+        .args(["ask"])
         .env("NO_COLOR", "1")
         .stdin(std::process::Stdio::piped())
-        .output()
+        .spawn()
         .unwrap();
 
+    {
+        let stdin = child.stdin.take().expect("stdin not available");
+        let mut stdin = std::io::BufWriter::new(stdin);
+        stdin.write_all(b"hello\n").unwrap();
+    }
+
+    let output = child.wait_with_output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     assert!(
         !stderr.contains("no query provided"),
@@ -143,6 +160,10 @@ fn test_ask_empty_query_no_pipe() {
         .env("NO_COLOR", "1")
         .output()
         .unwrap();
+    assert!(
+        !output.status.success(),
+        "mimir ask with empty query should exit with failure"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     assert!(
         stderr.contains("no query provided"),
@@ -163,6 +184,12 @@ fn test_start_binary_not_found() {
             combined.contains("Could not find") || combined.contains("Failed to start"),
             "start should report not found when binary is missing"
         );
+    } else {
+        assert!(
+            combined.contains("Started") || combined.contains("Running"),
+            "start should report success when binary is found; got: {}",
+            combined
+        );
     }
 }
 
@@ -179,6 +206,10 @@ fn test_ask_incognito_flag_accepted() {
         .env("NO_COLOR", "1")
         .output()
         .unwrap();
+    assert!(
+        output.status.success(),
+        "mimir ask --help exited with non-zero status"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     assert!(
         stdout.contains("--incognito"),
@@ -193,6 +224,10 @@ fn test_ask_no_stream_flag_accepted() {
         .env("NO_COLOR", "1")
         .output()
         .unwrap();
+    assert!(
+        output.status.success(),
+        "mimir ask --help exited with non-zero status"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     assert!(
         stdout.contains("--no-stream"),
@@ -211,6 +246,10 @@ fn test_chat_help_flag() {
         .env("NO_COLOR", "1")
         .output()
         .unwrap();
+    assert!(
+        output.status.success(),
+        "mimir chat --help exited with non-zero status"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     assert!(
         stdout.contains("interactive"),

@@ -19,9 +19,6 @@ use mimir_core::config::Config;
 use crate::routes::{chat_handler, chat_stream_handler, memory_handler, status_handler};
 use crate::state::AppState;
 
-/// Default bind address for the Mimir HTTP server.
-pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8080";
-
 /// Build the Axum router with all routes and middleware.
 pub fn build_app(state: Arc<AppState>) -> Router {
     let cors = CorsLayer::new()
@@ -61,18 +58,19 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// Start the Mimir HTTP server on the given bind address.
+/// Start the Mimir HTTP server using the provided configuration.
 ///
-/// Parses `bind_addr` as a `SocketAddr` and runs until the process is terminated.
-pub async fn start_server(bind_addr: &str) -> anyhow::Result<()> {
-    let config = Config::load(None)?;
+/// Loads shared state from `config`, binds to `config.server.bind_addr`,
+/// and runs until the process is terminated.
+pub async fn start_server(config: Config) -> anyhow::Result<()> {
+    let bind_addr = config.server.bind_addr.clone();
     let state = Arc::new(AppState::from_config(config).await?);
 
     let app = build_app(state);
 
     let addr: SocketAddr = bind_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    info!("mimir-server listening on {}", bind_addr);
+    info!("Mimir daemon listening on {}", addr);
 
     axum::serve(listener, app).await?;
     Ok(())

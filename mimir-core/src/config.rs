@@ -268,7 +268,10 @@ impl Config {
             Ok(mut file) => {
                 use std::io::Write;
                 let default_toml = Self::default_config_toml();
-                file.write_all(default_toml.as_bytes())?;
+                if let Err(e) = file.write_all(default_toml.as_bytes()) {
+                    let _ = std::fs::remove_file(&cfg_path);
+                    return Err(ConfigError::Io(e));
+                }
                 tracing::info!("Created default config at {}", cfg_path.display());
                 Ok(InitResult::Created {
                     config_dir: cfg_dir,

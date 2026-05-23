@@ -1,0 +1,27 @@
+[package]
+name = "mimir"
+version = "0.10.0"
+edition = "2024"
+
+[[bin]]
+name = "mimir"
+path = "src/main.rs"
+
+[dependencies]
+mimir-core = { path = "../mimir-core" }
+mimir-server = { path = "../mimir-server" }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+dirs = "6.0"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+rustyline = { version = "18", default-features = false, features = ["with-file-history"] }
+is-terminal = "0.4"
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1.0"
+axum = { version = "0.8", features = ["macros"] }
+
+[dev-dependencies]
+tempfile = "3"

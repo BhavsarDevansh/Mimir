@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Mono-binary consolidation**: Mimir is now a single binary (`mimir`) instead of two separate binaries (`mimir` CLI + `mimir-server` daemon).
+  - `mimir start` now runs the Axum HTTP server in-process — no more forking a separate binary or searching PATH for `mimir-server`.
+  - The `mimir-server` crate is now a library only (no binary). Its `main.rs` has been removed.
+  - The `mimir` binary crate (formerly `mimir-cli`) is the single entry point, importing from both `mimir-core` and `mimir-server`.
+  - The `which` crate dependency is no longer needed for server discovery.
+  - CLI commands (`ask`, `chat`, `status`, `memory`, `tool`, `skill`, `init`) still use `mimir-core` directly. Future releases will refactor them to use an HTTP client talking to the daemon.
 - Version bumped across all workspace crates: `0.9.0` → `0.10.0` (minor: new feature).
 - `mimir-core/src/llm/types.rs`: moved test module after `Job` enum to fix clippy warning.
 

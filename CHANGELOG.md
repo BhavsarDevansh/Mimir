@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-05-23
+
+### Added
+
+- **Mono-binary architecture**: Mimir is now a single `mimir` binary instead of two separate binaries.
+  - `mimir start` runs the Axum HTTP server in-process — no more forking a separate `mimir-server` binary or searching PATH.
+  - The `mimir-server` crate is now library-only (no binary). Its `main.rs` has been removed.
+  - The `mimir` binary crate (formerly `mimir-cli`) is the single entry point, importing from both `mimir-core` and `mimir-server`.
+  - `Config.server.bind_addr` is used to configure the daemon's TCP listener (default: `127.0.0.1:8080`).
+  - CLI tests updated for the new binary location and in-process start behaviour.
+
+### Changed
+
+- Version bumped across all workspace crates: `0.10.0` → `0.11.0` (minor: architectural change).
+
+### Removed
+
+- `mimir-server` binary — the server is now started in-process by `mimir start`, not as a separate binary.
+- `which` crate dependency — no longer needed since the server is not launched as a separate process.
+
 ## [0.10.0] - 2026-05-23
 
 ### Added

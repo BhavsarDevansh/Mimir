@@ -4,4 +4,4 @@ members = ["mimir", "mimir-core", "mimir-server"]
 default-members = ["mimir"]
 
 [workspace.dependencies]
-version = "0.10.0"
+version = "0.11.0"

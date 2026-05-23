@@ -20,7 +20,7 @@ async fn main() {
         cli::Commands::Tool { command } => handle_tool_command(command).await,
         cli::Commands::Skill { command } => handle_skill_command(command).await,
         cli::Commands::Init => init::handle_init().await,
-        cli::Commands::Start => start::handle_start(),
+        cli::Commands::Start => start::handle_start().await,
         cli::Commands::Ask {
             query,
             no_stream,

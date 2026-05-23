@@ -16,6 +16,7 @@ pub struct Config {
     pub memory: MemoryConfig,
     pub context: ContextConfig,
     pub personality: PersonalityConfig,
+    pub server: ServerConfig,
 }
 
 /// Result of an initialisation attempt.
@@ -87,6 +88,28 @@ pub struct ContextConfig {
 #[serde(default)]
 pub struct PersonalityConfig {
     pub preset: String,
+}
+
+/// Server (daemon) settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ServerConfig {
+    /// TCP bind address for the HTTP server (e.g. "127.0.0.1:8080").
+    pub bind_addr: String,
+    /// Path to the Unix domain socket for local CLI communication.
+    /// Set to None to disable Unix socket.
+    /// Defaults to None (auto-detected from data dir on Unix platforms).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub socket_path: Option<String>,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            bind_addr: "127.0.0.1:8080".to_string(),
+            socket_path: None,
+        }
+    }
 }
 
 /// How eagerly the agent initiates actions on its own.
@@ -319,6 +342,10 @@ max_turns = 20
 
 [personality]
 preset = "transparent"
+
+[server]
+bind_addr = "127.0.0.1:8080"
+# socket_path = "~/.local/share/mimir/mimir.sock"  # Optional: Unix domain socket for local CLI
 "#
         .to_string()
     }
@@ -393,6 +420,12 @@ preset = "transparent"
         if let Ok(v) = std::env::var("MIMIR_PERSONALITY_PRESET") {
             self.personality.preset = v;
         }
+        if let Ok(v) = std::env::var("MIMIR_SERVER_BIND_ADDR") {
+            self.server.bind_addr = v;
+        }
+        if let Ok(v) = std::env::var("MIMIR_SERVER_SOCKET_PATH") {
+            self.server.socket_path = if v.trim().is_empty() { None } else { Some(v) };
+        }
     }
 }
 
@@ -413,6 +446,8 @@ mod tests {
         assert_eq!(config.context.max_tokens, None);
         assert_eq!(config.context.max_turns, 20);
         assert_eq!(config.context.db_path, paths::default_db_path().ok());
+        assert_eq!(config.server.bind_addr, "127.0.0.1:8080");
+        assert_eq!(config.server.socket_path, None);
     }
 
     #[test]
@@ -483,6 +518,10 @@ mod tests {
             },
             personality: PersonalityConfig {
                 preset: "transparent".to_string(),
+            },
+            server: ServerConfig {
+                bind_addr: "127.0.0.1:8080".to_string(),
+                socket_path: None,
             },
         };
 

@@ -194,6 +194,24 @@ impl Message {
     }
 }
 
+/// A job dispatched to the LLM worker pool.
+pub enum Job {
+    /// Non-streaming chat completion.
+    Chat {
+        /// Conversation messages.
+        messages: Vec<Message>,
+        /// Channel to send the result back.
+        respond: tokio::sync::oneshot::Sender<Result<(String, Usage), LlmError>>,
+    },
+    /// Streaming chat completion.
+    ChatStream {
+        /// Conversation messages.
+        messages: Vec<Message>,
+        /// Channel to stream items back.
+        respond: tokio::sync::mpsc::Sender<Result<StreamItem, LlmError>>,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,22 +316,4 @@ mod tests {
         let err2 = LlmError::RetryExhausted { attempts: 4 };
         assert_eq!(err2.to_string(), "retry exhausted after 4 attempts");
     }
-}
-
-/// A job dispatched to the LLM worker pool.
-pub enum Job {
-    /// Non-streaming chat completion.
-    Chat {
-        /// Conversation messages.
-        messages: Vec<Message>,
-        /// Channel to send the result back.
-        respond: tokio::sync::oneshot::Sender<Result<(String, Usage), LlmError>>,
-    },
-    /// Streaming chat completion.
-    ChatStream {
-        /// Conversation messages.
-        messages: Vec<Message>,
-        /// Channel to stream items back.
-        respond: tokio::sync::mpsc::Sender<Result<StreamItem, LlmError>>,
-    },
 }

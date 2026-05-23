@@ -2,28 +2,46 @@
 
 ## Overview
 
-The `mimir` binary provides a command-line interface for interacting with Mimir's subsystems directly, without going through the HTTP server. It links `mimir-core` as a library for all LLM, memory, context, and personality operations.
+The `mimir` binary provides a command-line interface for interacting with Mimir. It operates in two modes:
+
+- **Daemon mode** (`mimir start`): runs the persistent HTTP server in the foreground
+- **Client mode** (`mimir ask`, `mimir chat`, etc.): interacts with Mimir's subsystems
+
+Currently, client-mode commands link `mimir-core` directly for LLM, memory, context, and personality operations. In a future release, they will communicate with the daemon via HTTP.
 
 ## Architecture
 
 ```text
-mimir-cli (binary)
+mimir (single binary)
+├── main.rs         — Dispatch: daemon or client based on subcommand
 ├── cli.rs          — Command definitions (clap)
-├── main.rs         — Dispatch
 ├── commands.rs     — Tool & Skill subcommand handlers
-├── skills_permissions_config.rs — Skill permission persistence
-├── start.rs        — Server launcher
+├── start.rs        — Daemon launcher (in-process Axum server)
 ├── ask.rs          — Single-shot query
 ├── chat.rs         — Interactive REPL
 ├── status.rs       — System status
-└── memory_cmd.rs   — Memory viewer
+├── memory_cmd.rs   — Memory viewer
+├── init.rs         — First-run bootstrap
+└── skills_permissions_config.rs — Skill permission persistence
 ```
+
+### Library Crates (code organisation, not separate binaries)
+
+| Crate | Type | Role |
+|-------|------|------|
+| `mimir-core` | library | LLM client, config, memory, context, personality, tools, skills |
+| `mimir-server` | library | Axum routes, state, middleware |
+| `mimir` | binary | Single entry point — dispatches daemon or client mode |
 
 ## Subcommands
 
 ### `mimir start`
 
-Locates the `mimir-server` binary adjacent to the current executable or on `PATH`, and spawns it as a detached background process. Stdout and stderr are discarded.
+Runs the Mimir HTTP server in the foreground (in-process, no separate binary). Use systemd or a process manager for backgrounding. Reads `bind_addr` from `[server]` config.
+
+### `mimir init`
+
+Creates Mimir directories and default configuration files. Idempotent.
 
 ### `mimir ask <query>`
 
@@ -58,7 +76,9 @@ Loads and prints `memory.md` content to stdout.
 
 ## Key Design Decisions
 
-- **Direct library linkage**: CLI talks to `mimir-core` directly, bypassing the HTTP server. This avoids unnecessary network overhead for terminal use.
-- **LlmClient pooling**: Each command creates its own `LlmClient` with a single-worker pool, enabling concurrent handling without coupling across commands.
+- **Single binary**: The `mimir` binary contains both the daemon and client code. `mimir start` runs the Axum server in-process; no separate `mimir-server` binary is needed.
+- **Daemon mode**: The server reads `bind_addr` from `[server]` config (default: `127.0.0.1:8080`) and listens for HTTP connections. systemd manages backgrounding and restarts.
+- **Direct library linkage (current)**: CLI commands talk to `mimir-core` directly, bypassing the HTTP server. This will be refactored to use `mimir-client` for daemon communication in a future release.
+- **LlmClient pooling**: Each command creates its own `LlmClient` with a single-worker pool.
 - **Incognito mode**: Skips `ContextManager` persistence; uses `LlmClient` for one-shot operations.
 - **REPL session**: Uses a single `ContextManager` session for the REPL duration with in-memory conversation history.

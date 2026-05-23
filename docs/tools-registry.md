@@ -159,7 +159,7 @@ get_current_time = "auto"
 
 ## CLI Management
 
-`mimir-cli` exposes:
+`mimir` exposes:
 
 | Command | Action |
 |---------|--------|

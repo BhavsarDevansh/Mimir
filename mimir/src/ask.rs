@@ -137,11 +137,11 @@ pub async fn handle_ask(opts: AskOptions) {
 
     // Persist the interaction unless incognito was requested.
     if !opts.incognito {
-        let db_path = config
-            .context
-            .db_path
-            .clone()
-            .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share/mimir/context.db"));
+        let db_path = config.context.db_path.clone().unwrap_or_else(|| {
+            dirs::data_dir()
+                .map(|d| d.join("mimir").join("context.db"))
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp/mimir/context.db"))
+        });
         let ctx = match ContextManager::new(&db_path).await {
             Ok(ctx) => ctx,
             Err(e) => {

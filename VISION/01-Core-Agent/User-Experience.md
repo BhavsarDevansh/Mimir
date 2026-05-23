@@ -6,20 +6,29 @@
 The primary interface for power users. The agent runs as a persistent background daemon with a CLI client.
 
 ```bash
-# Start the daemon
-$ agent start
+# Start the daemon (runs in foreground; systemd manages backgrounding)
+$ mimir start
 
-# Ask a question
-$ agent ask "When was I last in Rome?"
+# Ask a question (talks to daemon via TCP (Unix socket planned — see #25))
+$ mimir ask "When was I last in Rome?"
 
-# Chat mode (interactive)
-$ agent chat
+# Chat mode (interactive, talks to daemon)
+$ mimir chat
 > When was I last in Rome?
 Investigating your calendar, photos, and emails...
 You were last in Rome from May 3–7, 2025. I found a Colosseum tour on May 5th.
 
-# Proactive notification
-$ agent notify "You have a flight to Tokyo in 6 hours. It's long-haul and the forecast shows rain — pack an umbrella and your warmer jacket from storage."
+# Stop the daemon
+$ mimir stop
+```
+
+If the daemon is not running when a CLI command is issued:
+```
+$ mimir ask "hello"
+Error: Mimir is not running.
+Start the server now? [y/N]: y
+Starting mimir... done.
+[response streams]
 ```
 
 ### Chat Interface
@@ -30,7 +39,7 @@ A local web-based chat UI (or TUI) for conversational interaction.
 - Toggle "verbose mode" to see reasoning steps
 
 ### Configuration
-All settings live in `~/.config/agent/config.toml`:
+All settings live in `~/.config/mimir/config.toml`:
 ```toml
 [llm]
 endpoint = "https://api.openai.com/v1"
@@ -38,9 +47,13 @@ api_key = "sk-..."
 model = "gpt-5"
 
 [agent]
-name = "Ariadne"
+name = "Mimir"
 proactivity = "important_only"  # never | important_only | always
 verbose_reasoning = false
+
+[server]
+bind_addr = "127.0.0.1:8080"                    # TCP listener (remote clients, web UI)
+# socket_path = "~/.local/share/mimir/mimir.sock"  # Unix socket (local CLI, preferred)
 ```
 
 ## Personality

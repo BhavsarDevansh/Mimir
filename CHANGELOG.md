@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-05-23
+
+### Added
+
+- **Mono-binary architecture**: Mimir is now a single `mimir` binary instead of two separate binaries.
+  - `mimir start` runs the Axum HTTP server in-process — no more forking a separate `mimir-server` binary or searching PATH.
+  - The `mimir-server` crate is now library-only (no binary). Its `main.rs` has been removed.
+  - The `mimir` binary crate (formerly `mimir-cli`) is the single entry point, importing from both `mimir-core` and `mimir-server`.
+  - `Config.server.bind_addr` is used to configure the daemon's TCP listener (default: `127.0.0.1:8080`).
+  - CLI tests updated for the new binary location and in-process start behaviour.
+
+### Changed
+
+- Version bumped across all workspace crates: `0.10.0` → `0.11.0` (minor: architectural change).
+
+### Removed
+
+- `mimir-server` binary — the server is now started in-process by `mimir start`, not as a separate binary.
+- `which` crate dependency — no longer needed since the server is not launched as a separate process.
+
+## [0.10.0] - 2026-05-23
+
+### Added
+
+- **ServerConfig**: New `[server]` config section for daemon settings.
+  - `bind_addr` — TCP bind address for the HTTP server (default: `127.0.0.1:8080`).
+  - `socket_path` — Optional Unix domain socket path for local CLI communication (disabled by default; see #25).
+  - Environment variable overrides: `MIMIR_SERVER_BIND_ADDR`, `MIMIR_SERVER_SOCKET_PATH`.
+  - Added to `Config` struct, `default.toml`, and all relevant tests.
+- **Mono-binary architecture documentation**: Updated VISION and implementation docs to describe the single-binary daemon/client model.
+  - `VISION/09-Roadmap/Phase-1-Core-Agent.md` — added mono-binary deliverables, systemd integration, Unix socket transport.
+  - `VISION/08-Architecture/Deployment-Model.md` — described single-binary process model, systemd unit file, daemon-down prompt.
+  - `VISION/01-Core-Agent/Technical-Design.md` — documented single-binary architecture, transport layer, daemon-down handling.
+  - `VISION/01-Core-Agent/User-Experience.md` — updated CLI examples for daemon/client model, added `[server]` config.
+  - `VISION/00-Overview/Onboarding.md` — replaced `agent` references with `mimir`, updated paths.
+  - `Mimir-Implementation-Context.md` — rewrote architecture section, added key design decisions, updated success criteria.
+- **GitHub issue #25**: Unix domain socket transport for local CLI↔daemon communication.
+
+### Changed
+
+- Version bumped across all workspace crates: `0.9.0` → `0.10.0` (minor: new feature).
+- `mimir-core/src/llm/types.rs`: moved test module after `Job` enum to fix clippy warning.
+
 ## [0.9.0] - 2026-05-23
 
 ### Added
@@ -46,8 +89,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **CLI chat subcommands** (`mimir-cli`): direct LLM interaction from the terminal.
-  - `mimir start` — spawns `mimir-server` in the background as a detached child.
+- **CLI chat subcommands** (`mimir` binary): direct LLM interaction from the terminal.
+  - `mimir start` — runs the Mimir HTTP server in the foreground (in-process, no separate binary).
   - `mimir ask <query>` — single-shot query with optional streaming (`--no-stream`), model override (`--model`), token usage (`--verbose`), incognito mode (`--incognito`), personality override (`--personality`), and piped stdin support.
   - `mimir chat` — interactive REPL with persistent history (`~/.config/mimir/history.txt`), multi-line input, built-in commands (`/exit`, `/clear`, `/memory`, `/status`, `/help`), and conversation context management via `ContextManager`.
   - `mimir status` — displays config path, LLM endpoint/model, connectivity check, and memory.md stats (usage %).
@@ -78,7 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **HTTP Chat Server** (`mimir-server`): Axum-based HTTP daemon on `127.0.0.1:8080`.
+- **HTTP Chat Server**: Axum-based HTTP daemon on `127.0.0.1:8080`, runs in-process via `mimir start`.
   - `POST /chat` — blocking chat completion with server-managed sessions.
   - `POST /chat/stream` — SSE streaming chat completion with server-managed sessions.
   - `GET /status` — health and runtime state (queue depth, worker count).

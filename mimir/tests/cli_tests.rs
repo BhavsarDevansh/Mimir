@@ -176,21 +176,21 @@ fn test_ask_empty_query_no_pipe() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_start_binary_not_found() {
-    let (stdout, stderr, status) = run_mimir(&["start"]);
-    let combined = format!("{}{}", stdout, stderr);
-    if !status.success() {
-        assert!(
-            combined.contains("Could not find") || combined.contains("Failed to start"),
-            "start should report not found when binary is missing"
-        );
-    } else {
-        assert!(
-            combined.contains("Started") || combined.contains("Running"),
-            "start should report success when binary is found; got: {}",
-            combined
-        );
-    }
+fn test_start_starts_server() {
+    // In the mono-binary architecture, `mimir start` runs the server
+    // in-process. We can't fully test this without a running LLM endpoint,
+    // but we can verify the command is recognised by checking --help.
+    let output = Command::new(env!("CARGO_BIN_EXE_mimir"))
+        .args(["start", "--help"])
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "mimir start --help should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        stdout.contains("Start the Mimir"),
+        "start --help should describe the command"
+    );
 }
 
 // ---------------------------------------------------------------------------

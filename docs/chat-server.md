@@ -2,7 +2,7 @@
 
 ## Overview
 
-`mimir-server` is an Axum HTTP daemon that exposes Mimir's chat capabilities over a local REST API. It binds to `127.0.0.1:8080` by default and is intended for single-user, local-first operation.
+The Mimir chat server is an Axum HTTP daemon that runs in-process as part of the `mimir start` command. It exposes chat, status, and memory endpoints over a local REST API.
 
 ## Endpoints
 
@@ -61,7 +61,7 @@ Keep-alive pings are sent every 10 seconds.
 **Response body:**
 ```json
 {
-  "version": "0.7.0",
+  "version": "0.11.0",
   "uptime_seconds": 123,
   "queue_depth_user": 0,
   "queue_depth_system": 0,
@@ -91,3 +91,7 @@ Per-session requests are serialised using a `DashMap<String, Arc<Semaphore>>`. C
 - Origins: `http://localhost:8080`, `http://127.0.0.1:8080`, `http://localhost:3000`, `http://127.0.0.1:3000`, `http://localhost:5173`, `http://127.0.0.1:5173`
 - Methods: `GET`, `POST`
 - Headers: `Content-Type`
+
+## Configuration
+
+The server reads its bind address from `[server].bind_addr` in `~/.config/mimir/config.toml` (default: `127.0.0.1:8080`). See [Configuration](configuration.md) for details.

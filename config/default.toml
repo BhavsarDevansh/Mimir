@@ -1,5 +1,6 @@
 [llm]
 endpoint = "https://api.openai.com/v1"
+# Set your API key here, or use the MIMIR_LLM_API_KEY environment variable.
 api_key = ""
 model = "gpt-4o"
 temperature = 0.2
@@ -23,3 +24,7 @@ db_path = "~/.local/share/mimir/context.db"
 
 [personality]
 preset = "transparent"
+
+[server]
+bind_addr = "127.0.0.1:8080"
+# socket_path = "~/.local/share/mimir/mimir.sock"  # Optional: Unix domain socket for local CLI

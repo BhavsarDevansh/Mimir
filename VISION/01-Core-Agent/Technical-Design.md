@@ -10,6 +10,40 @@ The Core Agent is the orchestration layer. It does not contain business logic fo
 4. Stream responses back to the user
 5. Log interactions for learning
 
+## Single Binary Architecture
+
+Mimir is distributed as a single `mimir` binary that operates in two modes:
+
+- **Daemon mode** (`mimir start`): runs a persistent process with the HTTP server, LLM worker pool, context manager, and all subsystems
+- **Client mode** (`mimir ask`, `mimir chat`, `mimir status`, `mimir memory`, `mimir stop`): thin HTTP client that talks to the daemon
+
+Library crates provide code organisation without separate binaries:
+
+| Crate | Type | Role |
+|-------|------|------|
+| `mimir-core` | library | LLM client, config, memory, context, personality, tools, skills, paths |
+| `mimir-server` | library | Axum routes, state, middleware |
+| `mimir-client` | library | HTTP client for talking to the daemon |
+| `mimir` | binary | Single entry point — dispatches daemon or client mode |
+
+### Transport
+
+The daemon exposes its API over two transports simultaneously:
+
+1. **TCP** (`127.0.0.1:8080`) — active transport for all clients (local and remote)
+2. **Unix domain socket** (`~/.local/share/mimir/mimir.sock`) — planned for local CLI (see #25); will offer instant daemon detection, filesystem permissions, and lower latency
+
+The CLI will prefer the Unix socket and fall back to TCP if the socket file is not present (planned, see #25).
+
+### Daemon-down Handling
+
+When a CLI command cannot connect to the daemon, the user is prompted:
+```
+Error: Mimir is not running.
+Start the server now? [y/N]:
+```
+If the user agrees, the daemon is started in-process and the command is retried.
+
 ## Components
 
 ### 1. Input Router
@@ -65,13 +99,14 @@ User Input → Input Router → Context Manager → LLM Client
 
 The Core Agent exposes:
 - **HTTP API** (localhost only by default) for chat UI
-- **Unix socket / named pipe** for CLI
-- **gRPC or similar** for internal subsystem communication
+- **Unix domain socket** for local CLI (preferred transport)
+- **TCP fallback** for remote clients and Windows
+- **gRPC or similar** for internal subsystem communication (future)
 
 ## Technology Stack
 - **Language:** Rust (performance, safety, native async)
-- **HTTP Framework:** Axum or Actix-web
-- **LLM Client:** Custom async HTTP client with streaming
+- **HTTP Framework:** Axum
+- **LLM Client:** Custom async HTTP client with streaming (reqwest)
 - **Config:** TOML files
 - **Logging:** Structured JSON logging (tracing)
 

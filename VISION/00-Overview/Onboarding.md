@@ -4,31 +4,31 @@
 
 ### Primary Method
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://install.agent.dev | sh
+curl --proto '=https' --tlsv1.2 -sSf https://install.mimir.dev | sh
 ```
 
 This installs:
-- The `agent` binary to `~/.local/bin/`
+- The `mimir` binary to `~/.local/bin/`
 - A systemd user service file (Linux) or launchd plist (macOS)
-- Default config scaffolding to `~/.config/agent/`
+- Default config scaffolding to `~/.config/mimir/`
 
 ### Alternative: Cargo
 ```bash
-cargo install agent
+cargo install mimir
 ```
 
 ### Alternative: Docker
 ```bash
-docker run -v ~/.config/agent:/config -v ~/.local/share/agent:/data agent:latest
+docker run -v ~/.config/mimir:/config -v ~/.local/share/mimir:/data mimir:latest
 ```
 
 ## First-Run Wizard
 
-After installation, running `agent start` for the first time launches the wizard.
+After installation, running `mimir start` for the first time launches the wizard.
 
 ### Step 1: Welcome
 ```
-Welcome. I am your personal agent. I learn from your life, 
+Welcome. I am your personal intelligence. I learn from your life, 
 connect to your services, and become more useful over time.
 
 I will start by observing. I will not act without your permission.
@@ -64,7 +64,7 @@ I can learn from your emails: trips, bookings, events, receipts.
 [Connect Gmail] [Connect IMAP] [Skip for now]
 ```
 
-For each connected service, the wizard explains what the agent will learn and what it will not do.
+For each connected service, the wizard explains what Mimir will learn and what it will not do.
 
 ### Step 3: Historic Ingestion
 
@@ -156,13 +156,13 @@ Try asking me something:
 
 Or just let me observe. I will notify you when I have something useful.
 
-Run `agent chat` to start a conversation.
-Run `agent help` to see all commands.
+Run `mimir chat` to start a conversation.
+Run `mimir help` to see all commands.
 ```
 
 ## Gradual Adoption
 
-The user does not adopt the agent in a single moment. It happens gradually:
+Mimir does not adopt the user in a single moment. It happens gradually:
 
 ### Week 1: Observation
 - Agent is connected but mostly silent
@@ -173,7 +173,7 @@ The user does not adopt the agent in a single moment. It happens gradually:
 ### Week 2–4: First Offers
 - Agent detects first helpful patterns
 - Offers are infrequent and low-stakes
-- User accepts or rejects, teaching the agent
+- User accepts or rejects, teaching Mimir
 
 ### Month 2–3: Permission Grants
 - Agent offers category-level permissions
@@ -230,10 +230,10 @@ No action needed — just a heads up.
 
 ## Retention and Engagement
 
-The agent does not nag. It respects the user's attention:
+Mimir does not nag. It respects the user's attention:
 - No daily "check in" messages
 - No marketing-style notifications
 - Proactivity only when genuinely useful
 - User can always say "leave me alone for 3 days"
 
-The goal is that the user forgets the agent exists until it saves them.
+The goal is that the user forgets Mimir exists until it saves them.

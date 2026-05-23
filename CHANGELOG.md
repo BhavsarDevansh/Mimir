@@ -87,4 +87,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - System-generated skill scaffolding: `SessionSummary` and `should_generate_skill()` trigger detector.
   - CLI commands: `mimir skill list`, `show`, `add`, `delete`, `enable`, `disable`.
   - `SkillRegistry::export_openai_tools()` for OpenAI-compatible function-calling exposure.
- Dependencies added: `rustyline` (REPL with file history), `is-terminal` (TTY detection), `which` (server binary discovery), `futures` (stream processing).

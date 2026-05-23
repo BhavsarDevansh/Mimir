@@ -108,6 +108,7 @@ mimir init
 ```
 
 Output:
+Linux (XDG) example:
 
 ```text
 Created config directory: ~/.config/mimir

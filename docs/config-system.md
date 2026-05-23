@@ -20,7 +20,7 @@ Precedence (highest wins):
 ### `Config::load(path: Option<&Path>) -> Result<Self, ConfigError>`
 
 - **`path = Some(p)`** — reads `p` as TOML. File must exist or an error is returned.
-- **`path = None`** — resolves the platform config directory via `dirs::config_dir()`, appends `mimir/config.toml`, and reads it if present. If the file is missing, compiled defaults are used silently.
+- **`path = None`** — resolves the platform config directory via `paths::config_path()`, reads the file if it exists. If the file is missing, `Config::init()` is called to bootstrap directories and write the default `config.toml`, then compiled defaults are returned.
 
 After file loading, all `MIMIR_*` environment variables are applied.
 
@@ -114,5 +114,3 @@ All `PathsError` variants include troubleshooting guidance in their error messag
 4. Update `config/default.toml` with the new default value.
 5. Add a unit test asserting the default and, if applicable, a round-trip test via TOML.
 6. Update this document and `docs/wiki/configuration.md`.
- - **`path = None`** — resolves the platform config directory via `paths::config_path()`, reads the file if it exists. If the file is missing, `Config::init()` is called to bootstrap directories and write the default `config.toml`, then compiled defaults are returned.
-`ConfigError` (via `thiserror`) exposes five variants:

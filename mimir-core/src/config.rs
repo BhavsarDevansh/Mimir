@@ -311,7 +311,7 @@ temporal_horizon = 30
 [context]
 max_turns = 20
 # db_path is resolved automatically; override only if needed.
-# db_path = "~/.local/share/mimir/context.db"
+# db_path = "${USER_DATA_DIR}/mimir/context.db"
 # max_tokens = 4096  # Optional: token budget for conversation history
 
 [personality]
@@ -661,6 +661,7 @@ preset = "formal"
     }
 
     #[test]
+    #[serial]
     fn test_init_creates_config_dir_and_file() {
         let dir = tempfile::tempdir().unwrap();
         let cfg_home = dir.path().join("config");

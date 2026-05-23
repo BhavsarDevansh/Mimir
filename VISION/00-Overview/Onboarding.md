@@ -4,27 +4,27 @@
 
 ### Primary Method
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://install.agent.dev | sh
+curl --proto '=https' --tlsv1.2 -sSf https://install.mimir.dev | sh
 ```
 
 This installs:
 - The `agent` binary to `~/.local/bin/`
 - A systemd user service file (Linux) or launchd plist (macOS)
-- Default config scaffolding to `~/.config/agent/`
+- Default config scaffolding to `~/.config/mimir/`
 
 ### Alternative: Cargo
 ```bash
-cargo install agent
+cargo install mimir
 ```
 
 ### Alternative: Docker
 ```bash
-docker run -v ~/.config/agent:/config -v ~/.local/share/agent:/data agent:latest
+docker run -v ~/.config/agent:/config -v ~/.local/share/agent:/data mimir:latest
 ```
 
 ## First-Run Wizard
 
-After installation, running `agent start` for the first time launches the wizard.
+After installation, running `mimir start` for the first time launches the wizard.
 
 ### Step 1: Welcome
 ```
@@ -156,8 +156,8 @@ Try asking me something:
 
 Or just let me observe. I will notify you when I have something useful.
 
-Run `agent chat` to start a conversation.
-Run `agent help` to see all commands.
+Run `mimir chat` to start a conversation.
+Run `mimir help` to see all commands.
 ```
 
 ## Gradual Adoption

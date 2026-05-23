@@ -104,6 +104,8 @@ mimir ask "Hello"
 | `MIMIR_MEMORY_CHAR_LIMIT` | Character budget for memory.md | `2500` |
 | `MIMIR_MEMORY_AUTO_MANAGE` | Auto-truncate old memory | `true` or `false` |
 | `MIMIR_MEMORY_TEMPORAL_HORIZON` | Days of memory to retain | `30` |
+| `MIMIR_SERVER_BIND_ADDR` | TCP bind address for the daemon | `127.0.0.1:8080` |
+| `MIMIR_SERVER_SOCKET_PATH` | Unix domain socket path for local CLI | (disabled by default) |
 
 ## Proactivity Levels
 

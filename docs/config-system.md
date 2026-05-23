@@ -106,6 +106,24 @@ Invalid numeric or boolean values are ignored silently. Invalid `MIMIR_AGENT_PRO
 
 All `PathsError` variants include troubleshooting guidance in their error messages (e.g., "Ensure $HOME is set, or set $XDG_CONFIG_HOME to a valid path.").
 
+
+## ServerConfig
+
+Controls the daemon's HTTP and Unix socket listeners.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bind_addr` | `String` | `"127.0.0.1:8080"` | TCP bind address for the HTTP server |
+| `socket_path` | `Option<String>` | `None` | Path to Unix domain socket for local CLI (disabled by default) |
+
+### Environment Variables
+
+| Variable | Target Field | Type |
+|----------|-------------|------|
+| `MIMIR_SERVER_BIND_ADDR` | `server.bind_addr` | `String` |
+| `MIMIR_SERVER_SOCKET_PATH` | `server.socket_path` | `String` |
+
+When `socket_path` is `None` (default), only the TCP listener is active. On Unix platforms, the recommended default is `~/.local/share/mimir/mimir.sock`, which provides instant daemon detection and filesystem-level access control. See issue #25 for full Unix socket implementation details.
 ## Extending the Configuration
 
 1. Add the new field to the appropriate struct (`LlmConfig`, `AgentConfig`, or `MemoryConfig`).

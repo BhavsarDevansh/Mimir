@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-05-23
+
+### Added
+
+- **ServerConfig**: New `[server]` config section for daemon settings.
+  - `bind_addr` — TCP bind address for the HTTP server (default: `127.0.0.1:8080`).
+  - `socket_path` — Optional Unix domain socket path for local CLI communication (disabled by default; see #25).
+  - Environment variable overrides: `MIMIR_SERVER_BIND_ADDR`, `MIMIR_SERVER_SOCKET_PATH`.
+  - Added to `Config` struct, `default.toml`, and all relevant tests.
+- **Mono-binary architecture documentation**: Updated VISION and implementation docs to describe the single-binary daemon/client model.
+  - `VISION/09-Roadmap/Phase-1-Core-Agent.md` — added mono-binary deliverables, systemd integration, Unix socket transport.
+  - `VISION/08-Architecture/Deployment-Model.md` — described single-binary process model, systemd unit file, daemon-down prompt.
+  - `VISION/01-Core-Agent/Technical-Design.md` — documented single-binary architecture, transport layer, daemon-down handling.
+  - `VISION/01-Core-Agent/User-Experience.md` — updated CLI examples for daemon/client model, added `[server]` config.
+  - `VISION/00-Overview/Onboarding.md` — replaced `agent` references with `mimir`, updated paths.
+  - `Mimir-Implementation-Context.md` — rewrote architecture section, added key design decisions, updated success criteria.
+- **GitHub issue #25**: Unix domain socket transport for local CLI↔daemon communication.
+
+### Changed
+
+- Version bumped across all workspace crates: `0.9.0` → `0.10.0` (minor: new feature).
+- `mimir-core/src/llm/types.rs`: moved test module after `Job` enum to fix clippy warning.
+
 ## [0.9.0] - 2026-05-23
 
 ### Added

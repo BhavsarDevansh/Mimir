@@ -1,13 +1,19 @@
 [package]
 name = "mimir"
-version = "0.7.1"
+version = "0.8.1"
 edition = "2024"
 
 [dependencies]
-mimir-server = { path = "../mimir-server" }
 mimir-core = { path = "../mimir-core" }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 dirs = "6.0"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
+rustyline = { version = "18", default-features = false, features = ["with-file-history"] }
+is-terminal = "0.4"
+which = "7"
+futures = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

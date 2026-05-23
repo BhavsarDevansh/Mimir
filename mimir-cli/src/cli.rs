@@ -20,6 +20,39 @@ pub enum Commands {
         #[command(subcommand)]
         command: SkillCommands,
     },
+    /// Start the Mimir HTTP server in the background.
+    Start,
+    /// Send a single query to the LLM.
+    Ask {
+        /// The query to send.
+        query: Vec<String>,
+
+        /// Disable streaming; wait for the full response.
+        #[arg(short = 'n', long)]
+        no_stream: bool,
+
+        /// Override the configured LLM model.
+        #[arg(short = 'm', long)]
+        model: Option<String>,
+
+        /// Print token usage after the response.
+        #[arg(short = 'v', long)]
+        verbose: bool,
+
+        /// Skip context persistence and memory learning.
+        #[arg(long)]
+        incognito: bool,
+
+        /// Override the personality preset.
+        #[arg(short = 'p', long)]
+        personality: Option<String>,
+    },
+    /// Start an interactive chat REPL.
+    Chat,
+    /// Display system status and connectivity.
+    Status,
+    /// Print the contents of memory.md.
+    Memory,
 }
 
 #[derive(Subcommand)]

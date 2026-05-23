@@ -20,13 +20,13 @@ Build the foundational interaction layer: CLI, chat interface, LLM orchestration
 - [ ] `mimir init` — first-run bootstrap (exists, needs systemd integration)
 
 ### 1.2 Mono-Binary Architecture
-- [ ] Consolidate `mimir-cli` and `mimir-server` into a single `mimir` binary
+- [x] Consolidate `mimir-cli` and `mimir-server` into a single `mimir` binary
 - [ ] CLI commands (`ask`, `chat`, `status`, `memory`) talk to the daemon via HTTP, not directly to `mimir-core`
 - [ ] `mimir start` runs the Axum server in-process (foreground, systemd manages backgrounding)
 - [ ] Daemon-down detection: CLI prompts user to start the daemon if it is not running
-- [ ] `mimir-server` becomes a library crate (no `main.rs`)
+- [x] `mimir-server` becomes a library crate (no `main.rs`)
 - [ ] New `mimir-client` library crate for HTTP client logic
-- [ ] New `mimir` binary crate (single entry point, dispatches daemon vs client)
+- [x] New `mimir` binary crate (single entry point, dispatches daemon vs client)
 
 ### 1.3 Chat Interface
 - [x] Local HTTP server (Axum)
@@ -68,7 +68,7 @@ Build the foundational interaction layer: CLI, chat interface, LLM orchestration
 - [x] Environment variable overrides
 - [x] XDG-aware path resolution (`paths` module)
 - [x] Auto-initialisation of directories and defaults
-- [ ] `[server]` config section (bind_addr, socket_path placeholder)
+- [x] `[server]` config section (bind_addr, socket_path placeholder)
 - [ ] Hot-reload for non-sensitive config
 
 ### 1.9 Personality System
@@ -118,7 +118,7 @@ Library crates provide code organisation:
 ## Success Criteria
 - [x] `cargo build --workspace` succeeds
 - [x] `cargo test --workspace` passes
-- [ ] `mimir start` runs the daemon in the foreground (no separate binary)
+- [x] `mimir start` runs the daemon in the foreground (no separate binary)
 - [ ] `mimir ask "hello"` talks to the daemon via HTTP
 - [ ] `mimir chat` starts an interactive session via the daemon
 - [ ] `mimir status` queries the daemon for health

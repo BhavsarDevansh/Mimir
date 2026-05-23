@@ -63,6 +63,10 @@ enabled = true
 char_limit = 2500
 auto_manage = true
 temporal_horizon = 30
+
+[server]
+bind_addr = "127.0.0.1:8080"
+# socket_path = "~/.local/share/mimir/mimir.sock"  # Optional: Unix domain socket for local CLI
 TOML
 ```
 

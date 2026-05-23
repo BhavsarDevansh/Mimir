@@ -1,16 +1,22 @@
 # Server
 
-Mimir includes an HTTP server (`mimir-server`) that exposes chat, status, and memory endpoints.
+Mimir includes an HTTP server that exposes chat, status, and memory endpoints. The server runs in-process as part of the `mimir` binary.
 
 ## Starting the Server
 
-Run the server binary directly:
-
 ```bash
-cargo run -p mimir-server
+mimir start
 ```
 
-By default it binds to `127.0.0.1:8080`.
+This runs the Axum HTTP server in the foreground. For production use, systemd manages backgrounding and restarts.
+
+By default, it binds to `127.0.0.1:8080`. Configure this in `~/.config/mimir/config.toml`:
+
+```toml
+[server]
+bind_addr = "127.0.0.1:8080"
+# socket_path = "~/.local/share/mimir/mimir.sock"  # Optional: Unix domain socket
+```
 
 ## Endpoints
 
@@ -47,3 +53,8 @@ See [Chat API](chat-api.md) for detailed examples.
 - LLM requests are routed through a worker pool with user and system priority queues.
 - Sessions are persisted in SQLite via `ContextManager`.
 - Per-session concurrency is controlled via semaphores.
+- The server is a library crate (`mimir-server`); the `mimir` binary calls `mimir_server::build_app()` and `mimir_server::start_server()`.
+
+## Stopping the Server
+
+Send `SIGINT` or `SIGTERM` to the process (e.g., `Ctrl+C` in the foreground, or `systemctl --user stop mimir` when running as a systemd service).

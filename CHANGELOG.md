@@ -95,8 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **CLI chat subcommands** (`mimir-cli`): direct LLM interaction from the terminal.
-  - `mimir start` — spawns `mimir-server` in the background as a detached child.
+- **CLI chat subcommands** (`mimir` binary): direct LLM interaction from the terminal.
+  - `mimir start` — runs the Mimir HTTP server in the foreground (in-process, no separate binary).
   - `mimir ask <query>` — single-shot query with optional streaming (`--no-stream`), model override (`--model`), token usage (`--verbose`), incognito mode (`--incognito`), personality override (`--personality`), and piped stdin support.
   - `mimir chat` — interactive REPL with persistent history (`~/.config/mimir/history.txt`), multi-line input, built-in commands (`/exit`, `/clear`, `/memory`, `/status`, `/help`), and conversation context management via `ContextManager`.
   - `mimir status` — displays config path, LLM endpoint/model, connectivity check, and memory.md stats (usage %).
@@ -127,7 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **HTTP Chat Server** (`mimir-server`): Axum-based HTTP daemon on `127.0.0.1:8080`.
+- **HTTP Chat Server**: Axum-based HTTP daemon on `127.0.0.1:8080`, runs in-process via `mimir start`.
   - `POST /chat` — blocking chat completion with server-managed sessions.
   - `POST /chat/stream` — SSE streaming chat completion with server-managed sessions.
   - `GET /status` — health and runtime state (queue depth, worker count).

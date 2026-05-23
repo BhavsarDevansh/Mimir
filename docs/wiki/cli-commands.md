@@ -1,6 +1,6 @@
 # CLI Commands
 
-Mimir provides a command-line interface for direct interaction with the LLM and system management.
+Mimir provides a command-line interface for direct interaction with the LLM and system management. The `mimir` binary operates in two modes: daemon mode (`mimir start`) and client mode (all other commands).
 
 ## Quick Start
 
@@ -8,7 +8,7 @@ Mimir provides a command-line interface for direct interaction with the LLM and 
 # First-time setup (creates directories and default config)
 mimir init
 
-# Start the background server
+# Start the daemon (runs in foreground; use systemd for backgrounding)
 mimir start
 
 # Ask a question
@@ -24,6 +24,17 @@ mimir status
 mimir memory
 ```
 
+## `mimir start` — Start Daemon
+
+Runs the Mimir HTTP server in the foreground. The server binds to the address configured in `[server].bind_addr` (default: `127.0.0.1:8080`).
+
+```bash
+mimir start
+# Output: Mimir daemon listening on 127.0.0.1:8080
+```
+
+For production use, run as a systemd user service. See [Deployment Model](../../VISION/08-Architecture/Deployment-Model.md) for details.
+
 ## `mimir ask` — Single-Shot Queries
 
 Send a one-off query to the LLM. Tokens stream to your terminal as they arrive.
@@ -36,7 +47,7 @@ Send a one-off query to the LLM. Tokens stream to your terminal as they arrive.
 | `-m, --model <model>` | Use a different model for this query |
 | `-v, --verbose` | Show token usage after the response |
 | `--incognito` | Don't save this interaction to context or memory |
-| `-p, --personality <name>` | Override the personality preset (e.g., `concise`, `warm`, `formal`) |
+| `-p, --personality <name>` | Override the personality preset |
 
 ### Piping
 
@@ -101,14 +112,13 @@ Chat history is saved to `~/.config/mimir/history.txt` and loaded automatically 
 
 ## `mimir init` — First-Run Setup
 
-Create the Mimir directory structure and default configuration files. This happens automatically on first use, but you can also run it explicitly.
+Create the Mimir directory structure and default configuration files. This happens automatically on first use, but you can also run it explicitly:
 
 ```bash
 mimir init
 ```
 
-Output:
-Linux (XDG) example:
+Output (Linux/XDG example):
 
 ```text
 Created config directory: ~/.config/mimir
@@ -120,22 +130,7 @@ Next: set your API key in the config file or via MIMIR_LLM_API_KEY.
 Then run: mimir ask hello
 ```
 
-If everything already exists, it prints:
-
-```text
-Mimir is already initialized.
-```
-
-Existing files are never overwritten.
-
-## `mimir start` — Launch Server
-
-Starts the Mimir HTTP server in the background. The CLI looks for the `mimir-server` binary adjacent to the `mimir` binary, or on your PATH.
-
-```bash
-mimir start
-# Output: Started mimir-server (PID: 12345).
-```
+If everything already exists, it prints `Mimir is already initialized.` Existing files are never overwritten.
 
 ## `mimir status` — System Health
 
@@ -160,3 +155,28 @@ mimir memory
 ```
 
 This shows what Mimir remembers about you across sessions.
+
+## `mimir tool` — Tool Management
+
+Manage registered tools:
+
+```bash
+mimir tool list                    # List all tools
+mimir tool enable <name>           # Enable a tool (set permission to Auto)
+mimir tool disable <name>           # Disable a tool
+mimir tool permission <name> <level>  # Set a tool's permission level
+```
+
+## `mimir skill` — Skill Management
+
+Manage registered skills:
+
+```bash
+mimir skill list                   # List all skills
+mimir skill list --origin builtin # Filter by origin
+mimir skill show <name>            # Show full skill details
+mimir skill add <path>             # Add a user skill from a Markdown file
+mimir skill delete <name>          # Delete a user skill
+mimir skill enable <name>          # Enable a skill
+mimir skill disable <name>         # Disable a skill
+```

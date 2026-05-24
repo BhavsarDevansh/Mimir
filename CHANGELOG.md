@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-05-24
+
+### Fixed
+
+- Addressed PR review feedback: black-boxed `create_session` result in
+  `context_manager` benchmark for accurate measurement.
+- Fixed `docs/wiki/integration-testing.md` command/label mismatch: the "All
+  workspace tests" heading now matches the `cargo test --workspace` command
+  (removed `--lib` so integration tests are included).
+
 ## [0.12.0] - 2026-05-24
 
 ### Added
@@ -39,3 +49,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `criterion = { version = "0.8.2", features = ["async_tokio"] }` to
   `mimir-core` dev-dependencies.
 - Added `mock-llm` feature flag to `mimir-core`.
+

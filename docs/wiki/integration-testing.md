@@ -24,7 +24,7 @@ the real HTTP client behaves correctly:
 
 ```bash
 # All workspace tests
-cargo test --workspace --lib
+cargo test --workspace
 
 # Integration tests only
 cargo test -p mimir-core --test llm_http_integration

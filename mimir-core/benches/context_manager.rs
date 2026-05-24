@@ -13,7 +13,8 @@ fn bench_create_session(c: &mut Criterion) {
             },
             |(mgr, _dir)| {
                 rt.block_on(async {
-                    let _ = mgr.create_session("system prompt").await.unwrap();
+                    let sid = mgr.create_session("system prompt").await.unwrap();
+                    std::hint::black_box(sid);
                 });
             },
             BatchSize::SmallInput,

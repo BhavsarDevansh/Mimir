@@ -8,6 +8,10 @@ use std::sync::Arc;
 
 use axum::{
     Router,
+    extract::ConnectInfo,
+    http::StatusCode,
+    middleware::from_fn,
+    response::IntoResponse,
     routing::{get, post},
 };
 use tower::ServiceBuilder;
@@ -20,6 +24,18 @@ use crate::routes::{
     chat_handler, chat_stream_handler, memory_handler, status_handler, stop_handler,
 };
 use crate::state::AppState;
+
+/// Middleware guard that restricts access to loopback addresses.
+async fn require_loopback(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if !addr.ip().is_loopback() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(req).await
+}
 
 /// Build the Axum router with all routes and middleware.
 pub fn build_app(state: Arc<AppState>) -> Router {
@@ -52,7 +68,7 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route("/memory", get(memory_handler))
         .route("/chat", post(chat_handler))
         .route("/chat/stream", post(chat_stream_handler))
-        .route("/stop", post(stop_handler))
+        .route("/stop", post(stop_handler).layer(from_fn(require_loopback)))
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
@@ -414,5 +430,29 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_stop_rejects_non_loopback() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/stop")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [192, 168, 1, 1],
+                        0,
+                    ))))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }

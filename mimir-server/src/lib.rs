@@ -87,15 +87,19 @@ mod tests {
     use tower::ServiceExt;
 
     use mimir_core::{
-        config::LlmConfig, context::ContextManager, llm::LlmClient, personality::Personality,
+        config::PersonalityConfig,
+        context::ContextManager,
+        llm::types::{LlmError, StreamItem, Usage},
+        llm::{LlmBackend, MockLlmClient},
+        personality::Personality,
     };
 
     use crate::state::AppState;
-    use crate::types::ChatResponse;
+    use crate::types::{ChatResponse, StatusResponse};
 
     /// Build an `AppState` suitable for tests, using a temporary directory
     /// for the context database and memory.md.
-    async fn test_state(endpoint: String) -> (Arc<AppState>, tempfile::TempDir) {
+    async fn test_state(llm: Arc<dyn LlmBackend>) -> (Arc<AppState>, tempfile::TempDir) {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("context.db");
         let memory_path = temp.path().join("memory.md");
@@ -104,22 +108,13 @@ mod tests {
             .await
             .unwrap();
 
-        let llm_config = LlmConfig {
-            endpoint,
-            api_key: "test".to_string(),
-            model: "gpt-4o".to_string(),
-            max_tokens: Some(10),
-            temperature: 0.0,
-        };
-        let llm_client = Arc::new(LlmClient::new(llm_config).await);
-
         let context_manager = Arc::new(ContextManager::new(&db_path).await.unwrap());
 
         let state = Arc::new(AppState {
-            llm_client,
+            llm_client: llm,
             context_manager,
             memory_path,
-            personality: Personality::new(&mimir_core::config::PersonalityConfig::default()),
+            personality: Personality::new(&PersonalityConfig::default()),
             session_locks: Arc::new(DashMap::new()),
             start_time: Instant::now(),
         });
@@ -127,33 +122,10 @@ mod tests {
         (state, temp)
     }
 
-    /// Spawn a minimal HTTP server that returns a valid non-streaming chat completion.
-    async fn mock_llm_server() -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        tokio::spawn(async move {
-            loop {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                tokio::spawn(async move {
-                    let body = r#"{"id":"1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
-                        body.len(),
-                        body
-                    );
-                    let _ =
-                        tokio::io::AsyncWriteExt::write_all(&mut stream, response.as_bytes()).await;
-                });
-            }
-        });
-
-        format!("http://{}/v1", addr)
-    }
-
     #[tokio::test]
     async fn test_status_returns_ok() {
-        let (state, _temp) = test_state("http://127.0.0.1:1".to_string()).await;
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
         let app = super::build_app(state);
 
         let response = app
@@ -171,8 +143,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_chat_creates_session() {
-        let endpoint = mock_llm_server().await;
-        let (state, _temp) = test_state(endpoint).await;
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_chat("Hello!", Usage::default())
+                .build(),
+        );
+        let (state, _temp) = test_state(mock).await;
         let app = super::build_app(state);
 
         let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
@@ -200,30 +176,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_chat_stream_returns_sse() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        tokio::spawn(async move {
-            loop {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                tokio::spawn(async move {
-                    let sse_body = format!(
-                        "data: {}\n\n",
-                        r#"{"id":"1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}"#
-                    );
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
-                        sse_body.len(),
-                        sse_body
-                    );
-                    let _ =
-                        tokio::io::AsyncWriteExt::write_all(&mut stream, response.as_bytes()).await;
-                });
-            }
-        });
-
-        let endpoint = format!("http://{}/v1", addr);
-        let (state, _temp) = test_state(endpoint).await;
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_stream(vec![
+                    Ok(StreamItem::Text("Hi".to_string())),
+                    Ok(StreamItem::Usage(Usage {
+                        prompt_tokens: 1,
+                        completion_tokens: 1,
+                        total_tokens: 2,
+                    })),
+                ])
+                .build(),
+        );
+        let (state, _temp) = test_state(mock).await;
         let app = super::build_app(state);
 
         let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
@@ -246,11 +211,150 @@ mod tests {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         assert!(ct.contains("text/event-stream"));
+
+        // Collect SSE events to verify content.
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(text.contains("Hi"));
+    }
+
+    #[tokio::test]
+    async fn test_chat_llm_error_returns_500() {
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_chat_error(LlmError::Api {
+                    status: 500,
+                    body: "boom".to_string(),
+                })
+                .build(),
+        );
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn test_chat_stream_llm_error_sends_error_event() {
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_stream(vec![
+                    Ok(StreamItem::Text("partial".to_string())),
+                    Err(LlmError::Api {
+                        status: 500,
+                        body: "boom".to_string(),
+                    }),
+                ])
+                .build(),
+        );
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat/stream")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(text.contains("partial"));
+        assert!(text.contains("error"));
+    }
+
+    #[tokio::test]
+    async fn test_chat_queue_full_returns_503() {
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_chat_error(LlmError::QueueFull)
+                .build(),
+        );
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let retry = response
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        assert_eq!(retry, "5");
+    }
+
+    #[tokio::test]
+    async fn test_status_returns_queue_depths() {
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .user_queue_depth(2)
+                .system_queue_depth(1)
+                .worker_threads(4)
+                .build(),
+        );
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let status: StatusResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(status.queue_depth_user, 2);
+        assert_eq!(status.queue_depth_system, 1);
+        assert_eq!(status.worker_threads, 4);
     }
 
     #[tokio::test]
     async fn test_chat_unknown_session_returns_404() {
-        let (state, _temp) = test_state("http://127.0.0.1:1".to_string()).await;
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
         let app = super::build_app(state);
 
         let body = serde_json::to_string(
@@ -274,7 +378,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_memory_returns_content() {
-        let (state, _temp) = test_state("http://127.0.0.1:1".to_string()).await;
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
         let app = super::build_app(state);
 
         let response = app

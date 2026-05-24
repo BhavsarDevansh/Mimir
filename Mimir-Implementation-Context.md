@@ -299,16 +299,21 @@ See `VISION/09-Roadmap/Phase-1-Core-Agent.md` for full task list.
 
 ## Success Criteria for Phase 1
 
-- [ ] `cargo build --workspace` succeeds
-- [ ] `cargo test --workspace` passes
-- [ ] `mimir start` runs the daemon in the foreground (no separate binary)
-- [ ] `mimir ask "hello"` talks to the daemon via HTTP
-- [ ] `mimir chat` starts an interactive session via the daemon
-- [ ] `mimir status` queries the daemon for health
-- [ ] `mimir stop` signals the daemon to shut down
-- [ ] Daemon-down prompt: CLI asks user if they want to start the daemon
-- [ ] SSE streaming endpoint works for chat
-- [ ] systemd user service works for auto-start
+- [x] `cargo build --workspace` succeeds
+- [x] `cargo test --workspace` passes
+- [x] `mimir start` runs the daemon in the foreground (no separate binary)
+- [ ] `mimir ask "hello"` talks to the daemon via HTTP (tracked in #30)
+- [ ] `mimir chat` starts an interactive session via the daemon (tracked in #30)
+- [ ] `mimir status` queries the daemon for health (tracked in #30)
+- [ ] `mimir stop` signals the daemon to shut down (tracked in #31)
+- [ ] Daemon-down prompt: CLI asks user if they want to start the daemon (tracked in #33)
+- [x] SSE streaming endpoint works for chat
+- [ ] systemd user service works for auto-start (tracked in #34)
+- [ ] `mimir-client` crate exists and is a workspace member (tracked in #30)
+- [ ] Conversation history display works in `mimir chat` (tracked in #36)
+- [ ] Markdown responses are preserved in terminal output (tracked in #36)
+- [ ] End-to-end round-trip test passes (tracked in #35)
+- [ ] Config hot-reload works for non-sensitive settings (tracked in #32)
 
 ---
 

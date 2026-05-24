@@ -16,24 +16,24 @@ Build the foundational interaction layer: CLI, chat interface, LLM orchestration
 - [x] `mimir memory` — memory viewer
 - [x] Command-line argument parsing (clap)
 - [x] Structured logging (tracing)
-- [ ] `mimir stop` — signal daemon to shut down
-- [ ] `mimir init` — first-run bootstrap (exists, needs systemd integration)
+- [ ] `mimir stop` — signal daemon to shut down  (tracked in #31)
+- [ ] `mimir init` — first-run bootstrap (exists, needs systemd integration; tracked in #34)
 
 ### 1.2 Mono-Binary Architecture
 - [x] Consolidate `mimir-cli` and `mimir-server` into a single `mimir` binary
-- [ ] CLI commands (`ask`, `chat`, `status`, `memory`) talk to the daemon via HTTP, not directly to `mimir-core`
+- [ ] CLI commands (`ask`, `chat`, `status`, `memory`) talk to the daemon via HTTP, not directly to `mimir-core` (tracked in #30)
 - [x] `mimir start` runs the Axum server in-process (foreground, systemd manages backgrounding)
-- [ ] Daemon-down detection: CLI prompts user to start the daemon if it is not running
+- [ ] Daemon-down detection: CLI prompts user to start the daemon if it is not running (tracked in #33)
 - [x] `mimir-server` becomes a library crate (no `main.rs`)
-- [ ] New `mimir-client` library crate for HTTP client logic
+- [ ] New `mimir-client` library crate for HTTP client logic (tracked in #30)
 - [x] New `mimir` binary crate (single entry point, dispatches daemon vs client)
 
 ### 1.3 Chat Interface
 - [x] Local HTTP server (Axum)
 - [x] SSE for streaming responses
 - [ ] Unix domain socket transport (see #25)
-- [ ] Conversation history display
-- [ ] Markdown rendering for responses
+- [ ] Conversation history display (tracked in #36)
+- [ ] Markdown rendering for responses (tracked in #36)
 
 ### 1.4 LLM Client
 - [x] OpenAI-compatible HTTP client
@@ -69,7 +69,7 @@ Build the foundational interaction layer: CLI, chat interface, LLM orchestration
 - [x] XDG-aware path resolution (`paths` module)
 - [x] Auto-initialisation of directories and defaults
 - [x] `[server]` config section (bind_addr, socket_path placeholder)
-- [ ] Hot-reload for non-sensitive config
+- [ ] Hot-reload for non-sensitive config (tracked in #32)
 
 ### 1.9 Personality System
 - [x] Personality presets (transparent, concise, warm, formal)
@@ -77,15 +77,15 @@ Build the foundational interaction layer: CLI, chat interface, LLM orchestration
 - [x] CLI override via `--personality` flag
 
 ### 1.10 Deployment
-- [ ] systemd user service file for `mimir start`
-- [ ] `mimir init` offers to install and enable the systemd service
-- [ ] Graceful shutdown via `mimir stop` (sends signal to daemon)
+- [ ] systemd user service file for `mimir start` (tracked in #34)
+- [ ] `mimir init` offers to install and enable the systemd service (tracked in #34)
+- [ ] Graceful shutdown via `mimir stop` (sends signal to daemon) (tracked in #31)
 
 ### 1.11 Testing
 - [x] Unit tests for CLI parsing
 - [x] Mock LLM client for testing
 - [x] Integration tests for config and memory
-- [ ] End-to-end test: CLI → daemon → response round-trip
+- [ ] End-to-end test: CLI → daemon → response round-trip (tracked in #35)
 - [ ] Unix socket transport tests (see #25)
 
 ## Architecture (Updated)
@@ -119,13 +119,18 @@ Library crates provide code organisation:
 - [x] `cargo build --workspace` succeeds
 - [x] `cargo test --workspace` passes
 - [x] `mimir start` runs the daemon in the foreground (no separate binary)
-- [ ] `mimir ask "hello"` talks to the daemon via HTTP
-- [ ] `mimir chat` starts an interactive session via the daemon
-- [ ] `mimir status` queries the daemon for health
-- [ ] `mimir stop` signals the daemon to shut down
-- [ ] Daemon-down prompt: CLI asks user if they want to start the daemon
-- [ ] SSE streaming endpoint works for chat
-- [ ] systemd user service works for auto-start
+- [ ] `mimir ask "hello"` talks to the daemon via HTTP (tracked in #30)
+- [ ] `mimir chat` starts an interactive session via the daemon (tracked in #30)
+- [ ] `mimir status` queries the daemon for health (tracked in #30)
+- [ ] `mimir stop` signals the daemon to shut down (tracked in #31)
+- [ ] Daemon-down prompt: CLI asks user if they want to start the daemon (tracked in #33)
+- [x] SSE streaming endpoint works for chat
+- [ ] systemd user service works for auto-start (tracked in #34)
+- [ ] `mimir-client` crate exists and is a workspace member (tracked in #30)
+- [ ] Conversation history display works in `mimir chat` (tracked in #36)
+- [ ] Markdown responses are preserved in terminal output (tracked in #36)
+- [ ] End-to-end round-trip test passes (tracked in #35)
+- [ ] Config hot-reload works for non-sensitive settings (tracked in #32)
 
 ## Dependencies
 - None (this is the foundation)
@@ -137,4 +142,12 @@ Library crates provide code organisation:
 - Unix domain socket availability on Windows (graceful fallback to TCP)
 
 ## Related Issues
+- #30 — Create `mimir-client` crate and migrate CLI to HTTP client mode
+- #31 — `mimir stop` command and graceful daemon shutdown
+- #32 — Config hot-reload for non-sensitive settings
+- #33 — Daemon-down detection with TCP health check and auto-start prompt
+- #34 — systemd user service integration
+- #35 — End-to-end CLI → daemon → response round-trip test
+- #36 — Conversation history display and markdown rendering in chat
+- #12 — Phase 1 Finalize Workspace (parent tracking issue)
 - #25 — Unix domain socket transport for local CLI↔daemon communication

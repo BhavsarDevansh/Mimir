@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `docs/wiki/integration-testing.md` command/label mismatch: the "All
   workspace tests" heading now matches the `cargo test --workspace` command
   (removed `--lib` so integration tests are included).
+- Synced `mimir` crate version to `0.12.1` to align with `mimir-core` and
+  `mimir-server`.
 
 ## [0.12.0] - 2026-05-24
 

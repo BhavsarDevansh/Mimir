@@ -13,10 +13,13 @@ use crate::llm::types::{LlmError, Message, StreamItem, Usage};
 ///
 /// # Example
 /// ```
+/// # use mimir_core::llm::MockLlmClient;
+/// # use mimir_core::llm::Usage;
 /// let mock = MockLlmClient::builder()
 ///     .push_chat("Hello!", Usage::default())
 ///     .user_queue_depth(3)
 ///     .build();
+/// assert!(mock.chat_calls().is_empty());
 /// ```
 #[derive(Debug)]
 pub struct MockLlmClient {

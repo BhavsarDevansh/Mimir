@@ -4,7 +4,10 @@ use std::time::Instant;
 use dashmap::DashMap;
 
 use mimir_core::{
-    config::Config, context::ContextManager, llm::LlmClient, memory::loader::MemoryLoader,
+    config::Config,
+    context::ContextManager,
+    llm::{LlmBackend, LlmClient},
+    memory::loader::MemoryLoader,
     personality::Personality,
 };
 
@@ -15,7 +18,7 @@ use mimir_core::{
 /// to prevent concurrent mutation of the same session.
 #[derive(Debug, Clone)]
 pub struct AppState {
-    pub llm_client: Arc<LlmClient>,
+    pub llm_client: Arc<dyn LlmBackend>,
     pub context_manager: Arc<ContextManager>,
     pub memory_path: std::path::PathBuf,
     pub personality: Personality,
@@ -27,7 +30,7 @@ pub struct AppState {
 impl AppState {
     /// Build `AppState` from the global Mimir [`Config`].
     pub async fn from_config(config: Config) -> anyhow::Result<Self> {
-        let llm_client = Arc::new(LlmClient::new(config.llm.clone()).await);
+        let llm_client: Arc<dyn LlmBackend> = Arc::new(LlmClient::new(config.llm.clone()).await);
 
         let db_path = config
             .context

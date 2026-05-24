@@ -1,6 +1,6 @@
 [package]
 name = "mimir-core"
-version = "0.11.0"
+version = "0.12.1"
 edition = "2024"
 
 [dependencies]
@@ -27,3 +27,24 @@ tempfile = "3"
 serial_test = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "process"] }
 dashmap = "6.2"
+wiremock = "0.6.5"
+criterion = { version = "0.8.2", features = ["async_tokio"] }
+
+[features]
+mock-llm = []
+
+[[bench]]
+name = "context_manager"
+harness = false
+
+[[bench]]
+name = "memory_manager"
+harness = false
+
+[[bench]]
+name = "tool_registry"
+harness = false
+
+[[bench]]
+name = "personality"
+harness = false

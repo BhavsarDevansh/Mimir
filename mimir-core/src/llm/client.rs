@@ -9,8 +9,10 @@ use reqwest::StatusCode;
 use tracing::{debug, error, warn};
 
 use crate::config::LlmConfig;
+use crate::llm::backend::{LlmBackend, LlmStream};
 use crate::llm::pool::{LlmWorkerPool, WorkerPoolConfig};
 use crate::llm::types::*;
+use async_trait::async_trait;
 
 const MAX_RETRIES: u32 = 3;
 const BASE_BACKOFF_MS: u64 = 200;
@@ -440,6 +442,36 @@ impl LlmClient {
     }
 }
 
+#[async_trait]
+impl LlmBackend for LlmClient {
+    async fn chat(&self, messages: Vec<Message>) -> Result<(String, Usage), LlmError> {
+        self.chat(messages).await
+    }
+
+    async fn chat_stream_with_usage(&self, messages: Vec<Message>) -> Result<LlmStream, LlmError> {
+        self.chat_stream_with_usage(messages).await
+    }
+
+    async fn fetch_model_context_window(&self) -> Result<Option<u32>, LlmError> {
+        self.fetch_model_context_window().await
+    }
+
+    async fn user_queue_depth(&self) -> usize {
+        self.user_queue_depth().await
+    }
+
+    async fn system_queue_depth(&self) -> usize {
+        self.system_queue_depth().await
+    }
+
+    fn worker_threads(&self) -> u8 {
+        self.worker_threads()
+    }
+
+    async fn user_queue_has_capacity(&self) -> bool {
+        self.user_queue_has_capacity().await
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

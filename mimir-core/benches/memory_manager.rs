@@ -14,7 +14,7 @@ fn bench_add_small(c: &mut Criterion) {
             },
             |(mut mgr, _dir)| {
                 rt.block_on(async {
-                    mgr.add("small entry").await.unwrap();
+                    std::hint::black_box(mgr.add("small entry").await).unwrap();
                 });
             },
             criterion::BatchSize::SmallInput,
@@ -37,7 +37,7 @@ fn bench_add_large(c: &mut Criterion) {
             |(mut mgr, _dir)| {
                 let text = large_text.clone();
                 rt.block_on(async move {
-                    mgr.add(&text).await.unwrap();
+                    std::hint::black_box(mgr.add(&text).await).unwrap();
                 });
             },
             criterion::BatchSize::SmallInput,
@@ -58,7 +58,8 @@ fn bench_replace(c: &mut Criterion) {
             },
             |(mut mgr, _dir)| {
                 rt.block_on(async {
-                    mgr.replace("Old text here", "New text here").await.unwrap();
+                    std::hint::black_box(mgr.replace("Old text here", "New text here").await)
+                        .unwrap();
                 });
             },
             criterion::BatchSize::SmallInput,

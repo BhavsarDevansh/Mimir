@@ -35,8 +35,9 @@ fn bench_add_messages(c: &mut Criterion) {
             },
             |(mgr, sid, _dir)| {
                 rt.block_on(async {
-                    mgr.add_user_message(&sid, "hello world").await.unwrap();
-                    mgr.add_assistant_message(&sid, "hi there").await.unwrap();
+                    std::hint::black_box(mgr.add_user_message(&sid, "hello world").await).unwrap();
+                    std::hint::black_box(mgr.add_assistant_message(&sid, "hi there").await)
+                        .unwrap();
                 });
             },
             BatchSize::SmallInput,
@@ -94,7 +95,7 @@ fn bench_trim_to_budget(c: &mut Criterion) {
             },
             |(mgr, sid, _dir)| {
                 rt.block_on(async {
-                    mgr.trim_to_budget(&sid, Some(1000), 100).await.unwrap();
+                    std::hint::black_box(mgr.trim_to_budget(&sid, Some(1000), 100).await).unwrap();
                 });
             },
             BatchSize::SmallInput,

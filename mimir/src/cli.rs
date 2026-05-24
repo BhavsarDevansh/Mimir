@@ -22,6 +22,8 @@ pub enum Commands {
     },
     /// Start the Mimir HTTP server (foreground daemon).
     Start,
+    /// Stop the Mimir HTTP server.
+    Stop,
     /// Initialise Mimir directories and default configuration.
     Init,
     /// Send a single query to the LLM.

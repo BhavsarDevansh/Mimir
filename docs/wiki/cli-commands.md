@@ -35,6 +35,17 @@ mimir start
 
 For production use, run as a systemd user service. See [Deployment Model](../../VISION/08-Architecture/Deployment-Model.md) for details.
 
+## `mimir stop` — Stop Daemon
+
+Triggers a graceful shutdown of the running Mimir daemon.
+
+```bash
+mimir stop
+# Output: Mimir daemon stopped.
+```
+
+If the daemon is not running, the command will prompt to start it (see [Daemon Auto-Start](daemon-auto-start.md)).
+
 ## `mimir ask` — Single-Shot Queries
 
 Send a one-off query to the LLM. Tokens stream to your terminal as they arrive.

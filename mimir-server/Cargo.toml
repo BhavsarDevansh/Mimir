@@ -1,10 +1,11 @@
 [package]
 name = "mimir-server"
-version = "0.12.2"
+version = "0.13.0"
 edition = "2024"
 
 [dependencies]
 mimir-core = { path = "../mimir-core" }
+mimir-api-types = { path = "../mimir-api-types" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
 axum = { version = "0.8", features = ["macros"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
@@ -18,6 +19,7 @@ anyhow = "1.0"
 dashmap = "6.2"
 tokio-stream = "0.1"
 http = "1.2"
+uuid = { version = "1.23", features = ["v4"] }
 
 [dev-dependencies]
 mimir-core = { path = "../mimir-core", features = ["mock-llm"] }

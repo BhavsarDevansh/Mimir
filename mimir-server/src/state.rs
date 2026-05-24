@@ -25,7 +25,20 @@ pub struct AppState {
     /// Per-session semaphore to serialise concurrent requests for the same session.
     pub session_locks: Arc<DashMap<String, Arc<tokio::sync::Semaphore>>>,
     pub start_time: Instant,
+    /// LLM endpoint URL (for status reporting).
+    pub endpoint: String,
+    /// Configured LLM model (for status reporting).
+    pub model: String,
+    /// Memory character limit (for status reporting).
+    pub memory_limit: usize,
+    /// Shutdown signal sender.
+    pub shutdown_tx: tokio::sync::watch::Sender<bool>,
+    /// Cache for model-override LLM clients to avoid allocating a new client
+    /// on every request with the same override model.
+    pub model_override_cache: Arc<DashMap<String, Arc<dyn LlmBackend>>>,
 }
+
+const MODEL_OVERRIDE_CACHE_CAP: usize = 16;
 
 impl AppState {
     /// Build `AppState` from the global Mimir [`Config`].
@@ -43,6 +56,8 @@ impl AppState {
 
         let personality = Personality::new(&config.personality);
 
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+
         Ok(Self {
             llm_client,
             context_manager,
@@ -50,6 +65,11 @@ impl AppState {
             personality,
             session_locks: Arc::new(DashMap::new()),
             start_time: Instant::now(),
+            endpoint: config.llm.endpoint.clone(),
+            model: config.llm.model.clone(),
+            memory_limit: config.memory.char_limit as usize,
+            shutdown_tx,
+            model_override_cache: Arc::new(DashMap::new()),
         })
     }
 
@@ -59,5 +79,35 @@ impl AppState {
             .entry(session_id.to_string())
             .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(1)))
             .clone()
+    }
+
+    /// Resolve the LLM backend to use, applying a model override if requested.
+    ///
+    /// Override clients are cached so that repeated requests with the same
+    /// model do not allocate a new [`Arc`] on every call.
+    pub fn resolve_llm(&self, model_override: Option<String>) -> Arc<dyn LlmBackend> {
+        let model = match model_override {
+            Some(m) => m,
+            None => return Arc::clone(&self.llm_client),
+        };
+        if let Some(cached) = self.model_override_cache.get(&model) {
+            return cached.clone();
+        }
+        let client = self
+            .llm_client
+            .with_model_override(model.clone())
+            .unwrap_or_else(|| Arc::clone(&self.llm_client));
+
+        // Evict an arbitrary entry if at capacity so memory cannot grow without bound.
+        if self.model_override_cache.len() >= MODEL_OVERRIDE_CACHE_CAP
+            && let Some(entry) = self.model_override_cache.iter().next()
+        {
+            let key = entry.key().clone();
+            drop(entry);
+            self.model_override_cache.remove(&key);
+        }
+
+        self.model_override_cache.insert(model, Arc::clone(&client));
+        client
     }
 }

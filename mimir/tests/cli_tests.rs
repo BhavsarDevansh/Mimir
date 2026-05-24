@@ -1,6 +1,5 @@
 use std::io::Write;
 use std::process::Command;
-use tempfile::tempdir;
 
 /// Helper: run the mimir binary with given args and return stdout + stderr.
 fn run_mimir(args: &[&str]) -> (String, String, std::process::ExitStatus) {
@@ -14,74 +13,23 @@ fn run_mimir(args: &[&str]) -> (String, String, std::process::ExitStatus) {
     (stdout, stderr, output.status)
 }
 
-/// Helper: create a temporary config file at the correct location.
-fn write_temp_config(dir: &tempfile::TempDir, content: &str) -> std::path::PathBuf {
-    let mimir_dir = dir.path().join("mimir");
-    std::fs::create_dir_all(&mimir_dir).unwrap();
-    let path = mimir_dir.join("config.toml");
-    let mut file = std::fs::File::create(&path).unwrap();
-    file.write_all(content.as_bytes()).unwrap();
-    path
-}
-
-/// Helper: create a temporary memory.md file.
-fn write_temp_memory(dir: &tempfile::TempDir, content: &str) -> std::path::PathBuf {
-    let mimir_dir = dir.path().join("mimir");
-    std::fs::create_dir_all(&mimir_dir).unwrap();
-    let path = mimir_dir.join("memory.md");
-    let mut file = std::fs::File::create(&path).unwrap();
-    file.write_all(content.as_bytes()).unwrap();
-    path
-}
-
 // ---------------------------------------------------------------------------
 // status tests
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_status_output_contains_expected_sections() {
-    let (stdout, stderr, status) = run_mimir(&["status"]);
-    assert!(status.success(), "mimir status exited with non-zero status");
-    let combined = format!("{}{}", stdout, stderr);
-    assert!(combined.contains("Config path"), "missing 'Config path'");
-    assert!(combined.contains("LLM endpoint"), "missing 'LLM endpoint'");
-    assert!(combined.contains("LLM model"), "missing 'LLM model'");
-    assert!(combined.contains("Memory path"), "missing 'Memory path'");
-    assert!(combined.contains("Memory usage"), "missing 'Memory usage'");
-}
-
-#[test]
-fn test_status_with_temp_config() {
-    let dir = tempdir().unwrap();
-    let _config = write_temp_config(
-        &dir,
-        r#"
-[llm]
-endpoint = "https://api.example.com/v1"
-api_key = "test"
-model = "test-model"
-
-[memory]
-char_limit = 1000
-"#,
-    );
-
-    let output = Command::new(env!("CARGO_BIN_EXE_mimir"))
-        .args(["status"])
-        .env("NO_COLOR", "1")
-        .env("XDG_CONFIG_HOME", dir.path())
-        .output()
-        .unwrap();
-
+fn test_status_fails_when_server_down() {
+    let (_stdout, stderr, status) = run_mimir(&["status"]);
     assert!(
-        output.status.success(),
-        "mimir status exited with non-zero status"
+        !status.success(),
+        "mimir status should fail when daemon is not running"
     );
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let combined = format!("{}{}", stdout, stderr);
-    assert!(combined.contains("https://api.example.com/v1"));
-    assert!(combined.contains("test-model"));
+    let combined = format!("{}{}", _stdout, stderr);
+    assert!(
+        combined.contains("error") || combined.contains("Error"),
+        "should report an error when daemon is unreachable, got: {}",
+        combined
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -89,38 +37,16 @@ char_limit = 1000
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_memory_command_output() {
-    let (stdout, stderr, status) = run_mimir(&["memory"]);
-    assert!(status.success(), "mimir memory exited with non-zero status");
-    let combined = format!("{}{}", stdout, stderr);
+fn test_memory_fails_when_server_down() {
+    let (_stdout, stderr, status) = run_mimir(&["memory"]);
     assert!(
-        combined.contains("Mimir Working Memory") || combined.contains("Failed to load memory"),
-        "memory command should output memory content or an error message"
+        !status.success(),
+        "mimir memory should fail when daemon is not running"
     );
-}
-
-#[test]
-fn test_memory_with_temp_file() {
-    let dir = tempdir().unwrap();
-    let _mem_path = write_temp_memory(&dir, "Hello from memory!");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_mimir"))
-        .args(["memory"])
-        .env("NO_COLOR", "1")
-        .env("XDG_CONFIG_HOME", dir.path())
-        .output()
-        .unwrap();
-
+    let combined = format!("{}{}", _stdout, stderr);
     assert!(
-        output.status.success(),
-        "mimir memory exited with non-zero status"
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let combined = format!("{}{}", stdout, stderr);
-    assert!(
-        combined.contains("Hello from memory!"),
-        "memory command should show our custom content, got: {}",
+        combined.contains("error") || combined.contains("Error"),
+        "should report an error when daemon is unreachable, got: {}",
         combined
     );
 }

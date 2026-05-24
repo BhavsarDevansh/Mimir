@@ -471,12 +471,18 @@ impl LlmBackend for LlmClient {
     async fn user_queue_has_capacity(&self) -> bool {
         self.user_queue_has_capacity().await
     }
+
+    fn with_model_override(&self, model: String) -> Option<Arc<dyn LlmBackend>> {
+        let mut clone = self.clone();
+        clone.config.model = model;
+        clone.pool = None;
+        Some(Arc::new(clone))
+    }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use eventsource_stream::Eventsource;
-
     #[test]
     fn test_debug_does_not_leak_api_key() {
         let config = LlmConfig {

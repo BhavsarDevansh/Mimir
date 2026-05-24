@@ -1,4 +1,4 @@
 [workspace]
 resolver = "3"
-members = ["mimir", "mimir-core", "mimir-server"]
+members = ["mimir", "mimir-api-types", "mimir-client", "mimir-core", "mimir-server"]
 default-members = ["mimir"]

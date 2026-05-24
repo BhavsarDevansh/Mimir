@@ -1,6 +1,6 @@
 [package]
 name = "mimir"
-version = "0.12.2"
+version = "0.13.0"
 edition = "2024"
 
 [[bin]]
@@ -10,6 +10,8 @@ path = "src/main.rs"
 [dependencies]
 mimir-core = { path = "../mimir-core" }
 mimir-server = { path = "../mimir-server" }
+mimir-client = { path = "../mimir-client" }
+mimir-api-types = { path = "../mimir-api-types" }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 dirs = "6.0"
@@ -21,7 +23,6 @@ futures = "0.3"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 anyhow = "1.0"
-axum = { version = "0.8", features = ["macros"] }
 
 [dev-dependencies]
 tempfile = "3"

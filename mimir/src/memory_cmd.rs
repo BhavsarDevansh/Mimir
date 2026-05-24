@@ -1,9 +1,10 @@
 //! Memory viewer. Loads and prints the contents of `memory.md` to stdout.
-use mimir_core::memory::MemoryLoader;
+use crate::constants::DEFAULT_BASE_URL;
+use mimir_client::MimirClient;
 
 pub async fn handle_memory() {
-    let path = MemoryLoader::get_memory_path();
-    match MemoryLoader::load(&path).await {
+    let client = MimirClient::new(DEFAULT_BASE_URL);
+    match client.memory().await {
         Ok(content) => {
             println!("{}", content);
         }

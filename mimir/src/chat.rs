@@ -1,55 +1,16 @@
-//! Interactive chat REPL with persistent history and context management.
-use futures::StreamExt;
-use mimir_core::config::Config;
-use mimir_core::context::ContextManager;
-use mimir_core::llm::LlmClient;
-use mimir_core::llm::types::Message;
-use mimir_core::memory::MemoryLoader;
-use mimir_core::personality::Personality;
+//! Interactive chat REPL with persistent history.
+//!
+//! The daemon owns the session and conversation history; this client is
+//! fully stateless except for the optional `session_id` used to resume.
+use crate::constants::DEFAULT_BASE_URL;
+use mimir_api_types::ChatRequest;
+use mimir_client::MimirClient;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 
 pub async fn handle_chat() {
-    let config = match Config::load(None) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to load config: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    let personality = Personality::new(&config.personality);
-
-    let mem_path = MemoryLoader::get_memory_path();
-    let memory_content = match MemoryLoader::load(&mem_path).await {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Warning: failed to load memory: {}", e);
-            String::new()
-        }
-    };
-
-    let system_prompt = personality.system_prompt(&memory_content);
-
-    let db_path = config.context.db_path.clone().unwrap_or_else(|| {
-        dirs::data_dir()
-            .map(|d| d.join("mimir").join("context.db"))
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/mimir/context.db"))
-    });
-    let ctx = match ContextManager::new(&db_path).await {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            eprintln!("Failed to initialize context manager: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let mut session_id = match ctx.create_session(&system_prompt).await {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("Failed to create session: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let client = MimirClient::new(DEFAULT_BASE_URL);
+    let mut session_id: Option<String> = None;
 
     let history_path = dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -77,20 +38,11 @@ pub async fn handle_chat() {
     }
 
     println!("Mimir chat. Type /help for commands, /exit to quit.");
-    println!("Press Ctrl+C during input to exit, Ctrl+C during streaming to abort.");
-
-    // Clone llm config before giving it away to the client so we can still
-    // reference endpoint/model in the /status handler.
-    let llm_endpoint = config.llm.endpoint.clone();
-    let llm_model = config.llm.model.clone();
-    let config_path_clone = Config::config_path();
-    let agent_name = config.agent.name.clone();
-    let client = LlmClient::new(config.llm).await;
-    let mut conversation: Vec<Message> = Vec::new();
+    println!("Press Ctrl+C during input to exit.");
 
     loop {
-        let prompt = format!("{}> ", agent_name);
-        let line = match editor.readline(&prompt) {
+        let prompt = "Mimir> ";
+        let line = match editor.readline(prompt) {
             Ok(line) => {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
@@ -112,21 +64,13 @@ pub async fn handle_chat() {
                     continue;
                 }
                 if trimmed == "/clear" {
-                    conversation.clear();
-                    match ctx.create_session(&system_prompt).await {
-                        Ok(new_id) => {
-                            session_id = new_id;
-                            println!("Session reset.");
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to create new session: {}", e);
-                        }
-                    }
+                    session_id = None;
+                    println!("Session reset.");
                     editor.add_history_entry(&line).ok();
                     continue;
                 }
                 if trimmed == "/memory" {
-                    match MemoryLoader::load(&mem_path).await {
+                    match client.memory().await {
                         Ok(content) => println!("{}", content),
                         Err(e) => eprintln!("Failed to load memory: {}", e),
                     }
@@ -134,19 +78,49 @@ pub async fn handle_chat() {
                     continue;
                 }
                 if trimmed == "/status" {
-                    println!(
-                        "Config: {} ({}), LLM: {} @ {}",
-                        config_path_clone
-                            .as_deref()
-                            .map_or("unknown", |p| p.to_str().unwrap_or("?")),
-                        if config_path_clone.as_ref().is_some_and(|p| p.exists()) {
-                            "ok"
-                        } else {
-                            "missing"
-                        },
-                        llm_model,
-                        llm_endpoint,
-                    );
+                    match client.status().await {
+                        Ok(status) => {
+                            println!(
+                                "Version: {}, Uptime: {}s, Endpoint: {}, Model: {}",
+                                status.version,
+                                status.uptime_seconds,
+                                status.endpoint,
+                                status.model
+                            );
+                            println!(
+                                "Queue: user={} system={}, Workers: {}",
+                                status.queue_depth_user,
+                                status.queue_depth_system,
+                                status.worker_threads
+                            );
+                            println!(
+                                "Config: {} ({})",
+                                status.config_path.as_deref().unwrap_or("unknown"),
+                                if status.config_exists {
+                                    "exists"
+                                } else {
+                                    "missing"
+                                }
+                            );
+                            println!(
+                                "LLM: reachable={}, context_window={:?}",
+                                status.llm_reachable, status.context_window
+                            );
+                            println!(
+                                "Memory: {} ({}), {} / {} chars ({:.1}%)",
+                                status.memory_path,
+                                if status.memory_exists {
+                                    "exists"
+                                } else {
+                                    "NOT FOUND"
+                                },
+                                status.memory_chars,
+                                status.memory_limit,
+                                status.memory_usage_pct
+                            );
+                        }
+                        Err(e) => eprintln!("Status request failed: {}", e),
+                    }
                     editor.add_history_entry(&line).ok();
                     continue;
                 }
@@ -180,55 +154,18 @@ pub async fn handle_chat() {
             }
         };
 
-        conversation.push(Message::user(&line));
-        let _ = ctx.add_user_message(&session_id, &line).await;
+        let req = ChatRequest {
+            session_id: session_id.clone(),
+            message: line,
+            model: None,
+            personality_preset: None,
+            incognito: None,
+        };
 
-        let mut messages = vec![Message::system(&system_prompt)];
-        messages.extend(conversation.clone());
-
-        match client.chat_stream_with_usage(messages).await {
-            Ok(mut stream) => {
-                let mut full_response = String::new();
-                let mut total_usage = mimir_core::llm::types::Usage::default();
-                let mut stream_completed = true;
-                while let Some(item) = stream.next().await {
-                    match item {
-                        Ok(mimir_core::llm::StreamItem::Text(text)) => {
-                            print!("{}", text);
-                            use std::io::Write;
-                            let _ = std::io::stdout().flush();
-                            full_response.push_str(&text);
-                        }
-                        Ok(mimir_core::llm::StreamItem::Usage(u)) => {
-                            total_usage = u;
-                        }
-                        Err(e) => {
-                            eprintln!("\nStream error: {}", e);
-                            stream_completed = false;
-                            break;
-                        }
-                    }
-                }
-                println!();
-
-                if stream_completed && !full_response.is_empty() {
-                    conversation.push(Message::assistant(&full_response));
-                    if let Err(e) = ctx.add_assistant_message(&session_id, &full_response).await {
-                        eprintln!("Warning: failed to persist assistant message: {}", e);
-                    }
-                }
-                if stream_completed
-                    && total_usage.total_tokens > 0
-                    && let Err(e) = ctx
-                        .record_usage(
-                            &session_id,
-                            total_usage.prompt_tokens,
-                            total_usage.completion_tokens,
-                        )
-                        .await
-                {
-                    eprintln!("Warning: failed to record usage: {}", e);
-                }
+        match client.chat(req).await {
+            Ok(resp) => {
+                println!("{}", resp.response);
+                session_id = Some(resp.session_id);
             }
             Err(e) => {
                 eprintln!("LLM error: {}", e);

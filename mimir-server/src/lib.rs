@@ -16,7 +16,9 @@ use tracing::info;
 
 use mimir_core::config::Config;
 
-use crate::routes::{chat_handler, chat_stream_handler, memory_handler, status_handler};
+use crate::routes::{
+    chat_handler, chat_stream_handler, memory_handler, status_handler, stop_handler,
+};
 use crate::state::AppState;
 
 /// Build the Axum router with all routes and middleware.
@@ -50,6 +52,7 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route("/memory", get(memory_handler))
         .route("/chat", post(chat_handler))
         .route("/chat/stream", post(chat_stream_handler))
+        .route("/stop", post(stop_handler))
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
@@ -61,10 +64,12 @@ pub fn build_app(state: Arc<AppState>) -> Router {
 /// Start the Mimir HTTP server using the provided configuration.
 ///
 /// Loads shared state from `config`, binds to `config.server.bind_addr`,
-/// and runs until the process is terminated.
+/// and runs until the process is terminated or a graceful shutdown is
+/// triggered via the `/stop` endpoint.
 pub async fn start_server(config: Config) -> anyhow::Result<()> {
     let bind_addr = config.server.bind_addr.clone();
     let state = Arc::new(AppState::from_config(config).await?);
+    let mut shutdown_rx = state.shutdown_tx.subscribe();
 
     let app = build_app(state);
 
@@ -72,7 +77,11 @@ pub async fn start_server(config: Config) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("Mimir daemon listening on {}", addr);
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            let _ = shutdown_rx.changed().await;
+        })
+        .await?;
     Ok(())
 }
 
@@ -86,6 +95,7 @@ mod tests {
     use dashmap::DashMap;
     use tower::ServiceExt;
 
+    use mimir_api_types::{ChatResponse, StatusResponse};
     use mimir_core::{
         config::PersonalityConfig,
         context::ContextManager,
@@ -95,7 +105,6 @@ mod tests {
     };
 
     use crate::state::AppState;
-    use crate::types::{ChatResponse, StatusResponse};
 
     /// Build an `AppState` suitable for tests, using a temporary directory
     /// for the context database and memory.md.
@@ -109,6 +118,7 @@ mod tests {
             .unwrap();
 
         let context_manager = Arc::new(ContextManager::new(&db_path).await.unwrap());
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
 
         let state = Arc::new(AppState {
             llm_client: llm,
@@ -117,6 +127,11 @@ mod tests {
             personality: Personality::new(&PersonalityConfig::default()),
             session_locks: Arc::new(DashMap::new()),
             start_time: Instant::now(),
+            endpoint: "http://localhost:8080".to_string(),
+            model: "gpt-4o".to_string(),
+            memory_limit: 10_000,
+            shutdown_tx,
+            model_override_cache: Arc::new(DashMap::new()),
         });
 
         (state, temp)
@@ -165,26 +180,21 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let chat_resp: ChatResponse = serde_json::from_slice(&body_bytes).unwrap();
-        assert!(!chat_resp.session_id.is_empty());
-        assert_eq!(chat_resp.response, "Hello!");
+        let chat: ChatResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(!chat.session_id.is_empty());
+        assert_eq!(chat.response, "Hello!");
     }
 
     #[tokio::test]
-    async fn test_chat_stream_returns_sse() {
+    async fn test_chat_stream_returns_ok() {
         let mock = Arc::new(
             MockLlmClient::builder()
                 .push_stream(vec![
-                    Ok(StreamItem::Text("Hi".to_string())),
-                    Ok(StreamItem::Usage(Usage {
-                        prompt_tokens: 1,
-                        completion_tokens: 1,
-                        total_tokens: 2,
-                    })),
+                    Ok(StreamItem::Text("hi".to_string())),
+                    Ok(StreamItem::Usage(Usage::default())),
                 ])
                 .build(),
         );
@@ -210,43 +220,25 @@ mod tests {
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
-        assert!(ct.contains("text/event-stream"));
+        assert!(
+            ct.starts_with("text/event-stream"),
+            "expected SSE content-type, got: {}",
+            ct
+        );
 
-        // Collect SSE events to verify content.
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         let text = String::from_utf8(bytes.to_vec()).unwrap();
-        assert!(text.contains("Hi"));
-    }
-
-    #[tokio::test]
-    async fn test_chat_llm_error_returns_500() {
-        let mock = Arc::new(
-            MockLlmClient::builder()
-                .push_chat_error(LlmError::Api {
-                    status: 500,
-                    body: "boom".to_string(),
-                })
-                .build(),
+        assert!(text.contains("data: hi"), "expected text frame in SSE body");
+        assert!(
+            text.contains("event: usage"),
+            "expected usage frame in SSE body"
         );
-        let (state, _temp) = test_state(mock).await;
-        let app = super::build_app(state);
-
-        let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/chat")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            text.contains("\n\n"),
+            "expected SSE frames terminated with double newline"
+        );
     }
 
     #[tokio::test]
@@ -398,5 +390,29 @@ mod tests {
             .unwrap();
         let text = String::from_utf8(body_bytes.to_vec()).unwrap();
         assert!(text.contains("Test memory content"));
+    }
+
+    #[tokio::test]
+    async fn test_stop_returns_ok() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/stop")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

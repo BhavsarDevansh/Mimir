@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
@@ -62,6 +63,14 @@ pub trait LlmBackend: Send + Sync + Debug {
     async fn user_queue_has_capacity(&self) -> bool {
         true
     }
+
+    /// Return a clone of this backend with the model overridden.
+    ///
+    /// The default implementation returns `None`, indicating that the backend
+    /// does not support model overrides.
+    fn with_model_override(&self, _model: String) -> Option<Arc<dyn LlmBackend>> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -118,5 +127,11 @@ mod tests {
         assert_eq!(backend.system_queue_depth().await, 0);
         assert_eq!(backend.worker_threads(), 0);
         assert!(backend.user_queue_has_capacity().await);
+    }
+
+    #[tokio::test]
+    async fn test_with_model_override_default_returns_none() {
+        let backend = DummyBackend;
+        assert!(backend.with_model_override("other".to_string()).is_none());
     }
 }

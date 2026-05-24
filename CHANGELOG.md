@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-05-24
+
+### Added
+
+- **`mimir-api-types`** (new workspace member): Shared serde wire types (`ChatRequest`, `ChatResponse`, `StatusResponse`, `Usage`, `StreamItem`) decoupling the server and client from `mimir-core`.
+- **`mimir-client`** (new workspace member): Thin HTTP client (`MimirClient`) with methods for `chat`, `chat_stream`, `status`, `memory`, and `stop`. Includes a lightweight SSE line parser over `reqwest::bytes_stream()`.
+- **Per-request overrides** (`mimir-server`):
+  - `model` override via `ChatRequest.model` — `LlmBackend::with_model_override` clones `LlmClient` with the new model.
+  - `personality_preset` override via `ChatRequest.personality_preset` — builds a temporary `Personality` for the request.
+  - `incognito` mode via `ChatRequest.incognito` — skips all DB persistence and returns an ephemeral session ID.
+- **Richer `/status` response** (`mimir-server`): Now includes `endpoint`, `model`, `config_path`, `config_exists`, `llm_reachable`, `context_window`, `memory_path`, `memory_exists`, `memory_chars`, `memory_limit`, and `memory_usage_pct`.
+- **`/stop` endpoint** (`mimir-server`): POST endpoint that triggers graceful shutdown via a `tokio::sync::watch` channel.
+
+### Changed
+
+- **`mimir` binary chat modules** (`ask`, `chat`, `status`, `memory`) now talk to the daemon via HTTP using `mimir-client` instead of directly importing `mimir-core`. The chat REPL is fully stateless — the daemon owns the session and conversation history.
+- **`mimir-server/src/types.rs`** replaced with re-exports from `mimir-api-types`.
+
 ## [0.12.2] - 2026-05-24
 
 ### Fixed

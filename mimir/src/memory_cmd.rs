@@ -1,9 +1,11 @@
 //! Memory viewer. Loads and prints the contents of `memory.md` to stdout.
-use mimir_core::memory::MemoryLoader;
+use mimir_client::MimirClient;
+
+const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8080";
 
 pub async fn handle_memory() {
-    let path = MemoryLoader::get_memory_path();
-    match MemoryLoader::load(&path).await {
+    let client = MimirClient::new(DEFAULT_BASE_URL);
+    match client.memory().await {
         Ok(content) => {
             println!("{}", content);
         }

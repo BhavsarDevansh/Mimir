@@ -8,5 +8,5 @@ pub mod skills;
 pub mod tools;
 
 pub fn version() -> &'static str {
-    "0.9.0"
+    "0.13.0"
 }

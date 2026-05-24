@@ -4,7 +4,7 @@ use mimir_core::tools::ToolRegistry;
 fn bench_register(c: &mut Criterion) {
     c.bench_function("tool_registry_register", |b| {
         b.iter_batched(
-            || ToolRegistry::new(),
+            ToolRegistry::new,
             |registry| {
                 // Register the two built-in tools repeatedly to measure overhead.
                 registry.register_builtins();

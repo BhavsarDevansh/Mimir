@@ -3,16 +3,14 @@
 //! Supports streaming/non-streaming, piped stdin, model/personality overrides,
 //! token usage reporting, and incognito mode.
 
+use is_terminal::IsTerminal;
 use std::io::Read;
 
 use futures::StreamExt;
-use is_terminal::IsTerminal;
-use mimir_core::config::Config;
-use mimir_core::context::ContextManager;
-use mimir_core::llm::LlmClient;
-use mimir_core::llm::types::{Message, Usage};
-use mimir_core::memory::MemoryLoader;
-use mimir_core::personality::Personality;
+use mimir_api_types::{ChatRequest, StreamItem};
+use mimir_client::MimirClient;
+
+const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8080";
 
 pub struct AskOptions {
     pub query: String,
@@ -25,60 +23,34 @@ pub struct AskOptions {
 }
 
 pub async fn handle_ask(opts: AskOptions) {
-    let mut config = match Config::load(None) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to load config: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let client = MimirClient::new(DEFAULT_BASE_URL);
 
-    if let Some(ref model) = opts.model {
-        config.llm.model = model.clone();
-    }
-
-    let personality_preset = opts
-        .personality
-        .unwrap_or_else(|| config.personality.preset.clone());
-    let personality = Personality::new(&mimir_core::config::PersonalityConfig {
-        preset: personality_preset,
-    });
-
-    let mem_path = MemoryLoader::get_memory_path();
-    let memory_content = match MemoryLoader::load(&mem_path).await {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Warning: failed to load memory: {}", e);
-            String::new()
-        }
-    };
-
-    let mut user_content = String::new();
+    let mut message = String::new();
     if let Some(ref piped) = opts.piped_input {
-        user_content.push_str(&format!("[Context from stdin]\n{}\n\n", piped));
+        message.push_str(&format!("[Context from stdin]\n{}\n\n", piped));
     }
-    user_content.push_str(&opts.query);
+    message.push_str(&opts.query);
 
-    let system_prompt = personality.system_prompt(&memory_content);
-    let messages = vec![
-        Message::system(&system_prompt),
-        Message::user(&user_content),
-    ];
+    let req = ChatRequest {
+        session_id: None,
+        message,
+        model: opts.model,
+        personality_preset: opts.personality,
+        incognito: Some(opts.incognito),
+    };
 
-    let client = LlmClient::new(config.llm.clone()).await;
-
-    // Collect the full response and usage so we can persist them.
-    let (response_text, usage) = if opts.no_stream {
-        match client.chat(messages).await {
-            Ok((response, usage)) => {
-                println!("{}", response);
+    if opts.no_stream {
+        match client.chat(req).await {
+            Ok(resp) => {
+                println!("{}", resp.response);
                 if opts.verbose {
                     eprintln!(
                         "Tokens: {} prompt + {} completion = {} total",
-                        usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+                        resp.usage.prompt_tokens,
+                        resp.usage.completion_tokens,
+                        resp.usage.total_tokens
                     );
                 }
-                (Some(response), Some(usage))
             }
             Err(e) => {
                 eprintln!("LLM request failed: {}", e);
@@ -86,19 +58,19 @@ pub async fn handle_ask(opts: AskOptions) {
             }
         }
     } else {
-        match client.chat_stream_with_usage(messages).await {
+        match client.chat_stream(req).await {
             Ok(mut stream) => {
                 let mut full_response = String::new();
-                let mut total_usage = Usage::default();
+                let mut total_usage = mimir_api_types::Usage::default();
                 while let Some(item) = stream.next().await {
                     match item {
-                        Ok(mimir_core::llm::StreamItem::Text(text)) => {
+                        Ok(StreamItem::Text(text)) => {
                             print!("{}", text);
                             use std::io::Write;
                             let _ = std::io::stdout().flush();
                             full_response.push_str(&text);
                         }
-                        Ok(mimir_core::llm::StreamItem::Usage(u)) => {
+                        Ok(StreamItem::Usage(u)) => {
                             total_usage = u;
                         }
                         Err(e) => {
@@ -116,62 +88,12 @@ pub async fn handle_ask(opts: AskOptions) {
                         total_usage.total_tokens
                     );
                 }
-                let text = if full_response.is_empty() {
-                    None
-                } else {
-                    Some(full_response)
-                };
-                let usage = if total_usage.total_tokens > 0 {
-                    Some(total_usage)
-                } else {
-                    None
-                };
-                (text, usage)
             }
             Err(e) => {
                 eprintln!("LLM stream request failed: {}", e);
                 std::process::exit(1);
             }
         }
-    };
-
-    // Persist the interaction unless incognito was requested.
-    if !opts.incognito {
-        let db_path = config.context.db_path.clone().unwrap_or_else(|| {
-            dirs::data_dir()
-                .map(|d| d.join("mimir").join("context.db"))
-                .unwrap_or_else(|| std::path::PathBuf::from("/tmp/mimir/context.db"))
-        });
-        let ctx = match ContextManager::new(&db_path).await {
-            Ok(ctx) => ctx,
-            Err(e) => {
-                eprintln!("Warning: failed to open context database: {}", e);
-                return;
-            }
-        };
-        let sid = match ctx.create_session(&system_prompt).await {
-            Ok(sid) => sid,
-            Err(e) => {
-                eprintln!("Warning: failed to create context session: {}", e);
-                return;
-            }
-        };
-        if let Err(e) = ctx.add_user_message(&sid, &user_content).await {
-            eprintln!("Warning: failed to persist user message: {}", e);
-        }
-        if let Some(ref text) = response_text
-            && let Err(e) = ctx.add_assistant_message(&sid, text).await
-        {
-            eprintln!("Warning: failed to persist assistant message: {}", e);
-        }
-        if let Some(ref usage) = usage
-            && let Err(e) = ctx
-                .record_usage(&sid, usage.prompt_tokens, usage.completion_tokens)
-                .await
-        {
-            eprintln!("Warning: failed to record usage: {}", e);
-        }
-        // Don't delete the session — let it persist for future context.
     }
 }
 

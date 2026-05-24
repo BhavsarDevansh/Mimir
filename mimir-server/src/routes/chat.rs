@@ -7,81 +7,134 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
 };
 use futures::{Stream, StreamExt};
+use mimir_api_types::{ChatRequest, ChatResponse, Usage};
 use mimir_core::llm::types::StreamItem;
+use mimir_core::personality::Personality;
 
 use tracing::error;
 
 use crate::error;
 use crate::state::AppState;
-use crate::types::{ChatRequest, ChatResponse};
 
-/// Blocking chat completion endpoint.
+/// Resolve the common chat state shared by both the blocking and streaming handlers.
 ///
-/// 1. Validates or creates a session.
-/// 2. Persists the user message.
-/// 3. Delegates to the LLM worker pool.
-/// 4. Persists the assistant response and returns it.
-pub async fn chat_handler(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ChatRequest>,
-) -> Result<Json<ChatResponse>, axum::response::Response> {
+/// Returns `(session_id, llm, messages, incognito, permit_option)` where
+/// `permit_option` is `Some` only when the session is non-incognito and the
+/// caller must hold the permit until after the assistant response is persisted.
+async fn resolve_chat_state(
+    state: &Arc<AppState>,
+    req: &ChatRequest,
+) -> Result<
+    (
+        String,
+        Arc<dyn mimir_core::llm::LlmBackend>,
+        Vec<mimir_core::llm::types::Message>,
+        bool,
+        Option<tokio::sync::OwnedSemaphorePermit>,
+    ),
+    axum::response::Response,
+> {
     let memory = tokio::fs::read_to_string(&state.memory_path)
         .await
         .unwrap_or_default();
 
-    let session_id = match &req.session_id {
-        Some(id) => {
-            // Verify the session exists, distinguishing not-found from real errors.
-            match state.context_manager.export_messages(id).await {
+    let incognito = req.incognito == Some(true);
+
+    let personality = if let Some(ref preset) = req.personality_preset {
+        Personality::new(&mimir_core::config::PersonalityConfig {
+            preset: preset.clone(),
+        })
+    } else {
+        state.personality.clone()
+    };
+
+    let llm = state.resolve_llm(req.model.clone());
+
+    let session_id = if incognito {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        match &req.session_id {
+            Some(id) => match state.context_manager.export_messages(id).await {
                 Ok(_) => id.clone(),
                 Err(mimir_core::context::ContextError::SessionNotFound(_)) => {
                     return Err(error::session_not_found());
                 }
                 Err(e) => return Err(error::context_error(e)),
+            },
+            None => {
+                let system_prompt = personality.system_prompt(&memory);
+                state
+                    .context_manager
+                    .create_session(system_prompt)
+                    .await
+                    .map_err(error::context_error)?
             }
-        }
-        None => {
-            let system_prompt = state.personality.system_prompt(&memory);
-            state
-                .context_manager
-                .create_session(system_prompt)
-                .await
-                .map_err(error::context_error)?
         }
     };
 
-    // Serialise per-session access.
-    let sem = state.session_semaphore(&session_id);
-    let _permit = sem.acquire().await.expect("semaphore never closed");
+    if incognito {
+        let system_prompt = personality.system_prompt(&memory);
+        let messages = vec![
+            mimir_core::llm::types::Message::system(&system_prompt),
+            mimir_core::llm::types::Message::user(&req.message),
+        ];
+        Ok((session_id, llm, messages, incognito, None))
+    } else {
+        let permit = state
+            .session_semaphore(&session_id)
+            .acquire_owned()
+            .await
+            .map_err(|_| {
+                error!("session semaphore closed");
+                error::internal("internal server error")
+            })?;
 
-    state
-        .context_manager
-        .add_user_message(&session_id, &req.message)
-        .await
-        .map_err(error::context_error)?;
+        state
+            .context_manager
+            .add_user_message(&session_id, &req.message)
+            .await
+            .map_err(error::context_error)?;
 
-    let messages = state
-        .context_manager
-        .export_messages(&session_id)
-        .await
-        .map_err(error::context_error)?;
+        let messages = state
+            .context_manager
+            .export_messages(&session_id)
+            .await
+            .map_err(error::context_error)?;
 
-    let (response_text, usage) = state
-        .llm_client
-        .chat(messages)
-        .await
-        .map_err(error::llm_error)?;
+        Ok((session_id, llm, messages, incognito, Some(permit)))
+    }
+}
 
-    state
-        .context_manager
-        .add_assistant_message(&session_id, &response_text)
-        .await
-        .map_err(error::context_error)?;
+/// Blocking chat completion endpoint.
+///
+/// 1. Validates or creates a session (unless incognito).
+/// 2. Persists the user message (unless incognito).
+/// 3. Delegates to the LLM worker pool, with optional model override.
+/// 4. Persists the assistant response and returns it (unless incognito).
+pub async fn chat_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ChatRequest>,
+) -> Result<Json<ChatResponse>, axum::response::Response> {
+    let (session_id, llm, messages, incognito, _permit) = resolve_chat_state(&state, &req).await?;
+
+    let (response_text, usage) = llm.chat(messages).await.map_err(error::llm_error)?;
+
+    if !incognito {
+        state
+            .context_manager
+            .add_assistant_message(&session_id, &response_text)
+            .await
+            .map_err(error::context_error)?;
+    }
 
     Ok(Json(ChatResponse {
         session_id,
         response: response_text,
-        usage,
+        usage: Usage {
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            total_tokens: usage.total_tokens,
+        },
     }))
 }
 
@@ -96,73 +149,18 @@ pub async fn chat_stream_handler(
     Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>,
     axum::response::Response,
 > {
-    let memory = tokio::fs::read_to_string(&state.memory_path)
-        .await
-        .unwrap_or_default();
+    let (session_id, llm, messages, incognito, permit) = resolve_chat_state(&state, &req).await?;
 
-    let session_id = match &req.session_id {
-        Some(id) => {
-            // Verify the session exists, distinguishing not-found from real errors.
-            match state.context_manager.export_messages(id).await {
-                Ok(_) => id.clone(),
-                Err(mimir_core::context::ContextError::SessionNotFound(_)) => {
-                    return Err(error::session_not_found());
-                }
-                Err(e) => return Err(error::context_error(e)),
-            }
-        }
-        None => {
-            let system_prompt = state.personality.system_prompt(&memory);
-            state
-                .context_manager
-                .create_session(system_prompt)
-                .await
-                .map_err(error::context_error)?
-        }
-    };
-
-    // Acquire the session lock synchronously so the enqueue and stream
-    // processing are serialised per-session.
-    let permit = state
-        .session_semaphore(&session_id)
-        .acquire_owned()
-        .await
-        .map_err(|_| {
-            error!("session semaphore closed");
-            error::internal("internal server error")
-        })?;
-
-    // Persist the user message before enqueuing so the 200 response is
-    // only committed after both the message is stored and the stream
-    // handle is obtained (real enqueue, no TOCTOU race).
-    state
-        .context_manager
-        .add_user_message(&session_id, &req.message)
-        .await
-        .map_err(error::context_error)?;
-
-    // Export messages and enqueue the stream immediately.
-    // If the queue is full we return a proper 503 error response instead
-    // of committing a 200 and sending an error event later.
-    let messages = state
-        .context_manager
-        .export_messages(&session_id)
-        .await
-        .map_err(error::context_error)?;
-
-    let mut stream = state
-        .llm_client
+    let mut stream = llm
         .chat_stream_with_usage(messages)
         .await
         .map_err(error::llm_error)?;
 
-    // Build the SSE channel and spawn the streaming task.
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<Event>(16);
     let state_clone = Arc::clone(&state);
     let session_id_clone = session_id.clone();
 
     tokio::spawn(async move {
-        // Keep the session permit alive for the entire stream lifetime.
         let _permit = permit;
 
         let mut full_response = String::new();
@@ -176,8 +174,6 @@ pub async fn chat_stream_handler(
                     let event = Event::default().data(text);
                     if event_tx.send(event).await.is_err() {
                         all_sends_ok = false;
-                        // Drop the stream immediately so the upstream provider
-                        // can be cancelled, instead of silently draining it.
                         drop(stream);
                         break;
                     }
@@ -189,9 +185,7 @@ pub async fn chat_stream_handler(
                     if !send_ok {
                         all_sends_ok = false;
                     }
-                    // Persist the assistant message only when the client
-                    // received all data and the context write succeeds.
-                    if all_sends_ok && !full_response.is_empty() {
+                    if !incognito && all_sends_ok && !full_response.is_empty() {
                         match state_clone
                             .context_manager
                             .add_assistant_message(&session_id_clone, &full_response)
@@ -224,10 +218,8 @@ pub async fn chat_stream_handler(
             }
         }
 
-        // If the provider never emitted a usage block, and all sends
-        // succeeded, persist the accumulated response so the session
-        // is not left incomplete.
-        if !assistant_persisted
+        if !incognito
+            && !assistant_persisted
             && all_sends_ok
             && !full_response.is_empty()
             && let Err(e) = state_clone

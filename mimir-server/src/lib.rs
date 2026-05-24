@@ -215,6 +215,30 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+        let ct = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        assert!(
+            ct.starts_with("text/event-stream"),
+            "expected SSE content-type, got: {}",
+            ct
+        );
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(text.contains("data: hi"), "expected text frame in SSE body");
+        assert!(
+            text.contains("event: usage"),
+            "expected usage frame in SSE body"
+        );
+        assert!(
+            text.contains("\n\n"),
+            "expected SSE frames terminated with double newline"
+        );
     }
 
     #[tokio::test]
@@ -379,6 +403,10 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/stop")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
                     .body(Body::empty())
                     .unwrap(),
             )

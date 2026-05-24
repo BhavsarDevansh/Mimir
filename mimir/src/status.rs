@@ -1,7 +1,6 @@
 //! System status reporter. Displays config, LLM connectivity, and memory stats.
+use crate::constants::DEFAULT_BASE_URL;
 use mimir_client::MimirClient;
-
-const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8080";
 
 pub async fn handle_status() {
     let client = MimirClient::new(DEFAULT_BASE_URL);

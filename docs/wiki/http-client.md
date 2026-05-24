@@ -12,7 +12,7 @@ The `mimir` binary no longer loads `mimir-core` for chat commands. Instead, `mim
 
 ## How It Works
 
-```
+```text
 mimir ask "hello"     →  HTTP POST /chat      →  daemon
 mimir chat            →  HTTP POST /chat      →  daemon (REPL loop)
 mimir status          →  HTTP GET /status     →  daemon

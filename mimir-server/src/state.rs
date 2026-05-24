@@ -38,6 +38,8 @@ pub struct AppState {
     pub model_override_cache: Arc<DashMap<String, Arc<dyn LlmBackend>>>,
 }
 
+const MODEL_OVERRIDE_CACHE_CAP: usize = 16;
+
 impl AppState {
     /// Build `AppState` from the global Mimir [`Config`].
     pub async fn from_config(config: Config) -> anyhow::Result<Self> {
@@ -95,6 +97,16 @@ impl AppState {
             .llm_client
             .with_model_override(model.clone())
             .unwrap_or_else(|| Arc::clone(&self.llm_client));
+
+        // Evict an arbitrary entry if at capacity so memory cannot grow without bound.
+        if self.model_override_cache.len() >= MODEL_OVERRIDE_CACHE_CAP
+            && let Some(entry) = self.model_override_cache.iter().next()
+        {
+            let key = entry.key().clone();
+            drop(entry);
+            self.model_override_cache.remove(&key);
+        }
+
         self.model_override_cache.insert(model, Arc::clone(&client));
         client
     }

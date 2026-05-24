@@ -2,12 +2,11 @@
 //!
 //! The daemon owns the session and conversation history; this client is
 //! fully stateless except for the optional `session_id` used to resume.
+use crate::constants::DEFAULT_BASE_URL;
 use mimir_api_types::ChatRequest;
 use mimir_client::MimirClient;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
-
-const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8080";
 
 pub async fn handle_chat() {
     let client = MimirClient::new(DEFAULT_BASE_URL);

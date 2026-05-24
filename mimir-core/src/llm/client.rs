@@ -475,6 +475,7 @@ impl LlmBackend for LlmClient {
     fn with_model_override(&self, model: String) -> Option<Arc<dyn LlmBackend>> {
         let mut clone = self.clone();
         clone.config.model = model;
+        clone.pool = None;
         Some(Arc::new(clone))
     }
 }

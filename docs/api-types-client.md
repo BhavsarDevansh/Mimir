@@ -9,7 +9,7 @@ Two new workspace members were introduced in v0.13.0 to decouple the CLI from `m
 
 ## Crate Structure
 
-```
+```text
 mimir-api-types/
 └── src/lib.rs
     ├── ChatRequest

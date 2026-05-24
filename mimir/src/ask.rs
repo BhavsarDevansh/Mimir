@@ -6,11 +6,10 @@
 use is_terminal::IsTerminal;
 use std::io::Read;
 
+use crate::constants::DEFAULT_BASE_URL;
 use futures::StreamExt;
 use mimir_api_types::{ChatRequest, StreamItem};
 use mimir_client::MimirClient;
-
-const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8080";
 
 pub struct AskOptions {
     pub query: String,

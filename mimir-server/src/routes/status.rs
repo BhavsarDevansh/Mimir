@@ -21,7 +21,9 @@ pub async fn status_handler(State(state): State<Arc<AppState>>) -> Json<StatusRe
         Err(_) => (false, None),
     };
 
-    let memory_exists = state.memory_path.exists();
+    let memory_exists = tokio::fs::try_exists(&state.memory_path)
+        .await
+        .unwrap_or(false);
     let memory_chars = if memory_exists {
         match tokio::fs::read_to_string(&state.memory_path).await {
             Ok(content) => content.chars().count(),

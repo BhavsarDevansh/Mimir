@@ -34,9 +34,14 @@ impl MimirClient {
     /// The base URL should include the scheme and host/port, e.g.
     /// `http://127.0.0.1:8080`.
     pub fn new(base_url: impl Into<String>) -> Self {
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .expect("failed to build HTTP client");
         Self {
             base_url: base_url.into(),
-            client: reqwest::Client::new(),
+            client,
         }
     }
 
@@ -141,8 +146,8 @@ fn parse_sse_stream(
             Ok(bytes) => {
                 buf.extend_from_slice(&bytes);
                 let mut items = Vec::new();
-                while let Some(pos) = find_double_newline(&buf) {
-                    let event_bytes: Vec<u8> = buf.drain(..pos + 2).collect();
+                while let Some((pos, delim_len)) = find_double_newline(&buf) {
+                    let event_bytes: Vec<u8> = buf.drain(..pos + delim_len).collect();
                     match String::from_utf8(event_bytes) {
                         Ok(event) => {
                             if let Some(item) = parse_sse_event(&event) {
@@ -163,9 +168,17 @@ fn parse_sse_stream(
         .flat_map(futures::stream::iter)
 }
 
-/// Return the index of the first `\n\n` delimiter in `buf`.
-fn find_double_newline(buf: &[u8]) -> Option<usize> {
-    buf.windows(2).position(|w| w == b"\n\n")
+/// Return the index and delimiter length of the first `\n\n` or `\r\n\r\n` in `buf`.
+fn find_double_newline(buf: &[u8]) -> Option<(usize, usize)> {
+    for i in 0..buf.len() {
+        if buf[i..].starts_with(b"\r\n\r\n") {
+            return Some((i, 4));
+        }
+        if buf[i..].starts_with(b"\n\n") {
+            return Some((i, 2));
+        }
+    }
+    None
 }
 
 /// Parse a single SSE event block into a [`StreamItem`] or an error.

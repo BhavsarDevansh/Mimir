@@ -2,6 +2,7 @@ mod ask;
 mod chat;
 mod cli;
 mod commands;
+mod constants;
 mod init;
 mod memory_cmd;
 mod skills_permissions_config;

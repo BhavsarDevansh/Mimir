@@ -64,6 +64,11 @@ pub trait LlmBackend: Send + Sync + Debug {
         true
     }
 
+    /// Gracefully shut down the backend, releasing resources.
+    ///
+    /// The default implementation is a no-op so existing mocks are unaffected.
+    async fn shutdown(&self) {}
+
     /// Return a clone of this backend with the model overridden.
     ///
     /// The default implementation returns `None`, indicating that the backend

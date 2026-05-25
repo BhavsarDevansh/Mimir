@@ -81,6 +81,29 @@ impl AppState {
             .clone()
     }
 
+    /// Gracefully shut down all long-lived resources.
+    ///
+    /// 1. Close the SQLite pool (flushes WAL).
+    /// 2. Shut down the LLM worker pool and drop HTTP clients.
+    /// 3. Sync memory.md to disk.
+    pub async fn shutdown(&self) {
+        tracing::info!("Shutting down ContextManager...");
+        self.context_manager.close().await;
+
+        tracing::info!("Shutting down LLM client...");
+        self.llm_client.shutdown().await;
+
+        if let Ok(file) = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&self.memory_path)
+            .await
+        {
+            let _ = file.sync_all().await;
+        }
+
+        tracing::info!("Shutdown complete.");
+    }
+
     /// Resolve the LLM backend to use, applying a model override if requested.
     ///
     /// Override clients are cached so that repeated requests with the same

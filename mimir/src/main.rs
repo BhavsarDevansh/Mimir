@@ -27,8 +27,8 @@ async fn main() {
         cli::Commands::Start => start::handle_start().await,
         cli::Commands::Stop => {
             if !daemon_guard::check_daemon_reachable(constants::DEFAULT_BASE_URL).await {
-                println!("daemon already stopped");
-                return;
+                eprintln!("Mimir is not running.");
+                std::process::exit(1);
             }
             stop::handle_stop().await;
         }

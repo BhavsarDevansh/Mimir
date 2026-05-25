@@ -40,13 +40,14 @@ fn test_status_fails_when_server_down() {
 fn test_stop_when_server_down() {
     let (stdout, stderr, status) = run_mimir(&["stop"]);
     assert!(
-        status.success(),
-        "mimir stop should succeed even when daemon is not running"
+        !status.success(),
+        "mimir stop should fail when daemon is not running"
     );
+    assert_eq!(status.code(), Some(1), "exit code should be 1");
     let combined = format!("{}{}", stdout, stderr);
     assert!(
-        combined.contains("daemon already stopped"),
-        "should report daemon already stopped, got: {}",
+        combined.contains("Mimir is not running."),
+        "should report daemon not running, got: {}",
         combined
     );
 }

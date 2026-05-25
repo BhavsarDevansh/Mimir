@@ -70,16 +70,7 @@ Mimir is built in **Rust** with a modular, local-first architecture:
 
 ## Installation
 
-```bash
-# One-line installer
-curl --proto '=https' --tlsv1.2 -sSf https://install.mimir.dev | sh
-
-# Or via Cargo
-cargo install mimir
-
-# Or via Docker
-docker run -v ~/.config/mimir:/config -v ~/.local/share/mimir:/data mimir:latest
-```
+> Coming soon. For now clone and run with `cargo run`.
 
 ## Quick Start
 

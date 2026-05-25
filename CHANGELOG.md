@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `LlmBackend::chat_message` returning the full assistant `Message` alongside usage; the existing `LlmBackend::chat` method now delegates to it and extracts the text content.
   - Updated `LlmClient`, `LlmWorkerPool`, and `MockLlmClient` to support the new `chat_message` path.
   - `chat_handler` in `mimir-server` now detects when the LLM issues `tool_calls`, executes each tool via `ToolRegistry`, appends the results as `role: tool` messages, and makes a follow-up LLM call to obtain the final assistant response.
-  - Added `test_chat_executes_tool_calls_and_returns_final_response` verifying the full tool-call loop end-to-end.
-  - Note: SSE streaming (`/chat/stream`) does not yet handle tool calls; this will be addressed in a future update.
+  - `chat_stream_handler` in `mimir-server` accumulates tool-call deltas (`StreamItem::ToolCalls`) during SSE streaming, executes the tools when the usage block arrives, makes a follow-up non-streaming LLM call, and streams the final text to the client.
+  - Added `StreamItem::ToolCalls` variant and `ToolCallDelta` parsing in `LlmClient::map_sse_event`.
+  - Added `test_chat_executes_tool_calls_and_returns_final_response` and `test_chat_stream_executes_tool_calls_and_returns_final_response` verifying the full tool-call loop end-to-end for both blocking and streaming endpoints.
 
 ## [0.16.1] - 2026-05-25
 

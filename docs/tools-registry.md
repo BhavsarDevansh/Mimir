@@ -188,7 +188,7 @@ When the LLM backend receives a request via the `/chat` endpoint, enabled tools 
 3. Results are rendered with `ToolOutput::to_llm_text()` and sent back as `role: tool` messages.
 4. A follow-up LLM call produces the final assistant response, which is persisted to the session.
 
-This loop is handled entirely within the `chat_handler` route; only the final assistant text is stored in the conversation history.
+This loop is handled within both the `chat_handler` (blocking) and `chat_stream_handler` (SSE) routes; only the final assistant text is stored in the conversation history. In streaming mode, tool-call deltas are accumulated across SSE chunks, the tools are executed when the usage block arrives, and the final response is streamed to the client.
 
 ## Future Work
 
@@ -196,4 +196,3 @@ This loop is handled entirely within the `chat_handler` route; only the final as
 - Connector-based tools (e.g., Gmail, Calendar)
 - Skill registry (higher-level compositions of tools)
 - Hot-reload of CLI tool definitions
-- Tool-call handling for SSE streaming (`/chat/stream`)

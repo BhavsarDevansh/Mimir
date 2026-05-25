@@ -208,7 +208,7 @@ impl LlmClient {
         let text_stream = stream
             .map(|item| match item {
                 Ok(StreamItem::Text(text)) => Ok(text),
-                Ok(StreamItem::Usage(_)) => Ok(String::new()),
+                Ok(StreamItem::Usage(_)) | Ok(StreamItem::ToolCalls(_)) => Ok(String::new()),
                 Err(e) => Err(e),
             })
             .filter(|item| futures::future::ready(!matches!(item, Ok(s) if s.is_empty())));
@@ -303,12 +303,17 @@ impl LlmClient {
             return Ok(StreamItem::Usage(usage));
         }
 
-        let content = chunk
-            .choices
-            .into_iter()
-            .next()
-            .and_then(|c| c.delta.content)
-            .unwrap_or_default();
+        let choice = chunk.choices.into_iter().next();
+
+        // Check for tool-call deltas first.
+        if let Some(ref c) = choice
+            && let Some(ref tool_calls) = c.delta.tool_calls
+            && !tool_calls.is_empty()
+        {
+            return Ok(StreamItem::ToolCalls(tool_calls.clone()));
+        }
+
+        let content = choice.and_then(|c| c.delta.content).unwrap_or_default();
 
         Ok(StreamItem::Text(content))
     }

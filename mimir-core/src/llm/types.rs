@@ -18,18 +18,24 @@ pub struct ChatRequest {
 }
 
 /// A function call inside a tool call.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct FunctionCall {
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub arguments: String,
 }
 
 /// A tool call issued by the assistant.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ToolCall {
+    #[serde(default)]
+    pub index: u32,
+    #[serde(default)]
     pub id: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     pub call_type: String,
+    #[serde(default)]
     pub function: FunctionCall,
 }
 
@@ -124,6 +130,8 @@ pub struct StreamChoice {
 pub struct Delta {
     pub role: Option<String>,
     pub content: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Option<Vec<ToolCall>>,
 }
 
 /// An item yielded by the usage-aware streaming chat method.
@@ -131,6 +139,8 @@ pub struct Delta {
 pub enum StreamItem {
     Text(String),
     Usage(Usage),
+    /// Partial tool-call deltas from a streaming response.
+    ToolCalls(Vec<ToolCall>),
 }
 
 /// Errors that can occur when interacting with an LLM API.

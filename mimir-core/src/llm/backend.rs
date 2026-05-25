@@ -59,7 +59,7 @@ pub trait LlmBackend: Send + Sync + Debug {
         let text_stream = stream
             .map(|item| match item {
                 Ok(StreamItem::Text(text)) => Ok(text),
-                Ok(StreamItem::Usage(_)) => Ok(String::new()),
+                Ok(StreamItem::Usage(_)) | Ok(StreamItem::ToolCalls(_)) => Ok(String::new()),
                 Err(e) => Err(e),
             })
             .filter(|item| futures::future::ready(!matches!(item, Ok(s) if s.is_empty())));

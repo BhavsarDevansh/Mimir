@@ -439,6 +439,7 @@ mod tests {
     #[tokio::test]
     async fn test_chat_executes_tool_calls_and_returns_final_response() {
         let tool_call = ToolCall {
+            index: 0,
             id: "call_123".to_string(),
             call_type: "function".to_string(),
             function: FunctionCall {
@@ -530,6 +531,64 @@ mod tests {
             .collect();
         assert!(names.contains(&"get_current_time".to_string()));
         assert!(names.contains(&"echo".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_chat_stream_executes_tool_calls_and_returns_final_response() {
+        let tool_call_delta = ToolCall {
+            index: 0,
+            id: "call_456".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "get_current_time".to_string(),
+                arguments: "{}".to_string(),
+            },
+        };
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_stream(vec![
+                    Ok(StreamItem::ToolCalls(vec![tool_call_delta])),
+                    Ok(StreamItem::Usage(Usage::default())),
+                ])
+                .push_chat("The current time is now.", Usage::default())
+                .build(),
+        );
+        let (state, _temp) = test_state(mock.clone()).await;
+        let app = super::build_app(state);
+
+        let body =
+            serde_json::to_string(&serde_json::json!({"message": "What time is it?"})).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat/stream")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        // The follow-up text should be streamed as a data event.
+        assert!(
+            text.contains("The current time is now."),
+            "expected follow-up text in SSE stream, got: {}",
+            text
+        );
+
+        // The follow-up call should have been made via the non-streaming chat path.
+        let calls = mock.chat_calls();
+        assert_eq!(
+            calls.len(),
+            1,
+            "expected one follow-up LLM call after tool execution"
+        );
     }
 
     #[tokio::test]

@@ -24,9 +24,9 @@ pub enum DaemonGuardError {
     /// Daemon did not become ready within the timeout.
     #[error("daemon start timeout")]
     StartTimeout,
-    /// Connection probe failed in an unexpected way.
+    /// Reserved for unexpected probe-level failures (currently unused).
     #[error("connection error: {0}")]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // intentionally reserved; not used by current probe impl
     Connection(String),
 }
 
@@ -45,6 +45,11 @@ pub async fn ensure_daemon_running(
 ) -> Result<(), DaemonGuardError> {
     let guard = DaemonGuard::default();
     guard.ensure_running(base_url, already_tried).await
+}
+
+/// Non-interactive reachability check for the daemon.
+pub async fn check_daemon_reachable(base_url: &str) -> bool {
+    HttpProbe.check(base_url).await
 }
 
 // ---------------------------------------------------------------------------
@@ -113,8 +118,8 @@ impl ProcessSpawner for RealProcessSpawner {
         std::process::Command::new(exe)
             .arg("start")
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn()
             .map_err(|e| DaemonGuardError::Spawn(e.to_string()))?;
         Ok(())
@@ -178,10 +183,10 @@ impl DaemonGuard {
         let timeout = Duration::from_secs(10);
 
         while start.elapsed() < timeout {
-            tokio::time::sleep(delay).await;
             if self.probe.check(base_url).await {
                 return Ok(());
             }
+            tokio::time::sleep(delay).await;
             delay = (delay * 2).min(Duration::from_secs(1));
         }
 

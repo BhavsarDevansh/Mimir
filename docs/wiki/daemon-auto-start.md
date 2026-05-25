@@ -19,7 +19,7 @@ Start the server now? [y/N]:
 If you approve, Mimir:
 
 1. Spawns `mimir start` using the same binary you are currently running.
-2. Shows the daemon's startup logs in your terminal (stdout/stderr are inherited).
+2. Daemon stdout and stderr are redirected to null so it runs silently in the background.
 3. Polls the daemon every 200–1 000 ms with exponential backoff.
 4. Proceeds with your original command as soon as the daemon is ready.
 
@@ -64,7 +64,7 @@ Commands that do **not** need the daemon and therefore skip the guard:
 ## Troubleshooting
 
 **The prompt never appears and the command just hangs.**
-- Check that `mimir` is in your `PATH` and `std::env::current_exe()` resolves correctly.
+- Ensure the `mimir` executable is in your `PATH` and the system can locate it.
 - If you are using a symlink, the symlink target must be a valid executable.
 
 **The daemon starts but the command still times out.**

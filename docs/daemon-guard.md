@@ -33,12 +33,13 @@ pub async fn ensure_daemon_running(
 
 1. **Fast probe** — A dedicated `reqwest` client with a 500 ms total-request timeout sends `GET {base_url}/status`. If the response is HTTP 2xx, the helper returns `Ok(())` immediately.
 2. **Prompt** — If the probe fails (connection refused, timeout, or non-2xx), the helper prints:
-   ```
+   ```text
    Error: Mimir is not running.
    Start the server now? [y/N]:
    ```
+
    It then reads a single line from `stdin`. The line is trimmed and lowercased. Only `y` or `yes` are accepted. EOF, empty input, or anything else aborts with a `Prompt` error.
-3. **Spawn** — On approval, the helper calls `std::env::current_exe()` to locate the current `mimir` binary and spawns it as `mimir start`. Stdout and stderr are inherited so the user sees daemon startup logs.
+3. **Spawn** — On approval, the helper calls `std::env::current_exe()` to locate the current `mimir` binary and spawns it as `mimir start`. Stdout and stderr are redirected to null so the daemon runs silently in the background.
 4. **Polling** — The helper enters a poll loop:
    - Initial delay: **200 ms**
    - After each failed probe, delay doubles: 200 → 400 → 800 → **capped at 1 000 ms**

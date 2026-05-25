@@ -37,16 +37,16 @@ fn test_status_fails_when_server_down() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_stop_fails_when_server_down() {
+fn test_stop_when_server_down() {
     let (stdout, stderr, status) = run_mimir(&["stop"]);
     assert!(
-        !status.success(),
-        "mimir stop should fail when daemon is not running"
+        status.success(),
+        "mimir stop should succeed even when daemon is not running"
     );
     let combined = format!("{}{}", stdout, stderr);
     assert!(
-        combined.contains("error") || combined.contains("Error"),
-        "should report an error when daemon is unreachable, got: {}",
+        combined.contains("daemon already stopped"),
+        "should report daemon already stopped, got: {}",
         combined
     );
 }
@@ -91,9 +91,10 @@ fn test_ask_piped_input_detection() {
 
     let output = child.wait_with_output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    // When the daemon is not running, the piped input is consumed by the
-    // daemon guard prompt reader. It will see "hello" and decline, so the
-    // error will be from the daemon guard, not the query validation.
+    // When the daemon is not running, the piped input "hello" is consumed by
+    // the daemon guard's prompt reader, which interprets it as a declined
+    // prompt. Therefore the error originates from the daemon guard (prompt
+    // handling) rather than from query validation.
     assert!(
         !stderr.contains("no query provided"),
         "piped ask should not complain about no query: {}",

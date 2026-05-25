@@ -26,14 +26,9 @@ async fn main() {
         cli::Commands::Init => init::handle_init().await,
         cli::Commands::Start => start::handle_start().await,
         cli::Commands::Stop => {
-            if let Err(e) = daemon_guard::ensure_daemon_running(
-                constants::DEFAULT_BASE_URL,
-                &mut daemon_started,
-            )
-            .await
-            {
-                eprintln!("{}", e);
-                std::process::exit(1);
+            if !daemon_guard::check_daemon_reachable(constants::DEFAULT_BASE_URL).await {
+                println!("daemon already stopped");
+                return;
             }
             stop::handle_stop().await;
         }

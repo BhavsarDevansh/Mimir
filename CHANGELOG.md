@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] - 2026-05-25
+
+### Fixed
+
+- **Daemon guard review fixes**:
+  - Daemon stdout/stderr are now redirected to null instead of being inherited, preventing log leakage into the client terminal.
+  - Poll loop now probes immediately before sleeping, removing unnecessary startup latency.
+  - `mimir stop` no longer auto-starts the daemon; it performs a non-interactive reachability probe and prints "daemon already stopped" when the daemon is down.
+  - Documentation formatting and wording cleaned up for user-facing guides.
+
 ## [0.14.0] - 2026-05-24
 
 ### Added

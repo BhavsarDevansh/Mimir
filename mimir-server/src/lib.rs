@@ -152,7 +152,7 @@ mod tests {
     use mimir_core::{
         config::PersonalityConfig,
         context::ContextManager,
-        llm::types::{LlmError, StreamItem, Usage},
+        llm::types::{FunctionCall, LlmError, Message, StreamItem, ToolCall, Usage},
         llm::{LlmBackend, MockLlmClient},
         personality::Personality,
     };
@@ -434,6 +434,61 @@ mod tests {
             .collect();
         assert!(names.contains(&"get_current_time".to_string()));
         assert!(names.contains(&"echo".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_chat_executes_tool_calls_and_returns_final_response() {
+        let tool_call = ToolCall {
+            id: "call_123".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "get_current_time".to_string(),
+                arguments: "{}".to_string(),
+            },
+        };
+        let first_response = Message {
+            role: "assistant".to_string(),
+            content: "".to_string(),
+            tool_calls: Some(vec![tool_call]),
+            tool_call_id: None,
+        };
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_chat_message(first_response, Usage::default())
+                .push_chat("The current time is now.", Usage::default())
+                .build(),
+        );
+        let (state, _temp) = test_state(mock.clone()).await;
+        let app = super::build_app(state);
+
+        let body =
+            serde_json::to_string(&serde_json::json!({"message": "What time is it?"})).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let chat: ChatResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(chat.response, "The current time is now.");
+
+        // Should have made two LLM calls: one for the tool call, one for the final answer.
+        let calls = mock.chat_calls();
+        assert_eq!(
+            calls.len(),
+            2,
+            "expected two LLM calls (tool request + follow-up)"
+        );
     }
 
     #[tokio::test]

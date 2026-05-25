@@ -78,8 +78,9 @@ Keep-alive pings are sent every 10 seconds.
 1. **Creation** — If `session_id` is omitted, a new session is created with the current `Personality::system_prompt(memory_content)`.
 2. **Validation** — If `session_id` is provided but unknown, `404` is returned immediately.
 3. **Persistence** — The user message is appended via `ContextManager::add_user_message`.
-4. **Enqueue** — Messages are exported and the stream is immediately enqueued in the `LlmWorkerPool`. If the pool is full, a `503` error is returned before the 200 SSE response is committed.
-5. **Storage** — The assistant response is appended via `ContextManager::add_assistant_message` when the stream completes.
+4. **Enqueue** — Messages are exported and the request is enqueued in the `LlmWorkerPool`. If the pool is full, a `503` error is returned before the 200 response is committed.
+5. **Tool Calls** — If the LLM responds with `tool_calls` (OpenAI function-calling format), each tool is executed via `ToolRegistry`, the results are appended as `role: tool` messages, and a follow-up LLM request is made to obtain the final assistant text. *Streaming (`/chat/stream`) does not yet handle tool calls.*
+6. **Storage** — The final assistant response is appended via `ContextManager::add_assistant_message`.
 
 ## Concurrency
 

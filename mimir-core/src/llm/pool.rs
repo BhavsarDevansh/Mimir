@@ -112,11 +112,12 @@ impl LlmWorkerPool {
     ///
     /// Returns the assistant response and token usage when the job completes.
     /// Returns [`LlmError::QueueFull`] if the user queue is at capacity.
-    pub async fn enqueue_chat(
+    /// Enqueue a non-streaming chat job to the **user** queue and return the full message.
+    pub async fn enqueue_chat_message(
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
-    ) -> Result<(String, Usage), LlmError> {
+    ) -> Result<(Message, Usage), LlmError> {
         let (tx, rx) = oneshot::channel();
         {
             let mut queue = self.inner.user_queue.lock().await;
@@ -132,6 +133,19 @@ impl LlmWorkerPool {
         self.inner.notify.notify_one();
         rx.await
             .map_err(|_| LlmError::StreamError("worker pool closed".to_string()))?
+    }
+
+    /// Enqueue a non-streaming chat job to the **user** queue.
+    ///
+    /// Returns the assistant response text and token usage when the job completes.
+    /// Returns [`LlmError::QueueFull`] if the user queue is at capacity.
+    pub async fn enqueue_chat(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(String, Usage), LlmError> {
+        let (msg, usage) = self.enqueue_chat_message(messages, tools).await?;
+        Ok((msg.content, usage))
     }
 
     /// Enqueue a streaming chat job to the **user** queue.
@@ -166,10 +180,11 @@ impl LlmWorkerPool {
     }
 
     /// Enqueue a non-streaming chat job to the **system** queue.
-    pub async fn enqueue_system_chat(
+    /// Enqueue a non-streaming chat job to the **system** queue and return the full message.
+    pub async fn enqueue_system_chat_message(
         &self,
         messages: Vec<Message>,
-    ) -> Result<(String, Usage), LlmError> {
+    ) -> Result<(Message, Usage), LlmError> {
         let (tx, rx) = oneshot::channel();
         {
             let mut queue = self.inner.system_queue.lock().await;
@@ -185,6 +200,15 @@ impl LlmWorkerPool {
         self.inner.notify.notify_one();
         rx.await
             .map_err(|_| LlmError::StreamError("worker pool closed".to_string()))?
+    }
+
+    /// Enqueue a non-streaming chat job to the **system** queue.
+    pub async fn enqueue_system_chat(
+        &self,
+        messages: Vec<Message>,
+    ) -> Result<(String, Usage), LlmError> {
+        let (msg, usage) = self.enqueue_system_chat_message(messages).await?;
+        Ok((msg.content, usage))
     }
 
     /// Enqueue a streaming chat job to the **system** queue.
@@ -253,7 +277,7 @@ impl LlmWorkerPool {
                 tools,
                 respond,
             } => {
-                let result = client.chat_direct(messages, tools).await;
+                let result = client.chat_message_direct(messages, tools).await;
                 let _ = respond.send(result);
             }
             Job::ChatStream {

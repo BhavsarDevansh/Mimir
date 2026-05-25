@@ -23,7 +23,7 @@ use crate::llm::types::{LlmError, Message, StreamItem, Usage};
 /// ```
 #[derive(Debug)]
 pub struct MockLlmClient {
-    chat_responses: Mutex<VecDeque<Result<(String, Usage), LlmError>>>,
+    chat_responses: Mutex<VecDeque<Result<(Message, Usage), LlmError>>>,
     stream_responses: Mutex<VecDeque<Vec<Result<StreamItem, LlmError>>>>,
     context_window: Mutex<Option<u32>>,
     user_queue_depth_val: Mutex<usize>,
@@ -89,7 +89,17 @@ impl MockLlmClientBuilder {
             .chat_responses
             .lock()
             .unwrap()
-            .push_back(Ok((text.into(), usage)));
+            .push_back(Ok((Message::assistant(text), usage)));
+        self
+    }
+
+    /// Queue a successful chat response with a full assistant message.
+    pub fn push_chat_message(self, message: Message, usage: Usage) -> Self {
+        self.client
+            .chat_responses
+            .lock()
+            .unwrap()
+            .push_back(Ok((message, usage)));
         self
     }
 
@@ -151,11 +161,11 @@ impl MockLlmClientBuilder {
 
 #[async_trait]
 impl LlmBackend for MockLlmClient {
-    async fn chat(
+    async fn chat_message(
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
-    ) -> Result<(String, Usage), LlmError> {
+    ) -> Result<(Message, Usage), LlmError> {
         self.chat_calls.lock().unwrap().push(messages);
         self.chat_tools.lock().unwrap().push(tools);
         match self.chat_responses.lock().unwrap().pop_front() {

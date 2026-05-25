@@ -167,6 +167,19 @@ impl LlmClient {
         }
     }
 
+    /// Send a non-streaming chat completion request and return the full assistant message.
+    pub async fn chat_message(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(Message, Usage), LlmError> {
+        if let Some(pool) = &self.pool {
+            pool.enqueue_chat_message(messages, tools).await
+        } else {
+            self.chat_message_direct(messages, tools).await
+        }
+    }
+
     /// Send a streaming chat completion request that includes token usage.
     ///
     /// The returned stream yields `StreamItem::Text` for each content chunk and
@@ -208,6 +221,16 @@ impl LlmClient {
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<(String, Usage), LlmError> {
+        let (msg, usage) = self.chat_message_direct(messages, tools).await?;
+        Ok((msg.content, usage))
+    }
+
+    /// Direct (non-pooled) non-streaming chat completion returning the full message.
+    pub(crate) async fn chat_message_direct(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(Message, Usage), LlmError> {
         let request = self.build_request(messages, false, tools);
         debug!(endpoint = %self.config.endpoint, model = %self.config.model, "sending chat request");
 
@@ -218,12 +241,12 @@ impl LlmClient {
         let response = self.check_response(response).await?;
 
         let body: ChatResponse = response.json().await.map_err(LlmError::Network)?;
-        let content = body
+        let message = body
             .choices
             .into_iter()
             .next()
-            .map(|c| c.message.content)
-            .unwrap_or_default();
+            .map(|c| c.message)
+            .unwrap_or_else(|| Message::assistant(""));
         let usage = body.usage.unwrap_or_default();
 
         debug!(
@@ -231,7 +254,7 @@ impl LlmClient {
             completion_tokens = usage.completion_tokens,
             "chat complete"
         );
-        Ok((content, usage))
+        Ok((message, usage))
     }
 
     /// Direct (non-pooled) streaming chat completion with usage.
@@ -467,12 +490,12 @@ impl LlmBackend for LlmClient {
         // Dropping the reqwest::Client closes idle connections.
     }
 
-    async fn chat(
+    async fn chat_message(
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
-    ) -> Result<(String, Usage), LlmError> {
-        self.chat(messages, tools).await
+    ) -> Result<(Message, Usage), LlmError> {
+        self.chat_message(messages, tools).await
     }
 
     async fn chat_stream_with_usage(

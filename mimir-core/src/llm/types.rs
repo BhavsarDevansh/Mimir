@@ -17,11 +17,40 @@ pub struct ChatRequest {
     pub stream_options: Option<serde_json::Value>,
 }
 
+/// A function call inside a tool call.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FunctionCall {
+    pub name: String,
+    pub arguments: String,
+}
+
+/// A tool call issued by the assistant.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub call_type: String,
+    pub function: FunctionCall,
+}
+
+fn deserialize_null_to_empty_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
+
 /// A single message in a chat conversation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Message {
     pub role: String,
+    #[serde(default, deserialize_with = "deserialize_null_to_empty_string")]
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 /// Model metadata returned by the `/models` endpoint.
@@ -183,6 +212,8 @@ impl Message {
         Self {
             role: "system".to_string(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
 
@@ -191,6 +222,8 @@ impl Message {
         Self {
             role: "user".to_string(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
 
@@ -199,6 +232,18 @@ impl Message {
         Self {
             role: "assistant".to_string(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    /// Create a tool result message.
+    pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: "tool".to_string(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
         }
     }
 }
@@ -212,7 +257,7 @@ pub enum Job {
         /// Optional tools to include in the request.
         tools: Option<Vec<serde_json::Value>>,
         /// Channel to send the result back.
-        respond: tokio::sync::oneshot::Sender<Result<(String, Usage), LlmError>>,
+        respond: tokio::sync::oneshot::Sender<Result<(Message, Usage), LlmError>>,
     },
     /// Streaming chat completion.
     ChatStream {

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.2] - 2026-05-25
+
+### Fixed
+
+- **Chat endpoint now handles LLM tool calls** (`mimir-server`, `mimir-core`):
+  - Added `ToolCall` and `FunctionCall` structs to `mimir-core::llm::types` for OpenAI-compatible tool call parsing.
+  - Extended `Message` with optional `tool_calls` and `tool_call_id` fields, and a custom deserializer that treats `null` content as an empty string (required for assistant messages that contain tool calls instead of text).
+  - Added `LlmBackend::chat_message` returning the full assistant `Message` alongside usage; the existing `LlmBackend::chat` method now delegates to it and extracts the text content.
+  - Updated `LlmClient`, `LlmWorkerPool`, and `MockLlmClient` to support the new `chat_message` path.
+  - `chat_handler` in `mimir-server` now detects when the LLM issues `tool_calls`, executes each tool via `ToolRegistry`, appends the results as `role: tool` messages, and makes a follow-up LLM call to obtain the final assistant response.
+  - Added `test_chat_executes_tool_calls_and_returns_final_response` verifying the full tool-call loop end-to-end.
+  - Note: SSE streaming (`/chat/stream`) does not yet handle tool calls; this will be addressed in a future update.
+
 ## [0.16.1] - 2026-05-25
 
 ### Fixed

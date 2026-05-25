@@ -118,10 +118,41 @@ pub async fn chat_handler(
     let (session_id, llm, messages, incognito, _permit) = resolve_chat_state(&state, &req).await?;
 
     let tools_opt = state.tool_registry.export_openai_tools_for_llm();
-    let (response_text, usage) = llm
-        .chat(messages, tools_opt)
+    let (assistant_msg, usage) = llm
+        .chat_message(messages.clone(), tools_opt)
         .await
         .map_err(error::llm_error)?;
+
+    let (response_text, final_usage) = if let Some(ref tool_calls) = assistant_msg.tool_calls {
+        // The model issued tool calls — execute them and ask again.
+        let tool_calls = tool_calls.clone();
+        let mut follow_up = messages;
+        follow_up.push(assistant_msg);
+
+        for tool_call in &tool_calls {
+            let result = match state
+                .tool_registry
+                .execute(
+                    &tool_call.function.name,
+                    serde_json::from_str(&tool_call.function.arguments)
+                        .unwrap_or(serde_json::Value::Null),
+                )
+                .await
+            {
+                Ok(output) => output.to_llm_text(),
+                Err(e) => format!("Tool error: {e}"),
+            };
+            follow_up.push(mimir_core::llm::types::Message::tool(&tool_call.id, result));
+        }
+
+        let (final_msg, final_usage) = llm
+            .chat_message(follow_up, None)
+            .await
+            .map_err(error::llm_error)?;
+        (final_msg.content, final_usage)
+    } else {
+        (assistant_msg.content, usage)
+    };
 
     if !incognito {
         state
@@ -135,9 +166,9 @@ pub async fn chat_handler(
         session_id,
         response: response_text,
         usage: Usage {
-            prompt_tokens: usage.prompt_tokens,
-            completion_tokens: usage.completion_tokens,
-            total_tokens: usage.total_tokens,
+            prompt_tokens: final_usage.prompt_tokens,
+            completion_tokens: final_usage.completion_tokens,
+            total_tokens: final_usage.total_tokens,
         },
     }))
 }

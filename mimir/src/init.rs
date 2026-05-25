@@ -3,6 +3,7 @@
 //! Creates the Mimir directory structure and default files, then prints
 //! a friendly welcome message guiding the user to the next step.
 
+use is_terminal::IsTerminal;
 use mimir_core::config::{Config, InitResult};
 use mimir_core::memory::MemoryLoader;
 
@@ -39,37 +40,41 @@ pub async fn handle_init() {
 
     #[cfg(target_os = "linux")]
     {
-        println!();
-        print!("Install systemd user service for auto-start? [y/N]: ");
-        if let Err(e) = std::io::Write::flush(&mut std::io::stdout()) {
-            eprintln!("Warning: failed to flush stdout: {e}");
-        }
-
-        let mut line = String::new();
-        match std::io::stdin().read_line(&mut line) {
-            Ok(0) => {
-                // EOF — treat as "no"
-                print_systemd_manual();
+        if std::io::stdin().is_terminal() {
+            println!();
+            print!("Install systemd user service for auto-start? [y/N]: ");
+            if let Err(e) = std::io::Write::flush(&mut std::io::stdout()) {
+                eprintln!("Warning: failed to flush stdout: {e}");
             }
-            Ok(_) => {
-                let answer = line.trim().to_lowercase();
-                if answer == "y" || answer == "yes" {
-                    install_systemd_service().await;
-                } else {
+
+            let mut line = String::new();
+            match std::io::stdin().read_line(&mut line) {
+                Ok(0) => {
+                    // EOF — treat as "no"
+                    print_systemd_manual();
+                }
+                Ok(_) => {
+                    let answer = line.trim().to_lowercase();
+                    if answer == "y" || answer == "yes" {
+                        install_systemd_service().await;
+                    } else {
+                        print_systemd_manual();
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: failed to read prompt response: {e}");
                     print_systemd_manual();
                 }
             }
-            Err(e) => {
-                eprintln!("Warning: failed to read prompt response: {e}");
-                print_systemd_manual();
-            }
+        } else {
+            print_systemd_manual();
         }
     }
 
     #[cfg(target_os = "macos")]
     {
         println!();
-        println!("Note: On macOS, use launchd for auto-start (planned for Phase 1).");
+        println!("Note: On macOS, use launchd for auto-start (planned for a future phase).");
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]

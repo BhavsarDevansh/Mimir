@@ -60,7 +60,7 @@ After config and memory files are created, `handle_init()` (Linux only):
 | Platform | Behaviour |
 |----------|-----------|
 | Linux    | Prompt for systemd installation |
-| macOS    | Print launchd note (future, Phase 1) |
+| macOS    | Print launchd note (future phase) |
 | Windows  | Skip silently |
 
 ## Important Notes

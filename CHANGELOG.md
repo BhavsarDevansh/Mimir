@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] - 2026-05-25
+
+### Fixed
+
+- **Daemon guard review fixes**:
+  - Daemon stdout/stderr are now redirected to null instead of being inherited, preventing log leakage into the client terminal.
+  - Poll loop now probes immediately before sleeping, removing unnecessary startup latency.
+  - `mimir stop` no longer auto-starts the daemon; it performs a non-interactive reachability probe and prints "daemon already stopped" when the daemon is down.
+  - Documentation formatting and wording cleaned up for user-facing guides.
+
+## [0.14.0] - 2026-05-24
+
+### Added
+
+- **`mimir stop` command**: New CLI subcommand that triggers graceful daemon shutdown via the `/stop` HTTP endpoint.
+- **Daemon guard (`daemon_guard.rs`)**: Shared `ensure_daemon_running` helper that runs before every client-mode command (`ask`, `chat`, `status`, `memory`, `stop`).
+  - Fast-probes `GET /status` with a 500 ms timeout.
+  - If the daemon is unreachable, prints `Error: Mimir is not running.` and prompts `Start the server now? [y/N]:`.
+  - On user approval (`y`/`yes`), resolves the current executable via `std::env::current_exe()` and spawns it as `mimir start` with inherited stdout/stderr.
+  - Polls `/status` with exponential backoff (200 ms → 400 ms → 800 ms → capped at 1 s) until the daemon is ready or a 10 s wall-clock timeout expires.
+  - Exactly one auto-start attempt per CLI invocation enforced via a shared `&mut bool` flag.
+
+### Changed
+
+- **Client command handlers** (`ask`, `chat`, `status`, `memory`, `stop`) now call `ensure_daemon_running` before constructing `MimirClient`. If the daemon is down and the user declines the prompt (or stdin is EOF), the command exits cleanly with a clear error message.
+- **Integration tests** (`mimir/tests/cli_tests.rs`) updated to account for daemon guard behaviour when no server is running.
+
 ## [0.13.0] - 2026-05-24
 
 ### Added
@@ -14,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Per-request overrides** (`mimir-server`):
   - `model` override via `ChatRequest.model` — `LlmBackend::with_model_override` clones `LlmClient` with the new model.
   - `personality_preset` override via `ChatRequest.personality_preset` — builds a temporary `Personality` for the request.
-  - `incognito` mode via `ChatRequest.incognito` — skips all DB persistence and returns an ephemeral session ID.
+  - `incognito` mode via `ChatRequest.incognito` — skips all DB persistence and memory learning.
 - **Richer `/status` response** (`mimir-server`): Now includes `endpoint`, `model`, `config_path`, `config_exists`, `llm_reachable`, `context_window`, `memory_path`, `memory_exists`, `memory_chars`, `memory_limit`, and `memory_usage_pct`.
 - **`/stop` endpoint** (`mimir-server`): POST endpoint that triggers graceful shutdown via a `tokio::sync::watch` channel.
 

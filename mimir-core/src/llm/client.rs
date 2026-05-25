@@ -155,11 +155,28 @@ impl LlmClient {
     /// Send a non-streaming chat completion request.
     ///
     /// Returns the assistant's message content and token usage statistics.
-    pub async fn chat(&self, messages: Vec<Message>) -> Result<(String, Usage), LlmError> {
+    pub async fn chat(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(String, Usage), LlmError> {
         if let Some(pool) = &self.pool {
-            pool.enqueue_chat(messages).await
+            pool.enqueue_chat(messages, tools).await
         } else {
-            self.chat_direct(messages).await
+            self.chat_direct(messages, tools).await
+        }
+    }
+
+    /// Send a non-streaming chat completion request and return the full assistant message.
+    pub async fn chat_message(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(Message, Usage), LlmError> {
+        if let Some(pool) = &self.pool {
+            pool.enqueue_chat_message(messages, tools).await
+        } else {
+            self.chat_message_direct(messages, tools).await
         }
     }
 
@@ -170,11 +187,12 @@ impl LlmClient {
     pub async fn chat_stream_with_usage(
         &self,
         messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
         if let Some(pool) = &self.pool {
-            pool.enqueue_chat_stream(messages).await
+            pool.enqueue_chat_stream(messages, tools).await
         } else {
-            self.chat_stream_with_usage_direct(messages).await
+            self.chat_stream_with_usage_direct(messages, tools).await
         }
     }
 
@@ -184,12 +202,13 @@ impl LlmClient {
     pub async fn chat_stream(
         &self,
         messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String, LlmError>> + Send>>, LlmError> {
-        let stream = self.chat_stream_with_usage(messages).await?;
+        let stream = self.chat_stream_with_usage(messages, tools).await?;
         let text_stream = stream
             .map(|item| match item {
                 Ok(StreamItem::Text(text)) => Ok(text),
-                Ok(StreamItem::Usage(_)) => Ok(String::new()),
+                Ok(StreamItem::Usage(_)) | Ok(StreamItem::ToolCalls(_)) => Ok(String::new()),
                 Err(e) => Err(e),
             })
             .filter(|item| futures::future::ready(!matches!(item, Ok(s) if s.is_empty())));
@@ -200,8 +219,19 @@ impl LlmClient {
     pub(crate) async fn chat_direct(
         &self,
         messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
     ) -> Result<(String, Usage), LlmError> {
-        let request = self.build_request(messages, false);
+        let (msg, usage) = self.chat_message_direct(messages, tools).await?;
+        Ok((msg.content, usage))
+    }
+
+    /// Direct (non-pooled) non-streaming chat completion returning the full message.
+    pub(crate) async fn chat_message_direct(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(Message, Usage), LlmError> {
+        let request = self.build_request(messages, false, tools);
         debug!(endpoint = %self.config.endpoint, model = %self.config.model, "sending chat request");
 
         let response = self
@@ -211,12 +241,12 @@ impl LlmClient {
         let response = self.check_response(response).await?;
 
         let body: ChatResponse = response.json().await.map_err(LlmError::Network)?;
-        let content = body
+        let message = body
             .choices
             .into_iter()
             .next()
-            .map(|c| c.message.content)
-            .unwrap_or_default();
+            .map(|c| c.message)
+            .unwrap_or_else(|| Message::assistant(""));
         let usage = body.usage.unwrap_or_default();
 
         debug!(
@@ -224,15 +254,16 @@ impl LlmClient {
             completion_tokens = usage.completion_tokens,
             "chat complete"
         );
-        Ok((content, usage))
+        Ok((message, usage))
     }
 
     /// Direct (non-pooled) streaming chat completion with usage.
     pub(crate) async fn chat_stream_with_usage_direct(
         &self,
         messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
-        let mut request = self.build_request(messages, true);
+        let mut request = self.build_request(messages, true, tools);
         request.stream_options = Some(serde_json::json!({"include_usage": true}));
         debug!(endpoint = %self.config.endpoint, model = %self.config.model, "sending streaming chat request with usage");
 
@@ -272,23 +303,36 @@ impl LlmClient {
             return Ok(StreamItem::Usage(usage));
         }
 
-        let content = chunk
-            .choices
-            .into_iter()
-            .next()
-            .and_then(|c| c.delta.content)
-            .unwrap_or_default();
+        let choice = chunk.choices.into_iter().next();
+
+        // Check for tool-call deltas first.
+        if let Some(ref c) = choice
+            && let Some(ref tool_calls) = c.delta.tool_calls
+            && !tool_calls.is_empty()
+        {
+            return Ok(StreamItem::ToolCalls(tool_calls.clone()));
+        }
+
+        let content = choice.and_then(|c| c.delta.content).unwrap_or_default();
 
         Ok(StreamItem::Text(content))
     }
 
     /// Build a `ChatRequest` from the stored configuration.
-    fn build_request(&self, messages: Vec<Message>, stream: bool) -> ChatRequest {
+    fn build_request(
+        &self,
+        messages: Vec<Message>,
+        stream: bool,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> ChatRequest {
         let mut req = ChatRequest::new(self.config.model.clone(), messages)
             .with_temperature(self.config.temperature)
             .with_stream(stream);
         if let Some(mt) = self.config.max_tokens {
             req = req.with_max_tokens(mt);
+        }
+        if let Some(tools) = tools {
+            req = req.with_tools(tools);
         }
         req
     }
@@ -451,12 +495,20 @@ impl LlmBackend for LlmClient {
         // Dropping the reqwest::Client closes idle connections.
     }
 
-    async fn chat(&self, messages: Vec<Message>) -> Result<(String, Usage), LlmError> {
-        self.chat(messages).await
+    async fn chat_message(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(Message, Usage), LlmError> {
+        self.chat_message(messages, tools).await
     }
 
-    async fn chat_stream_with_usage(&self, messages: Vec<Message>) -> Result<LlmStream, LlmError> {
-        self.chat_stream_with_usage(messages).await
+    async fn chat_stream_with_usage(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<LlmStream, LlmError> {
+        self.chat_stream_with_usage(messages, tools).await
     }
 
     async fn fetch_model_context_window(&self) -> Result<Option<u32>, LlmError> {
@@ -542,7 +594,7 @@ mod tests {
         };
         let client = LlmClient::new(config).await;
 
-        let result = client.chat(vec![Message::user("hi")]).await;
+        let result = client.chat(vec![Message::user("hi")], None).await;
         assert!(result.is_err());
 
         match result {

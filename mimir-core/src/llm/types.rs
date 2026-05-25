@@ -7,6 +7,8 @@ pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
@@ -15,11 +17,46 @@ pub struct ChatRequest {
     pub stream_options: Option<serde_json::Value>,
 }
 
+/// A function call inside a tool call.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct FunctionCall {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub arguments: String,
+}
+
+/// A tool call issued by the assistant.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ToolCall {
+    #[serde(default)]
+    pub index: u32,
+    #[serde(default)]
+    pub id: String,
+    #[serde(rename = "type", default)]
+    pub call_type: String,
+    #[serde(default)]
+    pub function: FunctionCall,
+}
+
+fn deserialize_null_to_empty_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
+
 /// A single message in a chat conversation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Message {
     pub role: String,
+    #[serde(default, deserialize_with = "deserialize_null_to_empty_string")]
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 /// Model metadata returned by the `/models` endpoint.
@@ -93,6 +130,8 @@ pub struct StreamChoice {
 pub struct Delta {
     pub role: Option<String>,
     pub content: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Option<Vec<ToolCall>>,
 }
 
 /// An item yielded by the usage-aware streaming chat method.
@@ -100,6 +139,8 @@ pub struct Delta {
 pub enum StreamItem {
     Text(String),
     Usage(Usage),
+    /// Partial tool-call deltas from a streaming response.
+    ToolCalls(Vec<ToolCall>),
 }
 
 /// Errors that can occur when interacting with an LLM API.
@@ -136,6 +177,7 @@ impl ChatRequest {
         Self {
             model: model.into(),
             messages,
+            tools: None,
             max_tokens: None,
             temperature: None,
             stream: false,
@@ -152,6 +194,12 @@ impl ChatRequest {
     /// Set the sampling temperature.
     pub fn with_temperature(mut self, temperature: f32) -> Self {
         self.temperature = Some(temperature);
+        self
+    }
+
+    /// Set the tools to include in the request.
+    pub fn with_tools(mut self, tools: Vec<serde_json::Value>) -> Self {
+        self.tools = Some(tools);
         self
     }
 
@@ -174,6 +222,8 @@ impl Message {
         Self {
             role: "system".to_string(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
 
@@ -182,6 +232,8 @@ impl Message {
         Self {
             role: "user".to_string(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
 
@@ -190,6 +242,18 @@ impl Message {
         Self {
             role: "assistant".to_string(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    /// Create a tool result message.
+    pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: "tool".to_string(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
         }
     }
 }
@@ -200,13 +264,17 @@ pub enum Job {
     Chat {
         /// Conversation messages.
         messages: Vec<Message>,
+        /// Optional tools to include in the request.
+        tools: Option<Vec<serde_json::Value>>,
         /// Channel to send the result back.
-        respond: tokio::sync::oneshot::Sender<Result<(String, Usage), LlmError>>,
+        respond: tokio::sync::oneshot::Sender<Result<(Message, Usage), LlmError>>,
     },
     /// Streaming chat completion.
     ChatStream {
         /// Conversation messages.
         messages: Vec<Message>,
+        /// Optional tools to include in the request.
+        tools: Option<Vec<serde_json::Value>>,
         /// Channel to stream items back.
         respond: tokio::sync::mpsc::Sender<Result<StreamItem, LlmError>>,
     },
@@ -230,6 +298,24 @@ mod tests {
         assert!(json.contains("\"max_tokens\":100"));
         assert!(json.contains("\"temperature\":0.5"));
         assert!(json.contains("\"stream\":false"));
+    }
+
+    #[test]
+    fn test_chat_request_serializes_tools() {
+        let req = ChatRequest::new("gpt-4o", vec![Message::user("hello")]).with_tools(vec![
+            serde_json::json!({"type": "function", "function": {"name": "echo"}}),
+        ]);
+
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"tools\""));
+        assert!(json.contains("\"echo\""));
+    }
+
+    #[test]
+    fn test_chat_request_skips_none_tools() {
+        let req = ChatRequest::new("gpt-4o", vec![Message::user("hello")]);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("\"tools\""));
     }
 
     #[test]

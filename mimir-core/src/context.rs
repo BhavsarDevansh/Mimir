@@ -396,12 +396,16 @@ impl ContextManager {
             result.push(Message {
                 role: sys.role.clone(),
                 content: sys.content.clone(),
+                tool_calls: None,
+                tool_call_id: None,
             });
         }
         for row in rest {
             result.push(Message {
                 role: row.role,
                 content: row.content,
+                tool_calls: None,
+                tool_call_id: None,
             });
         }
         Ok(result)

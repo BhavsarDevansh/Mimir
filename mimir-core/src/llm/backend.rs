@@ -19,22 +19,47 @@ pub type LlmTextStream = Pin<Box<dyn Stream<Item = Result<String, LlmError>> + S
 /// and insulates server routes from concrete HTTP client details.
 #[async_trait]
 pub trait LlmBackend: Send + Sync + Debug {
+    /// Send a non-streaming chat completion request and return the full assistant message.
+    async fn chat_message(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(Message, Usage), LlmError>;
+
     /// Send a non-streaming chat completion request.
-    async fn chat(&self, messages: Vec<Message>) -> Result<(String, Usage), LlmError>;
+    ///
+    /// Default implementation delegates to [`Self::chat_message`] and extracts
+    /// the text content.
+    async fn chat(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(String, Usage), LlmError> {
+        let (msg, usage) = self.chat_message(messages, tools).await?;
+        Ok((msg.content, usage))
+    }
 
     /// Send a streaming chat completion request that includes token usage.
-    async fn chat_stream_with_usage(&self, messages: Vec<Message>) -> Result<LlmStream, LlmError>;
+    async fn chat_stream_with_usage(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<LlmStream, LlmError>;
 
     /// Send a plain streaming chat completion request (no usage).
     ///
     /// Default implementation delegates to [`Self::chat_stream_with_usage`] and
     /// filters out [`StreamItem::Usage`] events.
-    async fn chat_stream(&self, messages: Vec<Message>) -> Result<LlmTextStream, LlmError> {
-        let stream = self.chat_stream_with_usage(messages).await?;
+    async fn chat_stream(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<LlmTextStream, LlmError> {
+        let stream = self.chat_stream_with_usage(messages, tools).await?;
         let text_stream = stream
             .map(|item| match item {
                 Ok(StreamItem::Text(text)) => Ok(text),
-                Ok(StreamItem::Usage(_)) => Ok(String::new()),
+                Ok(StreamItem::Usage(_)) | Ok(StreamItem::ToolCalls(_)) => Ok(String::new()),
                 Err(e) => Err(e),
             })
             .filter(|item| futures::future::ready(!matches!(item, Ok(s) if s.is_empty())));
@@ -89,13 +114,18 @@ mod tests {
 
     #[async_trait]
     impl LlmBackend for DummyBackend {
-        async fn chat(&self, _messages: Vec<Message>) -> Result<(String, Usage), LlmError> {
-            Ok(("dummy".to_string(), Usage::default()))
+        async fn chat_message(
+            &self,
+            _messages: Vec<Message>,
+            _tools: Option<Vec<serde_json::Value>>,
+        ) -> Result<(Message, Usage), LlmError> {
+            Ok((Message::assistant("dummy"), Usage::default()))
         }
 
         async fn chat_stream_with_usage(
             &self,
             _messages: Vec<Message>,
+            _tools: Option<Vec<serde_json::Value>>,
         ) -> Result<LlmStream, LlmError> {
             let items: Vec<Result<StreamItem, LlmError>> = vec![
                 Ok(StreamItem::Text("hello".to_string())),
@@ -117,7 +147,7 @@ mod tests {
     async fn test_default_chat_stream_filters_usage() {
         let backend = DummyBackend;
         let stream = backend
-            .chat_stream(vec![Message::user("hi")])
+            .chat_stream(vec![Message::user("hi")], None)
             .await
             .unwrap();
         let items: Vec<Result<String, LlmError>> = stream.collect().await;

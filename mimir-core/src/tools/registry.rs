@@ -33,6 +33,16 @@ pub struct ToolRegistry {
     entries: RwLock<HashMap<String, ToolEntry>>,
 }
 
+impl std::fmt::Debug for ToolRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let entries = self.entries.read().unwrap();
+        f.debug_struct("ToolRegistry")
+            .field("tool_count", &entries.len())
+            .field("tool_names", &entries.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
 impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
@@ -160,6 +170,13 @@ impl ToolRegistry {
                 })
             })
             .collect()
+    }
+
+    /// Export tools ready for the LLM backend.
+    /// Returns `None` when there are no enabled tools so the request omits the field.
+    pub fn export_openai_tools_for_llm(&self) -> Option<Vec<Value>> {
+        let tools = self.export_openai_tools();
+        if tools.is_empty() { None } else { Some(tools) }
     }
 
     /// Execute a tool by name with the given JSON arguments.

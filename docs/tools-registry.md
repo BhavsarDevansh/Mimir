@@ -179,6 +179,17 @@ Changes are persisted to `tools.toml` immediately.
 - `dirs` — platform config directory resolution
 - `thiserror` — ergonomic error definitions
 
+## Chat Integration
+
+When the LLM backend receives a request via the `/chat` endpoint, enabled tools are forwarded in the OpenAI `tools` field. If the model responds with `tool_calls` instead of text:
+
+1. Each tool call is extracted from the assistant message.
+2. `ToolRegistry::execute` is invoked with the parsed JSON arguments.
+3. Results are rendered with `ToolOutput::to_llm_text()` and sent back as `role: tool` messages.
+4. A follow-up LLM call produces the final assistant response, which is persisted to the session.
+
+This loop is handled within both the `chat_handler` (blocking) and `chat_stream_handler` (SSE) routes; only the final assistant text is stored in the conversation history. In streaming mode, tool-call deltas are accumulated across SSE chunks, the tools are executed when the usage block arrives, and the final response is streamed to the client.
+
 ## Future Work
 
 - Actual interactive prompting for `Ask`-permission tools

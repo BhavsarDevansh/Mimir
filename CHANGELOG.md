@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.16.3] - 2026-05-25
+
+### Fixed
+
+- **Review feedback addressed** (`mimir-core`, `mimir-server`):
+  - Updated CHANGELOG release notes for 0.16.1 to include `test_chat_stream_forwards_tools_to_llm` alongside `test_chat_forwards_tools_to_llm`.
+  - Refactored `MockLlmClient` to record chat and stream call messages and tools under a single `Mutex<Vec<CallRecord>>` per path, ensuring atomicity between messages and tools.
+
+
+## [0.16.2] - 2026-05-25
+
+### Fixed
+
+- **Chat endpoint now handles LLM tool calls** (`mimir-server`, `mimir-core`):
+  - Added `ToolCall` and `FunctionCall` structs to `mimir-core::llm::types` for OpenAI-compatible tool call parsing.
+  - Extended `Message` with optional `tool_calls` and `tool_call_id` fields, and a custom deserializer that treats `null` content as an empty string (required for assistant messages that contain tool calls instead of text).
+  - Added `LlmBackend::chat_message` returning the full assistant `Message` alongside usage; the existing `LlmBackend::chat` method now delegates to it and extracts the text content.
+  - Updated `LlmClient`, `LlmWorkerPool`, and `MockLlmClient` to support the new `chat_message` path.
+  - `chat_handler` in `mimir-server` now detects when the LLM issues `tool_calls`, executes each tool via `ToolRegistry`, appends the results as `role: tool` messages, and makes a follow-up LLM call to obtain the final assistant response.
+  - `chat_stream_handler` in `mimir-server` accumulates tool-call deltas (`StreamItem::ToolCalls`) during SSE streaming, executes the tools when the usage block arrives, makes a follow-up non-streaming LLM call, and streams the final text to the client.
+  - Added `StreamItem::ToolCalls` variant and `ToolCallDelta` parsing in `LlmClient::map_sse_event`.
+  - Added `test_chat_executes_tool_calls_and_returns_final_response` and `test_chat_stream_executes_tool_calls_and_returns_final_response` verifying the full tool-call loop end-to-end for both blocking and streaming endpoints.
+
+## [0.16.1] - 2026-05-25
+
+### Fixed
+
+- **Chat no longer omits available tools from LLM requests** (`mimir-server`, `mimir-core`):
+  - `AppState` now initialises a `ToolRegistry` with built-in tools and loads persisted CLI tool definitions on startup.
+  - Both `/chat` and `/chat/stream` handlers forward enabled tools to the LLM backend via the new `ToolRegistry::export_openai_tools_for_llm()` helper.
+  - `LlmBackend` trait methods (`chat`, `chat_stream_with_usage`, `chat_stream`) now accept an optional `tools` parameter, threaded through `LlmClient`, `LlmWorkerPool`, and `Job`.
+  - `ChatRequest` (internal LLM type) gains a `tools` field with `#[serde(skip_serializing_if = "Option::is_none")]`.
+  - `MockLlmClient` extended to record forwarded tools for test assertions.
+  - Added `test_chat_forwards_tools_to_llm` and `test_chat_stream_forwards_tools_to_llm` in `mimir-server/src/lib.rs` verifying built-in tools (`get_current_time`, `echo`) are passed to the backend.
+
+
 
 ## [0.16.0] - 2026-05-25
 

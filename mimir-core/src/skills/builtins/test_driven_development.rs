@@ -61,7 +61,7 @@ impl Skill for TestDrivenDevelopmentSkill {
             Message::user(format!("Task: {task}\n\nGenerate the TDD plan.")),
         ];
 
-        match ctx.llm_client.chat(messages).await {
+        match ctx.llm_client.chat(messages, None).await {
             Ok((content, _usage)) => {
                 // Try to parse as JSON to validate it.
                 match serde_json::from_str::<Value>(&content) {

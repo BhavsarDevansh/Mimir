@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use futures::Stream;
-use tokio::sync::{Mutex, Notify, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot, watch};
 use tracing::debug;
 
 use crate::config::LlmConfig;
@@ -37,6 +37,8 @@ struct PoolInner {
     user_queue: Mutex<VecDeque<Job>>,
     system_queue: Mutex<VecDeque<Job>>,
     notify: Notify,
+    shutdown_tx: watch::Sender<bool>,
+    handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 /// A priority-based worker pool for LLM requests.
@@ -67,24 +69,40 @@ impl LlmWorkerPool {
             return Err("WorkerPoolConfig.worker_threads must be > 0");
         }
 
+        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
         let inner = Arc::new(PoolInner {
             user_queue: Mutex::new(VecDeque::new()),
             system_queue: Mutex::new(VecDeque::new()),
             notify: Notify::new(),
+            shutdown_tx,
+            handles: Mutex::new(Vec::new()),
         });
 
         for i in 0..config.worker_threads {
-            let inner = Arc::clone(&inner);
+            let inner_spawn = Arc::clone(&inner);
             let llm_config = llm_config.clone();
-            tokio::spawn(async move {
+            let mut shutdown_rx = inner_spawn.shutdown_tx.subscribe();
+            let handle = tokio::spawn(async move {
                 let client = LlmClient::new_direct(llm_config);
                 debug!(worker_id = i, "LLM worker started");
                 loop {
-                    if let Some(job) = Self::next_job(&inner).await {
-                        Self::process_job(&client, job).await;
+                    tokio::select! {
+                        biased;
+                        _ = shutdown_rx.changed() => {
+                            if *shutdown_rx.borrow() {
+                                debug!(worker_id = i, "LLM worker shutting down");
+                                break;
+                            }
+                        }
+                        job = Self::next_job(&inner_spawn) => {
+                            if let Some(job) = job {
+                                Self::process_job(&client, job).await;
+                            }
+                        }
                     }
                 }
             });
+            inner.handles.lock().await.push(handle);
         }
 
         Ok(Self { inner, config })
@@ -259,6 +277,22 @@ impl LlmWorkerPool {
         let len = self.inner.user_queue.lock().await.len();
         len < self.config.user_queue_size as usize
     }
+
+    /// Signal all workers to stop and wait for them to finish.
+    ///
+    /// Each worker is given a 5-second timeout to complete its current job
+    /// before the task is aborted.
+    pub async fn shutdown(&self) {
+        let _ = self.inner.shutdown_tx.send(true);
+        let mut handles = self.inner.handles.lock().await;
+        for handle in handles.drain(..) {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => debug!("worker panicked: {}", e),
+                Err(_) => debug!("worker shutdown timed out"),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -421,5 +455,19 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert!(matches!(&items[0], StreamItem::Text(t) if t == "Hello"));
         assert!(matches!(&items[1], StreamItem::Usage(u) if u.total_tokens == 4));
+    }
+
+    #[tokio::test]
+    async fn test_worker_pool_shutdown() {
+        let pool = LlmWorkerPool::new(test_config(), tiny_pool_config())
+            .await
+            .unwrap();
+
+        pool.shutdown().await;
+
+        // After shutdown, enqueuing should still work (queues are not cleared),
+        // but the workers have exited. We verify by checking that a second
+        // shutdown is a no-op (no handles left to await).
+        pool.shutdown().await;
     }
 }

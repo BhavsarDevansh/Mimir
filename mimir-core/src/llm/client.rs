@@ -444,6 +444,13 @@ impl LlmClient {
 
 #[async_trait]
 impl LlmBackend for LlmClient {
+    async fn shutdown(&self) {
+        if let Some(pool) = &self.pool {
+            Arc::clone(pool).shutdown().await;
+        }
+        // Dropping the reqwest::Client closes idle connections.
+    }
+
     async fn chat(&self, messages: Vec<Message>) -> Result<(String, Usage), LlmError> {
         self.chat(messages).await
     }

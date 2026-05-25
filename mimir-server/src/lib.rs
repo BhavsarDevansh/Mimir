@@ -77,27 +77,64 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
+/// Combined shutdown signal that races Ctrl-C, SIGTERM (Unix), and the
+/// `/stop` endpoint watch channel.
+async fn shutdown_signal(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = sigterm.recv() => {},
+            _ = shutdown_rx.changed() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = shutdown_rx.changed() => {},
+        }
+    }
+}
+
 /// Start the Mimir HTTP server using the provided configuration.
 ///
 /// Loads shared state from `config`, binds to `config.server.bind_addr`,
 /// and runs until the process is terminated or a graceful shutdown is
-/// triggered via the `/stop` endpoint.
+/// triggered via the `/stop` endpoint, Ctrl-C, or SIGTERM.
+///
+/// If the server does not shut down gracefully within 30 seconds, it is
+/// forcefully aborted so that resource cleanup can still run.
 pub async fn start_server(config: Config) -> anyhow::Result<()> {
     let bind_addr = config.server.bind_addr.clone();
     let state = Arc::new(AppState::from_config(config).await?);
-    let mut shutdown_rx = state.shutdown_tx.subscribe();
+    let shutdown_rx = state.shutdown_tx.subscribe();
 
-    let app = build_app(state);
+    let app = build_app(Arc::clone(&state));
 
     let addr: SocketAddr = bind_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("Mimir daemon listening on {}", addr);
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            let _ = shutdown_rx.changed().await;
-        })
-        .await?;
+    let server_fut = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal(shutdown_rx));
+
+    match tokio::time::timeout(std::time::Duration::from_secs(30), server_fut).await {
+        Ok(result) => {
+            result?;
+            info!("Server shut down gracefully.");
+        }
+        Err(_) => {
+            tracing::warn!("Graceful shutdown timed out after 30s; forcing exit.");
+        }
+    }
+
+    state.shutdown().await;
     Ok(())
 }
 
@@ -454,5 +491,68 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_server_exits_after_stop() {
+        use mimir_core::config::Config;
+
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("context.db");
+        let memory_path = temp.path().join("memory.md");
+        tokio::fs::write(&memory_path, "Test memory content")
+            .await
+            .unwrap();
+
+        // Find an available port.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let mut config = Config::default();
+        config.llm.endpoint = "http://127.0.0.1:1".to_string();
+        config.llm.api_key = "test".to_string();
+        config.llm.model = "gpt-4o".to_string();
+        config.llm.max_tokens = Some(10);
+        config.llm.temperature = 0.0;
+        config.server.bind_addr = addr.to_string();
+        config.memory.char_limit = 10_000;
+        config.context.db_path = Some(db_path);
+
+        let handle = tokio::spawn(async move { super::start_server(config).await });
+
+        // Wait for the server to start listening.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // Ensure the server didn't fail to start.
+        if handle.is_finished() {
+            let result = handle.await.unwrap();
+            panic!("server exited early: {:?}", result);
+        }
+
+        // Send the stop request.
+        let client = reqwest::Client::new();
+        let res = client
+            .post(format!("http://{}/stop", addr))
+            .send()
+            .await
+            .unwrap();
+        let status = res.status();
+        let body = res.text().await.unwrap();
+        assert_eq!(
+            status,
+            reqwest::StatusCode::OK,
+            "unexpected status: {} body: {}",
+            status,
+            body
+        );
+
+        // The server should exit within 5 seconds.
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+        assert!(result.is_ok(), "server did not exit within 5 seconds");
+        assert!(
+            result.unwrap().is_ok(),
+            "server task panicked or returned error"
+        );
     }
 }

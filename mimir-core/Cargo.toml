@@ -1,6 +1,6 @@
 [package]
 name = "mimir-core"
-version = "0.14.1"
+version = "0.15.0"
 edition = "2024"
 
 [dependencies]
@@ -10,7 +10,7 @@ toml = "0.8"
 anyhow = "1.0"
 dirs = "6.0"
 thiserror = "2.0"
-tokio = { version = "1", features = ["rt-multi-thread", "time", "fs", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "fs", "process", "macros"] }
 reqwest = { version = "0.13", features = ["json", "stream"] }
 eventsource-stream = "0.2.3"
 futures = "0.3"

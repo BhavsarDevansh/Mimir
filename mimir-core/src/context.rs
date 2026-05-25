@@ -435,6 +435,14 @@ impl ContextManager {
         Ok(())
     }
 
+    /// Close the underlying database pool, flushing any pending writes.
+    ///
+    /// After calling `close`, any further operations will fail with a
+    /// database error because the pool is no longer open.
+    pub async fn close(&self) {
+        self.pool.close().await;
+    }
+
     // ------------------------------------------------------------------
     // Private helpers
     // ------------------------------------------------------------------
@@ -908,5 +916,24 @@ mod tests {
                 std::env::remove_var("USERPROFILE");
             },
         }
+    }
+
+    #[tokio::test]
+    async fn test_context_manager_close() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("close_test.db");
+        let mgr = ContextManager::new(&db).await.unwrap();
+        let sid = mgr.create_session("sys").await.unwrap();
+        mgr.add_user_message(&sid, "hello").await.unwrap();
+
+        mgr.close().await;
+
+        // After close, any operation should fail because the pool is closed.
+        let result = mgr.add_user_message(&sid, "world").await;
+        assert!(
+            matches!(result, Err(ContextError::Database(_))),
+            "expected database error after close, got: {:?}",
+            result
+        );
     }
 }

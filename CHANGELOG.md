@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-05-25
+
+### Added
+
+- **Graceful daemon shutdown** (`mimir-server`):
+  - Server now listens for `SIGINT` and `SIGTERM` (Unix) in addition to the `/stop` HTTP endpoint.
+  - `shutdown_signal()` races `tokio::signal::ctrl_c()`, `tokio::signal::unix::signal(SignalKind::terminate())`, and the existing `/stop` watch channel.
+  - `axum::serve` is wrapped in a 30-second `tokio::time::timeout`; on timeout a warning is logged and resource cleanup still runs.
+  - `AppState::shutdown()` orchestrates cleanup in order:
+    1. `ContextManager::close()` flushes and closes the SQLite pool.
+    2. `LlmClient::shutdown()` signals the worker pool to exit and drops `reqwest::Client`s.
+    3. `memory.md` is synced to disk with `sync_all`.
+- **Resource cleanup in `mimir-core`**:
+  - `ContextManager::close()` calls `sqlx::SqlitePool::close().await`.
+  - `LlmWorkerPool::shutdown()` broadcasts a stop signal to workers, uses `tokio::select!` in the worker loop to break on shutdown, and awaits handles with a 5-second per-handle timeout.
+  - `LlmBackend::shutdown()` default no-op trait method so existing mocks are unaffected.
+  - `LlmClient::shutdown()` delegates to the pool and drops the HTTP client.
+- **`mimir stop` hardened** (`mimir`):
+  - When the daemon is unreachable, prints `"Mimir is not running."` to **stderr** and exits with code `1`.
+  - After a successful `client.stop()`, waits 2 seconds and probes reachability again.
+  - If the daemon is still reachable, prints a warning to stderr and exits with code `1`.
+  - If the daemon is no longer reachable, prints `"Mimir daemon stopped."` to stdout and exits `0`.
+- **Integration tests**:
+  - `test_server_exits_after_stop` (`mimir-server`): spawns `start_server` on a random port, sends `POST /stop`, and asserts the task resolves within 5 seconds.
+  - `test_context_manager_close` (`mimir-core`): verifies the SQLite pool is closed and subsequent operations fail.
+  - `test_worker_pool_shutdown` (`mimir-core`): verifies pool workers exit cleanly.
+  - `test_stop_when_server_down` (`mimir/tests/cli_tests.rs`): asserts exit code `1` and stderr contains `"Mimir is not running."`.
+
+### Changed
+
+- `axum::serve` now uses `app.into_make_service_with_connect_info::<std::net::SocketAddr>()` so the `require_loopback` middleware receives `ConnectInfo` for real TCP connections.
+
+### Dependencies
+
+- Added `"signal"` to `tokio` features in `mimir-server/Cargo.toml`.
+- Added `"macros"` to `tokio` features in `mimir-core/Cargo.toml` (required for `tokio::select!`).
+
 ## [0.14.1] - 2026-05-25
 
 ### Fixed

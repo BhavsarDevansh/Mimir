@@ -1,13 +1,13 @@
 [package]
 name = "mimir-server"
-version = "0.14.1"
+version = "0.15.0"
 edition = "2024"
 
 [dependencies]
 mimir-core = { path = "../mimir-core" }
 mimir-api-types = { path = "../mimir-api-types" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
-axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "signal"] }
+axum = { version = "0.8", features = ["macros", "tokio"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 tower = { version = "0.5", features = ["util"] }
 serde = { version = "1.0", features = ["derive"] }

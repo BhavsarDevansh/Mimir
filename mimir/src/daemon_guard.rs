@@ -8,6 +8,7 @@ use std::future::Future;
 use std::io::{BufRead, Write};
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
@@ -75,20 +76,24 @@ trait ProcessSpawner: Send + Sync {
 // Production implementations
 // ---------------------------------------------------------------------------
 
+static PROBE_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .build()
+        .expect("probe client build")
+});
+
 struct HttpProbe;
 
 impl Probe for HttpProbe {
     fn check<'a>(&'a self, base_url: &'a str) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
         Box::pin(async move {
-            let client = match reqwest::Client::builder()
+            let url = format!("{}/status", base_url);
+            match PROBE_CLIENT
+                .get(&url)
                 .timeout(Duration::from_millis(500))
-                .build()
+                .send()
+                .await
             {
-                Ok(c) => c,
-                Err(_) => return false,
-            };
-
-            match client.get(format!("{}/status", base_url)).send().await {
                 Ok(resp) => resp.status().is_success(),
                 Err(_) => false,
             }

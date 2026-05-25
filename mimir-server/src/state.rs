@@ -47,7 +47,17 @@ impl AppState {
     /// Build `AppState` from the global Mimir [`Config`].
     pub async fn from_config(config: Config) -> anyhow::Result<Self> {
         let llm_client: Arc<dyn LlmBackend> = Arc::new(LlmClient::new(config.llm.clone()).await);
+        Self::from_config_with_llm(config, llm_client).await
+    }
 
+    /// Build `AppState` from [`Config`] with an injected LLM backend.
+    ///
+    /// Primarily useful for tests that need to supply a [`MockLlmClient`]
+    /// without relying on sentinel strings or config hacks.
+    pub async fn from_config_with_llm(
+        config: Config,
+        llm_client: Arc<dyn LlmBackend>,
+    ) -> anyhow::Result<Self> {
         let db_path = config
             .context
             .db_path
@@ -55,7 +65,11 @@ impl AppState {
             .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share/mimir/context.db"));
         let context_manager = Arc::new(ContextManager::new(&db_path).await?);
 
-        let memory_path = MemoryLoader::get_memory_path();
+        let memory_path = config
+            .memory
+            .path
+            .clone()
+            .unwrap_or_else(MemoryLoader::get_memory_path);
 
         let personality = Personality::new(&config.personality);
 

@@ -5,6 +5,7 @@ pub mod memory;
 pub mod paths;
 pub mod personality;
 pub mod skills;
+pub mod systemd;
 pub mod tools;
 
 pub fn version() -> &'static str {

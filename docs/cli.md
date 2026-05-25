@@ -43,6 +43,15 @@ Runs the Mimir HTTP server in the foreground (in-process, no separate binary). U
 
 Creates Mimir directories and default configuration files. Idempotent.
 
+On **Linux**, after creating config and memory files, you are prompted:
+`Install systemd user service for auto-start? [y/N]:`.
+Answering **yes** generates a hardened systemd user service file,
+runs `systemctl --user daemon-reload`, and `systemctl --user enable --now mimir`.
+If any step fails, manual `systemctl` instructions are printed as a fallback.
+
+On **macOS**, a note about future launchd support is shown.
+On **Windows**, the step is skipped silently.
+
 ### `mimir ask <query>`
 
 Sends a single query to the configured LLM. Supports:

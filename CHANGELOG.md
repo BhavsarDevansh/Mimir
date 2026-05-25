@@ -155,7 +155,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **systemd user service integration** (`mimir-core`, `mimir`):
   - `mimir init` now prompts Linux users to install a systemd user service for auto-start.
-  - `generate_service_file()` in `mimir-core` produces a hardened `.service` unit with absolute `ExecStart`, `Restart=on-failure`, `NoNewPrivileges=true`, `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=true`, and `ReadWritePaths` covering config, data, and cache directories.
+  - `generate_service_file()` in `mimir-core` produces a hardened `.service` unit with absolute `ExecStart`, `Restart=on-failure`, `NoNewPrivileges=true`, `ProtectSystem=full`, `ProtectHome=read-only`, `PrivateTmp=true`, and `ReadWritePaths` covering config, data, and cache directories.
   - `install_service_file()` writes the unit to `~/.config/systemd/user/mimir.service`, creating parent directories as needed.
   - `SystemdRunner` async trait with `daemon_reload()` and `enable_now(service)` methods.
   - `RealSystemdRunner` spawns `systemctl` via `tokio::process::Command`.

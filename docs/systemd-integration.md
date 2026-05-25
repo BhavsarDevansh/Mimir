@@ -12,7 +12,7 @@ Mimir can install itself as a systemd **user service** so the daemon starts auto
 - **Restart policy** — `Restart=on-failure` with `RestartSec=5`.
 - **Security hardening**:
   - `NoNewPrivileges=true`
-  - `ProtectSystem=strict`
+  - `ProtectSystem=full`
   - `ProtectHome=read-only`
   - `ReadWritePaths=<config> <data> <cache>`
   - `PrivateTmp=true`

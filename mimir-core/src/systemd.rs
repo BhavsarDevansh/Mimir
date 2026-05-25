@@ -23,8 +23,12 @@ pub enum SystemdError {
     Io(#[from] std::io::Error),
 
     /// A systemctl command returned a non-zero exit code.
-    #[error("systemctl failed: {stderr}")]
-    Systemctl { stderr: String },
+    #[error("systemctl failed (code={code:?}): stdout={stdout} stderr={stderr}")]
+    Systemctl {
+        code: Option<i32>,
+        stdout: String,
+        stderr: String,
+    },
 }
 
 impl From<crate::paths::PathsError> for SystemdError {
@@ -64,8 +68,14 @@ async fn run_systemctl(args: &[&str]) -> Result<(), SystemdError> {
         .await?;
 
     if !output.status.success() {
+        let code = output.status.code();
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(SystemdError::Systemctl { stderr });
+        return Err(SystemdError::Systemctl {
+            code,
+            stdout,
+            stderr,
+        });
     }
     Ok(())
 }
@@ -99,7 +109,7 @@ RestartSec=5
 
 # Security hardening
 NoNewPrivileges=true
-ProtectSystem=strict
+ProtectSystem=full
 ProtectHome=read-only
 ReadWritePaths="{config}" "{data}" "{cache}"
 PrivateTmp=true
@@ -201,8 +211,8 @@ mod tests {
             "should contain NoNewPrivileges=true"
         );
         assert!(
-            content.contains("ProtectSystem=strict"),
-            "should contain ProtectSystem=strict"
+            content.contains("ProtectSystem=full"),
+            "should contain ProtectSystem=full"
         );
         assert!(
             content.contains("ProtectHome=read-only"),

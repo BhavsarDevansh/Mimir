@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] - 2026-05-25
+
+### Fixed
+
+- **Chat no longer omits available tools from LLM requests** (`mimir-server`, `mimir-core`):
+  - `AppState` now initialises a `ToolRegistry` with built-in tools and loads persisted CLI tool definitions on startup.
+  - Both `/chat` and `/chat/stream` handlers forward enabled tools to the LLM backend via the new `ToolRegistry::export_openai_tools_for_llm()` helper.
+  - `LlmBackend` trait methods (`chat`, `chat_stream_with_usage`, `chat_stream`) now accept an optional `tools` parameter, threaded through `LlmClient`, `LlmWorkerPool`, and `Job`.
+  - `ChatRequest` (internal LLM type) gains a `tools` field with `#[serde(skip_serializing_if = "Option::is_none")]`.
+  - `MockLlmClient` extended to record forwarded tools for test assertions.
+  - Added `test_chat_forwards_tools_to_llm` in `mimir-server/src/lib.rs` verifying built-in tools (`get_current_time`, `echo`) are passed to the backend.
+
+
+
 ## [0.16.0] - 2026-05-25
 
 ### Added

@@ -7,6 +7,8 @@ pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
@@ -136,6 +138,7 @@ impl ChatRequest {
         Self {
             model: model.into(),
             messages,
+            tools: None,
             max_tokens: None,
             temperature: None,
             stream: false,
@@ -152,6 +155,12 @@ impl ChatRequest {
     /// Set the sampling temperature.
     pub fn with_temperature(mut self, temperature: f32) -> Self {
         self.temperature = Some(temperature);
+        self
+    }
+
+    /// Set the tools to include in the request.
+    pub fn with_tools(mut self, tools: Vec<serde_json::Value>) -> Self {
+        self.tools = Some(tools);
         self
     }
 
@@ -200,6 +209,8 @@ pub enum Job {
     Chat {
         /// Conversation messages.
         messages: Vec<Message>,
+        /// Optional tools to include in the request.
+        tools: Option<Vec<serde_json::Value>>,
         /// Channel to send the result back.
         respond: tokio::sync::oneshot::Sender<Result<(String, Usage), LlmError>>,
     },
@@ -207,6 +218,8 @@ pub enum Job {
     ChatStream {
         /// Conversation messages.
         messages: Vec<Message>,
+        /// Optional tools to include in the request.
+        tools: Option<Vec<serde_json::Value>>,
         /// Channel to stream items back.
         respond: tokio::sync::mpsc::Sender<Result<StreamItem, LlmError>>,
     },
@@ -230,6 +243,24 @@ mod tests {
         assert!(json.contains("\"max_tokens\":100"));
         assert!(json.contains("\"temperature\":0.5"));
         assert!(json.contains("\"stream\":false"));
+    }
+
+    #[test]
+    fn test_chat_request_serializes_tools() {
+        let req = ChatRequest::new("gpt-4o", vec![Message::user("hello")]).with_tools(vec![
+            serde_json::json!({"type": "function", "function": {"name": "echo"}}),
+        ]);
+
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"tools\""));
+        assert!(json.contains("\"echo\""));
+    }
+
+    #[test]
+    fn test_chat_request_skips_none_tools() {
+        let req = ChatRequest::new("gpt-4o", vec![Message::user("hello")]);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("\"tools\""));
     }
 
     #[test]

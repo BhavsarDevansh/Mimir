@@ -185,6 +185,7 @@ mod tests {
             memory_limit: 10_000,
             shutdown_tx,
             model_override_cache: Arc::new(DashMap::new()),
+            tool_registry: Arc::new(mimir_core::tools::ToolRegistry::with_builtins()),
         });
 
         (state, temp)
@@ -394,6 +395,86 @@ mod tests {
         assert_eq!(status.queue_depth_user, 2);
         assert_eq!(status.queue_depth_system, 1);
         assert_eq!(status.worker_threads, 4);
+    }
+
+    #[tokio::test]
+    async fn test_chat_forwards_tools_to_llm() {
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_chat("Hello!", Usage::default())
+                .build(),
+        );
+        let (state, _temp) = test_state(mock.clone()).await;
+        let app = super::build_app(state);
+
+        let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Built-in tools should have been forwarded.
+        let tools = mock.chat_tools();
+        assert_eq!(tools.len(), 1);
+        let forwarded = tools[0].as_ref().expect("tools should be forwarded");
+        assert!(!forwarded.is_empty(), "at least one tool should be present");
+        let names: Vec<String> = forwarded
+            .iter()
+            .filter_map(|t| t.get("function")?.get("name")?.as_str())
+            .map(|s| s.to_string())
+            .collect();
+        assert!(names.contains(&"get_current_time".to_string()));
+        assert!(names.contains(&"echo".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_chat_stream_forwards_tools_to_llm() {
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_stream(vec![
+                    Ok(StreamItem::Text("Hello!".to_string())),
+                    Ok(StreamItem::Usage(Usage::default())),
+                ])
+                .build(),
+        );
+        let (state, _temp) = test_state(mock.clone()).await;
+        let app = super::build_app(state);
+
+        let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat/stream")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let tools = mock.stream_tools();
+        assert_eq!(tools.len(), 1);
+        let forwarded = tools[0].as_ref().expect("tools should be forwarded");
+        assert!(!forwarded.is_empty(), "at least one tool should be present");
+        let names: Vec<String> = forwarded
+            .iter()
+            .filter_map(|t| t.get("function")?.get("name")?.as_str())
+            .map(|s| s.to_string())
+            .collect();
+        assert!(names.contains(&"get_current_time".to_string()));
+        assert!(names.contains(&"echo".to_string()));
     }
 
     #[tokio::test]

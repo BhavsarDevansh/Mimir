@@ -227,7 +227,7 @@ impl Skill for MarkdownSkill {
             crate::llm::types::Message::user(user_content),
         ];
 
-        match ctx.llm_client.chat(messages).await {
+        match ctx.llm_client.chat(messages, None).await {
             Ok((content, _usage)) => Ok(SkillOutput {
                 result: Some(Value::String(content)),
                 ..Default::default()

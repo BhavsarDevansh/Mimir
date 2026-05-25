@@ -117,7 +117,11 @@ pub async fn chat_handler(
 ) -> Result<Json<ChatResponse>, axum::response::Response> {
     let (session_id, llm, messages, incognito, _permit) = resolve_chat_state(&state, &req).await?;
 
-    let (response_text, usage) = llm.chat(messages).await.map_err(error::llm_error)?;
+    let tools_opt = state.tool_registry.export_openai_tools_for_llm();
+    let (response_text, usage) = llm
+        .chat(messages, tools_opt)
+        .await
+        .map_err(error::llm_error)?;
 
     if !incognito {
         state
@@ -151,8 +155,9 @@ pub async fn chat_stream_handler(
 > {
     let (session_id, llm, messages, incognito, permit) = resolve_chat_state(&state, &req).await?;
 
+    let tools_opt = state.tool_registry.export_openai_tools_for_llm();
     let mut stream = llm
-        .chat_stream_with_usage(messages)
+        .chat_stream_with_usage(messages, tools_opt)
         .await
         .map_err(error::llm_error)?;
 

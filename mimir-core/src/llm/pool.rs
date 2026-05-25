@@ -112,7 +112,11 @@ impl LlmWorkerPool {
     ///
     /// Returns the assistant response and token usage when the job completes.
     /// Returns [`LlmError::QueueFull`] if the user queue is at capacity.
-    pub async fn enqueue_chat(&self, messages: Vec<Message>) -> Result<(String, Usage), LlmError> {
+    pub async fn enqueue_chat(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(String, Usage), LlmError> {
         let (tx, rx) = oneshot::channel();
         {
             let mut queue = self.inner.user_queue.lock().await;
@@ -121,6 +125,7 @@ impl LlmWorkerPool {
             }
             queue.push_back(Job::Chat {
                 messages,
+                tools,
                 respond: tx,
             });
         }
@@ -137,6 +142,7 @@ impl LlmWorkerPool {
     pub async fn enqueue_chat_stream(
         &self,
         messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
         let (tx, rx) = mpsc::channel::<Result<StreamItem, LlmError>>(64);
         {
@@ -146,6 +152,7 @@ impl LlmWorkerPool {
             }
             queue.push_back(Job::ChatStream {
                 messages,
+                tools,
                 respond: tx,
             });
         }
@@ -171,6 +178,7 @@ impl LlmWorkerPool {
             }
             queue.push_back(Job::Chat {
                 messages,
+                tools: None,
                 respond: tx,
             });
         }
@@ -192,6 +200,7 @@ impl LlmWorkerPool {
             }
             queue.push_back(Job::ChatStream {
                 messages,
+                tools: None,
                 respond: tx,
             });
         }
@@ -239,12 +248,20 @@ impl LlmWorkerPool {
     /// Process a single job using the provided direct LLM client.
     async fn process_job(client: &LlmClient, job: Job) {
         match job {
-            Job::Chat { messages, respond } => {
-                let result = client.chat_direct(messages).await;
+            Job::Chat {
+                messages,
+                tools,
+                respond,
+            } => {
+                let result = client.chat_direct(messages, tools).await;
                 let _ = respond.send(result);
             }
-            Job::ChatStream { messages, respond } => {
-                match client.chat_stream_with_usage_direct(messages).await {
+            Job::ChatStream {
+                messages,
+                tools,
+                respond,
+            } => {
+                match client.chat_stream_with_usage_direct(messages, tools).await {
                     Ok(mut stream) => {
                         while let Some(item) = stream.next().await {
                             if respond.send(item).await.is_err() {
@@ -332,7 +349,7 @@ mod tests {
 
         // This will fail with a network error, but it proves the job was
         // dequeued and processed by the worker.
-        let result = pool.enqueue_chat(vec![Message::user("hello")]).await;
+        let result = pool.enqueue_chat(vec![Message::user("hello")], None).await;
         assert!(result.is_err());
     }
 
@@ -385,7 +402,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Enqueue user second — it should jump ahead.
-        let user_job = pool.enqueue_chat(vec![Message::user("user-second")]);
+        let user_job = pool.enqueue_chat(vec![Message::user("user-second")], None);
 
         let (sys_res, usr_res) = tokio::join!(system_job, user_job);
         assert!(sys_res.is_ok());
@@ -405,7 +422,9 @@ mod tests {
 
         let pool = LlmWorkerPool::new(test_config(), config).await.unwrap();
 
-        let result = pool.enqueue_chat(vec![Message::user("overflow")]).await;
+        let result = pool
+            .enqueue_chat(vec![Message::user("overflow")], None)
+            .await;
         assert!(matches!(result, Err(LlmError::QueueFull)));
     }
     #[tokio::test]
@@ -447,7 +466,7 @@ mod tests {
             .unwrap();
 
         let mut stream = pool
-            .enqueue_chat_stream(vec![Message::user("hello")])
+            .enqueue_chat_stream(vec![Message::user("hello")], None)
             .await
             .unwrap();
 

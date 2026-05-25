@@ -43,7 +43,7 @@ async fn test_retry_on_429() {
         .await;
 
     let client = test_client(server.uri()).await;
-    let result = client.chat(vec![Message::user("hello")]).await;
+    let result = client.chat(vec![Message::user("hello")], None).await;
 
     assert!(result.is_ok());
     let (text, usage) = result.unwrap();
@@ -63,7 +63,7 @@ async fn test_no_retry_on_400() {
         .await;
 
     let client = test_client(server.uri()).await;
-    let result = client.chat(vec![Message::user("hello")]).await;
+    let result = client.chat(vec![Message::user("hello")], None).await;
 
     assert!(result.is_err());
     match result {
@@ -100,7 +100,7 @@ async fn test_sse_stream_parsing() {
 
     let client = test_client(server.uri()).await;
     let mut stream = client
-        .chat_stream_with_usage(vec![Message::user("hello")])
+        .chat_stream_with_usage(vec![Message::user("hello")], None)
         .await
         .unwrap();
 
@@ -117,7 +117,7 @@ async fn test_sse_stream_parsing() {
 async fn test_connection_failure() {
     // Point at a non-listening port to simulate connection failure.
     let client = test_client("http://127.0.0.1:1".to_string()).await;
-    let result = client.chat(vec![Message::user("hello")]).await;
+    let result = client.chat(vec![Message::user("hello")], None).await;
 
     assert!(result.is_err());
     match result {

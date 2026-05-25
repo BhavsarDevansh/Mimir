@@ -32,6 +32,8 @@ pub struct MockLlmClient {
     user_queue_has_capacity_val: Mutex<bool>,
     chat_calls: Mutex<Vec<Vec<Message>>>,
     stream_calls: Mutex<Vec<Vec<Message>>>,
+    chat_tools: Mutex<Vec<Option<Vec<serde_json::Value>>>>,
+    stream_tools: Mutex<Vec<Option<Vec<serde_json::Value>>>>,
 }
 
 /// Builder for [`MockLlmClient`].
@@ -53,6 +55,8 @@ impl MockLlmClient {
                 user_queue_has_capacity_val: Mutex::new(true),
                 chat_calls: Mutex::new(Vec::new()),
                 stream_calls: Mutex::new(Vec::new()),
+                chat_tools: Mutex::new(Vec::new()),
+                stream_tools: Mutex::new(Vec::new()),
             },
         }
     }
@@ -62,9 +66,19 @@ impl MockLlmClient {
         self.chat_calls.lock().unwrap().clone()
     }
 
+    /// Return all tool options passed to [`LlmBackend::chat`].
+    pub fn chat_tools(&self) -> Vec<Option<Vec<serde_json::Value>>> {
+        self.chat_tools.lock().unwrap().clone()
+    }
+
     /// Return all [`Message`] vectors passed to [`LlmBackend::chat_stream_with_usage`].
     pub fn stream_calls(&self) -> Vec<Vec<Message>> {
         self.stream_calls.lock().unwrap().clone()
+    }
+
+    /// Return all tool options passed to [`LlmBackend::chat_stream_with_usage`].
+    pub fn stream_tools(&self) -> Vec<Option<Vec<serde_json::Value>>> {
+        self.stream_tools.lock().unwrap().clone()
     }
 }
 
@@ -137,16 +151,26 @@ impl MockLlmClientBuilder {
 
 #[async_trait]
 impl LlmBackend for MockLlmClient {
-    async fn chat(&self, messages: Vec<Message>) -> Result<(String, Usage), LlmError> {
+    async fn chat(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(String, Usage), LlmError> {
         self.chat_calls.lock().unwrap().push(messages);
+        self.chat_tools.lock().unwrap().push(tools);
         match self.chat_responses.lock().unwrap().pop_front() {
             Some(result) => result,
             None => Err(LlmError::RetryExhausted { attempts: 1 }),
         }
     }
 
-    async fn chat_stream_with_usage(&self, messages: Vec<Message>) -> Result<LlmStream, LlmError> {
+    async fn chat_stream_with_usage(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<LlmStream, LlmError> {
         self.stream_calls.lock().unwrap().push(messages);
+        self.stream_tools.lock().unwrap().push(tools);
         match self.stream_responses.lock().unwrap().pop_front() {
             Some(items) => {
                 let stream = futures::stream::iter(items);
@@ -209,8 +233,8 @@ mod tests {
             .push_chat("second", Usage::default())
             .build();
 
-        let (text1, _) = mock.chat(vec![Message::user("a")]).await.unwrap();
-        let (text2, _) = mock.chat(vec![Message::user("b")]).await.unwrap();
+        let (text1, _) = mock.chat(vec![Message::user("a")], None).await.unwrap();
+        let (text2, _) = mock.chat(vec![Message::user("b")], None).await.unwrap();
 
         assert_eq!(text1, "first");
         assert_eq!(text2, "second");
@@ -227,7 +251,7 @@ mod tests {
             .push_chat_error(LlmError::QueueFull)
             .build();
 
-        let result = mock.chat(vec![Message::user("x")]).await;
+        let result = mock.chat(vec![Message::user("x")], None).await;
         assert!(matches!(result, Err(LlmError::QueueFull)));
     }
 
@@ -235,7 +259,7 @@ mod tests {
     async fn test_chat_empty_queue_returns_retry_exhausted() {
         let mock = MockLlmClient::builder().build();
 
-        let result = mock.chat(vec![Message::user("x")]).await;
+        let result = mock.chat(vec![Message::user("x")], None).await;
         assert!(matches!(result, Err(LlmError::RetryExhausted { .. })));
     }
 
@@ -253,7 +277,7 @@ mod tests {
             .build();
 
         let mut stream = mock
-            .chat_stream_with_usage(vec![Message::user("x")])
+            .chat_stream_with_usage(vec![Message::user("x")], None)
             .await
             .unwrap();
 
@@ -274,7 +298,9 @@ mod tests {
     async fn test_stream_empty_queue_returns_retry_exhausted() {
         let mock = MockLlmClient::builder().build();
 
-        let result = mock.chat_stream_with_usage(vec![Message::user("x")]).await;
+        let result = mock
+            .chat_stream_with_usage(vec![Message::user("x")], None)
+            .await;
         assert!(matches!(result, Err(LlmError::RetryExhausted { .. })));
     }
 

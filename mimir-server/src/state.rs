@@ -9,6 +9,7 @@ use mimir_core::{
     llm::{LlmBackend, LlmClient},
     memory::loader::MemoryLoader,
     personality::Personality,
+    tools::ToolRegistry,
 };
 
 /// Shared application state for the HTTP server.
@@ -36,6 +37,8 @@ pub struct AppState {
     /// Cache for model-override LLM clients to avoid allocating a new client
     /// on every request with the same override model.
     pub model_override_cache: Arc<DashMap<String, Arc<dyn LlmBackend>>>,
+    /// Tool registry for function-calling support.
+    pub tool_registry: Arc<ToolRegistry>,
 }
 
 const MODEL_OVERRIDE_CACHE_CAP: usize = 16;
@@ -58,6 +61,14 @@ impl AppState {
 
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
 
+        let tool_registry = Arc::new(ToolRegistry::with_builtins());
+        if let Some(path) = mimir_core::tools::ToolsConfig::default_path()
+            && path.exists()
+            && let Err(e) = tool_registry.load_tools_config(&path)
+        {
+            tracing::warn!("Failed to load tools config: {}", e);
+        }
+
         Ok(Self {
             llm_client,
             context_manager,
@@ -70,6 +81,7 @@ impl AppState {
             memory_limit: config.memory.char_limit as usize,
             shutdown_tx,
             model_override_cache: Arc::new(DashMap::new()),
+            tool_registry,
         })
     }
 

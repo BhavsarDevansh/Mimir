@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-05-25
+
+### Added
+
+- **systemd user service integration** (`mimir-core`, `mimir`):
+  - `mimir init` now prompts Linux users to install a systemd user service for auto-start.
+  - `generate_service_file()` in `mimir-core` produces a hardened `.service` unit with absolute `ExecStart`, `Restart=on-failure`, `NoNewPrivileges=true`, `ProtectSystem=full`, `ProtectHome=read-only`, `PrivateTmp=true`, and `ReadWritePaths` covering config, data, and cache directories.
+  - `install_service_file()` writes the unit to `~/.config/systemd/user/mimir.service`, creating parent directories as needed.
+  - `SystemdRunner` async trait with `daemon_reload()` and `enable_now(service)` methods.
+  - `RealSystemdRunner` spawns `systemctl` via `tokio::process::Command`.
+  - `MockSystemdRunner` records call arguments for unit-test assertions.
+  - On `mimir init`, after config and memory setup, Linux users are asked `Install systemd user service for auto-start? [y/N]:`.
+    - On **yes**, the service file is generated and installed, then `daemon-reload` and `enable --now mimir` are run. Success prints the `loginctl enable-linger $USER` suggestion.
+    - On **no** or EOF, manual `systemctl` instructions are printed.
+    - If any `systemctl` command fails, the error is printed and fallback manual instructions are shown; `mimir init` still exits successfully.
+  - On **macOS**, a note about future launchd support (Phase 1) is printed.
+  - On **Windows**, systemd setup is skipped silently.
+- **Path helpers** (`mimir-core`):
+  - `systemd_user_dir()` returns `~/.config/systemd/user`.
+
+### Documentation
+
+- `docs/systemd-integration.md`: technical details of service generation, path resolution, `SystemdRunner`, and security hardening.
+- `docs/wiki/systemd-setup.md`: user-facing guide on the `mimir init` prompt and manual fallback.
+- `docs/cli.md` updated to describe the new systemd prompt under the `init` command.
+
 ## [0.15.1] - 2026-05-25
 
 ### Fixed
@@ -148,3 +174,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `criterion = { version = "0.8.2", features = ["async_tokio"] }` to
   `mimir-core` dev-dependencies.
 - Added `mock-llm` feature flag to `mimir-core`.
+
+

@@ -62,6 +62,13 @@ pub fn cache_dir() -> Result<PathBuf, PathsError> {
         .ok_or(PathsError::MissingCacheDir)
 }
 
+/// Returns the systemd user service directory (`~/.config/systemd/user` on Linux).
+pub fn systemd_user_dir() -> Result<PathBuf, PathsError> {
+    dirs::config_dir()
+        .map(|p| p.join("systemd").join("user"))
+        .ok_or(PathsError::MissingConfigDir)
+}
+
 /// Returns the path to `config.toml` inside the config directory.
 pub fn config_path() -> Result<PathBuf, PathsError> {
     config_dir().map(|p| p.join("config.toml"))
@@ -151,5 +158,16 @@ mod tests {
         let target = dir.path().join("a").join("b").join("c");
         ensure_dir(target.as_path()).unwrap();
         assert!(target.is_dir());
+    }
+
+    #[test]
+    fn test_systemd_user_dir_ends_with_systemd_user() {
+        let dir = systemd_user_dir().unwrap();
+        let s = dir.to_string_lossy();
+        assert!(
+            s.ends_with("systemd/user"),
+            "expected systemd/user suffix, got: {}",
+            s
+        );
     }
 }

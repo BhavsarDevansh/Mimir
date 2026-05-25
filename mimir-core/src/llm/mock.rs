@@ -6,6 +6,13 @@ use async_trait::async_trait;
 use crate::llm::backend::{LlmBackend, LlmStream};
 use crate::llm::types::{LlmError, Message, StreamItem, Usage};
 
+/// A recorded LLM call capturing both messages and tools.
+#[derive(Debug, Clone)]
+struct CallRecord {
+    messages: Vec<Message>,
+    tools: Option<Vec<serde_json::Value>>,
+}
+
 /// A programmable mock LLM backend for deterministic, fast tests.
 ///
 /// Responses are queued in FIFO order. Callers can assert on the messages
@@ -30,10 +37,8 @@ pub struct MockLlmClient {
     system_queue_depth_val: Mutex<usize>,
     worker_threads_val: u8,
     user_queue_has_capacity_val: Mutex<bool>,
-    chat_calls: Mutex<Vec<Vec<Message>>>,
-    stream_calls: Mutex<Vec<Vec<Message>>>,
-    chat_tools: Mutex<Vec<Option<Vec<serde_json::Value>>>>,
-    stream_tools: Mutex<Vec<Option<Vec<serde_json::Value>>>>,
+    chat_records: Mutex<Vec<CallRecord>>,
+    stream_records: Mutex<Vec<CallRecord>>,
 }
 
 /// Builder for [`MockLlmClient`].
@@ -53,32 +58,50 @@ impl MockLlmClient {
                 system_queue_depth_val: Mutex::new(0),
                 worker_threads_val: 0,
                 user_queue_has_capacity_val: Mutex::new(true),
-                chat_calls: Mutex::new(Vec::new()),
-                stream_calls: Mutex::new(Vec::new()),
-                chat_tools: Mutex::new(Vec::new()),
-                stream_tools: Mutex::new(Vec::new()),
+                chat_records: Mutex::new(Vec::new()),
+                stream_records: Mutex::new(Vec::new()),
             },
         }
     }
 
     /// Return all [`Message`] vectors passed to [`LlmBackend::chat`].
     pub fn chat_calls(&self) -> Vec<Vec<Message>> {
-        self.chat_calls.lock().unwrap().clone()
+        self.chat_records
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.messages.clone())
+            .collect()
     }
 
     /// Return all tool options passed to [`LlmBackend::chat`].
     pub fn chat_tools(&self) -> Vec<Option<Vec<serde_json::Value>>> {
-        self.chat_tools.lock().unwrap().clone()
+        self.chat_records
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.tools.clone())
+            .collect()
     }
 
     /// Return all [`Message`] vectors passed to [`LlmBackend::chat_stream_with_usage`].
     pub fn stream_calls(&self) -> Vec<Vec<Message>> {
-        self.stream_calls.lock().unwrap().clone()
+        self.stream_records
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.messages.clone())
+            .collect()
     }
 
     /// Return all tool options passed to [`LlmBackend::chat_stream_with_usage`].
     pub fn stream_tools(&self) -> Vec<Option<Vec<serde_json::Value>>> {
-        self.stream_tools.lock().unwrap().clone()
+        self.stream_records
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.tools.clone())
+            .collect()
     }
 }
 
@@ -166,8 +189,10 @@ impl LlmBackend for MockLlmClient {
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<(Message, Usage), LlmError> {
-        self.chat_calls.lock().unwrap().push(messages);
-        self.chat_tools.lock().unwrap().push(tools);
+        self.chat_records
+            .lock()
+            .unwrap()
+            .push(CallRecord { messages, tools });
         match self.chat_responses.lock().unwrap().pop_front() {
             Some(result) => result,
             None => Err(LlmError::RetryExhausted { attempts: 1 }),
@@ -179,8 +204,10 @@ impl LlmBackend for MockLlmClient {
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<LlmStream, LlmError> {
-        self.stream_calls.lock().unwrap().push(messages);
-        self.stream_tools.lock().unwrap().push(tools);
+        self.stream_records
+            .lock()
+            .unwrap()
+            .push(CallRecord { messages, tools });
         match self.stream_responses.lock().unwrap().pop_front() {
             Some(items) => {
                 let stream = futures::stream::iter(items);

@@ -521,14 +521,21 @@ mod tests {
 
         let handle = tokio::spawn(async move { super::start_server(config).await });
 
-        // Wait for the server to start listening.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        // Ensure the server didn't fail to start.
-        if handle.is_finished() {
-            let result = handle.await.unwrap();
-            panic!("server exited early: {:?}", result);
+        // Poll until the server accepts a TCP connection (up to 5 s).
+        let poll_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut ready = false;
+        while tokio::time::Instant::now() < poll_deadline {
+            if handle.is_finished() {
+                let result = handle.await.unwrap();
+                panic!("server exited early: {:?}", result);
+            }
+            if tokio::net::TcpStream::connect(addr).await.is_ok() {
+                ready = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
+        assert!(ready, "server did not become reachable within 5 seconds");
 
         // Send the stop request.
         let client = reqwest::Client::new();

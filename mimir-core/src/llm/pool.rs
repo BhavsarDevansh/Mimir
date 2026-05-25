@@ -88,8 +88,8 @@ impl LlmWorkerPool {
                 loop {
                     tokio::select! {
                         biased;
-                        _ = shutdown_rx.changed() => {
-                            if *shutdown_rx.borrow() {
+                        result = shutdown_rx.changed() => {
+                            if result.is_err() || *shutdown_rx.borrow() {
                                 debug!(worker_id = i, "LLM worker shutting down");
                                 break;
                             }
@@ -286,10 +286,14 @@ impl LlmWorkerPool {
         let _ = self.inner.shutdown_tx.send(true);
         let mut handles = self.inner.handles.lock().await;
         for handle in handles.drain(..) {
+            let abort_handle = handle.abort_handle();
             match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => debug!("worker panicked: {}", e),
-                Err(_) => debug!("worker shutdown timed out"),
+                Err(_) => {
+                    debug!("worker shutdown timed out, aborting");
+                    abort_handle.abort();
+                }
             }
         }
     }

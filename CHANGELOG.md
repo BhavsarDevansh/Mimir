@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1] - 2026-05-25
+
+### Fixed
+
+- **Worker spin-loop on dropped watch sender** (`mimir-core`): workers now break their loop when `shutdown_rx.changed()` returns `Err(RecvError)`, preventing a busy spin when the pool is dropped without calling `shutdown()`.
+- **Worker shutdown timeout now aborts stuck tasks** (`mimir-core`): `LlmWorkerPool::shutdown()` captures `abort_handle()` before awaiting each worker and calls `abort()` when the 5-second timeout fires, preventing detached tasks from leaking.
+- **Non-blocking filesystem sync in shutdown** (`mimir-server`): `AppState::shutdown()` now uses `tokio::fs::OpenOptions` and `tokio::fs::File::sync_all` instead of `std::fs` blocking syscalls inside an async path.
+- **Flaky timing-based server test** (`mimir-server`): `test_server_exits_after_stop` now actively polls the TCP port instead of relying on a fixed 500 ms sleep.
+
 ## [0.15.0] - 2026-05-25
 
 ### Added

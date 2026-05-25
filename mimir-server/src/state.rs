@@ -93,11 +93,12 @@ impl AppState {
         tracing::info!("Shutting down LLM client...");
         self.llm_client.shutdown().await;
 
-        if let Ok(file) = std::fs::OpenOptions::new()
+        if let Ok(file) = tokio::fs::OpenOptions::new()
             .write(true)
             .open(&self.memory_path)
+            .await
         {
-            let _ = file.sync_all();
+            let _ = file.sync_all().await;
         }
 
         tracing::info!("Shutdown complete.");

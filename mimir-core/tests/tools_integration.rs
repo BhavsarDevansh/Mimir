@@ -408,7 +408,7 @@ async fn test_memory_tool_add_and_replace() {
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("memory.md");
-    std::fs::write(&path, "No memories yet.").unwrap();
+    std::fs::write(&path, "\u{2026}").unwrap();
 
     let registry = ToolRegistry::new();
     let tool = Arc::new(MemoryTool::new(path.clone(), 2500));
@@ -435,8 +435,8 @@ async fn test_memory_tool_add_and_replace() {
             "memory",
             json!({
                 "action": "replace",
-                "old_text": "No memories yet.",
-                "content": "User is Alice."
+                "old_text": "\u{2026}",
+                "content": "Alice, lives in Berlin."
             }),
         )
         .await
@@ -444,8 +444,8 @@ async fn test_memory_tool_add_and_replace() {
     assert_eq!(output.result, Some(json!("Replaced in memory.")));
 
     let disk = std::fs::read_to_string(&path).unwrap();
-    assert!(disk.contains("User is Alice."));
-    assert!(!disk.contains("No memories yet."));
+    assert!(disk.contains("Alice, lives in Berlin."));
+    assert!(!disk.contains("\u{2026}"));
 }
 
 #[tokio::test]

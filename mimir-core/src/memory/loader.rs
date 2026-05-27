@@ -70,8 +70,8 @@ impl MemoryLoader {
     pub fn default_memory() -> String {
         r#"Mimir memory [0/2500]
 
-No memories yet."#
-            .to_string()
+…"#
+        .to_string()
     }
 
     /// Return the platform-specific path for memory.md.
@@ -105,7 +105,7 @@ mod tests {
 
         assert!(path.exists());
         assert!(content.contains("Mimir memory ["));
-        assert!(content.contains("No memories yet."));
+        assert!(content.contains("…"));
     }
 
     #[tokio::test]
@@ -122,6 +122,6 @@ mod tests {
     #[test]
     fn test_default_memory_has_all_sections() {
         let default = MemoryLoader::default_memory();
-        assert!(default.contains("No memories yet."));
+        assert!(default.contains("…"));
     }
 }

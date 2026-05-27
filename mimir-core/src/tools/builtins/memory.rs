@@ -52,13 +52,13 @@ impl Tool for MemoryTool {
 
     fn description(&self) -> &str {
         "Update Mimir's persistent working memory (memory.md). \
-         memory.md is your personal scratchpad — a free-form text file where you \
-         record facts about the user and context that should persist across sessions. \
-         Write compact, self-contained notes (one thought per line or bullet). Group \
-         related facts together, but do not use rigid sections or prefixes. Prefer \
-         'replace' to update an existing note. Use 'add' for new observations. Use \
-         'remove' to delete stale notes. Be token-conscious: abbreviate, drop filler \
-         words, use shorthand. The file has a 2500 character limit."
+         memory.md is a scratchpad of compact, standalone notes — one fact per line. \
+         Do NOT use bullet points (-, *), dashes, or Key: Value prefixes. \
+         State facts directly as bare sentence fragments. Chain related facts with \
+         semicolons on the same line. Examples of GOOD notes:          'Devansh, born [MMM DD, YYYY], lives in [CITY].'          'Software Developer, C# Fullstack.'          'Married to [WIFE]; her birthday [MMM DD, YYYY].'          BAD (never do this): '- Name: Devansh', 'User: Devansh', '• Location: [CITY]'.          When the file contains the placeholder '\u{2026}' (…), use 'replace' with \
+         old_text='\u{2026}' to swap it with your first note. After that, use \
+         'replace' to update existing notes and 'add' for brand-new facts. \
+         Use 'remove' to delete stale notes. Be token-conscious. 2500 char limit."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -69,17 +69,17 @@ impl Tool for MemoryTool {
                     "type": "string",
                     "enum": ["add", "replace", "remove"],
                     "description": "The operation to perform. \
-                        'replace' is preferred: find old_text and substitute content. Use this to update an existing note and avoid duplication. \
-                        'add' appends content to memory. Use for new observations. \
-                        'remove' deletes the first occurrence of old_text."
+                        'replace': find old_text and substitute content. REQUIRED when the file has the … placeholder. Use this to update an existing note. \
+                        'add': appends content. Use ONLY for brand-new facts (file has no placeholder, and the fact does not already exist). \
+                        'remove': deletes the first occurrence of old_text."
                 },
                 "content": {
                     "type": "string",
-                    "description": "Concise note text. Required for 'add' and 'replace'. One thought per line or bullet. Be token-conscious: abbreviate, drop filler words."
+                    "description": "Compact note text (one line, bare sentence fragment). Required for 'add' and 'replace'. No bullets, dashes, or key:value prefixes."
                 },
                 "old_text": {
                     "type": "string",
-                    "description": "Exact current note text to find and replace or remove. Required for 'replace' and 'remove'. Must match the full existing note exactly."
+                    "description": "Exact existing note text to find and replace/remove. Required for 'replace' and 'remove'. Must match the full line exactly."
                 }
             },
             "required": ["action"],
@@ -174,7 +174,7 @@ mod tests {
     async fn test_memory_tool_add() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("memory.md");
-        std::fs::write(&path, "No memories yet.").unwrap();
+        std::fs::write(&path, "\u{2026}").unwrap();
 
         let tool = MemoryTool::new(path.clone(), 2500);
         let result = tool
@@ -191,21 +191,21 @@ mod tests {
     async fn test_memory_tool_replace() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("memory.md");
-        std::fs::write(&path, "No memories yet.").unwrap();
+        std::fs::write(&path, "\u{2026}").unwrap();
 
         let tool = MemoryTool::new(path.clone(), 2500);
         let result = tool
             .execute(json!({
                 "action": "replace",
-                "old_text": "No memories yet.",
-                "content": "User is Alice."
+                "old_text": "\u{2026}",
+                "content": "Alice, lives in Berlin."
             }))
             .await
             .unwrap();
 
         assert_eq!(result.result, Some(json!("Replaced in memory.")));
         let disk = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(disk, "User is Alice.");
+        assert_eq!(disk, "Alice, lives in Berlin.");
     }
 
     #[tokio::test]

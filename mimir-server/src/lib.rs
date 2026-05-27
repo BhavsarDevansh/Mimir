@@ -170,12 +170,14 @@ pub async fn start_server_with_llm_and_listener(
                 match debounce_rx.recv_timeout(std::time::Duration::from_millis(250)) {
                     Ok(Ok(events)) => {
                         if events.iter().any(|e| {
-                            e.event
-                                .paths
-                                .iter()
-                                .any(|p| {
-                                    config_filename.as_ref().map(|cf| p.file_name().map(|n| n == cf.as_os_str()).unwrap_or(false)).unwrap_or(false)
-                                })
+                            e.event.paths.iter().any(|p| {
+                                config_filename
+                                    .as_ref()
+                                    .map(|cf| {
+                                        p.file_name().map(|n| n == cf.as_os_str()).unwrap_or(false)
+                                    })
+                                    .unwrap_or(false)
+                            })
                         }) {
                             match tx.try_send(()) {
                                 Ok(()) => {}

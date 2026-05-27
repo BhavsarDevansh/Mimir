@@ -198,7 +198,7 @@ mod tests {
         let path = dir.path().join("memory.md");
 
         let manager = MemoryManager::new(&path, 2500).await.unwrap();
-        assert!(manager.content().contains("MEMORY ["));
+        assert!(manager.content().contains("Mimir memory ["));
         assert!(std::fs::metadata(&path).is_ok());
     }
 

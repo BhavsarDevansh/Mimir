@@ -68,13 +68,9 @@ impl MemoryLoader {
 
     /// Return the default memory.md template.
     pub fn default_memory() -> String {
-        r#"MEMORY [0/2500]
-User: -
-Location: -
-Projects: -
-Preferences: -
-Temporal: -
-KB: -"#
+        r#"Mimir memory [0/2500]
+
+No memories yet."#
             .to_string()
     }
 
@@ -108,8 +104,8 @@ mod tests {
         let content = MemoryLoader::load(&path).await.unwrap();
 
         assert!(path.exists());
-        assert!(content.contains("MEMORY ["));
-        assert!(content.contains("User: -"));
+        assert!(content.contains("Mimir memory ["));
+        assert!(content.contains("No memories yet."));
     }
 
     #[tokio::test]
@@ -126,9 +122,6 @@ mod tests {
     #[test]
     fn test_default_memory_has_all_sections() {
         let default = MemoryLoader::default_memory();
-        assert!(default.contains("Projects"));
-        assert!(default.contains("Preferences"));
-        assert!(default.contains("Temporal"));
-        assert!(default.contains("KB"));
+        assert!(default.contains("No memories yet."));
     }
 }

@@ -52,11 +52,13 @@ impl Tool for MemoryTool {
 
     fn description(&self) -> &str {
         "Update Mimir's persistent working memory (memory.md). \
-         memory.md is injected into every prompt, so be token-conscious: \
-         abbreviate values, drop filler words, and use comma-separated lists. \
-         Never duplicate a section. Use 'replace' to update an existing line \
-         (e.g., replace 'User: -' with 'User: Alice'). Use 'add' only for new facts \
-         that do not fit existing sections. Use 'remove' to delete stale facts."
+         memory.md is your personal scratchpad — a free-form text file where you \
+         record facts about the user and context that should persist across sessions. \
+         Write compact, self-contained notes (one thought per line or bullet). Group \
+         related facts together, but do not use rigid sections or prefixes. Prefer \
+         'replace' to update an existing note. Use 'add' for new observations. Use \
+         'remove' to delete stale notes. Be token-conscious: abbreviate, drop filler \
+         words, use shorthand. The file has a 2500 character limit."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -67,17 +69,17 @@ impl Tool for MemoryTool {
                     "type": "string",
                     "enum": ["add", "replace", "remove"],
                     "description": "The operation to perform. \
-                        'replace' is preferred: find old_text and substitute content. Use this to update existing fields and avoid duplication. \
-                        'add' appends content to memory. Only use for new facts that do not fit existing sections. \
+                        'replace' is preferred: find old_text and substitute content. Use this to update an existing note and avoid duplication. \
+                        'add' appends content to memory. Use for new observations. \
                         'remove' deletes the first occurrence of old_text."
                 },
                 "content": {
                     "type": "string",
-                    "description": "Concise text to add or replacement text. Required for 'add' and 'replace'. Keep it minimal: abbreviate, drop filler words, use commas to separate items."
+                    "description": "Concise note text. Required for 'add' and 'replace'. One thought per line or bullet. Be token-conscious: abbreviate, drop filler words."
                 },
                 "old_text": {
                     "type": "string",
-                    "description": "Exact text to find and replace or remove. Required for 'replace' and 'remove'. Must match the current line exactly, including the prefix (e.g., 'User: -')."
+                    "description": "Exact current note text to find and replace or remove. Required for 'replace' and 'remove'. Must match the full existing note exactly."
                 }
             },
             "required": ["action"],
@@ -172,7 +174,7 @@ mod tests {
     async fn test_memory_tool_add() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("memory.md");
-        std::fs::write(&path, "User: -").unwrap();
+        std::fs::write(&path, "No memories yet.").unwrap();
 
         let tool = MemoryTool::new(path.clone(), 2500);
         let result = tool
@@ -189,21 +191,21 @@ mod tests {
     async fn test_memory_tool_replace() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("memory.md");
-        std::fs::write(&path, "User: -").unwrap();
+        std::fs::write(&path, "No memories yet.").unwrap();
 
         let tool = MemoryTool::new(path.clone(), 2500);
         let result = tool
             .execute(json!({
                 "action": "replace",
-                "old_text": "User: -",
-                "content": "User: Alice"
+                "old_text": "No memories yet.",
+                "content": "User is Alice."
             }))
             .await
             .unwrap();
 
         assert_eq!(result.result, Some(json!("Replaced in memory.")));
         let disk = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(disk, "User: Alice");
+        assert_eq!(disk, "User is Alice.");
     }
 
     #[tokio::test]

@@ -16,39 +16,30 @@ If the file doesn't exist yet, Mimir creates it automatically with a friendly te
 
 ## What's Inside?
 
-The default template is compact but readable, with six labelled sections:
+`memory.md` is entirely agent-managed — Mimir decides what to write, how to group it, and when to rewrite it. There are no rigid sections or prefixes.
+
+The default template is a single placeholder line:
 
 ```markdown
-MEMORY [0/2500]
-User: -
-Location: -
-Projects: -
-Preferences: -
-Temporal: -
-KB: -
+Mimir memory [0/2500]
+
+No memories yet.
 ```
 
-Sections:
-- **User** — name, handle
-- **Location** — city, timezone, machine, shell, editor
-- **Projects** — active work (comma-separated, abbreviated)
-- **Preferences** — communication style, proactivity, sensitivities
-- **Temporal** — upcoming events, recent changes
-- **KB** — knowledge-base pointers (where deeper info lives)
+As Mimir learns, it replaces the placeholder and adds compact, self-contained notes — one thought per line or bullet. Mimir groups related facts together, but the structure is organic, not prescribed.
 
-Mimir keeps entries concise: abbreviates values, drops filler words, and uses comma-separated lists. For example:
+Example after learning about the user:
 
 ```markdown
-MEMORY [1,247/2500]
-User: Devansh Bhavsar (Dev)
-Location: Berlin,DE(since Mar2026)|TZ:Europe/Berlin|M:macOS14,M3,zsh+oh-my-zsh|Ed:VSCode+Vim
-Projects: mimir[~/code/mimir;cargo test,run],librechat[~/code/librechat;trunk serve]
-Preferences: transparent,important_only|sensitive:no-medical-public|calendar:auto-flights(granted 2025-05-10)
-Temporal: flight JL043 Tokyo May25 11:00|Priya bday Jun15|moved Berlin Mar2026
-KB: travel:12dev,work:2pos,relationships:Alice,preferences:23entries
+Mimir memory [247/2500]
+
+Devansh, born [DD MMM YYYY].
+Lives in [CITY].
+Software Developer (C# Fullstack).
+Married to [WIFE]; her birthday [DD MM YYYY].
 ```
 
-When updating, Mimir uses `replace` on the exact existing line (e.g., `User: -` → `User: Alice`) rather than duplicating sections.
+When something changes, Mimir uses `replace` on the exact existing note rather than appending a duplicate.
 
 ## Size Limit
 

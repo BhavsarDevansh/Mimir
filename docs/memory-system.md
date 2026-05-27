@@ -61,27 +61,17 @@ An immutable clone of `memory.md` content taken at a specific point in time. Inj
 
 ## Default Template
 
-The default `memory.md` uses a compact but readable line-oriented format:
+The default `memory.md` is a free-form agent scratchpad with no rigid sections:
 
 ```text
-MEMORY [0/2500]
-User: -
-Location: -
-Projects: -
-Preferences: -
-Temporal: -
-KB: -
+Mimir memory [0/2500]
+
+No memories yet.
 ```
 
-Sections:
-1. **User** — identity
-2. **Location** — city, timezone, machine, shell, editor
-3. **Projects** — active work context
-4. **Preferences** — communication style, proactivity, sensitivities
-5. **Temporal** — upcoming events, recent changes
-6. **KB** — knowledge-base pointers
+The agent writes compact, self-contained notes (one thought per line or bullet). It groups related facts organically — for example, placing the user's profession next to their location if it feels natural, or keeping birthday facts with relationship notes. There is no enforced structure.
 
-Agents are instructed to keep values concise (abbreviate, drop filler words, comma-separate) and to use `replace` on the exact existing line to avoid duplicating sections.
+Agents are instructed to be token-conscious (abbreviate, drop filler words, use shorthand) and to use `replace` on the exact existing note to avoid duplication.
 
 ## Capacity Management
 
@@ -123,7 +113,7 @@ The `memory` built-in tool gives the LLM a mechanism to update `memory.md` auton
 
 ### Tool Description (LLM-facing)
 
-> Update Mimir's persistent working memory (memory.md). memory.md is injected into every prompt, so be token-conscious: abbreviate values, drop filler words, and use comma-separated lists. Never duplicate a section. Use 'replace' to update an existing line (e.g., replace 'User: -' with 'User: Alice'). Use 'add' only for new facts that do not fit existing sections. Use 'remove' to delete stale facts.
+> Update Mimir's persistent working memory (memory.md). memory.md is your personal scratchpad — a free-form text file where you record facts about the user and context that should persist across sessions. Write compact, self-contained notes (one thought per line or bullet). Group related facts together, but do not use rigid sections or prefixes. Prefer 'replace' to update an existing note. Use 'add' for new observations. Use 'remove' to delete stale notes. Be token-conscious: abbreviate, drop filler words, use shorthand. The file has a 2500 character limit.
 
 ### Registration
 

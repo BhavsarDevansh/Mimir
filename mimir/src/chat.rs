@@ -52,13 +52,7 @@ pub async fn handle_chat(base_url: &str) {
                     break;
                 }
                 if trimmed == "/help" {
-                    println!("Commands:");
-                    println!("  /exit   - Exit the REPL");
-                    println!("  /clear  - Reset the conversation session");
-                    println!("  /memory - Show memory.md contents");
-                    println!("  /status - Quick health check");
-                    println!();
-                    println!("Multi-line input: end a line with \\ to continue.");
+                    print_help();
                     editor.add_history_entry(&line).ok();
                     continue;
                 }
@@ -123,6 +117,14 @@ pub async fn handle_chat(base_url: &str) {
                     editor.add_history_entry(&line).ok();
                     continue;
                 }
+                if trimmed == "/history" {
+                    match handle_history(&client, &mut session_id).await {
+                        Ok(()) => {}
+                        Err(e) => eprintln!("History error: {}", e),
+                    }
+                    editor.add_history_entry(&line).ok();
+                    continue;
+                }
 
                 let mut input = trimmed.to_string();
                 while input.ends_with('\\') {
@@ -163,7 +165,7 @@ pub async fn handle_chat(base_url: &str) {
 
         match client.chat(req).await {
             Ok(resp) => {
-                println!("{}", resp.response);
+                println!("{}", format_markdown_for_terminal(&resp.response));
                 session_id = Some(resp.session_id);
             }
             Err(e) => {
@@ -174,5 +176,179 @@ pub async fn handle_chat(base_url: &str) {
 
     if let Err(e) = editor.save_history(&history_path) {
         eprintln!("Warning: failed to save history: {}", e);
+    }
+}
+
+fn print_help() {
+    println!("Commands:");
+    println!("  /exit    - Exit the REPL");
+    println!("  /clear   - Reset the conversation session");
+    println!("  /memory  - Show memory.md contents");
+    println!("  /status  - Quick health check");
+    println!("  /history - Resume a previous conversation");
+    println!();
+    println!("Multi-line input: end a line with \\ to continue.");
+}
+
+async fn handle_history(
+    client: &MimirClient,
+    session_id: &mut Option<String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let sessions = client.sessions().await?;
+    if sessions.is_empty() {
+        println!("No conversation history yet.");
+        return Ok(());
+    }
+
+    let options: Vec<String> = sessions
+        .iter()
+        .map(|s| {
+            let dt = s
+                .updated_at
+                .split('T')
+                .next()
+                .unwrap_or(&s.updated_at)
+                .to_string();
+            let preview = s
+                .preview
+                .as_ref()
+                .map(|p| {
+                    if p.len() > 60 {
+                        format!("{}...", &p[..60])
+                    } else {
+                        p.clone()
+                    }
+                })
+                .unwrap_or_else(|| "(no preview)".to_string());
+            format!("{} — \"{}\"", dt, preview)
+        })
+        .collect();
+
+    let selection = inquire::Select::new("Resume conversation:", options)
+        .with_starting_cursor(0)
+        .raw_prompt()
+        .ok();
+
+    let idx = match selection {
+        Some(s) => s.index,
+        None => return Ok(()),
+    };
+
+    let selected = &sessions[idx];
+    let sid = selected.session_id.clone();
+    let resp = client.session_messages(&sid).await?;
+
+    *session_id = Some(sid);
+
+    for msg in resp.messages {
+        if msg.role == "system" {
+            continue;
+        }
+        if msg.role == "user" {
+            println!("\nYou: {}", msg.content);
+        } else if msg.role == "assistant" {
+            println!("\nMimir: {}", format_markdown_for_terminal(&msg.content));
+        }
+    }
+    println!();
+
+    Ok(())
+}
+
+/// Ensure markdown code fences have blank lines around them for terminal
+/// readability.
+pub fn format_markdown_for_terminal(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return text.to_string();
+    }
+
+    let mut result = Vec::new();
+    let mut in_code_block = false;
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let prev = i
+            .checked_sub(1)
+            .and_then(|p| lines.get(p))
+            .map(|l| l.trim());
+        let next = lines.get(i + 1).map(|l| l.trim());
+
+        if trimmed.starts_with("```") {
+            if !in_code_block {
+                // Opening fence
+                if let Some(p) = prev
+                    && !p.is_empty()
+                    && !p.starts_with("```")
+                    && result.last().map(|l: &String| l.trim()) != Some("")
+                {
+                    result.push(String::new());
+                }
+                result.push(line.to_string());
+                in_code_block = true;
+            } else {
+                // Closing fence
+                result.push(line.to_string());
+                if let Some(n) = next
+                    && !n.is_empty()
+                    && !n.starts_with("```")
+                {
+                    result.push(String::new());
+                }
+                in_code_block = false;
+            }
+        } else {
+            result.push(line.to_string());
+        }
+    }
+    result.join(
+        "
+",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_markdown_fence_at_start_gets_space_after() {
+        let input = "```rust\nlet x = 1;\n```\nHello";
+        let out = format_markdown_for_terminal(input);
+        assert!(out.contains("```\n\nHello"), "output was: {}", out);
+    }
+
+    #[test]
+    fn test_format_markdown_fence_in_middle() {
+        let input = "Some text\n```\ncode\n```\nMore text";
+        let out = format_markdown_for_terminal(input);
+        assert!(out.contains("Some text\n\n```"), "output was: {}", out);
+        assert!(out.contains("```\n\nMore text"), "output was: {}", out);
+    }
+
+    #[test]
+    fn test_format_markdown_consecutive_fences_no_extra_space() {
+        let input = "```\na\n```\n```\nb\n```";
+        let out = format_markdown_for_terminal(input);
+        // No blank line between closing and opening fence
+        assert!(out.contains("```\n```"), "output was: {}", out);
+    }
+
+    #[test]
+    fn test_format_markdown_fence_at_end_no_trailing_space() {
+        let input = "text\n```\ncode\n```";
+        let out = format_markdown_for_terminal(input);
+        assert!(out.contains("text\n\n```"), "output was: {}", out);
+        assert!(!out.ends_with("\n\n"), "output was: {}", out);
+    }
+
+    #[test]
+    fn test_format_markdown_empty_input() {
+        assert_eq!(format_markdown_for_terminal(""), "");
+    }
+
+    #[test]
+    fn test_format_markdown_no_fences_unchanged() {
+        let input = "Hello world\nHow are you?";
+        assert_eq!(format_markdown_for_terminal(input), input);
     }
 }

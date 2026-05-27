@@ -10,6 +10,8 @@ The Mimir chat server is an Axum HTTP daemon that runs in-process as part of the
 |--------|------|-------------|
 | `GET` | `/status` | Health check and runtime introspection |
 | `GET` | `/memory` | Current contents of `memory.md` |
+| `GET` | `/sessions` | List conversation sessions |
+| `GET` | `/sessions/{id}/messages` | Messages for a session from last compaction |
 | `POST` | `/chat` | Blocking chat completion |
 | `POST` | `/chat/stream` | SSE streaming chat completion |
 
@@ -72,6 +74,41 @@ Keep-alive pings are sent every 10 seconds.
 #### `GET /memory`
 
 **Response:** plain text containing the current `memory.md` contents.
+
+#### `GET /sessions`
+
+**Response body:**
+```json
+[
+  {
+    "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-02T00:00:00Z",
+    "preview": "Hello, Mimir!"
+  }
+]
+```
+
+Sessions are ordered by `updated_at` descending. `preview` is the most recent user message.
+
+#### `GET /sessions/{id}/messages`
+
+**Response body:**
+```json
+{
+  "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "messages": [
+    { "role": "system", "content": "...", "created_at": "2024-01-01T00:00:00Z" },
+    { "role": "user", "content": "Hello", "created_at": "2024-01-01T00:00:01Z" },
+    { "role": "assistant", "content": "Hi!", "created_at": "2024-01-01T00:00:02Z" }
+  ]
+}
+```
+
+If `compacted_at` is set on the session, only messages with `created_at >= compacted_at` are returned. Otherwise all messages are returned.
+
+**Errors:**
+- `404` — Session not found.
 
 ## Session Lifecycle
 

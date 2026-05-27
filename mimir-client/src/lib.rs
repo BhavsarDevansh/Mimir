@@ -1,6 +1,9 @@
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use mimir_api_types::{ChatRequest, ChatResponse, StatusResponse, StreamItem, Usage};
+use mimir_api_types::{
+    ChatRequest, ChatResponse, SessionMessagesResponse, SessionSummary, StatusResponse, StreamItem,
+    Usage,
+};
 use reqwest::StatusCode;
 use thiserror::Error;
 
@@ -122,6 +125,43 @@ impl MimirClient {
         if status.is_success() || status == StatusCode::SERVICE_UNAVAILABLE {
             // 503 may be returned if the server is already shutting down.
             Ok(())
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
+    /// List all conversation sessions.
+    pub async fn sessions(&self) -> Result<Vec<SessionSummary>, ClientError> {
+        let url = format!("{}/sessions", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.json::<Vec<SessionSummary>>().await?;
+            Ok(body)
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
+    /// Fetch messages for a single session from the last compaction point.
+    pub async fn session_messages(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionMessagesResponse, ClientError> {
+        let url = format!("{}/sessions/{}/messages", self.base_url, session_id);
+        let resp = self.client.get(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.json::<SessionMessagesResponse>().await?;
+            Ok(body)
         } else {
             let text = resp.text().await.unwrap_or_default();
             Err(ClientError::Server {
@@ -419,6 +459,68 @@ mod tests {
         let err = client.chat(req).await.unwrap_err();
         assert!(
             matches!(err, ClientError::Server { status: 503, message } if message == "queue full")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sessions_parsing() {
+        let server = MockServer::start().await;
+        let payload = vec![SessionSummary {
+            session_id: "sess-1".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-02T00:00:00Z".to_string(),
+            preview: Some("hello".to_string()),
+        }];
+        Mock::given(method("GET"))
+            .and(path("/sessions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let result = client.sessions().await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].session_id, "sess-1");
+        assert_eq!(result[0].preview, Some("hello".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_session_messages_parsing() {
+        let server = MockServer::start().await;
+        let payload = SessionMessagesResponse {
+            session_id: "sess-1".to_string(),
+            messages: vec![mimir_api_types::ChatMessage {
+                role: "user".to_string(),
+                content: "hi".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            }],
+        };
+        Mock::given(method("GET"))
+            .and(path("/sessions/sess-1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let result = client.session_messages("sess-1").await.unwrap();
+        assert_eq!(result.session_id, "sess-1");
+        assert_eq!(result.messages.len(), 1);
+        assert_eq!(result.messages[0].role, "user");
+    }
+
+    #[tokio::test]
+    async fn test_session_messages_404() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/sessions/bad-id/messages"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let err = client.session_messages("bad-id").await.unwrap_err();
+        assert!(
+            matches!(err, ClientError::Server { status: 404, message } if message == "not found")
         );
     }
 }

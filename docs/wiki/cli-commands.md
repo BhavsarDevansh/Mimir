@@ -100,6 +100,7 @@ mimir chat
 | `/clear` | Reset the conversation (start a new session) |
 | `/memory` | Show current memory.md contents |
 | `/status` | Quick health check |
+| `/history` | Resume a previous conversation |
 | `/help` | Show available commands |
 
 ### Multi-line Input
@@ -110,6 +111,10 @@ End a line with `\` to continue on the next line:
 Mimir> What are the key differences between \
 ... Rust and Go for systems programming?
 ```
+
+### Resuming Previous Conversations
+
+Type `/history` to see a list of recent sessions. Use arrow keys or type to fuzzy-filter, then press Enter to resume a session. All messages from the last compaction point are replayed in the terminal.
 
 ### Keyboard Shortcuts
 

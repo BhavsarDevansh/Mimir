@@ -47,6 +47,22 @@ curl -X POST http://127.0.0.1:8080/chat/stream \\
 
 The server returns `text/event-stream`. Each line of output is a token chunk. The final event is named `usage` and contains token statistics.
 
+## Listing Sessions
+
+```bash
+curl http://127.0.0.1:8080/sessions
+```
+
+Returns a JSON array of session summaries ordered by most-recently updated.
+
+## Resuming a Session
+
+```bash
+curl http://127.0.0.1:8080/sessions/<session-id>/messages
+```
+
+Returns the full message history from the last compaction point (or all messages if never compacted).
+
 ## Error Handling
 
 - **400** — Invalid JSON body.

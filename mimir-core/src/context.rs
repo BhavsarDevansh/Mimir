@@ -54,6 +54,8 @@ pub struct Session {
     pub cumulative_prompt_tokens: u64,
     /// Cumulative completion tokens recorded across all turns.
     pub cumulative_completion_tokens: u64,
+    /// If set, messages before this timestamp were compacted/summarised.
+    pub compacted_at: Option<DateTime<Utc>>,
 }
 
 /// Full conversation export for audit or logging.
@@ -61,6 +63,18 @@ pub struct Session {
 pub struct ConversationExport {
     pub session: Session,
     pub messages: Vec<ContextMessage>,
+}
+/// A lightweight summary of a conversation session for listing.
+#[derive(Debug, Clone)]
+pub struct SessionSummary {
+    /// Unique session identifier (UUIDv4).
+    pub id: String,
+    /// When the session was created.
+    pub created_at: DateTime<Utc>,
+    /// When the session was last updated.
+    pub updated_at: DateTime<Utc>,
+    /// Preview of the most recent user message.
+    pub preview: Option<String>,
 }
 
 /// Manages multi-turn conversation state backed by SQLite.
@@ -124,8 +138,8 @@ impl ContextManager {
 
         sqlx::query(
             r#"
-            INSERT INTO sessions (id, system_prompt, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?3)
+            INSERT INTO sessions (id, system_prompt, created_at, updated_at, compacted_at)
+            VALUES (?1, ?2, ?3, ?3, NULL)
             "#,
         )
         .bind(&id)
@@ -461,7 +475,8 @@ impl ContextManager {
                 updated_at TEXT NOT NULL,
                 cumulative_prompt_tokens INTEGER NOT NULL DEFAULT 0,
                 cumulative_completion_tokens INTEGER NOT NULL DEFAULT 0,
-                summary TEXT
+                summary TEXT,
+                compacted_at TEXT
             )
             "#,
         )
@@ -491,6 +506,19 @@ impl ContextManager {
         )
         .execute(pool)
         .await?;
+
+        // Migration: add compacted_at to existing databases where it is missing.
+        let has_compacted_at: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'compacted_at'",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if has_compacted_at == 0 {
+            sqlx::query("ALTER TABLE sessions ADD COLUMN compacted_at TEXT")
+                .execute(pool)
+                .await?;
+        }
 
         Ok(())
     }
@@ -544,11 +572,79 @@ impl ContextManager {
         Ok(())
     }
 
+    /// List all sessions ordered by most recently updated first.
+    pub async fn list_sessions(&self) -> Result<Vec<SessionSummary>, ContextError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                s.id,
+                s.created_at,
+                s.updated_at,
+                (
+                    SELECT content FROM messages
+                    WHERE session_id = s.id AND role = 'user'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                ) as preview
+            FROM sessions s
+            ORDER BY s.updated_at DESC
+            "#,
+        )
+        .fetch_all(self.pool.as_ref())
+        .await?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(SessionSummary {
+                id: row.try_get("id")?,
+                created_at: row.try_get("created_at")?,
+                updated_at: row.try_get("updated_at")?,
+                preview: row.try_get("preview").ok(),
+            });
+        }
+        Ok(result)
+    }
+
+    /// Return all messages for a session from the last compaction point (or all
+    /// messages if the session has never been compacted).
+    pub async fn get_messages_after_compaction(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<ContextMessage>, ContextError> {
+        self.ensure_session_exists(session_id).await?;
+
+        let compacted_at: Option<DateTime<Utc>> =
+            sqlx::query_scalar("SELECT compacted_at FROM sessions WHERE id = ?1")
+                .bind(session_id)
+                .fetch_one(self.pool.as_ref())
+                .await?;
+
+        let messages = if let Some(ts) = compacted_at {
+            sqlx::query_as::<_, ContextMessage>(
+                r#"
+                SELECT id, session_id, role, content, created_at, token_count
+                FROM messages
+                WHERE session_id = ?1 AND created_at >= ?2
+                ORDER BY created_at ASC
+                "#,
+            )
+            .bind(session_id)
+            .bind(ts)
+            .fetch_all(self.pool.as_ref())
+            .await?
+        } else {
+            self.fetch_messages(session_id).await?
+        };
+
+        Ok(messages)
+    }
+
     async fn load_session(&self, session_id: &str) -> Result<Session, ContextError> {
         let row = sqlx::query(
             r#"
             SELECT id, system_prompt, created_at, updated_at,
-                   cumulative_prompt_tokens, cumulative_completion_tokens
+                   cumulative_prompt_tokens, cumulative_completion_tokens,
+                   compacted_at
             FROM sessions
             WHERE id = ?1
             "#,
@@ -565,6 +661,7 @@ impl ContextManager {
             cumulative_prompt_tokens: row.try_get::<i64, _>("cumulative_prompt_tokens")? as u64,
             cumulative_completion_tokens: row.try_get::<i64, _>("cumulative_completion_tokens")?
                 as u64,
+            compacted_at: row.try_get("compacted_at").ok(),
         })
     }
 
@@ -922,6 +1019,143 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn list_sessions_orders_by_updated_at_desc() {
+        let (mgr, _dir) = setup_manager().await;
+        let sid1 = mgr.create_session("sys1").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let sid2 = mgr.create_session("sys2").await.unwrap();
+
+        mgr.add_user_message(&sid1, "first").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        mgr.add_user_message(&sid2, "second").await.unwrap();
+
+        let list = mgr.list_sessions().await.unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, sid2);
+        assert_eq!(list[1].id, sid1);
+    }
+
+    #[tokio::test]
+    async fn list_sessions_preview_is_latest_user_message() {
+        let (mgr, _dir) = setup_manager().await;
+        let sid = mgr.create_session("sys").await.unwrap();
+        mgr.add_user_message(&sid, "hello").await.unwrap();
+        mgr.add_assistant_message(&sid, "hi").await.unwrap();
+        mgr.add_user_message(&sid, "world").await.unwrap();
+
+        let list = mgr.list_sessions().await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].preview, Some("world".to_string()));
+    }
+
+    #[tokio::test]
+    async fn list_sessions_empty_db_returns_empty() {
+        let (mgr, _dir) = setup_manager().await;
+        let list = mgr.list_sessions().await.unwrap();
+        assert!(list.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_messages_after_compaction_returns_all_when_null() {
+        let (mgr, _dir) = setup_manager().await;
+        let sid = mgr.create_session("sys").await.unwrap();
+        mgr.add_user_message(&sid, "u1").await.unwrap();
+        mgr.add_assistant_message(&sid, "a1").await.unwrap();
+
+        let msgs = mgr.get_messages_after_compaction(&sid).await.unwrap();
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0].role, "system");
+        assert_eq!(msgs[1].role, "user");
+        assert_eq!(msgs[2].role, "assistant");
+    }
+
+    #[tokio::test]
+    async fn get_messages_after_compaction_returns_only_after_timestamp() {
+        let (mgr, _dir) = setup_manager().await;
+        let sid = mgr.create_session("sys").await.unwrap();
+        mgr.add_user_message(&sid, "old").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let mid = Utc::now();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        mgr.add_user_message(&sid, "new").await.unwrap();
+        mgr.add_assistant_message(&sid, "reply").await.unwrap();
+
+        sqlx::query("UPDATE sessions SET compacted_at = ?1 WHERE id = ?2")
+            .bind(mid)
+            .bind(&sid)
+            .execute(mgr.pool.as_ref())
+            .await
+            .unwrap();
+
+        let msgs = mgr.get_messages_after_compaction(&sid).await.unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[0].content, "new");
+        assert_eq!(msgs[1].role, "assistant");
+    }
+
+    #[tokio::test]
+    async fn get_messages_after_compaction_unknown_session_errors() {
+        let (mgr, _dir) = setup_manager().await;
+        let result = mgr.get_messages_after_compaction("fake-id").await;
+        assert!(matches!(result, Err(ContextError::SessionNotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn schema_migration_adds_compacted_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("migrate.db");
+
+        // Create an old-style database without compacted_at.
+        {
+            let pool = sqlx::SqlitePool::connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(&db)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+            sqlx::query(
+                r#"
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    system_prompt TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    cumulative_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    cumulative_completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    summary TEXT
+                )
+                "#,
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                r#"
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    token_count INTEGER
+                )
+                "#,
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            pool.close().await;
+        }
+
+        // ContextManager::new should migrate it.
+        let mgr = ContextManager::new(&db).await.unwrap();
+        let sid = mgr.create_session("sys").await.unwrap();
+        let conv = mgr.export_conversation(&sid).await.unwrap();
+        assert!(conv.session.compacted_at.is_none());
+    }
     #[tokio::test]
     async fn test_context_manager_close() {
         let dir = tempfile::tempdir().unwrap();

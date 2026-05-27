@@ -1,5 +1,29 @@
 use serde::{Deserialize, Serialize};
 
+/// Lightweight summary of a conversation session.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct SessionSummary {
+    pub session_id: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub preview: Option<String>,
+}
+
+/// A single message in a session history response.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
+}
+
+/// Response body for fetching session messages.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct SessionMessagesResponse {
+    pub session_id: String,
+    pub messages: Vec<ChatMessage>,
+}
+
 /// Request body for chat endpoints.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ChatRequest {

@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at TEXT NOT NULL,
     cumulative_prompt_tokens INTEGER NOT NULL DEFAULT 0,
     cumulative_completion_tokens INTEGER NOT NULL DEFAULT 0,
-    summary TEXT
+    summary TEXT,
+    compacted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -65,6 +66,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_
 - **WAL mode** is enabled on every connection for better concurrency.
 - **Cascading delete** ensures `DELETE FROM sessions` removes all messages.
 - The `summary` column is reserved for Phase 2 summarisation work.
+- `compacted_at` is an RFC 3339 timestamp marking the start of the retained message window. Messages before this point were compacted/summarised in Phase 2.
 
 ## Token Attribution
 
@@ -121,6 +123,10 @@ impl ContextManager {
     pub async fn export_conversation(&self, session_id: &str
     ) -> Result<ConversationExport, ContextError>;
     pub async fn delete_session(&self, session_id: &str) -> Result<(), ContextError>;
+    pub async fn list_sessions(&self) -> Result<Vec<SessionSummary>, ContextError>;
+    pub async fn get_messages_after_compaction(
+        &self, session_id: &str
+    ) -> Result<Vec<ContextMessage>, ContextError>;
 }
 ```
 

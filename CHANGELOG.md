@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-05-27
+
+### Added
+
+- **Conversation history and resumable sessions** (`mimir-core`, `mimir-server`, `mimir-client`, `mimir`):
+  - Added `compacted_at` column to the `sessions` table with automatic schema migration for existing databases.
+  - `ContextManager::list_sessions()` returns `SessionSummary` rows ordered by `updated_at DESC` with a preview of the latest user message.
+  - `ContextManager::get_messages_after_compaction()` returns messages from the last compaction point (or all messages if never compacted).
+  - New API types: `SessionSummary`, `ChatMessage`, `SessionMessagesResponse` in `mimir-api-types`.
+  - New server endpoints: `GET /sessions` and `GET /sessions/{id}/messages`.
+  - New client methods: `MimirClient::sessions()` and `MimirClient::session_messages()`.
+  - Chat REPL `/history` command with fuzzy filtering and arrow-key selection via `inquire::Select`.
+  - `format_markdown_for_terminal` helper ensures blank lines around Markdown code fences for terminal readability.
+
+### Dependencies
+
+- Added `inquire = "0.9.4"` to the `mimir` binary crate for interactive selection UI.
+
 ## [0.17.1] - 2026-05-27
 
 ### Fixed

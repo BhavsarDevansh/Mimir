@@ -408,7 +408,7 @@ async fn test_memory_tool_add_and_replace() {
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("memory.md");
-    std::fs::write(&path, "User: (not yet configured)").unwrap();
+    std::fs::write(&path, "User: -").unwrap();
 
     let registry = ToolRegistry::new();
     let tool = Arc::new(MemoryTool::new(path.clone(), 2500));
@@ -435,7 +435,7 @@ async fn test_memory_tool_add_and_replace() {
             "memory",
             json!({
                 "action": "replace",
-                "old_text": "User: (not yet configured)",
+                "old_text": "User: -",
                 "content": "User: Alice"
             }),
         )

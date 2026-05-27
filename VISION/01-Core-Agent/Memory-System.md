@@ -77,37 +77,31 @@ KB: Preferences → table "preferences" (23 entries, auto-learned)
 
 ## Format
 
+The default template is compact but readable:
+
 ```markdown
-═══════════════════════════════════════════════════════════
-MEMORY [1,247 / 2,500 chars] — Mimir Working Memory
-═══════════════════════════════════════════════════════════
-
-User: Devansh Bhavsar (Dev)
-Location: Berlin, Germany (since March 2026)
-Timezone: Europe/Berlin
-Machine: macOS 14, M3 MacBook Pro
-
-Active Projects:
-• ~/code/mimir — Rust personal agent (cargo test, cargo run)
-• ~/code/librechat — Rust chat frontend (trunk serve)
-
-Preferences:
-• Communication: transparent, normal verbosity
-• Proactivity: important_only
-• Sensitive: no medical in public contexts
-• Calendar: auto-add flights (granted 2025-05-10)
-
-Temporal:
-• Upcoming: Flight JL043 to Tokyo, May 25 11:00 AM
-• Upcoming: Priya's birthday, June 15
-
-KB Pointers:
-• Travel: 12 destinations (entity "devansh" → "visited")
-• Work: 2 positions (entity "devansh" → "works_as")
-• Relationships: Alice (entity "devansh" → "has_partner")
-• Preferences: 23 entries (table "preferences")
-═══════════════════════════════════════════════════════════
+MEMORY [0/2500]
+User: -
+Location: -
+Projects: -
+Preferences: -
+Temporal: -
+KB: -
 ```
+
+Agents keep values concise (abbreviate, drop filler words, comma-separate). Example populated memory:
+
+```markdown
+MEMORY [1,247/2500]
+User: Devansh Bhavsar (Dev)
+Location: Berlin,DE(since Mar2026)|TZ:Europe/Berlin|M:macOS14,M3,zsh+oh-my-zsh|Ed:VSCode+Vim
+Projects: mimir[~/code/mimir;cargo test,run],librechat[~/code/librechat;trunk serve]
+Preferences: transparent,important_only|sensitive:no-medical-public|calendar:auto-flights(granted 2025-05-10)
+Temporal: flight JL043 Tokyo May25 11:00|Priya bday Jun15|moved Berlin Mar2026
+KB: travel:12dev,work:2pos,relationships:Alice,preferences:23entries
+```
+
+Agents use `replace` on the exact existing line to update a field, preventing section duplication.
 
 ## Size and Budget
 
@@ -201,39 +195,13 @@ Changes made during a session are written to disk immediately but do not appear 
 ## Example: Full memory.md
 
 ```markdown
-═══════════════════════════════════════════════════════════
-MEMORY [1,890 / 2,500 chars] — Mimir Working Memory
-═══════════════════════════════════════════════════════════
-
+MEMORY [1,890/2500]
 User: Devansh Bhavsar (Dev)
-Location: Berlin, Germany (since March 2026)
-Timezone: Europe/Berlin
-Machine: macOS 14, M3 MacBook Pro, zsh + oh-my-zsh
-Editor: VS Code with Vim keybindings
-
-Active Projects:
-• ~/code/mimir — Rust personal agent (cargo test, cargo run)
-• ~/code/librechat — Rust chat frontend (trunk serve)
-
-Preferences:
-• Communication: transparent, normal verbosity
-• Proactivity: important_only
-• Sensitive: no medical in public contexts
-• Calendar: auto-add flights (granted 2025-05-10)
-• DND: quiet hours 22:00–08:00
-
-Temporal:
-• Upcoming: Flight JL043 to Tokyo, May 25 11:00 AM
-• Upcoming: Priya's birthday, June 15
-• Recent: Moved to Berlin (March 2026)
-
-KB Pointers:
-• Travel: 12 destinations (entity "devansh" → "visited")
-• Work: 2 positions (entity "devansh" → "works_as")
-• Relationships: Alice (entity "devansh" → "has_partner")
-• Preferences: 23 entries (table "preferences")
-• Health: 2 allergies (table "facts", sensitive flag)
-═══════════════════════════════════════════════════════════
+Location: Berlin,DE(since Mar2026)|TZ:Europe/Berlin|M:macOS14,M3,zsh+oh-my-zsh|Ed:VSCode+Vim
+Projects: mimir[~/code/mimir;cargo test,run],librechat[~/code/librechat;trunk serve]
+Preferences: transparent,important_only|sensitive:no-medical-public|calendar:auto-flights(granted 2025-05-10)|DND:22-08
+Temporal: flight JL043 Tokyo May25 11:00|Priya bday Jun15|moved Berlin Mar2026
+KB: travel:12dev,work:2pos,relationships:Alice,preferences:23entries,health:2allergies
 ```
 
 ## Configuration

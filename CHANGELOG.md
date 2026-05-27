@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.19.2] - 2026-05-27
+
+### Fixed
+
+- **Server killed after exactly 30 seconds** (mimir-server):
+  - start_server_with_llm_and_listener wrapped the entire Axum server future in tokio::time::timeout(30s), which forcefully aborted the daemon after 30 seconds regardless of load or health.
+  - Removed the mistaken timeout. The server now runs indefinitely until a graceful shutdown is triggered via /stop, Ctrl-C, or SIGTERM. axum::serve().with_graceful_shutdown() already handles graceful termination correctly.
+
+- **Duplicated assistant response in streaming chat** (mimir-server):
+  - The SSE streaming endpoint (/chat/stream) sent the full assistant text a second time inside the StreamItem::Usage handler, even when no tool calls had been resolved.
+  - The client would then print the complete response twice (once as live chunks, once as the duplicated final block).
+  - Fixed by gating the final-text re-send on !tool_calls_acc.is_empty() so it only fires when tool calls were actually resolved and the final text differs from what was already streamed.
+
 ## [0.19.1] - 2026-05-27
 
 ### Fixed

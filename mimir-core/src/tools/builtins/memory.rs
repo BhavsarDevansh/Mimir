@@ -52,9 +52,11 @@ impl Tool for MemoryTool {
 
     fn description(&self) -> &str {
         "Update Mimir's persistent working memory (memory.md). \
-         Use this tool whenever you learn something about the user that should be remembered \
-         across sessions, such as their name, location, preferences, projects, upcoming events, \
-         or important facts. Supports add, replace, and remove actions."
+         memory.md is injected into every prompt, so be token-conscious: \
+         abbreviate values, drop filler words, and use comma-separated lists. \
+         Never duplicate a section. Use 'replace' to update an existing line \
+         (e.g., replace 'User: -' with 'User: Alice'). Use 'add' only for new facts \
+         that do not fit existing sections. Use 'remove' to delete stale facts."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -65,17 +67,17 @@ impl Tool for MemoryTool {
                     "type": "string",
                     "enum": ["add", "replace", "remove"],
                     "description": "The operation to perform. \
-                        'add' appends content to memory. \
-                        'replace' finds old_text and substitutes content. \
+                        'replace' is preferred: find old_text and substitute content. Use this to update existing fields and avoid duplication. \
+                        'add' appends content to memory. Only use for new facts that do not fit existing sections. \
                         'remove' deletes the first occurrence of old_text."
                 },
                 "content": {
                     "type": "string",
-                    "description": "Text to add or replacement text. Required for 'add' and 'replace'."
+                    "description": "Concise text to add or replacement text. Required for 'add' and 'replace'. Keep it minimal: abbreviate, drop filler words, use commas to separate items."
                 },
                 "old_text": {
                     "type": "string",
-                    "description": "Exact text to find and replace or remove. Required for 'replace' and 'remove'."
+                    "description": "Exact text to find and replace or remove. Required for 'replace' and 'remove'. Must match the current line exactly, including the prefix (e.g., 'User: -')."
                 }
             },
             "required": ["action"],
@@ -170,7 +172,7 @@ mod tests {
     async fn test_memory_tool_add() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("memory.md");
-        std::fs::write(&path, "User: (not yet configured)").unwrap();
+        std::fs::write(&path, "User: -").unwrap();
 
         let tool = MemoryTool::new(path.clone(), 2500);
         let result = tool
@@ -187,13 +189,13 @@ mod tests {
     async fn test_memory_tool_replace() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("memory.md");
-        std::fs::write(&path, "User: (not yet configured)").unwrap();
+        std::fs::write(&path, "User: -").unwrap();
 
         let tool = MemoryTool::new(path.clone(), 2500);
         let result = tool
             .execute(json!({
                 "action": "replace",
-                "old_text": "User: (not yet configured)",
+                "old_text": "User: -",
                 "content": "User: Alice"
             }))
             .await

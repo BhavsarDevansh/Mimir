@@ -297,7 +297,7 @@ pub async fn chat_stream_handler(
 
                     // If we resolved tool calls and produced final text that
                     // was not already streamed, send it now before the usage event.
-                    if !final_text.is_empty() {
+                    if !tool_calls_acc.is_empty() && !final_text.is_empty() {
                         let event = Event::default().data(final_text.clone());
                         if event_tx.send(event).await.is_err() {
                             all_sends_ok = false;

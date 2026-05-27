@@ -16,56 +16,39 @@ If the file doesn't exist yet, Mimir creates it automatically with a friendly te
 
 ## What's Inside?
 
-The default template has five sections:
-
-### 1. Identity
-
-Who you are and where you work.
+The default template is compact but readable, with six labelled sections:
 
 ```markdown
+MEMORY [0/2500]
+User: -
+Location: -
+Projects: -
+Preferences: -
+Temporal: -
+KB: -
+```
+
+Sections:
+- **User** — name, handle
+- **Location** — city, timezone, machine, shell, editor
+- **Projects** — active work (comma-separated, abbreviated)
+- **Preferences** — communication style, proactivity, sensitivities
+- **Temporal** — upcoming events, recent changes
+- **KB** — knowledge-base pointers (where deeper info lives)
+
+Mimir keeps entries concise: abbreviates values, drops filler words, and uses comma-separated lists. For example:
+
+```markdown
+MEMORY [1,247/2500]
 User: Devansh Bhavsar (Dev)
-Location: Berlin, Germany
-Machine: macOS 14, M3 MacBook Pro
+Location: Berlin,DE(since Mar2026)|TZ:Europe/Berlin|M:macOS14,M3,zsh+oh-my-zsh|Ed:VSCode+Vim
+Projects: mimir[~/code/mimir;cargo test,run],librechat[~/code/librechat;trunk serve]
+Preferences: transparent,important_only|sensitive:no-medical-public|calendar:auto-flights(granted 2025-05-10)
+Temporal: flight JL043 Tokyo May25 11:00|Priya bday Jun15|moved Berlin Mar2026
+KB: travel:12dev,work:2pos,relationships:Alice,preferences:23entries
 ```
 
-### 2. Active Projects
-
-What you're working on right now, with quick commands Mimir can remind you of.
-
-```markdown
-Active Projects:
-• ~/code/mimir — Rust personal agent (cargo test, cargo run)
-```
-
-### 3. Preferences
-
-How you like to communicate and what Mimir should avoid.
-
-```markdown
-Preferences:
-• Communication: transparent, normal verbosity
-• Proactivity: important_only
-```
-
-### 4. Temporal
-
-Time-sensitive things Mimir should know about.
-
-```markdown
-Temporal:
-• Upcoming: Flight JL043 to Tokyo, May 25 11:00 AM
-• Recent: Moved to Berlin (March 2026)
-```
-
-### 5. KB Pointers
-
-Where deeper information lives, so Mimir knows where to look.
-
-```markdown
-KB Pointers:
-• Travel: 12 destinations (Knowledge Graph)
-• Relationships: Alice (Knowledge Graph)
-```
+When updating, Mimir uses `replace` on the exact existing line (e.g., `User: -` → `User: Alice`) rather than duplicating sections.
 
 ## Size Limit
 

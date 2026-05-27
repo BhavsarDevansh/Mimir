@@ -61,13 +61,27 @@ An immutable clone of `memory.md` content taken at a specific point in time. Inj
 
 ## Default Template
 
-The default `memory.md` includes five categories:
+The default `memory.md` uses a compact but readable line-oriented format:
 
-1. **Identity** — user name, location, machine, editor
-2. **Active Projects** — current work context
-3. **Preferences** — communication style, proactivity, sensitivities
-4. **Temporal** — upcoming events, recent changes
-5. **KB Pointers** — where deeper knowledge lives in the Knowledge Graph
+```text
+MEMORY [0/2500]
+User: -
+Location: -
+Projects: -
+Preferences: -
+Temporal: -
+KB: -
+```
+
+Sections:
+1. **User** — identity
+2. **Location** — city, timezone, machine, shell, editor
+3. **Projects** — active work context
+4. **Preferences** — communication style, proactivity, sensitivities
+5. **Temporal** — upcoming events, recent changes
+6. **KB** — knowledge-base pointers
+
+Agents are instructed to keep values concise (abbreviate, drop filler words, comma-separate) and to use `replace` on the exact existing line to avoid duplicating sections.
 
 ## Capacity Management
 
@@ -109,7 +123,7 @@ The `memory` built-in tool gives the LLM a mechanism to update `memory.md` auton
 
 ### Tool Description (LLM-facing)
 
-> Update Mimir's persistent working memory (memory.md). Use this tool whenever you learn something about the user that should be remembered across sessions, such as their name, location, preferences, projects, upcoming events, or important facts. Supports add, replace, and remove actions.
+> Update Mimir's persistent working memory (memory.md). memory.md is injected into every prompt, so be token-conscious: abbreviate values, drop filler words, and use comma-separated lists. Never duplicate a section. Use 'replace' to update an existing line (e.g., replace 'User: -' with 'User: Alice'). Use 'add' only for new facts that do not fit existing sections. Use 'remove' to delete stale facts.
 
 ### Registration
 

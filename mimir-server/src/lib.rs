@@ -255,15 +255,8 @@ pub async fn start_server_with_llm_and_listener(
     )
     .with_graceful_shutdown(shutdown_signal(shutdown_rx));
 
-    match tokio::time::timeout(std::time::Duration::from_secs(30), server_fut).await {
-        Ok(result) => {
-            result?;
-            info!("Server shut down gracefully.");
-        }
-        Err(_) => {
-            tracing::warn!("Graceful shutdown timed out after 30s; forcing exit.");
-        }
-    }
+    server_fut.await?;
+    info!("Server shut down gracefully.");
 
     state.shutdown().await;
     Ok(())

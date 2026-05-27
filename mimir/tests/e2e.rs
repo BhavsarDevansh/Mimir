@@ -2,7 +2,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mimir_core::config::Config;
+use mimir_core::config::{Config, ReloadableConfig};
 use mimir_core::llm::MockLlmClient;
 
 #[test]
@@ -70,6 +70,10 @@ db_path = "{}"
     config.context.db_path = Some(db_path.clone());
 
     // Start the daemon in-process.
+    let config = Arc::new(ReloadableConfig::new(
+        config,
+        config_dir.join("mimir").join("config.toml"),
+    ));
     let server_handle = rt.spawn(async move {
         mimir_server::start_server_with_llm_and_listener(config, mock, listener).await
     });

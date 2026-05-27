@@ -5,10 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
 ## [0.19.0] - 2026-05-27
 
 ### Added
 
+- **Config hot-reload for non-sensitive settings** (`mimir-core`, `mimir-server`, `mimir`):
+  - `ReloadableConfig` wrapper in `mimir-core` holds the live `Config` behind an `Arc<tokio::sync::RwLock<Config>>`, with `snapshot()` and `reload()` methods.
+  - `ConfigReloadError` enum with `Io`, `Parse`, and `SensitiveFieldChanged` variants for safe reload semantics.
+  - Sensitive-field gate: if `llm.endpoint`, `llm.api_key`, `llm.model`, `server.bind_addr`, or `server.socket_path` change on reload, the reload is aborted and the old config is retained.
+  - File watcher using `notify` + `notify-debouncer-full` (1-second debounce) watches the config file's parent directory and triggers `ReloadableConfig::reload()` on changes.
+  - `SIGHUP` handler on Unix triggers `ReloadableConfig::reload()` for manual hot-reload via `kill -SIGHUP <pid>`.
+  - `AppState` now holds an `Arc<ReloadableConfig>` instead of copying individual reloadable fields; routes read via `snapshot().await`.
+  - `trim_to_budget()` is now called in the chat handler so that `max_turns` changes take effect.
 - **Workspace metadata and README finalization** (all crates):
   - Added `[workspace.package]` table to root `Cargo.toml` with shared `version`, `authors`,
     `license`, `description`, `repository`, `homepage`, `edition`, and `rust-version`.
@@ -18,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `AppState::from_config` and `AppState::from_config_with_llm` now accept `Arc<ReloadableConfig>` instead of bare `Config`.
+- `mimir_server::start_server`, `start_server_with_llm`, `start_server_with_llm_and_listener` all accept `Arc<ReloadableConfig>`.
+- `mimir::start::handle_start` wraps the loaded `Config` in `ReloadableConfig` before passing it to the server.
+- `mimir-core` `tokio` dependency now includes the `sync` feature for `RwLock`.
 - **README.md** updated to reflect Phase 1 reality only:
   - Removed aspirational Phase 2+ architecture descriptions (Knowledge Graph, Connectors,
     Reasoning Engine, Proactive Agent, Vision Tracking).
@@ -30,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Transport section updated to reflect current TCP-only reality with UDS as future work.
 - Added `docs/workspace.md` documenting crate responsibilities, metadata inheritance, build commands, and version policy.
 - Added `docs/wiki/getting-started.md` with prerequisites, installation, first-run, configuration, quick start, systemd, and troubleshooting.
+
+### Dependencies
+
+- Added `notify = "8.2.0"` and `notify-debouncer-full = "0.7.0"` to `mimir-server`.
 
 ## [0.18.0] - 2026-05-27
 

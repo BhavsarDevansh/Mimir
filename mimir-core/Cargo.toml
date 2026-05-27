@@ -16,7 +16,7 @@ toml = "0.8"
 anyhow = "1.0"
 dirs = "6.0"
 thiserror = "2.0"
-tokio = { version = "1", features = ["rt-multi-thread", "time", "fs", "process", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "fs", "process", "macros", "sync"] }
 reqwest = { version = "0.13", features = ["json", "stream"] }
 eventsource-stream = "0.2.3"
 futures = "0.3"
@@ -31,7 +31,7 @@ async-trait = "0.1"
 [dev-dependencies]
 tempfile = "3"
 serial_test = "3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "process"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "process", "sync"] }
 dashmap = "6.2"
 wiremock = "0.6.5"
 criterion = { version = "0.8.2", features = ["async_tokio"] }

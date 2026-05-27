@@ -33,7 +33,8 @@ pub async fn status_handler(State(state): State<Arc<AppState>>) -> Json<StatusRe
         0
     };
 
-    let memory_limit = state.memory_limit;
+    let cfg = state.config.snapshot().await;
+    let memory_limit = cfg.memory.char_limit as usize;
     let memory_usage_pct = if memory_limit > 0 {
         (memory_chars as f64 / memory_limit as f64) * 100.0
     } else {

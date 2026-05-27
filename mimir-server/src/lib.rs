@@ -306,6 +306,13 @@ mod tests {
         let config = Config::default();
         let reloadable = ReloadableConfig::new(config, temp.path().join("dummy_config.toml"));
 
+        let tool_registry = mimir_core::tools::ToolRegistry::with_builtins();
+        let memory_tool = Arc::new(mimir_core::tools::MemoryTool::new(
+            memory_path.clone(),
+            2500,
+        ));
+        let _ = tool_registry.register_native(memory_tool);
+
         let state = Arc::new(AppState {
             llm_client: llm,
             context_manager,
@@ -317,7 +324,7 @@ mod tests {
             model: "gpt-4o".to_string(),
             shutdown_tx,
             model_override_cache: Arc::new(DashMap::new()),
-            tool_registry: Arc::new(mimir_core::tools::ToolRegistry::with_builtins()),
+            tool_registry: Arc::new(tool_registry),
         });
 
         (state, temp)

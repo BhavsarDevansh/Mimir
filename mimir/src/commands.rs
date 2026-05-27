@@ -1,8 +1,10 @@
 use crate::cli::{SkillCommands, ToolCommands};
 use crate::skills_permissions_config::SkillsPermissionsConfig;
+use mimir_core::memory::MemoryLoader;
 use mimir_core::skills::{Skill, SkillRegistry, SkillSource};
-use mimir_core::tools::{ToolPermission, ToolRegistry, ToolSource, ToolsConfig};
+use mimir_core::tools::{MemoryTool, ToolPermission, ToolRegistry, ToolSource, ToolsConfig};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Return the user skills directory (`~/.config/mimir/skills/`).
 fn skills_dir() -> PathBuf {
@@ -21,6 +23,10 @@ pub async fn handle_tool_command(command: ToolCommands) {
         eprintln!("Error: failed to load tools config: {e}");
         std::process::exit(1);
     }
+
+    // Register memory tool so it appears in the CLI tool list.
+    let memory_tool = Arc::new(MemoryTool::new(MemoryLoader::get_memory_path(), 2500));
+    let _ = registry.register_native(memory_tool);
 
     match command {
         ToolCommands::List => {

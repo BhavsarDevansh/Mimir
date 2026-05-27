@@ -81,7 +81,7 @@ You can also ask Mimir to update it for you:
 
 > "Remember that I switched to Neovim."
 
-Mimir will use its memory tools to replace the old editor line with the new one.
+Mimir has a built-in `memory` tool that lets it add, replace, and remove entries in `memory.md` automatically. When you tell it something new, it will call the tool to persist the fact so future sessions remember it.
 
 ## Frozen Snapshots
 

@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.19.1] - 2026-05-27
+
+### Fixed
+
+- **Memory tool missing from ToolRegistry** (`mimir-core`, `mimir-server`, `mimir`):
+  - The LLM had no mechanism to persist facts to `memory.md` because the `memory` tool was never registered.
+  - Added `MemoryTool` to `mimir-core::tools::builtins` with `add`, `replace`, and `remove` actions backed by `MemoryManager`.
+  - Registered `MemoryTool` in daemon `AppState` with the configured `memory.path` and `memory.char_limit`.
+  - Registered `MemoryTool` in the CLI tool registry so `mimir tool list` includes it.
+  - Updated all built-in personality presets (`transparent`, `concise`, `warm`, `formal`) to instruct the LLM to use the `memory` tool when it learns something about the user that should persist across sessions.
+  - Added unit and integration tests covering add, replace, remove, char-limit enforcement, and schema export.
+
 ## [0.19.0] - 2026-05-27
 
 ### Added

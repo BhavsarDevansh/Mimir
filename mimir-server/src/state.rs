@@ -82,6 +82,15 @@ impl AppState {
             tracing::warn!("Failed to load tools config: {}", e);
         }
 
+        // Register the memory tool with the configured path and limit.
+        let memory_tool = Arc::new(mimir_core::tools::MemoryTool::new(
+            memory_path.clone(),
+            cfg.memory.char_limit,
+        ));
+        if let Err(e) = tool_registry.register_native(memory_tool) {
+            tracing::warn!("Failed to register memory tool: {}", e);
+        }
+
         Ok(Self {
             llm_client,
             context_manager,

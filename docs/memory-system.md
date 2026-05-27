@@ -95,6 +95,32 @@ Created automatically on first run if missing.
 
 This mirrors the Hermes Agent pattern and preserves prefix-cache performance.
 
+## MemoryTool (LLM Integration)
+
+The `memory` built-in tool gives the LLM a mechanism to update `memory.md` autonomously whenever it learns something about the user that should persist across sessions.
+
+### Actions
+
+| Action | Parameters | Behaviour |
+|--------|-----------|-----------|
+| `add` | `content` (string) | Appends content to memory.md, inserting a newline separator if needed. Fails if the limit would be exceeded. |
+| `replace` | `old_text` (string), `content` (string) | Finds the first (and only) occurrence of `old_text` and substitutes `content`. Fails if ambiguous or would overflow. |
+| `remove` | `old_text` (string) | Deletes the first (and only) occurrence of `old_text`. Fails if ambiguous. |
+
+### Tool Description (LLM-facing)
+
+> Update Mimir's persistent working memory (memory.md). Use this tool whenever you learn something about the user that should be remembered across sessions, such as their name, location, preferences, projects, upcoming events, or important facts. Supports add, replace, and remove actions.
+
+### Registration
+
+`MemoryTool` is **not** part of `ToolRegistry::with_builtins()` because it requires runtime configuration (`memory.path` and `memory.char_limit`). It is registered explicitly in:
+- `mimir-server/src/state.rs` — daemon startup, using the resolved config.
+- `mimir/src/commands.rs` — CLI tool list, using the default platform path.
+
+### Lazy Initialisation
+
+The underlying `MemoryManager` is created on the first tool execution. This allows the tool to be registered synchronously while still performing async file I/O when actually used.
+
 ## Error Model
 
 | Error | Cause |

@@ -1,5 +1,6 @@
 use mimir_core::tools::*;
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -399,4 +400,98 @@ async fn test_register_duplicate_fails() {
         .unwrap();
     let result = registry.register(Arc::new(EchoTool), ToolSource::Native, ToolPermission::Auto);
     assert!(matches!(result, Err(ToolError::AlreadyRegistered(_))));
+}
+
+#[tokio::test]
+async fn test_memory_tool_add_and_replace() {
+    use mimir_core::tools::MemoryTool;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("memory.md");
+    std::fs::write(&path, "User: (not yet configured)").unwrap();
+
+    let registry = ToolRegistry::new();
+    let tool = Arc::new(MemoryTool::new(path.clone(), 2500));
+    registry
+        .register(tool, ToolSource::Native, ToolPermission::Auto)
+        .unwrap();
+
+    // Execute add
+    let output = registry
+        .execute(
+            "memory",
+            json!({"action": "add", "content": "\nLocation: Berlin"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(output.result, Some(json!("Added to memory.")));
+
+    let disk = std::fs::read_to_string(&path).unwrap();
+    assert!(disk.contains("Location: Berlin"));
+
+    // Execute replace
+    let output = registry
+        .execute(
+            "memory",
+            json!({
+                "action": "replace",
+                "old_text": "User: (not yet configured)",
+                "content": "User: Alice"
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(output.result, Some(json!("Replaced in memory.")));
+
+    let disk = std::fs::read_to_string(&path).unwrap();
+    assert!(disk.contains("User: Alice"));
+    assert!(!disk.contains("not yet configured"));
+}
+
+#[tokio::test]
+async fn test_memory_tool_remove() {
+    use mimir_core::tools::MemoryTool;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("memory.md");
+    std::fs::write(&path, "A\nB\nC").unwrap();
+
+    let registry = ToolRegistry::new();
+    let tool = Arc::new(MemoryTool::new(path.clone(), 2500));
+    registry
+        .register(tool, ToolSource::Native, ToolPermission::Auto)
+        .unwrap();
+
+    let output = registry
+        .execute("memory", json!({"action": "remove", "old_text": "B\n"}))
+        .await
+        .unwrap();
+    assert_eq!(output.result, Some(json!("Removed from memory.")));
+
+    let disk = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(disk, "A\nC");
+}
+
+#[tokio::test]
+async fn test_memory_tool_schema_exported() {
+    use mimir_core::tools::MemoryTool;
+
+    let registry = ToolRegistry::new();
+    let tool = Arc::new(MemoryTool::new(PathBuf::from("memory.md"), 2500));
+    registry
+        .register(tool, ToolSource::Native, ToolPermission::Auto)
+        .unwrap();
+
+    let schemas = registry.export_openai_tools();
+    assert_eq!(schemas.len(), 1);
+
+    let schema = &schemas[0];
+    assert_eq!(schema["function"]["name"].as_str(), Some("memory"));
+    let params = &schema["function"]["parameters"];
+    assert_eq!(params["type"].as_str(), Some("object"));
+    assert!(params["properties"].get("action").is_some());
+    assert!(params["properties"].get("content").is_some());
+    assert!(params["properties"].get("old_text").is_some());
+    let required = params["required"].as_array().unwrap();
+    assert!(required.contains(&json!("action")));
 }

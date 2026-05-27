@@ -77,6 +77,16 @@ Centralised error enum covering permission, timeout, invalid arguments, missing 
 - Returns the message unchanged
 - Permission: `Auto`
 
+### `MemoryTool`
+- Name: `memory`
+- Parameters:
+  - `action` (enum: `add` | `replace` | `remove`, required)
+  - `content` (string, required for `add` and `replace`)
+  - `old_text` (string, required for `replace` and `remove`)
+- Updates `memory.md` via `MemoryManager`; lazily initialised on first use
+- Permission: `Auto`
+- Registered explicitly (not in `with_builtins()`) because it needs runtime config (`memory.path`, `memory.char_limit`)
+
 ## CLI Tool Wrapper
 
 ### `CliToolConfig`

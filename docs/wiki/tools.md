@@ -10,6 +10,7 @@ Mimir ships with a small set of native tools:
 |------|--------------|------------|
 | `get_current_time` | Returns the current date and time | Auto |
 | `echo` | Echoes back whatever you send it | Auto |
+| `memory` | Updates `memory.md` (add, replace, remove entries) | Auto |
 
 "Auto" means the tool runs immediately when the agent decides to use it.
 

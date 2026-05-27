@@ -1,7 +1,13 @@
 [package]
 name = "mimir-core"
-version = "0.18.0"
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Core library for Mimir: LLM client, config, memory, context, tools, skills"
+repository.workspace = true
+homepage.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

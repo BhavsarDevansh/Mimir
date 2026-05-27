@@ -1,7 +1,13 @@
 [package]
 name = "mimir-client"
-version = "0.18.0"
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "HTTP client library for talking to the Mimir daemon"
+repository.workspace = true
+homepage.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 mimir-api-types = { path = "../mimir-api-types" }

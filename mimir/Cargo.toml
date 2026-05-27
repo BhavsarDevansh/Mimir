@@ -1,7 +1,13 @@
 [package]
 name = "mimir"
-version = "0.18.0"
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Single binary entry point for the Mimir personal intelligence daemon and CLI"
+repository.workspace = true
+homepage.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 
 [[bin]]
 name = "mimir"

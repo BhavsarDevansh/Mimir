@@ -8,45 +8,10 @@ Named after the Norse god Mimir — the keeper of wisdom whose severed head pres
 
 Mimir is not a chatbot. It is a stateful, ever-learning companion that:
 
-- **Connects to your services** — email, calendar, photos, GitHub, Spotify, Home Assistant, Signal, and more
 - **Learns implicitly** — observes your patterns, extracts facts, and builds a persistent knowledge graph of your life
 - **Reasons intelligently** — investigates complex questions across multiple data sources, showing its work in real time
 - **Acts proactively** — earns your trust over time, then anticipates your needs before you ask
 - **Stays private** — local-first architecture. Your data stays on your device. No cloud intermediary.
-
-## Example Interactions
-
-```bash
-> "When was I last in Rome?"
-
-🔍 Investigating 5 sources...
-✅ Found: May 5, 2025 (photos, calendar, email, messages, tour confirmation)
-
-You were last in Rome May 3–7, 2025. I found a photo of you at the 
-Colosseum on May 5th, and your Roman History Tour confirmation email.
-```
-
-```bash
-> "Do I have time for coffee with Alice on Saturday?"
-
-Checking your calendar, Alice's shared availability, your location 
-patterns, and your mum's birthday dinner at 6 PM...
-
-Yes — you have a free block 2–5 PM. Alice is usually free Saturday 
-afternoons. I'll suggest 2 PM. Want me to send her a message?
-```
-
-```bash
-🔔 Proactive: Flight Preparation
-
-Your flight to Tokyo is in 6 hours. Based on your history:
-- This is a 12-hour long-haul flight
-- Tokyo forecast: 18°C and rain
-- You usually pack noise-canceling headphones
-- Your warmer clothes are in storage box B3
-
-Want a checklist?
-```
 
 ## Core Principles
 
@@ -61,12 +26,9 @@ Want a checklist?
 
 Mimir is built in **Rust** with a modular, local-first architecture:
 
-- **Core Agent** — CLI, chat interface, LLM orchestration, tool calling
-- **Knowledge Graph** — Persistent SQLite-based graph of entities, facts, temporal data, and confidence scores
-- **Connectors** — Pluggable adapters for external services (email, calendar, photos, Home Assistant, etc.)
-- **Reasoning Engine** — Multi-threaded investigation with real-time streaming, hypothesis generation, and meta-thread conflict resolution
-- **Proactive Agent** — Event monitoring, pattern recognition, and earned-trust proactive suggestions
-- **Vision & Object Tracking** — Object detection and spatial memory for physical items (optional)
+- **Core Agent** — CLI, chat interface, LLM orchestration, tool calling, skills, personality system, and working memory
+- **HTTP Server** — Axum-based daemon with SSE streaming, session management, and graceful shutdown
+- **Storage Layer** — SQLite for conversation history, skill metrics, and configuration
 
 ## Installation
 
@@ -78,18 +40,33 @@ Mimir is built in **Rust** with a modular, local-first architecture:
 # Start the daemon
 mimir start
 
-# Connect your first service
-mimir connector add gmail
+# Ask a one-shot question
+mimir ask "What is the capital of France?"
 
-# Ask a question
-mimir ask "When was I last in Rome?"
-
-# Chat interactively
+# Chat interactively with conversation history
 mimir chat
 
-# Browse what Mimir knows about you
-mimir kb profile
+# Check daemon status and configuration
+mimir status
+
+# View and edit working memory
+mimir memory
+
+# Stop the daemon gracefully
+mimir stop
 ```
+
+## Configuration
+
+Mimir auto-initialises its config directory on first run. The main config file lives at:
+
+```
+~/.config/mimir/config.toml
+```
+
+You can override settings with environment variables (e.g. `MIMIR_BASE_URL`, `MIMIR_MEMORY_PATH`).
+
+Run `mimir init` for a guided first-run setup including optional systemd user service installation.
 
 ## Documentation
 
@@ -106,15 +83,6 @@ The full project vision, architecture, and design documentation lives in the `VI
 - `08-Architecture/` — Security, privacy, deployment, integration points
 - `09-Roadmap/` — Phased implementation plans
 
-## Trust Ladder
-
-Mimir does not ask for broad permissions upfront. It observes, learns, and offers specific permissions when it has evidence they would be useful. You grant autonomy at your own pace:
-
-1. **Observation** — Mimir reads data but never acts
-2. **Gentle Offers** — "I noticed a flight email not in your calendar. Want me to add it?"
-3. **Pattern Permissions** — "I've asked 5 times and you always said yes. Want me to do this automatically?"
-4. **Autonomous Assistance** — Mimir acts within granted permissions, asks for anything outside
-
 ## License
 
 [GNU General Public License v3.0](LICENSE)
@@ -127,6 +95,6 @@ Contributions are welcome! See `CONTRIBUTING.md` (coming soon) for guidelines.
 
 ## Acknowledgments
 
-- Inspired by the work of [Nous Research](https://nousresearch.com) and [Hermes Agent](https://github.com/nousresearch/hermes-agent)
-- Named after **Mimir**, the Norse keeper of wisdom
+
+- Named after **Mimir**, the Norse keeper of wisdom whose severed head preserved all knowledge
 - Built with Rust, SQLite, and an OpenAI-compatible LLM of your choice

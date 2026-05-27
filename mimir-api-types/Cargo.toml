@@ -1,7 +1,13 @@
 [package]
 name = "mimir-api-types"
-version = "0.18.0"
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Shared API wire types for the Mimir workspace"
+repository.workspace = true
+homepage.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

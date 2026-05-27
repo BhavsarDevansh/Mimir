@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-05-27
+
+### Added
+
+- **Workspace metadata and README finalization** (all crates):
+  - Added `[workspace.package]` table to root `Cargo.toml` with shared `version`, `authors`,
+    `license`, `description`, `repository`, `homepage`, `edition`, and `rust-version`.
+  - All member `Cargo.toml` files now inherit metadata via `.workspace = true`.
+  - Individual crate descriptions added for `mimir`, `mimir-core`, `mimir-server`,
+    `mimir-client`, and `mimir-api-types`.
+
+### Changed
+
+- **README.md** updated to reflect Phase 1 reality only:
+  - Removed aspirational Phase 2+ architecture descriptions (Knowledge Graph, Connectors,
+    Reasoning Engine, Proactive Agent, Vision Tracking).
+  - Removed unimplemented Quick Start commands (`mimir connector add`, `mimir kb profile`).
+  - Removed Trust Ladder and proactive notification examples.
+  - Added Configuration section with config path and environment variable overrides.
+- **VISION/09-Roadmap/Phase-1-Core-Agent.md** updated to mark all completed items:
+  - All child issues (#30, #31, #32, #33, #34, #35, #36) now checked as complete.
+  - Unix domain socket transport (#25) explicitly deferred to Phase 2.
+  - Transport section updated to reflect current TCP-only reality with UDS as future work.
+- Added `docs/workspace.md` documenting crate responsibilities, metadata inheritance, build commands, and version policy.
+- Added `docs/wiki/getting-started.md` with prerequisites, installation, first-run, configuration, quick start, systemd, and troubleshooting.
+
 ## [0.18.0] - 2026-05-27
 
 ### Added

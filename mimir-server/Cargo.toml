@@ -1,7 +1,13 @@
 [package]
 name = "mimir-server"
-version = "0.18.0"
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "HTTP server library for the Mimir daemon (Axum routes, state, middleware)"
+repository.workspace = true
+homepage.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 mimir-core = { path = "../mimir-core" }

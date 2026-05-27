@@ -213,8 +213,9 @@ async fn handle_history(
                 .preview
                 .as_ref()
                 .map(|p| {
-                    if p.len() > 60 {
-                        format!("{}...", &p[..60])
+                    let char_count = p.chars().count();
+                    if char_count > 60 {
+                        format!("{}...", p.chars().take(60).collect::<String>())
                     } else {
                         p.clone()
                     }

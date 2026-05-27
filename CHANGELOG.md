@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New server endpoints: `GET /sessions` and `GET /sessions/{id}/messages`.
   - New client methods: `MimirClient::sessions()` and `MimirClient::session_messages()`.
   - Chat REPL `/history` command with fuzzy filtering and arrow-key selection via `inquire::Select`.
-  - `format_markdown_for_terminal` helper ensures blank lines around markdown code fences for terminal readability.
+  - `format_markdown_for_terminal` helper ensures blank lines around Markdown code fences for terminal readability.
 
 ### Dependencies
 

@@ -156,8 +156,14 @@ impl MimirClient {
         &self,
         session_id: &str,
     ) -> Result<SessionMessagesResponse, ClientError> {
-        let url = format!("{}/sessions/{}/messages", self.base_url, session_id);
-        let resp = self.client.get(&url).send().await?;
+        let mut url = reqwest::Url::parse(&self.base_url)
+            .map_err(|e| ClientError::Connection(format!("invalid base URL: {}", e)))?;
+        url.path_segments_mut()
+            .map_err(|_| ClientError::Connection("cannot be a base URL".to_string()))?
+            .push("sessions")
+            .push(session_id)
+            .push("messages");
+        let resp = self.client.get(url).send().await?;
         let status = resp.status();
         if status.is_success() {
             let body = resp.json::<SessionMessagesResponse>().await?;

@@ -78,6 +78,7 @@ Keep-alive pings are sent every 10 seconds.
 #### `GET /sessions`
 
 **Response body:**
+
 ```json
 [
   {
@@ -94,6 +95,7 @@ Sessions are ordered by `updated_at` descending. `preview` is the most recent us
 #### `GET /sessions/{id}/messages`
 
 **Response body:**
+
 ```json
 {
   "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",

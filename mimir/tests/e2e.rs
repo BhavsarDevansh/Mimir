@@ -72,7 +72,7 @@ db_path = "{}"
     // Start the daemon in-process.
     let config = Arc::new(ReloadableConfig::new(
         config,
-        memory_path.with_file_name("config.toml"),
+        config_dir.join("mimir").join("config.toml"),
     ));
     let server_handle = rt.spawn(async move {
         mimir_server::start_server_with_llm_and_listener(config, mock, listener).await

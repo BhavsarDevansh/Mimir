@@ -501,7 +501,10 @@ impl ReloadableConfig {
     /// 4. On success, write the new config into the lock and log.
     pub async fn reload(&self) -> Result<(), ConfigReloadError> {
         let contents = tokio::fs::read_to_string(&self.path).await?;
-        let new_config: Config = toml::from_str(&contents)?;
+        let mut new_config: Config = toml::from_str(&contents)?;
+
+        // Apply environment overrides to the new config before comparing sensitive fields.
+        new_config.apply_env_overrides();
 
         let current = self.inner.read().await.clone();
 

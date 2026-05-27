@@ -152,6 +152,7 @@ pub async fn start_server_with_llm_and_listener(
         let config_clone = Arc::clone(&config);
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
+        let config_filename = config_path.file_name().map(|n| n.to_os_string());
 
         tokio::task::spawn_blocking(move || {
             let (debounce_tx, debounce_rx) = std::sync::mpsc::channel();
@@ -172,7 +173,9 @@ pub async fn start_server_with_llm_and_listener(
                             e.event
                                 .paths
                                 .iter()
-                                .any(|p| p.file_name().map(|n| n == "config.toml").unwrap_or(false))
+                                .any(|p| {
+                                    config_filename.as_ref().map(|cf| p.file_name().map(|n| n == cf.as_os_str()).unwrap_or(false)).unwrap_or(false)
+                                })
                         }) {
                             match tx.try_send(()) {
                                 Ok(()) => {}

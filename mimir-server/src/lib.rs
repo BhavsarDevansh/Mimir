@@ -18,7 +18,7 @@ use tower::ServiceBuilder;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
 
-use mimir_core::config::Config;
+use mimir_core::config::ReloadableConfig;
 use mimir_core::llm::{LlmBackend, LlmClient};
 
 use crate::routes::{
@@ -111,8 +111,9 @@ async fn shutdown_signal(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
 ///
 /// If the server does not shut down gracefully within 30 seconds, it is
 /// forcefully aborted so that resource cleanup can still run.
-pub async fn start_server(config: Config) -> anyhow::Result<()> {
-    let llm_client: Arc<dyn LlmBackend> = Arc::new(LlmClient::new(config.llm.clone()).await);
+pub async fn start_server(config: Arc<ReloadableConfig>) -> anyhow::Result<()> {
+    let llm_client: Arc<dyn LlmBackend> =
+        Arc::new(LlmClient::new(config.snapshot().await.llm.clone()).await);
     start_server_with_llm(config, llm_client).await
 }
 
@@ -122,10 +123,10 @@ pub async fn start_server(config: Config) -> anyhow::Result<()> {
 /// embedders) to supply a custom [`LlmBackend`] implementation without
 /// relying on sentinel strings or config hacks.
 pub async fn start_server_with_llm(
-    config: Config,
+    config: Arc<ReloadableConfig>,
     llm_client: Arc<dyn LlmBackend>,
 ) -> anyhow::Result<()> {
-    let bind_addr = config.server.bind_addr.clone();
+    let bind_addr = config.snapshot().await.server.bind_addr.clone();
     let addr: SocketAddr = bind_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     start_server_with_llm_and_listener(config, llm_client, listener).await
@@ -137,12 +138,107 @@ pub async fn start_server_with_llm(
 /// a pre-bound [`TcpListener`] so the bound port is known before the server
 /// starts accepting connections.
 pub async fn start_server_with_llm_and_listener(
-    config: Config,
+    config: Arc<ReloadableConfig>,
     llm_client: Arc<dyn LlmBackend>,
     listener: tokio::net::TcpListener,
 ) -> anyhow::Result<()> {
-    let state = Arc::new(AppState::from_config_with_llm(config, llm_client).await?);
+    let state = Arc::new(AppState::from_config_with_llm(Arc::clone(&config), llm_client).await?);
     let shutdown_rx = state.shutdown_tx.subscribe();
+
+    // ---- File watcher for config hot-reload ----
+    let config_path = config.path().to_path_buf();
+    if let Some(parent) = config_path.parent().map(|p| p.to_path_buf()) {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let config_clone = Arc::clone(&config);
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop);
+
+        tokio::task::spawn_blocking(move || {
+            let (debounce_tx, debounce_rx) = std::sync::mpsc::channel();
+            let mut debouncer = notify_debouncer_full::new_debouncer(
+                std::time::Duration::from_secs(1),
+                None,
+                debounce_tx,
+            )
+            .expect("debouncer creation");
+            if let Err(e) = debouncer.watch(&parent, notify::RecursiveMode::NonRecursive) {
+                tracing::warn!("Failed to watch config directory: {}", e);
+                return;
+            }
+            loop {
+                match debounce_rx.recv_timeout(std::time::Duration::from_millis(250)) {
+                    Ok(Ok(events)) => {
+                        if events.iter().any(|e| {
+                            e.event
+                                .paths
+                                .iter()
+                                .any(|p| p.file_name().map(|n| n == "config.toml").unwrap_or(false))
+                        }) {
+                            match tx.try_send(()) {
+                                Ok(()) => {}
+                                Err(e) => {
+                                    tracing::warn!("Config reload event dropped: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    Ok(Err(errors)) => {
+                        for error in errors {
+                            tracing::warn!("File watcher error: {:?}", error);
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if stop_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                            drop(debouncer);
+                            break;
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        });
+
+        let mut shutdown_rx_clone = state.shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx_clone.changed() => {
+                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                        break;
+                    }
+                    msg = rx.recv() => {
+                        if msg.is_none() { break; }
+                        match config_clone.reload().await {
+                            Ok(()) => tracing::info!("Config reloaded from file watcher"),
+                            Err(e) => tracing::warn!("Config reload failed: {}", e),
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // ---- SIGHUP handler for config hot-reload ----
+    #[cfg(unix)]
+    {
+        let config_clone = Arc::clone(&config);
+        let mut shutdown_rx_clone = state.shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut sighup = signal(SignalKind::hangup()).expect("SIGHUP handler");
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx_clone.changed() => break,
+                    _ = sighup.recv() => {
+                        match config_clone.reload().await {
+                            Ok(()) => tracing::info!("Config reloaded from SIGHUP"),
+                            Err(e) => tracing::warn!("Config reload failed: {}", e),
+                        }
+                    }
+                }
+            }
+        });
+    }
 
     let app = build_app(Arc::clone(&state));
 
@@ -180,11 +276,10 @@ mod tests {
 
     use mimir_api_types::{ChatResponse, StatusResponse};
     use mimir_core::{
-        config::PersonalityConfig,
+        config::{Config, ReloadableConfig},
         context::ContextManager,
         llm::types::{FunctionCall, LlmError, Message, StreamItem, ToolCall, Usage},
         llm::{LlmBackend, MockLlmClient},
-        personality::Personality,
     };
 
     use crate::state::AppState;
@@ -203,16 +298,18 @@ mod tests {
         let context_manager = Arc::new(ContextManager::new(&db_path).await.unwrap());
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
 
+        let config = Config::default();
+        let reloadable = ReloadableConfig::new(config, temp.path().join("dummy_config.toml"));
+
         let state = Arc::new(AppState {
             llm_client: llm,
             context_manager,
             memory_path,
-            personality: Personality::new(&PersonalityConfig::default()),
+            config: Arc::new(reloadable),
             session_locks: Arc::new(DashMap::new()),
             start_time: Instant::now(),
             endpoint: "http://localhost:8080".to_string(),
             model: "gpt-4o".to_string(),
-            memory_limit: 10_000,
             shutdown_tx,
             model_override_cache: Arc::new(DashMap::new()),
             tool_registry: Arc::new(mimir_core::tools::ToolRegistry::with_builtins()),
@@ -720,7 +817,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_exits_after_stop() {
-        use mimir_core::config::Config;
+        use mimir_core::config::ReloadableConfig;
 
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("context.db");
@@ -744,6 +841,10 @@ mod tests {
         config.memory.char_limit = 10_000;
         config.context.db_path = Some(db_path);
 
+        let config = Arc::new(ReloadableConfig::new(
+            config,
+            temp.path().join("config.toml"),
+        ));
         let handle = tokio::spawn(async move { super::start_server(config).await });
 
         // Poll until the server accepts a TCP connection (up to 5 s).

@@ -23,8 +23,10 @@ This builds the real `mimir` binary, starts the server in-process with a mock LL
 ## Troubleshooting
 
 ### Test hangs or times out
+
 - Check for orphaned `mimir start` processes: `pkill -f 'mimir start'`
 - Ensure port `0` ephemeral binding is allowed by your OS.
 
 ### "daemon did not become ready within 10 seconds"
+
 - The server logs its bound address. If the port is in use, try running the test again.

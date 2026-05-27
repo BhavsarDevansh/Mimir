@@ -110,6 +110,12 @@ db_path = "{}"
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
+        output.status.success(),
+        "mimir ask exited with failure.\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+    assert!(
         stdout.contains("Hello from mock LLM!"),
         "expected mock response in stdout.\nstdout: {}\nstderr: {}",
         stdout,
@@ -121,6 +127,9 @@ db_path = "{}"
         .arg("stop")
         .env("NO_COLOR", "1")
         .env("MIMIR_BASE_URL", &base_url)
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .env("HOME", &home_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

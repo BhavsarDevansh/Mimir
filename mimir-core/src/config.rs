@@ -336,7 +336,7 @@ enabled = true
 char_limit = 2500
 auto_manage = true
 temporal_horizon = 30
-# path = "${USER_DATA_DIR}/mimir/memory.md"  # Optional: override memory file location
+# path = "${CONFIG_DIR}/memory.md"  # Optional: override memory file location
 
 [context]
 max_turns = 20
@@ -408,7 +408,9 @@ bind_addr = "127.0.0.1:8080"
         {
             self.memory.temporal_horizon = n;
         }
-        if let Ok(v) = std::env::var("MIMIR_MEMORY_PATH") {
+        if let Ok(v) = std::env::var("MIMIR_MEMORY_PATH")
+            && !v.trim().is_empty()
+        {
             self.memory.path = Some(PathBuf::from(v));
         }
         if let Ok(v) = std::env::var("MIMIR_CONTEXT_MAX_TOKENS")
@@ -513,6 +515,20 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn test_env_override_memory_path_blank_is_ignored() {
+        unsafe {
+            std::env::set_var("MIMIR_MEMORY_PATH", "   ");
+        }
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        assert_eq!(config.memory.path, None);
+        unsafe {
+            std::env::remove_var("MIMIR_MEMORY_PATH");
+        }
+    }
+
+    #[test]
     fn test_save_and_load() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -576,7 +592,7 @@ enabled = true
 char_limit = 2500
 auto_manage = true
 temporal_horizon = 30
-# path = "${USER_DATA_DIR}/mimir/memory.md"  # Optional: override memory file location
+# path = "${CONFIG_DIR}/memory.md"  # Optional: override memory file location
 
 [context]
 max_tokens = 4096

@@ -76,11 +76,8 @@ trait ProcessSpawner: Send + Sync {
 // Production implementations
 // ---------------------------------------------------------------------------
 
-static PROBE_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .build()
-        .expect("probe client build")
-});
+static PROBE_CLIENT: LazyLock<Result<reqwest::Client, reqwest::Error>> =
+    LazyLock::new(|| reqwest::Client::builder().build());
 
 struct HttpProbe;
 
@@ -88,13 +85,18 @@ impl Probe for HttpProbe {
     fn check<'a>(&'a self, base_url: &'a str) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
         Box::pin(async move {
             let url = format!("{}/status", base_url);
-            match PROBE_CLIENT
-                .get(&url)
-                .timeout(Duration::from_millis(500))
-                .send()
-                .await
-            {
-                Ok(resp) => resp.status().is_success(),
+            match PROBE_CLIENT.as_ref() {
+                Ok(client) => {
+                    match client
+                        .get(&url)
+                        .timeout(Duration::from_millis(500))
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => resp.status().is_success(),
+                        Err(_) => false,
+                    }
+                }
                 Err(_) => false,
             }
         })

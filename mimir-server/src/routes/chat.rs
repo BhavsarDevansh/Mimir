@@ -40,12 +40,14 @@ async fn resolve_chat_state(
 
     let incognito = req.incognito == Some(true);
 
+    let cfg = state.config.snapshot().await;
+
     let personality = if let Some(ref preset) = req.personality_preset {
         Personality::new(&mimir_core::config::PersonalityConfig {
             preset: preset.clone(),
         })
     } else {
-        state.personality.clone()
+        Personality::new(&cfg.personality)
     };
 
     let llm = state.resolve_llm(req.model.clone());
@@ -92,6 +94,12 @@ async fn resolve_chat_state(
         state
             .context_manager
             .add_user_message(&session_id, &req.message)
+            .await
+            .map_err(error::context_error)?;
+
+        state
+            .context_manager
+            .trim_to_budget(&session_id, cfg.context.max_tokens, cfg.context.max_turns)
             .await
             .map_err(error::context_error)?;
 

@@ -4,7 +4,9 @@
 //! The server runs in the foreground; systemd (or the user) manages
 //! backgrounding. No separate binary is spawned.
 
-use mimir_core::config::Config;
+use std::sync::Arc;
+
+use mimir_core::config::{Config, ReloadableConfig};
 
 /// Start the Mimir HTTP server in the foreground.
 ///
@@ -21,7 +23,14 @@ pub async fn handle_start() {
         }
     };
 
-    if let Err(e) = mimir_server::start_server(config).await {
+    let config_path = Config::config_path().unwrap_or_else(|| {
+        eprintln!("Failed to resolve config path");
+        std::process::exit(1);
+    });
+
+    let reloadable = Arc::new(ReloadableConfig::new(config, config_path));
+
+    if let Err(e) = mimir_server::start_server(reloadable).await {
         eprintln!("Server error: {}", e);
         std::process::exit(1);
     }

@@ -130,3 +130,51 @@ Make sure the file is valid TOML. A stray comma or missing quote will cause the 
 ### Changes not reflected
 
 Mimir loads configuration once at startup. Restart the process after editing the file.
+
+## Hot-Reload
+
+Mimir can hot-reload non-sensitive configuration settings without restarting. This allows you to tune personality, memory limits, context budgets, and agent behaviour on the fly.
+
+### Which Settings Reload
+
+These settings are reloaded when the config file changes or a `SIGHUP` signal is received:
+
+- Personality preset (`personality.preset`)
+- Memory character limit (`memory.char_limit`), auto-manage (`memory.auto_manage`), temporal horizon (`memory.temporal_horizon`)
+- Context max tokens (`context.max_tokens`), max turns (`context.max_turns`)
+- Agent name (`agent.name`), proactivity (`agent.proactivity`), verbose reasoning (`agent.verbose_reasoning`)
+- LLM max tokens (`llm.max_tokens`), temperature (`llm.temperature`)
+
+These settings are **not reloaded** (they require a restart):
+
+- LLM endpoint (`llm.endpoint`), API key (`llm.api_key`), model (`llm.model`)
+- Server bind address (`server.bind_addr`), socket path (`server.socket_path`)
+
+If you change a sensitive setting and trigger a reload, Mimir logs a warning and keeps the old value. No restart is forced.
+
+### How to Trigger a Reload
+
+**Method 1: Edit the config file**
+
+Edit `~/.config/mimir/config.toml` and save. Mimir watches the config directory and picks up the change within one second.
+
+```bash
+# Change the personality to "concise"
+sed -i 's/preset = ".*"/preset = "concise"/' ~/.config/mimir/config.toml
+```
+
+**Method 2: Send SIGHUP (Unix only)**
+
+```bash
+kill -SIGHUP $(pidof mimir)
+```
+
+This triggers an immediate reload of the config file.
+
+### What Happens on Error
+
+- **Parse error** (invalid TOML): The old config is kept. Mimir logs a warning with the parse error details.
+- **Sensitive field changed**: The reload is aborted. Mimir logs a warning stating which field was rejected.
+- **I/O error** (file missing, permissions): The old config is kept. Mimir logs a warning.
+
+In all cases, the server continues running with the last known good configuration.

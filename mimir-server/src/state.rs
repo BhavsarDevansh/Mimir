@@ -4,11 +4,10 @@ use std::time::Instant;
 use dashmap::DashMap;
 
 use mimir_core::{
-    config::Config,
+    config::ReloadableConfig,
     context::ContextManager,
     llm::{LlmBackend, LlmClient},
     memory::loader::MemoryLoader,
-    personality::Personality,
     tools::ToolRegistry,
 };
 
@@ -22,7 +21,8 @@ pub struct AppState {
     pub llm_client: Arc<dyn LlmBackend>,
     pub context_manager: Arc<ContextManager>,
     pub memory_path: std::path::PathBuf,
-    pub personality: Personality,
+    /// Live reloadable configuration.
+    pub config: Arc<ReloadableConfig>,
     /// Per-session semaphore to serialise concurrent requests for the same session.
     pub session_locks: Arc<DashMap<String, Arc<tokio::sync::Semaphore>>>,
     pub start_time: Instant,
@@ -30,8 +30,6 @@ pub struct AppState {
     pub endpoint: String,
     /// Configured LLM model (for status reporting).
     pub model: String,
-    /// Memory character limit (for status reporting).
-    pub memory_limit: usize,
     /// Shutdown signal sender.
     pub shutdown_tx: tokio::sync::watch::Sender<bool>,
     /// Cache for model-override LLM clients to avoid allocating a new client
@@ -44,34 +42,35 @@ pub struct AppState {
 const MODEL_OVERRIDE_CACHE_CAP: usize = 16;
 
 impl AppState {
-    /// Build `AppState` from the global Mimir [`Config`].
-    pub async fn from_config(config: Config) -> anyhow::Result<Self> {
-        let llm_client: Arc<dyn LlmBackend> = Arc::new(LlmClient::new(config.llm.clone()).await);
+    /// Build `AppState` from the global [`ReloadableConfig`].
+    pub async fn from_config(config: Arc<ReloadableConfig>) -> anyhow::Result<Self> {
+        let llm_client: Arc<dyn LlmBackend> =
+            Arc::new(LlmClient::new(config.snapshot().await.llm.clone()).await);
         Self::from_config_with_llm(config, llm_client).await
     }
 
-    /// Build `AppState` from [`Config`] with an injected LLM backend.
+    /// Build `AppState` from [`ReloadableConfig`] with an injected LLM backend.
     ///
     /// Primarily useful for tests that need to supply a [`MockLlmClient`]
     /// without relying on sentinel strings or config hacks.
     pub async fn from_config_with_llm(
-        config: Config,
+        config: Arc<ReloadableConfig>,
         llm_client: Arc<dyn LlmBackend>,
     ) -> anyhow::Result<Self> {
-        let db_path = config
+        let cfg = config.snapshot().await;
+
+        let db_path = cfg
             .context
             .db_path
             .clone()
             .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share/mimir/context.db"));
         let context_manager = Arc::new(ContextManager::new(&db_path).await?);
 
-        let memory_path = config
+        let memory_path = cfg
             .memory
             .path
             .clone()
             .unwrap_or_else(MemoryLoader::get_memory_path);
-
-        let personality = Personality::new(&config.personality);
 
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -87,12 +86,11 @@ impl AppState {
             llm_client,
             context_manager,
             memory_path,
-            personality,
+            config,
             session_locks: Arc::new(DashMap::new()),
             start_time: Instant::now(),
-            endpoint: config.llm.endpoint.clone(),
-            model: config.llm.model.clone(),
-            memory_limit: config.memory.char_limit as usize,
+            endpoint: cfg.llm.endpoint.clone(),
+            model: cfg.llm.model.clone(),
             shutdown_tx,
             model_override_cache: Arc::new(DashMap::new()),
             tool_registry,

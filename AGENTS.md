@@ -7,6 +7,11 @@
 ## Development Standards
 - Use **Don't Repeat Yourself (DRY)** development.
 - Use **Test Driven Development (TDD)** — write failing tests first, then implement.
+- **Keep logic in Rust, not in prompts.** Application behaviour must be implemented in deterministic Rust code, not delegated to LLM prompt engineering.
+  - System prompts should only define role, personality, and high-level goals — never encode conditional logic, parsing rules, or workflow orchestration.
+  - Changing the underlying LLM model should never require rewriting application code. If a feature breaks when the model changes, the logic belongs in Rust.
+  - Use structured outputs, tool schemas, and explicit Rust types for all data that crosses the LLM boundary. Do not rely on the model to format, validate, or decide control flow.
+  - When the LLM must produce structured data, provide a strict schema (e.g., JSON Schema via tool calling) and validate the result in Rust before acting on it.
 - Use **Context7** (and crates.io if needed) to fetch current documentation for libraries, frameworks, SDKs, APIs, CLI tools, or cloud services **before designing or planning** — even well-known ones. Use the official library name with proper punctuation (e.g., "tokio" not "tokio-rs", "axum" not "axum-rs").
   - **Verify versions:** Check the latest stable version and correct feature flags on crates.io before adding any dependency. Do not rely on training-data version knowledge.
   - **Verify patterns:** Confirm current best practices, recommended APIs, and common pitfalls from Context7 docs before writing implementation code or plans.

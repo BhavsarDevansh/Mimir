@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.19.3] - 2026-05-27
+
+### Added
+
+- **AGENTS.md: LLM-independence guideline** (project-wide):
+  - Added development standard mandating that application logic lives in deterministic Rust code, not in LLM prompts.
+  - System prompts must only define role, personality, and high-level goals — never encode conditional logic, parsing rules, or workflow orchestration.
+  - Changing the underlying LLM model should never require rewriting application code.
+  - Structured outputs, tool schemas, and explicit Rust types must be used for all data crossing the LLM boundary.
+
 ## [0.19.2] - 2026-05-27
 
 ### Fixed

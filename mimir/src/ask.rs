@@ -6,7 +6,6 @@
 use is_terminal::IsTerminal;
 use std::io::Read;
 
-use crate::constants::DEFAULT_BASE_URL;
 use futures::StreamExt;
 use mimir_api_types::{ChatRequest, StreamItem};
 use mimir_client::MimirClient;
@@ -21,8 +20,8 @@ pub struct AskOptions {
     pub piped_input: Option<String>,
 }
 
-pub async fn handle_ask(opts: AskOptions) {
-    let client = MimirClient::new(DEFAULT_BASE_URL);
+pub async fn handle_ask(base_url: &str, opts: AskOptions) {
+    let client = MimirClient::new(base_url);
 
     let mut message = String::new();
     if let Some(ref piped) = opts.piped_input {

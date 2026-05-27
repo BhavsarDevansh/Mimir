@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.17.1] - 2026-05-27
+
+### Fixed
+
+- Addressed review feedback: Markdown formatting, memory path comment accuracy, blank `MIMIR_MEMORY_PATH` handling, `PROBE_CLIENT` graceful error handling, E2E test assertions and hermetic environment.
+
+## [0.17.0] - 2026-05-26
+
+### Added
+
+- End-to-end integration test (`cargo test --test e2e`) that validates the full CLI → daemon → mock LLM round trip.
+- `MIMIR_BASE_URL` environment variable override for all CLI commands, cached via `LazyLock`.
+- `mimir-server` public API additions: `start_server_with_llm_and_listener`, `start_server_with_llm`, and `AppState::from_config_with_llm` for injecting custom LLM backends.
+- `MemoryConfig::path` field and `MIMIR_MEMORY_PATH` environment override for configurable memory file location.
+- Static `LazyLock<reqwest::Client>` in daemon guard probe to eliminate per-probe allocations.
+
+### Changed
+
+- `ensure_daemon_running` and `check_daemon_reachable` now accept `&str` instead of `&String`.
+- Server log message for bound address now prints the resolved ephemeral port (`listener.local_addr()`) instead of the raw config string.
+- All CLI command modules updated to accept a `base_url: &str` parameter.
+
+### Fixed
+
+- `MockProbe::check` in daemon guard tests no longer panics on empty result vector.
+
 ## [0.16.3] - 2026-05-25
 
 ### Fixed

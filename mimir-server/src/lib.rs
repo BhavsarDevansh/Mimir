@@ -19,6 +19,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
 
 use mimir_core::config::Config;
+use mimir_core::llm::{LlmBackend, LlmClient};
 
 use crate::routes::{
     chat_handler, chat_stream_handler, memory_handler, status_handler, stop_handler,
@@ -108,15 +109,41 @@ async fn shutdown_signal(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
 /// If the server does not shut down gracefully within 30 seconds, it is
 /// forcefully aborted so that resource cleanup can still run.
 pub async fn start_server(config: Config) -> anyhow::Result<()> {
+    let llm_client: Arc<dyn LlmBackend> = Arc::new(LlmClient::new(config.llm.clone()).await);
+    start_server_with_llm(config, llm_client).await
+}
+
+/// Start the Mimir HTTP server with an injected LLM backend.
+///
+/// This is the same as [`start_server`], but allows tests (and future
+/// embedders) to supply a custom [`LlmBackend`] implementation without
+/// relying on sentinel strings or config hacks.
+pub async fn start_server_with_llm(
+    config: Config,
+    llm_client: Arc<dyn LlmBackend>,
+) -> anyhow::Result<()> {
     let bind_addr = config.server.bind_addr.clone();
-    let state = Arc::new(AppState::from_config(config).await?);
+    let addr: SocketAddr = bind_addr.parse()?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    start_server_with_llm_and_listener(config, llm_client, listener).await
+}
+
+/// Start the Mimir HTTP server with an injected LLM backend and a pre-bound listener.
+///
+/// This is the same as [`start_server_with_llm`], but allows tests to supply
+/// a pre-bound [`TcpListener`] so the bound port is known before the server
+/// starts accepting connections.
+pub async fn start_server_with_llm_and_listener(
+    config: Config,
+    llm_client: Arc<dyn LlmBackend>,
+    listener: tokio::net::TcpListener,
+) -> anyhow::Result<()> {
+    let state = Arc::new(AppState::from_config_with_llm(config, llm_client).await?);
     let shutdown_rx = state.shutdown_tx.subscribe();
 
     let app = build_app(Arc::clone(&state));
 
-    let addr: SocketAddr = bind_addr.parse()?;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    info!("Mimir daemon listening on {}", addr);
+    info!("Mimir daemon listening on {}", listener.local_addr()?);
 
     let server_fut = axum::serve(
         listener,

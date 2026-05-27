@@ -67,6 +67,8 @@ pub struct AgentConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MemoryConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
     pub enabled: bool,
     pub char_limit: u16,
     pub auto_manage: bool,
@@ -193,6 +195,7 @@ impl Default for AgentConfig {
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
+            path: None,
             enabled: true,
             char_limit: 2500,
             auto_manage: true,
@@ -333,6 +336,7 @@ enabled = true
 char_limit = 2500
 auto_manage = true
 temporal_horizon = 30
+# path = "${CONFIG_DIR}/memory.md"  # Optional: override memory file location
 
 [context]
 max_turns = 20
@@ -404,6 +408,11 @@ bind_addr = "127.0.0.1:8080"
         {
             self.memory.temporal_horizon = n;
         }
+        if let Ok(v) = std::env::var("MIMIR_MEMORY_PATH")
+            && !v.trim().is_empty()
+        {
+            self.memory.path = Some(PathBuf::from(v));
+        }
         if let Ok(v) = std::env::var("MIMIR_CONTEXT_MAX_TOKENS")
             && let Ok(n) = v.parse::<u32>()
         {
@@ -442,6 +451,7 @@ mod tests {
         assert_eq!(config.llm.model, "gpt-4o");
         assert_eq!(config.agent.name, "Mimir");
         assert_eq!(config.memory.char_limit, 2500);
+        assert_eq!(config.memory.path, None);
         assert_eq!(config.llm.max_tokens, None);
         assert_eq!(config.context.max_tokens, None);
         assert_eq!(config.context.max_turns, 20);
@@ -488,6 +498,37 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn test_env_override_memory_path() {
+        unsafe {
+            std::env::set_var("MIMIR_MEMORY_PATH", "/tmp/mimir/memory.md");
+        }
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        assert_eq!(
+            config.memory.path,
+            Some(PathBuf::from("/tmp/mimir/memory.md"))
+        );
+        unsafe {
+            std::env::remove_var("MIMIR_MEMORY_PATH");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_env_override_memory_path_blank_is_ignored() {
+        unsafe {
+            std::env::set_var("MIMIR_MEMORY_PATH", "   ");
+        }
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        assert_eq!(config.memory.path, None);
+        unsafe {
+            std::env::remove_var("MIMIR_MEMORY_PATH");
+        }
+    }
+
+    #[test]
     fn test_save_and_load() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -506,6 +547,7 @@ mod tests {
                 verbose_reasoning: true,
             },
             memory: MemoryConfig {
+                path: None,
                 enabled: false,
                 char_limit: 100,
                 auto_manage: false,
@@ -550,6 +592,7 @@ enabled = true
 char_limit = 2500
 auto_manage = true
 temporal_horizon = 30
+# path = "${CONFIG_DIR}/memory.md"  # Optional: override memory file location
 
 [context]
 max_tokens = 4096
@@ -616,6 +659,7 @@ db_path = "~/.local/share/mimir/context.db"
         assert_eq!(config.llm.model, "gpt-4o");
         assert_eq!(config.agent.name, "Mimir");
         assert_eq!(config.memory.char_limit, 2500);
+        assert_eq!(config.memory.path, None);
         assert_eq!(config.llm.max_tokens, None);
         assert_eq!(config.context.max_tokens, None);
         assert_eq!(config.context.max_turns, 20);

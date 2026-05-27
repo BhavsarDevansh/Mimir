@@ -19,6 +19,7 @@ use commands::{handle_skill_command, handle_tool_command};
 async fn main() {
     let cli = Cli::parse();
     let mut daemon_started = false;
+    let base_url = constants::base_url();
 
     match cli.command {
         cli::Commands::Tool { command } => handle_tool_command(command).await,
@@ -26,11 +27,11 @@ async fn main() {
         cli::Commands::Init => init::handle_init().await,
         cli::Commands::Start => start::handle_start().await,
         cli::Commands::Stop => {
-            if !daemon_guard::check_daemon_reachable(constants::DEFAULT_BASE_URL).await {
+            if !daemon_guard::check_daemon_reachable(&base_url).await {
                 eprintln!("Mimir is not running.");
                 std::process::exit(1);
             }
-            stop::handle_stop().await;
+            stop::handle_stop(&base_url).await;
         }
         cli::Commands::Ask {
             query,
@@ -40,11 +41,8 @@ async fn main() {
             incognito,
             personality,
         } => {
-            if let Err(e) = daemon_guard::ensure_daemon_running(
-                constants::DEFAULT_BASE_URL,
-                &mut daemon_started,
-            )
-            .await
+            if let Err(e) =
+                daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
             {
                 eprintln!("{}", e);
                 std::process::exit(1);
@@ -56,52 +54,46 @@ async fn main() {
                 eprintln!("Error: no query provided.");
                 std::process::exit(1);
             }
-            ask::handle_ask(ask::AskOptions {
-                query: query_str,
-                no_stream,
-                model,
-                verbose,
-                incognito,
-                personality,
-                piped_input: piped,
-            })
+            ask::handle_ask(
+                &base_url,
+                ask::AskOptions {
+                    query: query_str,
+                    no_stream,
+                    model,
+                    verbose,
+                    incognito,
+                    personality,
+                    piped_input: piped,
+                },
+            )
             .await;
         }
         cli::Commands::Chat => {
-            if let Err(e) = daemon_guard::ensure_daemon_running(
-                constants::DEFAULT_BASE_URL,
-                &mut daemon_started,
-            )
-            .await
+            if let Err(e) =
+                daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
             {
                 eprintln!("{}", e);
                 std::process::exit(1);
             }
-            chat::handle_chat().await;
+            chat::handle_chat(&base_url).await;
         }
         cli::Commands::Status => {
-            if let Err(e) = daemon_guard::ensure_daemon_running(
-                constants::DEFAULT_BASE_URL,
-                &mut daemon_started,
-            )
-            .await
+            if let Err(e) =
+                daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
             {
                 eprintln!("{}", e);
                 std::process::exit(1);
             }
-            status::handle_status().await;
+            status::handle_status(&base_url).await;
         }
         cli::Commands::Memory => {
-            if let Err(e) = daemon_guard::ensure_daemon_running(
-                constants::DEFAULT_BASE_URL,
-                &mut daemon_started,
-            )
-            .await
+            if let Err(e) =
+                daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
             {
                 eprintln!("{}", e);
                 std::process::exit(1);
             }
-            memory_cmd::handle_memory().await;
+            memory_cmd::handle_memory(&base_url).await;
         }
     }
 }

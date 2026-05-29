@@ -61,13 +61,17 @@ An immutable clone of `memory.md` content taken at a specific point in time. Inj
 
 ## Default Template
 
-The default `memory.md` includes five categories:
+The default `memory.md` is a free-form agent scratchpad with no rigid sections:
 
-1. **Identity** — user name, location, machine, editor
-2. **Active Projects** — current work context
-3. **Preferences** — communication style, proactivity, sensitivities
-4. **Temporal** — upcoming events, recent changes
-5. **KB Pointers** — where deeper knowledge lives in the Knowledge Graph
+```text
+Mimir memory [0/2500]
+
+No memories yet.
+```
+
+The agent writes compact, self-contained notes (one thought per line or bullet). It groups related facts organically — for example, placing the user's profession next to their location if it feels natural, or keeping birthday facts with relationship notes. There is no enforced structure.
+
+Agents are instructed to be token-conscious (abbreviate, drop filler words, use shorthand) and to use `replace` on the exact existing note to avoid duplication.
 
 ## Capacity Management
 
@@ -109,7 +113,7 @@ The `memory` built-in tool gives the LLM a mechanism to update `memory.md` auton
 
 ### Tool Description (LLM-facing)
 
-> Update Mimir's persistent working memory (memory.md). Use this tool whenever you learn something about the user that should be remembered across sessions, such as their name, location, preferences, projects, upcoming events, or important facts. Supports add, replace, and remove actions.
+> Update Mimir's persistent working memory (memory.md). memory.md is your personal scratchpad — a free-form text file where you record facts about the user and context that should persist across sessions. Write compact, self-contained notes (one thought per line or bullet). Group related facts together, but do not use rigid sections or prefixes. Prefer 'replace' to update an existing note. Use 'add' for new observations. Use 'remove' to delete stale notes. Be token-conscious: abbreviate, drop filler words, use shorthand. The file has a 2500 character limit.
 
 ### Registration
 

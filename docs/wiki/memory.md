@@ -16,56 +16,30 @@ If the file doesn't exist yet, Mimir creates it automatically with a friendly te
 
 ## What's Inside?
 
-The default template has five sections:
+`memory.md` is entirely agent-managed — Mimir decides what to write, how to group it, and when to rewrite it. There are no rigid sections or prefixes.
 
-### 1. Identity
-
-Who you are and where you work.
+The default template is a single placeholder line:
 
 ```markdown
-User: Devansh Bhavsar (Dev)
-Location: Berlin, Germany
-Machine: macOS 14, M3 MacBook Pro
+Mimir memory [0/2500]
+
+No memories yet.
 ```
 
-### 2. Active Projects
+As Mimir learns, it replaces the placeholder and adds compact, self-contained notes — one thought per line or bullet. Mimir groups related facts together, but the structure is organic, not prescribed.
 
-What you're working on right now, with quick commands Mimir can remind you of.
+Example after learning about the user:
 
 ```markdown
-Active Projects:
-• ~/code/mimir — Rust personal agent (cargo test, cargo run)
+Mimir memory [247/2500]
+
+Devansh, born [DD MMM YYYY].
+Lives in [CITY].
+Software Developer (C# Fullstack).
+Married to [WIFE]; her birthday [DD MM YYYY].
 ```
 
-### 3. Preferences
-
-How you like to communicate and what Mimir should avoid.
-
-```markdown
-Preferences:
-• Communication: transparent, normal verbosity
-• Proactivity: important_only
-```
-
-### 4. Temporal
-
-Time-sensitive things Mimir should know about.
-
-```markdown
-Temporal:
-• Upcoming: Flight JL043 to Tokyo, May 25 11:00 AM
-• Recent: Moved to Berlin (March 2026)
-```
-
-### 5. KB Pointers
-
-Where deeper information lives, so Mimir knows where to look.
-
-```markdown
-KB Pointers:
-• Travel: 12 destinations (Knowledge Graph)
-• Relationships: Alice (Knowledge Graph)
-```
+When something changes, Mimir uses `replace` on the exact existing note rather than appending a duplicate.
 
 ## Size Limit
 

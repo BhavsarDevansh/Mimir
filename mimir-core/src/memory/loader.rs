@@ -68,19 +68,10 @@ impl MemoryLoader {
 
     /// Return the default memory.md template.
     pub fn default_memory() -> String {
-        r#"═══════════════════════════════════════════════════════════
-MEMORY [0 / 2,500 chars] — Mimir Working Memory
-═══════════════════════════════════════════════════════════
+        r#"Mimir memory [0/2500]
 
-User: (not yet configured)
-Location: (not yet configured)
-
-Active Projects: (none)
-Preferences: (none)
-Temporal: (none)
-KB Pointers: (none)
-═══════════════════════════════════════════════════════════"#
-            .to_string()
+No memories yet."#
+        .to_string()
     }
 
     /// Return the platform-specific path for memory.md.
@@ -113,8 +104,8 @@ mod tests {
         let content = MemoryLoader::load(&path).await.unwrap();
 
         assert!(path.exists());
-        assert!(content.contains("Mimir Working Memory"));
-        assert!(content.contains("User: (not yet configured)"));
+        assert!(content.contains("Mimir memory ["));
+        assert!(content.contains("No memories yet."));
     }
 
     #[tokio::test]
@@ -131,9 +122,6 @@ mod tests {
     #[test]
     fn test_default_memory_has_all_sections() {
         let default = MemoryLoader::default_memory();
-        assert!(default.contains("Active Projects"));
-        assert!(default.contains("Preferences"));
-        assert!(default.contains("Temporal"));
-        assert!(default.contains("KB Pointers"));
+        assert!(default.contains("…"));
     }
 }

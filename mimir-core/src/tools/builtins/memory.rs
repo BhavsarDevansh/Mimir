@@ -52,9 +52,13 @@ impl Tool for MemoryTool {
 
     fn description(&self) -> &str {
         "Update Mimir's persistent working memory (memory.md). \
-         Use this tool whenever you learn something about the user that should be remembered \
-         across sessions, such as their name, location, preferences, projects, upcoming events, \
-         or important facts. Supports add, replace, and remove actions."
+         memory.md is a scratchpad of compact, standalone notes — one fact per line. \
+         Do NOT use bullet points (-, *), dashes, or Key: Value prefixes. \
+         State facts directly as bare sentence fragments. Chain related facts with \
+         semicolons on the same line. Examples of GOOD notes:          'Devansh, born [MMM DD, YYYY], lives in [CITY].'          'Software Developer, C# Fullstack.'          'Married to [WIFE]; her birthday [MMM DD, YYYY].'          BAD (never do this): '- Name: Devansh', 'User: Devansh', '• Location: [CITY]'.          When the file contains the placeholder '\u{2026}' (…), use 'replace' with \
+         old_text='\u{2026}' to swap it with your first note. After that, use \
+         'replace' to update existing notes and 'add' for brand-new facts. \
+         Use 'remove' to delete stale notes. Be token-conscious. 2500 char limit."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -65,17 +69,17 @@ impl Tool for MemoryTool {
                     "type": "string",
                     "enum": ["add", "replace", "remove"],
                     "description": "The operation to perform. \
-                        'add' appends content to memory. \
-                        'replace' finds old_text and substitutes content. \
-                        'remove' deletes the first occurrence of old_text."
+                        'replace': find old_text and substitute content. REQUIRED when the file has the … placeholder. Use this to update an existing note. \
+                        'add': appends content. Use ONLY for brand-new facts (file has no placeholder, and the fact does not already exist). \
+                        'remove': deletes the first occurrence of old_text."
                 },
                 "content": {
                     "type": "string",
-                    "description": "Text to add or replacement text. Required for 'add' and 'replace'."
+                    "description": "Compact note text (one line, bare sentence fragment). Required for 'add' and 'replace'. No bullets, dashes, or key:value prefixes."
                 },
                 "old_text": {
                     "type": "string",
-                    "description": "Exact text to find and replace or remove. Required for 'replace' and 'remove'."
+                    "description": "Exact existing note text to find and replace/remove. Required for 'replace' and 'remove'. Must match the full line exactly."
                 }
             },
             "required": ["action"],
@@ -170,7 +174,7 @@ mod tests {
     async fn test_memory_tool_add() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("memory.md");
-        std::fs::write(&path, "User: (not yet configured)").unwrap();
+        std::fs::write(&path, "\u{2026}").unwrap();
 
         let tool = MemoryTool::new(path.clone(), 2500);
         let result = tool
@@ -187,21 +191,21 @@ mod tests {
     async fn test_memory_tool_replace() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("memory.md");
-        std::fs::write(&path, "User: (not yet configured)").unwrap();
+        std::fs::write(&path, "\u{2026}").unwrap();
 
         let tool = MemoryTool::new(path.clone(), 2500);
         let result = tool
             .execute(json!({
                 "action": "replace",
-                "old_text": "User: (not yet configured)",
-                "content": "User: Alice"
+                "old_text": "\u{2026}",
+                "content": "Alice, lives in Berlin."
             }))
             .await
             .unwrap();
 
         assert_eq!(result.result, Some(json!("Replaced in memory.")));
         let disk = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(disk, "User: Alice");
+        assert_eq!(disk, "Alice, lives in Berlin.");
     }
 
     #[tokio::test]

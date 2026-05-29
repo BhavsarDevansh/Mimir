@@ -26,88 +26,63 @@ If memory.md alone is insufficient → Query Knowledge Graph, Connectors, or Rea
 These are so fundamental that they are always included:
 
 ```
-User: Devansh Bhavsar (Dev)
-Location: Berlin, Germany (since March 2026)
-Timezone: Europe/Berlin
-Primary machine: macOS 14, M3 MacBook Pro
-Shell: zsh with oh-my-zsh
-Editor: VS Code with Vim keybindings
+Devansh, born [DD MMM YYYY].
+Lives in [CITY].
+Software Developer (C# Fullstack).
 ```
 
 ### Tier 2: Active Projects and Environment
 Current work context the agent needs to function effectively:
 
 ```
-Active project: ~/code/mimir (Rust, Axum, SQLite)
-  - Run tests: cargo test
-  - Run dev server: cargo run
-  - DB: SQLite at ~/.local/share/mimir/knowledge.db
-Other project: ~/code/librechat (Rust, Yew, WebAssembly)
-  - Frontend: trunk serve
+Active projects: mimir (~/code/mimir; cargo test,run), librechat (~/code/librechat; trunk serve).
 ```
 
 ### Tier 3: Critical Preferences
 Preferences that affect every interaction:
 
 ```
-Communication: Transparent (shows reasoning), normal verbosity
-Proactivity: Important only
-Sensitive: Do not mention medical topics in public contexts
-Calendar: Auto-add flight emails (granted 2025-05-10)
+Prefers transparent communication, important-only proactivity, no medical topics in public.
+Calendar: auto-add flights (granted 2025-05-10).
 ```
 
 ### Tier 4: Temporal Facts (Auto-Rotating)
 Time-sensitive facts that are important *now* but may not be in a month:
 
 ```
-Upcoming: Flight to Tokyo, JL043, May 25, 11:00 AM
-Upcoming: Sister's birthday (Priya), June 15
-Recent: Moved to Berlin (March 2026)
+Upcoming: flight JL043 Tokyo May25 11:00; Priya birthday Jun15.
+Recently moved to Berlin (March 2026).
 ```
 
 ### Tier 5: Knowledge Graph Pointers
 Pointers to where deeper information lives, so the agent knows what to query:
 
 ```
-KB: Travel history → entities "devansh" → "visited" (12 destinations)
-KB: Work history → entities "devansh" → "works_as" (2 positions)
-KB: Relationships → entities "devansh" → "has_partner" (Alice)
-KB: Preferences → table "preferences" (23 entries, auto-learned)
+KB: travel 12 destinations, work 2 positions, relationships (Alice), preferences 23 entries.
 ```
 
 ## Format
 
+The default template is a free-form agent scratchpad with no rigid sections:
+
 ```markdown
-═══════════════════════════════════════════════════════════
-MEMORY [1,247 / 2,500 chars] — Mimir Working Memory
-═══════════════════════════════════════════════════════════
+Mimir memory [0/2500]
 
-User: Devansh Bhavsar (Dev)
-Location: Berlin, Germany (since March 2026)
-Timezone: Europe/Berlin
-Machine: macOS 14, M3 MacBook Pro
-
-Active Projects:
-• ~/code/mimir — Rust personal agent (cargo test, cargo run)
-• ~/code/librechat — Rust chat frontend (trunk serve)
-
-Preferences:
-• Communication: transparent, normal verbosity
-• Proactivity: important_only
-• Sensitive: no medical in public contexts
-• Calendar: auto-add flights (granted 2025-05-10)
-
-Temporal:
-• Upcoming: Flight JL043 to Tokyo, May 25 11:00 AM
-• Upcoming: Priya's birthday, June 15
-
-KB Pointers:
-• Travel: 12 destinations (entity "devansh" → "visited")
-• Work: 2 positions (entity "devansh" → "works_as")
-• Relationships: Alice (entity "devansh" → "has_partner")
-• Preferences: 23 entries (table "preferences")
-═══════════════════════════════════════════════════════════
+No memories yet.
 ```
+
+The agent writes compact, self-contained notes (one thought per line or bullet). It groups related facts organically and decides its own structure. Example populated memory:
+
+```markdown
+Mimir memory [247/2500]
+
+Devansh, born [DD MMM YYYY].
+Lives in [CITY].
+Software Developer (C# Fullstack).
+Married to [WIFE]; her birthday [DD MM YYYY].
+```
+
+Agents use `replace` on the exact existing note to update it, preventing duplication.
 
 ## Size and Budget
 
@@ -201,39 +176,19 @@ Changes made during a session are written to disk immediately but do not appear 
 ## Example: Full memory.md
 
 ```markdown
-═══════════════════════════════════════════════════════════
-MEMORY [1,890 / 2,500 chars] — Mimir Working Memory
-═══════════════════════════════════════════════════════════
+Mimir memory [1,890/2500]
 
-User: Devansh Bhavsar (Dev)
-Location: Berlin, Germany (since March 2026)
-Timezone: Europe/Berlin
-Machine: macOS 14, M3 MacBook Pro, zsh + oh-my-zsh
-Editor: VS Code with Vim keybindings
-
-Active Projects:
-• ~/code/mimir — Rust personal agent (cargo test, cargo run)
-• ~/code/librechat — Rust chat frontend (trunk serve)
-
-Preferences:
-• Communication: transparent, normal verbosity
-• Proactivity: important_only
-• Sensitive: no medical in public contexts
-• Calendar: auto-add flights (granted 2025-05-10)
-• DND: quiet hours 22:00–08:00
-
-Temporal:
-• Upcoming: Flight JL043 to Tokyo, May 25 11:00 AM
-• Upcoming: Priya's birthday, June 15
-• Recent: Moved to Berlin (March 2026)
-
-KB Pointers:
-• Travel: 12 destinations (entity "devansh" → "visited")
-• Work: 2 positions (entity "devansh" → "works_as")
-• Relationships: Alice (entity "devansh" → "has_partner")
-• Preferences: 23 entries (table "preferences")
-• Health: 2 allergies (table "facts", sensitive flag)
-═══════════════════════════════════════════════════════════
+Devansh, born [DD MMM YYYY].
+Lives in [CITY].
+Software Developer (C# Fullstack).
+Married to [WIFE]; her birthday [DD MM YYYY].
+Uses macOS 14 on M3 MBP, zsh+oh-my-zsh, VSCode+Vim.
+Active projects: mimir (~/code/mimir; cargo test,run), librechat (~/code/librechat; trunk serve).
+Prefers transparent communication, important-only proactivity, no medical topics in public.
+Calendar: auto-add flights (granted 2025-05-10); DND 22:00–08:00.
+Upcoming: flight JL043 Tokyo May25 11:00; Priya birthday Jun15.
+Recently moved to Berlin (March 2026).
+KB: travel 12 destinations, work 2 positions, relationships (Alice), preferences 23 entries, health 2 allergies.
 ```
 
 ## Configuration

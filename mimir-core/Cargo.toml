@@ -17,7 +17,7 @@ anyhow = "1.0"
 dirs = "6.0"
 thiserror = "2.0"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "fs", "process", "macros", "sync"] }
-reqwest = { version = "0.13", features = ["json", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-tls-native-roots"] }
 eventsource-stream = "0.2.3"
 futures = "0.3"
 bytes = "1.9"

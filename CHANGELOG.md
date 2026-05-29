@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - System prompts must only define role, personality, and high-level goals — never encode conditional logic, parsing rules, or workflow orchestration.
   - Changing the underlying LLM model should never require rewriting application code.
   - Structured outputs, tool schemas, and explicit Rust types must be used for all data crossing the LLM boundary.
+- **Memory template redesign** (`mimir-core`):
+  - Switched from multi-section templates to a compact free-form scratchpad to simplify memory handling and reduce prompt bloat.
+  - The agent now writes compact, self-contained notes with organic grouping rather than rigid section headers.
+  - User-facing impact: simpler, less structured LLM memories that are easier to ingest and reason about.
+  - See AGENTS.md LLM-independence guideline and VISION/01-Core-Agent/Memory-System.md for design rationale.
 
 ## [0.19.2] - 2026-05-27
 

@@ -70,7 +70,7 @@ impl MemoryLoader {
     pub fn default_memory() -> String {
         r#"Mimir memory [0/2500]
 
-…"#
+No memories yet."#
         .to_string()
     }
 
@@ -105,7 +105,7 @@ mod tests {
 
         assert!(path.exists());
         assert!(content.contains("Mimir memory ["));
-        assert!(content.contains("…"));
+        assert!(content.contains("No memories yet."));
     }
 
     #[tokio::test]

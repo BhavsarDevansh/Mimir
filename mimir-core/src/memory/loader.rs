@@ -71,7 +71,7 @@ impl MemoryLoader {
         r#"Mimir memory [0/2500]
 
 No memories yet."#
-        .to_string()
+            .to_string()
     }
 
     /// Return the platform-specific path for memory.md.
@@ -118,5 +118,4 @@ mod tests {
 
         assert!(path.parent().unwrap().exists());
     }
-
 }

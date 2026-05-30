@@ -113,53 +113,93 @@ async fn resolve_chat_state(
     }
 }
 
-/// Blocking chat completion endpoint.
+/// Blocking chat completion endpoint with agentic tool loop.
 ///
 /// 1. Validates or creates a session (unless incognito).
 /// 2. Persists the user message (unless incognito).
-/// 3. Delegates to the LLM worker pool, with optional model override.
-/// 4. Persists the assistant response and returns it (unless incognito).
+/// 3. Delegates to the LLM, executing tool calls in a loop up to
+///    `max_tool_rounds` rounds.
+/// 4. Persists the final assistant response and returns it (unless incognito).
 pub async fn chat_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, axum::response::Response> {
     let (session_id, llm, messages, incognito, _permit) = resolve_chat_state(&state, &req).await?;
 
+    let max_rounds = state.config.snapshot().await.agent.max_tool_rounds;
     let tools_opt = state.tool_registry.export_openai_tools_for_llm();
-    let (assistant_msg, usage) = llm
-        .chat_message(messages.clone(), tools_opt)
-        .await
-        .map_err(error::llm_error)?;
 
-    let (response_text, final_usage) = if let Some(ref tool_calls) = assistant_msg.tool_calls {
-        // The model issued tool calls — execute them and ask again.
-        let tool_calls = tool_calls.clone();
-        let mut follow_up = messages;
-        follow_up.push(assistant_msg);
+    let mut conversation = messages;
+    let mut tool_call_info: Vec<mimir_api_types::ToolCallInfo> = Vec::new();
+    let mut round: u16 = 0;
 
-        for tool_call in &tool_calls {
-            let result = match state
-                .tool_registry
-                .execute(
-                    &tool_call.function.name,
-                    serde_json::from_str(&tool_call.function.arguments)
-                        .unwrap_or(serde_json::Value::Null),
-                )
-                .await
-            {
-                Ok(output) => output.to_llm_text(),
-                Err(e) => format!("Tool error: {e}"),
-            };
-            follow_up.push(mimir_core::llm::types::Message::tool(&tool_call.id, result));
-        }
-
-        let (final_msg, final_usage) = llm
-            .chat_message(follow_up, None)
+    let (response_text, final_usage) = loop {
+        let (assistant_msg, usage) = llm
+            .chat_message(
+                conversation.clone(),
+                if round == 0 { tools_opt.clone() } else { None },
+            )
             .await
             .map_err(error::llm_error)?;
-        (final_msg.content, final_usage)
-    } else {
-        (assistant_msg.content, usage)
+
+        match assistant_msg.tool_calls {
+            Some(ref tool_calls) if round < max_rounds => {
+                round += 1;
+                let tool_calls = tool_calls.clone();
+                conversation.push(assistant_msg);
+
+                for tool_call in &tool_calls {
+                    let display_name = state
+                        .tool_registry
+                        .get_display_name(&tool_call.function.name)
+                        .unwrap_or_else(|| {
+                            mimir_core::tools::snake_to_title_case(&tool_call.function.name)
+                        });
+
+                    let output = match state
+                        .tool_registry
+                        .execute(
+                            &tool_call.function.name,
+                            serde_json::from_str(&tool_call.function.arguments)
+                                .unwrap_or(serde_json::Value::Null),
+                        )
+                        .await
+                    {
+                        Ok(output) => output,
+                        Err(e) => {
+                            error!("tool '{}' execution failed: {e}", tool_call.function.name);
+                            tool_call_info.push(mimir_api_types::ToolCallInfo {
+                                name: tool_call.function.name.clone(),
+                                display_name,
+                                result: mimir_api_types::ToolCallInfo::truncate_result(&format!(
+                                    "Tool error: {e}"
+                                )),
+                            });
+                            conversation.push(mimir_core::llm::types::Message::tool(
+                                &tool_call.id,
+                                format!("Tool error: {e}"),
+                            ));
+                            continue;
+                        }
+                    };
+
+                    let llm_text = output.to_llm_text();
+                    let display_text = output.to_display_text();
+
+                    tool_call_info.push(mimir_api_types::ToolCallInfo {
+                        name: tool_call.function.name.clone(),
+                        display_name,
+                        result: mimir_api_types::ToolCallInfo::truncate_result(&display_text),
+                    });
+
+                    conversation.push(mimir_core::llm::types::Message::tool(
+                        &tool_call.id,
+                        llm_text,
+                    ));
+                }
+            }
+            _ => break (assistant_msg.content, usage),
+        }
     };
 
     if !incognito {
@@ -178,7 +218,7 @@ pub async fn chat_handler(
             completion_tokens: final_usage.completion_tokens,
             total_tokens: final_usage.total_tokens,
         },
-        tool_calls: vec![],
+        tool_calls: tool_call_info,
     }))
 }
 
@@ -329,7 +369,7 @@ pub async fn chat_stream_handler(
                         mimir_core::tools::snake_to_title_case(&tool_call.function.name)
                     });
 
-                let result_text = match tool_registry_clone
+                let (llm_text, display_text) = match tool_registry_clone
                     .execute(
                         &tool_call.function.name,
                         serde_json::from_str(&tool_call.function.arguments)
@@ -337,10 +377,10 @@ pub async fn chat_stream_handler(
                     )
                     .await
                 {
-                    Ok(output) => output.to_llm_text(),
+                    Ok(output) => (output.to_llm_text(), output.to_display_text()),
                     Err(e) => {
                         error!("tool '{}' execution failed: {e}", tool_call.function.name);
-                        format!("Tool error: {e}")
+                        (format!("Tool error: {e}"), format!("Tool error: {e}"))
                     }
                 };
 
@@ -348,7 +388,7 @@ pub async fn chat_stream_handler(
                 let info = mimir_api_types::ToolCallInfo {
                     name: tool_call.function.name.clone(),
                     display_name,
-                    result: mimir_api_types::ToolCallInfo::truncate_result(&result_text),
+                    result: mimir_api_types::ToolCallInfo::truncate_result(&display_text),
                 };
                 let json = serde_json::to_string(&info).unwrap_or_default();
                 if event_tx
@@ -361,7 +401,7 @@ pub async fn chat_stream_handler(
 
                 conversation.push(mimir_core::llm::types::Message::tool(
                     &tool_call.id,
-                    result_text,
+                    llm_text,
                 ));
             }
 

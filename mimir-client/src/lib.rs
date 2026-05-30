@@ -238,7 +238,9 @@ fn parse_sse_event(event: &str) -> Option<Result<StreamItem, ClientError>> {
             if !data.is_empty() {
                 data.push('\n');
             }
-            data.push_str(rest.trim_start());
+            // Per SSE spec: strip exactly one leading space after "data:", not all whitespace.
+            let value = rest.strip_prefix(' ').unwrap_or(rest);
+            data.push_str(value);
         }
     }
     match event_type {
@@ -543,6 +545,34 @@ mod tests {
         let item = result.unwrap();
         match item {
             Ok(StreamItem::Text(t)) => assert_eq!(t, "Hello world"),
+            other => panic!("expected Text, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_data_with_leading_space_preserved() {
+        // When the LLM streams a token like " on", the SSE data line becomes
+        // "data:  on" (two spaces after colon). Per SSE spec only the first
+        // space after "data:" is stripped; the second is part of the content.
+        let event = "data:  on\n\n";
+        let result = parse_sse_event(event);
+        assert!(result.is_some());
+        let item = result.unwrap();
+        match item {
+            Ok(StreamItem::Text(t)) => assert_eq!(t, " on"),
+            other => panic!("expected Text, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_data_no_space_after_colon() {
+        // "data:" with no space is valid SSE; content starts immediately.
+        let event = "data:hello\n\n";
+        let result = parse_sse_event(event);
+        assert!(result.is_some());
+        let item = result.unwrap();
+        match item {
+            Ok(StreamItem::Text(t)) => assert_eq!(t, "hello"),
             other => panic!("expected Text, got {:?}", other),
         }
     }

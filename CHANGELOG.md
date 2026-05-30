@@ -16,6 +16,10 @@
 - Added `colored` crate dependency for terminal styling
 - Moved `serde_json` from dev-dependency to dependency in `mimir-api-types`
 
+### Fixed
+
+- Fixed missing spaces in streaming chat responses caused by `trim_start()` in SSE parser stripping content whitespace instead of only the single SSE-spec space after `data:`
+
 ## [0.20.0] - 2026-05-30
 
 ### Added

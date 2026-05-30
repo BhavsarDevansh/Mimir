@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.20.0] - 2026-05-30
+
+### Added
+
+- **mimir-knowledge workspace crate** — SQLite-based knowledge graph foundation:
+  - KnowledgeGraph public API with init() and init_with_clock() for deterministic test timestamps.
+  - 11 ordered SQLx migrations covering all lookup tables, core tables, queues, trash, audit log, system state, and FTS5 full-text search.
+  - 9 lookup tables seeded with stable integer IDs, mapped to Rust enums via #[repr(i16)] discriminants.
+  - Clock trait with RealClock and MockClock implementations for testable time.
+  - Empty module stubs for future Phase 2 subsystems: queries/, inference/, optimization/, extract.rs.
+  - Comprehensive TDD test suite: migration verification, enum roundtrips, DB initialisation, bidirectional enum↔DB sync.
+  - Technical documentation (docs/knowledge-graph-schema.md) and user-facing wiki (docs/wiki/knowledge-graph.md).
+
+### Changed
+
+- **Workspace dependencies:** Added [workspace.dependencies] sqlx with migrate feature; mimir-core now references sqlx = { workspace = true }.
+- **Paths:** Added knowledge_db_path() to mimir-core::paths resolving to ~/.local/share/mimir/knowledge.db.
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),

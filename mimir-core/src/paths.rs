@@ -83,6 +83,10 @@ pub fn memory_path() -> Result<PathBuf, PathsError> {
 pub fn default_db_path() -> Result<PathBuf, PathsError> {
     data_dir().map(|p| p.join("context.db"))
 }
+/// Returns the path to the knowledge graph database inside the data directory.
+pub fn knowledge_db_path() -> Result<PathBuf, PathsError> {
+    data_dir().map(|p| p.join("knowledge.db"))
+}
 
 /// Ensures a directory exists, creating it and all parents if needed.
 ///
@@ -169,5 +173,11 @@ mod tests {
             "expected systemd/user suffix, got: {}",
             s
         );
+    }
+
+    #[test]
+    fn test_knowledge_db_path_is_data_dir_plus_db() {
+        let path = knowledge_db_path().unwrap();
+        assert!(path.ends_with("mimir/knowledge.db"));
     }
 }

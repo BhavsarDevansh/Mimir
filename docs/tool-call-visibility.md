@@ -36,7 +36,7 @@ Each tool has a `display_name` derived from its `name()` via `snake_to_title_cas
 
 Tool calls are rendered in the CLI using `colored` crate with `.dimmed().italic()` styling:
 
-```
+```text
 🔧 Get Current Time → 2025-05-30T12:00:00Z
 ```
 

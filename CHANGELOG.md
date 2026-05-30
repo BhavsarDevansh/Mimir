@@ -1,6 +1,26 @@
 # Changelog
 
-## [0.21.0] - 2026-05-30
+## [0.22.0] - 2026-05-31
+
+### Added
+
+- `MIMIR_AGENT_MAX_TOOL_ROUNDS` environment variable override
+- `max_tool_rounds` entry in default config TOML `[agent]` section
+- `StreamItem::SessionId(String)` variant for capturing session IDs from streaming responses
+- `event: session_id` SSE event type emitted at stream start
+- Regression tests for SSE data-field leading-space preservation and multibyte UTF-8 truncation
+
+### Fixed
+
+- Fixed missing spaces in streaming chat responses caused by `trim_start()` in SSE parser stripping content whitespace instead of only the single SSE-spec space after `data:`
+- Fixed `truncate_result` panicking on multibyte UTF-8 by switching from byte-slicing to `chars()`-based truncation
+- Fixed agentic tool loop not re-sending tools to LLM after round 0 (both blocking and streaming handlers)
+- Fixed streaming `usage_acc` being overwritten each round instead of accumulated across agentic rounds
+- Fixed streaming chat not capturing server-assigned `session_id`
+- Fixed `Tool::display_name()` overrides being ignored by registry
+- Fixed markdown fence blocks in docs missing language identifiers (markdownlint MD040)
+
+## [0.21.1] - 2026-05-30
 
 ### Added
 
@@ -19,6 +39,21 @@
 ### Fixed
 
 - Fixed missing spaces in streaming chat responses caused by `trim_start()` in SSE parser stripping content whitespace instead of only the single SSE-spec space after `data:`
+- Fixed `truncate_result` panicking on multibyte UTF-8 by switching from byte-slicing to `chars()`-based truncation
+- Fixed SSE parser `data:` field handling to strip exactly one leading space per the SSE specification
+- Fixed agentic tool loop not re-sending tools to LLM after round 0 (both blocking and streaming)
+- Fixed streaming `usage_acc` being overwritten each round instead of accumulated across agentic rounds
+- Fixed streaming chat not capturing server-assigned `session_id` — now emitted as `event: session_id` SSE event
+- Fixed `Tool::display_name()` overrides being ignored — registry now checks the trait method before falling back to `snake_to_title_case`
+
+### Added
+
+- `MIMIR_AGENT_MAX_TOOL_ROUNDS` environment variable override (e.g. `MIMIR_AGENT_MAX_TOOL_ROUNDS=50`)
+- `max_tool_rounds` entry in default config TOML `[agent]` section
+- `StreamItem::SessionId(String)` variant for capturing session IDs from streaming responses
+- `event: session_id` SSE event type emitted at stream start
+- Regression tests for SSE data-field leading-space preservation and multibyte UTF-8 truncation
+- Environment variable override test for `MIMIR_AGENT_MAX_TOOL_ROUNDS`
 
 ## [0.20.0] - 2026-05-30
 

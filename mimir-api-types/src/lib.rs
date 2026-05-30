@@ -42,8 +42,9 @@ impl ToolCallInfo {
     /// Truncate a result string to a single line of at most MAX_RESULT_LEN characters.
     pub fn truncate_result(result: &str) -> String {
         let first_line = result.lines().next().unwrap_or(result);
-        if first_line.len() > Self::MAX_RESULT_LEN {
-            format!("{}…", &first_line[..Self::MAX_RESULT_LEN])
+        if first_line.chars().count() > Self::MAX_RESULT_LEN {
+            let truncated: String = first_line.chars().take(Self::MAX_RESULT_LEN).collect();
+            format!("{truncated}…")
         } else {
             first_line.to_string()
         }
@@ -115,6 +116,8 @@ pub enum StreamItem {
     Text(String),
     Usage(Usage),
     ToolCall(ToolCallInfo),
+    /// Server-assigned session ID (emitted once at stream start).
+    SessionId(String),
 }
 
 #[cfg(test)]
@@ -206,6 +209,7 @@ mod tests {
         let item = StreamItem::Text("hello".to_string());
         assert_eq!(item, StreamItem::Text("hello".to_string()));
         assert_ne!(item, StreamItem::Usage(Usage::default()));
+        assert_ne!(item, StreamItem::SessionId("sess-1".to_string()));
     }
 
     #[test]
@@ -231,6 +235,15 @@ mod tests {
         let long = "a".repeat(100);
         let result = ToolCallInfo::truncate_result(&long);
         assert_eq!(result.chars().count(), 81); // 80 chars + ellipsis
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn test_tool_call_info_truncate_multibyte() {
+        // Multi-byte UTF-8 (emoji) should not panic on byte-slice truncation.
+        let emoji_result = "🎉".repeat(100); // 100 chars, 400 bytes
+        let result = ToolCallInfo::truncate_result(&emoji_result);
+        assert_eq!(result.chars().count(), 81); // 80 emoji + ellipsis
         assert!(result.ends_with('…'));
     }
 

@@ -80,6 +80,7 @@ pub async fn handle_ask(base_url: &str, opts: AskOptions) {
                         Ok(StreamItem::Usage(u)) => {
                             total_usage = u;
                         }
+                        Ok(StreamItem::SessionId(_)) => {}
                         Ok(StreamItem::ToolCall(info)) => {
                             eprintln!(
                                 "{}",

@@ -252,6 +252,13 @@ fn parse_sse_event(event: &str) -> Option<Result<StreamItem, ClientError>> {
             Ok(info) => Some(Ok(StreamItem::ToolCall(info))),
             Err(e) => Some(Err(ClientError::Serialization(e))),
         },
+        "session_id" => match serde_json::from_str::<serde_json::Value>(&data) {
+            Ok(v) => v
+                .get("session_id")
+                .and_then(|s| s.as_str())
+                .map_or_else(|| None, |s| Some(Ok(StreamItem::SessionId(s.to_string())))),
+            Err(_) => None,
+        },
         "error" => Some(Err(ClientError::Server {
             status: 500,
             message: data,
@@ -561,6 +568,18 @@ mod tests {
         match item {
             Ok(StreamItem::Text(t)) => assert_eq!(t, " on"),
             other => panic!("expected Text, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_session_id_event() {
+        let event = "event: session_id\ndata: {\"session_id\":\"sess-abc-123\"}\n\n";
+        let result = parse_sse_event(event);
+        assert!(result.is_some());
+        let item = result.unwrap();
+        match item {
+            Ok(StreamItem::SessionId(s)) => assert_eq!(s, "sess-abc-123"),
+            other => panic!("expected SessionId, got {:?}", other),
         }
     }
 

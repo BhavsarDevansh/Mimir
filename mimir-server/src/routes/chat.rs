@@ -137,7 +137,11 @@ pub async fn chat_handler(
         let (assistant_msg, usage) = llm
             .chat_message(
                 conversation.clone(),
-                if round == 0 { tools_opt.clone() } else { None },
+                if round < max_rounds {
+                    tools_opt.clone()
+                } else {
+                    None
+                },
             )
             .await
             .map_err(error::llm_error)?;
@@ -254,11 +258,28 @@ pub async fn chat_stream_handler(
         let mut conversation = messages;
         let mut round: u16 = 0;
 
+        let mut usage_acc: Option<mimir_core::llm::types::Usage> = None;
+
+        // Emit session_id so the client can capture it for subsequent turns.
+        {
+            let event = Event::default()
+                .event("session_id")
+                .json_data(serde_json::json!({"session_id": session_id_clone}))
+                .expect("serializing session_id should not fail");
+            if event_tx.send(event).await.is_err() {
+                return;
+            }
+        }
+
         'outer: loop {
             let mut stream = match llm_clone
                 .chat_stream_with_usage(
                     conversation.clone(),
-                    if round == 0 { tools_opt.clone() } else { None },
+                    if round < max_rounds {
+                        tools_opt.clone()
+                    } else {
+                        None
+                    },
                 )
                 .await
             {
@@ -281,7 +302,6 @@ pub async fn chat_stream_handler(
                 u32,
                 mimir_core::llm::types::ToolCall,
             > = std::collections::HashMap::new();
-            let mut usage_acc: Option<mimir_core::llm::types::Usage> = None;
 
             while let Some(item) = stream.next().await {
                 match item {
@@ -308,7 +328,14 @@ pub async fn chat_stream_handler(
                         }
                     }
                     Ok(StreamItem::Usage(usage)) => {
-                        usage_acc = Some(usage);
+                        usage_acc = Some(match usage_acc {
+                            Some(prev) => mimir_core::llm::types::Usage {
+                                prompt_tokens: prev.prompt_tokens + usage.prompt_tokens,
+                                completion_tokens: prev.completion_tokens + usage.completion_tokens,
+                                total_tokens: prev.total_tokens + usage.total_tokens,
+                            },
+                            None => usage,
+                        });
                     }
                     Err(e) => {
                         error!("LLM stream error: {e}");

@@ -335,6 +335,7 @@ temperature = 0.2
 name = "Mimir"
 proactivity = "important_only"
 verbose_reasoning = false
+max_tool_rounds = 100  # Maximum agentic tool-call rounds
 
 [memory]
 enabled = true
@@ -392,6 +393,11 @@ bind_addr = "127.0.0.1:8080"
             && let Ok(b) = v.parse::<bool>()
         {
             self.agent.verbose_reasoning = b;
+        }
+        if let Ok(v) = std::env::var("MIMIR_AGENT_MAX_TOOL_ROUNDS")
+            && let Ok(n) = v.parse::<u16>()
+        {
+            self.agent.max_tool_rounds = n;
         }
         if let Ok(v) = std::env::var("MIMIR_MEMORY_ENABLED")
             && let Ok(b) = v.parse::<bool>()
@@ -578,6 +584,34 @@ mod tests {
         assert_eq!(config.llm.model, "gpt-3.5-turbo");
         unsafe {
             std::env::remove_var("MIMIR_LLM_MODEL");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_env_override_agent_max_tool_rounds() {
+        unsafe {
+            std::env::set_var("MIMIR_AGENT_MAX_TOOL_ROUNDS", "50");
+        }
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        assert_eq!(config.agent.max_tool_rounds, 50);
+        unsafe {
+            std::env::remove_var("MIMIR_AGENT_MAX_TOOL_ROUNDS");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_env_override_agent_max_tool_rounds_invalid_ignored() {
+        unsafe {
+            std::env::set_var("MIMIR_AGENT_MAX_TOOL_ROUNDS", "not_a_number");
+        }
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        assert_eq!(config.agent.max_tool_rounds, 100);
+        unsafe {
+            std::env::remove_var("MIMIR_AGENT_MAX_TOOL_ROUNDS");
         }
     }
 

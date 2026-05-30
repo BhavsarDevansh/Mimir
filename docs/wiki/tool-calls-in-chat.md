@@ -8,7 +8,7 @@ When Mimir uses a tool during a conversation, you'll now see it in the chat outp
 
 When Mimir calls a tool, you'll see something like:
 
-```
+```text
 🔧 Get Current Time → 2025-05-30T12:00:00Z
 ```
 

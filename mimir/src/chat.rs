@@ -175,6 +175,9 @@ pub async fn handle_chat(base_url: &str) {
                             let _ = std::io::stdout().flush();
                         }
                         Ok(mimir_api_types::StreamItem::Usage(_)) => {}
+                        Ok(mimir_api_types::StreamItem::SessionId(id)) => {
+                            session_id = Some(id);
+                        }
                         Ok(mimir_api_types::StreamItem::ToolCall(info)) => {
                             eprintln!(
                                 "{}",

@@ -105,7 +105,14 @@ impl ToolRegistry {
         if entries.contains_key(&name) {
             return Err(ToolError::already_registered(&name));
         }
-        let display_name = super::snake_to_title_case(tool.name());
+        let display_name = {
+            let dn = tool.display_name();
+            if dn == "Unnamed Tool" {
+                super::snake_to_title_case(tool.name())
+            } else {
+                dn.to_string()
+            }
+        };
         let metadata = ToolMetadata {
             name: name.clone(),
             display_name,

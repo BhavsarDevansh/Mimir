@@ -15,6 +15,7 @@ pub enum ToolSource {
 #[derive(Debug, Clone)]
 pub struct ToolMetadata {
     pub name: String,
+    pub display_name: String,
     pub description: String,
     pub source: ToolSource,
     pub permission: ToolPermission,
@@ -104,8 +105,10 @@ impl ToolRegistry {
         if entries.contains_key(&name) {
             return Err(ToolError::already_registered(&name));
         }
+        let display_name = super::snake_to_title_case(tool.name());
         let metadata = ToolMetadata {
             name: name.clone(),
+            display_name,
             description: tool.description().to_string(),
             source,
             permission,
@@ -177,6 +180,11 @@ impl ToolRegistry {
     pub fn export_openai_tools_for_llm(&self) -> Option<Vec<Value>> {
         let tools = self.export_openai_tools();
         if tools.is_empty() { None } else { Some(tools) }
+    }
+
+    /// Look up the display name for a tool by name.
+    pub fn get_display_name(&self, name: &str) -> Option<String> {
+        self.metadata(name).map(|m| m.display_name)
     }
 
     /// Execute a tool by name with the given JSON arguments.

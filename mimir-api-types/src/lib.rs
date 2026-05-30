@@ -24,6 +24,32 @@ pub struct SessionMessagesResponse {
     pub messages: Vec<ChatMessage>,
 }
 
+/// Information about a tool call executed during a chat completion.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ToolCallInfo {
+    /// Snake_case tool identifier.
+    pub name: String,
+    /// Human-readable display name (e.g. "Get Current Time").
+    pub display_name: String,
+    /// Compact result summary (single line, truncated to ~80 chars).
+    pub result: String,
+}
+
+impl ToolCallInfo {
+    /// Maximum length for the result summary.
+    pub const MAX_RESULT_LEN: usize = 80;
+
+    /// Truncate a result string to a single line of at most MAX_RESULT_LEN characters.
+    pub fn truncate_result(result: &str) -> String {
+        let first_line = result.lines().next().unwrap_or(result);
+        if first_line.len() > Self::MAX_RESULT_LEN {
+            format!("{}…", &first_line[..Self::MAX_RESULT_LEN])
+        } else {
+            first_line.to_string()
+        }
+    }
+}
+
 /// Request body for chat endpoints.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ChatRequest {
@@ -49,6 +75,9 @@ pub struct ChatResponse {
     pub session_id: String,
     pub response: String,
     pub usage: Usage,
+    /// Tool calls executed during this completion (empty for responses without tool use).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCallInfo>,
 }
 
 /// Token usage statistics for a completion request.
@@ -85,6 +114,7 @@ pub struct StatusResponse {
 pub enum StreamItem {
     Text(String),
     Usage(Usage),
+    ToolCall(ToolCallInfo),
 }
 
 #[cfg(test)]
@@ -131,6 +161,7 @@ mod tests {
                 completion_tokens: 2,
                 total_tokens: 3,
             },
+            tool_calls: vec![],
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: ChatResponse = serde_json::from_str(&json).unwrap();
@@ -175,5 +206,58 @@ mod tests {
         let item = StreamItem::Text("hello".to_string());
         assert_eq!(item, StreamItem::Text("hello".to_string()));
         assert_ne!(item, StreamItem::Usage(Usage::default()));
+    }
+
+    #[test]
+    fn test_tool_call_info_roundtrip() {
+        let info = ToolCallInfo {
+            name: "get_current_time".to_string(),
+            display_name: "Get Current Time".to_string(),
+            result: "2025-05-30T12:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let back: ToolCallInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(info, back);
+    }
+
+    #[test]
+    fn test_tool_call_info_truncate_short() {
+        let result = ToolCallInfo::truncate_result("ok");
+        assert_eq!(result, "ok");
+    }
+
+    #[test]
+    fn test_tool_call_info_truncate_long() {
+        let long = "a".repeat(100);
+        let result = ToolCallInfo::truncate_result(&long);
+        assert_eq!(result.chars().count(), 81); // 80 chars + ellipsis
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn test_tool_call_info_truncate_multiline() {
+        let result = ToolCallInfo::truncate_result(
+            "line1
+line2",
+        );
+        assert_eq!(result, "line1");
+    }
+
+    #[test]
+    fn test_chat_response_with_tool_calls() {
+        let resp = ChatResponse {
+            session_id: "sess-1".to_string(),
+            response: "done".to_string(),
+            usage: Usage::default(),
+            tool_calls: vec![ToolCallInfo {
+                name: "echo".to_string(),
+                display_name: "Echo".to_string(),
+                result: "hello".to_string(),
+            }],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let back: ChatResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.tool_calls.len(), 1);
+        assert_eq!(back.tool_calls[0].name, "echo");
     }
 }

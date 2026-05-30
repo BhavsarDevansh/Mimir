@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.21.0] - 2026-05-30
+
+### Added
+
+- Tool calls are now visible in `mimir chat` and `mimir ask` output, displayed in dim/italic styling (e.g. 🔧 Get Current Time → 2025-05-30T12:00:00Z)
+- Agentic tool loop: Mimir can make multiple rounds of tool calls, configurable via `max_tool_rounds` in `[agent]` config (default 100)
+- New SSE event type `tool_call` for streaming tool call information to clients
+- New `ChatResponse.tool_calls` field for the blocking chat endpoint
+- New `ToolCallInfo` type in `mimir-api-types` (name, display_name, result)
+- New `display_name()` method on `Tool` trait with automatic Title Case conversion (`snake_to_title_case`)
+- New `ToolMetadata.display_name` field populated at registration time
+- New `ToolRegistry.get_display_name()` convenience method
+- New `AgentConfig.max_tool_rounds` configuration field (default 100)
+- Added `colored` crate dependency for terminal styling
+- Moved `serde_json` from dev-dependency to dependency in `mimir-api-types`
+
 ## [0.20.0] - 2026-05-30
 
 ### Added

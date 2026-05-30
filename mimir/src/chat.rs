@@ -2,6 +2,7 @@
 //!
 //! The daemon owns the session and conversation history; this client is
 //! fully stateless except for the optional `session_id` used to resume.
+use colored::Colorize;
 use mimir_api_types::ChatRequest;
 use mimir_client::MimirClient;
 use rustyline::DefaultEditor;
@@ -163,13 +164,39 @@ pub async fn handle_chat(base_url: &str) {
             incognito: None,
         };
 
-        match client.chat(req).await {
-            Ok(resp) => {
-                println!("{}", format_markdown_for_terminal(&resp.response));
-                session_id = Some(resp.session_id);
+        match client.chat_stream(req).await {
+            Ok(mut stream) => {
+                use futures::StreamExt;
+                while let Some(item) = stream.next().await {
+                    match item {
+                        Ok(mimir_api_types::StreamItem::Text(text)) => {
+                            print!("{}", text);
+                            use std::io::Write;
+                            let _ = std::io::stdout().flush();
+                        }
+                        Ok(mimir_api_types::StreamItem::Usage(_)) => {}
+                        Ok(mimir_api_types::StreamItem::ToolCall(info)) => {
+                            eprintln!(
+                                "{}",
+                                format!("🔧 {} → {}", info.display_name, info.result)
+                                    .dimmed()
+                                    .italic()
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "
+Stream error: {}",
+                                e
+                            );
+                            break;
+                        }
+                    }
+                }
+                println!();
             }
             Err(e) => {
-                eprintln!("LLM error: {}", e);
+                eprintln!("LLM stream error: {}", e);
             }
         }
     }

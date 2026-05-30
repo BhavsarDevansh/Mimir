@@ -63,6 +63,8 @@ pub struct AgentConfig {
     pub name: String,
     pub proactivity: Proactivity,
     pub verbose_reasoning: bool,
+    /// Maximum number of agentic tool-call rounds before forcing a final response.
+    pub max_tool_rounds: u16,
 }
 
 /// Memory subsystem settings.
@@ -190,6 +192,7 @@ impl Default for AgentConfig {
             name: "Mimir".to_string(),
             proactivity: Proactivity::ImportantOnly,
             verbose_reasoning: false,
+            max_tool_rounds: 100,
         }
     }
 }
@@ -649,6 +652,7 @@ mod tests {
                 name: "TestAgent".to_string(),
                 proactivity: Proactivity::Always,
                 verbose_reasoning: true,
+                max_tool_rounds: 100,
             },
             memory: MemoryConfig {
                 path: None,
@@ -1001,6 +1005,7 @@ preset = "formal"
         assert_eq!(parsed.llm.api_key, "");
         assert_eq!(parsed.llm.model, "gpt-4o");
         assert_eq!(parsed.agent.name, "Mimir");
+        assert_eq!(parsed.agent.max_tool_rounds, 100);
     }
 
     #[test]

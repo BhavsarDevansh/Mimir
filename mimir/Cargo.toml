@@ -32,6 +32,7 @@ tracing-subscriber = "0.3"
 anyhow = "1.0"
 reqwest = { version = "0.13", features = ["json"] }
 thiserror = "2.0"
+colored = "3"
 
 [dev-dependencies]
 tempfile = "3"

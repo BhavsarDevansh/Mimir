@@ -2,7 +2,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use mimir_api_types::{
     ChatRequest, ChatResponse, SessionMessagesResponse, SessionSummary, StatusResponse, StreamItem,
-    Usage,
+    ToolCallInfo, Usage,
 };
 use reqwest::StatusCode;
 use thiserror::Error;
@@ -246,6 +246,10 @@ fn parse_sse_event(event: &str) -> Option<Result<StreamItem, ClientError>> {
             Ok(u) => Some(Ok(StreamItem::Usage(u))),
             Err(e) => Some(Err(ClientError::Serialization(e))),
         },
+        "tool_call" => match serde_json::from_str::<ToolCallInfo>(&data) {
+            Ok(info) => Some(Ok(StreamItem::ToolCall(info))),
+            Err(e) => Some(Err(ClientError::Serialization(e))),
+        },
         "error" => Some(Err(ClientError::Server {
             status: 500,
             message: data,
@@ -288,6 +292,7 @@ mod tests {
             session_id: "s1".to_string(),
             response: "hi".to_string(),
             usage: Usage::default(),
+            tool_calls: vec![],
         };
         Mock::given(method("POST"))
             .and(path("/chat"))
@@ -512,6 +517,34 @@ mod tests {
         assert_eq!(result.session_id, "sess-1");
         assert_eq!(result.messages.len(), 1);
         assert_eq!(result.messages[0].role, "user");
+    }
+
+    #[test]
+    fn test_parse_sse_tool_call_event() {
+        let event = "event: tool_call\ndata: {\"name\":\"get_current_time\",\"display_name\":\"Get Current Time\",\"result\":\"2025-05-30T12:00:00Z\"}\n\n";
+        let result = parse_sse_event(event);
+        assert!(result.is_some());
+        let item = result.unwrap();
+        match item {
+            Ok(StreamItem::ToolCall(info)) => {
+                assert_eq!(info.name, "get_current_time");
+                assert_eq!(info.display_name, "Get Current Time");
+                assert_eq!(info.result, "2025-05-30T12:00:00Z");
+            }
+            other => panic!("expected ToolCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_default_event_is_text() {
+        let event = "data: Hello world\n\n";
+        let result = parse_sse_event(event);
+        assert!(result.is_some());
+        let item = result.unwrap();
+        match item {
+            Ok(StreamItem::Text(t)) => assert_eq!(t, "Hello world"),
+            other => panic!("expected Text, got {:?}", other),
+        }
     }
 
     #[tokio::test]

@@ -3,6 +3,7 @@
 //! Supports streaming/non-streaming, piped stdin, model/personality overrides,
 //! token usage reporting, and incognito mode.
 
+use colored::Colorize;
 use is_terminal::IsTerminal;
 use std::io::Read;
 
@@ -40,6 +41,14 @@ pub async fn handle_ask(base_url: &str, opts: AskOptions) {
     if opts.no_stream {
         match client.chat(req).await {
             Ok(resp) => {
+                for tc in &resp.tool_calls {
+                    eprintln!(
+                        "{}",
+                        format!("🔧 {} → {}", tc.display_name, tc.result)
+                            .dimmed()
+                            .italic()
+                    );
+                }
                 println!("{}", resp.response);
                 if opts.verbose {
                     eprintln!(
@@ -70,6 +79,14 @@ pub async fn handle_ask(base_url: &str, opts: AskOptions) {
                         }
                         Ok(StreamItem::Usage(u)) => {
                             total_usage = u;
+                        }
+                        Ok(StreamItem::ToolCall(info)) => {
+                            eprintln!(
+                                "{}",
+                                format!("🔧 {} → {}", info.display_name, info.result)
+                                    .dimmed()
+                                    .italic()
+                            );
                         }
                         Err(e) => {
                             eprintln!("\nStream error: {}", e);

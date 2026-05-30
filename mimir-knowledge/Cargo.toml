@@ -1,0 +1,26 @@
+[package]
+name = "mimir-knowledge"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Knowledge graph crate for Mimir: SQLite-based entity and fact storage"
+repository.workspace = true
+homepage.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mimir-core = { path = "../mimir-core" }
+sqlx = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "fs", "macros", "sync"] }
+thiserror = "2.0"
+anyhow = "1.0"
+tracing = "0.1"
+static_assertions = "1.1"
+uuid = { version = "1.23", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

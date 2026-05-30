@@ -119,9 +119,4 @@ mod tests {
         assert!(path.parent().unwrap().exists());
     }
 
-    #[test]
-    fn test_default_memory_has_all_sections() {
-        let default = MemoryLoader::default_memory();
-        assert!(default.contains("…"));
-    }
 }

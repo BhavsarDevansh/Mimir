@@ -17,13 +17,13 @@ anyhow = "1.0"
 dirs = "6.0"
 thiserror = "2.0"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "fs", "process", "macros", "sync"] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-tls-native-roots"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "rustls-native-certs"] }
 eventsource-stream = "0.2.3"
 futures = "0.3"
 bytes = "1.9"
 tracing = "0.1"
 serde_yaml = "0.9"
-sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "chrono", "uuid"] }
+sqlx = { workspace = true }
 uuid = { version = "1.23", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"

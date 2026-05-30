@@ -32,6 +32,7 @@ const_assert!((PreferenceSourceType::Explicit as i16) != 0);
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow, Serialize, Deserialize)]
 pub struct Preference {
     pub id: i32,
+    pub entity_id: Option<i32>,
     pub category_id: i16,
     pub key: String,
     pub value: String, // JSON

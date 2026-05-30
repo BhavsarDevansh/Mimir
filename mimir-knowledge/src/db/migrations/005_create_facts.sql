@@ -6,7 +6,7 @@ CREATE TABLE facts (
     object_literal TEXT,
     valid_from TIMESTAMP,
     valid_until TIMESTAMP,
-    confidence REAL NOT NULL DEFAULT 0.5 CHECK (confidence >= 0.0 AND confidence <= 1.0),
+    confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
     fact_status_id INTEGER NOT NULL DEFAULT 1 REFERENCES fact_statuses(id),
     inferred BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

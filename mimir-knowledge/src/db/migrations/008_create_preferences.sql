@@ -1,13 +1,14 @@
 CREATE TABLE preferences (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_id INTEGER REFERENCES entities(id),
     category_id INTEGER NOT NULL REFERENCES preference_categories(id),
     key TEXT NOT NULL,
     value TEXT NOT NULL, -- JSON
-    confidence REAL NOT NULL DEFAULT 0.5 CHECK (confidence >= 0.0 AND confidence <= 1.0),
+    confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
     overridden_by_user BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(category_id, key)
+    UNIQUE(entity_id, category_id, key)
 );
 
 CREATE TABLE preference_sources (

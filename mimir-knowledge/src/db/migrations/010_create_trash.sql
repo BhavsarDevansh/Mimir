@@ -4,6 +4,7 @@ CREATE TABLE trash (
     original_id INTEGER NOT NULL,
     payload TEXT NOT NULL, -- JSON of the deleted row
     deleted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP,
     restored_at TIMESTAMP,
     restorer TEXT
 );

@@ -102,6 +102,34 @@ INSERT INTO preference_source_types (id, name) VALUES
     (2, 'Inferred'),
     (3, 'Corrected');
 
+CREATE TABLE dedup_status_types (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+INSERT INTO dedup_status_types (id, name) VALUES
+    (1, 'Pending'),
+    (2, 'Merged'),
+    (3, 'Kept'),
+    (4, 'Rejected');
+
+CREATE TABLE merge_workflow_types (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+INSERT INTO merge_workflow_types (id, name) VALUES
+    (1, 'Pending'),
+    (2, 'Processing'),
+    (3, 'Complete');
+
+CREATE TABLE merge_resolution_types (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+INSERT INTO merge_resolution_types (id, name) VALUES
+    (1, 'Merged'),
+    (2, 'KeptSeparate'),
+    (3, 'Rejected');
+
 CREATE TABLE system_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,

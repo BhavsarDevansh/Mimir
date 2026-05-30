@@ -46,6 +46,34 @@ pub enum LocationType {
     Current = 5,
 }
 
+/// Workflow status of a dedup queue entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Type, serde::Serialize, serde::Deserialize)]
+#[repr(i16)]
+pub enum DedupStatus {
+    Pending = 1,
+    Merged = 2,
+    Kept = 3,
+    Rejected = 4,
+}
+
+/// Workflow status of an entity merge queue entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Type, serde::Serialize, serde::Deserialize)]
+#[repr(i16)]
+pub enum MergeWorkflowStatus {
+    Pending = 1,
+    Processing = 2,
+    Complete = 3,
+}
+
+/// Resolution outcome of an entity merge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Type, serde::Serialize, serde::Deserialize)]
+#[repr(i16)]
+pub enum MergeResolution {
+    Merged = 1,
+    KeptSeparate = 2,
+    Rejected = 3,
+}
+
 // Compile-time sanity checks: max variant value fits i16 and no zero IDs.
 
 // Verify no zero-ID variants.
@@ -53,3 +81,6 @@ const_assert!((RelationType::InferredFrom as i16) != 0);
 const_assert!((EntityDateType::Birth as i16) != 0);
 const_assert!((RecurrenceType::None as i16) != 0);
 const_assert!((LocationType::Home as i16) != 0);
+const_assert!((DedupStatus::Pending as i16) != 0);
+const_assert!((MergeWorkflowStatus::Pending as i16) != 0);
+const_assert!((MergeResolution::Merged as i16) != 0);

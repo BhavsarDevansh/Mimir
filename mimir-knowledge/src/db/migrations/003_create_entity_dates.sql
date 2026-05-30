@@ -5,6 +5,7 @@ CREATE TABLE entity_dates (
     date_value TEXT NOT NULL, -- ISO-8601 date or datetime
     recurrence_type_id INTEGER NOT NULL DEFAULT 1 REFERENCES recurrence_types(id),
     custom_label TEXT,
+    confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

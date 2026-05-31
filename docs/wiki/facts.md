@@ -1,0 +1,71 @@
+# Facts
+
+Facts are the edges of Mimir’s knowledge graph: statements that connect entities
+(or literal values) with a predicate and a time range.
+
+---
+
+## What Is a Fact?
+
+A fact has:
+- **Subject** — the entity the statement is about (e.g., *Alice*).
+- **Predicate** — the relationship (e.g., `is_in`, `works_as`, `visited`).
+- **Object** — another entity or a literal string (e.g., *London* or "pizza").
+- **Time range** — when the statement is true (`valid_from` → `valid_until`).
+- **Confidence** — how certain Mimir is (0.0–1.0).
+- **Status** — `Active`, `Inferred`, `Disputed`, `Corrected`, `Superseded`, or `Forgotten`.
+
+Example:
+```
+Alice --[is_in]--> London   (2020-01-01 → 2021-01-01, confidence 1.0, Active)
+```
+
+---
+
+## Temporal Awareness
+
+Mimir understands that facts can change over time without contradicting each
+other:
+
+- **Non-overlapping ranges** are treated as a timeline, not a conflict.
+  - Alice lived in London (2020), then moved to Paris (2021). Both facts stay
+    `Active`.
+- **Overlapping ranges** create a `Disputed` fact that needs review.
+- **Open-ended facts** (no `valid_until`) are automatically closed when a new,
+  explicitly-dated fact arrives.
+
+---
+
+## Confidence
+
+Confidence depends on where the fact came from:
+
+| Source | Typical Confidence |
+|--------|-----------------|
+| You edited it directly | 1.00 |
+| Connector (calendar, email, etc.) | 0.80 |
+| Inferred by the reasoning engine | 0.50 |
+
+If an inferred fact loses its supporting evidence, its confidence drops. When
+it falls below 0.20, Mimir flags it as `Disputed`.
+
+---
+
+## Forgetting
+
+When a fact is removed, Mimir does not immediately erase it. Instead:
+
+1. The fact is moved to the **trash** with a 30-day retention period.
+2. Any facts that were inferred from it are re-evaluated.
+3. Inferred facts with no remaining support are also forgotten.
+4. Inferred facts that still have other support survive with updated confidence.
+
+This cascade ensures the knowledge graph stays consistent when evidence changes.
+
+---
+
+## Audit Trail
+
+Every insert, update, status change, and delete is logged with a timestamp and
+a JSON snapshot of the before/after state. You can inspect the full history of
+any fact.

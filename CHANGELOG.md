@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.24.0] - 2026-05-31
+
+### Added
+
+- Fact management subsystem (#50):
+  - Schema migration: `predicate TEXT` → `predicate_id INTEGER` FK to `predicates`.
+  - `fact_dependencies` FK changed to `ON DELETE RESTRICT` for Rust-orchestrated cascade forget.
+  - Full fact CRUD in `mimir-knowledge`: insert, read, update `valid_until`, update status, forget.
+  - Temporal overlap logic: Active, Disputed, and open-ended closure handling.
+  - Confidence placeholder module (`src/confidence.rs`) with initial values per `SourceType`.
+  - Cascade forget with trash retention (30 days) and recursive child evaluation.
+  - Audit logging (`fact_audit_log`) for insert, update, status change, and delete.
+  - `NewFact` input struct, `Fact::status()` and `Fact::predicate()` helpers.
+  - `AuditLogEntry` model and `get_audit_log` query.
+  - `KnowledgeGraph` public delegates for all fact operations.
+  - Integration tests covering CRUD, temporal timeline, disputed, closure, predicate lookup, audit log, source attachment, cascade forget orphan/survives, trash payload, and confidence values.
+  - Technical docs: `docs/fact-management.md`.
+  - Wiki docs: `docs/wiki/facts.md`.
+
+# Changelog
+
 ## [0.23.2] - 2026-05-31
 
 ### Fixed

@@ -1,11 +1,8 @@
 -- no transaction
 PRAGMA foreign_keys = OFF;
 
--- 1. Rename old table
-ALTER TABLE facts RENAME TO facts_old;
-
--- 2. Create new table with predicate_id FK
-CREATE TABLE facts (
+-- 1. Create new table with predicate_id FK
+CREATE TABLE facts_new (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     subject_id INTEGER NOT NULL REFERENCES entities(id),
     predicate_id INTEGER NOT NULL REFERENCES predicates(id),
@@ -20,9 +17,9 @@ CREATE TABLE facts (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 3. Copy data, converting predicate strings to predicate_id via predicates lookup.
+-- 2. Copy data, converting predicate strings to predicate_id via predicates lookup.
 --    Unmatched predicates fall back to id=1 (IsIn).
-INSERT INTO facts (
+INSERT INTO facts_new (
     id, subject_id, predicate_id, object_id, object_literal,
     valid_from, valid_until, confidence, fact_status_id, inferred,
     created_at, updated_at
@@ -40,11 +37,14 @@ SELECT
     f.inferred,
     f.created_at,
     f.updated_at
-FROM facts_old f
+FROM facts f
 LEFT JOIN predicates p ON p.name = f.predicate;
 
--- 4. Drop old table
-DROP TABLE facts_old;
+-- 3. Drop old table (FKs off so fact_dependencies won't complain).
+DROP TABLE facts;
+
+-- 4. Rename new table to final name.
+ALTER TABLE facts_new RENAME TO facts;
 
 -- 5. Recreate indexes
 CREATE INDEX idx_facts_subject ON facts(subject_id);

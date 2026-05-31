@@ -46,10 +46,6 @@ pub async fn insert_fact(
             new_fact.valid_from,
             new_fact.valid_until,
         ) {
-            if existing_fact.valid_until.is_none() && new_fact.valid_until.is_none() {
-                fact_status = FactStatus::Disputed;
-                break;
-            }
             if existing_fact.valid_until.is_none() && new_fact.valid_from.is_some() {
                 sqlx::query("UPDATE facts SET valid_until = ?, updated_at = ? WHERE id = ?")
                     .bind(now)

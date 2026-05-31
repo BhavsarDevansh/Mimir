@@ -63,47 +63,131 @@ pub async fn insert_fact(
         .collect();
 
     let mut fact_status = FactStatus::Active;
-    if !overlaps.is_empty() {
-        // Only close a sole open-ended predecessor when the new fact starts now.
-        let sole_open_predecessor = overlaps.len() == 1
-            && overlaps[0].valid_until.is_none()
-            && new_fact.valid_from.is_some();
+    let mut facts_to_supersede: Vec<i32> = Vec::new();
 
-        if sole_open_predecessor {
-            let existing_fact = overlaps[0];
-            let old_json = serde_json::to_string(existing_fact).unwrap_or_default();
-            sqlx::query("UPDATE facts SET valid_until = ?, updated_at = ? WHERE id = ?")
-                .bind(now)
-                .bind(now)
+    if !overlaps.is_empty() {
+        if new_fact.source_type == crate::models::source::SourceType::UserEdit {
+            // Explicit replacement: supersede all overlapping facts.
+            for existing_fact in &overlaps {
+                // Temporal closure for sole open-ended predecessor.
+                let is_sole_open = overlaps.len() == 1
+                    && existing_fact.valid_until.is_none()
+                    && new_fact.valid_from.is_some();
+
+                if is_sole_open {
+                    let old_json = serde_json::to_string(*existing_fact).unwrap_or_default();
+                    sqlx::query("UPDATE facts SET valid_until = ?, updated_at = ? WHERE id = ?")
+                        .bind(now)
+                        .bind(now)
+                        .bind(existing_fact.id)
+                        .execute(&mut *tx)
+                        .await?;
+
+                    let updated: Fact = sqlx::query_as::<_, Fact>(
+                        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+                         valid_from, valid_until, confidence, fact_status_id, inferred, \
+                         inference_depth, stale_confidence, created_at, updated_at \
+                         FROM facts WHERE id = ?",
+                    )
+                    .bind(existing_fact.id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+
+                    let new_json = serde_json::to_string(&updated).unwrap_or_default();
+                    sqlx::query(
+                        "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer) \
+                         VALUES (?, ?, ?, ?, ?, ?)",
+                    )
+                    .bind(existing_fact.id)
+                    .bind("UPDATE")
+                    .bind(old_json)
+                    .bind(new_json)
+                    .bind(now)
+                    .bind("system")
+                    .execute(&mut *tx)
+                    .await?;
+                }
+
+                // Mark as Superseded unless already superseded.
+                if existing_fact.status() != Some(FactStatus::Superseded) {
+                    let old_json = serde_json::to_string(*existing_fact).unwrap_or_default();
+                    sqlx::query("UPDATE facts SET fact_status_id = ?, updated_at = ? WHERE id = ?")
+                        .bind(FactStatus::Superseded as i16)
+                        .bind(now)
+                        .bind(existing_fact.id)
+                        .execute(&mut *tx)
+                        .await?;
+
+                    let updated: Fact = sqlx::query_as::<_, Fact>(
+                        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+                         valid_from, valid_until, confidence, fact_status_id, inferred, \
+                         inference_depth, stale_confidence, created_at, updated_at \
+                         FROM facts WHERE id = ?",
+                    )
+                    .bind(existing_fact.id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+
+                    let new_json = serde_json::to_string(&updated).unwrap_or_default();
+                    sqlx::query(
+                        "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer) \
+                         VALUES (?, ?, ?, ?, ?, ?)",
+                    )
+                    .bind(existing_fact.id)
+                    .bind("STATUS_CHANGE")
+                    .bind(old_json)
+                    .bind(new_json)
+                    .bind(now)
+                    .bind("system")
+                    .execute(&mut *tx)
+                    .await?;
+
+                    facts_to_supersede.push(existing_fact.id);
+                }
+            }
+            fact_status = FactStatus::Active;
+        } else {
+            // Non-explicit: existing temporal rules.
+            let sole_open_predecessor = overlaps.len() == 1
+                && overlaps[0].valid_until.is_none()
+                && new_fact.valid_from.is_some();
+
+            if sole_open_predecessor {
+                let existing_fact = overlaps[0];
+                let old_json = serde_json::to_string(existing_fact).unwrap_or_default();
+                sqlx::query("UPDATE facts SET valid_until = ?, updated_at = ? WHERE id = ?")
+                    .bind(now)
+                    .bind(now)
+                    .bind(existing_fact.id)
+                    .execute(&mut *tx)
+                    .await?;
+
+                let updated: Fact = sqlx::query_as::<_, Fact>(
+                    "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+                     valid_from, valid_until, confidence, fact_status_id, inferred, \
+                     inference_depth, stale_confidence, created_at, updated_at \
+                     FROM facts WHERE id = ?",
+                )
                 .bind(existing_fact.id)
-                .execute(&mut *tx)
+                .fetch_one(&mut *tx)
                 .await?;
 
-            let updated: Fact = sqlx::query_as::<_, Fact>(
-                "SELECT id, subject_id, predicate_id, object_id, object_literal, \
-                 valid_from, valid_until, confidence, fact_status_id, inferred, \
-                 inference_depth, stale_confidence, created_at, updated_at \
-                 FROM facts WHERE id = ?",
-            )
-            .bind(existing_fact.id)
-            .fetch_one(&mut *tx)
-            .await?;
-
-            let new_json = serde_json::to_string(&updated).unwrap_or_default();
-            sqlx::query(
-                "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer) \
-                 VALUES (?, ?, ?, ?, ?, ?)",
-            )
-            .bind(existing_fact.id)
-            .bind("UPDATE")
-            .bind(old_json)
-            .bind(new_json)
-            .bind(now)
-            .bind("system")
-            .execute(&mut *tx)
-            .await?;
-        } else {
-            fact_status = FactStatus::Disputed;
+                let new_json = serde_json::to_string(&updated).unwrap_or_default();
+                sqlx::query(
+                    "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer) \
+                     VALUES (?, ?, ?, ?, ?, ?)",
+                )
+                .bind(existing_fact.id)
+                .bind("UPDATE")
+                .bind(old_json)
+                .bind(new_json)
+                .bind(now)
+                .bind("system")
+                .execute(&mut *tx)
+                .await?;
+            } else {
+                fact_status = FactStatus::Disputed;
+            }
         }
     }
 
@@ -138,6 +222,18 @@ pub async fn insert_fact(
         .bind(new_fact.source_type as i16)
         .execute(&mut *tx)
         .await?;
+
+    // 4b. Insert Supersedes edges for explicitly replaced facts.
+    for old_fact_id in &facts_to_supersede {
+        sqlx::query(
+            "INSERT INTO fact_dependencies (parent_fact_id, child_fact_id, relation_type_id)              VALUES (?, ?, ?)",
+        )
+        .bind(old_fact_id)
+        .bind(fact.id)
+        .bind(crate::models::enums::RelationType::Supersedes as i16)
+        .execute(&mut *tx)
+        .await?;
+    }
 
     // 5. Audit log.
     let new_json = serde_json::to_string(&fact).unwrap_or_default();

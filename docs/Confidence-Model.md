@@ -49,6 +49,14 @@ The result is clamped to `[0.0, 0.95]` for non-explicit facts. Explicit facts us
 - **Signed parent weights**: The `is_positive` flag on `fact_dependencies` allows negative contributions (e.g., "doesn't love green foods" opposes "likes basil pesto").
 - **Breadth bonus**: More independent parents increase confidence, but losing one still hurts because the weighted sum drops (or rises, for removed negatives).
 
+## Explicit Replacement (Supersession)
+
+When a `UserEdit` fact is inserted and an existing fact on the same `subject_id + predicate_id` has a temporally overlapping range, the existing fact is transitioned to `Superseded` status. Its confidence is preserved. A `fact_dependencies` edge `old → new` with `relation_type = Supersedes` is created. The new fact receives `status = Active`.
+
+This applies regardless of the old fact's source type (inferred, connector, casual, or explicit). Only facts that are already `Superseded` are left untouched.
+
+If the temporal ranges do **not** overlap, both facts remain `Active` (timeline behaviour).
+
 ## Cascade Behaviour
 
 When a parent fact is forgotten or its confidence changes:

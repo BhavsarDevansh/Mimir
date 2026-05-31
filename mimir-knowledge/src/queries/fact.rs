@@ -48,47 +48,57 @@ pub async fn insert_fact(
     .fetch_all(&mut *tx)
     .await?;
 
+    // Collect all overlapping facts.
+    let overlaps: Vec<&Fact> = existing
+        .iter()
+        .filter(|ef| {
+            ranges_overlap(
+                ef.valid_from,
+                ef.valid_until,
+                new_fact.valid_from,
+                new_fact.valid_until,
+            )
+        })
+        .collect();
+
     let mut fact_status = FactStatus::Active;
-    for existing_fact in &existing {
-        if ranges_overlap(
-            existing_fact.valid_from,
-            existing_fact.valid_until,
-            new_fact.valid_from,
-            new_fact.valid_until,
-        ) {
-            if existing_fact.valid_until.is_none() && new_fact.valid_from.is_some() {
-                let old_json = serde_json::to_string(existing_fact).unwrap_or_default();
-                sqlx::query("UPDATE facts SET valid_until = ?, updated_at = ? WHERE id = ?")
-                    .bind(now)
-                    .bind(now)
-                    .bind(existing_fact.id)
-                    .execute(&mut *tx)
-                    .await?;
+    if !overlaps.is_empty() {
+        // Only close a sole open-ended predecessor when the new fact starts now.
+        let sole_open_predecessor = overlaps.len() == 1
+            && overlaps[0].valid_until.is_none()
+            && new_fact.valid_from.is_some();
 
-                let updated: Fact = sqlx::query_as::<_, Fact>(
-                    "SELECT id, subject_id, predicate_id, object_id, object_literal,                      valid_from, valid_until, confidence, fact_status_id, inferred,                      created_at, updated_at                      FROM facts WHERE id = ?",
-                )
-                .bind(existing_fact.id)
-                .fetch_one(&mut *tx)
-                .await?;
-
-                let new_json = serde_json::to_string(&updated).unwrap_or_default();
-                sqlx::query(
-                    "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer)                      VALUES (?, ?, ?, ?, ?, ?)",
-                )
-                .bind(existing_fact.id)
-                .bind("UPDATE")
-                .bind(old_json)
-                .bind(new_json)
+        if sole_open_predecessor {
+            let existing_fact = overlaps[0];
+            let old_json = serde_json::to_string(existing_fact).unwrap_or_default();
+            sqlx::query("UPDATE facts SET valid_until = ?, updated_at = ? WHERE id = ?")
                 .bind(now)
-                .bind("system")
+                .bind(now)
+                .bind(existing_fact.id)
                 .execute(&mut *tx)
                 .await?;
-                // Continue checking other overlaps.
-            } else {
-                fact_status = FactStatus::Disputed;
-                break;
-            }
+
+            let updated: Fact = sqlx::query_as::<_, Fact>(
+                "SELECT id, subject_id, predicate_id, object_id, object_literal,                      valid_from, valid_until, confidence, fact_status_id, inferred,                      created_at, updated_at                      FROM facts WHERE id = ?",
+            )
+            .bind(existing_fact.id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+            let new_json = serde_json::to_string(&updated).unwrap_or_default();
+            sqlx::query(
+                "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer)                      VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(existing_fact.id)
+            .bind("UPDATE")
+            .bind(old_json)
+            .bind(new_json)
+            .bind(now)
+            .bind("system")
+            .execute(&mut *tx)
+            .await?;
+        } else {
+            fact_status = FactStatus::Disputed;
         }
     }
 
@@ -173,7 +183,7 @@ pub async fn get_by_subject(
          created_at, updated_at \
          FROM facts \
          WHERE subject_id = ? \
-         ORDER BY created_at DESC \
+         ORDER BY confidence DESC, created_at DESC \
          LIMIT ?",
     )
     .bind(subject_id)
@@ -195,7 +205,7 @@ pub async fn get_by_predicate(
          created_at, updated_at \
          FROM facts \
          WHERE predicate_id = ? \
-         ORDER BY created_at DESC \
+         ORDER BY confidence DESC, created_at DESC \
          LIMIT ?",
     )
     .bind(predicate_id)
@@ -217,7 +227,7 @@ pub async fn get_by_object(
          created_at, updated_at \
          FROM facts \
          WHERE object_id = ? \
-         ORDER BY created_at DESC \
+         ORDER BY confidence DESC, created_at DESC \
          LIMIT ?",
     )
     .bind(object_id)
@@ -247,7 +257,8 @@ pub async fn get_active_facts_at(
          WHERE subject_id = ? AND predicate_id = ? \
          AND (valid_from IS NULL OR valid_from <= ?) \
          AND (valid_until IS NULL OR valid_until > ?) \
-         AND fact_status_id = ?",
+         AND fact_status_id = ? \
+         ORDER BY confidence DESC, created_at DESC",
     )
     .bind(subject_id)
     .bind(predicate_id)
@@ -285,6 +296,16 @@ pub async fn update_valid_until(
     .await?;
 
     let old = old.ok_or(KnowledgeError::FactNotFound(fact_id))?;
+
+    if let (Some(from), Some(new_until)) = (old.valid_from, new_valid_until) {
+        if new_until < from {
+            return Err(KnowledgeError::Validation(format!(
+                "valid_until ({}) must not be before valid_from ({})",
+                new_until, from
+            )));
+        }
+    }
+
     let old_json = serde_json::to_string(&old).unwrap_or_default();
 
     sqlx::query("UPDATE facts SET valid_until = ?, updated_at = ? WHERE id = ?")

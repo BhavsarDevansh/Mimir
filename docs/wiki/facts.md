@@ -16,9 +16,11 @@ A fact has:
 - **Status** — `Active`, `Inferred`, `Disputed`, `Corrected`, `Superseded`, or `Forgotten`.
 
 Example:
-```
+
+```text
 Alice --[is_in]--> London   (2020-01-01 → 2021-01-01, confidence 1.0, Active)
 ```
+
 
 ---
 
@@ -42,7 +44,7 @@ Confidence depends on where the fact came from:
 
 | Source | Typical Confidence |
 |--------|-----------------|
-| You edited it directly | 1.00 |
+| You edited it directly | 0.80 |
 | Connector (calendar, email, etc.) | 0.80 |
 | Inferred by the reasoning engine | 0.50 |
 

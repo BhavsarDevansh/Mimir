@@ -74,7 +74,8 @@ fn forget_fact_inner<'a>(
             fact: fact.clone(),
             sources,
         };
-        let payload_json = serde_json::to_string(&payload).unwrap_or_default();
+        let payload_json = serde_json::to_string(&payload)
+            .map_err(|e| KnowledgeError::Validation(format!("JSON serialization failed: {}", e)))?;
 
         let expires_at = now + Duration::days(30);
 
@@ -92,7 +93,8 @@ fn forget_fact_inner<'a>(
         .await?;
 
         // Audit log before deletion (fact_id FK will cascade after delete).
-        let old_json = serde_json::to_string(&fact).unwrap_or_default();
+        let old_json = serde_json::to_string(&fact)
+            .map_err(|e| KnowledgeError::Validation(format!("JSON serialization failed: {}", e)))?;
         sqlx::query(
             "INSERT INTO fact_audit_log (fact_id, action, old_value, performed_at, performer) \
              VALUES (?, ?, ?, ?, ?)",
@@ -110,16 +112,18 @@ fn forget_fact_inner<'a>(
             "SELECT fd.child_fact_id, f.inferred \
              FROM fact_dependencies fd \
              JOIN facts f ON f.id = fd.child_fact_id \
-             WHERE fd.parent_fact_id = ?",
+             WHERE fd.parent_fact_id = ? AND fd.relation_type_id = ?",
         )
         .bind(fact_id)
+        .bind(crate::models::enums::RelationType::InferredFrom as i16)
         .fetch_all(&mut *tx)
         .await?;
 
         // Remove all dependency rows where this fact is parent or child.
-        sqlx::query("DELETE FROM fact_dependencies WHERE parent_fact_id = ? OR child_fact_id = ?")
+        sqlx::query("DELETE FROM fact_dependencies WHERE (parent_fact_id = ? OR child_fact_id = ?) AND relation_type_id = ?")
             .bind(fact_id)
             .bind(fact_id)
+            .bind(crate::models::enums::RelationType::InferredFrom as i16)
             .execute(&mut *tx)
             .await?;
 
@@ -135,9 +139,10 @@ fn forget_fact_inner<'a>(
         // each recursive forget runs its own transaction.
         for (child_id, child_inferred) in children {
             let remaining_parents: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM fact_dependencies WHERE child_fact_id = ?",
+                "SELECT COUNT(*) FROM fact_dependencies WHERE child_fact_id = ? AND relation_type_id = ?",
             )
             .bind(child_id)
+            .bind(crate::models::enums::RelationType::InferredFrom as i16)
             .fetch_one(pool)
             .await?;
 
@@ -160,7 +165,9 @@ fn forget_fact_inner<'a>(
                     .await?;
 
                     if let Some(old_child) = old_child {
-                        let old_json = serde_json::to_string(&old_child).unwrap_or_default();
+                        let old_json = serde_json::to_string(&old_child).map_err(|e| {
+                            KnowledgeError::Validation(format!("JSON serialization failed: {}", e))
+                        })?;
 
                         sqlx::query("UPDATE facts SET fact_status_id = ? WHERE id = ?")
                             .bind(crate::models::fact::FactStatus::Disputed as i16)
@@ -175,7 +182,9 @@ fn forget_fact_inner<'a>(
                         .fetch_one(pool)
                         .await?;
 
-                        let new_json = serde_json::to_string(&updated_child).unwrap_or_default();
+                        let new_json = serde_json::to_string(&updated_child).map_err(|e| {
+                            KnowledgeError::Validation(format!("JSON serialization failed: {}", e))
+                        })?;
                         sqlx::query(
                             "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer)                              VALUES (?, ?, ?, ?, ?, ?)",
                         )

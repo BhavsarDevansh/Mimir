@@ -1,4 +1,4 @@
--- no transaction
+-- no-transaction
 PRAGMA foreign_keys = OFF;
 
 -- 1. Create new table with predicate_id FK

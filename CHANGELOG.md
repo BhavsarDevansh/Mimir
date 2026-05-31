@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.24.2] - 2026-05-31
+
+### Fixed
+
+- Removed duplicate top-level "# Changelog" heading.
+- Fixed fenced code block formatting in `docs/wiki/facts.md`.
+- Aligned `SourceType::UserEdit` initial confidence with connectors at `0.80`.
+- Restricted confidence recalculation and cascade forget to inference-only dependencies via `RelationType::InferredFrom` filter.
+- Fixed SQLx migration directives (`-- no-transaction`) in `016_fix_facts_predicate.sql` and `017_fix_fact_dependencies_fk.sql`.
+- Replaced `unwrap_or_default()` with proper error propagation for JSON serialization in `forget.rs`.
+- Added migration `018_fix_audit_log_fk.sql` removing `ON DELETE CASCADE` from `fact_audit_log.fact_id` so audit rows persist after fact deletion.
+- Updated all fact-read queries to order by `confidence DESC, created_at DESC`.
+- Added guard in `update_valid_until` rejecting `new_valid_until < valid_from`.
+- Refactored `insert_fact` temporal overlap logic to classify overlaps before modifying predecessors, preventing premature closure when the new fact should be `Disputed`.
+
 ## [0.24.1] - 2026-05-31
 
 ### Fixed
@@ -30,7 +45,6 @@
   - Technical docs: `docs/fact-management.md`.
   - Wiki docs: `docs/wiki/facts.md`.
 
-# Changelog
 
 ## [0.23.2] - 2026-05-31
 

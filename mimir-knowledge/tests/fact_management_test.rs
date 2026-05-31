@@ -566,7 +566,7 @@ async fn confidence_initial_values() {
         })
         .await
         .unwrap();
-    assert!((f_user.confidence - 1.0).abs() < f32::EPSILON);
+    assert!((f_user.confidence - 0.80).abs() < f32::EPSILON);
 
     let f_inf = kg
         .insert_fact(NewFact {

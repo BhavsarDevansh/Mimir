@@ -10,7 +10,7 @@ use crate::models::source::SourceType;
 /// TODO(#51): Replace with full structural confidence model.
 pub fn initial(source_type: SourceType) -> f32 {
     match source_type {
-        SourceType::UserEdit => 1.0,
+        SourceType::UserEdit => 0.80,
         SourceType::Connector => 0.80,
         SourceType::Email | SourceType::Calendar | SourceType::Photo | SourceType::Message => 0.80,
         SourceType::Inference => 0.50,
@@ -28,9 +28,10 @@ pub async fn recalculate(pool: &SqlitePool, fact_id: i32) -> Result<f32, Knowled
         "SELECT AVG(f.confidence) \
          FROM facts f \
          JOIN fact_dependencies fd ON fd.parent_fact_id = f.id \
-         WHERE fd.child_fact_id = ?",
+         WHERE fd.child_fact_id = ? AND fd.relation_type_id = ?",
     )
     .bind(fact_id)
+    .bind(crate::models::enums::RelationType::InferredFrom as i16)
     .fetch_one(pool)
     .await?;
 

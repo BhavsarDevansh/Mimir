@@ -22,3 +22,13 @@
 ### Fixed
 
 - Updated all test assertions and raw SQL to match new schema columns.
+
+## 0.24.4 (2026-05-31)
+
+### Fixed
+
+- Build failure in `mimir-client`: replaced unsupported `reqwest` feature `rustls-tls-ring` with `rustls-native-certs` to align with `reqwest` 0.13 feature flags and `mimir-core` crate configuration.
+
+### Documentation
+
+- Added `docs/wiki/what-works-now.md`: comprehensive user-facing overview of all working features, current limitations, known bugs, and roadmap context.

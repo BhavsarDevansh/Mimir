@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.23.2] - 2026-05-31
+
+### Fixed
+
+- Made `KnowledgeGraph` public API consistent: `update_entity`, `insert_entity_date`, and `insert_location` now accept strongly-typed enums (`EntityType`, `EntityDateType`, `RecurrenceType`, `LocationType`) instead of raw `i16` values.
+- Wrapped `create_entity` in a transaction with `INSERT ... ON CONFLICT DO NOTHING` and added a DB-level unique expression index on `LOWER(name)` to prevent case-insensitive duplicate races.
+- Fixed inverted FTS5 rank filter in `get_by_name` (`rank >= -0.2` → `rank <= -0.2`) and corrected score mapping so more negative (better) bm25 ranks receive higher scores.
+- Updated `knowledge-graph-schema.md` to accurately reflect that lookup-table seeding spans migrations `001`, `012`, and `013`.
+- Added missing `predicates` and `predicate_constraints` assertions to `all_migrations_apply_cleanly`.
+
+## [0.23.1] - 2026-05-31
+
+### Fixed
+
+- Weekly recurrence in `next_occurrence` computed weekday offset in wrong direction, causing incorrect upcoming dates when current day differed from base weekday.
+- `auto_merge_pair` silently deleted `entity_dates` and `entity_locations` via `ON DELETE CASCADE` instead of migrating them to the survivor; now also explicitly removes `preferences` and `entity_merge_queue` rows for the merged entity to prevent FK constraint failures.
+- `delete_entity` guard only checked `facts`, allowing raw SQLite FK errors when deleting entities with `preferences` or `entity_merge_queue` entries; now counts all three tables and returns a clean `KnowledgeError`.
+- `find_exact_duplicates` performed an O(n²) self-join; rewritten to use a `dup_names` CTE backed by a new expression index on `LOWER(name)`.
+- `escape_fts5` only doubled double quotes, leaving `*`, `OR`, `AND`, etc. unescaped; now wraps the query in a quoted phrase and sanitises asterisks to prevent FTS5 syntax errors.
+
+## [0.23.0] - 2026-05-31
+
+### Added
+
+- Entity management subsystem (#49):
+  - `DateTime = 8` entity type for temporal nodes.
+  - Predicate taxonomy with 10 seeded predicates and type constraints (`validate_predicate`).
+  - Full entity CRUD with alias resolution: `create_entity`, `get_by_id`, `get_by_name`, `search`, `update_entity`, `delete_entity`.
+  - Alias management: `add_alias`, `remove_alias` with FTS5 index refresh.
+  - Entity deduplication: exact-match auto-merge (repoints facts, preserves aliases) and overlapping-alias flagging into `entity_merge_queue`.
+  - LLM semantic dedup stub (`enqueue_semantic_dedup`) deferred to Phase 2 (#50+).
+  - Entity dates with recurrence resolution: `insert_entity_date`, `get_dates_for_entity`, `get_upcoming_dates`, `delete_entity_date`. Supports None, Daily, Weekly, Monthly, and Yearly (including Feb 29 → Mar 1 fallback).
+  - Entity location stubs: `insert_location`, `get_locations`, `update_location`.
+  - New `KnowledgeGraph` public API methods delegating to query modules.
+  - Integration tests covering CRUD, alias resolution, predicate validation, dates, dedup, and location stubs.
+
+### Changed
+
+- Updated `knowledge-graph-schema.md` and `wiki/knowledge-graph.md` with entity dates, aliases, dedup, and predicate taxonomy documentation.
+
 ## [0.22.0] - 2026-05-31
 
 ### Added

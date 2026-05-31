@@ -10,11 +10,15 @@
 
 ### Lookup Tables (Stable Integer IDs)
 
-All lookup tables are seeded in migration `001` with stable integer IDs that map to Rust enums via `#[repr(i16)]` discriminants.
+Lookup tables are seeded across migrations `001`, `012`, and `013` with stable integer IDs that map to Rust enums via `#[repr(i16)]` discriminants:
+
+- Migration `001` seeds `entity_types` (7 variants), `entity_date_types`, `recurrence_types`, `location_types`, `fact_statuses`, `relation_types`, `source_types`, `preference_categories`, and `preference_source_types`.
+- Migration `012` adds the `DateTime = 8` variant to `entity_types`.
+- Migration `013` seeds `predicates` and `predicate_constraints`.
 
 | Table | Rows | Rust Enum | Module |
 |-------|------|-----------|--------|
-| `entity_types` | 7 | `EntityType` | `models::entity` |
+| `entity_types` | 8 | `EntityType` | `models::entity` |
 | `entity_date_types` | 6 | `EntityDateType` | `models::enums` |
 | `recurrence_types` | 5 | `RecurrenceType` | `models::enums` |
 | `location_types` | 5 | `LocationType` | `models::enums` |
@@ -23,14 +27,15 @@ All lookup tables are seeded in migration `001` with stable integer IDs that map
 | `source_types` | 7 | `SourceType` | `models::source` |
 | `preference_categories` | 5 | `PreferenceCategory` | `models::preference` |
 | `preference_source_types` | 3 | `PreferenceSourceType` | `models::preference` |
+| `predicates` | 10 | `Predicate` | `models::enums` |
 
 ### Core Tables
 
 | Table | Description |
 |-------|-------------|
-| `entities` | Graph nodes: people, places, events, objects, etc. |
+| `entities` | Graph nodes: people, places, events, objects, dates, etc. |
 | `entity_aliases` | Alternative names for entities (dedup / search) |
-| `entity_dates` | Temporal annotations (birth, anniversary, custom) |
+| `entity_dates` | Temporal annotations (birth, anniversary, custom) with recurrence |
 | `entity_locations` | Geographic / address data with validity windows |
 | `facts` | Directed temporal edges between entities |
 | `fact_dependencies` | Junction table linking inferred facts to parents |
@@ -49,6 +54,17 @@ All lookup tables are seeded in migration `001` with stable integer IDs that map
 | `trash` | Soft-deleted rows with full payload JSON |
 | `entity_fts` | FTS5 virtual table for entity name / alias search |
 
+### Predicate Taxonomy (New in 0.23.0)
+
+Migration `013` introduces a controlled vocabulary for predicates:
+
+- `predicates(id, name, description)` — canonical predicate names with stable IDs.
+- `predicate_constraints(predicate_id, allowed_subject_type_id, allowed_object_type_id)` — valid subject/object type combinations per predicate.
+
+Seeded predicates: `is_in`, `visited`, `owns`, `works_as`, `has_partner`, `has_parent`, `born_on`, `died_on`, `located_in`, `created_on`.
+
+Validation is enforced at fact-insert time via `validate_predicate(subject_type, predicate, object_type)`.
+
 ---
 
 ## Enum ↔ Lookup Mapping
@@ -66,6 +82,7 @@ pub enum EntityType {
     Concept = 5,
     Organization = 6,
     Activity = 7,
+    DateTime = 8,
 }
 ```
 
@@ -102,6 +119,8 @@ Migrations are strictly ordered by foreign-key dependencies:
 9. `009` — Audit log + queues (depends on `facts`, `entities`)
 10. `010` — `trash` (standalone, no FKs)
 11. `011` — FTS5 virtual table + triggers (depends on `entities`)
+12. `012` — `DateTime` entity type seed
+13. `013` — Predicate taxonomy tables + constraints
 
 ---
 
@@ -117,11 +136,41 @@ Migrations are strictly ordered by foreign-key dependencies:
 
 `entity_fts` is an FTS5 virtual table shadowing `entities`. Triggers on `entities` keep the index in sync automatically on insert, update, and delete.
 
+Search flow (`get_by_name`):
+1. Exact name match (step 1)
+2. Exact alias match (step 2)
+3. FTS5 fuzzy search with rank threshold ≥ 0.8 (step 3)
+
+Results are deduplicated, scored, and capped at 10.
+
+---
+
+## Entity Deduplication
+
+Two-phase dedup implemented in Rust:
+
+1. **Exact-match auto-merge** — case-insensitive name match; survivor is the entity with more facts. Merged aliases are preserved; facts are repointed via FK update.
+2. **Overlapping-alias flagging** — shared alias strings across different entities insert rows into `entity_merge_queue` with `Pending` status for human review.
+3. **LLM semantic dedup** — stubbed in #49; full implementation deferred to Phase 2 optimization (#50+).
+
+---
+
+## Entity Dates & Recurrence
+
+`entity_dates` stores ISO-8601 date/datetime values with a recurrence type:
+
+- `None` — one-time date.
+- `Daily` — every day.
+- `Weekly` — same weekday each week.
+- `Monthly` — same day each month (falls back to last valid day).
+- `Yearly` — anniversary; Feb 29 falls back to Mar 1 in non-leap years.
+
+All recurrence math is UTC-internal; timezone formatting is a presentation-layer concern.
+
 ---
 
 ## Future Work
 
-- Query builders (`queries/` modules) — CRUD, temporal retrieval, graph traversal.
 - Inference engine (`inference/`) — Rust-native transitivity, contradiction, threshold rules.
 - Optimization pipeline (`optimization/`) — Nightly dedup, confidence recalc, dormant cleanup.
 - Fact extraction (`extract.rs`) — LLM-assisted structured extraction with Rust validation.

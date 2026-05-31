@@ -16,6 +16,7 @@ pub enum EntityType {
     Concept = 5,
     Organization = 6,
     Activity = 7,
+    DateTime = 8,
 }
 
 const_assert!((EntityType::Person as i16) != 0);

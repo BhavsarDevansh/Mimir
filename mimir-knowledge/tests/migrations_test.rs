@@ -43,6 +43,8 @@ async fn all_migrations_apply_cleanly() {
     assert!(names.contains(&"source_types".to_string()));
     assert!(names.contains(&"preference_categories".to_string()));
     assert!(names.contains(&"preference_source_types".to_string()));
+    assert!(names.contains(&"predicates".to_string()));
+    assert!(names.contains(&"predicate_constraints".to_string()));
 }
 
 #[tokio::test]
@@ -52,7 +54,7 @@ async fn lookup_tables_seeded_correctly() {
     let kg = KnowledgeGraph::init(&db_path).await.unwrap();
 
     let queries: Vec<(&'static str, i64)> = vec![
-        ("SELECT COUNT(*) FROM entity_types", 7),
+        ("SELECT COUNT(*) FROM entity_types", 8),
         ("SELECT COUNT(*) FROM entity_date_types", 6),
         ("SELECT COUNT(*) FROM recurrence_types", 5),
         ("SELECT COUNT(*) FROM location_types", 5),

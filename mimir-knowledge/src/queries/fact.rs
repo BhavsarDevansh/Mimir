@@ -376,3 +376,25 @@ fn ranges_overlap(
     };
     a_starts_before_b_ends && b_starts_before_a_ends
 }
+
+// ---------------------------------------------------------------------------
+// Audit log
+// ---------------------------------------------------------------------------
+
+/// Retrieve audit log entries for a given fact, newest first.
+pub async fn get_audit_log(
+    pool: &SqlitePool,
+    fact_id: i32,
+) -> Result<Vec<crate::models::audit_log::AuditLogEntry>, KnowledgeError> {
+    let entries: Vec<crate::models::audit_log::AuditLogEntry> =
+        sqlx::query_as::<_, crate::models::audit_log::AuditLogEntry>(
+            "SELECT id, fact_id, action, old_value, new_value, performed_at, performer \
+         FROM fact_audit_log \
+         WHERE fact_id = ? \
+         ORDER BY performed_at DESC",
+        )
+        .bind(fact_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(entries)
+}

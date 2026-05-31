@@ -231,4 +231,89 @@ impl KnowledgeGraph {
     ) -> Result<Vec<models::entity_location::EntityLocation>, KnowledgeError> {
         queries::entity::get_locations(&self.pool, entity_id).await
     }
+
+    // ------------------------------------------------------------------
+    // Fact CRUD delegates
+    // ------------------------------------------------------------------
+
+    /// Insert a new fact with temporal overlap handling and provenance.
+    pub async fn insert_fact(
+        &self,
+        new_fact: models::fact::NewFact,
+    ) -> Result<models::fact::Fact, KnowledgeError> {
+        queries::fact::insert_fact(&self.pool, &new_fact, self.now()).await
+    }
+
+    /// Get a fact by ID.
+    pub async fn get_fact(&self, id: i32) -> Result<Option<models::fact::Fact>, KnowledgeError> {
+        queries::fact::get_by_id(&self.pool, id).await
+    }
+
+    /// List facts for a subject entity.
+    pub async fn get_facts_by_subject(
+        &self,
+        subject_id: i32,
+        limit: i64,
+    ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
+        queries::fact::get_by_subject(&self.pool, subject_id, limit).await
+    }
+
+    /// List facts for a predicate.
+    pub async fn get_facts_by_predicate(
+        &self,
+        predicate: models::enums::Predicate,
+        limit: i64,
+    ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
+        queries::fact::get_by_predicate(&self.pool, predicate as i16, limit).await
+    }
+
+    /// List facts for an object entity.
+    pub async fn get_facts_by_object(
+        &self,
+        object_id: i32,
+        limit: i64,
+    ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
+        queries::fact::get_by_object(&self.pool, object_id, limit).await
+    }
+
+    /// Return facts active at a specific point in time.
+    pub async fn get_active_facts_at(
+        &self,
+        subject_id: i32,
+        predicate: models::enums::Predicate,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
+        queries::fact::get_active_facts_at(&self.pool, subject_id, predicate as i16, at).await
+    }
+
+    /// Update a fact's valid-until timestamp.
+    pub async fn update_fact_valid_until(
+        &self,
+        id: i32,
+        valid_until: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<models::fact::Fact, KnowledgeError> {
+        queries::fact::update_valid_until(&self.pool, id, valid_until, self.now()).await
+    }
+
+    /// Update a fact's lifecycle status.
+    pub async fn update_fact_status(
+        &self,
+        id: i32,
+        status: models::fact::FactStatus,
+    ) -> Result<models::fact::Fact, KnowledgeError> {
+        queries::fact::set_status(&self.pool, id, status, self.now()).await
+    }
+
+    /// Soft-delete a fact to trash, cascading to inferred children.
+    pub async fn forget_fact(&self, id: i32, performer: &str) -> Result<(), KnowledgeError> {
+        forget::forget_fact(&self.pool, id, performer, self.now()).await
+    }
+
+    /// Retrieve audit log entries for a fact.
+    pub async fn get_audit_log(
+        &self,
+        fact_id: i32,
+    ) -> Result<Vec<models::audit_log::AuditLogEntry>, KnowledgeError> {
+        queries::fact::get_audit_log(&self.pool, fact_id).await
+    }
 }

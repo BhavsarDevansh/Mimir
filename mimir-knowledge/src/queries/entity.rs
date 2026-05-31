@@ -369,7 +369,7 @@ pub async fn validate_predicate(
     .await?;
 
     if row.is_none() {
-        return Err(KnowledgeError::InvalidPredicate);
+        return Err(KnowledgeError::InvalidPredicate(predicate as i16));
     }
     Ok(())
 }

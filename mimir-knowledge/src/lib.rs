@@ -31,11 +31,23 @@ pub enum KnowledgeError {
     #[error("Entity has {0} fact(s) and cannot be deleted")]
     EntityHasFacts(i64),
 
-    #[error("Invalid predicate for subject/object type combination")]
-    InvalidPredicate,
+    #[error("Invalid predicate id {0}")]
+    InvalidPredicate(i16),
+
+    #[error("Entity {0} not found")]
+    EntityNotFound(i32),
 
     #[error("Duplicate entity detected")]
     DuplicateEntity,
+
+    #[error("Fact {0} not found")]
+    FactNotFound(i32),
+
+    #[error("Temporal conflict: {0}")]
+    TemporalConflict(String),
+
+    #[error("Immutable field cannot be updated")]
+    ImmutableField,
 
     #[error("Validation error: {0}")]
     Validation(String),

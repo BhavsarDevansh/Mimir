@@ -4,6 +4,7 @@
 //! and full-text search via SQLite FTS5.
 
 pub mod clock;
+pub mod confidence;
 pub mod db;
 pub mod extract;
 pub mod inference;

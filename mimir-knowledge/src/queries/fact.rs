@@ -6,7 +6,6 @@ use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
 use crate::models::fact::{Fact, FactStatus, NewFact};
-use crate::models::source::SourceType;
 
 // ---------------------------------------------------------------------------
 // Insert
@@ -69,7 +68,7 @@ pub async fn insert_fact(
     // 2. Compute confidence (placeholder — extracted to confidence module in #51).
     let confidence = new_fact
         .confidence
-        .unwrap_or_else(|| initial_confidence(new_fact.source_type));
+        .unwrap_or_else(|| crate::confidence::initial(new_fact.source_type));
 
     // 3. Insert fact.
     let fact: Fact = sqlx::query_as::<_, Fact>(
@@ -376,15 +375,4 @@ fn ranges_overlap(
         (Some(bf), Some(au)) => bf < au,
     };
     a_starts_before_b_ends && b_starts_before_a_ends
-}
-
-/// Placeholder initial confidence based on source type.
-/// TODO(#51): Replace with full structural confidence model.
-fn initial_confidence(source_type: SourceType) -> f32 {
-    match source_type {
-        SourceType::UserEdit => 1.0,
-        SourceType::Connector => 0.80,
-        SourceType::Email | SourceType::Calendar | SourceType::Photo | SourceType::Message => 0.80,
-        SourceType::Inference => 0.50,
-    }
 }

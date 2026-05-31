@@ -92,7 +92,7 @@ fn forget_fact_inner<'a>(
         .execute(&mut *tx)
         .await?;
 
-        // Audit log before deletion (fact_id FK will cascade after delete).
+        // Audit log before deletion (FK removed by migration 018 so row persists after delete).
         let old_json = serde_json::to_string(&fact)
             .map_err(|e| KnowledgeError::Validation(format!("JSON serialization failed: {}", e)))?;
         sqlx::query(
@@ -127,7 +127,7 @@ fn forget_fact_inner<'a>(
             .execute(&mut *tx)
             .await?;
 
-        // Hard-delete the fact. sources and fact_audit_log cascade.
+        // Hard-delete the fact. sources cascade; fact_audit_log rows persist (migration 018).
         sqlx::query("DELETE FROM facts WHERE id = ?")
             .bind(fact_id)
             .execute(&mut *tx)

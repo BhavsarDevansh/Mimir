@@ -6,6 +6,7 @@ use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
 use crate::confidence;
+use crate::models::enums::ConnectorType;
 use crate::models::fact::{Fact, FactStatus, NewFact};
 
 // ---------------------------------------------------------------------------
@@ -192,7 +193,25 @@ pub async fn insert_fact(
     }
 
     // 2. Compute confidence based on source type.
-    let conf = confidence::initial(new_fact.source_type, None);
+    let connector_type = match new_fact.source_type {
+        crate::models::source::SourceType::Calendar => Some(ConnectorType::Calendar),
+        crate::models::source::SourceType::Email => Some(ConnectorType::Gmail),
+        crate::models::source::SourceType::Photo => Some(ConnectorType::Photos),
+        crate::models::source::SourceType::Message => Some(ConnectorType::Gmail),
+        _ => None,
+    };
+
+    let conf = if let Some(ct) = connector_type {
+        let db_score: Option<f32> = sqlx::query_scalar(
+            "SELECT score FROM connector_reliability WHERE connector_type_id = ?",
+        )
+        .bind(ct as i16)
+        .fetch_optional(&mut *tx)
+        .await?;
+        db_score.unwrap_or_else(|| confidence::default_connector_score(ct))
+    } else {
+        confidence::initial(new_fact.source_type, None)
+    };
 
     // 3. Insert fact.
     let fact: Fact = sqlx::query_as::<_, Fact>(
@@ -344,12 +363,13 @@ pub async fn get_active_facts_at(
          inference_depth, stale_confidence, created_at, updated_at \
          FROM facts \
          WHERE subject_id = ? AND predicate_id = ? \
-         AND (valid_from IS NULL OR valid_from <= ?) \
+         AND fact_status_id = ? \n         AND (valid_from IS NULL OR valid_from <= ?) \
          AND (valid_until IS NULL OR valid_until > ?) \
          ORDER BY confidence DESC, created_at DESC",
     )
     .bind(subject_id)
     .bind(predicate_id)
+    .bind(FactStatus::Active as i16)
     .bind(at)
     .bind(at)
     .fetch_all(pool)

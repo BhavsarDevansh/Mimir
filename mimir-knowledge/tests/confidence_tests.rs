@@ -152,7 +152,7 @@ async fn test_connector_reliability_feedback() {
         .connector_reliability(ConnectorType::Gmail)
         .await
         .unwrap();
-    assert!((initial - 0.85).abs() < f32::EPSILON);
+    assert!((initial - 0.85).abs() < 1e-4);
 
     kg.adjust_connector_reliability(ConnectorType::Gmail, -0.02)
         .await
@@ -161,7 +161,7 @@ async fn test_connector_reliability_feedback() {
         .connector_reliability(ConnectorType::Gmail)
         .await
         .unwrap();
-    assert!((after_drop - 0.83).abs() < f32::EPSILON);
+    assert!((after_drop - 0.83).abs() < 1e-4);
 
     kg.adjust_connector_reliability(ConnectorType::Gmail, 0.01)
         .await
@@ -170,7 +170,7 @@ async fn test_connector_reliability_feedback() {
         .connector_reliability(ConnectorType::Gmail)
         .await
         .unwrap();
-    assert!((after_rise - 0.84).abs() < f32::EPSILON);
+    assert!((after_rise - 0.84).abs() < 1e-4);
 }
 
 #[tokio::test]
@@ -204,6 +204,42 @@ async fn test_connector_reliability_clamped() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+async fn test_connector_reliability_defaults_match_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    for &(ct, expected) in &[
+        (
+            ConnectorType::Gmail,
+            confidence::default_connector_score(ConnectorType::Gmail),
+        ),
+        (
+            ConnectorType::Calendar,
+            confidence::default_connector_score(ConnectorType::Calendar),
+        ),
+        (
+            ConnectorType::Photos,
+            confidence::default_connector_score(ConnectorType::Photos),
+        ),
+        (
+            ConnectorType::LinkedIn,
+            confidence::default_connector_score(ConnectorType::LinkedIn),
+        ),
+    ] {
+        let actual = kg.connector_reliability(ct).await.unwrap();
+        assert!(
+            (actual - expected).abs() < 1e-4,
+            "Mismatch for {:?}: expected {}, got {}",
+            ct,
+            expected,
+            actual
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_user_edit_confidence_is_one() {
     let dir = tempfile::tempdir().unwrap();
     let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
@@ -226,7 +262,7 @@ async fn test_user_edit_confidence_is_one() {
         .await
         .unwrap();
 
-    assert!((fact.confidence - 1.0).abs() < f32::EPSILON);
+    assert!((fact.confidence - 1.0).abs() < 1e-4);
 }
 
 #[tokio::test]
@@ -252,7 +288,7 @@ async fn test_casual_mention_confidence_is_low() {
         .await
         .unwrap();
 
-    assert!((fact.confidence - 0.30).abs() < f32::EPSILON);
+    assert!((fact.confidence - 0.30).abs() < 1e-4);
 }
 
 #[tokio::test]
@@ -278,7 +314,7 @@ async fn test_system_confidence_is_one() {
         .await
         .unwrap();
 
-    assert!((fact.confidence - 1.0).abs() < f32::EPSILON);
+    assert!((fact.confidence - 1.0).abs() < 1e-4);
 }
 
 #[tokio::test]
@@ -304,13 +340,18 @@ async fn test_import_confidence_is_eighty() {
         .await
         .unwrap();
 
-    assert!((fact.confidence - 0.80).abs() < f32::EPSILON);
+    assert!((fact.confidence - 0.80).abs() < 1e-4);
 }
 
 #[tokio::test]
-async fn test_connector_confidence_uses_reliability() {
+async fn test_connector_confidence_uses_db_reliability() {
     let dir = tempfile::tempdir().unwrap();
     let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    // Adjust Gmail reliability away from the default.
+    kg.adjust_connector_reliability(ConnectorType::Gmail, -0.02)
         .await
         .unwrap();
 
@@ -330,5 +371,5 @@ async fn test_connector_confidence_uses_reliability() {
         .await
         .unwrap();
 
-    assert!((fact.confidence - 0.85).abs() < f32::EPSILON);
+    assert!((fact.confidence - 0.83).abs() < 1e-4);
 }

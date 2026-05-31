@@ -17,7 +17,7 @@ use crate::models::source::SourceType;
 const CHAIN_PENALTY_BASE: f32 = 0.8;
 
 /// Per-connector default reliability scores, seeded from migration 020.
-fn default_connector_score(ct: ConnectorType) -> f32 {
+pub fn default_connector_score(ct: ConnectorType) -> f32 {
     match ct {
         ConnectorType::Gmail => 0.85,
         ConnectorType::Calendar => 0.90,

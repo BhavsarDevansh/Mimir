@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.24.2] - 2026-05-31
+
+### Fixed
+
+- Removed duplicate top-level "# Changelog" heading.
+- Fixed fenced code block formatting in `docs/wiki/facts.md`.
+- Aligned `SourceType::UserEdit` initial confidence with connectors at `0.80`.
+- Restricted confidence recalculation and cascade forget to inference-only dependencies via `RelationType::InferredFrom` filter.
+- Fixed SQLx migration directives (`-- no-transaction`) in `016_fix_facts_predicate.sql` and `017_fix_fact_dependencies_fk.sql`.
+- Replaced `unwrap_or_default()` with proper error propagation for JSON serialization in `forget.rs`.
+- Added migration `018_fix_audit_log_fk.sql` removing `ON DELETE CASCADE` from `fact_audit_log.fact_id` so audit rows persist after fact deletion.
+- Updated all fact-read queries to order by `confidence DESC, created_at DESC`.
+- Added guard in `update_valid_until` rejecting `new_valid_until < valid_from`.
+- Refactored `insert_fact` temporal overlap logic to classify overlaps before modifying predecessors, preventing premature closure when the new fact should be `Disputed`.
+
+## [0.24.1] - 2026-05-31
+
+### Fixed
+
+- `Fact::status()` and `Fact::predicate()` now return `Option` instead of silently defaulting to `Active`/`IsIn` for unknown DB IDs, making enum drift immediately visible.
+- `get_active_facts_at` now uses half-open interval semantics (`valid_until > at_time`) consistent with `ranges_overlap`, and parameterises `fact_status_id` via `FactStatus::Active as i16` instead of a hardcoded magic number.
+- `insert_fact` now validates that `valid_from <= valid_until` when both are provided, rejecting inverted time ranges that would create ghost facts.
+- Automatic closure of open-ended predecessor facts during `insert_fact` now writes an audit log entry documenting the `UPDATE` to `valid_until`.
+- Cascade status change to `Disputed` in `forget.rs` (triggered when child confidence drops below 0.20) now writes an audit log entry, closing the gap in the audit trail.
+
+
+## [0.24.0] - 2026-05-31
+
+### Added
+
+- Fact management subsystem (#50):
+  - Schema migration: `predicate TEXT` → `predicate_id INTEGER` FK to `predicates`.
+  - `fact_dependencies` FK changed to `ON DELETE RESTRICT` for Rust-orchestrated cascade forget.
+  - Full fact CRUD in `mimir-knowledge`: insert, read, update `valid_until`, update status, forget.
+  - Temporal overlap logic: Active, Disputed, and open-ended closure handling.
+  - Confidence placeholder module (`src/confidence.rs`) with initial values per `SourceType`.
+  - Cascade forget with trash retention (30 days) and recursive child evaluation.
+  - Audit logging (`fact_audit_log`) for insert, update, status change, and delete.
+  - `NewFact` input struct, `Fact::status()` and `Fact::predicate()` helpers.
+  - `AuditLogEntry` model and `get_audit_log` query.
+  - `KnowledgeGraph` public delegates for all fact operations.
+  - Integration tests covering CRUD, temporal timeline, disputed, closure, predicate lookup, audit log, source attachment, cascade forget orphan/survives, trash payload, and confidence values.
+  - Technical docs: `docs/fact-management.md`.
+  - Wiki docs: `docs/wiki/facts.md`.
+
+
 ## [0.23.2] - 2026-05-31
 
 ### Fixed

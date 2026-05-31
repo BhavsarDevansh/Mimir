@@ -283,9 +283,9 @@ async fn test_dedup_exact_merge() {
         .unwrap();
 
     // Insert a fact referencing y so we can verify FK repointing.
-    sqlx::query("INSERT INTO facts (subject_id, predicate, object_id, confidence, fact_status_id) VALUES (?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id) VALUES (?, ?, ?, ?, ?)")
         .bind(y.id)
-        .bind("knows")
+        .bind(1i16)
         .bind(x.id)
         .bind(1.0f32)
         .bind(1i16)
@@ -304,7 +304,7 @@ async fn test_dedup_exact_merge() {
 
     // Fact should now point to x as subject
     let (subject_id,): (i32,) =
-        sqlx::query_as("SELECT subject_id FROM facts WHERE predicate = 'knows'")
+        sqlx::query_as("SELECT subject_id FROM facts WHERE predicate_id = 1")
             .fetch_one(kg.pool())
             .await
             .unwrap();
@@ -519,9 +519,9 @@ async fn test_delete_guard_rejects_entity_with_facts() {
         .await
         .unwrap();
 
-    sqlx::query("INSERT INTO facts (subject_id, predicate, object_id, confidence, fact_status_id) VALUES (?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id) VALUES (?, ?, ?, ?, ?)")
         .bind(a.id)
-        .bind("knows")
+        .bind(1i16)
         .bind(b.id)
         .bind(1.0f32)
         .bind(1i16)

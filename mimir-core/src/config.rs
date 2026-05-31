@@ -63,6 +63,8 @@ pub struct AgentConfig {
     pub name: String,
     pub proactivity: Proactivity,
     pub verbose_reasoning: bool,
+    /// Maximum number of agentic tool-call rounds before forcing a final response.
+    pub max_tool_rounds: u16,
 }
 
 /// Memory subsystem settings.
@@ -190,6 +192,7 @@ impl Default for AgentConfig {
             name: "Mimir".to_string(),
             proactivity: Proactivity::ImportantOnly,
             verbose_reasoning: false,
+            max_tool_rounds: 100,
         }
     }
 }
@@ -332,6 +335,7 @@ temperature = 0.2
 name = "Mimir"
 proactivity = "important_only"
 verbose_reasoning = false
+max_tool_rounds = 100  # Maximum agentic tool-call rounds
 
 [memory]
 enabled = true
@@ -389,6 +393,11 @@ bind_addr = "127.0.0.1:8080"
             && let Ok(b) = v.parse::<bool>()
         {
             self.agent.verbose_reasoning = b;
+        }
+        if let Ok(v) = std::env::var("MIMIR_AGENT_MAX_TOOL_ROUNDS")
+            && let Ok(n) = v.parse::<u16>()
+        {
+            self.agent.max_tool_rounds = n;
         }
         if let Ok(v) = std::env::var("MIMIR_MEMORY_ENABLED")
             && let Ok(b) = v.parse::<bool>()
@@ -580,6 +589,34 @@ mod tests {
 
     #[test]
     #[serial]
+    fn test_env_override_agent_max_tool_rounds() {
+        unsafe {
+            std::env::set_var("MIMIR_AGENT_MAX_TOOL_ROUNDS", "50");
+        }
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        assert_eq!(config.agent.max_tool_rounds, 50);
+        unsafe {
+            std::env::remove_var("MIMIR_AGENT_MAX_TOOL_ROUNDS");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_env_override_agent_max_tool_rounds_invalid_ignored() {
+        unsafe {
+            std::env::set_var("MIMIR_AGENT_MAX_TOOL_ROUNDS", "not_a_number");
+        }
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        assert_eq!(config.agent.max_tool_rounds, 100);
+        unsafe {
+            std::env::remove_var("MIMIR_AGENT_MAX_TOOL_ROUNDS");
+        }
+    }
+
+    #[test]
+    #[serial]
     fn test_env_override_context() {
         unsafe {
             std::env::set_var("MIMIR_CONTEXT_MAX_TOKENS", "8192");
@@ -649,6 +686,7 @@ mod tests {
                 name: "TestAgent".to_string(),
                 proactivity: Proactivity::Always,
                 verbose_reasoning: true,
+                max_tool_rounds: 100,
             },
             memory: MemoryConfig {
                 path: None,
@@ -1001,6 +1039,7 @@ preset = "formal"
         assert_eq!(parsed.llm.api_key, "");
         assert_eq!(parsed.llm.model, "gpt-4o");
         assert_eq!(parsed.agent.name, "Mimir");
+        assert_eq!(parsed.agent.max_tool_rounds, 100);
     }
 
     #[test]

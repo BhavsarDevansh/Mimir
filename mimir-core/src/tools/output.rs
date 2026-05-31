@@ -21,6 +21,30 @@ pub struct ToolOutput {
 }
 
 impl ToolOutput {
+    /// Render a human-readable display string for the CLI.
+    ///
+    /// Extracts the primary value without `result:` prefix or JSON quotes.
+    /// Falls back to error, stdout, or "(no output)" as needed.
+    pub fn to_display_text(&self) -> String {
+        if let Some(ref err) = self.error {
+            return format!("error: {err}");
+        }
+        if let Some(ref val) = self.result {
+            // Strip JSON quotes from string values for cleaner display.
+            match val {
+                serde_json::Value::String(s) => return s.clone(),
+                other => return other.to_string(),
+            }
+        }
+        if let Some(ref stdout) = self.stdout {
+            let trimmed = stdout.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        String::from("(no output)")
+    }
+
     /// Render a compact plaintext representation for the LLM context.
     pub fn to_llm_text(&self) -> String {
         output_to_llm_text(

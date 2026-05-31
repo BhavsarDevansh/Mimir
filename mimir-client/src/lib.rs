@@ -2,7 +2,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use mimir_api_types::{
     ChatRequest, ChatResponse, SessionMessagesResponse, SessionSummary, StatusResponse, StreamItem,
-    Usage,
+    ToolCallInfo, Usage,
 };
 use reqwest::StatusCode;
 use thiserror::Error;
@@ -238,13 +238,26 @@ fn parse_sse_event(event: &str) -> Option<Result<StreamItem, ClientError>> {
             if !data.is_empty() {
                 data.push('\n');
             }
-            data.push_str(rest.trim_start());
+            // Per SSE spec: strip exactly one leading space after "data:", not all whitespace.
+            let value = rest.strip_prefix(' ').unwrap_or(rest);
+            data.push_str(value);
         }
     }
     match event_type {
         "usage" => match serde_json::from_str::<Usage>(&data) {
             Ok(u) => Some(Ok(StreamItem::Usage(u))),
             Err(e) => Some(Err(ClientError::Serialization(e))),
+        },
+        "tool_call" => match serde_json::from_str::<ToolCallInfo>(&data) {
+            Ok(info) => Some(Ok(StreamItem::ToolCall(info))),
+            Err(e) => Some(Err(ClientError::Serialization(e))),
+        },
+        "session_id" => match serde_json::from_str::<serde_json::Value>(&data) {
+            Ok(v) => v
+                .get("session_id")
+                .and_then(|s| s.as_str())
+                .map_or_else(|| None, |s| Some(Ok(StreamItem::SessionId(s.to_string())))),
+            Err(_) => None,
         },
         "error" => Some(Err(ClientError::Server {
             status: 500,
@@ -288,6 +301,7 @@ mod tests {
             session_id: "s1".to_string(),
             response: "hi".to_string(),
             usage: Usage::default(),
+            tool_calls: vec![],
         };
         Mock::given(method("POST"))
             .and(path("/chat"))
@@ -512,6 +526,74 @@ mod tests {
         assert_eq!(result.session_id, "sess-1");
         assert_eq!(result.messages.len(), 1);
         assert_eq!(result.messages[0].role, "user");
+    }
+
+    #[test]
+    fn test_parse_sse_tool_call_event() {
+        let event = "event: tool_call\ndata: {\"name\":\"get_current_time\",\"display_name\":\"Get Current Time\",\"result\":\"2025-05-30T12:00:00Z\"}\n\n";
+        let result = parse_sse_event(event);
+        assert!(result.is_some());
+        let item = result.unwrap();
+        match item {
+            Ok(StreamItem::ToolCall(info)) => {
+                assert_eq!(info.name, "get_current_time");
+                assert_eq!(info.display_name, "Get Current Time");
+                assert_eq!(info.result, "2025-05-30T12:00:00Z");
+            }
+            other => panic!("expected ToolCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_default_event_is_text() {
+        let event = "data: Hello world\n\n";
+        let result = parse_sse_event(event);
+        assert!(result.is_some());
+        let item = result.unwrap();
+        match item {
+            Ok(StreamItem::Text(t)) => assert_eq!(t, "Hello world"),
+            other => panic!("expected Text, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_data_with_leading_space_preserved() {
+        // When the LLM streams a token like " on", the SSE data line becomes
+        // "data:  on" (two spaces after colon). Per SSE spec only the first
+        // space after "data:" is stripped; the second is part of the content.
+        let event = "data:  on\n\n";
+        let result = parse_sse_event(event);
+        assert!(result.is_some());
+        let item = result.unwrap();
+        match item {
+            Ok(StreamItem::Text(t)) => assert_eq!(t, " on"),
+            other => panic!("expected Text, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_session_id_event() {
+        let event = "event: session_id\ndata: {\"session_id\":\"sess-abc-123\"}\n\n";
+        let result = parse_sse_event(event);
+        assert!(result.is_some());
+        let item = result.unwrap();
+        match item {
+            Ok(StreamItem::SessionId(s)) => assert_eq!(s, "sess-abc-123"),
+            other => panic!("expected SessionId, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_data_no_space_after_colon() {
+        // "data:" with no space is valid SSE; content starts immediately.
+        let event = "data:hello\n\n";
+        let result = parse_sse_event(event);
+        assert!(result.is_some());
+        let item = result.unwrap();
+        match item {
+            Ok(StreamItem::Text(t)) => assert_eq!(t, "hello"),
+            other => panic!("expected Text, got {:?}", other),
+        }
     }
 
     #[tokio::test]

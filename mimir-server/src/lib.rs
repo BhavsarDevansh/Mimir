@@ -652,6 +652,11 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
+        // Consume the SSE body to ensure the spawned task runs.
+        let _bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
         let tools = mock.stream_tools();
         assert_eq!(tools.len(), 1);
         let forwarded = tools[0].as_ref().expect("tools should be forwarded");
@@ -678,11 +683,16 @@ mod tests {
         };
         let mock = Arc::new(
             MockLlmClient::builder()
+                // First stream: tool call + usage
                 .push_stream(vec![
                     Ok(StreamItem::ToolCalls(vec![tool_call_delta])),
                     Ok(StreamItem::Usage(Usage::default())),
                 ])
-                .push_chat("The current time is now.", Usage::default())
+                // Second stream (agentic loop): final text + usage
+                .push_stream(vec![
+                    Ok(StreamItem::Text("The current time is now.".to_string())),
+                    Ok(StreamItem::Usage(Usage::default())),
+                ])
                 .build(),
         );
         let (state, _temp) = test_state(mock.clone()).await;
@@ -714,12 +724,19 @@ mod tests {
             text
         );
 
-        // The follow-up call should have been made via the non-streaming chat path.
-        let calls = mock.chat_calls();
+        // The tool_call SSE event should be present.
+        assert!(
+            text.contains("tool_call"),
+            "expected tool_call event in SSE stream, got: {}",
+            text
+        );
+
+        // The agentic loop should have made two stream calls.
+        let calls = mock.stream_calls();
         assert_eq!(
             calls.len(),
-            1,
-            "expected one follow-up LLM call after tool execution"
+            2,
+            "expected two LLM stream calls (initial + agentic loop)"
         );
     }
 

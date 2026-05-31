@@ -263,3 +263,30 @@ async fn preference_source_types_sync() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn predicates_sync() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+    assert_enum_db_sync(
+        &kg,
+        "SELECT id, name FROM predicates WHERE id = ?",
+        "SELECT id, name FROM predicates",
+        "SELECT COUNT(*) FROM predicates",
+        &[
+            (1, "is_in", Predicate::IsIn),
+            (2, "visited", Predicate::Visited),
+            (3, "owns", Predicate::Owns),
+            (4, "works_as", Predicate::WorksAs),
+            (5, "has_partner", Predicate::HasPartner),
+            (6, "has_parent", Predicate::HasParent),
+            (7, "born_on", Predicate::BornOn),
+            (8, "died_on", Predicate::DiedOn),
+            (9, "located_in", Predicate::LocatedIn),
+            (10, "created_on", Predicate::CreatedOn),
+        ],
+    )
+    .await;
+}

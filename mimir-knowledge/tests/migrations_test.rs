@@ -63,6 +63,7 @@ async fn lookup_tables_seeded_correctly() {
         ("SELECT COUNT(*) FROM source_types", 7),
         ("SELECT COUNT(*) FROM preference_categories", 5),
         ("SELECT COUNT(*) FROM preference_source_types", 3),
+        ("SELECT COUNT(*) FROM predicates", 10),
     ];
 
     for (query, expected) in queries {

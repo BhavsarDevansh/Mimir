@@ -7,6 +7,7 @@ pub mod clock;
 pub mod confidence;
 pub mod db;
 pub mod extract;
+pub mod forget;
 pub mod inference;
 pub mod models;
 pub mod optimization;

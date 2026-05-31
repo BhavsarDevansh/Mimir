@@ -12,9 +12,7 @@ pub fn initial(source_type: SourceType) -> f32 {
     match source_type {
         SourceType::UserEdit => 1.0,
         SourceType::Connector => 0.80,
-        SourceType::Email | SourceType::Calendar | SourceType::Photo | SourceType::Message => {
-            0.80
-        }
+        SourceType::Email | SourceType::Calendar | SourceType::Photo | SourceType::Message => 0.80,
         SourceType::Inference => 0.50,
     }
 }

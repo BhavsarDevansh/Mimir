@@ -49,7 +49,6 @@ async fn fact_crud_roundtrip() {
         valid_from: None,
         valid_until: None,
         source_type: SourceType::UserEdit,
-        confidence: None,
     };
 
     let fact = kg.insert_fact(new_fact.clone()).await.unwrap();
@@ -108,7 +107,6 @@ async fn fact_temporal_timeline() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -122,7 +120,6 @@ async fn fact_temporal_timeline() {
             valid_from: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -155,7 +152,6 @@ async fn fact_temporal_disputed() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -169,16 +165,18 @@ async fn fact_temporal_disputed() {
             valid_from: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
 
-    assert_eq!(f2.status().unwrap(), FactStatus::Disputed);
+    // With explicit replacement, f1 is Superseded and f2 is Active.
+    let f1_updated = kg.get_fact(_f1.id).await.unwrap().unwrap();
+    assert_eq!(f1_updated.status().unwrap(), FactStatus::Superseded);
+    assert_eq!(f2.status().unwrap(), FactStatus::Active);
 }
 
 // ---------------------------------------------------------------------------
-// Temporal: open-ended old + new explicit → old gets closed, new Active
+// Temporal: open-ended old + new explicit → old gets closed and Superseded, new Active
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -201,7 +199,6 @@ async fn fact_temporal_closure() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -215,7 +212,6 @@ async fn fact_temporal_closure() {
             valid_from: Some(kg.now()),
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -224,7 +220,7 @@ async fn fact_temporal_closure() {
 
     let old = kg.get_fact(f1.id).await.unwrap().unwrap();
     assert!(old.valid_until.is_some());
-    assert_eq!(old.status().unwrap(), FactStatus::Active);
+    assert_eq!(old.status().unwrap(), FactStatus::Superseded);
 }
 
 // ---------------------------------------------------------------------------
@@ -250,7 +246,6 @@ async fn fact_predicate_id_lookup() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -288,7 +283,6 @@ async fn fact_audit_log_written() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -327,7 +321,6 @@ async fn fact_source_attached() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::Calendar,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -364,18 +357,17 @@ async fn cascade_forget_orphan() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
 
     // Create an inferred child fact manually.
     let child: mimir_knowledge::models::fact::Fact = sqlx::query_as(
-        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred) \
-         VALUES (?, ?, ?, ?, ?, ?) \
+        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at",
+         inference_depth, stale_confidence, created_at, updated_at",
     )
     .bind(alice)
     .bind(Predicate::Visited as i16)
@@ -383,6 +375,8 @@ async fn cascade_forget_orphan() {
     .bind(0.5f32)
     .bind(FactStatus::Inferred as i16)
     .bind(true)
+    .bind(0i32)
+    .bind(false)
     .fetch_one(kg.pool())
     .await
     .unwrap();
@@ -431,7 +425,6 @@ async fn cascade_forget_survives() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -445,18 +438,17 @@ async fn cascade_forget_survives() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
 
     // Inferred child with two parents.
     let child: mimir_knowledge::models::fact::Fact = sqlx::query_as(
-        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred) \
-         VALUES (?, ?, ?, ?, ?, ?) \
+        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at",
+         inference_depth, stale_confidence, created_at, updated_at",
     )
     .bind(alice)
     .bind(Predicate::Visited as i16)
@@ -464,6 +456,8 @@ async fn cascade_forget_survives() {
     .bind(0.8f32)
     .bind(FactStatus::Inferred as i16)
     .bind(true)
+    .bind(0i32)
+    .bind(false)
     .fetch_one(kg.pool())
     .await
     .unwrap();
@@ -520,7 +514,6 @@ async fn trash_contains_payload() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -562,11 +555,10 @@ async fn confidence_initial_values() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
-    assert!((f_user.confidence - 0.80).abs() < f32::EPSILON);
+    assert!((f_user.confidence - 1.0).abs() < f32::EPSILON);
 
     let f_inf = kg
         .insert_fact(NewFact {
@@ -577,11 +569,10 @@ async fn confidence_initial_values() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::Inference,
-            confidence: None,
         })
         .await
         .unwrap();
-    assert!((f_inf.confidence - 0.50).abs() < f32::EPSILON);
+    assert!((f_inf.confidence - 0.0).abs() < f32::EPSILON);
 
     let f_conn = kg
         .insert_fact(NewFact {
@@ -592,7 +583,6 @@ async fn confidence_initial_values() {
             valid_from: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::Connector,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -622,7 +612,6 @@ async fn unknown_status_id_returns_none() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -667,7 +656,6 @@ async fn unknown_predicate_id_returns_none() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -721,7 +709,6 @@ async fn get_active_facts_at_half_open_boundary() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(boundary),
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -736,7 +723,6 @@ async fn get_active_facts_at_half_open_boundary() {
             valid_from: Some(boundary),
             valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -779,7 +765,6 @@ async fn automatic_closure_writes_audit_log() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -794,7 +779,6 @@ async fn automatic_closure_writes_audit_log() {
             valid_from: Some(now),
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -837,7 +821,6 @@ async fn insert_rejects_inverted_time_range() {
             valid_from: Some(from),
             valid_until: Some(until),
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await;
 
@@ -871,24 +854,25 @@ async fn forget_cascade_status_change_writes_audit_log() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: Some(1.0),
         })
         .await
         .unwrap();
 
     // Non-inferred child with confidence that will drop below 0.20 when parent is removed.
     let child: mimir_knowledge::models::fact::Fact = sqlx::query_as(
-        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred) \
-         VALUES (?, ?, ?, ?, ?, ?) \
+        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at",
+         inference_depth, stale_confidence, created_at, updated_at",
     )
     .bind(alice)
     .bind(Predicate::Visited as i16)
     .bind(london)
     .bind(0.8f32)
     .bind(FactStatus::Active as i16)
+    .bind(false)
+    .bind(0i32)
     .bind(false)
     .fetch_one(kg.pool())
     .await
@@ -924,4 +908,282 @@ async fn forget_cascade_status_change_writes_audit_log() {
     assert!(entry.old_value.is_some());
     assert!(entry.new_value.is_some());
     assert_eq!(entry.performer.as_deref(), Some("system"));
+}
+
+// ---------------------------------------------------------------------------
+// Explicit replacement (supersession)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn explicit_replaces_explicit() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let alice = create_person(&kg, "Alice").await;
+    let london = create_place(&kg, "London").await;
+    let paris = create_place(&kg, "Paris").await;
+
+    // Old explicit fact.
+    let old_fact = kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            predicate: Predicate::IsIn,
+            object_id: Some(london),
+            object_literal: None,
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+        })
+        .await
+        .unwrap();
+
+    // New explicit fact with temporal overlap.
+    let new_fact = kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            predicate: Predicate::IsIn,
+            object_id: Some(paris),
+            object_literal: None,
+            valid_from: Some(Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap()),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+        })
+        .await
+        .unwrap();
+
+    // Old fact is Superseded.
+    let old_updated = kg.get_fact(old_fact.id).await.unwrap().unwrap();
+    assert_eq!(old_updated.status().unwrap(), FactStatus::Superseded);
+    assert!((old_updated.confidence - 1.0).abs() < f32::EPSILON);
+
+    // New fact is Active.
+    assert_eq!(new_fact.status().unwrap(), FactStatus::Active);
+    assert!((new_fact.confidence - 1.0).abs() < f32::EPSILON);
+
+    // Supersedes edge exists.
+    let edge_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM fact_dependencies \
+         WHERE parent_fact_id = ? AND child_fact_id = ? AND relation_type_id = ?",
+    )
+    .bind(old_fact.id)
+    .bind(new_fact.id)
+    .bind(3i16) // Supersedes
+    .fetch_one(kg.pool())
+    .await
+    .unwrap();
+    assert_eq!(edge_count, 1);
+
+    // Audit log has STATUS_CHANGE for old fact.
+    let log = kg.get_audit_log(old_fact.id).await.unwrap();
+    let status_change = log.iter().find(|e| e.action == "STATUS_CHANGE");
+    assert!(
+        status_change.is_some(),
+        "Expected STATUS_CHANGE audit entry for superseded fact"
+    );
+}
+
+#[tokio::test]
+async fn explicit_replaces_inferred() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let alice = create_person(&kg, "Alice").await;
+    let london = create_place(&kg, "London").await;
+
+    // Inferred fact.
+    let old_fact: mimir_knowledge::models::fact::Fact = sqlx::query_as(
+        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, subject_id, predicate_id, object_id, object_literal, valid_from, valid_until, confidence, fact_status_id, inferred, inference_depth, stale_confidence, created_at, updated_at",
+    )
+    .bind(alice)
+    .bind(Predicate::IsIn as i16)
+    .bind(london)
+    .bind(0.5f32)
+    .bind(FactStatus::Inferred as i16)
+    .bind(true)
+    .bind(0i32)
+    .bind(false)
+    .fetch_one(kg.pool())
+    .await
+    .unwrap();
+
+    // Explicit replacement.
+    let new_fact = kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            predicate: Predicate::IsIn,
+            object_id: Some(london),
+            object_literal: None,
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+        })
+        .await
+        .unwrap();
+
+    let old_updated = kg.get_fact(old_fact.id).await.unwrap().unwrap();
+    assert_eq!(old_updated.status().unwrap(), FactStatus::Superseded);
+    assert_eq!(new_fact.status().unwrap(), FactStatus::Active);
+}
+
+#[tokio::test]
+async fn explicit_replaces_connector() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let alice = create_person(&kg, "Alice").await;
+    let london = create_place(&kg, "London").await;
+
+    // Connector-extracted fact.
+    let old_fact = kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            predicate: Predicate::IsIn,
+            object_id: Some(london),
+            object_literal: None,
+            valid_from: Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()),
+            valid_until: Some(Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap()),
+            source_type: SourceType::Email,
+        })
+        .await
+        .unwrap();
+
+    // Explicit replacement with temporal overlap.
+    let new_fact = kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            predicate: Predicate::IsIn,
+            object_id: Some(london),
+            object_literal: None,
+            valid_from: Some(Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap()),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+        })
+        .await
+        .unwrap();
+
+    let old_updated = kg.get_fact(old_fact.id).await.unwrap().unwrap();
+    assert_eq!(old_updated.status().unwrap(), FactStatus::Superseded);
+    assert_eq!(new_fact.status().unwrap(), FactStatus::Active);
+}
+
+#[tokio::test]
+async fn explicit_no_overlap_no_supersession() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let alice = create_person(&kg, "Alice").await;
+    let london = create_place(&kg, "London").await;
+    let paris = create_place(&kg, "Paris").await;
+
+    // Explicit fact with bounded temporal range.
+    let old_fact = kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            predicate: Predicate::IsIn,
+            object_id: Some(london),
+            object_literal: None,
+            valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
+            valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
+            source_type: SourceType::UserEdit,
+        })
+        .await
+        .unwrap();
+
+    // New explicit fact with NON-overlapping range.
+    let new_fact = kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            predicate: Predicate::IsIn,
+            object_id: Some(paris),
+            object_literal: None,
+            valid_from: Some(Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap()),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+        })
+        .await
+        .unwrap();
+
+    // Both remain Active because ranges do not overlap.
+    assert_eq!(old_fact.status().unwrap(), FactStatus::Active);
+    assert_eq!(new_fact.status().unwrap(), FactStatus::Active);
+}
+
+#[tokio::test]
+async fn explicit_replaces_already_superseded_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let alice = create_person(&kg, "Alice").await;
+    let london = create_place(&kg, "London").await;
+    let paris = create_place(&kg, "Paris").await;
+    let berlin = create_place(&kg, "Berlin").await;
+
+    // First explicit fact.
+    let f1 = kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            predicate: Predicate::IsIn,
+            object_id: Some(london),
+            object_literal: None,
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+        })
+        .await
+        .unwrap();
+
+    // Second explicit fact replaces first.
+    let f2 = kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            predicate: Predicate::IsIn,
+            object_id: Some(paris),
+            object_literal: None,
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+        })
+        .await
+        .unwrap();
+
+    // Third explicit fact replaces second; first is already Superseded.
+    let f3 = kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            predicate: Predicate::IsIn,
+            object_id: Some(berlin),
+            object_literal: None,
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+        })
+        .await
+        .unwrap();
+
+    let f1_now = kg.get_fact(f1.id).await.unwrap().unwrap();
+    assert_eq!(f1_now.status().unwrap(), FactStatus::Superseded);
+
+    let f2_now = kg.get_fact(f2.id).await.unwrap().unwrap();
+    assert_eq!(f2_now.status().unwrap(), FactStatus::Superseded);
+
+    assert_eq!(f3.status().unwrap(), FactStatus::Active);
+
+    // Only one Supersedes edge from f1 (to f2), not duplicated by f3.
+    let f1_edges: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM fact_dependencies WHERE parent_fact_id = ?")
+            .bind(f1.id)
+            .fetch_one(kg.pool())
+            .await
+            .unwrap();
+    assert_eq!(f1_edges, 1);
 }

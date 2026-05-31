@@ -209,6 +209,9 @@ async fn source_types_sync() {
             (5, "Inference", SourceType::Inference),
             (6, "UserEdit", SourceType::UserEdit),
             (7, "Connector", SourceType::Connector),
+            (8, "CasualMention", SourceType::CasualMention),
+            (9, "Import", SourceType::Import),
+            (10, "System", SourceType::System),
         ],
     )
     .await;

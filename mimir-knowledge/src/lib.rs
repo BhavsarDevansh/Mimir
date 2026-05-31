@@ -316,4 +316,25 @@ impl KnowledgeGraph {
     ) -> Result<Vec<models::audit_log::AuditLogEntry>, KnowledgeError> {
         queries::fact::get_audit_log(&self.pool, fact_id).await
     }
+
+    // ------------------------------------------------------------------
+    // Connector reliability
+    // ------------------------------------------------------------------
+
+    /// Adjust a connector's reliability score.
+    pub async fn adjust_connector_reliability(
+        &self,
+        connector: models::enums::ConnectorType,
+        delta: f32,
+    ) -> Result<(), KnowledgeError> {
+        confidence::adjust_connector_reliability(&self.pool, connector, delta).await
+    }
+
+    /// Read a connector's current reliability score.
+    pub async fn connector_reliability(
+        &self,
+        connector: models::enums::ConnectorType,
+    ) -> Result<f32, KnowledgeError> {
+        confidence::connector_reliability(&self.pool, connector).await
+    }
 }

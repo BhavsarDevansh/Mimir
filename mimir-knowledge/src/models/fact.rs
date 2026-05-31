@@ -34,6 +34,8 @@ pub struct Fact {
     pub confidence: f32,
     pub fact_status_id: i16,
     pub inferred: bool,
+    pub inference_depth: i32,
+    pub stale_confidence: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -82,5 +84,4 @@ pub struct NewFact {
     pub valid_from: Option<DateTime<Utc>>,
     pub valid_until: Option<DateTime<Utc>>,
     pub source_type: crate::models::source::SourceType,
-    pub confidence: Option<f32>,
 }

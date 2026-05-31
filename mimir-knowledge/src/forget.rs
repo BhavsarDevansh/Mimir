@@ -51,7 +51,7 @@ fn forget_fact_inner<'a>(
         let fact: Option<Fact> = sqlx::query_as::<_, Fact>(
             "SELECT id, subject_id, predicate_id, object_id, object_literal, \
              valid_from, valid_until, confidence, fact_status_id, inferred, \
-             created_at, updated_at \
+             inference_depth, stale_confidence, created_at, updated_at \
              FROM facts WHERE id = ?",
         )
         .bind(fact_id)
@@ -62,7 +62,7 @@ fn forget_fact_inner<'a>(
 
         // Fetch linked sources.
         let sources: Vec<Source> = sqlx::query_as::<_, Source>(
-            "SELECT id, fact_id, source_type_id, connector_id, raw_reference, \
+            "SELECT id, fact_id, source_type_id, connector_id, connector_type_id, raw_reference, \
              extracted_at, extraction_method \
              FROM sources WHERE fact_id = ?",
         )
@@ -158,7 +158,7 @@ fn forget_fact_inner<'a>(
 
                 if new_confidence < 0.20 {
                     let old_child: Option<Fact> = sqlx::query_as::<_, Fact>(
-                        "SELECT id, subject_id, predicate_id, object_id, object_literal,                          valid_from, valid_until, confidence, fact_status_id, inferred,                          created_at, updated_at                          FROM facts WHERE id = ?",
+                        "SELECT id, subject_id, predicate_id, object_id, object_literal,                          valid_from, valid_until, confidence, fact_status_id, inferred,                          inference_depth, stale_confidence, created_at, updated_at                          FROM facts WHERE id = ?",
                     )
                     .bind(child_id)
                     .fetch_optional(pool)
@@ -176,7 +176,7 @@ fn forget_fact_inner<'a>(
                             .await?;
 
                         let updated_child: Fact = sqlx::query_as::<_, Fact>(
-                            "SELECT id, subject_id, predicate_id, object_id, object_literal,                              valid_from, valid_until, confidence, fact_status_id, inferred,                              created_at, updated_at                              FROM facts WHERE id = ?",
+                            "SELECT id, subject_id, predicate_id, object_id, object_literal,                              valid_from, valid_until, confidence, fact_status_id, inferred,                              inference_depth, stale_confidence, created_at, updated_at                              FROM facts WHERE id = ?",
                         )
                         .bind(child_id)
                         .fetch_one(pool)

@@ -16,6 +16,9 @@ pub enum SourceType {
     Inference = 5,
     UserEdit = 6,
     Connector = 7,
+    CasualMention = 8,
+    Import = 9,
+    System = 10,
 }
 
 const_assert!((SourceType::Email as i16) != 0);
@@ -27,6 +30,7 @@ pub struct Source {
     pub fact_id: i32,
     pub source_type_id: i16,
     pub connector_id: Option<String>,
+    pub connector_type_id: Option<i16>,
     pub raw_reference: Option<String>,
     pub extracted_at: DateTime<Utc>,
     pub extraction_method: Option<String>,

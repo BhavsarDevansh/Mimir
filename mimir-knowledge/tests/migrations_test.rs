@@ -52,7 +52,7 @@ async fn lookup_tables_seeded_correctly() {
     let kg = KnowledgeGraph::init(&db_path).await.unwrap();
 
     let queries: Vec<(&'static str, i64)> = vec![
-        ("SELECT COUNT(*) FROM entity_types", 7),
+        ("SELECT COUNT(*) FROM entity_types", 8),
         ("SELECT COUNT(*) FROM entity_date_types", 6),
         ("SELECT COUNT(*) FROM recurrence_types", 5),
         ("SELECT COUNT(*) FROM location_types", 5),

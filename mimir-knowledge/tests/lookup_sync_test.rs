@@ -74,6 +74,7 @@ async fn entity_types_sync() {
             (5, "Concept", EntityType::Concept),
             (6, "Organization", EntityType::Organization),
             (7, "Activity", EntityType::Activity),
+            (8, "DateTime", EntityType::DateTime),
         ],
     )
     .await;

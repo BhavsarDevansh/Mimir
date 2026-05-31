@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.23.0] - 2026-05-31
+
+### Added
+
+- Entity management subsystem (#49):
+  - `DateTime = 8` entity type for temporal nodes.
+  - Predicate taxonomy with 10 seeded predicates and type constraints (`validate_predicate`).
+  - Full entity CRUD with alias resolution: `create_entity`, `get_by_id`, `get_by_name`, `search`, `update_entity`, `delete_entity`.
+  - Alias management: `add_alias`, `remove_alias` with FTS5 index refresh.
+  - Entity deduplication: exact-match auto-merge (repoints facts, preserves aliases) and overlapping-alias flagging into `entity_merge_queue`.
+  - LLM semantic dedup stub (`enqueue_semantic_dedup`) deferred to Phase 2 (#50+).
+  - Entity dates with recurrence resolution: `insert_entity_date`, `get_dates_for_entity`, `get_upcoming_dates`, `delete_entity_date`. Supports None, Daily, Weekly, Monthly, and Yearly (including Feb 29 → Mar 1 fallback).
+  - Entity location stubs: `insert_location`, `get_locations`, `update_location`.
+  - New `KnowledgeGraph` public API methods delegating to query modules.
+  - Integration tests covering CRUD, alias resolution, predicate validation, dates, dedup, and location stubs.
+
+### Changed
+
+- Updated `knowledge-graph-schema.md` and `wiki/knowledge-graph.md` with entity dates, aliases, dedup, and predicate taxonomy documentation.
+
 ## [0.22.0] - 2026-05-31
 
 ### Added

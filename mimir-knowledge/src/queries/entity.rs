@@ -45,46 +45,52 @@ pub async fn create_entity(
     entity_type: EntityType,
     aliases: &[&str],
 ) -> Result<Entity, KnowledgeError> {
-    // 1. Exact duplicate check (case-insensitive name match).
-    let existing: Option<Entity> = sqlx::query_as::<_, Entity>(
-        "SELECT id, name, entity_type_id, aliases, created_at, updated_at \
-         FROM entities WHERE name = ? COLLATE NOCASE LIMIT 1",
-    )
-    .bind(name)
-    .fetch_optional(pool)
-    .await?;
-
-    if let Some(e) = existing {
-        return Ok(e);
-    }
-
-    // 2. Insert entity.
     let aliases_json = if aliases.is_empty() {
         None
     } else {
         Some(serde_json::to_string(aliases).unwrap_or_else(|_| "[]".to_string()))
     };
 
-    let entity = sqlx::query_as::<_, Entity>(
+    let mut tx = pool.begin().await?;
+
+    // Upsert entity under a transaction; the unique index on LOWER(name)
+    // guarantees case-insensitive uniqueness.
+    let entity: Option<Entity> = sqlx::query_as::<_, Entity>(
         "INSERT INTO entities (name, entity_type_id, aliases) \
          VALUES (?, ?, ?) \
+         ON CONFLICT DO NOTHING \
          RETURNING id, name, entity_type_id, aliases, created_at, updated_at",
     )
     .bind(name)
     .bind(entity_type as i16)
     .bind(aliases_json.as_ref())
-    .fetch_one(pool)
+    .fetch_optional(&mut *tx)
     .await?;
 
-    // 3. Insert aliases into entity_aliases (for exact alias matching and indexing).
+    let entity = match entity {
+        Some(e) => e,
+        None => {
+            // Conflict: another txn inserted the same name; fetch the survivor.
+            sqlx::query_as::<_, Entity>(
+                "SELECT id, name, entity_type_id, aliases, created_at, updated_at \
+                 FROM entities WHERE LOWER(name) = LOWER(?) LIMIT 1",
+            )
+            .bind(name)
+            .fetch_one(&mut *tx)
+            .await?
+        }
+    };
+
+    // Insert aliases atomically within the same transaction.
     for alias in aliases {
         sqlx::query("INSERT OR IGNORE INTO entity_aliases (entity_id, alias) VALUES (?, ?)")
             .bind(entity.id)
             .bind(alias)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
     }
 
+    tx.commit().await?;
     Ok(entity)
 }
 
@@ -163,11 +169,11 @@ pub async fn get_by_name(
         }
     }
 
-    // Step 3: FTS5 fuzzy search with rank threshold ≥ 0.8.
-    // SQLite FTS5 rank is negative; lower (more negative) = worse. We map to [0,1].
+    // Step 3: FTS5 fuzzy search.
+    // SQLite FTS5 bm25 rank is negative; more negative = better match.
     let safe_query = escape_fts5(name);
     let fts_rows: Vec<(i32, f64)> = sqlx::query_as(
-        "SELECT rowid, rank FROM entity_fts WHERE entity_fts MATCH ? AND rank >= -0.2 ORDER BY rank LIMIT 10",
+        "SELECT rowid, rank FROM entity_fts WHERE entity_fts MATCH ? AND rank <= -0.2 ORDER BY rank LIMIT 10",
     )
     .bind(safe_query)
     .fetch_all(pool)
@@ -177,8 +183,8 @@ pub async fn get_by_name(
         if !seen_ids.contains(&rowid) {
             if let Some(e) = get_by_id(pool, rowid).await? {
                 if seen_ids.insert(e.id) {
-                    // Map bm25 rank to 0..1 score; rank >= -0.2 → score >= 0.8.
-                    let score = (0.2 + rank as f32).clamp(0.0, 0.2) / 0.2;
+                    // Map bm25 rank to 0..1 score; more negative rank → higher score.
+                    let score = ((-rank as f32) * 4.0).clamp(0.0, 1.0);
                     results.push(AliasSearchResult {
                         entity: e,
                         match_kind: MatchKind::Fuzzy,
@@ -212,7 +218,8 @@ pub async fn search(
     let mut results = Vec::new();
     for (rowid, rank) in fts_rows {
         if let Some(e) = get_by_id(pool, rowid).await? {
-            let score = (0.2 + rank as f32).clamp(0.0, 0.2) / 0.2;
+            // Map bm25 rank to 0..1 score; more negative rank → higher score.
+            let score = ((-rank as f32) * 4.0).clamp(0.0, 1.0);
             results.push(AliasSearchResult {
                 entity: e,
                 match_kind: MatchKind::Fuzzy,

@@ -112,9 +112,9 @@ impl KnowledgeGraph {
         &self,
         id: i32,
         name: &str,
-        type_id: i16,
+        entity_type: models::entity::EntityType,
     ) -> Result<models::entity::Entity, KnowledgeError> {
-        queries::entity::update_entity(&self.pool, id, name, type_id).await
+        queries::entity::update_entity(&self.pool, id, name, entity_type as i16).await
     }
 
     /// Delete entity (rejected if referenced by facts).
@@ -149,18 +149,18 @@ impl KnowledgeGraph {
     pub async fn insert_entity_date(
         &self,
         entity_id: i32,
-        date_type_id: i16,
+        date_type: models::enums::EntityDateType,
         date_value: &str,
-        recurrence_type_id: i16,
+        recurrence: models::enums::RecurrenceType,
         custom_label: Option<&str>,
         confidence: f32,
     ) -> Result<models::entity_date::EntityDate, KnowledgeError> {
         queries::entity::insert_entity_date(
             &self.pool,
             entity_id,
-            date_type_id,
+            date_type as i16,
             date_value,
-            recurrence_type_id,
+            recurrence as i16,
             custom_label,
             confidence,
         )
@@ -192,7 +192,7 @@ impl KnowledgeGraph {
     pub async fn insert_location(
         &self,
         entity_id: i32,
-        location_type_id: i16,
+        location_type: models::enums::LocationType,
         address: Option<&str>,
         latitude: Option<f64>,
         longitude: Option<f64>,
@@ -201,7 +201,7 @@ impl KnowledgeGraph {
         queries::entity::insert_location(
             &self.pool,
             entity_id,
-            location_type_id,
+            location_type as i16,
             address,
             latitude,
             longitude,

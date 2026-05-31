@@ -43,6 +43,8 @@ async fn all_migrations_apply_cleanly() {
     assert!(names.contains(&"source_types".to_string()));
     assert!(names.contains(&"preference_categories".to_string()));
     assert!(names.contains(&"preference_source_types".to_string()));
+    assert!(names.contains(&"predicates".to_string()));
+    assert!(names.contains(&"predicate_constraints".to_string()));
 }
 
 #[tokio::test]

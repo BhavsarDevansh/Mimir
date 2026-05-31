@@ -10,7 +10,11 @@
 
 ### Lookup Tables (Stable Integer IDs)
 
-All lookup tables are seeded in migration `001` with stable integer IDs that map to Rust enums via `#[repr(i16)]` discriminants.
+Lookup tables are seeded across migrations `001`, `012`, and `013` with stable integer IDs that map to Rust enums via `#[repr(i16)]` discriminants:
+
+- Migration `001` seeds `entity_types` (7 variants), `entity_date_types`, `recurrence_types`, `location_types`, `fact_statuses`, `relation_types`, `source_types`, `preference_categories`, and `preference_source_types`.
+- Migration `012` adds the `DateTime = 8` variant to `entity_types`.
+- Migration `013` seeds `predicates` and `predicate_constraints`.
 
 | Table | Rows | Rust Enum | Module |
 |-------|------|-----------|--------|

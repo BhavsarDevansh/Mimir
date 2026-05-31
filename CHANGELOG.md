@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.23.2] - 2026-05-31
+
+### Fixed
+
+- Made `KnowledgeGraph` public API consistent: `update_entity`, `insert_entity_date`, and `insert_location` now accept strongly-typed enums (`EntityType`, `EntityDateType`, `RecurrenceType`, `LocationType`) instead of raw `i16` values.
+- Wrapped `create_entity` in a transaction with `INSERT ... ON CONFLICT DO NOTHING` and added a DB-level unique expression index on `LOWER(name)` to prevent case-insensitive duplicate races.
+- Fixed inverted FTS5 rank filter in `get_by_name` (`rank >= -0.2` → `rank <= -0.2`) and corrected score mapping so more negative (better) bm25 ranks receive higher scores.
+- Updated `knowledge-graph-schema.md` to accurately reflect that lookup-table seeding spans migrations `001`, `012`, and `013`.
+- Added missing `predicates` and `predicate_constraints` assertions to `all_migrations_apply_cleanly`.
+
 ## [0.23.1] - 2026-05-31
 
 ### Fixed

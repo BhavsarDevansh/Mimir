@@ -3,7 +3,7 @@
 use chrono::{TimeZone, Utc};
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::entity::EntityType;
-use mimir_knowledge::models::enums::{LocationType, Predicate, RecurrenceType};
+use mimir_knowledge::models::enums::{EntityDateType, LocationType, Predicate, RecurrenceType};
 use mimir_knowledge::queries::entity::MatchKind;
 
 // ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ async fn test_entity_crud_roundtrip() {
 
     // Update
     let updated = kg
-        .update_entity(entity.id, "Alice Smith", EntityType::Person as i16)
+        .update_entity(entity.id, "Alice Smith", EntityType::Person)
         .await
         .unwrap();
     assert_eq!(updated.name, "Alice Smith");
@@ -207,9 +207,9 @@ async fn test_entity_date_recurrence_yearly() {
     let date = kg
         .insert_entity_date(
             entity.id,
-            1, // Birth
+            EntityDateType::Birth,
             "1990-05-15",
-            RecurrenceType::Yearly as i16,
+            RecurrenceType::Yearly,
             None,
             1.0,
         )
@@ -328,14 +328,21 @@ async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue()
         .unwrap();
 
     // Insert a date for y
-    kg.insert_entity_date(y.id, 1, "2024-06-01", 1, Some("birthday"), 1.0)
-        .await
-        .unwrap();
+    kg.insert_entity_date(
+        y.id,
+        EntityDateType::Birth,
+        "2024-06-01",
+        RecurrenceType::None,
+        Some("birthday"),
+        1.0,
+    )
+    .await
+    .unwrap();
 
     // Insert a location for y
     kg.insert_location(
         y.id,
-        LocationType::Home as i16,
+        LocationType::Home,
         Some("456 Oak Ave"),
         Some(40.0),
         Some(-74.0),
@@ -462,7 +469,7 @@ async fn test_entity_location_stub_roundtrip() {
     let loc = kg
         .insert_location(
             entity.id,
-            LocationType::Home as i16,
+            LocationType::Home,
             Some("123 Maple St"),
             Some(40.7128),
             Some(-74.0060),
@@ -605,39 +612,31 @@ async fn test_delete_guard_rejects_entity_in_merge_queue() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_find_exact_duplicates_case_insensitive() {
+async fn test_find_exact_duplicates_returns_empty_when_no_duplicates() {
     let dir = tempfile::tempdir().unwrap();
     let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
         .await
         .unwrap();
 
-    let _a = kg
+    // create_entity now enforces case-insensitive uniqueness at the DB level,
+    // so "alice" resolves to the existing "Alice" record.
+    let a = kg
         .create_entity("Alice", EntityType::Person, &[])
         .await
         .unwrap();
-    // Exact same name (different case) should trigger duplicate detection
-    let _b = kg
+    let b = kg
         .create_entity("alice", EntityType::Person, &[])
         .await
         .unwrap();
-
-    // Need to bypass create_entity dedup to insert a true duplicate
-    sqlx::query("INSERT INTO entities (name, entity_type_id, aliases) VALUES (?, ?, ?)")
-        .bind("ALICE")
-        .bind(EntityType::Person as i16)
-        .bind(None::<&str>)
-        .execute(kg.pool())
-        .await
-        .unwrap();
+    assert_eq!(a.id, b.id);
 
     let dups = mimir_knowledge::queries::entity::find_exact_duplicates(kg.pool())
         .await
         .unwrap();
-    assert!(!dups.is_empty());
-    let found = dups
-        .iter()
-        .any(|(e1, e2)| e1.name == "Alice" || e2.name == "Alice");
-    assert!(found, "Expected duplicate pair containing Alice");
+    assert!(
+        dups.is_empty(),
+        "Expected no duplicates with DB-level uniqueness"
+    );
 }
 
 #[tokio::test]

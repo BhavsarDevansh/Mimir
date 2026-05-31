@@ -153,7 +153,7 @@ fn forget_fact_inner<'a>(
 
                 if new_confidence < 0.20 {
                     sqlx::query("UPDATE facts SET fact_status_id = ? WHERE id = ?")
-                        .bind(3i16) // Disputed
+                        .bind(crate::models::fact::FactStatus::Disputed as i16)
                         .bind(child_id)
                         .execute(pool)
                         .await?;

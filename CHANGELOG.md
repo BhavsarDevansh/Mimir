@@ -15,7 +15,7 @@
 
 ### Changed
 
-- `NewFact` no longer accepts caller-provided `confidence`; all confidence is Rust-computed. This is an internal-only change — `mimir-knowledge` is not a public library and `NewFact` is only used within the Mimir workspace.
+- `NewFact` no longer accepts caller-provided `confidence`; confidence is now computed in Rust (internal change; not public API).
 - Connector-type source facts now use per-connector reliability scores instead of flat 0.80.
 - Initial confidence values: `UserEdit`/`System` = 1.0, `CasualMention` = 0.30, `Import` = 0.80.
 

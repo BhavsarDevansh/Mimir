@@ -49,7 +49,6 @@ async fn fact_crud_roundtrip() {
         valid_from: None,
         valid_until: None,
         source_type: SourceType::UserEdit,
-        confidence: None,
     };
 
     let fact = kg.insert_fact(new_fact.clone()).await.unwrap();
@@ -108,7 +107,6 @@ async fn fact_temporal_timeline() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -122,7 +120,6 @@ async fn fact_temporal_timeline() {
             valid_from: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -155,7 +152,6 @@ async fn fact_temporal_disputed() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -169,7 +165,6 @@ async fn fact_temporal_disputed() {
             valid_from: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -201,7 +196,6 @@ async fn fact_temporal_closure() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -215,7 +209,6 @@ async fn fact_temporal_closure() {
             valid_from: Some(kg.now()),
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -250,7 +243,6 @@ async fn fact_predicate_id_lookup() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -288,7 +280,6 @@ async fn fact_audit_log_written() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -327,7 +318,6 @@ async fn fact_source_attached() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::Calendar,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -364,18 +354,17 @@ async fn cascade_forget_orphan() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
 
     // Create an inferred child fact manually.
     let child: mimir_knowledge::models::fact::Fact = sqlx::query_as(
-        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred) \
-         VALUES (?, ?, ?, ?, ?, ?) \
+        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at",
+         inference_depth, stale_confidence, created_at, updated_at",
     )
     .bind(alice)
     .bind(Predicate::Visited as i16)
@@ -383,6 +372,8 @@ async fn cascade_forget_orphan() {
     .bind(0.5f32)
     .bind(FactStatus::Inferred as i16)
     .bind(true)
+    .bind(0i32)
+    .bind(false)
     .fetch_one(kg.pool())
     .await
     .unwrap();
@@ -431,7 +422,6 @@ async fn cascade_forget_survives() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -445,18 +435,17 @@ async fn cascade_forget_survives() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
 
     // Inferred child with two parents.
     let child: mimir_knowledge::models::fact::Fact = sqlx::query_as(
-        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred) \
-         VALUES (?, ?, ?, ?, ?, ?) \
+        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at",
+         inference_depth, stale_confidence, created_at, updated_at",
     )
     .bind(alice)
     .bind(Predicate::Visited as i16)
@@ -464,6 +453,8 @@ async fn cascade_forget_survives() {
     .bind(0.8f32)
     .bind(FactStatus::Inferred as i16)
     .bind(true)
+    .bind(0i32)
+    .bind(false)
     .fetch_one(kg.pool())
     .await
     .unwrap();
@@ -520,7 +511,6 @@ async fn trash_contains_payload() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -562,11 +552,10 @@ async fn confidence_initial_values() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
-    assert!((f_user.confidence - 0.80).abs() < f32::EPSILON);
+    assert!((f_user.confidence - 1.0).abs() < f32::EPSILON);
 
     let f_inf = kg
         .insert_fact(NewFact {
@@ -577,11 +566,10 @@ async fn confidence_initial_values() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::Inference,
-            confidence: None,
         })
         .await
         .unwrap();
-    assert!((f_inf.confidence - 0.50).abs() < f32::EPSILON);
+    assert!((f_inf.confidence - 0.0).abs() < f32::EPSILON);
 
     let f_conn = kg
         .insert_fact(NewFact {
@@ -592,7 +580,6 @@ async fn confidence_initial_values() {
             valid_from: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::Connector,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -622,7 +609,6 @@ async fn unknown_status_id_returns_none() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -667,7 +653,6 @@ async fn unknown_predicate_id_returns_none() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -721,7 +706,6 @@ async fn get_active_facts_at_half_open_boundary() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(boundary),
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -736,7 +720,6 @@ async fn get_active_facts_at_half_open_boundary() {
             valid_from: Some(boundary),
             valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -779,7 +762,6 @@ async fn automatic_closure_writes_audit_log() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -794,7 +776,6 @@ async fn automatic_closure_writes_audit_log() {
             valid_from: Some(now),
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await
         .unwrap();
@@ -837,7 +818,6 @@ async fn insert_rejects_inverted_time_range() {
             valid_from: Some(from),
             valid_until: Some(until),
             source_type: SourceType::UserEdit,
-            confidence: None,
         })
         .await;
 
@@ -871,24 +851,25 @@ async fn forget_cascade_status_change_writes_audit_log() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            confidence: Some(1.0),
         })
         .await
         .unwrap();
 
     // Non-inferred child with confidence that will drop below 0.20 when parent is removed.
     let child: mimir_knowledge::models::fact::Fact = sqlx::query_as(
-        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred) \
-         VALUES (?, ?, ?, ?, ?, ?) \
+        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at",
+         inference_depth, stale_confidence, created_at, updated_at",
     )
     .bind(alice)
     .bind(Predicate::Visited as i16)
     .bind(london)
     .bind(0.8f32)
     .bind(FactStatus::Active as i16)
+    .bind(false)
+    .bind(0i32)
     .bind(false)
     .fetch_one(kg.pool())
     .await

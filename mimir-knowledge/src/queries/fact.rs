@@ -5,6 +5,7 @@ use serde_json;
 use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
+use crate::confidence;
 use crate::models::fact::{Fact, FactStatus, NewFact};
 
 // ---------------------------------------------------------------------------
@@ -39,7 +40,7 @@ pub async fn insert_fact(
     let existing: Vec<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at \
+         inference_depth, stale_confidence, created_at, updated_at \
          FROM facts \
          WHERE subject_id = ? AND predicate_id = ?",
     )
@@ -79,7 +80,10 @@ pub async fn insert_fact(
                 .await?;
 
             let updated: Fact = sqlx::query_as::<_, Fact>(
-                "SELECT id, subject_id, predicate_id, object_id, object_literal,                      valid_from, valid_until, confidence, fact_status_id, inferred,                      created_at, updated_at                      FROM facts WHERE id = ?",
+                "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+                 valid_from, valid_until, confidence, fact_status_id, inferred, \
+                 inference_depth, stale_confidence, created_at, updated_at \
+                 FROM facts WHERE id = ?",
             )
             .bind(existing_fact.id)
             .fetch_one(&mut *tx)
@@ -87,7 +91,8 @@ pub async fn insert_fact(
 
             let new_json = serde_json::to_string(&updated).unwrap_or_default();
             sqlx::query(
-                "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer)                      VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(existing_fact.id)
             .bind("UPDATE")
@@ -102,19 +107,17 @@ pub async fn insert_fact(
         }
     }
 
-    // 2. Compute confidence (placeholder — extracted to confidence module in #51).
-    let confidence = new_fact
-        .confidence
-        .unwrap_or_else(|| crate::confidence::initial(new_fact.source_type));
+    // 2. Compute confidence based on source type.
+    let conf = confidence::initial(new_fact.source_type, None);
 
     // 3. Insert fact.
     let fact: Fact = sqlx::query_as::<_, Fact>(
         "INSERT INTO facts (subject_id, predicate_id, object_id, object_literal, \
-         valid_from, valid_until, confidence, fact_status_id, inferred) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         valid_from, valid_until, confidence, fact_status_id, inferred, inference_depth) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at",
+         inference_depth, stale_confidence, created_at, updated_at",
     )
     .bind(new_fact.subject_id)
     .bind(new_fact.predicate as i16)
@@ -122,9 +125,10 @@ pub async fn insert_fact(
     .bind(&new_fact.object_literal)
     .bind(new_fact.valid_from)
     .bind(new_fact.valid_until)
-    .bind(confidence)
+    .bind(conf)
     .bind(fact_status as i16)
     .bind(false) // inferred
+    .bind(0i32) // inference_depth
     .fetch_one(&mut *tx)
     .await?;
 
@@ -162,7 +166,7 @@ pub async fn get_by_id(pool: &SqlitePool, id: i32) -> Result<Option<Fact>, Knowl
     let fact: Option<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at \
+         inference_depth, stale_confidence, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(id)
@@ -180,11 +184,9 @@ pub async fn get_by_subject(
     let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at \
-         FROM facts \
-         WHERE subject_id = ? \
-         ORDER BY confidence DESC, created_at DESC \
-         LIMIT ?",
+         inference_depth, stale_confidence, created_at, updated_at \
+         FROM facts WHERE subject_id = ? \
+         ORDER BY confidence DESC, created_at DESC LIMIT ?",
     )
     .bind(subject_id)
     .bind(limit)
@@ -202,11 +204,9 @@ pub async fn get_by_predicate(
     let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at \
-         FROM facts \
-         WHERE predicate_id = ? \
-         ORDER BY confidence DESC, created_at DESC \
-         LIMIT ?",
+         inference_depth, stale_confidence, created_at, updated_at \
+         FROM facts WHERE predicate_id = ? \
+         ORDER BY confidence DESC, created_at DESC LIMIT ?",
     )
     .bind(predicate_id)
     .bind(limit)
@@ -215,7 +215,7 @@ pub async fn get_by_predicate(
     Ok(facts)
 }
 
-/// List facts for a given object entity, newest first.
+/// List facts for an object entity.
 pub async fn get_by_object(
     pool: &SqlitePool,
     object_id: i32,
@@ -224,11 +224,9 @@ pub async fn get_by_object(
     let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at \
-         FROM facts \
-         WHERE object_id = ? \
-         ORDER BY confidence DESC, created_at DESC \
-         LIMIT ?",
+         inference_depth, stale_confidence, created_at, updated_at \
+         FROM facts WHERE object_id = ? \
+         ORDER BY confidence DESC, created_at DESC LIMIT ?",
     )
     .bind(object_id)
     .bind(limit)
@@ -237,34 +235,27 @@ pub async fn get_by_object(
     Ok(facts)
 }
 
-/// Return facts that are active at a specific point in time.
-///
-/// A fact is active at `at_time` when:
-/// - `valid_from IS NULL OR valid_from <= at_time`
-/// - `valid_until IS NULL OR valid_until > at_time`  (half-open interval)
-/// - `fact_status_id = ?` (Active)
+/// Return facts active at a specific point in time.
 pub async fn get_active_facts_at(
     pool: &SqlitePool,
     subject_id: i32,
     predicate_id: i16,
-    at_time: DateTime<Utc>,
+    at: DateTime<Utc>,
 ) -> Result<Vec<Fact>, KnowledgeError> {
     let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at \
+         inference_depth, stale_confidence, created_at, updated_at \
          FROM facts \
          WHERE subject_id = ? AND predicate_id = ? \
          AND (valid_from IS NULL OR valid_from <= ?) \
          AND (valid_until IS NULL OR valid_until > ?) \
-         AND fact_status_id = ? \
          ORDER BY confidence DESC, created_at DESC",
     )
     .bind(subject_id)
     .bind(predicate_id)
-    .bind(at_time)
-    .bind(at_time)
-    .bind(FactStatus::Active as i16)
+    .bind(at)
+    .bind(at)
     .fetch_all(pool)
     .await?;
     Ok(facts)
@@ -274,9 +265,7 @@ pub async fn get_active_facts_at(
 // Update
 // ---------------------------------------------------------------------------
 
-/// Update the `valid_until` timestamp of a fact.
-///
-/// Rejects updates to immutable fields by only touching `valid_until`.
+/// Close a fact's temporal range, writing an audit log entry.
 pub async fn update_valid_until(
     pool: &SqlitePool,
     fact_id: i32,
@@ -288,7 +277,7 @@ pub async fn update_valid_until(
     let old: Option<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at \
+         inference_depth, stale_confidence, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
@@ -318,7 +307,7 @@ pub async fn update_valid_until(
     let updated: Fact = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at \
+         inference_depth, stale_confidence, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
@@ -355,7 +344,7 @@ pub async fn set_status(
     let old: Option<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at \
+         inference_depth, stale_confidence, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
@@ -375,7 +364,7 @@ pub async fn set_status(
     let updated: Fact = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         created_at, updated_at \
+         inference_depth, stale_confidence, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)

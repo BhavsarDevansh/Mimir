@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.23.1] - 2026-05-31
+
+### Fixed
+
+- Weekly recurrence in `next_occurrence` computed weekday offset in wrong direction, causing incorrect upcoming dates when current day differed from base weekday.
+- `auto_merge_pair` silently deleted `entity_dates` and `entity_locations` via `ON DELETE CASCADE` instead of migrating them to the survivor; now also explicitly removes `preferences` and `entity_merge_queue` rows for the merged entity to prevent FK constraint failures.
+- `delete_entity` guard only checked `facts`, allowing raw SQLite FK errors when deleting entities with `preferences` or `entity_merge_queue` entries; now counts all three tables and returns a clean `KnowledgeError`.
+- `find_exact_duplicates` performed an O(n²) self-join; rewritten to use a `dup_names` CTE backed by a new expression index on `LOWER(name)`.
+- `escape_fts5` only doubled double quotes, leaving `*`, `OR`, `AND`, etc. unescaped; now wraps the query in a quoted phrase and sanitises asterisks to prevent FTS5 syntax errors.
+
 ## [0.23.0] - 2026-05-31
 
 ### Added

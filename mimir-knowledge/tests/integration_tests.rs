@@ -312,6 +312,102 @@ async fn test_dedup_exact_merge() {
 }
 
 #[tokio::test]
+async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let x = kg
+        .create_entity("Frank", EntityType::Person, &[])
+        .await
+        .unwrap();
+    let y = kg
+        .create_entity("Grace", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    // Insert a date for y
+    kg.insert_entity_date(y.id, 1, "2024-06-01", 1, Some("birthday"), 1.0)
+        .await
+        .unwrap();
+
+    // Insert a location for y
+    kg.insert_location(
+        y.id,
+        LocationType::Home as i16,
+        Some("456 Oak Ave"),
+        Some(40.0),
+        Some(-74.0),
+        Some("America/New_York"),
+    )
+    .await
+    .unwrap();
+
+    // Insert a preference for y (direct SQL since no helper yet)
+    sqlx::query("INSERT INTO preferences (entity_id, category_id, key, value, confidence) VALUES (?, ?, ?, ?, ?)")
+        .bind(y.id)
+        .bind(1i16)
+        .bind("theme")
+        .bind("\"dark\"")
+        .bind(1.0f32)
+        .execute(kg.pool())
+        .await
+        .unwrap();
+
+    // Insert a merge-queue entry referencing y as duplicate
+    sqlx::query(
+        "INSERT INTO entity_merge_queue (primary_entity_id, duplicate_entity_id, status_id) VALUES (?, ?, ?)",
+    )
+    .bind(x.id)
+    .bind(y.id)
+    .bind(1i16)
+    .execute(kg.pool())
+    .await
+    .unwrap();
+
+    // Merge y into x
+    mimir_knowledge::queries::entity::auto_merge_pair(kg.pool(), x.id, y.id)
+        .await
+        .unwrap();
+
+    // y should be gone
+    let gone = kg.get_entity(y.id).await.unwrap();
+    assert!(gone.is_none());
+
+    // Date should now belong to x
+    let dates = mimir_knowledge::queries::entity::get_dates_for_entity(kg.pool(), x.id)
+        .await
+        .unwrap();
+    assert_eq!(dates.len(), 1);
+    assert_eq!(dates[0].entity_id, x.id);
+
+    // Location should now belong to x
+    let locs = kg.get_locations(x.id).await.unwrap();
+    assert_eq!(locs.len(), 1);
+    assert_eq!(locs[0].entity_id, x.id);
+
+    // Preference for y should be removed
+    let pref_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM preferences WHERE entity_id = ?")
+        .bind(y.id)
+        .fetch_one(kg.pool())
+        .await
+        .unwrap();
+    assert_eq!(pref_count.0, 0);
+
+    // Merge-queue entry referencing y should be removed
+    let queue_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM entity_merge_queue WHERE primary_entity_id = ? OR duplicate_entity_id = ?"
+    )
+    .bind(y.id)
+    .bind(y.id)
+    .fetch_one(kg.pool())
+    .await
+    .unwrap();
+    assert_eq!(queue_count.0, 0);
+}
+
+#[tokio::test]
 async fn test_dedup_overlapping_alias_flag() {
     let dir = tempfile::tempdir().unwrap();
     let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
@@ -436,9 +532,113 @@ async fn test_delete_guard_rejects_entity_with_facts() {
     );
 }
 
+#[tokio::test]
+async fn test_delete_guard_rejects_entity_with_preferences() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let a = kg
+        .create_entity("Jack", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    sqlx::query("INSERT INTO preferences (entity_id, category_id, key, value, confidence) VALUES (?, ?, ?, ?, ?)")
+        .bind(a.id)
+        .bind(1i16)
+        .bind("theme")
+        .bind("\"dark\"")
+        .bind(1.0f32)
+        .execute(kg.pool())
+        .await
+        .unwrap();
+
+    let result = kg.delete_entity(a.id).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("1"),
+        "Expected reference count in error: {}",
+        err
+    );
+}
+
+#[tokio::test]
+async fn test_delete_guard_rejects_entity_in_merge_queue() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let a = kg
+        .create_entity("Jack", EntityType::Person, &[])
+        .await
+        .unwrap();
+    let b = kg
+        .create_entity("Jill", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    sqlx::query(
+        "INSERT INTO entity_merge_queue (primary_entity_id, duplicate_entity_id, status_id) VALUES (?, ?, ?)",
+    )
+    .bind(a.id)
+    .bind(b.id)
+    .bind(1i16)
+    .execute(kg.pool())
+    .await
+    .unwrap();
+
+    let result = kg.delete_entity(a.id).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("1"),
+        "Expected reference count in error: {}",
+        err
+    );
+}
+
 // ---------------------------------------------------------------------------
 // LLM semantic dedup stub
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_find_exact_duplicates_case_insensitive() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let _a = kg
+        .create_entity("Alice", EntityType::Person, &[])
+        .await
+        .unwrap();
+    // Exact same name (different case) should trigger duplicate detection
+    let _b = kg
+        .create_entity("alice", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    // Need to bypass create_entity dedup to insert a true duplicate
+    sqlx::query("INSERT INTO entities (name, entity_type_id, aliases) VALUES (?, ?, ?)")
+        .bind("ALICE")
+        .bind(EntityType::Person as i16)
+        .bind(None::<&str>)
+        .execute(kg.pool())
+        .await
+        .unwrap();
+
+    let dups = mimir_knowledge::queries::entity::find_exact_duplicates(kg.pool())
+        .await
+        .unwrap();
+    assert!(!dups.is_empty());
+    let found = dups
+        .iter()
+        .any(|(e1, e2)| e1.name == "Alice" || e2.name == "Alice");
+    assert!(found, "Expected duplicate pair containing Alice");
+}
 
 #[tokio::test]
 async fn test_semantic_dedup_stub_returns_not_yet_implemented() {

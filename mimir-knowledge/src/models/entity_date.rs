@@ -51,15 +51,12 @@ pub fn next_occurrence(
             }
         }
         RecurrenceType::Weekly => {
-            let days_diff = (from.date_naive().weekday().num_days_from_monday() as i64)
-                - (base.date_naive().weekday().num_days_from_monday() as i64);
-            let days_ahead = if days_diff < 0 {
-                days_diff + 7
-            } else if days_diff == 0 {
-                if base.time() >= from.time() { 0 } else { 7 }
-            } else {
-                days_diff
-            };
+            let from_weekday = from.date_naive().weekday().num_days_from_monday() as i64;
+            let base_weekday = base.date_naive().weekday().num_days_from_monday() as i64;
+            let mut days_ahead = (base_weekday - from_weekday + 7) % 7;
+            if days_ahead == 0 && base.time() < from.time() {
+                days_ahead = 7;
+            }
             Some(from.date_naive() + Duration::days(days_ahead))
                 .and_then(|d| Utc.from_local_datetime(&d.and_time(base.time())).single())
         }
@@ -236,6 +233,33 @@ mod tests {
         let from = Utc.with_ymd_and_hms(2024, 3, 20, 12, 0, 0).unwrap(); // Wednesday noon
         let result = next_occurrence("2020-03-18", RecurrenceType::Weekly, from); // Wednesday base
         let expected = Utc.with_ymd_and_hms(2024, 3, 27, 0, 0, 0).unwrap();
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn next_occurrence_weekly_from_tuesday_to_wednesday() {
+        // from = Tuesday, base = Wednesday → next Wednesday is +1 day
+        let from = Utc.with_ymd_and_hms(2024, 3, 19, 12, 0, 0).unwrap(); // Tuesday noon
+        let result = next_occurrence("2020-03-18", RecurrenceType::Weekly, from); // Wednesday base
+        let expected = Utc.with_ymd_and_hms(2024, 3, 20, 0, 0, 0).unwrap();
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn next_occurrence_weekly_from_thursday_to_wednesday() {
+        // from = Thursday, base = Wednesday → next Wednesday is +6 days
+        let from = Utc.with_ymd_and_hms(2024, 3, 21, 12, 0, 0).unwrap(); // Thursday noon
+        let result = next_occurrence("2020-03-18", RecurrenceType::Weekly, from); // Wednesday base
+        let expected = Utc.with_ymd_and_hms(2024, 3, 27, 0, 0, 0).unwrap();
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn next_occurrence_weekly_same_day_time_already_passed() {
+        // from = Wednesday afternoon, base = Wednesday morning → next week
+        let from = Utc.with_ymd_and_hms(2024, 3, 20, 14, 0, 0).unwrap(); // Wednesday 14:00
+        let result = next_occurrence("2020-03-18T08:00:00Z", RecurrenceType::Weekly, from); // Wednesday 08:00
+        let expected = Utc.with_ymd_and_hms(2024, 3, 27, 8, 0, 0).unwrap();
         assert_eq!(result, Some(expected));
     }
 

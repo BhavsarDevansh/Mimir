@@ -100,9 +100,18 @@ pub async fn get_by_id(pool: &SqlitePool, id: i32) -> Result<Option<Entity>, Kno
 }
 
 /// Escape a raw string for safe use in an FTS5 MATCH expression.
-/// Replaces double quotes with doubled double-quotes per SQLite FTS5 rules.
+///
+/// FTS5 treats spaces, `OR`, `AND`, `NOT`, `*`, `-`, `(` and `)` as query
+/// operators. To avoid syntax errors and force literal matching, the input is
+/// wrapped in a double-quoted phrase. Internal double quotes are doubled and
+/// asterisks are replaced with spaces so that prefix-operator syntax cannot
+/// appear inside the quoted phrase.
 fn escape_fts5(query: &str) -> String {
-    query.replace('"', "\"\"")
+    if query.is_empty() {
+        return String::new();
+    }
+    let escaped = query.replace('"', "\"\"").replace('*', " ");
+    format!("\"{}\"", escaped)
 }
 
 /// Search for entities by exact name match, then exact alias match, then FTS5 fuzzy.
@@ -293,17 +302,33 @@ async fn refresh_entity_aliases_json(
     Ok(())
 }
 
-/// Delete an entity, rejecting if it is referenced by any facts.
+/// Delete an entity, rejecting if it is referenced by facts, preferences, or merge-queue entries.
 pub async fn delete_entity(pool: &SqlitePool, id: i32) -> Result<(), KnowledgeError> {
-    let (count,): (i64,) =
+    let (fact_count,): (i64,) =
         sqlx::query_as("SELECT COUNT(*) FROM facts WHERE subject_id = ? OR object_id = ?")
             .bind(id)
             .bind(id)
             .fetch_one(pool)
             .await?;
 
-    if count > 0 {
-        return Err(KnowledgeError::EntityHasFacts(count));
+    let (pref_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM preferences WHERE entity_id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+
+    let (queue_count,): (i64,) =
+        sqlx::query_as(
+            "SELECT COUNT(*) FROM entity_merge_queue WHERE primary_entity_id = ? OR duplicate_entity_id = ?"
+        )
+        .bind(id)
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+
+    let total = fact_count + pref_count + queue_count;
+    if total > 0 {
+        return Err(KnowledgeError::EntityHasFacts(total));
     }
 
     sqlx::query("DELETE FROM entities WHERE id = ?")
@@ -524,9 +549,16 @@ pub async fn find_exact_duplicates(
     pool: &SqlitePool,
 ) -> Result<Vec<(Entity, Entity)>, KnowledgeError> {
     let rows: Vec<(i32, i32)> = sqlx::query_as(
-        "SELECT a.id, b.id \
+        "WITH dup_names AS ( \
+            SELECT LOWER(name) AS lower_name \
+            FROM entities \
+            GROUP BY LOWER(name) \
+            HAVING COUNT(*) > 1 \
+         ) \
+         SELECT a.id, b.id \
          FROM entities a \
-         JOIN entities b ON LOWER(a.name) = LOWER(b.name) AND a.id < b.id",
+         JOIN dup_names d ON LOWER(a.name) = d.lower_name \
+         JOIN entities b ON LOWER(b.name) = d.lower_name AND a.id < b.id",
     )
     .fetch_all(pool)
     .await?;
@@ -627,7 +659,36 @@ pub async fn auto_merge_pair(
         .execute(&mut *tx)
         .await?;
 
-    // 4. Delete merged entity (cascades entity_aliases thanks to ON DELETE CASCADE).
+    // 4. Migrate entity_dates to survivor.
+    sqlx::query("UPDATE entity_dates SET entity_id = ? WHERE entity_id = ?")
+        .bind(actual_survivor)
+        .bind(actual_merged)
+        .execute(&mut *tx)
+        .await?;
+
+    // 5. Migrate entity_locations to survivor.
+    sqlx::query("UPDATE entity_locations SET entity_id = ? WHERE entity_id = ?")
+        .bind(actual_survivor)
+        .bind(actual_merged)
+        .execute(&mut *tx)
+        .await?;
+
+    // 6. Remove preferences for merged entity to avoid FK violation.
+    sqlx::query("DELETE FROM preferences WHERE entity_id = ?")
+        .bind(actual_merged)
+        .execute(&mut *tx)
+        .await?;
+
+    // 7. Remove merge-queue entries referencing merged entity.
+    sqlx::query(
+        "DELETE FROM entity_merge_queue WHERE primary_entity_id = ? OR duplicate_entity_id = ?",
+    )
+    .bind(actual_merged)
+    .bind(actual_merged)
+    .execute(&mut *tx)
+    .await?;
+
+    // 8. Delete merged entity (cascades entity_aliases thanks to ON DELETE CASCADE).
     sqlx::query("DELETE FROM entities WHERE id = ?")
         .bind(actual_merged)
         .execute(&mut *tx)
@@ -690,4 +751,42 @@ pub async fn enqueue_semantic_dedup(
     // TODO(#50): Build structured prompt, call LlmWorkerPool, parse JSON response,
     // insert into entity_merge_queue with llm_confidence and suggested_action.
     Err(KnowledgeError::NotYetImplemented)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::escape_fts5;
+
+    #[test]
+    fn escape_fts5_empty() {
+        assert_eq!(escape_fts5(""), "");
+    }
+
+    #[test]
+    fn escape_fts5_plain_word() {
+        assert_eq!(escape_fts5("hello"), "\"hello\"");
+    }
+
+    #[test]
+    fn escape_fts5_doubles_quotes() {
+        assert_eq!(escape_fts5("foo\"bar"), "\"foo\"\"bar\"");
+    }
+
+    #[test]
+    fn escape_fts5_replaces_asterisk_with_space() {
+        assert_eq!(escape_fts5("foo*bar"), "\"foo bar\"");
+    }
+
+    #[test]
+    fn escape_fts5_boolean_operators_become_literal_phrase() {
+        // Without escaping, "foo OR bar" would be parsed as a boolean expression.
+        assert_eq!(escape_fts5("foo OR bar"), "\"foo OR bar\"");
+        assert_eq!(escape_fts5("foo AND bar"), "\"foo AND bar\"");
+        assert_eq!(escape_fts5("foo NOT bar"), "\"foo NOT bar\"");
+    }
+
+    #[test]
+    fn escape_fts5_parentheses_and_dash_literal() {
+        assert_eq!(escape_fts5("(foo-bar)"), "\"(foo-bar)\"");
+    }
 }

@@ -25,6 +25,16 @@ pub async fn insert_fact(
 ) -> Result<Fact, KnowledgeError> {
     let mut tx = pool.begin().await?;
 
+    // 0. Validate time range ordering.
+    if let (Some(from), Some(until)) = (new_fact.valid_from, new_fact.valid_until) {
+        if from > until {
+            return Err(KnowledgeError::Validation(format!(
+                "valid_from ({}) must not be after valid_until ({})",
+                from, until
+            )));
+        }
+    }
+
     // 1. Temporal overlap check against same subject + predicate.
     let existing: Vec<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
@@ -47,12 +57,33 @@ pub async fn insert_fact(
             new_fact.valid_until,
         ) {
             if existing_fact.valid_until.is_none() && new_fact.valid_from.is_some() {
+                let old_json = serde_json::to_string(existing_fact).unwrap_or_default();
                 sqlx::query("UPDATE facts SET valid_until = ?, updated_at = ? WHERE id = ?")
                     .bind(now)
                     .bind(now)
                     .bind(existing_fact.id)
                     .execute(&mut *tx)
                     .await?;
+
+                let updated: Fact = sqlx::query_as::<_, Fact>(
+                    "SELECT id, subject_id, predicate_id, object_id, object_literal,                      valid_from, valid_until, confidence, fact_status_id, inferred,                      created_at, updated_at                      FROM facts WHERE id = ?",
+                )
+                .bind(existing_fact.id)
+                .fetch_one(&mut *tx)
+                .await?;
+
+                let new_json = serde_json::to_string(&updated).unwrap_or_default();
+                sqlx::query(
+                    "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer)                      VALUES (?, ?, ?, ?, ?, ?)",
+                )
+                .bind(existing_fact.id)
+                .bind("UPDATE")
+                .bind(old_json)
+                .bind(new_json)
+                .bind(now)
+                .bind("system")
+                .execute(&mut *tx)
+                .await?;
                 // Continue checking other overlaps.
             } else {
                 fact_status = FactStatus::Disputed;
@@ -200,8 +231,8 @@ pub async fn get_by_object(
 ///
 /// A fact is active at `at_time` when:
 /// - `valid_from IS NULL OR valid_from <= at_time`
-/// - `valid_until IS NULL OR valid_until >= at_time`
-/// - `fact_status_id = 1` (Active)
+/// - `valid_until IS NULL OR valid_until > at_time`  (half-open interval)
+/// - `fact_status_id = ?` (Active)
 pub async fn get_active_facts_at(
     pool: &SqlitePool,
     subject_id: i32,
@@ -215,13 +246,14 @@ pub async fn get_active_facts_at(
          FROM facts \
          WHERE subject_id = ? AND predicate_id = ? \
          AND (valid_from IS NULL OR valid_from <= ?) \
-         AND (valid_until IS NULL OR valid_until >= ?) \
-         AND fact_status_id = 1",
+         AND (valid_until IS NULL OR valid_until > ?) \
+         AND fact_status_id = ?",
     )
     .bind(subject_id)
     .bind(predicate_id)
     .bind(at_time)
     .bind(at_time)
+    .bind(FactStatus::Active as i16)
     .fetch_all(pool)
     .await?;
     Ok(facts)

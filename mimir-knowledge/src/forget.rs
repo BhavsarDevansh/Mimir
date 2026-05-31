@@ -152,11 +152,42 @@ fn forget_fact_inner<'a>(
                     .await?;
 
                 if new_confidence < 0.20 {
-                    sqlx::query("UPDATE facts SET fact_status_id = ? WHERE id = ?")
-                        .bind(crate::models::fact::FactStatus::Disputed as i16)
+                    let old_child: Option<Fact> = sqlx::query_as::<_, Fact>(
+                        "SELECT id, subject_id, predicate_id, object_id, object_literal,                          valid_from, valid_until, confidence, fact_status_id, inferred,                          created_at, updated_at                          FROM facts WHERE id = ?",
+                    )
+                    .bind(child_id)
+                    .fetch_optional(pool)
+                    .await?;
+
+                    if let Some(old_child) = old_child {
+                        let old_json = serde_json::to_string(&old_child).unwrap_or_default();
+
+                        sqlx::query("UPDATE facts SET fact_status_id = ? WHERE id = ?")
+                            .bind(crate::models::fact::FactStatus::Disputed as i16)
+                            .bind(child_id)
+                            .execute(pool)
+                            .await?;
+
+                        let updated_child: Fact = sqlx::query_as::<_, Fact>(
+                            "SELECT id, subject_id, predicate_id, object_id, object_literal,                              valid_from, valid_until, confidence, fact_status_id, inferred,                              created_at, updated_at                              FROM facts WHERE id = ?",
+                        )
                         .bind(child_id)
+                        .fetch_one(pool)
+                        .await?;
+
+                        let new_json = serde_json::to_string(&updated_child).unwrap_or_default();
+                        sqlx::query(
+                            "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer)                              VALUES (?, ?, ?, ?, ?, ?)",
+                        )
+                        .bind(child_id)
+                        .bind("STATUS_CHANGE")
+                        .bind(old_json)
+                        .bind(new_json)
+                        .bind(now)
+                        .bind("system")
                         .execute(pool)
                         .await?;
+                    }
                 }
             }
         }

@@ -40,32 +40,34 @@ pub struct Fact {
 
 impl Fact {
     /// Map the stored `fact_status_id` to the typed enum.
-    pub fn status(&self) -> FactStatus {
+    /// Returns `None` if the ID does not correspond to a known variant.
+    pub fn status(&self) -> Option<FactStatus> {
         match self.fact_status_id {
-            1 => FactStatus::Active,
-            2 => FactStatus::Inferred,
-            3 => FactStatus::Disputed,
-            4 => FactStatus::Corrected,
-            5 => FactStatus::Superseded,
-            6 => FactStatus::Forgotten,
-            _ => FactStatus::Active,
+            1 => Some(FactStatus::Active),
+            2 => Some(FactStatus::Inferred),
+            3 => Some(FactStatus::Disputed),
+            4 => Some(FactStatus::Corrected),
+            5 => Some(FactStatus::Superseded),
+            6 => Some(FactStatus::Forgotten),
+            _ => None,
         }
     }
 
     /// Map the stored `predicate_id` to the typed enum.
-    pub fn predicate(&self) -> Predicate {
+    /// Returns `None` if the ID does not correspond to a known variant.
+    pub fn predicate(&self) -> Option<Predicate> {
         match self.predicate_id {
-            1 => Predicate::IsIn,
-            2 => Predicate::Visited,
-            3 => Predicate::Owns,
-            4 => Predicate::WorksAs,
-            5 => Predicate::HasPartner,
-            6 => Predicate::HasParent,
-            7 => Predicate::BornOn,
-            8 => Predicate::DiedOn,
-            9 => Predicate::LocatedIn,
-            10 => Predicate::CreatedOn,
-            _ => Predicate::IsIn,
+            1 => Some(Predicate::IsIn),
+            2 => Some(Predicate::Visited),
+            3 => Some(Predicate::Owns),
+            4 => Some(Predicate::WorksAs),
+            5 => Some(Predicate::HasPartner),
+            6 => Some(Predicate::HasParent),
+            7 => Some(Predicate::BornOn),
+            8 => Some(Predicate::DiedOn),
+            9 => Some(Predicate::LocatedIn),
+            10 => Some(Predicate::CreatedOn),
+            _ => None,
         }
     }
 }

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.24.1] - 2026-05-31
+
+### Fixed
+
+- `Fact::status()` and `Fact::predicate()` now return `Option` instead of silently defaulting to `Active`/`IsIn` for unknown DB IDs, making enum drift immediately visible.
+- `get_active_facts_at` now uses half-open interval semantics (`valid_until > at_time`) consistent with `ranges_overlap`, and parameterises `fact_status_id` via `FactStatus::Active as i16` instead of a hardcoded magic number.
+- `insert_fact` now validates that `valid_from <= valid_until` when both are provided, rejecting inverted time ranges that would create ghost facts.
+- Automatic closure of open-ended predecessor facts during `insert_fact` now writes an audit log entry documenting the `UPDATE` to `valid_until`.
+- Cascade status change to `Disputed` in `forget.rs` (triggered when child confidence drops below 0.20) now writes an audit log entry, closing the gap in the audit trail.
+
+
 ## [0.24.0] - 2026-05-31
 
 ### Added

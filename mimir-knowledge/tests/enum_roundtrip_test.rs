@@ -185,11 +185,13 @@ async fn preference_category_roundtrips() {
         &kg,
         "SELECT id FROM preference_categories WHERE id = ? LIMIT 1",
         &[
+            PreferenceCategory::CalendarBehavior,
             PreferenceCategory::NotificationStyle,
-            PreferenceCategory::CalendarAutoAdd,
-            PreferenceCategory::ProactivityLevel,
-            PreferenceCategory::CommunicationTone,
-            PreferenceCategory::Privacy,
+            PreferenceCategory::FoodPreference,
+            PreferenceCategory::TravelPreference,
+            PreferenceCategory::WorkStyle,
+            PreferenceCategory::CommunicationPreference,
+            PreferenceCategory::General,
         ],
     )
     .await;
@@ -205,9 +207,9 @@ async fn preference_source_type_roundtrips() {
         &kg,
         "SELECT id FROM preference_source_types WHERE id = ? LIMIT 1",
         &[
-            PreferenceSourceType::Explicit,
-            PreferenceSourceType::Inferred,
-            PreferenceSourceType::Corrected,
+            PreferenceSourceType::Interaction,
+            PreferenceSourceType::Fact,
+            PreferenceSourceType::UserEdit,
         ],
     )
     .await;

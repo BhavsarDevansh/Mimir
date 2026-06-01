@@ -4,6 +4,8 @@ use chrono::{TimeZone, Utc};
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::enums::{EntityDateType, LocationType, Predicate, RecurrenceType};
+use mimir_knowledge::models::fact::NewFact;
+use mimir_knowledge::models::source::SourceType;
 use mimir_knowledge::queries::entity::MatchKind;
 
 // ---------------------------------------------------------------------------
@@ -282,6 +284,23 @@ async fn test_dedup_exact_merge() {
         .await
         .unwrap();
 
+    // Insert a fact for x so x survives the merge (more facts = survivor)
+    kg.insert_fact(NewFact {
+        subject_id: x.id,
+        predicate: Predicate::IsIn,
+        object_id: None,
+        object_literal: Some("somewhere".to_string()),
+        valid_from: None,
+        valid_until: None,
+        source_type: SourceType::UserEdit,
+        connector_id: None,
+        connector_type: None,
+        raw_reference: None,
+        extraction_method: None,
+    })
+    .await
+    .unwrap();
+
     // Insert a fact referencing y so we can verify FK repointing.
     sqlx::query("INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id) VALUES (?, ?, ?, ?, ?)")
         .bind(y.id)
@@ -327,6 +346,23 @@ async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue()
         .await
         .unwrap();
 
+    // Insert a fact for x so x survives the merge (more facts = survivor)
+    kg.insert_fact(NewFact {
+        subject_id: x.id,
+        predicate: Predicate::IsIn,
+        object_id: None,
+        object_literal: Some("somewhere".to_string()),
+        valid_from: None,
+        valid_until: None,
+        source_type: SourceType::UserEdit,
+        connector_id: None,
+        connector_type: None,
+        raw_reference: None,
+        extraction_method: None,
+    })
+    .await
+    .unwrap();
+
     // Insert a date for y
     kg.insert_entity_date(
         y.id,
@@ -351,13 +387,32 @@ async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue()
     .await
     .unwrap();
 
+    // Insert a fact for y to serve as source_fact_id
+    let fact_y = kg
+        .insert_fact(NewFact {
+            subject_id: y.id,
+            predicate: Predicate::HasPreference,
+            object_id: None,
+            object_literal: Some("pref".to_string()),
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+        })
+        .await
+        .unwrap();
+
     // Insert a preference for y (direct SQL since no helper yet)
-    sqlx::query("INSERT INTO preferences (entity_id, category_id, key, value, confidence) VALUES (?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO preferences (entity_id, category_id, key, value, confidence, source_fact_id) VALUES (?, ?, ?, ?, ?, ?)")
         .bind(y.id)
         .bind(1i16)
         .bind("theme")
-        .bind("\"dark\"")
+        .bind("dark")
         .bind(1.0f32)
+        .bind(fact_y.id)
         .execute(kg.pool())
         .await
         .unwrap();
@@ -551,12 +606,31 @@ async fn test_delete_guard_rejects_entity_with_preferences() {
         .await
         .unwrap();
 
-    sqlx::query("INSERT INTO preferences (entity_id, category_id, key, value, confidence) VALUES (?, ?, ?, ?, ?)")
+    // Insert a fact for a to serve as source_fact_id
+    let fact_a = kg
+        .insert_fact(NewFact {
+            subject_id: a.id,
+            predicate: Predicate::HasPreference,
+            object_id: None,
+            object_literal: Some("pref".to_string()),
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+        })
+        .await
+        .unwrap();
+
+    sqlx::query("INSERT INTO preferences (entity_id, category_id, key, value, confidence, source_fact_id) VALUES (?, ?, ?, ?, ?, ?)")
         .bind(a.id)
         .bind(1i16)
         .bind("theme")
-        .bind("\"dark\"")
+        .bind("dark")
         .bind(1.0f32)
+        .bind(fact_a.id)
         .execute(kg.pool())
         .await
         .unwrap();
@@ -565,7 +639,7 @@ async fn test_delete_guard_rejects_entity_with_preferences() {
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
-        err.contains("1"),
+        err.contains("2"),
         "Expected reference count in error: {}",
         err
     );

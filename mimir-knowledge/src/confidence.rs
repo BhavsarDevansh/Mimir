@@ -7,6 +7,7 @@ use sqlx::SqlitePool;
 use std::pin::Pin;
 
 use crate::KnowledgeError;
+use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::enums::ConnectorType;
 use crate::models::source::SourceType;
 
@@ -52,19 +53,9 @@ pub fn initial(source_type: SourceType, connector_type: Option<ConnectorType>) -
     match source_type {
         SourceType::UserEdit => 1.0,
         SourceType::System => 1.0,
-        SourceType::CasualMention => 0.30,
+        SourceType::Interaction => 0.30,
         SourceType::Import => 0.80,
         SourceType::Connector => connector_type.map(default_connector_score).unwrap_or(0.80),
-        SourceType::Email | SourceType::Calendar | SourceType::Photo | SourceType::Message => {
-            // Legacy source types that map to a connector subtype.
-            match source_type {
-                SourceType::Calendar => default_connector_score(ConnectorType::Calendar),
-                SourceType::Email => default_connector_score(ConnectorType::Gmail),
-                SourceType::Photo => default_connector_score(ConnectorType::Photos),
-                SourceType::Message => default_connector_score(ConnectorType::Gmail),
-                _ => 0.80,
-            }
-        }
         SourceType::Inference => {
             // Inferred facts never use `initial` — their confidence is
             // computed during insertion by `inference_confidence`.
@@ -178,11 +169,34 @@ fn cascade_inner<'a>(
             let old_confidence = old_confidence.unwrap_or(0.0);
 
             if (new_confidence - old_confidence).abs() > 0.001 {
-                sqlx::query("UPDATE facts SET confidence = ? WHERE id = ?")
+                let mut tx = pool.begin().await?;
+
+                sqlx::query("UPDATE facts SET confidence = ?, updated_at = ? WHERE id = ?")
                     .bind(new_confidence)
+                    .bind(chrono::Utc::now())
                     .bind(child_id)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
+
+                // Write confidence_change audit entry.
+                let old_json = serde_json::json!({"confidence": old_confidence}).to_string();
+                let new_json = serde_json::json!({"confidence": new_confidence}).to_string();
+                sqlx::query(
+                    "INSERT INTO fact_audit_log \
+                     (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(child_id)
+                .bind(ChangeType::ConfidenceChange as i16)
+                .bind(old_json)
+                .bind(new_json)
+                .bind(chrono::Utc::now())
+                .bind(ChangedBy::System as i16)
+                .bind(None::<&str>)
+                .execute(&mut *tx)
+                .await?;
+
+                tx.commit().await?;
 
                 cascade_inner(pool, child_id, depth_budget - 1).await?;
             }

@@ -20,6 +20,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: SkillCommands,
     },
+    /// Knowledge graph commands.
+    Kb {
+        #[command(subcommand)]
+        command: KbCommands,
+    },
     /// Start the Mimir HTTP server (foreground daemon).
     Start,
     /// Stop the Mimir HTTP server.
@@ -57,6 +62,28 @@ pub enum Commands {
     Status,
     /// Print the contents of memory.md.
     Memory,
+}
+
+#[derive(Subcommand)]
+pub enum KbCommands {
+    /// Query the fact audit log.
+    Audit {
+        /// Filter by entity name.
+        #[arg(long)]
+        entity: Option<String>,
+        /// Filter by predicate name.
+        #[arg(long)]
+        predicate: Option<String>,
+        /// Filter from datetime (ISO-8601).
+        #[arg(long)]
+        from: Option<String>,
+        /// Filter to datetime (ISO-8601).
+        #[arg(long)]
+        to: Option<String>,
+        /// Filter by change type.
+        #[arg(long)]
+        change_type: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

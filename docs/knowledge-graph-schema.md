@@ -24,10 +24,14 @@ Lookup tables are seeded across migrations `001`, `012`, and `013` with stable i
 | `location_types` | 5 | `LocationType` | `models::enums` |
 | `fact_statuses` | 6 | `FactStatus` | `models::fact` |
 | `relation_types` | 3 | `RelationType` | `models::enums` |
-| `source_types` | 7 | `SourceType` | `models::source` |
+| `source_types` | 6 | `SourceType` | `models::source` |
 | `preference_categories` | 5 | `PreferenceCategory` | `models::preference` |
 | `preference_source_types` | 3 | `PreferenceSourceType` | `models::preference` |
 | `predicates` | 10 | `Predicate` | `models::enums` |
+| `extraction_methods` | 5 | `ExtractionMethod` | `models::source` |
+| `change_types` | 7 | `ChangeType` | `models::audit_log` |
+| `changed_by_types` | 4 | `ChangedBy` | `models::audit_log` |
+| `connector_types` | 4 | `ConnectorType` | `models::enums` |
 
 ### Core Tables
 
@@ -39,7 +43,7 @@ Lookup tables are seeded across migrations `001`, `012`, and `013` with stable i
 | `entity_locations` | Geographic / address data with validity windows |
 | `facts` | Directed temporal edges between entities |
 | `fact_dependencies` | Junction table linking inferred facts to parents |
-| `sources` | Provenance for every fact |
+| `sources` | Provenance for every fact (with `connector_id`, `connector_type_id`, `raw_reference`, `extraction_method_id`) |
 | `preferences` | Learned user preferences with confidence |
 | `preference_sources` | Provenance for preference values |
 
@@ -48,7 +52,7 @@ Lookup tables are seeded across migrations `001`, `012`, and `013` with stable i
 | Table | Description |
 |-------|-------------|
 | `system_state` | Key–value store for daemon state (e.g. condensed memory) |
-| `fact_audit_log` | Immutable history of fact insert / update / delete |
+| `fact_audit_log` | Immutable history with typed `change_type_id` and `changed_by_id`; column-only JSON snapshots |
 | `dedup_queue` | Pending duplicate-fact resolutions |
 | `entity_merge_queue` | Pending entity deduplication tasks |
 | `trash` | Soft-deleted rows with full payload JSON |
@@ -121,6 +125,8 @@ Migrations are strictly ordered by foreign-key dependencies:
 11. `011` — FTS5 virtual table + triggers (depends on `entities`)
 12. `012` — `DateTime` entity type seed
 13. `013` — Predicate taxonomy tables + constraints
+14. `021` — Additional source types (`CasualMention`, `Import`, `System`)
+15. `022` — Provenance audit refactor: remap `source_types` to 6 variants, add `extraction_methods` / `change_types` / `changed_by_types`, recreate `sources` and `fact_audit_log` with typed FKs
 
 ---
 

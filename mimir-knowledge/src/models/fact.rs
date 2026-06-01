@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Type;
 use static_assertions::const_assert;
 
-use crate::models::enums::Predicate;
+use crate::models::enums::{ConnectorType, Predicate};
 
 /// Lifecycle status of a fact in the knowledge graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Type, Serialize, Deserialize)]
@@ -84,4 +84,8 @@ pub struct NewFact {
     pub valid_from: Option<DateTime<Utc>>,
     pub valid_until: Option<DateTime<Utc>>,
     pub source_type: crate::models::source::SourceType,
+    pub connector_id: Option<String>,
+    pub connector_type: Option<ConnectorType>,
+    pub raw_reference: Option<String>,
+    pub extraction_method: Option<crate::models::source::ExtractionMethod>,
 }

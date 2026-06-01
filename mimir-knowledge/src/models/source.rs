@@ -1,4 +1,4 @@
-//! Source model and source-type enum.
+//! Source model, source-type enum, and extraction-method enum.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -9,19 +9,28 @@ use static_assertions::const_assert;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Type, Serialize, Deserialize)]
 #[repr(i16)]
 pub enum SourceType {
-    Email = 1,
-    Calendar = 2,
-    Photo = 3,
-    Message = 4,
-    Inference = 5,
-    UserEdit = 6,
-    Connector = 7,
-    CasualMention = 8,
-    Import = 9,
-    System = 10,
+    UserEdit = 1,
+    Connector = 2,
+    Inference = 3,
+    Interaction = 4,
+    Import = 5,
+    System = 6,
 }
 
-const_assert!((SourceType::Email as i16) != 0);
+const_assert!((SourceType::UserEdit as i16) != 0);
+
+/// How a fact was extracted from its source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Type, Serialize, Deserialize)]
+#[repr(i16)]
+pub enum ExtractionMethod {
+    LlmExtraction = 1,
+    StructuredParse = 2,
+    UserInput = 3,
+    InferenceRule = 4,
+    DedupMerge = 5,
+}
+
+const_assert!((ExtractionMethod::LlmExtraction as i16) != 0);
 
 /// Provenance record linking a fact to its origin.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow, Serialize, Deserialize)]
@@ -33,5 +42,5 @@ pub struct Source {
     pub connector_type_id: Option<i16>,
     pub raw_reference: Option<String>,
     pub extracted_at: DateTime<Utc>,
-    pub extraction_method: Option<String>,
+    pub extraction_method_id: Option<i16>,
 }

@@ -6,8 +6,35 @@ use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
 use crate::confidence;
-use crate::models::enums::ConnectorType;
+use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::fact::{Fact, FactStatus, NewFact};
+use crate::models::source::{ExtractionMethod, SourceType};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn default_extraction_method(source_type: SourceType) -> Option<i16> {
+    match source_type {
+        SourceType::UserEdit => Some(ExtractionMethod::UserInput as i16),
+        SourceType::Connector => Some(ExtractionMethod::StructuredParse as i16),
+        SourceType::Inference => Some(ExtractionMethod::InferenceRule as i16),
+        SourceType::Interaction => Some(ExtractionMethod::LlmExtraction as i16),
+        SourceType::Import => Some(ExtractionMethod::StructuredParse as i16),
+        SourceType::System => None,
+    }
+}
+
+fn changed_by_for_source_type(source_type: SourceType) -> ChangedBy {
+    match source_type {
+        SourceType::UserEdit => ChangedBy::User,
+        SourceType::Connector => ChangedBy::System,
+        SourceType::Inference => ChangedBy::InferenceEngine,
+        SourceType::Interaction => ChangedBy::System,
+        SourceType::Import => ChangedBy::User,
+        SourceType::System => ChangedBy::System,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Insert
@@ -67,7 +94,7 @@ pub async fn insert_fact(
     let mut facts_to_supersede: Vec<i32> = Vec::new();
 
     if !overlaps.is_empty() {
-        if new_fact.source_type == crate::models::source::SourceType::UserEdit {
+        if new_fact.source_type == SourceType::UserEdit {
             // Explicit replacement: supersede all overlapping facts.
             for existing_fact in &overlaps {
                 // Temporal closure for sole open-ended predecessor.
@@ -76,9 +103,11 @@ pub async fn insert_fact(
                     && new_fact.valid_from.is_some();
 
                 if is_sole_open {
-                    let old_json = serde_json::to_string(*existing_fact).unwrap_or_default();
+                    let new_start = new_fact.valid_from.unwrap();
+                    let old_json =
+                        serde_json::json!({"valid_until": existing_fact.valid_until}).to_string();
                     sqlx::query("UPDATE facts SET valid_until = ?, updated_at = ? WHERE id = ?")
-                        .bind(now)
+                        .bind(new_start)
                         .bind(now)
                         .bind(existing_fact.id)
                         .execute(&mut *tx)
@@ -94,24 +123,29 @@ pub async fn insert_fact(
                     .fetch_one(&mut *tx)
                     .await?;
 
-                    let new_json = serde_json::to_string(&updated).unwrap_or_default();
+                    let new_json =
+                        serde_json::json!({"valid_until": updated.valid_until}).to_string();
                     sqlx::query(
-                        "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer) \
-                         VALUES (?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO fact_audit_log \
+                         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(existing_fact.id)
-                    .bind("UPDATE")
+                    .bind(ChangeType::TemporalUpdate as i16)
                     .bind(old_json)
                     .bind(new_json)
                     .bind(now)
-                    .bind("system")
+                    .bind(ChangedBy::System as i16)
+                    .bind(None::<&str>)
                     .execute(&mut *tx)
                     .await?;
                 }
 
                 // Mark as Superseded unless already superseded.
                 if existing_fact.status() != Some(FactStatus::Superseded) {
-                    let old_json = serde_json::to_string(*existing_fact).unwrap_or_default();
+                    let old_json =
+                        serde_json::json!({"fact_status_id": existing_fact.fact_status_id})
+                            .to_string();
                     sqlx::query("UPDATE facts SET fact_status_id = ?, updated_at = ? WHERE id = ?")
                         .bind(FactStatus::Superseded as i16)
                         .bind(now)
@@ -129,79 +163,43 @@ pub async fn insert_fact(
                     .fetch_one(&mut *tx)
                     .await?;
 
-                    let new_json = serde_json::to_string(&updated).unwrap_or_default();
+                    let new_json =
+                        serde_json::json!({"fact_status_id": updated.fact_status_id}).to_string();
                     sqlx::query(
-                        "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer) \
-                         VALUES (?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO fact_audit_log \
+                         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(existing_fact.id)
-                    .bind("STATUS_CHANGE")
+                    .bind(ChangeType::StatusChange as i16)
                     .bind(old_json)
                     .bind(new_json)
                     .bind(now)
-                    .bind("system")
+                    .bind(ChangedBy::System as i16)
+                    .bind(None::<&str>)
                     .execute(&mut *tx)
                     .await?;
 
                     facts_to_supersede.push(existing_fact.id);
                 }
             }
-            fact_status = FactStatus::Active;
         } else {
-            // Non-explicit: existing temporal rules.
-            let sole_open_predecessor = overlaps.len() == 1
-                && overlaps[0].valid_until.is_none()
-                && new_fact.valid_from.is_some();
-
-            if sole_open_predecessor {
-                let existing_fact = overlaps[0];
-                let old_json = serde_json::to_string(existing_fact).unwrap_or_default();
-                sqlx::query("UPDATE facts SET valid_until = ?, updated_at = ? WHERE id = ?")
-                    .bind(now)
-                    .bind(now)
-                    .bind(existing_fact.id)
-                    .execute(&mut *tx)
-                    .await?;
-
-                let updated: Fact = sqlx::query_as::<_, Fact>(
-                    "SELECT id, subject_id, predicate_id, object_id, object_literal, \
-                     valid_from, valid_until, confidence, fact_status_id, inferred, \
-                     inference_depth, stale_confidence, created_at, updated_at \
-                     FROM facts WHERE id = ?",
-                )
-                .bind(existing_fact.id)
-                .fetch_one(&mut *tx)
-                .await?;
-
-                let new_json = serde_json::to_string(&updated).unwrap_or_default();
-                sqlx::query(
-                    "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer) \
-                     VALUES (?, ?, ?, ?, ?, ?)",
-                )
-                .bind(existing_fact.id)
-                .bind("UPDATE")
-                .bind(old_json)
-                .bind(new_json)
-                .bind(now)
-                .bind("system")
-                .execute(&mut *tx)
-                .await?;
-            } else {
-                fact_status = FactStatus::Disputed;
-            }
+            // Overlap with non-explicit source → mark new fact as Disputed.
+            fact_status = FactStatus::Disputed;
         }
     }
 
-    // 2. Compute confidence based on source type.
-    let connector_type = match new_fact.source_type {
-        crate::models::source::SourceType::Calendar => Some(ConnectorType::Calendar),
-        crate::models::source::SourceType::Email => Some(ConnectorType::Gmail),
-        crate::models::source::SourceType::Photo => Some(ConnectorType::Photos),
-        crate::models::source::SourceType::Message => Some(ConnectorType::Gmail),
-        _ => None,
-    };
-
-    let conf = if let Some(ct) = connector_type {
+    // 2. Compute initial confidence.
+    let confidence = if let Some(ct) = new_fact.connector_type {
+        if new_fact.connector_id.is_none()
+            || new_fact.raw_reference.is_none()
+            || new_fact.extraction_method.is_none()
+        {
+            return Err(KnowledgeError::Validation(
+                "Connector provenance requires connector_id, raw_reference, and extraction_method"
+                    .to_string(),
+            ));
+        }
         let db_score: Option<f32> = sqlx::query_scalar(
             "SELECT score FROM connector_reliability WHERE connector_type_id = ?",
         )
@@ -213,14 +211,13 @@ pub async fn insert_fact(
         confidence::initial(new_fact.source_type, None)
     };
 
-    // 3. Insert fact.
-    let fact: Fact = sqlx::query_as::<_, Fact>(
-        "INSERT INTO facts (subject_id, predicate_id, object_id, object_literal, \
-         valid_from, valid_until, confidence, fact_status_id, inferred, inference_depth) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-         RETURNING id, subject_id, predicate_id, object_id, object_literal, \
-         valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, created_at, updated_at",
+    // 3. Insert the fact.
+    let fact_id: i64 = sqlx::query_scalar(
+        "INSERT INTO facts \
+         (subject_id, predicate_id, object_id, object_literal, valid_from, valid_until, \
+          confidence, fact_status_id, inferred, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         RETURNING id",
     )
     .bind(new_fact.subject_id)
     .bind(new_fact.predicate as i16)
@@ -228,47 +225,92 @@ pub async fn insert_fact(
     .bind(&new_fact.object_literal)
     .bind(new_fact.valid_from)
     .bind(new_fact.valid_until)
-    .bind(conf)
+    .bind(confidence)
     .bind(fact_status as i16)
-    .bind(false) // inferred
-    .bind(0i32) // inference_depth
+    .bind(false)
+    .bind(now)
+    .bind(now)
     .fetch_one(&mut *tx)
     .await?;
 
-    // 4. Insert source.
-    sqlx::query("INSERT INTO sources (fact_id, source_type_id) VALUES (?, ?)")
-        .bind(fact.id)
-        .bind(new_fact.source_type as i16)
-        .execute(&mut *tx)
-        .await?;
+    let fact_id = fact_id as i32;
 
-    // 4b. Insert Supersedes edges for explicitly replaced facts.
-    for old_fact_id in &facts_to_supersede {
+    // 4. Resolve extraction method.
+    let extraction_method_id = new_fact
+        .extraction_method
+        .map(|e| e as i16)
+        .or_else(|| default_extraction_method(new_fact.source_type));
+
+    // 5. Insert the source row.
+    let connector_type_id = new_fact.connector_type.map(|ct| ct as i16);
+    sqlx::query(
+        "INSERT INTO sources \
+         (fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(fact_id)
+    .bind(new_fact.source_type as i16)
+    .bind(&new_fact.connector_id)
+    .bind(connector_type_id)
+    .bind(&new_fact.raw_reference)
+    .bind(now)
+    .bind(extraction_method_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // 6. Write created audit entry (column-only snapshot).
+    let new_value = serde_json::json!({
+        "fact_id": fact_id,
+        "confidence": confidence,
+        "fact_status_id": fact_status as i16,
+        "valid_from": new_fact.valid_from,
+        "valid_until": new_fact.valid_until,
+    })
+    .to_string();
+
+    sqlx::query(
+        "INSERT INTO fact_audit_log \
+         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(fact_id)
+    .bind(ChangeType::Created as i16)
+    .bind(None::<&str>)
+    .bind(new_value)
+    .bind(now)
+    .bind(changed_by_for_source_type(new_fact.source_type) as i16)
+    .bind(None::<&str>)
+    .execute(&mut *tx)
+    .await?;
+
+    // 7. Insert superseded edges for any facts replaced by a user edit.
+    for existing_id in facts_to_supersede {
         sqlx::query(
-            "INSERT INTO fact_dependencies (parent_fact_id, child_fact_id, relation_type_id)              VALUES (?, ?, ?)",
+            "INSERT INTO fact_dependencies \
+             (parent_fact_id, child_fact_id, relation_type_id, is_positive) \
+             VALUES (?, ?, ?, ?)",
         )
-        .bind(old_fact_id)
-        .bind(fact.id)
+        .bind(existing_id)
+        .bind(fact_id)
         .bind(crate::models::enums::RelationType::Supersedes as i16)
+        .bind(true)
         .execute(&mut *tx)
         .await?;
     }
 
-    // 5. Audit log.
-    let new_json = serde_json::to_string(&fact).unwrap_or_default();
-    sqlx::query(
-        "INSERT INTO fact_audit_log (fact_id, action, new_value, performed_at, performer) \
-         VALUES (?, ?, ?, ?, ?)",
+    tx.commit().await?;
+
+    // 8. Return the inserted fact.
+    let fact = sqlx::query_as::<_, Fact>(
+        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+         valid_from, valid_until, confidence, fact_status_id, inferred, \
+         inference_depth, stale_confidence, created_at, updated_at \
+         FROM facts WHERE id = ?",
     )
-    .bind(fact.id)
-    .bind("INSERT")
-    .bind(new_json)
-    .bind(now)
-    .bind("system")
-    .execute(&mut *tx)
+    .bind(fact_id)
+    .fetch_one(pool)
     .await?;
 
-    tx.commit().await?;
     Ok(fact)
 }
 
@@ -276,21 +318,22 @@ pub async fn insert_fact(
 // Read
 // ---------------------------------------------------------------------------
 
-/// Retrieve a single fact by primary key.
-pub async fn get_by_id(pool: &SqlitePool, id: i32) -> Result<Option<Fact>, KnowledgeError> {
+/// Get a fact by ID.
+pub async fn get_by_id(pool: &SqlitePool, fact_id: i32) -> Result<Option<Fact>, KnowledgeError> {
     let fact: Option<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
-    .bind(id)
+    .bind(fact_id)
     .fetch_optional(pool)
     .await?;
+
     Ok(fact)
 }
 
-/// List facts for a given subject, newest first.
+/// List facts for a subject entity.
 pub async fn get_by_subject(
     pool: &SqlitePool,
     subject_id: i32,
@@ -300,17 +343,17 @@ pub async fn get_by_subject(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, created_at, updated_at \
-         FROM facts WHERE subject_id = ? \
-         ORDER BY confidence DESC, created_at DESC LIMIT ?",
+         FROM facts WHERE subject_id = ? ORDER BY id ASC LIMIT ?",
     )
     .bind(subject_id)
     .bind(limit)
     .fetch_all(pool)
     .await?;
+
     Ok(facts)
 }
 
-/// List facts for a given predicate, newest first.
+/// List facts for a predicate.
 pub async fn get_by_predicate(
     pool: &SqlitePool,
     predicate_id: i16,
@@ -320,13 +363,13 @@ pub async fn get_by_predicate(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, created_at, updated_at \
-         FROM facts WHERE predicate_id = ? \
-         ORDER BY confidence DESC, created_at DESC LIMIT ?",
+         FROM facts WHERE predicate_id = ? ORDER BY id ASC LIMIT ?",
     )
     .bind(predicate_id)
     .bind(limit)
     .fetch_all(pool)
     .await?;
+
     Ok(facts)
 }
 
@@ -340,13 +383,13 @@ pub async fn get_by_object(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, created_at, updated_at \
-         FROM facts WHERE object_id = ? \
-         ORDER BY confidence DESC, created_at DESC LIMIT ?",
+         FROM facts WHERE object_id = ? ORDER BY id ASC LIMIT ?",
     )
     .bind(object_id)
     .bind(limit)
     .fetch_all(pool)
     .await?;
+
     Ok(facts)
 }
 
@@ -363,9 +406,10 @@ pub async fn get_active_facts_at(
          inference_depth, stale_confidence, created_at, updated_at \
          FROM facts \
          WHERE subject_id = ? AND predicate_id = ? \
-         AND fact_status_id = ? \n         AND (valid_from IS NULL OR valid_from <= ?) \
-         AND (valid_until IS NULL OR valid_until > ?) \
-         ORDER BY confidence DESC, created_at DESC",
+           AND fact_status_id = ? \
+           AND (valid_from IS NULL OR valid_from <= ?) \
+           AND (valid_until IS NULL OR valid_until > ?) \
+         ORDER BY valid_from",
     )
     .bind(subject_id)
     .bind(predicate_id)
@@ -374,6 +418,7 @@ pub async fn get_active_facts_at(
     .bind(at)
     .fetch_all(pool)
     .await?;
+
     Ok(facts)
 }
 
@@ -381,12 +426,13 @@ pub async fn get_active_facts_at(
 // Update
 // ---------------------------------------------------------------------------
 
-/// Close a fact's temporal range, writing an audit log entry.
+/// Update a fact's `valid_until`, writing a `temporal_update` audit entry.
 pub async fn update_valid_until(
     pool: &SqlitePool,
     fact_id: i32,
     new_valid_until: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
+    changed_by: ChangedBy,
 ) -> Result<Fact, KnowledgeError> {
     let mut tx = pool.begin().await?;
 
@@ -411,7 +457,7 @@ pub async fn update_valid_until(
         }
     }
 
-    let old_json = serde_json::to_string(&old).unwrap_or_default();
+    let old_json = serde_json::json!({"valid_until": old.valid_until}).to_string();
 
     sqlx::query("UPDATE facts SET valid_until = ?, updated_at = ? WHERE id = ?")
         .bind(new_valid_until)
@@ -430,17 +476,19 @@ pub async fn update_valid_until(
     .fetch_one(&mut *tx)
     .await?;
 
-    let new_json = serde_json::to_string(&updated).unwrap_or_default();
+    let new_json = serde_json::json!({"valid_until": updated.valid_until}).to_string();
     sqlx::query(
-        "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer) \
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO fact_audit_log \
+         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(fact_id)
-    .bind("UPDATE")
+    .bind(ChangeType::TemporalUpdate as i16)
     .bind(old_json)
     .bind(new_json)
     .bind(now)
-    .bind("system")
+    .bind(changed_by as i16)
+    .bind(None::<&str>)
     .execute(&mut *tx)
     .await?;
 
@@ -448,12 +496,13 @@ pub async fn update_valid_until(
     Ok(updated)
 }
 
-/// Update the lifecycle status of a fact, writing an audit log entry.
+/// Update the lifecycle status of a fact, writing a `status_change` audit entry.
 pub async fn set_status(
     pool: &SqlitePool,
     fact_id: i32,
     new_status: FactStatus,
     now: DateTime<Utc>,
+    changed_by: ChangedBy,
 ) -> Result<Fact, KnowledgeError> {
     let mut tx = pool.begin().await?;
 
@@ -468,7 +517,7 @@ pub async fn set_status(
     .await?;
 
     let old = old.ok_or(KnowledgeError::FactNotFound(fact_id))?;
-    let old_json = serde_json::to_string(&old).unwrap_or_default();
+    let old_json = serde_json::json!({"fact_status_id": old.fact_status_id}).to_string();
 
     sqlx::query("UPDATE facts SET fact_status_id = ?, updated_at = ? WHERE id = ?")
         .bind(new_status as i16)
@@ -487,17 +536,19 @@ pub async fn set_status(
     .fetch_one(&mut *tx)
     .await?;
 
-    let new_json = serde_json::to_string(&updated).unwrap_or_default();
+    let new_json = serde_json::json!({"fact_status_id": updated.fact_status_id}).to_string();
     sqlx::query(
-        "INSERT INTO fact_audit_log (fact_id, action, old_value, new_value, performed_at, performer) \
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO fact_audit_log \
+         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(fact_id)
-    .bind("STATUS_CHANGE")
+    .bind(ChangeType::StatusChange as i16)
     .bind(old_json)
     .bind(new_json)
     .bind(now)
-    .bind("system")
+    .bind(changed_by as i16)
+    .bind(None::<&str>)
     .execute(&mut *tx)
     .await?;
 
@@ -542,10 +593,11 @@ pub async fn get_audit_log(
 ) -> Result<Vec<crate::models::audit_log::AuditLogEntry>, KnowledgeError> {
     let entries: Vec<crate::models::audit_log::AuditLogEntry> =
         sqlx::query_as::<_, crate::models::audit_log::AuditLogEntry>(
-            "SELECT id, fact_id, action, old_value, new_value, performed_at, performer \
-         FROM fact_audit_log \
-         WHERE fact_id = ? \
-         ORDER BY performed_at DESC",
+            "SELECT id, fact_id, change_type_id, old_value, new_value, \
+             changed_at, changed_by_id, reason \
+             FROM fact_audit_log \
+             WHERE fact_id = ? \
+             ORDER BY changed_at DESC",
         )
         .bind(fact_id)
         .fetch_all(pool)

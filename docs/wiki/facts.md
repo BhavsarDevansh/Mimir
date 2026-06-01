@@ -44,9 +44,12 @@ Confidence depends on where the fact came from:
 
 | Source | Typical Confidence |
 |--------|-----------------|
-| You edited it directly | 0.80 |
-| Connector (calendar, email, etc.) | 0.80 |
-| Inferred by the reasoning engine | 0.50 |
+| You edited it directly | 1.00 |
+| Connector (calendar, email, etc.) | ~0.80 (varies by connector reliability) |
+| Inferred by the reasoning engine | computed from parents |
+| Casual mention in conversation | 0.30 |
+| Bulk import | 0.80 |
+| System-generated | 1.00 |
 
 If an inferred fact loses its supporting evidence, its confidence drops. When
 it falls below 0.20, Mimir flags it as `Disputed`.
@@ -68,6 +71,13 @@ This cascade ensures the knowledge graph stays consistent when evidence changes.
 
 ## Audit Trail
 
-Every insert, update, status change, and delete is logged with a timestamp and
-a JSON snapshot of the before/after state. You can inspect the full history of
-any fact.
+Every insert, update, status change, confidence change, source addition, and
+delete is logged with a timestamp, a typed `change_type` and `changed_by`,
+and a **column-only** JSON snapshot of the affected field(s).
+
+You can inspect the full history of any fact through the API, or query the
+audit log directly from the CLI:
+
+```bash
+mimir kb audit --entity "Alice" --change-type status_change
+```

@@ -5,6 +5,7 @@ mod commands;
 mod constants;
 mod daemon_guard;
 mod init;
+mod kb;
 mod memory_cmd;
 mod skills_permissions_config;
 mod start;
@@ -14,6 +15,7 @@ mod stop;
 use clap::Parser;
 use cli::Cli;
 use commands::{handle_skill_command, handle_tool_command};
+use kb::handle_kb_audit;
 
 #[tokio::main]
 async fn main() {
@@ -24,6 +26,15 @@ async fn main() {
     match cli.command {
         cli::Commands::Tool { command } => handle_tool_command(command).await,
         cli::Commands::Skill { command } => handle_skill_command(command).await,
+        cli::Commands::Kb { command } => match command {
+            cli::KbCommands::Audit {
+                entity,
+                predicate,
+                from,
+                to,
+                change_type,
+            } => handle_kb_audit(entity, predicate, from, to, change_type).await,
+        },
         cli::Commands::Init => init::handle_init().await,
         cli::Commands::Start => start::handle_start().await,
         cli::Commands::Stop => {

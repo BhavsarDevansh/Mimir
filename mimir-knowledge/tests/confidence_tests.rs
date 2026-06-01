@@ -33,7 +33,7 @@ async fn create_place(kg: &KnowledgeGraph, name: &str) -> i32 {
 fn test_initial_confidence_by_source_type() {
     assert_eq!(confidence::initial(SourceType::UserEdit, None), 1.0);
     assert_eq!(confidence::initial(SourceType::System, None), 1.0);
-    assert_eq!(confidence::initial(SourceType::CasualMention, None), 0.30);
+    assert_eq!(confidence::initial(SourceType::Interaction, None), 0.30);
     assert_eq!(confidence::initial(SourceType::Import, None), 0.80);
     assert_eq!(confidence::initial(SourceType::Inference, None), 0.0);
 }
@@ -258,6 +258,10 @@ async fn test_user_edit_confidence_is_one() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -283,7 +287,11 @@ async fn test_casual_mention_confidence_is_low() {
             object_literal: None,
             valid_from: None,
             valid_until: None,
-            source_type: SourceType::CasualMention,
+            source_type: SourceType::Interaction,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -310,6 +318,10 @@ async fn test_system_confidence_is_one() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::System,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -336,6 +348,10 @@ async fn test_import_confidence_is_eighty() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::Import,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -366,7 +382,13 @@ async fn test_connector_confidence_uses_db_reliability() {
             object_literal: None,
             valid_from: None,
             valid_until: None,
-            source_type: SourceType::Email,
+            source_type: SourceType::Connector,
+            connector_id: Some("gmail-1".to_string()),
+            connector_type: Some(ConnectorType::Gmail),
+            raw_reference: Some("msg-123".to_string()),
+            extraction_method: Some(
+                mimir_knowledge::models::source::ExtractionMethod::StructuredParse,
+            ),
         })
         .await
         .unwrap();

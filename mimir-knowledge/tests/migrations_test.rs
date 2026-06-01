@@ -45,6 +45,10 @@ async fn all_migrations_apply_cleanly() {
     assert!(names.contains(&"preference_source_types".to_string()));
     assert!(names.contains(&"predicates".to_string()));
     assert!(names.contains(&"predicate_constraints".to_string()));
+    assert!(names.contains(&"extraction_methods".to_string()));
+    assert!(names.contains(&"change_types".to_string()));
+    assert!(names.contains(&"changed_by_types".to_string()));
+    assert!(names.contains(&"connector_types".to_string()));
 }
 
 #[tokio::test]
@@ -60,7 +64,7 @@ async fn lookup_tables_seeded_correctly() {
         ("SELECT COUNT(*) FROM location_types", 5),
         ("SELECT COUNT(*) FROM fact_statuses", 6),
         ("SELECT COUNT(*) FROM relation_types", 3),
-        ("SELECT COUNT(*) FROM source_types", 10),
+        ("SELECT COUNT(*) FROM source_types", 6),
         ("SELECT COUNT(*) FROM preference_categories", 5),
         ("SELECT COUNT(*) FROM preference_source_types", 3),
         ("SELECT COUNT(*) FROM predicates", 10),

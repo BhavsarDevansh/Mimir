@@ -52,6 +52,9 @@ mimir status
 # View and edit working memory
 mimir memory
 
+# Query the knowledge graph audit log
+mimir kb audit --entity "Alice" --change-type status_change
+
 # Stop the daemon gracefully
 mimir stop
 ```

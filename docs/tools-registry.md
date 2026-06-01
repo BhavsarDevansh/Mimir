@@ -87,6 +87,20 @@ Centralised error enum covering permission, timeout, invalid arguments, missing 
 - Permission: `Auto`
 - Registered explicitly (not in `with_builtins()`) because it needs runtime config (`memory.path`, `memory.char_limit`)
 
+### `GetWeatherTool`
+- Name: `get_weather`
+- Parameters:
+  - `location` (string, required)
+  - `date` (string, optional): `"current"` for current conditions only, or a `YYYY-MM-DD` date for a specific forecast day. Omit to get current conditions plus all available forecast days.
+- Fetches current weather and up to a 3-day forecast from wttr.in
+- **All measurements are metric-only**
+- Returns current conditions: temperature (°C), feels-like temperature (°C), description, humidity %, wind speed (km/h), wind direction, UV index, visibility (km), pressure (mb)
+- Returns forecast days (when requested or by default): date, min/max/avg temperature (°C), description, chance of rain %, chance of snow %, UV index
+- Permission: `Auto`
+- Network timeout: 15 seconds
+- Unknown locations are detected even when wttr.in returns HTTP 200 with a plain-text error body
+- Requests for unavailable forecast dates return an error listing the available dates
+
 ## CLI Tool Wrapper
 
 ### `CliToolConfig`

@@ -11,8 +11,34 @@ Mimir ships with a small set of native tools:
 | `get_current_time` | Returns the current date and time | Auto |
 | `echo` | Echoes back whatever you send it | Auto |
 | `memory` | Updates `memory.md` (add, replace, remove entries) | Auto |
+| `get_weather` | Fetches current weather for a location via wttr.in | Auto |
 
 "Auto" means the tool runs immediately when the agent decides to use it.
+### Weather Tool (`get_weather`)
+
+The weather tool queries [wttr.in](https://wttr.in) to retrieve current conditions and a short-term forecast for any location. You can ask for a city name, airport code, or GPS coordinates.
+
+**Current conditions** (metric only) include:
+- Temperature in °C and "feels like" temperature in °C
+- Weather description (e.g., "Partly cloudy")
+- Humidity %, wind speed (km/h) and direction
+- UV index, visibility (km), and atmospheric pressure (mb)
+
+**Forecast** data (up to 3 days ahead, metric only) includes:
+- Date, minimum and maximum temperatures in °C
+- Weather description and UV index
+- **Chance of rain %** — the key field for umbrella decisions
+- Chance of snow %
+
+The agent can request a specific date (`YYYY-MM-DD`) or ask for `"current"` conditions only. When no date is given, the agent receives both current conditions and all available forecast days, so it can answer questions like:
+
+- "What is the weather in London?"
+- "Do I need an umbrella in Tokyo?"
+- "How hot is it in New Delhi right now?"
+- "Will it rain in Sydney next Tuesday?"
+- "Do I need a jacket for my trip to Berlin this weekend?"
+
+> **Note:** wttr.in provides approximately 3 days of forecast data. If you ask about dates further ahead, the agent will tell you what it can see and note the limitation.
 
 ## Adding Your Own CLI Tools
 

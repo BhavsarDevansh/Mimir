@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.26.0 (2026-06-01)
+
+### Added
+
+- New built-in tool `get_weather` using wttr.in.
+  - Fetches current conditions for any location (city name, airport code, or coordinates).
+  - Returns structured JSON: temperature (°C/°F), feels-like, description, humidity, wind, UV index, visibility, and pressure.
+  - Configurable base URL for testing (`GetWeatherTool::with_base_url`).
+
+
 ## 0.25.1 (2026-06-01)
 
 ### Fixed

@@ -5,7 +5,7 @@ use serde_json::Value;
 const DEFAULT_BASE_URL: &str = "https://wttr.in";
 
 /// Fetches current weather conditions and up to a 3-day forecast for a given
-/// location using wttr.in.
+/// location using wttr.in. All measurements are metric-only.
 pub struct GetWeatherTool {
     client: reqwest::Client,
     base_url: String,
@@ -75,7 +75,6 @@ impl GetWeatherTool {
 
         Ok(serde_json::json!({
             "temperature_c": Self::extract_str(current, "temp_C"),
-            "temperature_f": Self::extract_str(current, "temp_F"),
             "feels_like_c": Self::extract_str(current, "FeelsLikeC"),
             "description": Self::extract_nested_value(current, "weatherDesc"),
             "humidity_percent": Self::extract_str(current, "humidity"),
@@ -106,11 +105,8 @@ impl GetWeatherTool {
         serde_json::json!({
             "date": Self::extract_str(day, "date"),
             "min_temp_c": Self::extract_str(day, "mintempC"),
-            "min_temp_f": Self::extract_str(day, "mintempF"),
             "max_temp_c": Self::extract_str(day, "maxtempC"),
-            "max_temp_f": Self::extract_str(day, "maxtempF"),
             "avg_temp_c": Self::extract_str(day, "avgtempC"),
-            "avg_temp_f": Self::extract_str(day, "avgtempF"),
             "description": hourly.map(|h| Self::extract_nested_value(h, "weatherDesc")).unwrap_or("unknown"),
             "chance_of_rain_percent": hourly.and_then(|h| h.get("chanceofrain")).and_then(|v| v.as_str()).unwrap_or("unknown"),
             "chance_of_snow_percent": hourly.and_then(|h| h.get("chanceofsnow")).and_then(|v| v.as_str()).unwrap_or("unknown"),
@@ -146,9 +142,9 @@ impl Tool for GetWeatherTool {
 
     fn description(&self) -> &str {
         "Fetches current weather conditions and up to a 3-day forecast for a \
-given location using wttr.in. Returns temperature, conditions, humidity, \
-wind, UV index, visibility, pressure, and forecast summaries with rain \
-probability — useful for deciding whether you need an umbrella."
+given location using wttr.in. All measurements are metric-only. Returns \
+temperature (°C), conditions, humidity, wind (km/h), UV index, visibility \
+(km), pressure (mb), and forecast summaries with rain probability."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -344,7 +340,6 @@ mod tests {
     fn test_parse_current_condition_valid() {
         let parsed = GetWeatherTool::parse_current_condition(MOCK_BODY).unwrap();
         assert_eq!(parsed["temperature_c"], "18");
-        assert_eq!(parsed["temperature_f"], "64");
         assert_eq!(parsed["feels_like_c"], "17");
         assert_eq!(parsed["description"], "Partly cloudy");
         assert_eq!(parsed["humidity_percent"], "65");
@@ -383,6 +378,7 @@ mod tests {
         assert_eq!(forecast[0]["date"], "2026-06-01");
         assert_eq!(forecast[0]["min_temp_c"], "13");
         assert_eq!(forecast[0]["max_temp_c"], "22");
+        assert_eq!(forecast[0]["avg_temp_c"], "16");
         assert_eq!(forecast[0]["description"], "Overcast");
         assert_eq!(forecast[0]["chance_of_rain_percent"], "5");
 

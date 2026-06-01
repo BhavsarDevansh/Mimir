@@ -213,8 +213,9 @@ This loop is handled within both the `chat_handler` (blocking) and `chat_stream_
   - `location` (string, required)
   - `date` (string, optional): `"current"` for current conditions only, or a `YYYY-MM-DD` date for a specific forecast day. Omit to get current conditions plus all available forecast days.
 - Fetches current weather and up to a 3-day forecast from wttr.in
-- Returns current conditions: temperature (°C/°F), feels-like temperature, description, humidity %, wind speed (km/h), wind direction, UV index, visibility (km), pressure (mb)
-- Returns forecast days (when requested or by default): date, min/max/avg temperature, description, chance of rain %, chance of snow %, UV index
+- **All measurements are metric-only**
+- Returns current conditions: temperature (°C), feels-like temperature (°C), description, humidity %, wind speed (km/h), wind direction, UV index, visibility (km), pressure (mb)
+- Returns forecast days (when requested or by default): date, min/max/avg temperature (°C), description, chance of rain %, chance of snow %, UV index
 - Permission: `Auto`
 - Network timeout: 15 seconds
 - Unknown locations are detected even when wttr.in returns HTTP 200 with a plain-text error body

@@ -18,15 +18,14 @@ Mimir ships with a small set of native tools:
 
 The weather tool queries [wttr.in](https://wttr.in) to retrieve current conditions and a short-term forecast for any location. You can ask for a city name, airport code, or GPS coordinates.
 
-**Current conditions** include:
-- Temperature in Celsius and Fahrenheit
-- "Feels like" temperature
+**Current conditions** (metric only) include:
+- Temperature in °C and "feels like" temperature in °C
 - Weather description (e.g., "Partly cloudy")
-- Humidity, wind speed and direction
-- UV index, visibility, and atmospheric pressure
+- Humidity %, wind speed (km/h) and direction
+- UV index, visibility (km), and atmospheric pressure (mb)
 
-**Forecast** data (up to 3 days ahead) includes:
-- Date, minimum and maximum temperatures
+**Forecast** data (up to 3 days ahead, metric only) includes:
+- Date, minimum and maximum temperatures in °C
 - Weather description and UV index
 - **Chance of rain %** — the key field for umbrella decisions
 - Chance of snow %

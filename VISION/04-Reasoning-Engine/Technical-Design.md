@@ -44,7 +44,7 @@ $ agent ask "What caused WWI?" --threads 8 --depth 5
 ### Investigation
 ```rust
 struct Investigation {
-    id: String,
+    id: u32,
     original_query: String,
     query_embedding: Vec<f32>,
     status: InvestigationStatus,  // Planning | Running | Evaluating | Complete | Failed
@@ -62,17 +62,17 @@ A single avenue of investigation that can drill down deeply.
 
 ```rust
 struct InvestigationThread {
-    id: String,
-    investigation_id: String,
+    id: u32,
+    investigation_id: u32,
     name: String,             // e.g., "Photo Evidence", "Calendar Events"
     status: ThreadStatus,     // Running | Paused | Complete | Failed
     query: String,            // What this thread is investigating
-    parent_thread: Option<String>, // For sub-threads spawned from drilling down
+    parent_thread: Option<u32>, // For sub-threads spawned from drilling down
     depth: u32,               // How deep in the drill-down chain
     evidence: Vec<Evidence>,
     hypothesis: Option<Hypothesis>,
     confidence: f32,
-    sub_threads: Vec<String>, // IDs of child threads
+    sub_threads: Vec<u32>, // IDs of child threads
 }
 ```
 
@@ -81,9 +81,9 @@ Spawned when multiple threads produce contradictory results.
 
 ```rust
 struct MetaThread {
-    id: String,
-    investigation_id: String,
-    conflicting_threads: Vec<String>, // Thread IDs that contradict
+    id: u32,
+    investigation_id: u32,
+    conflicting_threads: Vec<u32>, // Thread IDs that contradict
     conflict_description: String,
     resolution_attempts: Vec<ResolutionAttempt>,
     status: MetaThreadStatus, // Running | Resolved | Unresolved
@@ -94,8 +94,8 @@ struct MetaThread {
 ### Evidence
 ```rust
 struct Evidence {
-    id: String,
-    thread_id: String,
+    id: u32,
+    thread_id: u32,
     source: EvidenceSource,   // KnowledgeGraph | Connector | ExternalWeb | Inference
     source_reference: String,
     content: String,
@@ -110,13 +110,13 @@ struct Evidence {
 ### Hypothesis
 ```rust
 struct Hypothesis {
-    id: String,
-    thread_id: String,
+    id: u32,
+    thread_id: u32,
     statement: String,
     confidence: f32,
     status: HypothesisStatus, // Unverified | Supported | Contradicted | Inconclusive
-    supporting_evidence: Vec<String>,
-    contradicting_evidence: Vec<String>,
+    supporting_evidence: Vec<u32>,
+    contradicting_evidence: Vec<u32>,
 }
 ```
 

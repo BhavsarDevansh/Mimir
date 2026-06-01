@@ -166,7 +166,7 @@ impl KnowledgeGraph {
         date_type: models::enums::EntityDateType,
         date_value: &str,
         recurrence: models::enums::RecurrenceType,
-        custom_label: Option<&str>,
+        label: Option<&str>,
         confidence: f32,
     ) -> Result<models::entity_date::EntityDate, KnowledgeError> {
         queries::entity::insert_entity_date(
@@ -175,13 +175,13 @@ impl KnowledgeGraph {
             date_type as i16,
             date_value,
             recurrence as i16,
-            custom_label,
+            label,
             confidence,
         )
         .await
     }
 
-    /// Get all dates for an entity.
+    /// List all dates for an entity.
     pub async fn get_entity_dates(
         &self,
         entity_id: i32,
@@ -189,7 +189,7 @@ impl KnowledgeGraph {
         queries::entity::get_dates_for_entity(&self.pool, entity_id).await
     }
 
-    /// Get upcoming dates within a window.
+    /// Return dates that recur within the next `days_ahead` days.
     pub async fn get_upcoming_dates(
         &self,
         entity_id: i32,
@@ -291,8 +291,9 @@ impl KnowledgeGraph {
         &self,
         id: i32,
         valid_until: Option<chrono::DateTime<chrono::Utc>>,
+        changed_by: models::audit_log::ChangedBy,
     ) -> Result<models::fact::Fact, KnowledgeError> {
-        queries::fact::update_valid_until(&self.pool, id, valid_until, self.now()).await
+        queries::fact::update_valid_until(&self.pool, id, valid_until, self.now(), changed_by).await
     }
 
     /// Update a fact's lifecycle status.
@@ -300,13 +301,18 @@ impl KnowledgeGraph {
         &self,
         id: i32,
         status: models::fact::FactStatus,
+        changed_by: models::audit_log::ChangedBy,
     ) -> Result<models::fact::Fact, KnowledgeError> {
-        queries::fact::set_status(&self.pool, id, status, self.now()).await
+        queries::fact::set_status(&self.pool, id, status, self.now(), changed_by).await
     }
 
     /// Soft-delete a fact to trash, cascading to inferred children.
-    pub async fn forget_fact(&self, id: i32, performer: &str) -> Result<(), KnowledgeError> {
-        forget::forget_fact(&self.pool, id, performer, self.now()).await
+    pub async fn forget_fact(
+        &self,
+        id: i32,
+        changed_by: models::audit_log::ChangedBy,
+    ) -> Result<(), KnowledgeError> {
+        forget::forget_fact(&self.pool, id, changed_by, self.now()).await
     }
 
     /// Retrieve audit log entries for a fact.
@@ -315,6 +321,47 @@ impl KnowledgeGraph {
         fact_id: i32,
     ) -> Result<Vec<models::audit_log::AuditLogEntry>, KnowledgeError> {
         queries::fact::get_audit_log(&self.pool, fact_id).await
+    }
+
+    // ------------------------------------------------------------------
+    // Source CRUD delegates
+    // ------------------------------------------------------------------
+
+    /// Retrieve all sources linked to a fact.
+    pub async fn get_sources_for_fact(
+        &self,
+        fact_id: i32,
+    ) -> Result<Vec<models::source::Source>, KnowledgeError> {
+        queries::source::get_sources_for_fact(&self.pool, fact_id).await
+    }
+
+    /// Add a new source to an existing fact and write a `source_added` audit entry.
+    pub async fn add_source_to_fact(
+        &self,
+        request: queries::source::AddSourceRequest,
+    ) -> Result<models::source::Source, KnowledgeError> {
+        let input = queries::source::SourceInput {
+            fact_id: request.fact_id,
+            source_type_id: request.source_type as i16,
+            connector_id: request.connector_id,
+            connector_type_id: request.connector_type.map(|c| c as i16),
+            raw_reference: request.raw_reference,
+            extraction_method_id: request.extraction_method.map(|e| e as i16),
+        };
+        queries::source::add_source_to_fact(&self.pool, &input, self.now(), request.changed_by)
+            .await
+    }
+
+    // ------------------------------------------------------------------
+    // Audit log delegates
+    // ------------------------------------------------------------------
+
+    /// Query the audit log with optional filters.
+    pub async fn query_audit_log(
+        &self,
+        filter: queries::audit::AuditLogFilter,
+    ) -> Result<Vec<queries::audit::AuditLogRow>, KnowledgeError> {
+        queries::audit::query_audit_log(&self.pool, &filter).await
     }
 
     // ------------------------------------------------------------------

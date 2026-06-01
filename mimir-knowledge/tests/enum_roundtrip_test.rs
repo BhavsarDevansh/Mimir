@@ -85,13 +85,12 @@ async fn source_type_roundtrips() {
         &kg,
         "SELECT id FROM source_types WHERE id = ? LIMIT 1",
         &[
-            SourceType::Email,
-            SourceType::Calendar,
-            SourceType::Photo,
-            SourceType::Message,
-            SourceType::Inference,
             SourceType::UserEdit,
             SourceType::Connector,
+            SourceType::Inference,
+            SourceType::Interaction,
+            SourceType::Import,
+            SourceType::System,
         ],
     )
     .await;

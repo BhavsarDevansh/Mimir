@@ -2,6 +2,7 @@
 
 use chrono::{TimeZone, Utc};
 use mimir_knowledge::KnowledgeGraph;
+use mimir_knowledge::models::audit_log::ChangedBy;
 use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::enums::Predicate;
 use mimir_knowledge::models::fact::{FactStatus, NewFact};
@@ -49,6 +50,10 @@ async fn fact_crud_roundtrip() {
         valid_from: None,
         valid_until: None,
         source_type: SourceType::UserEdit,
+        connector_id: None,
+        raw_reference: None,
+        extraction_method: None,
+        connector_type: None,
     };
 
     let fact = kg.insert_fact(new_fact.clone()).await.unwrap();
@@ -64,7 +69,7 @@ async fn fact_crud_roundtrip() {
 
     // Update status
     let updated = kg
-        .update_fact_status(fact.id, FactStatus::Disputed)
+        .update_fact_status(fact.id, FactStatus::Disputed, ChangedBy::User)
         .await
         .unwrap();
     assert_eq!(updated.status().unwrap(), FactStatus::Disputed);
@@ -72,13 +77,13 @@ async fn fact_crud_roundtrip() {
     // Update valid_until
     let until = Utc.with_ymd_and_hms(2026, 12, 31, 0, 0, 0).unwrap();
     let updated = kg
-        .update_fact_valid_until(fact.id, Some(until))
+        .update_fact_valid_until(fact.id, Some(until), ChangedBy::User)
         .await
         .unwrap();
     assert_eq!(updated.valid_until, Some(until));
 
     // Forget
-    kg.forget_fact(fact.id, "test_user").await.unwrap();
+    kg.forget_fact(fact.id, ChangedBy::User).await.unwrap();
     let gone = kg.get_fact(fact.id).await.unwrap();
     assert!(gone.is_none());
 }
@@ -107,6 +112,10 @@ async fn fact_temporal_timeline() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -120,6 +129,10 @@ async fn fact_temporal_timeline() {
             valid_from: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -152,6 +165,10 @@ async fn fact_temporal_disputed() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -165,6 +182,10 @@ async fn fact_temporal_disputed() {
             valid_from: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -199,6 +220,10 @@ async fn fact_temporal_closure() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -212,6 +237,10 @@ async fn fact_temporal_closure() {
             valid_from: Some(kg.now()),
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -246,6 +275,10 @@ async fn fact_predicate_id_lookup() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -283,19 +316,23 @@ async fn fact_audit_log_written() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
 
     let log = kg.get_audit_log(fact.id).await.unwrap();
-    assert!(log.iter().any(|e| e.action == "INSERT"));
+    assert!(log.iter().any(|e| e.change_type_id == 1));
 
-    kg.update_fact_status(fact.id, FactStatus::Disputed)
+    kg.update_fact_status(fact.id, FactStatus::Disputed, ChangedBy::User)
         .await
         .unwrap();
 
     let log = kg.get_audit_log(fact.id).await.unwrap();
-    assert!(log.iter().any(|e| e.action == "STATUS_CHANGE"));
+    assert!(log.iter().any(|e| e.change_type_id == 2));
 }
 
 // ---------------------------------------------------------------------------
@@ -320,7 +357,11 @@ async fn fact_source_attached() {
             object_literal: None,
             valid_from: None,
             valid_until: None,
-            source_type: SourceType::Calendar,
+            source_type: SourceType::Connector,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -357,6 +398,10 @@ async fn cascade_forget_orphan() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -394,7 +439,7 @@ async fn cascade_forget_orphan() {
     .unwrap();
 
     // Forget parent → child should also be forgotten (orphan).
-    kg.forget_fact(parent.id, "test").await.unwrap();
+    kg.forget_fact(parent.id, ChangedBy::User).await.unwrap();
 
     let parent_gone = kg.get_fact(parent.id).await.unwrap();
     let child_gone = kg.get_fact(child.id).await.unwrap();
@@ -425,6 +470,10 @@ async fn cascade_forget_survives() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -438,6 +487,10 @@ async fn cascade_forget_survives() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -485,7 +538,7 @@ async fn cascade_forget_survives() {
     .unwrap();
 
     // Forget one parent → child should survive.
-    kg.forget_fact(parent_a.id, "test").await.unwrap();
+    kg.forget_fact(parent_a.id, ChangedBy::User).await.unwrap();
 
     let child_alive = kg.get_fact(child.id).await.unwrap();
     assert!(child_alive.is_some());
@@ -514,11 +567,15 @@ async fn trash_contains_payload() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
 
-    kg.forget_fact(fact.id, "test").await.unwrap();
+    kg.forget_fact(fact.id, ChangedBy::User).await.unwrap();
 
     let (payload,): (String,) = sqlx::query_as(
         "SELECT payload FROM trash WHERE original_table = 'facts' AND original_id = ?",
@@ -555,6 +612,10 @@ async fn confidence_initial_values() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -569,6 +630,10 @@ async fn confidence_initial_values() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::Inference,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -583,6 +648,10 @@ async fn confidence_initial_values() {
             valid_from: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::Connector,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -612,6 +681,10 @@ async fn unknown_status_id_returns_none() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -656,6 +729,10 @@ async fn unknown_predicate_id_returns_none() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -709,6 +786,10 @@ async fn get_active_facts_at_half_open_boundary() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(boundary),
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -723,6 +804,10 @@ async fn get_active_facts_at_half_open_boundary() {
             valid_from: Some(boundary),
             valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -765,6 +850,10 @@ async fn automatic_closure_writes_audit_log() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -779,12 +868,16 @@ async fn automatic_closure_writes_audit_log() {
             valid_from: Some(now),
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
 
     let log = kg.get_audit_log(old_fact.id).await.unwrap();
-    let closure_entry = log.iter().find(|e| e.action == "UPDATE");
+    let closure_entry = log.iter().find(|e| e.change_type_id == 4);
     assert!(
         closure_entry.is_some(),
         "Expected an UPDATE audit log entry for automatic closure"
@@ -792,7 +885,7 @@ async fn automatic_closure_writes_audit_log() {
     let entry = closure_entry.unwrap();
     assert!(entry.old_value.is_some());
     assert!(entry.new_value.is_some());
-    assert_eq!(entry.performer.as_deref(), Some("system"));
+    assert_eq!(entry.changed_by_id, Some(2));
 }
 
 // ---------------------------------------------------------------------------
@@ -821,6 +914,10 @@ async fn insert_rejects_inverted_time_range() {
             valid_from: Some(from),
             valid_until: Some(until),
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await;
 
@@ -854,6 +951,10 @@ async fn forget_cascade_status_change_writes_audit_log() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -891,7 +992,7 @@ async fn forget_cascade_status_change_writes_audit_log() {
 
     // Forget parent → child confidence recalculates to 0 (no parents left).
     // 0 < 0.20 triggers STATUS_CHANGE to Disputed.
-    kg.forget_fact(parent.id, "test").await.unwrap();
+    kg.forget_fact(parent.id, ChangedBy::User).await.unwrap();
 
     let child_alive = kg.get_fact(child.id).await.unwrap();
     assert!(child_alive.is_some());
@@ -899,7 +1000,7 @@ async fn forget_cascade_status_change_writes_audit_log() {
     assert_eq!(child_alive.status().unwrap(), FactStatus::Disputed);
 
     let log = kg.get_audit_log(child.id).await.unwrap();
-    let status_change = log.iter().find(|e| e.action == "STATUS_CHANGE");
+    let status_change = log.iter().find(|e| e.change_type_id == 2);
     assert!(
         status_change.is_some(),
         "Expected a STATUS_CHANGE audit log entry for cascade Disputed"
@@ -907,7 +1008,7 @@ async fn forget_cascade_status_change_writes_audit_log() {
     let entry = status_change.unwrap();
     assert!(entry.old_value.is_some());
     assert!(entry.new_value.is_some());
-    assert_eq!(entry.performer.as_deref(), Some("system"));
+    assert_eq!(entry.changed_by_id, Some(2));
 }
 
 // ---------------------------------------------------------------------------
@@ -935,6 +1036,10 @@ async fn explicit_replaces_explicit() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -949,6 +1054,10 @@ async fn explicit_replaces_explicit() {
             valid_from: Some(Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap()),
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -977,7 +1086,7 @@ async fn explicit_replaces_explicit() {
 
     // Audit log has STATUS_CHANGE for old fact.
     let log = kg.get_audit_log(old_fact.id).await.unwrap();
-    let status_change = log.iter().find(|e| e.action == "STATUS_CHANGE");
+    let status_change = log.iter().find(|e| e.change_type_id == 2);
     assert!(
         status_change.is_some(),
         "Expected STATUS_CHANGE audit entry for superseded fact"
@@ -1020,6 +1129,10 @@ async fn explicit_replaces_inferred() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -1048,7 +1161,11 @@ async fn explicit_replaces_connector() {
             object_literal: None,
             valid_from: Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap()),
-            source_type: SourceType::Email,
+            source_type: SourceType::Connector,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -1063,6 +1180,10 @@ async fn explicit_replaces_connector() {
             valid_from: Some(Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap()),
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -1093,6 +1214,10 @@ async fn explicit_no_overlap_no_supersession() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -1107,6 +1232,10 @@ async fn explicit_no_overlap_no_supersession() {
             valid_from: Some(Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap()),
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -1138,6 +1267,10 @@ async fn explicit_replaces_already_superseded_is_idempotent() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -1152,6 +1285,10 @@ async fn explicit_replaces_already_superseded_is_idempotent() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();
@@ -1166,6 +1303,10 @@ async fn explicit_replaces_already_superseded_is_idempotent() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
         })
         .await
         .unwrap();

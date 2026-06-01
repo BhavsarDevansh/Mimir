@@ -202,16 +202,12 @@ async fn source_types_sync() {
         "SELECT id, name FROM source_types",
         "SELECT COUNT(*) FROM source_types",
         &[
-            (1, "Email", SourceType::Email),
-            (2, "Calendar", SourceType::Calendar),
-            (3, "Photo", SourceType::Photo),
-            (4, "Message", SourceType::Message),
-            (5, "Inference", SourceType::Inference),
-            (6, "UserEdit", SourceType::UserEdit),
-            (7, "Connector", SourceType::Connector),
-            (8, "CasualMention", SourceType::CasualMention),
-            (9, "Import", SourceType::Import),
-            (10, "System", SourceType::System),
+            (1, "UserEdit", SourceType::UserEdit),
+            (2, "Connector", SourceType::Connector),
+            (3, "Inference", SourceType::Inference),
+            (4, "Interaction", SourceType::Interaction),
+            (5, "Import", SourceType::Import),
+            (6, "System", SourceType::System),
         ],
     )
     .await;

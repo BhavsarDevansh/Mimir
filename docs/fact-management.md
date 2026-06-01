@@ -36,13 +36,20 @@ chains can be re-evaluated before removal.
 
 ### `sources` table
 
-One row per fact automatically inserted by `insert_fact`, linking the fact to
-its `SourceType`.
+One row per fact (plus any additional sources added via `add_source_to_fact`),
+linking the fact to its `SourceType` with optional `connector_id`,
+`connector_type_id`, `raw_reference`, and `extraction_method_id`.
+
+Unique constraint: `(fact_id, source_type_id, connector_id, raw_reference)`.
 
 ### `fact_audit_log` table
 
-Every insert, update (`valid_until`), status change, and delete writes a row with
-JSON snapshots (`old_value`, `new_value`).
+Every insert, temporal update, status change, confidence change, source added,
+forget, and restore writes a row with:
+- `change_type_id` → `change_types(id)` (`created`, `status_change`, `confidence_change`, `temporal_update`, `source_added`, `forgotten`, `restored`)
+- `changed_by_id` → `changed_by_types(id)` (`user`, `system`, `inference_engine`, `nightly_optimization`)
+- `old_value` / `new_value` — **column-only** JSON snapshots (e.g. `{"valid_until": "..."}`, not the full fact)
+- `reason` — optional human-readable explanation
 
 ---
 
@@ -68,14 +75,16 @@ unbounded).
 | SourceType | Initial Confidence |
 |------------|-------------------|
 | `UserEdit` | 1.00 |
-| `Connector` | 0.80 |
-| `Email`, `Calendar`, `Photo`, `Message` | 0.80 |
-| `Inference` | 0.50 |
+| `Connector` | connector reliability score (default 0.80) |
+| `Interaction` | 0.30 |
+| `Import` | 0.80 |
+| `Inference` | 0.00 (computed at insertion from parent confidences) |
+| `System` | 1.00 |
 
-`recalculate()` averages remaining parent confidences × 0.8^depth. If the
-result falls below 0.20, the caller marks the fact `Disputed`. Full structural
-confidence (source weights, chain depth, transitive propagation) is tracked
-in #51.
+`recalculate()` uses parent confidences × 0.8^depth × breadth factor. If the
+result falls below 0.20, the caller marks the fact `Disputed`. Every confidence
+recalculation writes a `confidence_change` audit entry. Full structural
+confidence is tracked in #51.
 
 ---
 
@@ -85,14 +94,14 @@ in #51.
 
 1. JSON-serializes the fact + linked sources into `trash.payload`.
 2. Inserts a `trash` row with 30-day `expires_at`.
-3. Writes a `DELETE` audit log entry.
-4. Manually removes `fact_dependencies` rows (RESTRICT FK).
-5. Hard-deletes the fact from `facts` (`sources` and `fact_audit_log` cascade).
+3. Writes a `forgotten` audit log entry (`old_value` = full fact snapshot).
+4. Manually removes all `fact_dependencies` rows where the fact is parent or child.
+5. Hard-deletes the fact from `facts` (`sources` cascade; `fact_audit_log` persists).
 6. For each former child:
    - If the child has zero remaining parents and `inferred = true`, recursively
      forget the child.
-   - If the child has other parents, recalculate its confidence and update
-     `facts.confidence`.
+   - If the child has other parents, recalculate its confidence, update
+     `facts.confidence`, and write a `confidence_change` audit entry.
 
 `hard_delete_expired_trash()` removes trash rows whose `expires_at` has passed.
 
@@ -108,7 +117,10 @@ in #51.
 | `get_facts_by_predicate` | List by predicate enum |
 | `get_facts_by_object` | List by object entity |
 | `get_active_facts_at` | Temporal point-in-time query |
-| `update_fact_valid_until` | Close or extend a fact’s range |
+| `update_fact_valid_until` | Close or extend a fact’s range (with audit) |
 | `update_fact_status` | Lifecycle status change (with audit) |
-| `forget_fact` | Soft-delete with cascade evaluation |
+| `forget_fact` | Soft-delete with cascade evaluation (with audit) |
 | `get_audit_log` | Retrieve audit entries for a fact |
+| `get_sources_for_fact` | Retrieve all sources for a fact |
+| `add_source_to_fact` | Add a new source and write `source_added` audit entry |
+| `query_audit_log` | Filtered audit log query across entities / predicates / time |

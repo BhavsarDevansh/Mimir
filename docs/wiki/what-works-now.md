@@ -1,7 +1,7 @@
 # What Works in Mimir Today
 
 > **Last updated:** 2026-05-31  
-> **Version:** 0.24.3  
+> **Version:** 0.25.0  
 > **Phase:** Phase 1 (Core Agent) is complete. Phase 2 (Knowledge Graph) is partially implemented but not yet wired into the daemon.
 
 ---
@@ -115,7 +115,8 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | `mimir tool list` | ✅ Works | Lists registered tools and their permissions |
 | `mimir tool enable/disable/permission` | ✅ Works | Change tool permission levels (saved to `tools.toml`) |
 | `mimir skill list/show/add/delete/enable/disable` | ✅ Works | Manage skills (built-in, user-added, and generated) |
-| `mimir kb ...` | ❌ Not yet | Knowledge graph CLI commands are planned for Phase 2 |
+| `mimir kb audit` | ✅ Works | Query the fact audit log directly from the local SQLite DB |
+| `mimir kb ...` | 🔄 Partial | Only `audit` is implemented; full CRUD planned for Phase 2 |
 
 ### Chat & Conversation
 
@@ -204,7 +205,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Fact CRUD | ✅ Works | Temporal bounds, statuses, dependencies, cascade forget |
 | Confidence model | ✅ Works | Graph-derived; no LLM involvement, no decay |
 | Inference engine (Rust) | ✅ Works | Transitivity, contradiction, propagation, threshold rules |
-| Provenance tracking | ✅ Works | Source tracking + fact audit log |
+| Provenance tracking | ✅ Works | Source tracking with `connector_id`/`raw_reference` + typed audit log with `change_type`/`changed_by` |
 | Forgetting system | ✅ Works | Trash, cascade forget, restore, bulk operations |
 | FTS5 search | ✅ Works | Full-text search over entities and aliases |
 | **Daemon integration** | ❌ Not yet | The crate is **not wired into** `mimir-server` or the CLI |

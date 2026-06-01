@@ -257,10 +257,11 @@ temperature (°C), conditions, humidity, wind (km/h), UV index, visibility \
                 }
             }
             None => {
-                let forecast = Self::parse_forecast(&body)?;
                 let mut current = Self::parse_current_condition(&body)?;
-                if !forecast.is_empty() {
-                    current["forecast"] = serde_json::json!(forecast);
+                if let Ok(forecast) = Self::parse_forecast(&body) {
+                    if !forecast.is_empty() {
+                        current["forecast"] = serde_json::json!(forecast);
+                    }
                 }
                 Ok(ToolOutput {
                     result: Some(current),

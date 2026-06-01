@@ -69,6 +69,7 @@ impl ToolRegistry {
         // Built-in names are hardcoded and guaranteed unique; unwrap is safe.
         let _ = self.register_native(Arc::new(super::GetCurrentTimeTool));
         let _ = self.register_native(Arc::new(super::EchoTool));
+        let _ = self.register_native(Arc::new(super::GetWeatherTool::new()));
     }
 
     /// Register a native tool with its default permission.

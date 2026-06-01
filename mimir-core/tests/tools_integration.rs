@@ -495,3 +495,102 @@ async fn test_memory_tool_schema_exported() {
     let required = params["required"].as_array().unwrap();
     assert!(required.contains(&json!("action")));
 }
+
+#[tokio::test]
+async fn test_get_weather_execution_success() {
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+
+    let server = MockServer::start().await;
+    let mock_body = r#"{"current_condition": [{"temp_C": "22", "temp_F": "72", "FeelsLikeC": "21", "weatherDesc": [{"value": "Sunny"}], "humidity": "45", "windspeedKmph": "10", "winddir16Point": "NE", "uvIndex": "5", "visibility": "10", "pressure": "1012"}]}"#;
+
+    Mock::given(method("GET"))
+        .and(path("/London"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(mock_body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let tool = mimir_core::tools::GetWeatherTool::with_base_url(server.uri());
+    let output = tool
+        .execute(serde_json::json!({"location": "London"}))
+        .await
+        .unwrap();
+    let result = output.result.unwrap();
+    assert_eq!(result["temperature_c"], "22");
+    assert_eq!(result["description"], "Sunny");
+}
+
+#[tokio::test]
+async fn test_get_weather_execution_unknown_location() {
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/NotARealPlace12345"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("Unknown location; please try"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let tool = mimir_core::tools::GetWeatherTool::with_base_url(server.uri());
+    let result = tool
+        .execute(serde_json::json!({"location": "NotARealPlace12345"}))
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_get_weather_execution_http_error() {
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/London"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let tool = mimir_core::tools::GetWeatherTool::with_base_url(server.uri());
+    let result = tool
+        .execute(serde_json::json!({"location": "London"}))
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_get_weather_missing_location() {
+    use mimir_core::tools::{Tool, ToolError};
+
+    let tool = mimir_core::tools::GetWeatherTool::new();
+    let result = tool.execute(serde_json::json!({})).await;
+    assert!(result.is_err());
+    match result {
+        Err(ToolError::InvalidArguments(name, _)) => assert_eq!(name, "get_weather"),
+        other => panic!("expected InvalidArguments error, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn test_get_weather_empty_location() {
+    use mimir_core::tools::{Tool, ToolError};
+
+    let tool = mimir_core::tools::GetWeatherTool::new();
+    let result = tool.execute(serde_json::json!({"location": "   "})).await;
+    assert!(result.is_err());
+    match result {
+        Err(ToolError::InvalidArguments(name, _)) => assert_eq!(name, "get_weather"),
+        other => panic!("expected InvalidArguments error, got {:?}", other),
+    }
+}

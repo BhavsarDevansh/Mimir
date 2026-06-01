@@ -11,8 +11,24 @@ Mimir ships with a small set of native tools:
 | `get_current_time` | Returns the current date and time | Auto |
 | `echo` | Echoes back whatever you send it | Auto |
 | `memory` | Updates `memory.md` (add, replace, remove entries) | Auto |
+| `get_weather` | Fetches current weather for a location via wttr.in | Auto |
 
 "Auto" means the tool runs immediately when the agent decides to use it.
+### Weather Tool (`get_weather`)
+
+The weather tool queries [wttr.in](https://wttr.in) to retrieve current conditions for any location. You can ask for a city name, airport code, or GPS coordinates.
+
+When the agent invokes `get_weather`, it receives structured data including:
+- Temperature in Celsius and Fahrenheit
+- "Feels like" temperature
+- Weather description (e.g., "Partly cloudy")
+- Humidity, wind speed and direction
+- UV index, visibility, and atmospheric pressure
+
+Example queries:
+- "What is the weather in London?"
+- "Do I need an umbrella in Tokyo?"
+- "How hot is it in New Delhi right now?"
 
 ## Adding Your Own CLI Tools
 

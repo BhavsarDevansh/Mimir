@@ -206,3 +206,12 @@ This loop is handled within both the `chat_handler` (blocking) and `chat_stream_
 - Connector-based tools (e.g., Gmail, Calendar)
 - Skill registry (higher-level compositions of tools)
 - Hot-reload of CLI tool definitions
+
+### `GetWeatherTool`
+- Name: `get_weather`
+- Parameter: `location` (string, required)
+- Fetches current weather from wttr.in for the given location
+- Returns: temperature (°C/°F), feels-like temperature, description, humidity %, wind speed (km/h), wind direction, UV index, visibility (km), pressure (mb)
+- Permission: `Auto`
+- Network timeout: 15 seconds
+- Unknown locations are detected even when wttr.in returns HTTP 200 with a plain-text error body

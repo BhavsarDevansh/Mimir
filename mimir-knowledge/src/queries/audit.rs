@@ -23,8 +23,8 @@ pub struct AuditLogFilter {
 pub struct AuditLogRow {
     pub audit_id: i32,
     pub fact_id: i32,
-    pub entity_name: String,
-    pub predicate_name: String,
+    pub entity_name: Option<String>,
+    pub predicate_name: Option<String>,
     pub change_type_name: String,
     pub changed_by_name: Option<String>,
     pub old_value: Option<String>,
@@ -51,9 +51,9 @@ pub async fn query_audit_log(
             fal.changed_at, \
             fal.reason \
          FROM fact_audit_log fal \
-         JOIN facts f ON f.id = fal.fact_id \
-         JOIN entities e ON e.id = f.subject_id \
-         JOIN predicates p ON p.id = f.predicate_id \
+         LEFT JOIN facts f ON f.id = fal.fact_id \
+         LEFT JOIN entities e ON e.id = f.subject_id \
+         LEFT JOIN predicates p ON p.id = f.predicate_id \
          JOIN change_types ct ON ct.id = fal.change_type_id \
          LEFT JOIN changed_by_types cbt ON cbt.id = fal.changed_by_id \
          WHERE 1=1",

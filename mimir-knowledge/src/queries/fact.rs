@@ -403,12 +403,14 @@ pub async fn get_active_facts_at(
          inference_depth, stale_confidence, created_at, updated_at \
          FROM facts \
          WHERE subject_id = ? AND predicate_id = ? \
+           AND fact_status_id = ? \
            AND (valid_from IS NULL OR valid_from <= ?) \
            AND (valid_until IS NULL OR valid_until > ?) \
          ORDER BY valid_from",
     )
     .bind(subject_id)
     .bind(predicate_id)
+    .bind(FactStatus::Active as i16)
     .bind(at)
     .bind(at)
     .fetch_all(pool)

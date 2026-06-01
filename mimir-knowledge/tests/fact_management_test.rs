@@ -822,6 +822,51 @@ async fn get_active_facts_at_half_open_boundary() {
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].id, f2.id);
 }
+// ---------------------------------------------------------------------------
+// Active status filter
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn get_active_facts_at_filters_by_active_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let alice = create_person(&kg, "Alice").await;
+    let london = create_place(&kg, "London").await;
+
+    let fact = kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            predicate: Predicate::IsIn,
+            object_id: Some(london),
+            object_literal: None,
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_id: None,
+            raw_reference: None,
+            extraction_method: None,
+            connector_type: None,
+        })
+        .await
+        .unwrap();
+
+    kg.update_fact_status(fact.id, FactStatus::Disputed, ChangedBy::User)
+        .await
+        .unwrap();
+
+    let active = kg
+        .get_active_facts_at(alice, Predicate::IsIn, Utc::now())
+        .await
+        .unwrap();
+
+    assert!(
+        active.is_empty(),
+        "Disputed facts should not appear in get_active_facts_at"
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Temporal: automatic closure writes audit log

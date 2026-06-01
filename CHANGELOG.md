@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.25.1 (2026-06-01)
+
+### Fixed
+
+- `get_active_facts_at` restored missing `AND fact_status_id = ?` filter so it again returns only active facts.
+- `query_audit_log` switched from INNER JOINs to LEFT JOINs on `facts`, `entities`, and `predicates`, ensuring audit history remains visible after a fact is forgotten (hard-deleted).
+- `mimir kb audit` now validates `--from` and `--to` datetime strings and exits with an error instead of silently ignoring malformed input.
+
 ## 0.25.0 (2026-06-01)
 
 ### Added

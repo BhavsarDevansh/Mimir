@@ -57,11 +57,27 @@ pub async fn handle_kb_audit(
         }
     }
 
+    let from_dt = from.as_deref().and_then(parse_datetime);
+    if let Some(ref raw) = from {
+        if from_dt.is_none() {
+            eprintln!("Error: invalid --from datetime '{}'", raw);
+            std::process::exit(1);
+        }
+    }
+
+    let to_dt = to.as_deref().and_then(parse_datetime);
+    if let Some(ref raw) = to {
+        if to_dt.is_none() {
+            eprintln!("Error: invalid --to datetime '{}'", raw);
+            std::process::exit(1);
+        }
+    }
+
     let filter = AuditLogFilter {
         entity_name: entity,
         predicate_name: predicate,
-        from: from.as_deref().and_then(parse_datetime),
-        to: to.as_deref().and_then(parse_datetime),
+        from: from_dt,
+        to: to_dt,
         change_type: ct,
     };
 
@@ -93,12 +109,14 @@ pub async fn handle_kb_audit(
     for row in rows {
         let changed_by = row.changed_by_name.as_deref().unwrap_or("-");
         let reason = row.reason.as_deref().unwrap_or("-");
+        let entity = row.entity_name.as_deref().unwrap_or("(deleted)");
+        let predicate = row.predicate_name.as_deref().unwrap_or("(deleted)");
         println!(
             "{:>6} {:>6} {:<20} {:<15} {:<18} {:<12} {:<25} {:<25}",
             row.audit_id,
             row.fact_id,
-            row.entity_name,
-            row.predicate_name,
+            entity,
+            predicate,
             row.change_type_name,
             changed_by,
             row.changed_at

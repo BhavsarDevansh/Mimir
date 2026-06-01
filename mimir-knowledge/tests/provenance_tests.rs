@@ -480,7 +480,53 @@ async fn query_audit_log_filtered() {
 
     let rows = kg.query_audit_log(filter).await.unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].entity_name, "Alice");
+    assert_eq!(rows[0].entity_name.as_deref(), Some("Alice"));
     assert_eq!(rows[0].change_type_name, "status_change");
     assert_eq!(rows[0].changed_by_name.as_deref(), Some("user"));
+}
+
+#[tokio::test]
+async fn query_audit_log_includes_forgotten_facts() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let alice = create_person(&kg, "Alice").await;
+    let london = create_place(&kg, "London").await;
+
+    let fact = kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            predicate: Predicate::IsIn,
+            object_id: Some(london),
+            object_literal: None,
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+        })
+        .await
+        .unwrap();
+
+    kg.forget_fact(fact.id, ChangedBy::User).await.unwrap();
+
+    let filter = AuditLogFilter {
+        entity_name: None,
+        predicate_name: None,
+        from: None,
+        to: None,
+        change_type: Some(ChangeType::Forgotten),
+    };
+
+    let rows = kg.query_audit_log(filter).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].fact_id, fact.id);
+    assert_eq!(rows[0].change_type_name, "forgotten");
+    // Names are NULL because the fact was hard-deleted.
+    assert!(rows[0].entity_name.is_none());
+    assert!(rows[0].predicate_name.is_none());
 }

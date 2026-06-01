@@ -1,6 +1,7 @@
 use super::super::{Tool, ToolError, ToolOutput, ToolPermission};
 use async_trait::async_trait;
 use serde_json::Value;
+use urlencoding::encode;
 
 const DEFAULT_BASE_URL: &str = "https://wttr.in";
 
@@ -35,9 +36,10 @@ impl GetWeatherTool {
     }
 
     /// Build the wttr.in URL for a location with JSON output.
-    /// Spaces are percent-encoded to `%20`.
+    /// Properly percent-encodes the location string to handle spaces,
+    /// reserved characters, and non-ASCII characters.
     fn build_url(&self, location: &str) -> String {
-        let encoded = location.replace(' ', "%20");
+        let encoded = encode(location);
         format!("{}/{encoded}?format=j1", self.base_url)
     }
 

@@ -87,5 +87,5 @@ pub struct NewFact {
     pub connector_id: Option<String>,
     pub connector_type: Option<ConnectorType>,
     pub raw_reference: Option<String>,
-    pub extraction_method: Option<String>,
+    pub extraction_method: Option<crate::models::source::ExtractionMethod>,
 }

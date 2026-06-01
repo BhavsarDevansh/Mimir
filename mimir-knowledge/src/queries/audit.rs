@@ -16,6 +16,8 @@ pub struct AuditLogFilter {
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
     pub change_type: Option<ChangeType>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
 }
 
 /// A human-readable row from the joined audit log query.
@@ -81,6 +83,15 @@ pub async fn query_audit_log(
     }
 
     builder.push(" ORDER BY fal.changed_at ASC");
+
+    let limit = filter.limit.unwrap_or(1000);
+    builder.push(" LIMIT ");
+    builder.push_bind(limit);
+
+    if let Some(offset) = filter.offset {
+        builder.push(" OFFSET ");
+        builder.push_bind(offset);
+    }
 
     let rows = builder
         .build_query_as::<AuditLogRow>()

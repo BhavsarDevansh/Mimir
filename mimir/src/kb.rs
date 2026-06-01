@@ -4,7 +4,26 @@ use mimir_knowledge::queries::audit::AuditLogFilter;
 use mimir_knowledge::{KnowledgeError, KnowledgeGraph};
 
 fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
-    s.parse::<DateTime<Utc>>().ok()
+    // RFC 3339 / ISO 8601 with timezone offset.
+    if let Ok(dt) = s.parse::<DateTime<Utc>>() {
+        return Some(dt);
+    }
+    // Naive date → midnight UTC.
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Some(d.and_hms_opt(0, 0, 0)?.and_utc());
+    }
+    // Naive datetime without timezone.
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S%.f",
+    ] {
+        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(ndt.and_utc());
+        }
+    }
+    None
 }
 
 fn parse_change_type(s: &str) -> Option<mimir_knowledge::models::audit_log::ChangeType> {
@@ -79,6 +98,8 @@ pub async fn handle_kb_audit(
         from: from_dt,
         to: to_dt,
         change_type: ct,
+        limit: None,
+        offset: None,
     };
 
     let rows = match kg.query_audit_log(filter).await {

@@ -476,6 +476,8 @@ async fn query_audit_log_filtered() {
         from: None,
         to: None,
         change_type: Some(ChangeType::StatusChange),
+        limit: None,
+        offset: None,
     };
 
     let rows = kg.query_audit_log(filter).await.unwrap();
@@ -520,6 +522,8 @@ async fn query_audit_log_includes_forgotten_facts() {
         from: None,
         to: None,
         change_type: Some(ChangeType::Forgotten),
+        limit: None,
+        offset: None,
     };
 
     let rows = kg.query_audit_log(filter).await.unwrap();

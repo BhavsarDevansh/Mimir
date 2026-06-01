@@ -25,17 +25,6 @@ fn default_extraction_method(source_type: SourceType) -> Option<i16> {
     }
 }
 
-fn parse_extraction_method(s: &str) -> Option<i16> {
-    match s {
-        "llm_extraction" => Some(ExtractionMethod::LlmExtraction as i16),
-        "structured_parse" => Some(ExtractionMethod::StructuredParse as i16),
-        "user_input" => Some(ExtractionMethod::UserInput as i16),
-        "inference_rule" => Some(ExtractionMethod::InferenceRule as i16),
-        "dedup_merge" => Some(ExtractionMethod::DedupMerge as i16),
-        _ => None,
-    }
-}
-
 fn changed_by_for_source_type(source_type: SourceType) -> ChangedBy {
     match source_type {
         SourceType::UserEdit => ChangedBy::User,
@@ -114,9 +103,11 @@ pub async fn insert_fact(
                     && new_fact.valid_from.is_some();
 
                 if is_sole_open {
-                    let old_json = serde_json::to_string(*existing_fact).unwrap_or_default();
+                    let new_start = new_fact.valid_from.unwrap();
+                    let old_json =
+                        serde_json::json!({"valid_until": existing_fact.valid_until}).to_string();
                     sqlx::query("UPDATE facts SET valid_until = ?, updated_at = ? WHERE id = ?")
-                        .bind(now)
+                        .bind(new_start)
                         .bind(now)
                         .bind(existing_fact.id)
                         .execute(&mut *tx)
@@ -132,7 +123,8 @@ pub async fn insert_fact(
                     .fetch_one(&mut *tx)
                     .await?;
 
-                    let new_json = serde_json::to_string(&updated).unwrap_or_default();
+                    let new_json =
+                        serde_json::json!({"valid_until": updated.valid_until}).to_string();
                     sqlx::query(
                         "INSERT INTO fact_audit_log \
                          (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
@@ -151,7 +143,9 @@ pub async fn insert_fact(
 
                 // Mark as Superseded unless already superseded.
                 if existing_fact.status() != Some(FactStatus::Superseded) {
-                    let old_json = serde_json::to_string(*existing_fact).unwrap_or_default();
+                    let old_json =
+                        serde_json::json!({"fact_status_id": existing_fact.fact_status_id})
+                            .to_string();
                     sqlx::query("UPDATE facts SET fact_status_id = ?, updated_at = ? WHERE id = ?")
                         .bind(FactStatus::Superseded as i16)
                         .bind(now)
@@ -169,7 +163,8 @@ pub async fn insert_fact(
                     .fetch_one(&mut *tx)
                     .await?;
 
-                    let new_json = serde_json::to_string(&updated).unwrap_or_default();
+                    let new_json =
+                        serde_json::json!({"fact_status_id": updated.fact_status_id}).to_string();
                     sqlx::query(
                         "INSERT INTO fact_audit_log \
                          (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
@@ -196,6 +191,15 @@ pub async fn insert_fact(
 
     // 2. Compute initial confidence.
     let confidence = if let Some(ct) = new_fact.connector_type {
+        if new_fact.connector_id.is_none()
+            || new_fact.raw_reference.is_none()
+            || new_fact.extraction_method.is_none()
+        {
+            return Err(KnowledgeError::Validation(
+                "Connector provenance requires connector_id, raw_reference, and extraction_method"
+                    .to_string(),
+            ));
+        }
         let db_score: Option<f32> = sqlx::query_scalar(
             "SELECT score FROM connector_reliability WHERE connector_type_id = ?",
         )
@@ -234,8 +238,7 @@ pub async fn insert_fact(
     // 4. Resolve extraction method.
     let extraction_method_id = new_fact
         .extraction_method
-        .as_ref()
-        .and_then(|s| parse_extraction_method(s))
+        .map(|e| e as i16)
         .or_else(|| default_extraction_method(new_fact.source_type));
 
     // 5. Insert the source row.
@@ -340,7 +343,7 @@ pub async fn get_by_subject(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, created_at, updated_at \
-         FROM facts WHERE subject_id = ? LIMIT ?",
+         FROM facts WHERE subject_id = ? ORDER BY id ASC LIMIT ?",
     )
     .bind(subject_id)
     .bind(limit)
@@ -360,7 +363,7 @@ pub async fn get_by_predicate(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, created_at, updated_at \
-         FROM facts WHERE predicate_id = ? LIMIT ?",
+         FROM facts WHERE predicate_id = ? ORDER BY id ASC LIMIT ?",
     )
     .bind(predicate_id)
     .bind(limit)
@@ -380,7 +383,7 @@ pub async fn get_by_object(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, created_at, updated_at \
-         FROM facts WHERE object_id = ? LIMIT ?",
+         FROM facts WHERE object_id = ? ORDER BY id ASC LIMIT ?",
     )
     .bind(object_id)
     .bind(limit)

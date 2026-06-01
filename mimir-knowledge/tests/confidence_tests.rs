@@ -383,10 +383,12 @@ async fn test_connector_confidence_uses_db_reliability() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::Connector,
-            connector_id: None,
+            connector_id: Some("gmail-1".to_string()),
             connector_type: Some(ConnectorType::Gmail),
-            raw_reference: None,
-            extraction_method: None,
+            raw_reference: Some("msg-123".to_string()),
+            extraction_method: Some(
+                mimir_knowledge::models::source::ExtractionMethod::StructuredParse,
+            ),
         })
         .await
         .unwrap();

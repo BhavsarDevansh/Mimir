@@ -160,17 +160,22 @@ fn forget_fact_inner<'a>(
                 let old_confidence = old_confidence.unwrap_or(0.0);
 
                 let new_confidence = confidence::recalculate(pool, child_id).await?;
-                sqlx::query("UPDATE facts SET confidence = ? WHERE id = ?")
+
+                let mut tx = pool.begin().await?;
+                sqlx::query("UPDATE facts SET confidence = ?, updated_at = ? WHERE id = ?")
                     .bind(new_confidence)
+                    .bind(now)
                     .bind(child_id)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
 
                 if (new_confidence - old_confidence).abs() > 0.001 {
                     let old_json = serde_json::json!({"confidence": old_confidence}).to_string();
                     let new_json = serde_json::json!({"confidence": new_confidence}).to_string();
                     sqlx::query(
-                        "INSERT INTO fact_audit_log                          (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason)                          VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO fact_audit_log \
+                         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(child_id)
                     .bind(ChangeType::ConfidenceChange as i16)
@@ -179,11 +184,15 @@ fn forget_fact_inner<'a>(
                     .bind(now)
                     .bind(ChangedBy::System as i16)
                     .bind(None::<&str>)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
                 }
 
+                tx.commit().await?;
+
                 if new_confidence < 0.20 {
+                    let mut tx = pool.begin().await?;
+
                     let old_child: Option<Fact> = sqlx::query_as::<_, Fact>(
                         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
                          valid_from, valid_until, confidence, fact_status_id, inferred, \
@@ -191,19 +200,26 @@ fn forget_fact_inner<'a>(
                          FROM facts WHERE id = ?",
                     )
                     .bind(child_id)
-                    .fetch_optional(pool)
+                    .fetch_optional(&mut *tx)
                     .await?;
 
                     if let Some(old_child) = old_child {
-                        let old_json = serde_json::to_string(&old_child).map_err(|e| {
-                            KnowledgeError::Validation(format!("JSON serialization failed: {}", e))
-                        })?;
+                        let old_json =
+                            serde_json::to_string(&old_child.fact_status_id).map_err(|e| {
+                                KnowledgeError::Validation(format!(
+                                    "JSON serialization failed: {}",
+                                    e
+                                ))
+                            })?;
 
-                        sqlx::query("UPDATE facts SET fact_status_id = ? WHERE id = ?")
-                            .bind(crate::models::fact::FactStatus::Disputed as i16)
-                            .bind(child_id)
-                            .execute(pool)
-                            .await?;
+                        sqlx::query(
+                            "UPDATE facts SET fact_status_id = ?, updated_at = ? WHERE id = ?",
+                        )
+                        .bind(crate::models::fact::FactStatus::Disputed as i16)
+                        .bind(now)
+                        .bind(child_id)
+                        .execute(&mut *tx)
+                        .await?;
 
                         let updated_child: Fact = sqlx::query_as::<_, Fact>(
                             "SELECT id, subject_id, predicate_id, object_id, object_literal, \
@@ -212,12 +228,16 @@ fn forget_fact_inner<'a>(
                              FROM facts WHERE id = ?",
                         )
                         .bind(child_id)
-                        .fetch_one(pool)
+                        .fetch_one(&mut *tx)
                         .await?;
 
-                        let new_json = serde_json::to_string(&updated_child).map_err(|e| {
-                            KnowledgeError::Validation(format!("JSON serialization failed: {}", e))
-                        })?;
+                        let new_json = serde_json::to_string(&updated_child.fact_status_id)
+                            .map_err(|e| {
+                                KnowledgeError::Validation(format!(
+                                    "JSON serialization failed: {}",
+                                    e
+                                ))
+                            })?;
                         sqlx::query(
                             "INSERT INTO fact_audit_log \
                              (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
@@ -230,9 +250,11 @@ fn forget_fact_inner<'a>(
                         .bind(now)
                         .bind(ChangedBy::System as i16)
                         .bind(None::<&str>)
-                        .execute(pool)
+                        .execute(&mut *tx)
                         .await?;
                     }
+
+                    tx.commit().await?;
                 }
             }
         }

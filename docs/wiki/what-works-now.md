@@ -1,7 +1,7 @@
 # What Works in Mimir Today
 
 > **Last updated:** 2026-05-31  
-> **Version:** 0.25.0  
+> **Version:** 0.25.1  
 > **Phase:** Phase 1 (Core Agent) is complete. Phase 2 (Knowledge Graph) is partially implemented but not yet wired into the daemon.
 
 ---
@@ -115,8 +115,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | `mimir tool list` | ✅ Works | Lists registered tools and their permissions |
 | `mimir tool enable/disable/permission` | ✅ Works | Change tool permission levels (saved to `tools.toml`) |
 | `mimir skill list/show/add/delete/enable/disable` | ✅ Works | Manage skills (built-in, user-added, and generated) |
-| `mimir kb audit` | ✅ Works | Query the fact audit log directly from the local SQLite DB |
-| `mimir kb ...` | 🔄 Partial | Only `audit` is implemented; full CRUD planned for Phase 2 |
+| `mimir kb` | 🔄 Partial | `mimir kb audit` available; full CRUD planned for Phase 2 |
 
 ### Chat & Conversation
 
@@ -209,7 +208,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Forgetting system | ✅ Works | Trash, cascade forget, restore, bulk operations |
 | FTS5 search | ✅ Works | Full-text search over entities and aliases |
 | **Daemon integration** | ❌ Not yet | The crate is **not wired into** `mimir-server` or the CLI |
-| **`mimir kb` CLI** | ❌ Not yet | Commands are documented in the wiki but not implemented |
+| **`mimir kb` CLI** | 🔄 Partial | `mimir kb audit` available; full CRUD planned for Phase 2 |
 
 ---
 

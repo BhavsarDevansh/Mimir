@@ -169,10 +169,13 @@ fn cascade_inner<'a>(
             let old_confidence = old_confidence.unwrap_or(0.0);
 
             if (new_confidence - old_confidence).abs() > 0.001 {
-                sqlx::query("UPDATE facts SET confidence = ? WHERE id = ?")
+                let mut tx = pool.begin().await?;
+
+                sqlx::query("UPDATE facts SET confidence = ?, updated_at = ? WHERE id = ?")
                     .bind(new_confidence)
+                    .bind(chrono::Utc::now())
                     .bind(child_id)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
 
                 // Write confidence_change audit entry.
@@ -190,8 +193,10 @@ fn cascade_inner<'a>(
                 .bind(chrono::Utc::now())
                 .bind(ChangedBy::System as i16)
                 .bind(None::<&str>)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
+
+                tx.commit().await?;
 
                 cascade_inner(pool, child_id, depth_budget - 1).await?;
             }

@@ -34,6 +34,9 @@ pub async fn insert_source(
     input: &SourceInput,
     extracted_at: DateTime<Utc>,
 ) -> Result<Source, KnowledgeError> {
+    let connector_id_norm = input.connector_id.as_deref().unwrap_or("");
+    let raw_reference_norm = input.raw_reference.as_deref().unwrap_or("");
+
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO sources \
          (fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
@@ -42,9 +45,9 @@ pub async fn insert_source(
     )
     .bind(input.fact_id)
     .bind(input.source_type_id)
-    .bind(&input.connector_id)
+    .bind(connector_id_norm)
     .bind(input.connector_type_id)
-    .bind(&input.raw_reference)
+    .bind(raw_reference_norm)
     .bind(extracted_at)
     .bind(input.extraction_method_id)
     .fetch_one(pool)
@@ -88,6 +91,10 @@ pub async fn add_source_to_fact(
 ) -> Result<Source, KnowledgeError> {
     let mut tx = pool.begin().await?;
 
+    let connector_id_norm = input.connector_id.as_deref().unwrap_or("");
+    let raw_reference_norm = input.raw_reference.as_deref().unwrap_or("");
+    let changed_at = Utc::now();
+
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO sources \
          (fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
@@ -96,9 +103,9 @@ pub async fn add_source_to_fact(
     )
     .bind(input.fact_id)
     .bind(input.source_type_id)
-    .bind(&input.connector_id)
+    .bind(connector_id_norm)
     .bind(input.connector_type_id)
-    .bind(&input.raw_reference)
+    .bind(raw_reference_norm)
     .bind(extracted_at)
     .bind(input.extraction_method_id)
     .fetch_one(&mut *tx)
@@ -115,9 +122,9 @@ pub async fn add_source_to_fact(
 
     let new_value = serde_json::json!({
         "source_type_id": input.source_type_id,
-        "connector_id": input.connector_id,
+        "connector_id": connector_id_norm,
         "connector_type_id": input.connector_type_id,
-        "raw_reference": input.raw_reference,
+        "raw_reference": raw_reference_norm,
         "extraction_method_id": input.extraction_method_id,
     })
     .to_string();
@@ -131,7 +138,7 @@ pub async fn add_source_to_fact(
     .bind(ChangeType::SourceAdded as i16)
     .bind(None::<&str>)
     .bind(new_value)
-    .bind(extracted_at)
+    .bind(changed_at)
     .bind(changed_by as i16)
     .bind(None::<&str>)
     .execute(&mut *tx)

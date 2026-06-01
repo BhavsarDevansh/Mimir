@@ -96,11 +96,21 @@ SELECT
     NULL  -- old extraction_method text has no reliable mapping to IDs
 FROM sources;
 
+-- Deduplicate after canonicalisation so the unique index can be created.
+DELETE FROM sources_new
+WHERE id NOT IN (
+    SELECT MIN(id)
+    FROM sources_new
+    GROUP BY fact_id, source_type_id, COALESCE(connector_id, ''), COALESCE(raw_reference, '')
+);
+
 DROP TABLE sources;
 ALTER TABLE sources_new RENAME TO sources;
 
+-- NULL-aware unique index: NULLs in connector_id / raw_reference are
+-- treated as empty strings so duplicates are detected correctly.
 CREATE UNIQUE INDEX idx_sources_unique
-    ON sources(fact_id, source_type_id, connector_id, raw_reference);
+    ON sources(fact_id, source_type_id, COALESCE(connector_id, ''), COALESCE(raw_reference, ''));
 CREATE INDEX idx_sources_fact ON sources(fact_id);
 CREATE INDEX idx_sources_type ON sources(source_type_id);
 

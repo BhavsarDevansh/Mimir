@@ -504,7 +504,7 @@ async fn test_get_weather_execution_success() {
     };
 
     let server = MockServer::start().await;
-    let mock_body = r#"{"current_condition": [{"temp_C": "22", "temp_F": "72", "FeelsLikeC": "21", "weatherDesc": [{"value": "Sunny"}], "humidity": "45", "windspeedKmph": "10", "winddir16Point": "NE", "uvIndex": "5", "visibility": "10", "pressure": "1012"}]}"#;
+    let mock_body = r#"{"current_condition": [{"temp_C": "22", "temp_F": "72", "FeelsLikeC": "21", "weatherDesc": [{"value": "Sunny"}], "humidity": "45", "windspeedKmph": "10", "winddir16Point": "NE", "uvIndex": "5", "visibility": "10", "pressure": "1012"}], "weather": [{"date": "2026-06-01", "avgtempC": "20", "avgtempF": "68", "mintempC": "15", "mintempF": "59", "maxtempC": "25", "maxtempF": "77", "hourly": [{"time": "1200", "weatherDesc": [{"value": "Clear"}], "chanceofrain": "0", "chanceofsnow": "0", "uvIndex": "6"}]}]}"#;
 
     Mock::given(method("GET"))
         .and(path("/London"))
@@ -519,8 +519,97 @@ async fn test_get_weather_execution_success() {
         .await
         .unwrap();
     let result = output.result.unwrap();
+    // Current conditions at top level.
     assert_eq!(result["temperature_c"], "22");
     assert_eq!(result["description"], "Sunny");
+    // Forecast included when date is omitted.
+    let forecast = result["forecast"].as_array().unwrap();
+    assert_eq!(forecast.len(), 1);
+    assert_eq!(forecast[0]["date"], "2026-06-01");
+    assert_eq!(forecast[0]["description"], "Clear");
+}
+
+#[tokio::test]
+async fn test_get_weather_current_only() {
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+
+    let server = MockServer::start().await;
+    let mock_body = r#"{"current_condition": [{"temp_C": "22", "temp_F": "72", "FeelsLikeC": "21", "weatherDesc": [{"value": "Sunny"}], "humidity": "45", "windspeedKmph": "10", "winddir16Point": "NE", "uvIndex": "5", "visibility": "10", "pressure": "1012"}]}"#;
+
+    Mock::given(method("GET"))
+        .and(path("/London"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(mock_body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let tool = mimir_core::tools::GetWeatherTool::with_base_url(server.uri());
+    let output = tool
+        .execute(serde_json::json!({"location": "London", "date": "current"}))
+        .await
+        .unwrap();
+    let result = output.result.unwrap();
+    assert_eq!(result["temperature_c"], "22");
+    assert!(result.get("forecast").is_none());
+}
+
+#[tokio::test]
+async fn test_get_weather_specific_date() {
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+
+    let server = MockServer::start().await;
+    let mock_body = r#"{"current_condition": [{"temp_C": "22", "temp_F": "72", "FeelsLikeC": "21", "weatherDesc": [{"value": "Sunny"}], "humidity": "45", "windspeedKmph": "10", "winddir16Point": "NE", "uvIndex": "5", "visibility": "10", "pressure": "1012"}], "weather": [{"date": "2026-06-01", "avgtempC": "20", "avgtempF": "68", "mintempC": "15", "mintempF": "59", "maxtempC": "25", "maxtempF": "77", "hourly": [{"time": "1200", "weatherDesc": [{"value": "Clear"}], "chanceofrain": "0", "chanceofsnow": "0", "uvIndex": "6"}]}, {"date": "2026-06-02", "avgtempC": "18", "avgtempF": "64", "mintempC": "12", "mintempF": "54", "maxtempC": "20", "maxtempF": "68", "hourly": [{"time": "1200", "weatherDesc": [{"value": "Light rain"}], "chanceofrain": "75", "chanceofsnow": "0", "uvIndex": "3"}]}]}"#;
+
+    Mock::given(method("GET"))
+        .and(path("/London"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(mock_body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let tool = mimir_core::tools::GetWeatherTool::with_base_url(server.uri());
+    let output = tool
+        .execute(serde_json::json!({"location": "London", "date": "2026-06-02"}))
+        .await
+        .unwrap();
+    let result = output.result.unwrap();
+    assert_eq!(result["date"], "2026-06-02");
+    assert_eq!(result["description"], "Light rain");
+    assert_eq!(result["chance_of_rain_percent"], "75");
+    assert!(result.get("temperature_c").is_none());
+}
+
+#[tokio::test]
+async fn test_get_weather_unknown_date() {
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+
+    let server = MockServer::start().await;
+    let mock_body = r#"{"current_condition": [{"temp_C": "22", "temp_F": "72", "FeelsLikeC": "21", "weatherDesc": [{"value": "Sunny"}], "humidity": "45", "windspeedKmph": "10", "winddir16Point": "NE", "uvIndex": "5", "visibility": "10", "pressure": "1012"}], "weather": [{"date": "2026-06-01", "avgtempC": "20", "avgtempF": "68", "mintempC": "15", "mintempF": "59", "maxtempC": "25", "maxtempF": "77", "hourly": [{"time": "1200", "weatherDesc": [{"value": "Clear"}], "chanceofrain": "0", "chanceofsnow": "0", "uvIndex": "6"}]}]}"#;
+
+    Mock::given(method("GET"))
+        .and(path("/London"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(mock_body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let tool = mimir_core::tools::GetWeatherTool::with_base_url(server.uri());
+    let result = tool
+        .execute(serde_json::json!({"location": "London", "date": "2026-06-99"}))
+        .await;
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("forecast not available"));
+    assert!(err_msg.contains("2026-06-01"));
 }
 
 #[tokio::test]

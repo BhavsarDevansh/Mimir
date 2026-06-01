@@ -4,7 +4,8 @@ use serde_json::Value;
 
 const DEFAULT_BASE_URL: &str = "https://wttr.in";
 
-/// Fetches current weather conditions for a given location using wttr.in.
+/// Fetches current weather conditions and up to a 3-day forecast for a given
+/// location using wttr.in.
 pub struct GetWeatherTool {
     client: reqwest::Client,
     base_url: String,
@@ -55,8 +56,8 @@ impl GetWeatherTool {
             .unwrap_or("unknown")
     }
 
-    /// Extract a concise weather summary from the wttr.in JSON response.
-    fn parse_response(body: &str) -> Result<Value, ToolError> {
+    /// Build a concise current-conditions object from the wttr.in JSON response.
+    fn parse_current_condition(body: &str) -> Result<Value, ToolError> {
         let parsed: Value = serde_json::from_str(body).map_err(|e| {
             ToolError::execution_failed(
                 "get_weather",
@@ -85,6 +86,56 @@ impl GetWeatherTool {
             "pressure_mb": Self::extract_str(current, "pressure"),
         }))
     }
+
+    /// Extract a representative midday hourly entry from a forecast day.
+    /// Falls back to the first available hourly entry.
+    fn get_midday_hourly(day: &Value) -> Option<&Value> {
+        day.get("hourly")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|h| h.get("time").and_then(|t| t.as_str()) == Some("1200"))
+                    .or_else(|| arr.first())
+            })
+    }
+
+    /// Build a concise forecast-day object from a single wttr.in `weather` entry.
+    fn parse_forecast_day(day: &Value) -> Value {
+        let hourly = Self::get_midday_hourly(day);
+
+        serde_json::json!({
+            "date": Self::extract_str(day, "date"),
+            "min_temp_c": Self::extract_str(day, "mintempC"),
+            "min_temp_f": Self::extract_str(day, "mintempF"),
+            "max_temp_c": Self::extract_str(day, "maxtempC"),
+            "max_temp_f": Self::extract_str(day, "maxtempF"),
+            "avg_temp_c": Self::extract_str(day, "avgtempC"),
+            "avg_temp_f": Self::extract_str(day, "avgtempF"),
+            "description": hourly.map(|h| Self::extract_nested_value(h, "weatherDesc")).unwrap_or("unknown"),
+            "chance_of_rain_percent": hourly.and_then(|h| h.get("chanceofrain")).and_then(|v| v.as_str()).unwrap_or("unknown"),
+            "chance_of_snow_percent": hourly.and_then(|h| h.get("chanceofsnow")).and_then(|v| v.as_str()).unwrap_or("unknown"),
+            "uv_index": hourly.and_then(|h| h.get("uvIndex")).and_then(|v| v.as_str()).unwrap_or("unknown"),
+        })
+    }
+
+    /// Build a forecast array from the wttr.in JSON response.
+    fn parse_forecast(body: &str) -> Result<Vec<Value>, ToolError> {
+        let parsed: Value = serde_json::from_str(body).map_err(|e| {
+            ToolError::execution_failed(
+                "get_weather",
+                format!("failed to parse wttr.in response: {e}"),
+            )
+        })?;
+
+        let weather = parsed
+            .get("weather")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                ToolError::execution_failed("get_weather", "missing weather forecast in response")
+            })?;
+
+        Ok(weather.iter().map(Self::parse_forecast_day).collect())
+    }
 }
 
 #[async_trait]
@@ -94,8 +145,10 @@ impl Tool for GetWeatherTool {
     }
 
     fn description(&self) -> &str {
-        "Fetches current weather conditions for a given location using wttr.in. \
-Returns temperature, conditions, humidity, wind, UV index, visibility, and pressure."
+        "Fetches current weather conditions and up to a 3-day forecast for a \
+given location using wttr.in. Returns temperature, conditions, humidity, \
+wind, UV index, visibility, pressure, and forecast summaries with rain \
+probability — useful for deciding whether you need an umbrella."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -105,6 +158,10 @@ Returns temperature, conditions, humidity, wind, UV index, visibility, and press
                 "location": {
                     "type": "string",
                     "description": "The location to get weather for. Can be a city name, airport code, or coordinates."
+                },
+                "date": {
+                    "type": "string",
+                    "description": "Optional. Use 'current' for current conditions only, or a YYYY-MM-DD date for a specific forecast day. Omit to get current conditions plus all available forecast days."
                 }
             },
             "required": ["location"],
@@ -130,6 +187,8 @@ Returns temperature, conditions, humidity, wind, UV index, visibility, and press
                 "'location' must not be empty",
             ));
         }
+
+        let date_arg = args.get("date").and_then(|v| v.as_str());
 
         let url = self.build_url(location);
         let user_agent = format!("Mimir/{}", env!("CARGO_PKG_VERSION"));
@@ -165,18 +224,107 @@ Returns temperature, conditions, humidity, wind, UV index, visibility, and press
             ));
         }
 
-        let result = Self::parse_response(&body)?;
+        match date_arg {
+            Some("current") => {
+                let current = Self::parse_current_condition(&body)?;
+                Ok(ToolOutput {
+                    result: Some(current),
+                    ..Default::default()
+                })
+            }
+            Some(specific_date) => {
+                let forecast = Self::parse_forecast(&body)?;
+                let day = forecast
+                    .iter()
+                    .find(|d| d.get("date").and_then(|v| v.as_str()) == Some(specific_date));
 
-        Ok(ToolOutput {
-            result: Some(result),
-            ..Default::default()
-        })
+                match day {
+                    Some(d) => Ok(ToolOutput {
+                        result: Some(d.clone()),
+                        ..Default::default()
+                    }),
+                    None => {
+                        let available = forecast
+                            .iter()
+                            .filter_map(|d| d.get("date").and_then(|v| v.as_str()))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        Err(ToolError::execution_failed(
+                            "get_weather",
+                            format!(
+                                "forecast not available for '{specific_date}'. Available dates: {available}"
+                            ),
+                        ))
+                    }
+                }
+            }
+            None => {
+                let forecast = Self::parse_forecast(&body)?;
+                let mut current = Self::parse_current_condition(&body)?;
+                if !forecast.is_empty() {
+                    current["forecast"] = serde_json::json!(forecast);
+                }
+                Ok(ToolOutput {
+                    result: Some(current),
+                    ..Default::default()
+                })
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const MOCK_BODY: &str = r#"{
+        "current_condition": [{
+            "temp_C": "18",
+            "temp_F": "64",
+            "FeelsLikeC": "17",
+            "weatherDesc": [{"value": "Partly cloudy"}],
+            "humidity": "65",
+            "windspeedKmph": "12",
+            "winddir16Point": "SW",
+            "uvIndex": "4",
+            "visibility": "10",
+            "pressure": "1015"
+        }],
+        "weather": [
+            {
+                "date": "2026-06-01",
+                "avgtempC": "16",
+                "avgtempF": "61",
+                "mintempC": "13",
+                "mintempF": "55",
+                "maxtempC": "22",
+                "maxtempF": "72",
+                "hourly": [{
+                    "time": "1200",
+                    "weatherDesc": [{"value": "Overcast"}],
+                    "chanceofrain": "5",
+                    "chanceofsnow": "0",
+                    "uvIndex": "3"
+                }]
+            },
+            {
+                "date": "2026-06-02",
+                "avgtempC": "15",
+                "avgtempF": "59",
+                "mintempC": "13",
+                "mintempF": "55",
+                "maxtempC": "18",
+                "maxtempF": "64",
+                "hourly": [{
+                    "time": "1200",
+                    "weatherDesc": [{"value": "Light rain shower"}],
+                    "chanceofrain": "80",
+                    "chanceofsnow": "0",
+                    "uvIndex": "2"
+                }]
+            }
+        ]
+    }"#;
 
     #[test]
     fn test_build_url_encodes_spaces() {
@@ -193,23 +341,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_response_valid() {
-        let body = r#"{
-            "current_condition": [{
-                "temp_C": "18",
-                "temp_F": "64",
-                "FeelsLikeC": "17",
-                "weatherDesc": [{"value": "Partly cloudy"}],
-                "humidity": "65",
-                "windspeedKmph": "12",
-                "winddir16Point": "SW",
-                "uvIndex": "4",
-                "visibility": "10",
-                "pressure": "1015"
-            }]
-        }"#;
-
-        let parsed = GetWeatherTool::parse_response(body).unwrap();
+    fn test_parse_current_condition_valid() {
+        let parsed = GetWeatherTool::parse_current_condition(MOCK_BODY).unwrap();
         assert_eq!(parsed["temperature_c"], "18");
         assert_eq!(parsed["temperature_f"], "64");
         assert_eq!(parsed["feels_like_c"], "17");
@@ -223,22 +356,64 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_response_missing_fields() {
+    fn test_parse_current_condition_missing_fields() {
         let body = r#"{"current_condition": [{"temp_C": "20"}]}"#;
-        let parsed = GetWeatherTool::parse_response(body).unwrap();
+        let parsed = GetWeatherTool::parse_current_condition(body).unwrap();
         assert_eq!(parsed["temperature_c"], "20");
         assert_eq!(parsed["description"], "unknown");
     }
 
     #[test]
-    fn test_parse_response_invalid_json() {
-        let result = GetWeatherTool::parse_response("not json");
+    fn test_parse_current_condition_invalid_json() {
+        let result = GetWeatherTool::parse_current_condition("not json");
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_parse_response_missing_current_condition() {
-        let result = GetWeatherTool::parse_response(r#"{"foo": "bar"}"#);
+    fn test_parse_current_condition_missing_current_condition() {
+        let result = GetWeatherTool::parse_current_condition(r#"{"foo": "bar"}"#);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_forecast_valid() {
+        let forecast = GetWeatherTool::parse_forecast(MOCK_BODY).unwrap();
+        assert_eq!(forecast.len(), 2);
+
+        assert_eq!(forecast[0]["date"], "2026-06-01");
+        assert_eq!(forecast[0]["min_temp_c"], "13");
+        assert_eq!(forecast[0]["max_temp_c"], "22");
+        assert_eq!(forecast[0]["description"], "Overcast");
+        assert_eq!(forecast[0]["chance_of_rain_percent"], "5");
+
+        assert_eq!(forecast[1]["date"], "2026-06-02");
+        assert_eq!(forecast[1]["description"], "Light rain shower");
+        assert_eq!(forecast[1]["chance_of_rain_percent"], "80");
+    }
+
+    #[test]
+    fn test_parse_forecast_missing_weather() {
+        let result = GetWeatherTool::parse_forecast(r#"{"current_condition": [{}]}"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_forecast_day_fallback_hourly() {
+        // No 1200 entry — should fall back to the first hourly entry.
+        let body = r#"{"weather": [{
+            "date": "2026-06-01",
+            "mintempC": "10",
+            "maxtempC": "20",
+            "hourly": [{
+                "time": "0",
+                "weatherDesc": [{"value": "Clear"}],
+                "chanceofrain": "0",
+                "chanceofsnow": "0",
+                "uvIndex": "1"
+            }]
+        }]}"#;
+        let forecast = GetWeatherTool::parse_forecast(body).unwrap();
+        assert_eq!(forecast[0]["description"], "Clear");
+        assert_eq!(forecast[0]["chance_of_rain_percent"], "0");
     }
 }

@@ -193,6 +193,12 @@ pub async fn insert_fact(
             // and also mark existing overlapping facts as Disputed.
             fact_status = FactStatus::Disputed;
             for existing_fact in &overlaps {
+                // Skip Superseded and Forgotten facts; they should not be resurrected.
+                if existing_fact.status() == Some(FactStatus::Superseded)
+                    || existing_fact.status() == Some(FactStatus::Forgotten)
+                {
+                    continue;
+                }
                 if existing_fact.fact_status_id != FactStatus::Disputed as i16 {
                     let old_json =
                         serde_json::json!({"fact_status_id": existing_fact.fact_status_id})

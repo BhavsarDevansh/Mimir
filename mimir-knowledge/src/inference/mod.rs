@@ -57,7 +57,11 @@ impl CascadeContext {
 pub trait InferenceRule: Send + Sync {
     /// Evaluate this rule against the given fact.
     /// Returns zero or more inferred `NewFact`s.
-    async fn evaluate(&self, fact: &Fact, kg: &KnowledgeGraph) -> Vec<NewFact>;
+    async fn evaluate(
+        &self,
+        fact: &Fact,
+        kg: &KnowledgeGraph,
+    ) -> Result<Vec<NewFact>, crate::KnowledgeError>;
 }
 
 /// Engine that holds and runs all registered inference rules.
@@ -80,17 +84,20 @@ impl RuleEngine {
         fact: &Fact,
         kg: &KnowledgeGraph,
         _ctx: &mut CascadeContext,
-    ) -> Vec<NewFact> {
+    ) -> Result<Vec<NewFact>, crate::KnowledgeError> {
         let mut results = Vec::new();
         for rule in &self.rules {
-            let mut inferred = rule.evaluate(fact, kg).await;
+            let mut inferred = rule.evaluate(fact, kg).await?;
             results.append(&mut inferred);
         }
-        results
+        Ok(results)
     }
 
     /// Batch re-evaluation: iterate all Active/Inferred facts and run rules.
-    pub async fn evaluate_batch(&self, kg: &KnowledgeGraph) -> Vec<NewFact> {
+    pub async fn evaluate_batch(
+        &self,
+        kg: &KnowledgeGraph,
+    ) -> Result<Vec<NewFact>, crate::KnowledgeError> {
         let mut results = Vec::new();
         // Fetch all Active and Inferred facts.
         let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
@@ -103,16 +110,15 @@ impl RuleEngine {
         .bind(crate::models::fact::FactStatus::Active as i16)
         .bind(crate::models::fact::FactStatus::Inferred as i16)
         .fetch_all(kg.pool())
-        .await
-        .unwrap_or_default();
+        .await?;
 
         for fact in &facts {
             for rule in &self.rules {
-                let mut inferred = rule.evaluate(fact, kg).await;
+                let mut inferred = rule.evaluate(fact, kg).await?;
                 results.append(&mut inferred);
             }
         }
-        results
+        Ok(results)
     }
 }
 

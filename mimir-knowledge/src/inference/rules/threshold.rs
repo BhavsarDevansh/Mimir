@@ -8,31 +8,45 @@ use crate::models::audit_log::ChangedBy;
 use crate::models::fact::{Fact, FactStatus, NewFact};
 use crate::models::preference::{NewPreference, PreferenceCategory, UpsertPreferenceInput};
 
-const PREDICATE_REJECTED_ACTION: &str = "rejected_action";
+pub(crate) const PREDICATE_REJECTED_ACTION: &str = "rejected_action";
 const KEY_PREFIX: &str = "reject_";
 
 pub struct ThresholdRule;
 
 #[async_trait]
 impl InferenceRule for ThresholdRule {
-    async fn evaluate(&self, fact: &Fact, kg: &KnowledgeGraph) -> Vec<NewFact> {
+    async fn evaluate(
+        &self,
+        _fact: &Fact,
+        _kg: &KnowledgeGraph,
+    ) -> Result<Vec<NewFact>, crate::KnowledgeError> {
+        // Threshold side-effects are handled explicitly in insert_fact_internal
+        // so that the InferenceRule trait remains a pure inference abstraction.
+        Ok(Vec::new())
+    }
+}
+
+impl ThresholdRule {
+    /// Check whether a rejected_action fact has reached the threshold (3+)
+    /// and upsert a preference if so.
+    pub(crate) async fn check_threshold(fact: &Fact, kg: &KnowledgeGraph) {
         let predicate_name = match kg.predicate_name(fact.predicate_id).await {
             Some(name) => name,
-            None => return Vec::new(),
+            None => return,
         };
 
         if predicate_name != PREDICATE_REJECTED_ACTION {
-            return Vec::new();
+            return;
         }
 
         let object_value = match fact.object_id {
             Some(oid) => match kg.get_entity(oid).await {
                 Ok(Some(e)) => e.name,
-                _ => return Vec::new(),
+                _ => return,
             },
             None => match &fact.object_literal {
                 Some(lit) => lit.clone(),
-                None => return Vec::new(),
+                None => return,
             },
         };
 
@@ -73,8 +87,6 @@ impl InferenceRule for ThresholdRule {
                 tracing::warn!("threshold preference upsert failed: {}", e);
             }
         }
-
-        Vec::new()
     }
 }
 
@@ -121,7 +133,7 @@ impl ThresholdRule {
             .unwrap_or(0);
 
             if count < 3 {
-                let now = chrono::Utc::now();
+                let now = kg.now();
                 sqlx::query(
                     "INSERT INTO preference_audit_log \
                      (preference_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \

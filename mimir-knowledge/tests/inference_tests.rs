@@ -1,5 +1,6 @@
 //! Inference engine integration tests (Issue #54).
 
+use mimir_knowledge::inference::InferenceRule;
 mod common;
 
 use mimir_knowledge::models::fact::FactStatus;
@@ -349,4 +350,81 @@ async fn cycle_safety_cyclic_is_in_no_infinite_loop() {
     // consults Active is_in facts, A visited A is not inferred.
     // The cascade terminates safely (no infinite loop) with 1 inferred fact.
     assert_eq!(inferred_count, 1);
+}
+
+// ---------------------------------------------------------------------------
+// Nightly batch deduplication
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn nightly_batch_does_not_duplicate_inferred_facts() {
+    let tg = common::TestGraph::new().await;
+    let devansh = tg.create_person("Devansh").await;
+    let rome = tg.create_place("Rome").await;
+    let italy = tg.create_place("Italy").await;
+
+    // Seed facts
+    tg.create_fact(rome, "is_in", Some(italy), SourceType::UserEdit)
+        .await;
+    tg.create_fact(devansh, "visited", Some(rome), SourceType::UserEdit)
+        .await;
+
+    // Count inferred facts after initial cascade
+    let facts_before = tg.kg.get_facts_by_subject(devansh, 100).await.unwrap();
+    let inferred_before: Vec<_> = facts_before.iter().filter(|f| f.inferred).collect();
+    let count_before = inferred_before.len();
+
+    // Run nightly optimization once
+    mimir_knowledge::optimization::run_nightly_optimization(&tg.kg)
+        .await
+        .unwrap();
+
+    let facts_after_first = tg.kg.get_facts_by_subject(devansh, 100).await.unwrap();
+    let inferred_after_first: Vec<_> = facts_after_first.iter().filter(|f| f.inferred).collect();
+    let count_after_first = inferred_after_first.len();
+
+    // Should still be the same number of inferred facts
+    assert_eq!(
+        count_after_first, count_before,
+        "nightly run should not create new inferred facts"
+    );
+
+    // Run nightly optimization again
+    mimir_knowledge::optimization::run_nightly_optimization(&tg.kg)
+        .await
+        .unwrap();
+
+    let facts_after_second = tg.kg.get_facts_by_subject(devansh, 100).await.unwrap();
+    let inferred_after_second: Vec<_> = facts_after_second.iter().filter(|f| f.inferred).collect();
+    let count_after_second = inferred_after_second.len();
+
+    // Should still not have duplicated anything
+    assert_eq!(
+        count_after_second, count_before,
+        "second nightly run should not duplicate inferred facts"
+    );
+}
+
+#[tokio::test]
+async fn threshold_evaluate_returns_no_facts() {
+    let tg = common::TestGraph::new().await;
+    let alice = tg.create_person("Alice").await;
+    let hiking = tg.create_activity("hiking").await;
+
+    let fact = tg
+        .create_fact(alice, "rejected_action", Some(hiking), SourceType::UserEdit)
+        .await;
+
+    // ThresholdRule::evaluate should be a pure function with no side effects now.
+    let rule = mimir_knowledge::inference::rules::threshold::ThresholdRule;
+    let result = rule.evaluate(&fact, &tg.kg).await.unwrap();
+    assert!(result.is_empty());
+
+    // No preference should be created from evaluate alone.
+    let pref = tg
+        .kg
+        .get_preference(Some(alice), "reject_hiking", &[])
+        .await
+        .unwrap();
+    assert!(pref.is_none());
 }

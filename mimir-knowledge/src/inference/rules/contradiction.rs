@@ -1,7 +1,6 @@
 //! Contradiction rule: auto-resolve explicit vs. inferred disputes in batch passes.
 
 use async_trait::async_trait;
-use chrono::Utc;
 
 use crate::KnowledgeGraph;
 use crate::inference::InferenceRule;
@@ -12,9 +11,13 @@ pub struct ContradictionRule;
 
 #[async_trait]
 impl InferenceRule for ContradictionRule {
-    async fn evaluate(&self, _fact: &Fact, _kg: &KnowledgeGraph) -> Vec<NewFact> {
+    async fn evaluate(
+        &self,
+        _fact: &Fact,
+        _kg: &KnowledgeGraph,
+    ) -> Result<Vec<NewFact>, crate::KnowledgeError> {
         // Real-time contradiction handling is done inside queries::fact::insert_fact.
-        Vec::new()
+        Ok(Vec::new())
     }
 }
 
@@ -22,17 +25,20 @@ impl ContradictionRule {
     /// Batch auto-resolution: explicit (confidence == 1.0) beats inferred.
     pub async fn evaluate_batch(kg: &KnowledgeGraph) -> Result<(), crate::KnowledgeError> {
         let pool = kg.pool();
-        let now = Utc::now();
+        let now = kg.now();
 
         // Find all disputed fact pairs linked by Contradicts.
+        // Deduplicate bidirectional edges with MIN/MAX so each pair is processed once.
         let rows: Vec<(i32, i32)> = sqlx::query_as(
-            "SELECT fd.parent_fact_id, fd.child_fact_id \
+            "SELECT MIN(fd.parent_fact_id, fd.child_fact_id) AS a, \
+                    MAX(fd.parent_fact_id, fd.child_fact_id) AS b \
              FROM fact_dependencies fd \
              JOIN facts f1 ON f1.id = fd.parent_fact_id \
              JOIN facts f2 ON f2.id = fd.child_fact_id \
              WHERE fd.relation_type_id = ? \
                AND f1.fact_status_id = ? \
-               AND f2.fact_status_id = ?",
+               AND f2.fact_status_id = ? \
+             GROUP BY a, b",
         )
         .bind(crate::models::enums::RelationType::Contradicts as i16)
         .bind(FactStatus::Disputed as i16)

@@ -23,7 +23,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::inference::rules::contradiction::ContradictionRule;
-use crate::inference::rules::threshold::ThresholdRule;
+use crate::inference::rules::threshold::{PREDICATE_REJECTED_ACTION, ThresholdRule};
 use crate::inference::rules::transitivity::TransitivityRule;
 use crate::inference::{CascadeContext, RuleEngine};
 use crate::models::enums::RelationType;
@@ -357,7 +357,7 @@ impl KnowledgeGraph {
             .await
     }
 
-    fn insert_fact_internal<'a>(
+    pub(crate) fn insert_fact_internal<'a>(
         &'a self,
         mut new_fact: NewFact,
         ctx: &'a mut CascadeContext,
@@ -441,14 +441,25 @@ impl KnowledgeGraph {
             }
 
             // Run inference rules and cascade inferred facts.
-            let inferred = self.rule_engine.evaluate_insert(&fact, self, ctx).await;
-            for mut inferred_fact in inferred {
-                inferred_fact.inferred = true;
-                inferred_fact.source_type = SourceType::Inference;
-                inferred_fact.extraction_method = Some(ExtractionMethod::InferenceRule);
-                if let Err(e) = self.insert_fact_internal(inferred_fact, ctx).await {
-                    tracing::warn!("inference cascade failed: {}", e);
+            match self.rule_engine.evaluate_insert(&fact, self, ctx).await {
+                Ok(inferred) => {
+                    for mut inferred_fact in inferred {
+                        inferred_fact.inferred = true;
+                        inferred_fact.source_type = SourceType::Inference;
+                        inferred_fact.extraction_method = Some(ExtractionMethod::InferenceRule);
+                        if let Err(e) = self.insert_fact_internal(inferred_fact, ctx).await {
+                            tracing::warn!("inference cascade failed: {}", e);
+                        }
+                    }
                 }
+                Err(e) => {
+                    tracing::warn!("inference evaluation failed: {}", e);
+                }
+            }
+
+            // Side-effect: check rejected_action thresholds (decoupled from InferenceRule trait).
+            if new_fact.predicate == PREDICATE_REJECTED_ACTION {
+                ThresholdRule::check_threshold(&fact, self).await;
             }
 
             Ok(fact)

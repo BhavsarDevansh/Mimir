@@ -15,26 +15,30 @@ pub struct TransitivityRule;
 
 #[async_trait]
 impl InferenceRule for TransitivityRule {
-    async fn evaluate(&self, fact: &Fact, kg: &KnowledgeGraph) -> Vec<NewFact> {
+    async fn evaluate(
+        &self,
+        fact: &Fact,
+        kg: &KnowledgeGraph,
+    ) -> Result<Vec<NewFact>, crate::KnowledgeError> {
         let predicate_name = match kg.predicate_name(fact.predicate_id).await {
             Some(name) => name,
-            None => return Vec::new(),
+            None => return Ok(Vec::new()),
         };
 
         // Only run for predicates we care about.
         if predicate_name != PREDICATE_VISITED && predicate_name != PREDICATE_IS_IN {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let is_in_id = match kg.ensure_predicate(PREDICATE_IS_IN).await {
             Ok(id) => id,
-            Err(_) => return Vec::new(),
+            Err(e) => return Err(e),
         };
 
         let mut results = Vec::new();
 
-        if predicate_name == PREDICATE_VISITED || predicate_name == PREDICATE_IS_IN {
-            // Forward: A-P-B inserted, look for B-is_in-C → infer A-P-C.
+        if predicate_name == PREDICATE_VISITED {
+            // Forward: A-visited-B inserted, look for B-is_in-C → infer A-visited-C.
             if let Some(object_id) = fact.object_id {
                 let parent_facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
                     "SELECT id, subject_id, predicate_id, object_id, object_literal, \
@@ -47,14 +51,14 @@ impl InferenceRule for TransitivityRule {
                 .bind(is_in_id)
                 .bind(FactStatus::Active as i16)
                 .fetch_all(kg.pool())
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!("transitivity forward query failed: {}", e);
-                    Vec::new()
-                });
+                .await?;
 
                 for parent in parent_facts {
                     if let Some(parent_object_id) = parent.object_id {
+                        // Guard against self-referential garbage in cycles.
+                        if fact.subject_id == parent_object_id {
+                            continue;
+                        }
                         let depth = std::cmp::max(fact.inference_depth, parent.inference_depth) + 1;
                         let conf = confidence::inference_confidence(
                             &[(fact.confidence, true), (parent.confidence, true)],
@@ -81,6 +85,9 @@ impl InferenceRule for TransitivityRule {
                     }
                 }
             }
+        } else if predicate_name == PREDICATE_IS_IN {
+            // We do NOT do forward is_in→is_in lookup to prevent cyclic garbage.
+            // (Backward is_in→visited lookup is handled below.)
         }
 
         if predicate_name == PREDICATE_IS_IN {
@@ -88,7 +95,7 @@ impl InferenceRule for TransitivityRule {
             // We do NOT do backward lookup for is_in-to-is_in to avoid self-disputing chains.
             let visited_id = match kg.ensure_predicate(PREDICATE_VISITED).await {
                 Ok(id) => id,
-                Err(_) => return results,
+                Err(e) => return Err(e),
             };
 
             let trigger_facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
@@ -102,11 +109,14 @@ impl InferenceRule for TransitivityRule {
             .bind(visited_id)
             .bind(FactStatus::Active as i16)
             .fetch_all(kg.pool())
-            .await
-            .unwrap_or_default();
+            .await?;
 
             for trigger in trigger_facts {
                 if let Some(trigger_object_id) = fact.object_id {
+                    // Guard against self-referential garbage in cycles.
+                    if trigger.subject_id == trigger_object_id {
+                        continue;
+                    }
                     let depth = std::cmp::max(fact.inference_depth, trigger.inference_depth) + 1;
                     let conf = confidence::inference_confidence(
                         &[(trigger.confidence, true), (fact.confidence, true)],
@@ -134,6 +144,6 @@ impl InferenceRule for TransitivityRule {
             }
         }
 
-        results
+        Ok(results)
     }
 }

@@ -22,7 +22,7 @@ impl InferenceRule for ContradictionRule {
 }
 
 impl ContradictionRule {
-    /// Batch auto-resolution: explicit (confidence == 1.0) beats inferred.
+    /// Batch auto-resolution: explicit (non-inferred) beats inferred.
     pub async fn evaluate_batch(kg: &KnowledgeGraph) -> Result<(), crate::KnowledgeError> {
         let pool = kg.pool();
         let now = kg.now();
@@ -71,45 +71,49 @@ impl ContradictionRule {
                 continue;
             };
 
-            let a_explicit = a.confidence == 1.0 && !a.inferred;
-            let b_explicit = b.confidence == 1.0 && !b.inferred;
+            let a_explicit = !a.inferred;
+            let b_explicit = !b.inferred;
             let a_inferred = a.inferred;
             let b_inferred = b.inferred;
 
             if a_explicit && b_inferred {
-                crate::queries::fact::set_status(
-                    pool,
+                let mut tx = pool.begin().await?;
+                crate::queries::fact::set_status_tx(
+                    &mut tx,
                     b.id,
                     FactStatus::Superseded,
                     now,
                     ChangedBy::NightlyOptimization,
                 )
                 .await?;
-                crate::queries::fact::set_status(
-                    pool,
+                crate::queries::fact::set_status_tx(
+                    &mut tx,
                     a.id,
                     FactStatus::Active,
                     now,
                     ChangedBy::NightlyOptimization,
                 )
                 .await?;
+                tx.commit().await?;
             } else if b_explicit && a_inferred {
-                crate::queries::fact::set_status(
-                    pool,
+                let mut tx = pool.begin().await?;
+                crate::queries::fact::set_status_tx(
+                    &mut tx,
                     a.id,
                     FactStatus::Superseded,
                     now,
                     ChangedBy::NightlyOptimization,
                 )
                 .await?;
-                crate::queries::fact::set_status(
-                    pool,
+                crate::queries::fact::set_status_tx(
+                    &mut tx,
                     b.id,
                     FactStatus::Active,
                     now,
                     ChangedBy::NightlyOptimization,
                 )
                 .await?;
+                tx.commit().await?;
             }
             // If both inferred or both explicit, leave Disputed for user intervention.
         }

@@ -35,7 +35,10 @@ async fn create_has_preference_fact(kg: &KnowledgeGraph, subject_id: i32) -> i32
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();

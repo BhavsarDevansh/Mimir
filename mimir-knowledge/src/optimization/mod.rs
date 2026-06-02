@@ -43,7 +43,7 @@ pub async fn run_nightly_optimization(kg: &KnowledgeGraph) -> Result<(), crate::
             .await?;
 
     for fact_id in stale_facts {
-        crate::confidence::cascade_confidence_change(kg.pool(), fact_id, 5).await?;
+        crate::confidence::cascade_confidence_change(kg.pool(), fact_id, None).await?;
     }
 
     // 3. Inference re-evaluation.
@@ -63,32 +63,17 @@ pub async fn run_nightly_optimization(kg: &KnowledgeGraph) -> Result<(), crate::
         new_fact.source_type = crate::models::source::SourceType::Inference;
         new_fact.extraction_method = Some(crate::models::source::ExtractionMethod::InferenceRule);
 
-        let predicate_id = match kg.ensure_predicate(&new_fact.predicate).await {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!("nightly batch: predicate resolution failed: {}", e);
-                continue;
-            }
-        };
+        let predicate_id = kg.ensure_predicate(&new_fact.predicate).await?;
 
-        match fact_already_exists(kg, &new_fact, predicate_id).await {
-            Ok(true) => {
-                tracing::debug!("nightly batch: skipping duplicate fact");
-                continue;
-            }
-            Ok(false) => {}
-            Err(e) => {
-                tracing::warn!("nightly batch: existence check failed: {}", e);
-                continue;
-            }
+        if fact_already_exists(kg, &new_fact, predicate_id).await? {
+            tracing::debug!("nightly batch: skipping duplicate fact");
+            continue;
         }
 
         // Each top-level insertion gets its own CascadeContext so that cycle
         // detection is scoped to a single cascade, not shared across the batch.
         let mut ctx = crate::inference::CascadeContext::new();
-        if let Err(e) = kg.insert_fact_internal(new_fact, &mut ctx).await {
-            tracing::warn!("nightly batch: insert failed: {}", e);
-        }
+        kg.insert_fact_internal(new_fact, &mut ctx).await?;
     }
 
     // 4. Threshold nightly re-count.

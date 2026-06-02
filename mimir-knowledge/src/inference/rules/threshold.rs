@@ -29,24 +29,27 @@ impl InferenceRule for ThresholdRule {
 impl ThresholdRule {
     /// Check whether a rejected_action fact has reached the threshold (3+)
     /// and upsert a preference if so.
-    pub(crate) async fn check_threshold(fact: &Fact, kg: &KnowledgeGraph) {
+    pub(crate) async fn check_threshold(
+        fact: &Fact,
+        kg: &KnowledgeGraph,
+    ) -> Result<(), crate::KnowledgeError> {
         let predicate_name = match kg.predicate_name(fact.predicate_id).await {
             Some(name) => name,
-            None => return,
+            None => return Ok(()),
         };
 
         if predicate_name != PREDICATE_REJECTED_ACTION {
-            return;
+            return Ok(());
         }
 
         let object_value = match fact.object_id {
             Some(oid) => match kg.get_entity(oid).await {
                 Ok(Some(e)) => e.name,
-                _ => return,
+                _ => return Ok(()),
             },
             None => match &fact.object_literal {
                 Some(lit) => lit.clone(),
-                None => return,
+                None => return Ok(()),
             },
         };
 
@@ -62,8 +65,7 @@ impl ThresholdRule {
         .bind(fact.object_id)
         .bind(&fact.object_literal)
         .fetch_one(kg.pool())
-        .await
-        .unwrap_or(0);
+        .await?;
 
         if count >= 3 {
             let key = format!("{}{}", KEY_PREFIX, object_value);
@@ -87,6 +89,8 @@ impl ThresholdRule {
                 tracing::warn!("threshold preference upsert failed: {}", e);
             }
         }
+
+        Ok(())
     }
 }
 
@@ -114,6 +118,16 @@ impl ThresholdRule {
             .await?;
 
             let Some(source) = source else {
+                // Stale preference: source fact no longer exists; remove it.
+                sqlx::query("DELETE FROM preferences WHERE id = ?")
+                    .bind(pref_id)
+                    .execute(pool)
+                    .await?;
+                tracing::info!(
+                    "removed stale preference {} because source fact {} no longer exists",
+                    pref_id,
+                    source_fact_id
+                );
                 continue;
             };
 
@@ -129,25 +143,45 @@ impl ThresholdRule {
             .bind(source.object_id)
             .bind(&source.object_literal)
             .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+            .await?;
 
             if count < 3 {
                 let now = kg.now();
-                sqlx::query(
-                    "INSERT INTO preference_audit_log \
-                     (preference_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+
+                // Deduplicate: skip if an identical StatusChange audit by NightlyOptimization
+                // already exists within the last 24 hours.
+                let recent_dup: Option<i64> = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM preference_audit_log \
+                     WHERE preference_id = ? \
+                       AND change_type_id = ? \
+                       AND changed_by_id = ? \
+                       AND reason = ? \
+                       AND changed_at >= ?",
                 )
                 .bind(pref_id)
                 .bind(crate::models::audit_log::ChangeType::StatusChange as i16)
-                .bind(None::<&str>)
-                .bind(None::<&str>)
-                .bind(now)
                 .bind(ChangedBy::NightlyOptimization as i16)
-                .bind(Some("threshold no longer met; review recommended"))
-                .execute(pool)
+                .bind("threshold no longer met; review recommended")
+                .bind(now - chrono::Duration::hours(24))
+                .fetch_one(pool)
                 .await?;
+
+                if recent_dup.unwrap_or(0) == 0 {
+                    sqlx::query(
+                        "INSERT INTO preference_audit_log \
+                         (preference_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    )
+                    .bind(pref_id)
+                    .bind(crate::models::audit_log::ChangeType::StatusChange as i16)
+                    .bind(None::<&str>)
+                    .bind(None::<&str>)
+                    .bind(now)
+                    .bind(ChangedBy::NightlyOptimization as i16)
+                    .bind(Some("threshold no longer met; review recommended"))
+                    .execute(pool)
+                    .await?;
+                }
             }
         }
 

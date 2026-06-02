@@ -131,7 +131,7 @@ pub async fn recalculate(pool: &SqlitePool, fact_id: i32) -> Result<f32, Knowled
 pub async fn cascade_confidence_change(
     pool: &SqlitePool,
     changed_fact_id: i32,
-    depth_budget: u8,
+    depth_budget: Option<u8>,
 ) -> Result<(), KnowledgeError> {
     cascade_inner(pool, changed_fact_id, depth_budget).await
 }
@@ -139,10 +139,10 @@ pub async fn cascade_confidence_change(
 fn cascade_inner<'a>(
     pool: &'a SqlitePool,
     changed_fact_id: i32,
-    depth_budget: u8,
+    depth_budget: Option<u8>,
 ) -> Pin<Box<dyn std::future::Future<Output = Result<(), KnowledgeError>> + 'a>> {
     Box::pin(async move {
-        if depth_budget == 0 {
+        if depth_budget == Some(0) {
             return Ok(());
         }
 
@@ -198,7 +198,7 @@ fn cascade_inner<'a>(
 
                 tx.commit().await?;
 
-                cascade_inner(pool, child_id, depth_budget - 1).await?;
+                cascade_inner(pool, child_id, depth_budget.map(|d| d.saturating_sub(1))).await?;
             }
         }
 

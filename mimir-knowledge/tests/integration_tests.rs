@@ -297,7 +297,10 @@ async fn test_dedup_exact_merge() {
         connector_type: None,
         raw_reference: None,
         extraction_method: None,
-        ..Default::default()
+        inferred: false,
+        inference_depth: 0,
+        confidence: None,
+        parent_fact_ids: Vec::new(),
     })
     .await
     .unwrap();
@@ -360,7 +363,10 @@ async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue()
         connector_type: None,
         raw_reference: None,
         extraction_method: None,
-        ..Default::default()
+        inferred: false,
+        inference_depth: 0,
+        confidence: None,
+        parent_fact_ids: Vec::new(),
     })
     .await
     .unwrap();
@@ -403,7 +409,10 @@ async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue()
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -623,7 +632,10 @@ async fn test_delete_guard_rejects_entity_with_preferences() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();

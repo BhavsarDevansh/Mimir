@@ -41,7 +41,7 @@ Inferred facts use `confidence::inference_confidence(parents, depth, num_parents
 
 **Real-time:** During `insert_fact`, overlapping non-explicit facts mark both sides `Disputed` and write `Contradicts` edges in both directions.
 
-**Batch:** `evaluate_batch` scans `Disputed` pairs linked by `Contradicts`. If one is explicit (`confidence == 1.0`) and the other is inferred, the inferred is marked `Superseded` and the explicit `Active`.
+**Batch:** `evaluate_batch` scans `Disputed` pairs linked by `Contradicts`. If one is explicit (non-inferred, e.g., source == UserEdit or source == System) and the other is inferred, the inferred is marked `Superseded` and the explicit `Active`.
 
 ### Threshold
 

@@ -555,7 +555,18 @@ pub async fn set_status(
     changed_by: ChangedBy,
 ) -> Result<Fact, KnowledgeError> {
     let mut tx = pool.begin().await?;
+    let updated = set_status_tx(&mut tx, fact_id, new_status, now, changed_by).await?;
+    tx.commit().await?;
+    Ok(updated)
+}
 
+pub async fn set_status_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    fact_id: i32,
+    new_status: FactStatus,
+    now: DateTime<Utc>,
+    changed_by: ChangedBy,
+) -> Result<Fact, KnowledgeError> {
     let old: Option<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
@@ -563,7 +574,7 @@ pub async fn set_status(
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await?;
 
     let old = old.ok_or(KnowledgeError::FactNotFound(fact_id))?;
@@ -573,7 +584,7 @@ pub async fn set_status(
         .bind(new_status as i16)
         .bind(now)
         .bind(fact_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
     let updated: Fact = sqlx::query_as::<_, Fact>(
@@ -583,7 +594,7 @@ pub async fn set_status(
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?;
 
     let new_json = serde_json::json!({"fact_status_id": updated.fact_status_id}).to_string();
@@ -599,10 +610,9 @@ pub async fn set_status(
     .bind(now)
     .bind(changed_by as i16)
     .bind(None::<&str>)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
 
-    tx.commit().await?;
     Ok(updated)
 }
 

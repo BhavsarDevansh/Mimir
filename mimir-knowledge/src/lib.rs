@@ -159,7 +159,7 @@ impl KnowledgeGraph {
             Some((id,)) => id,
             None => {
                 let id: i64 = sqlx::query_scalar(
-                    "INSERT INTO predicates (name, description) VALUES (?, ?) RETURNING id",
+                    "INSERT INTO predicates (name, description) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET name = predicates.name RETURNING id",
                 )
                 .bind(name)
                 .bind(format!("Auto-created predicate: {}", name))
@@ -459,7 +459,7 @@ impl KnowledgeGraph {
 
             // Side-effect: check rejected_action thresholds (decoupled from InferenceRule trait).
             if new_fact.predicate == PREDICATE_REJECTED_ACTION {
-                ThresholdRule::check_threshold(&fact, self).await;
+                ThresholdRule::check_threshold(&fact, self).await?;
             }
 
             Ok(fact)

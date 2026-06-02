@@ -76,11 +76,11 @@ pub struct NewFact {
     pub parent_fact_ids: Vec<i32>,
 }
 
-impl Default for NewFact {
-    fn default() -> Self {
+impl NewFact {
+    pub fn new(subject_id: i32, predicate: impl Into<String>) -> Self {
         Self {
-            subject_id: 0,
-            predicate: String::new(),
+            subject_id,
+            predicate: predicate.into(),
             object_id: None,
             object_literal: None,
             valid_from: None,

@@ -70,7 +70,10 @@ async fn sources_unique_constraint() {
             connector_type: None,
             raw_reference: Some("msg-123".to_string()),
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -113,7 +116,10 @@ async fn audit_on_insert_creates_entry() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -158,7 +164,10 @@ async fn audit_on_temporal_update() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -207,7 +216,10 @@ async fn audit_on_status_change() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -253,7 +265,10 @@ async fn audit_on_forget() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -297,7 +312,10 @@ async fn audit_on_confidence_cascade() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -315,7 +333,10 @@ async fn audit_on_confidence_cascade() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -333,7 +354,10 @@ async fn audit_on_confidence_cascade() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -413,7 +437,10 @@ async fn source_crud_adds_source_and_audit() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -471,7 +498,10 @@ async fn query_audit_log_filtered() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -520,7 +550,10 @@ async fn query_audit_log_includes_forgotten_facts() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();

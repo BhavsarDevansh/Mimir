@@ -45,11 +45,12 @@ impl InferenceRule for TransitivityRule {
                      valid_from, valid_until, confidence, fact_status_id, inferred, \
                      inference_depth, stale_confidence, created_at, updated_at \
                      FROM facts \
-                     WHERE subject_id = ? AND predicate_id = ? AND fact_status_id = ?",
+                     WHERE subject_id = ? AND predicate_id = ? AND fact_status_id IN (?, ?)",
                 )
                 .bind(object_id)
                 .bind(is_in_id)
                 .bind(FactStatus::Active as i16)
+                .bind(FactStatus::Inferred as i16)
                 .fetch_all(kg.pool())
                 .await?;
 
@@ -65,13 +66,24 @@ impl InferenceRule for TransitivityRule {
                             depth,
                             2,
                         );
+                        let (valid_from, valid_until) = intersect_windows(
+                            fact.valid_from,
+                            fact.valid_until,
+                            parent.valid_from,
+                            parent.valid_until,
+                        );
+                        if let (Some(from), Some(until)) = (valid_from, valid_until) {
+                            if from >= until {
+                                continue;
+                            }
+                        }
                         results.push(NewFact {
                             subject_id: fact.subject_id,
                             predicate: predicate_name.clone(),
                             object_id: Some(parent_object_id),
                             object_literal: None,
-                            valid_from: fact.valid_from,
-                            valid_until: fact.valid_until,
+                            valid_from,
+                            valid_until,
                             source_type: SourceType::Inference,
                             connector_id: None,
                             connector_type: None,
@@ -103,11 +115,12 @@ impl InferenceRule for TransitivityRule {
                  valid_from, valid_until, confidence, fact_status_id, inferred, \
                  inference_depth, stale_confidence, created_at, updated_at \
                  FROM facts \
-                 WHERE object_id = ? AND predicate_id = ? AND fact_status_id = ?",
+                 WHERE object_id = ? AND predicate_id = ? AND fact_status_id IN (?, ?)",
             )
             .bind(fact.subject_id)
             .bind(visited_id)
             .bind(FactStatus::Active as i16)
+            .bind(FactStatus::Inferred as i16)
             .fetch_all(kg.pool())
             .await?;
 
@@ -123,13 +136,24 @@ impl InferenceRule for TransitivityRule {
                         depth,
                         2,
                     );
+                    let (valid_from, valid_until) = intersect_windows(
+                        trigger.valid_from,
+                        trigger.valid_until,
+                        fact.valid_from,
+                        fact.valid_until,
+                    );
+                    if let (Some(from), Some(until)) = (valid_from, valid_until) {
+                        if from >= until {
+                            continue;
+                        }
+                    }
                     results.push(NewFact {
                         subject_id: trigger.subject_id,
                         predicate: PREDICATE_VISITED.to_string(),
                         object_id: Some(trigger_object_id),
                         object_literal: None,
-                        valid_from: trigger.valid_from,
-                        valid_until: trigger.valid_until,
+                        valid_from,
+                        valid_until,
                         source_type: SourceType::Inference,
                         connector_id: None,
                         connector_type: None,
@@ -146,4 +170,30 @@ impl InferenceRule for TransitivityRule {
 
         Ok(results)
     }
+}
+
+/// Compute the intersection of two optional validity windows.
+/// Returns (valid_from, valid_until) where:
+/// - valid_from = max(start1, start2)
+/// - valid_until = min(end1, end2)
+fn intersect_windows(
+    a_from: Option<chrono::DateTime<chrono::Utc>>,
+    a_until: Option<chrono::DateTime<chrono::Utc>>,
+    b_from: Option<chrono::DateTime<chrono::Utc>>,
+    b_until: Option<chrono::DateTime<chrono::Utc>>,
+) -> (
+    Option<chrono::DateTime<chrono::Utc>>,
+    Option<chrono::DateTime<chrono::Utc>>,
+) {
+    let from = match (a_from, b_from) {
+        (Some(a), Some(b)) => Some(if a > b { a } else { b }),
+        (Some(a), None) | (None, Some(a)) => Some(a),
+        (None, None) => None,
+    };
+    let until = match (a_until, b_until) {
+        (Some(a), Some(b)) => Some(if a < b { a } else { b }),
+        (Some(a), None) | (None, Some(a)) => Some(a),
+        (None, None) => None,
+    };
+    (from, until)
 }

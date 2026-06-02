@@ -66,7 +66,10 @@ impl TestGraph {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         };
         self.kg.insert_fact(new_fact).await.unwrap()
     }
@@ -92,7 +95,10 @@ impl TestGraph {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
-            ..Default::default()
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         };
         self.kg.insert_fact(new_fact).await.unwrap()
     }

@@ -185,6 +185,7 @@ async fn relation_types_sync() {
             (1, "InferredFrom", RelationType::InferredFrom),
             (2, "Corrects", RelationType::Corrects),
             (3, "Supersedes", RelationType::Supersedes),
+            (4, "Contradicts", RelationType::Contradicts),
         ],
     )
     .await;
@@ -277,17 +278,18 @@ async fn predicates_sync() {
         "SELECT id, name FROM predicates",
         "SELECT COUNT(*) FROM predicates",
         &[
-            (1, "is_in", Predicate::IsIn),
-            (2, "visited", Predicate::Visited),
-            (3, "owns", Predicate::Owns),
-            (4, "works_as", Predicate::WorksAs),
-            (5, "has_partner", Predicate::HasPartner),
-            (6, "has_parent", Predicate::HasParent),
-            (7, "born_on", Predicate::BornOn),
-            (8, "died_on", Predicate::DiedOn),
-            (9, "located_in", Predicate::LocatedIn),
-            (10, "created_on", Predicate::CreatedOn),
-            (11, "has_preference", Predicate::HasPreference),
+            (1, "is_in", "is_in"),
+            (2, "visited", "visited"),
+            (3, "owns", "owns"),
+            (4, "works_as", "works_as"),
+            (5, "has_partner", "has_partner"),
+            (6, "has_parent", "has_parent"),
+            (7, "born_on", "born_on"),
+            (8, "died_on", "died_on"),
+            (9, "located_in", "located_in"),
+            (10, "created_on", "created_on"),
+            (11, "has_preference", "has_preference"),
+            (12, "rejected_action", "rejected_action"),
         ],
     )
     .await;

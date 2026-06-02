@@ -134,3 +134,24 @@
 ### Documentation
 
 - Added `docs/wiki/what-works-now.md`: comprehensive user-facing overview of all working features, current limitations, known bugs, and roadmap context.
+## [0.28.0] - 2026-06-02
+
+### Added
+- Inference engine core with `InferenceRule` trait, `RuleEngine`, and `CascadeContext` for cycle-safe unbounded cascades.
+- Transitivity rule: `visited`/`is_in` + `is_in` chain → inferred transitive facts with depth-tracked confidence.
+- Contradiction rule: real-time `Disputed` status + bidirectional `Contradicts` edges; nightly batch auto-resolves explicit > inferred disputes.
+- Threshold rule: 3+ `rejected_action` facts → `General` preference upsert; nightly re-count warns if threshold drops.
+- `PredicateRegistry` with `ensure_predicate` and `predicate_name` for unlimited extensible predicates backed by the DB.
+- Migrations 024 (Contradicts relation type) and 025 (rejected_action predicate).
+- Nightly optimization orchestrator (`run_nightly_optimization`) wiring contradiction resolution, confidence propagation, and inference re-evaluation.
+- Integration tests for transitivity, contradiction, threshold, cascade, and cycle safety.
+
+### Changed
+- Removed compile-time `Predicate` enum; `NewFact.predicate` is now a `String` resolved at runtime.
+- `Fact::predicate()` removed; callers use `kg.predicate_name(fact.predicate_id)`.
+- `KnowledgeGraph::insert_fact` automatically runs inference rules and cascades inferred facts.
+- `NewFact` extended with `inferred`, `inference_depth`, `confidence`, and `parent_fact_ids` fields.
+
+### Documentation
+- Added `docs/inference-engine.md` with architecture, rule descriptions, confidence formulas, and cascade behavior.
+- Added `docs/wiki/inference-rules.md` with user-facing examples and best practices.

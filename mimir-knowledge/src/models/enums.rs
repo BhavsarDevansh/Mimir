@@ -10,6 +10,7 @@ pub enum RelationType {
     InferredFrom = 1,
     Corrects = 2,
     Supersedes = 3,
+    Contradicts = 4,
 }
 
 /// Classification of dates associated with entities.
@@ -74,23 +75,6 @@ pub enum MergeResolution {
     Rejected = 3,
 }
 
-/// Named predicates in the knowledge graph with stable IDs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Type, serde::Serialize, serde::Deserialize)]
-#[repr(i16)]
-pub enum Predicate {
-    IsIn = 1,
-    Visited = 2,
-    Owns = 3,
-    WorksAs = 4,
-    HasPartner = 5,
-    HasParent = 6,
-    BornOn = 7,
-    DiedOn = 8,
-    LocatedIn = 9,
-    CreatedOn = 10,
-    HasPreference = 11,
-}
-
 // Compile-time sanity checks: max variant value fits i16 and no zero IDs.
 
 // Verify no zero-ID variants.
@@ -101,7 +85,6 @@ const_assert!((LocationType::Home as i16) != 0);
 const_assert!((DedupStatus::Pending as i16) != 0);
 const_assert!((MergeWorkflowStatus::Pending as i16) != 0);
 const_assert!((MergeResolution::Merged as i16) != 0);
-const_assert!((Predicate::IsIn as i16) != 0);
 
 /// External service connectors that extract facts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Type, serde::Serialize, serde::Deserialize)]

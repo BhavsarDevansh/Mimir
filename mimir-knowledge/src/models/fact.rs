@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Type;
 use static_assertions::const_assert;
 
-use crate::models::enums::{ConnectorType, Predicate};
+use crate::models::enums::ConnectorType;
 
 /// Lifecycle status of a fact in the knowledge graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Type, Serialize, Deserialize)]
@@ -54,32 +54,13 @@ impl Fact {
             _ => None,
         }
     }
-
-    /// Map the stored `predicate_id` to the typed enum.
-    /// Returns `None` if the ID does not correspond to a known variant.
-    pub fn predicate(&self) -> Option<Predicate> {
-        match self.predicate_id {
-            1 => Some(Predicate::IsIn),
-            2 => Some(Predicate::Visited),
-            3 => Some(Predicate::Owns),
-            4 => Some(Predicate::WorksAs),
-            5 => Some(Predicate::HasPartner),
-            6 => Some(Predicate::HasParent),
-            7 => Some(Predicate::BornOn),
-            8 => Some(Predicate::DiedOn),
-            9 => Some(Predicate::LocatedIn),
-            10 => Some(Predicate::CreatedOn),
-            11 => Some(Predicate::HasPreference),
-            _ => None,
-        }
-    }
 }
 
 /// Input for inserting a new fact.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NewFact {
     pub subject_id: i32,
-    pub predicate: Predicate,
+    pub predicate: String,
     pub object_id: Option<i32>,
     pub object_literal: Option<String>,
     pub valid_from: Option<DateTime<Utc>>,
@@ -89,4 +70,30 @@ pub struct NewFact {
     pub connector_type: Option<ConnectorType>,
     pub raw_reference: Option<String>,
     pub extraction_method: Option<crate::models::source::ExtractionMethod>,
+    pub inferred: bool,
+    pub inference_depth: i32,
+    pub confidence: Option<f32>,
+    pub parent_fact_ids: Vec<i32>,
+}
+
+impl Default for NewFact {
+    fn default() -> Self {
+        Self {
+            subject_id: 0,
+            predicate: String::new(),
+            object_id: None,
+            object_literal: None,
+            valid_from: None,
+            valid_until: None,
+            source_type: crate::models::source::SourceType::UserEdit,
+            connector_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
+        }
+    }
 }

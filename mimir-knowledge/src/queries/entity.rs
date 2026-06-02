@@ -8,7 +8,7 @@ use crate::KnowledgeError;
 use crate::models::entity::{Entity, EntityType};
 use crate::models::entity_date::{EntityDate, next_occurrence};
 use crate::models::entity_location::EntityLocation;
-use crate::models::enums::{MergeWorkflowStatus, Predicate, RecurrenceType};
+use crate::models::enums::{MergeWorkflowStatus, RecurrenceType};
 
 // ---------------------------------------------------------------------------
 // Alias search
@@ -354,7 +354,7 @@ pub async fn delete_entity(pool: &SqlitePool, id: i32) -> Result<(), KnowledgeEr
 pub async fn validate_predicate(
     pool: &SqlitePool,
     subject_type: EntityType,
-    predicate: Predicate,
+    predicate_id: i16,
     object_type: EntityType,
 ) -> Result<(), KnowledgeError> {
     let row: Option<(i64,)> = sqlx::query_as(
@@ -362,14 +362,14 @@ pub async fn validate_predicate(
          WHERE predicate_id = ? AND allowed_subject_type_id = ? AND allowed_object_type_id = ? \
          LIMIT 1",
     )
-    .bind(predicate as i16)
+    .bind(predicate_id)
     .bind(subject_type as i16)
     .bind(object_type as i16)
     .fetch_optional(pool)
     .await?;
 
     if row.is_none() {
-        return Err(KnowledgeError::InvalidPredicate(predicate as i16));
+        return Err(KnowledgeError::InvalidPredicate(predicate_id));
     }
     Ok(())
 }

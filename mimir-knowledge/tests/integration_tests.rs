@@ -3,7 +3,7 @@
 use chrono::{TimeZone, Utc};
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::entity::EntityType;
-use mimir_knowledge::models::enums::{EntityDateType, LocationType, Predicate, RecurrenceType};
+use mimir_knowledge::models::enums::{EntityDateType, LocationType, RecurrenceType};
 use mimir_knowledge::models::fact::NewFact;
 use mimir_knowledge::models::source::SourceType;
 use mimir_knowledge::queries::entity::MatchKind;
@@ -163,7 +163,7 @@ async fn test_predicate_validation() {
     mimir_knowledge::queries::entity::validate_predicate(
         kg.pool(),
         EntityType::Person,
-        Predicate::BornOn,
+        kg.ensure_predicate("born_on").await.unwrap(),
         EntityType::DateTime,
     )
     .await
@@ -173,7 +173,7 @@ async fn test_predicate_validation() {
     mimir_knowledge::queries::entity::validate_predicate(
         kg.pool(),
         EntityType::Organization,
-        Predicate::LocatedIn,
+        kg.ensure_predicate("located_in").await.unwrap(),
         EntityType::Place,
     )
     .await
@@ -183,7 +183,7 @@ async fn test_predicate_validation() {
     let result = mimir_knowledge::queries::entity::validate_predicate(
         kg.pool(),
         EntityType::Place,
-        Predicate::BornOn,
+        kg.ensure_predicate("born_on").await.unwrap(),
         EntityType::Person,
     )
     .await;
@@ -287,7 +287,7 @@ async fn test_dedup_exact_merge() {
     // Insert a fact for x so x survives the merge (more facts = survivor)
     kg.insert_fact(NewFact {
         subject_id: x.id,
-        predicate: Predicate::IsIn,
+        predicate: "is_in".to_string(),
         object_id: None,
         object_literal: Some("somewhere".to_string()),
         valid_from: None,
@@ -297,6 +297,7 @@ async fn test_dedup_exact_merge() {
         connector_type: None,
         raw_reference: None,
         extraction_method: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -349,7 +350,7 @@ async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue()
     // Insert a fact for x so x survives the merge (more facts = survivor)
     kg.insert_fact(NewFact {
         subject_id: x.id,
-        predicate: Predicate::IsIn,
+        predicate: "is_in".to_string(),
         object_id: None,
         object_literal: Some("somewhere".to_string()),
         valid_from: None,
@@ -359,6 +360,7 @@ async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue()
         connector_type: None,
         raw_reference: None,
         extraction_method: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -391,7 +393,7 @@ async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue()
     let fact_y = kg
         .insert_fact(NewFact {
             subject_id: y.id,
-            predicate: Predicate::HasPreference,
+            predicate: "has_preference".to_string(),
             object_id: None,
             object_literal: Some("pref".to_string()),
             valid_from: None,
@@ -401,6 +403,7 @@ async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue()
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -610,7 +613,7 @@ async fn test_delete_guard_rejects_entity_with_preferences() {
     let fact_a = kg
         .insert_fact(NewFact {
             subject_id: a.id,
-            predicate: Predicate::HasPreference,
+            predicate: "has_preference".to_string(),
             object_id: None,
             object_literal: Some("pref".to_string()),
             valid_from: None,
@@ -620,6 +623,7 @@ async fn test_delete_guard_rejects_entity_with_preferences() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
+            ..Default::default()
         })
         .await
         .unwrap();

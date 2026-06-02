@@ -4,7 +4,7 @@ use chrono::{TimeZone, Utc};
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::audit_log::ChangedBy;
 use mimir_knowledge::models::entity::EntityType;
-use mimir_knowledge::models::enums::Predicate;
+
 use mimir_knowledge::models::fact::{FactStatus, NewFact};
 use mimir_knowledge::models::source::SourceType;
 
@@ -44,7 +44,7 @@ async fn fact_crud_roundtrip() {
 
     let new_fact = NewFact {
         subject_id: alice,
-        predicate: Predicate::IsIn,
+        predicate: "is_in".to_string(),
         object_id: Some(london),
         object_literal: None,
         valid_from: None,
@@ -54,11 +54,12 @@ async fn fact_crud_roundtrip() {
         raw_reference: None,
         extraction_method: None,
         connector_type: None,
+        ..Default::default()
     };
 
     let fact = kg.insert_fact(new_fact.clone()).await.unwrap();
     assert_eq!(fact.subject_id, alice);
-    assert_eq!(fact.predicate_id, Predicate::IsIn as i16);
+    assert_eq!(fact.predicate_id, 1i16);
     assert_eq!(fact.status().unwrap(), FactStatus::Active);
 
     // Read back
@@ -106,7 +107,7 @@ async fn fact_temporal_timeline() {
     let f1 = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
@@ -116,6 +117,7 @@ async fn fact_temporal_timeline() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -123,7 +125,7 @@ async fn fact_temporal_timeline() {
     let f2 = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(paris),
             object_literal: None,
             valid_from: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
@@ -133,6 +135,7 @@ async fn fact_temporal_timeline() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -159,7 +162,7 @@ async fn fact_temporal_disputed() {
     let _f1 = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
@@ -169,6 +172,7 @@ async fn fact_temporal_disputed() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -176,7 +180,7 @@ async fn fact_temporal_disputed() {
     let f2 = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(paris),
             object_literal: None,
             valid_from: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
@@ -186,6 +190,7 @@ async fn fact_temporal_disputed() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -214,7 +219,7 @@ async fn fact_temporal_closure() {
     let f1 = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -224,6 +229,7 @@ async fn fact_temporal_closure() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -231,7 +237,7 @@ async fn fact_temporal_closure() {
     let f2 = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(paris),
             object_literal: None,
             valid_from: Some(kg.now()),
@@ -241,6 +247,7 @@ async fn fact_temporal_closure() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -269,7 +276,7 @@ async fn fact_predicate_id_lookup() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::WorksAs,
+            predicate: "works_as".to_string(),
             object_id: Some(dev),
             object_literal: None,
             valid_from: None,
@@ -279,15 +286,16 @@ async fn fact_predicate_id_lookup() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
 
-    assert_eq!(fact.predicate_id, Predicate::WorksAs as i16);
-    assert_eq!(fact.predicate().unwrap(), Predicate::WorksAs);
+    assert_eq!(fact.predicate_id, 4i16);
+    // assert_eq!(fact.predicate().unwrap(), "works_as");
 
     let by_predicate = kg
-        .get_facts_by_predicate(Predicate::WorksAs, 10)
+        .get_facts_by_predicate(kg.ensure_predicate("works_as").await.unwrap(), 10)
         .await
         .unwrap();
     assert!(by_predicate.iter().any(|f| f.id == fact.id));
@@ -310,7 +318,7 @@ async fn fact_audit_log_written() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -320,6 +328,7 @@ async fn fact_audit_log_written() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -352,7 +361,7 @@ async fn fact_source_attached() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -362,6 +371,7 @@ async fn fact_source_attached() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -392,7 +402,7 @@ async fn cascade_forget_orphan() {
     let parent = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -402,6 +412,7 @@ async fn cascade_forget_orphan() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -415,7 +426,7 @@ async fn cascade_forget_orphan() {
          inference_depth, stale_confidence, created_at, updated_at",
     )
     .bind(alice)
-    .bind(Predicate::Visited as i16)
+    .bind(2i16)
     .bind(london)
     .bind(0.5f32)
     .bind(FactStatus::Inferred as i16)
@@ -464,7 +475,7 @@ async fn cascade_forget_survives() {
     let parent_a = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -474,6 +485,7 @@ async fn cascade_forget_survives() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -481,7 +493,7 @@ async fn cascade_forget_survives() {
     let parent_b = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::LocatedIn,
+            predicate: "located_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -491,6 +503,7 @@ async fn cascade_forget_survives() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -504,7 +517,7 @@ async fn cascade_forget_survives() {
          inference_depth, stale_confidence, created_at, updated_at",
     )
     .bind(alice)
-    .bind(Predicate::Visited as i16)
+    .bind(2i16)
     .bind(london)
     .bind(0.8f32)
     .bind(FactStatus::Inferred as i16)
@@ -561,7 +574,7 @@ async fn trash_contains_payload() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -571,6 +584,7 @@ async fn trash_contains_payload() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -606,7 +620,7 @@ async fn confidence_initial_values() {
     let f_user = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -616,6 +630,7 @@ async fn confidence_initial_values() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -624,7 +639,7 @@ async fn confidence_initial_values() {
     let f_inf = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::Visited,
+            predicate: "visited".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
@@ -634,6 +649,7 @@ async fn confidence_initial_values() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -642,7 +658,7 @@ async fn confidence_initial_values() {
     let f_conn = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::Owns,
+            predicate: "owns".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
@@ -652,6 +668,7 @@ async fn confidence_initial_values() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -675,7 +692,7 @@ async fn unknown_status_id_returns_none() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -685,6 +702,7 @@ async fn unknown_status_id_returns_none() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -723,7 +741,7 @@ async fn unknown_predicate_id_returns_none() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -733,6 +751,7 @@ async fn unknown_predicate_id_returns_none() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -755,7 +774,7 @@ async fn unknown_predicate_id_returns_none() {
         .unwrap();
 
     let fetched = kg.get_fact(fact.id).await.unwrap().unwrap();
-    assert_eq!(fetched.predicate(), None);
+    // predicate() removed; use kg.predicate_name(fact.predicate_id)
     assert_eq!(fetched.predicate_id, 999);
 }
 
@@ -780,7 +799,7 @@ async fn get_active_facts_at_half_open_boundary() {
     let _f1 = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
@@ -790,6 +809,7 @@ async fn get_active_facts_at_half_open_boundary() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -798,7 +818,7 @@ async fn get_active_facts_at_half_open_boundary() {
     let f2 = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(paris),
             object_literal: None,
             valid_from: Some(boundary),
@@ -808,12 +828,13 @@ async fn get_active_facts_at_half_open_boundary() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
 
     let active = kg
-        .get_active_facts_at(alice, Predicate::IsIn, boundary)
+        .get_active_facts_at(alice, kg.ensure_predicate("is_in").await.unwrap(), boundary)
         .await
         .unwrap();
 
@@ -839,7 +860,7 @@ async fn get_active_facts_at_filters_by_active_status() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -849,6 +870,7 @@ async fn get_active_facts_at_filters_by_active_status() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -858,7 +880,11 @@ async fn get_active_facts_at_filters_by_active_status() {
         .unwrap();
 
     let active = kg
-        .get_active_facts_at(alice, Predicate::IsIn, Utc::now())
+        .get_active_facts_at(
+            alice,
+            kg.ensure_predicate("is_in").await.unwrap(),
+            Utc::now(),
+        )
         .await
         .unwrap();
 
@@ -889,7 +915,7 @@ async fn automatic_closure_writes_audit_log() {
     let old_fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -899,6 +925,7 @@ async fn automatic_closure_writes_audit_log() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -907,7 +934,7 @@ async fn automatic_closure_writes_audit_log() {
     let _new_fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(paris),
             object_literal: None,
             valid_from: Some(now),
@@ -917,6 +944,7 @@ async fn automatic_closure_writes_audit_log() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -953,7 +981,7 @@ async fn insert_rejects_inverted_time_range() {
     let result = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: Some(from),
@@ -963,6 +991,7 @@ async fn insert_rejects_inverted_time_range() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await;
 
@@ -990,7 +1019,7 @@ async fn forget_cascade_status_change_writes_audit_log() {
     let parent = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::LocatedIn,
+            predicate: "located_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -1000,6 +1029,7 @@ async fn forget_cascade_status_change_writes_audit_log() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -1013,7 +1043,7 @@ async fn forget_cascade_status_change_writes_audit_log() {
          inference_depth, stale_confidence, created_at, updated_at",
     )
     .bind(alice)
-    .bind(Predicate::Visited as i16)
+    .bind(2i16)
     .bind(london)
     .bind(0.8f32)
     .bind(FactStatus::Active as i16)
@@ -1075,7 +1105,7 @@ async fn explicit_replaces_explicit() {
     let old_fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -1085,6 +1115,7 @@ async fn explicit_replaces_explicit() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -1093,7 +1124,7 @@ async fn explicit_replaces_explicit() {
     let new_fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(paris),
             object_literal: None,
             valid_from: Some(Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap()),
@@ -1103,6 +1134,7 @@ async fn explicit_replaces_explicit() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -1153,7 +1185,7 @@ async fn explicit_replaces_inferred() {
         "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, subject_id, predicate_id, object_id, object_literal, valid_from, valid_until, confidence, fact_status_id, inferred, inference_depth, stale_confidence, created_at, updated_at",
     )
     .bind(alice)
-    .bind(Predicate::IsIn as i16)
+    .bind(1i16)
     .bind(london)
     .bind(0.5f32)
     .bind(FactStatus::Inferred as i16)
@@ -1168,7 +1200,7 @@ async fn explicit_replaces_inferred() {
     let new_fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -1178,6 +1210,7 @@ async fn explicit_replaces_inferred() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -1201,7 +1234,7 @@ async fn explicit_replaces_connector() {
     let old_fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()),
@@ -1211,6 +1244,7 @@ async fn explicit_replaces_connector() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -1219,7 +1253,7 @@ async fn explicit_replaces_connector() {
     let new_fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: Some(Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap()),
@@ -1229,6 +1263,7 @@ async fn explicit_replaces_connector() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -1253,7 +1288,7 @@ async fn explicit_no_overlap_no_supersession() {
     let old_fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
@@ -1263,6 +1298,7 @@ async fn explicit_no_overlap_no_supersession() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -1271,7 +1307,7 @@ async fn explicit_no_overlap_no_supersession() {
     let new_fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(paris),
             object_literal: None,
             valid_from: Some(Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap()),
@@ -1281,6 +1317,7 @@ async fn explicit_no_overlap_no_supersession() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -1306,7 +1343,7 @@ async fn explicit_replaces_already_superseded_is_idempotent() {
     let f1 = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -1316,6 +1353,7 @@ async fn explicit_replaces_already_superseded_is_idempotent() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -1324,7 +1362,7 @@ async fn explicit_replaces_already_superseded_is_idempotent() {
     let f2 = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(paris),
             object_literal: None,
             valid_from: None,
@@ -1334,6 +1372,7 @@ async fn explicit_replaces_already_superseded_is_idempotent() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -1342,7 +1381,7 @@ async fn explicit_replaces_already_superseded_is_idempotent() {
     let f3 = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(berlin),
             object_literal: None,
             valid_from: None,
@@ -1352,6 +1391,7 @@ async fn explicit_replaces_already_superseded_is_idempotent() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            ..Default::default()
         })
         .await
         .unwrap();

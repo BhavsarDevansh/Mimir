@@ -5,8 +5,8 @@ use serde_json;
 use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
-use crate::confidence;
 use crate::models::audit_log::{ChangeType, ChangedBy};
+use crate::models::enums::RelationType;
 use crate::models::fact::{Fact, FactStatus, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
 
@@ -47,9 +47,13 @@ fn changed_by_for_source_type(source_type: SourceType) -> ChangedBy {
 /// - Overlapping with both unbounded → `Disputed`
 /// - Old open-ended + new explicit starting now → close old at `now()`, new `Active`
 /// - Any other overlap → `Disputed`
+///
+/// `predicate_id` and `confidence` are resolved by the caller (`KnowledgeGraph`).
 pub async fn insert_fact(
     pool: &SqlitePool,
     new_fact: &NewFact,
+    predicate_id: i16,
+    confidence: f32,
     now: DateTime<Utc>,
 ) -> Result<Fact, KnowledgeError> {
     let mut tx = pool.begin().await?;
@@ -73,7 +77,7 @@ pub async fn insert_fact(
          WHERE subject_id = ? AND predicate_id = ?",
     )
     .bind(new_fact.subject_id)
-    .bind(new_fact.predicate as i16)
+    .bind(predicate_id)
     .fetch_all(&mut *tx)
     .await?;
 
@@ -92,6 +96,7 @@ pub async fn insert_fact(
 
     let mut fact_status = FactStatus::Active;
     let mut facts_to_supersede: Vec<i32> = Vec::new();
+    let mut contradicts_pairs: Vec<i32> = Vec::new();
 
     if !overlaps.is_empty() {
         if new_fact.source_type == SourceType::UserEdit {
@@ -184,50 +189,62 @@ pub async fn insert_fact(
                 }
             }
         } else {
-            // Overlap with non-explicit source → mark new fact as Disputed.
+            // Overlap with non-explicit source → mark new fact as Disputed
+            // and also mark existing overlapping facts as Disputed.
             fact_status = FactStatus::Disputed;
+            for existing_fact in &overlaps {
+                if existing_fact.fact_status_id != FactStatus::Disputed as i16 {
+                    let old_json =
+                        serde_json::json!({"fact_status_id": existing_fact.fact_status_id})
+                            .to_string();
+                    sqlx::query("UPDATE facts SET fact_status_id = ?, updated_at = ? WHERE id = ?")
+                        .bind(FactStatus::Disputed as i16)
+                        .bind(now)
+                        .bind(existing_fact.id)
+                        .execute(&mut *tx)
+                        .await?;
+
+                    let new_json =
+                        serde_json::json!({"fact_status_id": FactStatus::Disputed as i16})
+                            .to_string();
+                    sqlx::query(
+                        "INSERT INTO fact_audit_log \
+                         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    )
+                    .bind(existing_fact.id)
+                    .bind(ChangeType::StatusChange as i16)
+                    .bind(old_json)
+                    .bind(new_json)
+                    .bind(now)
+                    .bind(ChangedBy::System as i16)
+                    .bind(None::<&str>)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+                contradicts_pairs.push(existing_fact.id);
+            }
         }
     }
 
-    // 2. Compute initial confidence.
-    let confidence = if let Some(ct) = new_fact.connector_type {
-        if new_fact.connector_id.is_none()
-            || new_fact.raw_reference.is_none()
-            || new_fact.extraction_method.is_none()
-        {
-            return Err(KnowledgeError::Validation(
-                "Connector provenance requires connector_id, raw_reference, and extraction_method"
-                    .to_string(),
-            ));
-        }
-        let db_score: Option<f32> = sqlx::query_scalar(
-            "SELECT score FROM connector_reliability WHERE connector_type_id = ?",
-        )
-        .bind(ct as i16)
-        .fetch_optional(&mut *tx)
-        .await?;
-        db_score.unwrap_or_else(|| confidence::default_connector_score(ct))
-    } else {
-        confidence::initial(new_fact.source_type, None)
-    };
-
-    // 3. Insert the fact.
+    // 2. Insert the fact.
     let fact_id: i64 = sqlx::query_scalar(
         "INSERT INTO facts \
          (subject_id, predicate_id, object_id, object_literal, valid_from, valid_until, \
-          confidence, fact_status_id, inferred, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+          confidence, fact_status_id, inferred, inference_depth, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id",
     )
     .bind(new_fact.subject_id)
-    .bind(new_fact.predicate as i16)
+    .bind(predicate_id)
     .bind(new_fact.object_id)
     .bind(&new_fact.object_literal)
     .bind(new_fact.valid_from)
     .bind(new_fact.valid_until)
     .bind(confidence)
     .bind(fact_status as i16)
-    .bind(false)
+    .bind(new_fact.inferred)
+    .bind(new_fact.inference_depth)
     .bind(now)
     .bind(now)
     .fetch_one(&mut *tx)
@@ -235,13 +252,13 @@ pub async fn insert_fact(
 
     let fact_id = fact_id as i32;
 
-    // 4. Resolve extraction method.
+    // 3. Resolve extraction method.
     let extraction_method_id = new_fact
         .extraction_method
         .map(|e| e as i16)
         .or_else(|| default_extraction_method(new_fact.source_type));
 
-    // 5. Insert the source row.
+    // 4. Insert the source row.
     let connector_type_id = new_fact.connector_type.map(|ct| ct as i16);
     sqlx::query(
         "INSERT INTO sources \
@@ -258,7 +275,7 @@ pub async fn insert_fact(
     .execute(&mut *tx)
     .await?;
 
-    // 6. Write created audit entry (column-only snapshot).
+    // 5. Write created audit entry (column-only snapshot).
     let new_value = serde_json::json!({
         "fact_id": fact_id,
         "confidence": confidence,
@@ -283,7 +300,7 @@ pub async fn insert_fact(
     .execute(&mut *tx)
     .await?;
 
-    // 7. Insert superseded edges for any facts replaced by a user edit.
+    // 6. Insert superseded edges for any facts replaced by a user edit.
     for existing_id in facts_to_supersede {
         sqlx::query(
             "INSERT INTO fact_dependencies \
@@ -292,8 +309,35 @@ pub async fn insert_fact(
         )
         .bind(existing_id)
         .bind(fact_id)
-        .bind(crate::models::enums::RelationType::Supersedes as i16)
+        .bind(RelationType::Supersedes as i16)
         .bind(true)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // 7. Insert Contradicts edges in both directions for disputed overlaps.
+    for existing_id in contradicts_pairs {
+        sqlx::query(
+            "INSERT INTO fact_dependencies \
+             (parent_fact_id, child_fact_id, relation_type_id, is_positive) \
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(existing_id)
+        .bind(fact_id)
+        .bind(RelationType::Contradicts as i16)
+        .bind(false)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO fact_dependencies \
+             (parent_fact_id, child_fact_id, relation_type_id, is_positive) \
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(fact_id)
+        .bind(existing_id)
+        .bind(RelationType::Contradicts as i16)
+        .bind(false)
         .execute(&mut *tx)
         .await?;
     }

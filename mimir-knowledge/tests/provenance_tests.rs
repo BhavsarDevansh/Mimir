@@ -4,7 +4,7 @@ use chrono::{TimeZone, Utc};
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::audit_log::{ChangeType, ChangedBy};
 use mimir_knowledge::models::entity::EntityType;
-use mimir_knowledge::models::enums::Predicate;
+
 use mimir_knowledge::models::fact::{FactStatus, NewFact};
 use mimir_knowledge::models::source::{ExtractionMethod, SourceType};
 use mimir_knowledge::queries::audit::AuditLogFilter;
@@ -60,7 +60,7 @@ async fn sources_unique_constraint() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -70,6 +70,7 @@ async fn sources_unique_constraint() {
             connector_type: None,
             raw_reference: Some("msg-123".to_string()),
             extraction_method: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -102,7 +103,7 @@ async fn audit_on_insert_creates_entry() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -112,6 +113,7 @@ async fn audit_on_insert_creates_entry() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -146,7 +148,7 @@ async fn audit_on_temporal_update() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -156,6 +158,7 @@ async fn audit_on_temporal_update() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -194,7 +197,7 @@ async fn audit_on_status_change() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -204,6 +207,7 @@ async fn audit_on_status_change() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -239,7 +243,7 @@ async fn audit_on_forget() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -249,6 +253,7 @@ async fn audit_on_forget() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -282,7 +287,7 @@ async fn audit_on_confidence_cascade() {
     let parent_a = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -292,6 +297,7 @@ async fn audit_on_confidence_cascade() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -299,7 +305,7 @@ async fn audit_on_confidence_cascade() {
     let parent_b = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(paris),
             object_literal: None,
             valid_from: None,
@@ -309,6 +315,7 @@ async fn audit_on_confidence_cascade() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -316,7 +323,7 @@ async fn audit_on_confidence_cascade() {
     let child = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::Visited,
+            predicate: "visited".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -326,6 +333,7 @@ async fn audit_on_confidence_cascade() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -395,7 +403,7 @@ async fn source_crud_adds_source_and_audit() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -405,6 +413,7 @@ async fn source_crud_adds_source_and_audit() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -452,7 +461,7 @@ async fn query_audit_log_filtered() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -462,6 +471,7 @@ async fn query_audit_log_filtered() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -500,7 +510,7 @@ async fn query_audit_log_includes_forgotten_facts() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -510,6 +520,7 @@ async fn query_audit_log_includes_forgotten_facts() {
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
+            ..Default::default()
         })
         .await
         .unwrap();

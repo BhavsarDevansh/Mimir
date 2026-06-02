@@ -68,8 +68,10 @@ impl InferenceRule for ThresholdRule {
                 sources: Vec::new(),
             };
 
-            // Ignore duplicate or existing preferences.
-            let _ = kg.upsert_preference(input).await;
+            // Upsert preference; log but do not fail on duplicates.
+            if let Err(e) = kg.upsert_preference(input).await {
+                tracing::warn!("threshold preference upsert failed: {}", e);
+            }
         }
 
         Vec::new()

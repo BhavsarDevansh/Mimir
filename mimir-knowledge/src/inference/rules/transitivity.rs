@@ -21,6 +21,11 @@ impl InferenceRule for TransitivityRule {
             None => return Vec::new(),
         };
 
+        // Only run for predicates we care about.
+        if predicate_name != PREDICATE_VISITED && predicate_name != PREDICATE_IS_IN {
+            return Vec::new();
+        }
+
         let is_in_id = match kg.ensure_predicate(PREDICATE_IS_IN).await {
             Ok(id) => id,
             Err(_) => return Vec::new(),
@@ -43,7 +48,10 @@ impl InferenceRule for TransitivityRule {
                 .bind(FactStatus::Active as i16)
                 .fetch_all(kg.pool())
                 .await
-                .unwrap_or_default();
+                .unwrap_or_else(|e| {
+                    tracing::warn!("transitivity forward query failed: {}", e);
+                    Vec::new()
+                });
 
                 for parent in parent_facts {
                     if let Some(parent_object_id) = parent.object_id {

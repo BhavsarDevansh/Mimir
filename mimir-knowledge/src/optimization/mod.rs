@@ -26,7 +26,14 @@ pub async fn run_nightly_optimization(kg: &KnowledgeGraph) -> Result<(), crate::
     }
 
     // 3. Inference re-evaluation.
-    let engine = crate::inference::RuleEngine::new();
+    let mut engine = crate::inference::RuleEngine::new();
+    engine.register(Box::new(
+        crate::inference::rules::transitivity::TransitivityRule,
+    ));
+    engine.register(Box::new(
+        crate::inference::rules::contradiction::ContradictionRule,
+    ));
+    engine.register(Box::new(crate::inference::rules::threshold::ThresholdRule));
     let inferred = engine.evaluate_batch(kg).await;
     for mut new_fact in inferred {
         new_fact.inferred = true;

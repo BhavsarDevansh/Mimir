@@ -184,12 +184,18 @@ impl KnowledgeGraph {
             }
         }
 
-        let row: Option<(String,)> = sqlx::query_as("SELECT name FROM predicates WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .ok()
-            .flatten();
+        let row: Option<(String,)> =
+            match sqlx::query_as("SELECT name FROM predicates WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("predicate_name lookup failed for id {}: {}", id, e);
+                    return None;
+                }
+            };
 
         if let Some((ref name,)) = row {
             let mut cache = self.predicate_cache.write().await;
@@ -440,7 +446,9 @@ impl KnowledgeGraph {
                 inferred_fact.inferred = true;
                 inferred_fact.source_type = SourceType::Inference;
                 inferred_fact.extraction_method = Some(ExtractionMethod::InferenceRule);
-                let _ = self.insert_fact_internal(inferred_fact, ctx).await;
+                if let Err(e) = self.insert_fact_internal(inferred_fact, ctx).await {
+                    tracing::warn!("inference cascade failed: {}", e);
+                }
             }
 
             Ok(fact)

@@ -2,7 +2,7 @@
 
 ## 0.27.1 (2026-06-02)
 
-> Same-day hotfix release for 0.27.0.
+> Next-day hotfix release for 0.27.0.
 
 ### Fixed
 

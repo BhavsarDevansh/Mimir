@@ -460,6 +460,21 @@ async fn resolve_conflict(
     }
 
     // Rule 4: same or lower confidence → keep existing.
+    if new.confidence == existing.confidence {
+        write_preference_audit_log(
+            tx,
+            AuditLogParams {
+                preference_id: existing.id,
+                change_type: ChangeType::ConfidenceChange,
+                old_value: Some(&existing.value),
+                new_value: Some(&new.value),
+                now,
+                changed_by,
+                reason: Some("equal confidence inferred preference"),
+            },
+        )
+        .await?;
+    }
     Ok(UpsertAction::KeptAsPrimary)
 }
 

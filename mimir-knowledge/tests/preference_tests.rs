@@ -324,6 +324,13 @@ async fn same_confidence_keeps_existing() {
     assert_eq!(action, UpsertAction::KeptAsPrimary);
     assert_eq!(pref.id, first_id);
     assert_eq!(pref.value, "light");
+
+    let audit = kg.get_preference_audit_log(first_id).await.unwrap();
+    assert!(
+        audit
+            .iter()
+            .any(|a| a.reason.as_deref() == Some("equal confidence inferred preference"))
+    );
 }
 
 #[tokio::test]
@@ -650,4 +657,32 @@ async fn global_preference_with_null_entity_id() {
     let fetched = kg.get_preference_by_id(pref.id).await.unwrap();
     assert!(fetched.is_some());
     assert_eq!(fetched.unwrap().entity_id, None);
+}
+
+// ---------------------------------------------------------------------------
+// 10. Nullable provenance (source_fact_id = None)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn preference_with_null_source_fact_id_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let alice = create_person(&kg, "Alice").await;
+
+    let input = upsert_input(Some(alice), "theme", "dark", 0.9, false, None, vec![]);
+
+    let pref = kg.insert_preference(input).await.unwrap();
+    assert_eq!(pref.source_fact_id, None);
+    assert_eq!(pref.value, "dark");
+
+    let fetched = kg.get_preference_by_id(pref.id).await.unwrap().unwrap();
+    assert_eq!(fetched.source_fact_id, None);
+    assert_eq!(fetched.value, "dark");
+
+    let audit = kg.get_preference_audit_log(pref.id).await.unwrap();
+    assert!(!audit.is_empty());
+    assert_eq!(audit[0].change_type_id, 1); // Created
 }

@@ -27,6 +27,8 @@ async fn all_migrations_apply_cleanly() {
     assert!(names.contains(&"sources".to_string()));
     assert!(names.contains(&"preferences".to_string()));
     assert!(names.contains(&"preference_sources".to_string()));
+    assert!(names.contains(&"preference_contexts".to_string()));
+    assert!(names.contains(&"preference_audit_log".to_string()));
     assert!(names.contains(&"fact_audit_log".to_string()));
     assert!(names.contains(&"dedup_queue".to_string()));
     assert!(names.contains(&"entity_merge_queue".to_string()));
@@ -65,9 +67,9 @@ async fn lookup_tables_seeded_correctly() {
         ("SELECT COUNT(*) FROM fact_statuses", 6),
         ("SELECT COUNT(*) FROM relation_types", 3),
         ("SELECT COUNT(*) FROM source_types", 6),
-        ("SELECT COUNT(*) FROM preference_categories", 5),
+        ("SELECT COUNT(*) FROM preference_categories", 7),
         ("SELECT COUNT(*) FROM preference_source_types", 3),
-        ("SELECT COUNT(*) FROM predicates", 10),
+        ("SELECT COUNT(*) FROM predicates", 11),
     ];
 
     for (query, expected) in queries {

@@ -69,6 +69,7 @@ impl Fact {
             8 => Some(Predicate::DiedOn),
             9 => Some(Predicate::LocatedIn),
             10 => Some(Predicate::CreatedOn),
+            11 => Some(Predicate::HasPreference),
             _ => None,
         }
     }

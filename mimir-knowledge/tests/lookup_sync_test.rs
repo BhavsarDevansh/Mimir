@@ -225,19 +225,21 @@ async fn preference_categories_sync() {
         "SELECT id, name FROM preference_categories",
         "SELECT COUNT(*) FROM preference_categories",
         &[
+            (1, "CalendarBehavior", PreferenceCategory::CalendarBehavior),
             (
-                1,
+                2,
                 "NotificationStyle",
                 PreferenceCategory::NotificationStyle,
             ),
-            (2, "CalendarAutoAdd", PreferenceCategory::CalendarAutoAdd),
-            (3, "ProactivityLevel", PreferenceCategory::ProactivityLevel),
+            (3, "FoodPreference", PreferenceCategory::FoodPreference),
+            (4, "TravelPreference", PreferenceCategory::TravelPreference),
+            (5, "WorkStyle", PreferenceCategory::WorkStyle),
             (
-                4,
-                "CommunicationTone",
-                PreferenceCategory::CommunicationTone,
+                6,
+                "CommunicationPreference",
+                PreferenceCategory::CommunicationPreference,
             ),
-            (5, "Privacy", PreferenceCategory::Privacy),
+            (7, "General", PreferenceCategory::General),
         ],
     )
     .await;
@@ -255,9 +257,9 @@ async fn preference_source_types_sync() {
         "SELECT id, name FROM preference_source_types",
         "SELECT COUNT(*) FROM preference_source_types",
         &[
-            (1, "Explicit", PreferenceSourceType::Explicit),
-            (2, "Inferred", PreferenceSourceType::Inferred),
-            (3, "Corrected", PreferenceSourceType::Corrected),
+            (1, "Interaction", PreferenceSourceType::Interaction),
+            (2, "Fact", PreferenceSourceType::Fact),
+            (3, "UserEdit", PreferenceSourceType::UserEdit),
         ],
     )
     .await;
@@ -285,6 +287,7 @@ async fn predicates_sync() {
             (8, "died_on", Predicate::DiedOn),
             (9, "located_in", Predicate::LocatedIn),
             (10, "created_on", Predicate::CreatedOn),
+            (11, "has_preference", Predicate::HasPreference),
         ],
     )
     .await;

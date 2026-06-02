@@ -25,9 +25,9 @@ Lookup tables are seeded across migrations `001`, `012`, and `013` with stable i
 | `fact_statuses` | 6 | `FactStatus` | `models::fact` |
 | `relation_types` | 3 | `RelationType` | `models::enums` |
 | `source_types` | 6 | `SourceType` | `models::source` |
-| `preference_categories` | 5 | `PreferenceCategory` | `models::preference` |
+| `preference_categories` | 7 | `PreferenceCategory` | `models::preference` |
 | `preference_source_types` | 3 | `PreferenceSourceType` | `models::preference` |
-| `predicates` | 10 | `Predicate` | `models::enums` |
+| `predicates` | 11 | `Predicate` | `models::enums` |
 | `extraction_methods` | 5 | `ExtractionMethod` | `models::source` |
 | `change_types` | 7 | `ChangeType` | `models::audit_log` |
 | `changed_by_types` | 4 | `ChangedBy` | `models::audit_log` |
@@ -44,8 +44,10 @@ Lookup tables are seeded across migrations `001`, `012`, and `013` with stable i
 | `facts` | Directed temporal edges between entities |
 | `fact_dependencies` | Junction table linking inferred facts to parents |
 | `sources` | Provenance for every fact (with `connector_id`, `connector_type_id`, `raw_reference`, `extraction_method_id`) |
-| `preferences` | Learned user preferences with confidence |
+| `preferences` | Learned user preferences with confidence, source_fact_id, and contextual lookup |
+| `preference_contexts` | Normalized context conditions for preferences (no JSON) |
 | `preference_sources` | Provenance for preference values |
+| `preference_audit_log` | Immutable history of preference changes |
 
 ### System Tables
 
@@ -65,7 +67,19 @@ Migration `013` introduces a controlled vocabulary for predicates:
 - `predicates(id, name, description)` — canonical predicate names with stable IDs.
 - `predicate_constraints(predicate_id, allowed_subject_type_id, allowed_object_type_id)` — valid subject/object type combinations per predicate.
 
-Seeded predicates: `is_in`, `visited`, `owns`, `works_as`, `has_partner`, `has_parent`, `born_on`, `died_on`, `located_in`, `created_on`.
+The following 11 predicates are the complete seeded set:
+
+1. `is_in`
+2. `visited`
+3. `owns`
+4. `works_as`
+5. `has_partner`
+6. `has_parent`
+7. `born_on`
+8. `died_on`
+9. `located_in`
+10. `created_on`
+11. `has_preference`
 
 Validation is enforced at fact-insert time via `validate_predicate(subject_type, predicate, object_type)`.
 

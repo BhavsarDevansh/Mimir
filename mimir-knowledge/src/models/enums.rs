@@ -88,6 +88,7 @@ pub enum Predicate {
     DiedOn = 8,
     LocatedIn = 9,
     CreatedOn = 10,
+    HasPreference = 11,
 }
 
 // Compile-time sanity checks: max variant value fits i16 and no zero IDs.

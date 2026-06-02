@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.27.1 (2026-06-01)
+## 0.27.1 (2026-06-02)
+
+> Same-day hotfix release for 0.27.0.
 
 ### Fixed
 
@@ -12,6 +14,16 @@
 - Uniqueness checks in `insert_preference` and `upsert_preference` no longer clone the full context `HashSet`.
 - Confidence validation now happens before acquiring a database write lock.
 - Migration 023 now seeds `predicate_constraints` for `HasPreference` so `validate_predicate` does not fail.
+
+## 0.27.2 (2026-06-02)
+
+### Fixed
+
+- Review feedback on preference system (issue #53):
+  - `source_fact_id` is now nullable in `preferences` table and Rust types (`Option<i32>`).
+  - Explicit preferences (`overridden_by_user = true`) now require `confidence = 1.0` at validation time.
+  - `UpsertAction::Overwritten` now updates the existing preference row in-place instead of deleting and re-inserting, preserving the audit trail.
+  - Clarified that the 11 seeded predicates in `predicate_constraints` are the complete set.
 
 ## 0.27.0 (2026-06-01)
 

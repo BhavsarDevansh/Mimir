@@ -1,6 +1,6 @@
 -- Preference system refactor (Issue #53)
 -- Breaking change: drops old preferences / preference_sources, recreates them
--- with normalized context, source_fact_id NOT NULL, and contextual lookup support.
+-- with normalized context, source_fact_id nullable, and contextual lookup support.
 
 -- ============================================================================
 -- 1. Drop old tables
@@ -56,7 +56,7 @@ CREATE TABLE preferences (
     value TEXT NOT NULL,            -- scalar string/bool/number as text
     confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
     overridden_by_user BOOLEAN NOT NULL DEFAULT FALSE,
-    source_fact_id INTEGER NOT NULL REFERENCES facts(id),
+    source_fact_id INTEGER REFERENCES facts(id),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

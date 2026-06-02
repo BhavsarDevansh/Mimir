@@ -31,7 +31,6 @@ const_assert!((PreferenceCategory::CalendarBehavior as i16) != 0);
 const_assert!((PreferenceSourceType::Interaction as i16) != 0);
 
 /// A learned user preference with confidence and provenance.
-/// Every preference must reference a source fact (`source_fact_id` is NOT NULL).
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow, Serialize, Deserialize)]
 pub struct Preference {
     pub id: i32,
@@ -41,7 +40,7 @@ pub struct Preference {
     pub value: String,
     pub confidence: f32,
     pub overridden_by_user: bool,
-    pub source_fact_id: i32,
+    pub source_fact_id: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -87,7 +86,7 @@ pub struct NewPreference {
     pub value: String,
     pub confidence: f32,
     pub overridden_by_user: bool,
-    pub source_fact_id: i32,
+    pub source_fact_id: Option<i32>,
 }
 
 /// Action taken during an upsert operation.

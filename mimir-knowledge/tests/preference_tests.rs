@@ -47,7 +47,7 @@ fn upsert_input(
     value: &str,
     confidence: f32,
     overridden: bool,
-    source_fact_id: i32,
+    source_fact_id: Option<i32>,
     contexts: Vec<(&str, &str)>,
 ) -> UpsertPreferenceInput {
     UpsertPreferenceInput {
@@ -122,7 +122,7 @@ async fn insert_preference_roundtrip() {
         "dark",
         0.9,
         false,
-        fact_id,
+        Some(fact_id),
         vec![("time_of_day", "evening")],
     );
 
@@ -131,7 +131,7 @@ async fn insert_preference_roundtrip() {
     assert_eq!(pref.key, "theme");
     assert_eq!(pref.value, "dark");
     assert!((pref.confidence - 0.9).abs() < f32::EPSILON);
-    assert_eq!(pref.source_fact_id, fact_id);
+    assert_eq!(pref.source_fact_id, Some(fact_id));
 
     let contexts = kg.get_preference_contexts(pref.id).await.unwrap();
     assert_eq!(contexts.len(), 1);
@@ -170,7 +170,7 @@ async fn duplicate_preference_rejected() {
         "dark",
         0.9,
         false,
-        fact_id,
+        Some(fact_id),
         vec![("time_of_day", "evening")],
     );
 
@@ -201,7 +201,15 @@ async fn explicit_overrides_inferred() {
     let fact1 = create_has_preference_fact(&kg, alice).await;
     let fact2 = create_has_preference_fact(&kg, alice).await;
 
-    let inferred = upsert_input(Some(alice), "theme", "light", 0.6, false, fact1, vec![]);
+    let inferred = upsert_input(
+        Some(alice),
+        "theme",
+        "light",
+        0.6,
+        false,
+        Some(fact1),
+        vec![],
+    );
 
     let (old_pref, action) = kg.upsert_preference(inferred).await.unwrap();
     assert_eq!(action, UpsertAction::Created);
@@ -211,9 +219,9 @@ async fn explicit_overrides_inferred() {
         Some(alice),
         "theme",
         "dark",
-        0.5, // lower confidence but explicit
+        1.0, // explicit override
         true,
-        fact2,
+        Some(fact2),
         vec![],
     );
 
@@ -240,18 +248,34 @@ async fn higher_confidence_inferred_wins() {
     let fact1 = create_has_preference_fact(&kg, alice).await;
     let fact2 = create_has_preference_fact(&kg, alice).await;
 
-    let low = upsert_input(Some(alice), "theme", "light", 0.6, false, fact1, vec![]);
+    let low = upsert_input(
+        Some(alice),
+        "theme",
+        "light",
+        0.6,
+        false,
+        Some(fact1),
+        vec![],
+    );
 
     let (pref, action) = kg.upsert_preference(low).await.unwrap();
     assert_eq!(action, UpsertAction::Created);
     let first_id = pref.id;
 
-    let high = upsert_input(Some(alice), "theme", "dark", 0.8, false, fact2, vec![]);
+    let high = upsert_input(
+        Some(alice),
+        "theme",
+        "dark",
+        0.8,
+        false,
+        Some(fact2),
+        vec![],
+    );
 
     let (pref, action) = kg.upsert_preference(high).await.unwrap();
     assert_eq!(action, UpsertAction::Overwritten);
     assert_eq!(pref.value, "dark");
-    assert_ne!(pref.id, first_id);
+    assert_eq!(pref.id, first_id); // ID preserved by in-place update
 
     let audit = kg.get_preference_audit_log(first_id).await.unwrap();
     assert!(
@@ -272,13 +296,29 @@ async fn same_confidence_keeps_existing() {
     let fact1 = create_has_preference_fact(&kg, alice).await;
     let fact2 = create_has_preference_fact(&kg, alice).await;
 
-    let first = upsert_input(Some(alice), "theme", "light", 0.7, false, fact1, vec![]);
+    let first = upsert_input(
+        Some(alice),
+        "theme",
+        "light",
+        0.7,
+        false,
+        Some(fact1),
+        vec![],
+    );
 
     let (pref, action) = kg.upsert_preference(first).await.unwrap();
     assert_eq!(action, UpsertAction::Created);
     let first_id = pref.id;
 
-    let second = upsert_input(Some(alice), "theme", "dark", 0.7, false, fact2, vec![]);
+    let second = upsert_input(
+        Some(alice),
+        "theme",
+        "dark",
+        0.7,
+        false,
+        Some(fact2),
+        vec![],
+    );
 
     let (pref, action) = kg.upsert_preference(second).await.unwrap();
     assert_eq!(action, UpsertAction::KeptAsPrimary);
@@ -297,13 +337,21 @@ async fn user_override_blocks_inferred_overwrite() {
     let fact1 = create_has_preference_fact(&kg, alice).await;
     let fact2 = create_has_preference_fact(&kg, alice).await;
 
-    let explicit = upsert_input(Some(alice), "theme", "dark", 0.5, true, fact1, vec![]);
+    let explicit = upsert_input(Some(alice), "theme", "dark", 1.0, true, Some(fact1), vec![]);
 
     let (pref, action) = kg.upsert_preference(explicit).await.unwrap();
     assert_eq!(action, UpsertAction::Created);
     let first_id = pref.id;
 
-    let inferred = upsert_input(Some(alice), "theme", "light", 0.9, false, fact2, vec![]);
+    let inferred = upsert_input(
+        Some(alice),
+        "theme",
+        "light",
+        0.9,
+        false,
+        Some(fact2),
+        vec![],
+    );
 
     let (pref, action) = kg.upsert_preference(inferred).await.unwrap();
     assert_eq!(action, UpsertAction::Rejected);
@@ -325,7 +373,15 @@ async fn contextual_lookup_default_fallback() {
     let alice = create_person(&kg, "Alice").await;
     let fact = create_has_preference_fact(&kg, alice).await;
 
-    let default = upsert_input(Some(alice), "theme", "light", 0.8, false, fact, vec![]);
+    let default = upsert_input(
+        Some(alice),
+        "theme",
+        "light",
+        0.8,
+        false,
+        Some(fact),
+        vec![],
+    );
 
     kg.upsert_preference(default).await.unwrap();
 
@@ -353,7 +409,15 @@ async fn contextual_lookup_specific_wins_over_default() {
     let fact1 = create_has_preference_fact(&kg, alice).await;
     let fact2 = create_has_preference_fact(&kg, alice).await;
 
-    let default = upsert_input(Some(alice), "theme", "light", 0.8, false, fact1, vec![]);
+    let default = upsert_input(
+        Some(alice),
+        "theme",
+        "light",
+        0.8,
+        false,
+        Some(fact1),
+        vec![],
+    );
 
     let specific = upsert_input(
         Some(alice),
@@ -361,7 +425,7 @@ async fn contextual_lookup_specific_wins_over_default() {
         "dark",
         0.7,
         false,
-        fact2,
+        Some(fact2),
         vec![("time_of_day", "evening")],
     );
 
@@ -398,7 +462,7 @@ async fn contextual_lookup_most_specific_wins() {
         "blue",
         0.8,
         false,
-        fact1,
+        Some(fact1),
         vec![("time_of_day", "evening")],
     );
 
@@ -408,7 +472,7 @@ async fn contextual_lookup_most_specific_wins() {
         "red",
         0.8,
         false,
-        fact2,
+        Some(fact2),
         vec![("time_of_day", "evening"), ("mood", "relaxed")],
     );
 
@@ -460,12 +524,28 @@ async fn overwrite_writes_audit_log() {
     let fact1 = create_has_preference_fact(&kg, alice).await;
     let fact2 = create_has_preference_fact(&kg, alice).await;
 
-    let first = upsert_input(Some(alice), "theme", "light", 0.6, false, fact1, vec![]);
+    let first = upsert_input(
+        Some(alice),
+        "theme",
+        "light",
+        0.6,
+        false,
+        Some(fact1),
+        vec![],
+    );
 
     let (pref, _) = kg.upsert_preference(first).await.unwrap();
     let first_id = pref.id;
 
-    let second = upsert_input(Some(alice), "theme", "dark", 0.9, false, fact2, vec![]);
+    let second = upsert_input(
+        Some(alice),
+        "theme",
+        "dark",
+        0.9,
+        false,
+        Some(fact2),
+        vec![],
+    );
 
     kg.upsert_preference(second).await.unwrap();
 
@@ -501,7 +581,7 @@ async fn get_preference_sources_returns_all() {
             value: "dark".to_string(),
             confidence: 0.9,
             overridden_by_user: false,
-            source_fact_id: fact,
+            source_fact_id: Some(fact),
         },
         changed_by: ChangedBy::User,
         contexts: vec![],
@@ -539,7 +619,7 @@ async fn invalid_source_fact_id_fails() {
         "dark",
         0.9,
         false,
-        99999, // non-existent fact
+        Some(99999), // non-existent fact
         vec![],
     );
 
@@ -562,7 +642,7 @@ async fn global_preference_with_null_entity_id() {
     let dummy = create_person(&kg, "Dummy").await;
     let fact = create_has_preference_fact(&kg, dummy).await;
 
-    let input = upsert_input(None, "global_theme", "dark", 0.9, false, fact, vec![]);
+    let input = upsert_input(None, "global_theme", "dark", 0.9, false, Some(fact), vec![]);
 
     let pref = kg.insert_preference(input).await.unwrap();
     assert_eq!(pref.entity_id, None);

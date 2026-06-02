@@ -67,7 +67,19 @@ Migration `013` introduces a controlled vocabulary for predicates:
 - `predicates(id, name, description)` — canonical predicate names with stable IDs.
 - `predicate_constraints(predicate_id, allowed_subject_type_id, allowed_object_type_id)` — valid subject/object type combinations per predicate.
 
-Seeded predicates: `is_in`, `visited`, `owns`, `works_as`, `has_partner`, `has_parent`, `born_on`, `died_on`, `located_in`, `created_on`, `has_preference`.
+The following 11 predicates are the complete seeded set:
+
+1. `is_in`
+2. `visited`
+3. `owns`
+4. `works_as`
+5. `has_partner`
+6. `has_parent`
+7. `born_on`
+8. `died_on`
+9. `located_in`
+10. `created_on`
+11. `has_preference`
 
 Validation is enforced at fact-insert time via `validate_predicate(subject_type, predicate, object_type)`.
 

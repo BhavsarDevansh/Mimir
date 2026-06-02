@@ -136,6 +136,126 @@ async fn insert_preference_in_tx(
 }
 
 // ---------------------------------------------------------------------------
+// Update in-place (preserves preference_id for audit trail)
+// ---------------------------------------------------------------------------
+
+async fn update_preference_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    existing_id: i32,
+    input: &UpsertPreferenceInput,
+    now: DateTime<Utc>,
+) -> Result<Preference, KnowledgeError> {
+    // 1. Check for duplicate (excluding the row we are updating).
+    let candidates: Vec<Preference> = sqlx::query_as::<_, Preference>(
+        "SELECT id, entity_id, category_id, key, value, confidence, \
+         overridden_by_user, source_fact_id, created_at, updated_at \
+         FROM preferences \
+         WHERE (entity_id IS ?) AND key = ? AND id != ?",
+    )
+    .bind(input.preference.entity_id)
+    .bind(&input.preference.key)
+    .bind(existing_id)
+    .fetch_all(&mut **tx)
+    .await?;
+
+    let input_len = input.contexts.len();
+
+    for candidate in candidates {
+        let ctx_rows: Vec<PreferenceContext> = sqlx::query_as::<_, PreferenceContext>(
+            "SELECT id, preference_id, context_key, context_value \
+             FROM preference_contexts \
+             WHERE preference_id = ?",
+        )
+        .bind(candidate.id)
+        .fetch_all(&mut **tx)
+        .await?;
+
+        if ctx_rows.len() == input_len {
+            let candidate_ctx_set: HashSet<(&str, &str)> = ctx_rows
+                .iter()
+                .map(|c| (c.context_key.as_str(), c.context_value.as_str()))
+                .collect();
+
+            if input
+                .contexts
+                .iter()
+                .all(|(k, v)| candidate_ctx_set.contains(&(k.as_str(), v.as_str())))
+            {
+                return Err(KnowledgeError::DuplicatePreference);
+            }
+        }
+    }
+
+    // 2. Update preference row.
+    sqlx::query(
+        "UPDATE preferences SET \
+         entity_id = ?, category_id = ?, key = ?, value = ?, \
+         confidence = ?, overridden_by_user = ?, source_fact_id = ?, updated_at = ? \
+         WHERE id = ?",
+    )
+    .bind(input.preference.entity_id)
+    .bind(input.preference.category as i16)
+    .bind(&input.preference.key)
+    .bind(&input.preference.value)
+    .bind(input.preference.confidence)
+    .bind(input.preference.overridden_by_user)
+    .bind(input.preference.source_fact_id)
+    .bind(now)
+    .bind(existing_id)
+    .execute(&mut **tx)
+    .await?;
+
+    // 3. Replace contexts.
+    sqlx::query("DELETE FROM preference_contexts WHERE preference_id = ?")
+        .bind(existing_id)
+        .execute(&mut **tx)
+        .await?;
+
+    for (ctx_key, ctx_value) in &input.contexts {
+        sqlx::query(
+            "INSERT INTO preference_contexts (preference_id, context_key, context_value) \
+             VALUES (?, ?, ?)",
+        )
+        .bind(existing_id)
+        .bind(ctx_key)
+        .bind(ctx_value)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    // 4. Replace sources.
+    sqlx::query("DELETE FROM preference_sources WHERE preference_id = ?")
+        .bind(existing_id)
+        .execute(&mut **tx)
+        .await?;
+
+    for (source_type, source_id) in &input.sources {
+        sqlx::query(
+            "INSERT INTO preference_sources (preference_id, source_type_id, source_id, extracted_at) \
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(existing_id)
+        .bind(*source_type as i16)
+        .bind(source_id)
+        .bind(now)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    // 5. Return updated preference.
+    let pref = sqlx::query_as::<_, Preference>(
+        "SELECT id, entity_id, category_id, key, value, confidence, \
+         overridden_by_user, source_fact_id, created_at, updated_at \
+         FROM preferences WHERE id = ?",
+    )
+    .bind(existing_id)
+    .fetch_one(&mut **tx)
+    .await?;
+
+    Ok(pref)
+}
+
+// ---------------------------------------------------------------------------
 // Insert
 // ---------------------------------------------------------------------------
 
@@ -150,8 +270,14 @@ pub async fn insert_preference(
     input: &UpsertPreferenceInput,
     now: DateTime<Utc>,
 ) -> Result<Preference, KnowledgeError> {
-    // 0. Validate confidence range before acquiring a write lock.
-    if !(0.0..=1.0).contains(&input.preference.confidence) {
+    // 0. Validate confidence before acquiring a write lock.
+    if input.preference.overridden_by_user && input.preference.confidence != 1.0 {
+        return Err(KnowledgeError::Validation(format!(
+            "explicit preference must have confidence 1.0, got {}",
+            input.preference.confidence
+        )));
+    }
+    if !input.preference.overridden_by_user && !(0.0..=1.0).contains(&input.preference.confidence) {
         return Err(KnowledgeError::Validation(format!(
             "confidence must be in [0.0, 1.0], got {}",
             input.preference.confidence
@@ -181,8 +307,14 @@ pub async fn upsert_preference(
     input: &UpsertPreferenceInput,
     now: DateTime<Utc>,
 ) -> Result<(Preference, UpsertAction), KnowledgeError> {
-    // 0. Validate confidence range before acquiring a write lock.
-    if !(0.0..=1.0).contains(&input.preference.confidence) {
+    // 0. Validate confidence before acquiring a write lock.
+    if input.preference.overridden_by_user && input.preference.confidence != 1.0 {
+        return Err(KnowledgeError::Validation(format!(
+            "explicit preference must have confidence 1.0, got {}",
+            input.preference.confidence
+        )));
+    }
+    if !input.preference.overridden_by_user && !(0.0..=1.0).contains(&input.preference.confidence) {
         return Err(KnowledgeError::Validation(format!(
             "confidence must be in [0.0, 1.0], got {}",
             input.preference.confidence
@@ -249,14 +381,8 @@ pub async fn upsert_preference(
 
     let pref = match action {
         UpsertAction::Overwritten => {
-            // Delete old preference (cascades to contexts, sources).
-            sqlx::query("DELETE FROM preferences WHERE id = ?")
-                .bind(existing.id)
-                .execute(&mut *tx)
-                .await?;
-
-            // Insert the new preference atomically in the same transaction.
-            insert_preference_in_tx(&mut tx, input, now).await?
+            // Update in-place to preserve preference_id for audit trail.
+            update_preference_in_tx(&mut tx, existing.id, input, now).await?
         }
         _ => existing,
     };

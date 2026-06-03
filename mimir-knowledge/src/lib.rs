@@ -15,7 +15,7 @@ pub mod queries;
 
 use clock::{Clock, RealClock};
 use sqlx::SqlitePool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
@@ -97,6 +97,7 @@ pub struct KnowledgeGraph {
     clock: Arc<dyn Clock>,
     predicate_cache: Arc<RwLock<PredicateCache>>,
     rule_engine: RuleEngine,
+    pending_confirmations: Arc<RwLock<HashSet<i32>>>,
 }
 
 impl KnowledgeGraph {
@@ -123,15 +124,32 @@ impl KnowledgeGraph {
         engine.register(Box::new(ContradictionRule));
         engine.register(Box::new(ThresholdRule));
 
+        let pending_ids: Vec<i32> =
+            sqlx::query_scalar("SELECT id FROM facts WHERE pending_confirmation = TRUE")
+                .fetch_all(&pool)
+                .await?;
+
+        let pending: HashSet<i32> = pending_ids.into_iter().collect();
+
         Ok(Self {
             pool,
             clock,
             predicate_cache: Arc::new(RwLock::new(PredicateCache::new())),
             rule_engine: engine,
+            pending_confirmations: Arc::new(RwLock::new(pending)),
         })
     }
 
-    /// Access the underlying connection pool.
+    /// Access the rule engine.
+    pub(crate) fn rule_engine(&self) -> &RuleEngine {
+        &self.rule_engine
+    }
+
+    /// Access the pending-confirmation in-memory cache.
+    pub fn pending_confirmations(&self) -> &Arc<RwLock<HashSet<i32>>> {
+        &self.pending_confirmations
+    }
+
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
@@ -685,5 +703,28 @@ impl KnowledgeGraph {
         preference_id: i32,
     ) -> Result<Vec<models::preference::PreferenceAuditLogEntry>, KnowledgeError> {
         queries::preference::get_preference_audit_log(&self.pool, preference_id).await
+    }
+
+    // ------------------------------------------------------------------
+    // Fact extraction pipeline delegates
+    // ------------------------------------------------------------------
+
+    /// Extract facts from a user message via LLM, validate, and insert.
+    pub async fn extract_facts(
+        &self,
+        llm: &Arc<dyn mimir_core::llm::backend::LlmBackend>,
+        user_message: &str,
+    ) -> Result<extract::ExtractionOutcome, KnowledgeError> {
+        extract::extract_facts(self, llm, user_message).await
+    }
+
+    /// Confirm a pending sensitive fact: flip to Active with confidence 1.0.
+    pub async fn confirm_fact(&self, fact_id: i32) -> Result<models::fact::Fact, KnowledgeError> {
+        extract::confirm_fact(self, fact_id).await
+    }
+
+    /// Reject a pending sensitive fact: hard-delete with audit trail.
+    pub async fn reject_fact(&self, fact_id: i32) -> Result<(), KnowledgeError> {
+        extract::reject_fact(self, fact_id).await
     }
 }

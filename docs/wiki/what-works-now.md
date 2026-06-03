@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-05-31  
-> **Version:** 0.25.1  
-> **Phase:** Phase 1 (Core Agent) is complete. Phase 2 (Knowledge Graph) is partially implemented but not yet wired into the daemon.
+> **Last updated:** 2026-06-03
+> **Version:** 0.29.1
+> **Phase:** Phase 1 (Core Agent) is complete. Phase 2 (Knowledge Graph) library code is complete; daemon integration is pending.
 
 ---
 
@@ -34,7 +34,7 @@ Library crates provide code organisation:
 - `mimir-server` — Axum routes, state, middleware (library, no binary)
 - `mimir-client` — HTTP client for talking to the daemon
 - `mimir-api-types` — Shared request/response types
-- `mimir-knowledge` — SQLite knowledge graph (Phase 2; library exists but is **not yet wired into the daemon**)
+- `mimir-knowledge` — SQLite knowledge graph (Phase 2; library is complete but **not yet wired into the daemon**)
 
 ---
 
@@ -130,34 +130,23 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Model override | ✅ Works | `-m gpt-4o-mini` creates a cached override client |
 | Personality override | ✅ Works | `-p concise` overrides the config preset for one query |
 | Markdown rendering | ✅ Works | Terminal output adds blank lines around code fences for readability |
-| Piped input | ✅ Works | `cat file.txt \| mimir ask "summarise this"` |
-| Token usage reporting | ✅ Works | `--verbose` prints prompt + completion + total tokens |
-| Multi-line input | ✅ Works | End a line with `\` to continue in `mimir chat` |
+| Piped input | ✅ Works | `cat file.txt \| mimir ask …` |
+| Multi-line input | ✅ Works | Ctrl-D to submit multi-line text in interactive chat |
+| Token usage display | ✅ Works | `--verbose` shows prompt/completion/total token counts |
 
-### Tool Calling
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Agentic tool loop | ✅ Works | Non-streaming `/chat` executes tools in a loop up to `max_tool_rounds` |
-| Tool call display | ✅ Works | Tool calls are shown as `🔧 Tool Name → result` in both `ask` and `chat` |
-| Built-in tools | ✅ Works | `get_current_time`, `echo`, `memory` |
-| CLI tool wrappers | ✅ Works | Wrap any executable in `~/.config/mimir/tools.toml` |
-| Permission levels | ✅ Works | `auto`, `ask`, `disabled` — per-tool |
-| JSON Schema generation | ✅ Works | Schemas are derived from tool definitions for LLM function calling |
-
-**Known bug:** `get_current_time` returns UTC rather than the user's local timezone ([#45](https://github.com/BhavsarDevansh/Mimir/issues/45)).
-
-### Skills
+### Tools & Skills
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Built-in skills | ✅ Works | `research_synthesis`, `test_driven_development` |
-| User Markdown skills | ✅ Works | Load `.md` files with YAML frontmatter from `~/.config/mimir/skills/` |
-| Skill registry | ✅ Works | SQLite-backed metrics and metadata |
-| Skill CLI | ✅ Works | `list`, `show`, `add`, `delete`, `enable`, `disable` |
-| System-generated skills | 🔄 Partial | Scaffolding exists; advanced lifecycle (pruning, auto-generation) is planned ([#20](https://github.com/BhavsarDevansh/Mimir/issues/20)) |
+| Tool registry | ✅ Works | Object-safe `Tool` trait; permissions per tool |
+| Skill registry | ✅ Works | Object-safe `Skill` trait with `SkillContext` |
+| Builtin tools | ✅ Works | `get_current_time`, `search_web`, `memory`, `context_summary`, etc. |
+| Builtin skills | ✅ Works | `research_synthesis`, `test_driven_development` |
+| User skills | ✅ Works | Markdown files in `~/.config/mimir/skills/` |
+| Generated skills | ✅ Works | Auto-created by the agent; tracked with metrics |
+| Metrics tracking | ✅ Works | SQLite-backed invocation counts, success rates, corrections |
 
-### Memory
+### Memory System
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -204,9 +193,10 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Fact CRUD | ✅ Works | Temporal bounds, statuses, dependencies, cascade forget |
 | Confidence model | ✅ Works | Graph-derived; no LLM involvement, no decay |
 | Inference engine (Rust) | ✅ Works | Transitivity, contradiction, propagation, threshold rules |
-| Provenance tracking | ✅ Works | Source tracking with `connector_id`/`raw_reference` + typed audit log with `change_type`/`changed_by` |
+| Provenance tracking | ✅ Works | Source tracking with connector_id/raw_reference + typed audit log with change_type/changed_by |
 | Forgetting system | ✅ Works | Trash, cascade forget, restore, bulk operations |
 | FTS5 search | ✅ Works | Full-text search over entities and aliases |
+| **Fact extraction pipeline** | ✅ Works | LLM → Rust validation → entity resolution → confidence → sensitive confirmation → insert (issue #55) |
 | **Daemon integration** | ❌ Not yet | The crate is **not wired into** `mimir-server` or the CLI |
 | **`mimir kb` CLI** | 🔄 Partial | `mimir kb audit` available; full CRUD planned for Phase 2 |
 
@@ -235,14 +225,14 @@ The daemon exposes an OpenAI-compatible chat endpoint plus Mimir-specific manage
 | [#71](https://github.com/BhavsarDevansh/Mimir/issues/71) — `mimir chat` streaming bug | Streaming may fail in some environments | Use `mimir ask` for single-shot queries; restart daemon if stream stalls |
 | [#45](https://github.com/BhavsarDevansh/Mimir/issues/45) — UTC time | `get_current_time` returns UTC | Ask Mimir to convert to your timezone verbally |
 | [#25](https://github.com/BhavsarDevansh/Mimir/issues/25) — Unix socket transport | TCP is the only transport | TCP on `127.0.0.1:8080` is secure for local use |
-| Knowledge graph not wired up | No `mimir kb` commands | Use `memory.md` for now; knowledge graph will arrive in a future release |
+| Knowledge graph not wired up | No `mimir kb` commands, no automatic fact extraction from chat | Use `memory.md` for now; knowledge graph will arrive in a future release once the pipeline is wired into the daemon |
 
 ---
 
 ## Roadmap Summary
 
-- **Phase 1 — Core Agent** ✅ Complete (this document describes Phase 1)
-- **Phase 2 — Knowledge Graph** 🔄 In progress (library code is written; integration pending)
+- **Phase 1 — Core Agent** ✅ Complete
+- **Phase 2 — Knowledge Graph** 🔄 Library complete; daemon integration pending
 - **Phase 3 — Connectors** ⏳ Planned (calendar, email, file watchers)
 - **Phase 4 — Reasoning** ⏳ Planned (inference engine expansion)
 - **Phase 5 — Proactive Agent** ⏳ Planned (events, reminders, domain surfacing)

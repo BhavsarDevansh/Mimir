@@ -43,7 +43,7 @@ impl InferenceRule for TransitivityRule {
                 let parent_facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
                     "SELECT id, subject_id, predicate_id, object_id, object_literal, \
                      valid_from, valid_until, confidence, fact_status_id, inferred, \
-                     inference_depth, stale_confidence, created_at, updated_at \
+                     inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
                      FROM facts \
                      WHERE subject_id = ? AND predicate_id = ? AND fact_status_id IN (?, ?)",
                 )
@@ -113,7 +113,7 @@ impl InferenceRule for TransitivityRule {
             let trigger_facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
                 "SELECT id, subject_id, predicate_id, object_id, object_literal, \
                  valid_from, valid_until, confidence, fact_status_id, inferred, \
-                 inference_depth, stale_confidence, created_at, updated_at \
+                 inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
                  FROM facts \
                  WHERE object_id = ? AND predicate_id = ? AND fact_status_id IN (?, ?)",
             )

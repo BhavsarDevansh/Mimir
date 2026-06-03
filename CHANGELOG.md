@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.29.2] - 2026-06-03
+
+### Fixed
+
+- `mimir-knowledge/src/optimization/mod.rs`: `cleanup_stale_pending_confirmations` now deletes `fact_dependencies` rows before deleting the fact and wraps each deletion in a transaction, avoiding `ON DELETE RESTRICT` violations and ensuring atomic DB/cache state.
+
+## [0.29.1] - 2026-06-03
+
+### Fixed
+
+- `mimir-knowledge/src/extract.rs`:
+  - `confirm_fact` now cascades inferred facts instead of discarding them (P1).
+  - `find_existing_fact` dedup query now matches pending-confirmation facts, preventing duplicate sensitive extractions (P1).
+  - `handle_correction` retrospective loop is now atomic: all overlapping facts are marked `Corrected` and soft-deleted in a single transaction before child evaluation (P2).
+- `mimir-knowledge/tests/extraction_test.rs`: corrected misleading comment in `test_casual_extraction` (P3).
+
+## [0.29.0] - 2026-06-03
+
+### Added
+
+- Fact extraction pipeline (issue #55):
+  - `mimir-knowledge/src/extract.rs`: full LLM → Rust validation → entity resolution → confidence assignment → sensitive confirmation → fact insertion pipeline.
+  - LLM tool `remember`: structured schema for extracting subject-predicate-object triples with classification (Explicit / Casual / Correction), temporal bounds, and sensitivity flags.
+  - Entity resolution: names matched via exact → alias → FTS5 fuzzy; new entities auto-created with LLM-provided type.
+  - Confidence assignment: classification maps to `SourceType` → `confidence::initial()`; LLM hints are ignored.
+  - Correction handling:
+    - Temporal: `correction_scope` as ISO-8601 datetime closes the sole open-ended predecessor.
+    - Retrospective: `correction_scope = "always"` marks overlapping facts as `Corrected`, moves them to trash, and inserts the new fact.
+  - Sensitive fact confirmation flow:
+    - Sensitive facts inserted as `Disputed` with `pending_confirmation = TRUE`.
+    - In-memory `HashSet<i32>` cache rebuilt from DB on startup.
+    - `confirm_fact`: flips to `Active`, confidence `1.0`, triggers inference.
+    - `reject_fact`: hard-deletes with `Rejected` audit entry.
+  - Corroboration stub for issue #79: duplicate facts returned in `ExtractionOutcome::corroborated` without insertion.
+  - 11 integration tests covering explicit, casual, entity resolution, temporal/retrospective correction, sensitive confirmation/rejection, multiple facts, empty extraction, and invalid LLM output.
+
+### Changed
+
+- `facts` table: added `pending_confirmation BOOLEAN NOT NULL DEFAULT FALSE` (migration 026).
+- `change_types` table: added `rejected` (migration 027).
+- `Fact` model: added `pending_confirmation` field.
+- `ChangeType` enum: added `Rejected = 8`.
+- `ranges_overlap` in `queries/fact.rs`: made `pub` for reuse in extraction pipeline.
+
+
 ## [0.28.1] - 2026-06-02
 
 ### Fixed

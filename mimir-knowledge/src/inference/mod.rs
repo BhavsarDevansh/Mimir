@@ -102,7 +102,7 @@ impl RuleEngine {
         let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
             "SELECT id, subject_id, predicate_id, object_id, object_literal, \
              valid_from, valid_until, confidence, fact_status_id, inferred, \
-             inference_depth, stale_confidence, created_at, updated_at \
+             inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
              FROM facts \
              WHERE fact_status_id IN (?, ?)",
         )

@@ -3,6 +3,7 @@
 use crate::KnowledgeGraph;
 use crate::inference::rules::contradiction::ContradictionRule;
 use crate::inference::rules::threshold::ThresholdRule;
+use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::fact::NewFact;
 
 /// Check whether any fact with the same triple already exists.
@@ -79,8 +80,70 @@ pub async fn run_nightly_optimization(kg: &KnowledgeGraph) -> Result<(), crate::
     // 4. Threshold nightly re-count.
     ThresholdRule::evaluate_batch(kg).await?;
 
+    // 5. Cleanup stale pending confirmations (7-day TTL).
+    cleanup_stale_pending_confirmations(kg).await?;
+
     // TODO: dormant cleanup pass.
     // TODO: compaction pass.
+
+    Ok(())
+}
+
+/// Remove pending-confirmation facts that have been ignored for 7+ days.
+async fn cleanup_stale_pending_confirmations(
+    kg: &KnowledgeGraph,
+) -> Result<(), crate::KnowledgeError> {
+    let now = kg.now();
+    let cutoff = now - chrono::Duration::days(7);
+
+    // Find all stale pending facts.
+    let stale_ids: Vec<i32> = sqlx::query_scalar(
+        "SELECT id FROM facts \
+         WHERE pending_confirmation = TRUE AND updated_at < ?",
+    )
+    .bind(cutoff)
+    .fetch_all(kg.pool())
+    .await?;
+
+    // Hard-delete each one and remove from in-memory cache.
+    for fact_id in stale_ids {
+        let mut tx = kg.pool().begin().await?;
+
+        // Remove dependency rows first to avoid ON DELETE RESTRICT.
+        sqlx::query("DELETE FROM fact_dependencies WHERE parent_fact_id = ? OR child_fact_id = ?")
+            .bind(fact_id)
+            .bind(fact_id)
+            .execute(&mut *tx)
+            .await?;
+
+        // Write a system Rejected audit entry before deletion (omitting the
+        // sensitive value per privacy policy for expired pending facts).
+        sqlx::query(
+            "INSERT INTO fact_audit_log \
+             (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(fact_id)
+        .bind(ChangeType::Rejected as i16)
+        .bind(None::<&str>)
+        .bind(None::<&str>)
+        .bind(now)
+        .bind(ChangedBy::NightlyOptimization as i16)
+        .bind(Some("Auto-expired after 7 days without confirmation"))
+        .execute(&mut *tx)
+        .await?;
+
+        // Delete the fact (sources cascade automatically).
+        sqlx::query("DELETE FROM facts WHERE id = ?")
+            .bind(fact_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+
+        // Remove from in-memory cache.
+        kg.pending_confirmations().write().await.remove(&fact_id);
+    }
 
     Ok(())
 }

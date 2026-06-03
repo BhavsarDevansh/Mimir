@@ -25,5 +25,6 @@ static_assertions = "1.1"
 uuid = { version = "1.23", features = ["v4", "serde"] }
 
 [dev-dependencies]
+mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

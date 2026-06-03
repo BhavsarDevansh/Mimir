@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.29.2] - 2026-06-03
+
+### Fixed
+
+- `mimir-knowledge/src/optimization/mod.rs`: `cleanup_stale_pending_confirmations` now deletes `fact_dependencies` rows before deleting the fact and wraps each deletion in a transaction, avoiding `ON DELETE RESTRICT` violations and ensuring atomic DB/cache state.
+
 ## [0.29.1] - 2026-06-03
 
 ### Fixed

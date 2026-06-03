@@ -106,11 +106,22 @@ async fn cleanup_stale_pending_confirmations(
 
     // Hard-delete each one and remove from in-memory cache.
     for fact_id in stale_ids {
+        let mut tx = kg.pool().begin().await?;
+
+        // Remove dependency rows first to avoid ON DELETE RESTRICT.
+        sqlx::query("DELETE FROM fact_dependencies WHERE parent_fact_id = ? OR child_fact_id = ?")
+            .bind(fact_id)
+            .bind(fact_id)
+            .execute(&mut *tx)
+            .await?;
+
         // Delete the fact (sources cascade automatically).
         sqlx::query("DELETE FROM facts WHERE id = ?")
             .bind(fact_id)
-            .execute(kg.pool())
+            .execute(&mut *tx)
             .await?;
+
+        tx.commit().await?;
 
         // Remove from in-memory cache.
         kg.pending_confirmations().write().await.remove(&fact_id);

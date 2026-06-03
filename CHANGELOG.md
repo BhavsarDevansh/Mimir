@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.28.1] - 2026-06-02
+
+### Fixed
+
+- Review feedback on inference engine (issue #54):
+  - `CHANGELOG.md`: reordered 0.28.0 section to top with markdownlint blank lines.
+  - `docs/inference-engine.md`: explicit facts are detected by `!inferred` rather than `confidence == 1.0`.
+  - `mimir-knowledge/src/inference/mod.rs`: streaming evaluation for `evaluate_batch` (pending — rule loop still materialises; moved to follow-up).
+  - `contradiction.rs`: explicitness uses `!inferred`; status updates wrapped in atomic transactions via `set_status_tx`.
+  - `threshold.rs`: DB errors propagated instead of `unwrap_or(0)`; stale preferences deleted when source fact missing; duplicate `StatusChange` audit entries deduplicated within 24h.
+  - `transitivity.rs`: trigger queries include `FactStatus::Inferred`; inferred facts use temporal intersection of parent windows.
+  - `lib.rs`: `ensure_predicate` insert is atomic with `ON CONFLICT`.
+  - `NewFact`: removed `Default` impl; added `NewFact::new(subject_id, predicate)` constructor.
+  - `optimization/mod.rs`: confidence cascade uses unlimited depth (`None`); operational errors propagated instead of swallowed.
+  - Tests: predicate name roundtrip restored; unknown predicate test uses absent ID; contradiction relation type asserted; cycle-safety contract replaces brittle exact count.
+
+## [0.28.0] - 2026-06-02
+
+### Added
+
+- Inference engine core with `InferenceRule` trait, `RuleEngine`, and `CascadeContext` for cycle-safe unbounded cascades.
+- Transitivity rule: `visited`/`is_in` + `is_in` chain → inferred transitive facts with depth-tracked confidence.
+- Contradiction rule: real-time `Disputed` status + bidirectional `Contradicts` edges; nightly batch auto-resolves explicit > inferred disputes.
+- Threshold rule: 3+ `rejected_action` facts → `General` preference upsert; nightly re-count warns if threshold drops.
+- `PredicateRegistry` with `ensure_predicate` and `predicate_name` for unlimited extensible predicates backed by the DB.
+- Migrations 024 (Contradicts relation type) and 025 (rejected_action predicate).
+- Nightly optimization orchestrator (`run_nightly_optimization`) wiring contradiction resolution, confidence propagation, and inference re-evaluation.
+- Integration tests for transitivity, contradiction, threshold, cascade, and cycle safety.
+
+### Changed
+
+- Removed compile-time `Predicate` enum; `NewFact.predicate` is now a `String` resolved at runtime.
+- `Fact::predicate()` removed; callers use `kg.predicate_name(fact.predicate_id)`.
+- `KnowledgeGraph::insert_fact` automatically runs inference rules and cascades inferred facts.
+- `NewFact` extended with `inferred`, `inference_depth`, `confidence`, and `parent_fact_ids` fields.
+
+### Documentation
+
+- Added `docs/inference-engine.md` with architecture, rule descriptions, confidence formulas, and cascade behavior.
+- Added `docs/wiki/inference-rules.md` with user-facing examples and best practices.
+
 ## 0.27.1 (2026-06-02)
 
 > Next-day hotfix release for 0.27.0.

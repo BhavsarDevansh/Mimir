@@ -15,8 +15,20 @@ pub mod queries;
 
 use clock::{Clock, RealClock};
 use sqlx::SqlitePool;
+use std::collections::HashMap;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
+use tokio::sync::RwLock;
+
+use crate::inference::rules::contradiction::ContradictionRule;
+use crate::inference::rules::threshold::{PREDICATE_REJECTED_ACTION, ThresholdRule};
+use crate::inference::rules::transitivity::TransitivityRule;
+use crate::inference::{CascadeContext, RuleEngine};
+use crate::models::enums::RelationType;
+use crate::models::fact::NewFact;
+use crate::models::source::{ExtractionMethod, SourceType};
 
 /// Errors that can occur during knowledge graph initialization or operation.
 #[derive(Debug, thiserror::Error)]
@@ -61,6 +73,21 @@ pub enum KnowledgeError {
     DuplicatePreference,
 }
 
+/// In-memory cache for predicate name ↔ id lookups.
+struct PredicateCache {
+    name_to_id: HashMap<String, i16>,
+    id_to_name: HashMap<i16, String>,
+}
+
+impl PredicateCache {
+    fn new() -> Self {
+        Self {
+            name_to_id: HashMap::new(),
+            id_to_name: HashMap::new(),
+        }
+    }
+}
+
 /// The public API for the knowledge graph.
 ///
 /// Holds a SQLite connection pool and a clock for deterministic timestamps
@@ -68,6 +95,8 @@ pub enum KnowledgeError {
 pub struct KnowledgeGraph {
     pool: SqlitePool,
     clock: Arc<dyn Clock>,
+    predicate_cache: Arc<RwLock<PredicateCache>>,
+    rule_engine: RuleEngine,
 }
 
 impl KnowledgeGraph {
@@ -89,12 +118,92 @@ impl KnowledgeGraph {
         let pool = db::create_pool(db_path).await?;
         sqlx::migrate!("src/db/migrations").run(&pool).await?;
 
-        Ok(Self { pool, clock })
+        let mut engine = RuleEngine::new();
+        engine.register(Box::new(TransitivityRule));
+        engine.register(Box::new(ContradictionRule));
+        engine.register(Box::new(ThresholdRule));
+
+        Ok(Self {
+            pool,
+            clock,
+            predicate_cache: Arc::new(RwLock::new(PredicateCache::new())),
+            rule_engine: engine,
+        })
     }
 
     /// Access the underlying connection pool.
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    // ------------------------------------------------------------------
+    // Predicate registry
+    // ------------------------------------------------------------------
+
+    /// Ensure a predicate exists in the database, returning its stable id.
+    /// Creates the row silently if missing.
+    pub async fn ensure_predicate(&self, name: &str) -> Result<i16, KnowledgeError> {
+        {
+            let cache = self.predicate_cache.read().await;
+            if let Some(&id) = cache.name_to_id.get(name) {
+                return Ok(id);
+            }
+        }
+
+        let row: Option<(i16,)> = sqlx::query_as("SELECT id FROM predicates WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        let id = match row {
+            Some((id,)) => id,
+            None => {
+                let id: i64 = sqlx::query_scalar(
+                    "INSERT INTO predicates (name, description) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET name = predicates.name RETURNING id",
+                )
+                .bind(name)
+                .bind(format!("Auto-created predicate: {}", name))
+                .fetch_one(&self.pool)
+                .await?;
+                id as i16
+            }
+        };
+
+        let mut cache = self.predicate_cache.write().await;
+        cache.name_to_id.insert(name.to_string(), id);
+        cache.id_to_name.insert(id, name.to_string());
+        Ok(id)
+    }
+
+    /// Reverse lookup: get the predicate name for a given id.
+    pub async fn predicate_name(&self, id: i16) -> Option<String> {
+        {
+            let cache = self.predicate_cache.read().await;
+            if let Some(name) = cache.id_to_name.get(&id) {
+                return Some(name.clone());
+            }
+        }
+
+        let row: Option<(String,)> =
+            match sqlx::query_as("SELECT name FROM predicates WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("predicate_name lookup failed for id {}: {}", id, e);
+                    return None;
+                }
+            };
+
+        if let Some((ref name,)) = row {
+            let mut cache = self.predicate_cache.write().await;
+            cache.name_to_id.insert(name.clone(), id);
+            cache.id_to_name.insert(id, name.clone());
+        }
+
+        row.map(|r| r.0)
     }
 
     /// Current timestamp according to the configured clock.
@@ -239,12 +348,134 @@ impl KnowledgeGraph {
     // Fact CRUD delegates
     // ------------------------------------------------------------------
 
-    /// Insert a new fact with temporal overlap handling and provenance.
+    /// Insert a new fact, running inference rules and cascading inferred facts.
     pub async fn insert_fact(
         &self,
         new_fact: models::fact::NewFact,
     ) -> Result<models::fact::Fact, KnowledgeError> {
-        queries::fact::insert_fact(&self.pool, &new_fact, self.now()).await
+        self.insert_fact_internal(new_fact, &mut CascadeContext::new())
+            .await
+    }
+
+    pub(crate) fn insert_fact_internal<'a>(
+        &'a self,
+        mut new_fact: NewFact,
+        ctx: &'a mut CascadeContext,
+    ) -> Pin<Box<dyn Future<Output = Result<models::fact::Fact, KnowledgeError>> + Send + 'a>> {
+        Box::pin(async move {
+            // Resolve predicate name to id.
+            let predicate_id = self.ensure_predicate(&new_fact.predicate).await?;
+
+            // Cycle detection: skip duplicate triples in the same cascade.
+            if ctx.contains(
+                new_fact.subject_id,
+                predicate_id,
+                new_fact.object_id,
+                new_fact.object_literal.as_deref(),
+            ) {
+                return Err(KnowledgeError::Validation(
+                    "inference cycle detected".to_string(),
+                ));
+            }
+            ctx.insert(
+                new_fact.subject_id,
+                predicate_id,
+                new_fact.object_id,
+                new_fact.object_literal.clone(),
+            );
+
+            // Determine confidence.
+            let confidence = if let Some(conf) = new_fact.confidence {
+                conf
+            } else if new_fact.inferred {
+                confidence::initial(SourceType::Inference, None)
+            } else if let Some(ct) = new_fact.connector_type {
+                if new_fact.connector_id.is_none()
+                    || new_fact.raw_reference.is_none()
+                    || new_fact.extraction_method.is_none()
+                {
+                    return Err(KnowledgeError::Validation(
+                        "Connector provenance requires connector_id, raw_reference, and extraction_method"
+                            .to_string(),
+                    ));
+                }
+                let db_score: Option<f32> = sqlx::query_scalar(
+                    "SELECT score FROM connector_reliability WHERE connector_type_id = ?",
+                )
+                .bind(ct as i16)
+                .fetch_optional(&self.pool)
+                .await?;
+                db_score.unwrap_or_else(|| confidence::default_connector_score(ct))
+            } else {
+                confidence::initial(new_fact.source_type, None)
+            };
+
+            // Ensure inferred facts use Inference source type.
+            if new_fact.inferred {
+                new_fact.source_type = SourceType::Inference;
+                new_fact.extraction_method = Some(ExtractionMethod::InferenceRule);
+            }
+
+            let mut tx = self.pool.begin().await?;
+
+            let fact = queries::fact::insert_fact_in_tx(
+                &mut tx,
+                &new_fact,
+                predicate_id,
+                confidence,
+                self.now(),
+            )
+            .await?;
+
+            // Write InferredFrom dependencies for inferred facts.
+            for parent_id in &new_fact.parent_fact_ids {
+                sqlx::query(
+                    "INSERT INTO fact_dependencies \
+                     (parent_fact_id, child_fact_id, relation_type_id, is_positive) \
+                     VALUES (?, ?, ?, ?)",
+                )
+                .bind(*parent_id)
+                .bind(fact.id)
+                .bind(RelationType::InferredFrom as i16)
+                .bind(true)
+                .execute(&mut *tx)
+                .await?;
+            }
+
+            // Side-effect: check rejected_action thresholds (decoupled from InferenceRule trait).
+            let threshold_input = if new_fact.predicate == PREDICATE_REJECTED_ACTION {
+                ThresholdRule::check_threshold(&fact, self, &mut tx).await?
+            } else {
+                None
+            };
+
+            tx.commit().await?;
+
+            if let Some(input) = threshold_input {
+                if let Err(e) = self.upsert_preference(input).await {
+                    tracing::warn!("threshold preference upsert failed: {}", e);
+                }
+            }
+
+            // Run inference rules and cascade inferred facts.
+            match self.rule_engine.evaluate_insert(&fact, self, ctx).await {
+                Ok(inferred) => {
+                    for mut inferred_fact in inferred {
+                        inferred_fact.inferred = true;
+                        inferred_fact.source_type = SourceType::Inference;
+                        inferred_fact.extraction_method = Some(ExtractionMethod::InferenceRule);
+                        if let Err(e) = self.insert_fact_internal(inferred_fact, ctx).await {
+                            tracing::warn!("inference cascade failed: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("inference evaluation failed: {}", e);
+                }
+            }
+
+            Ok(fact)
+        })
     }
 
     /// Get a fact by ID.
@@ -264,10 +495,10 @@ impl KnowledgeGraph {
     /// List facts for a predicate.
     pub async fn get_facts_by_predicate(
         &self,
-        predicate: models::enums::Predicate,
+        predicate_id: i16,
         limit: i64,
     ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
-        queries::fact::get_by_predicate(&self.pool, predicate as i16, limit).await
+        queries::fact::get_by_predicate(&self.pool, predicate_id, limit).await
     }
 
     /// List facts for an object entity.
@@ -283,10 +514,10 @@ impl KnowledgeGraph {
     pub async fn get_active_facts_at(
         &self,
         subject_id: i32,
-        predicate: models::enums::Predicate,
+        predicate_id: i16,
         at: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
-        queries::fact::get_active_facts_at(&self.pool, subject_id, predicate as i16, at).await
+        queries::fact::get_active_facts_at(&self.pool, subject_id, predicate_id, at).await
     }
 
     /// Update a fact's valid-until timestamp.

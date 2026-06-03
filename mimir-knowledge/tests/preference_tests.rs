@@ -3,7 +3,7 @@
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::audit_log::ChangedBy;
 use mimir_knowledge::models::entity::EntityType;
-use mimir_knowledge::models::enums::Predicate;
+
 use mimir_knowledge::models::fact::NewFact;
 use mimir_knowledge::models::preference::{
     NewPreference, PreferenceCategory, PreferenceSourceType, UpsertAction, UpsertPreferenceInput,
@@ -25,7 +25,7 @@ async fn create_has_preference_fact(kg: &KnowledgeGraph, subject_id: i32) -> i32
     let fact = kg
         .insert_fact(NewFact {
             subject_id,
-            predicate: Predicate::HasPreference,
+            predicate: "has_preference".to_string(),
             object_id: None,
             object_literal: Some("pref".to_string()),
             valid_from: None,
@@ -35,6 +35,10 @@ async fn create_has_preference_fact(kg: &KnowledgeGraph, subject_id: i32) -> i32
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();

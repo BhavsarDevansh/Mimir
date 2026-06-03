@@ -19,6 +19,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "time", "fs", "macros", 
 thiserror = "2.0"
 anyhow = "1.0"
 tracing = "0.1"
+async-trait = "0.1"
+futures = "0.3"
 static_assertions = "1.1"
 uuid = { version = "1.23", features = ["v4", "serde"] }
 

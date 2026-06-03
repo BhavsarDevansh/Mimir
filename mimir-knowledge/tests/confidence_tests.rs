@@ -1,4 +1,4 @@
-use mimir_knowledge::models::enums::{ConnectorType, Predicate};
+use mimir_knowledge::models::enums::ConnectorType;
 use mimir_knowledge::models::fact::NewFact;
 use mimir_knowledge::models::source::SourceType;
 use mimir_knowledge::{KnowledgeGraph, confidence};
@@ -252,7 +252,7 @@ async fn test_user_edit_confidence_is_one() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -262,6 +262,10 @@ async fn test_user_edit_confidence_is_one() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -282,7 +286,7 @@ async fn test_casual_mention_confidence_is_low() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -292,6 +296,10 @@ async fn test_casual_mention_confidence_is_low() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -312,7 +320,7 @@ async fn test_system_confidence_is_one() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -322,6 +330,10 @@ async fn test_system_confidence_is_one() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -342,7 +354,7 @@ async fn test_import_confidence_is_eighty() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -352,6 +364,10 @@ async fn test_import_confidence_is_eighty() {
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -377,7 +393,7 @@ async fn test_connector_confidence_uses_db_reliability() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: Predicate::IsIn,
+            predicate: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -389,6 +405,10 @@ async fn test_connector_confidence_uses_db_reliability() {
             extraction_method: Some(
                 mimir_knowledge::models::source::ExtractionMethod::StructuredParse,
             ),
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
         })
         .await
         .unwrap();

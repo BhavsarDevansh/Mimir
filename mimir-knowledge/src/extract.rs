@@ -13,7 +13,7 @@ use crate::inference::CascadeContext;
 use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::entity::{Entity, EntityType};
 use crate::models::fact::{Fact, FactStatus, NewFact};
-use crate::models::source::SourceType;
+use crate::models::source::{ExtractionMethod, SourceType};
 use crate::queries;
 use crate::{KnowledgeError, KnowledgeGraph};
 
@@ -251,7 +251,7 @@ async fn find_existing_fact(
         "SELECT id FROM facts \
          WHERE subject_id = ? AND predicate_id = ? \
          AND object_id IS ? AND object_literal IS ? \
-         AND fact_status_id = ? \
+         AND (fact_status_id = ? OR pending_confirmation = TRUE) \
          AND ((valid_from IS ?) OR (valid_from = ?)) \
          AND ((valid_until IS ?) OR (valid_until = ?))",
     )
@@ -506,10 +506,13 @@ async fn handle_correction(
             )
             .await?;
 
+            let mut tx = kg.pool().begin().await?;
+            let mut all_children: Vec<(i32, bool)> = Vec::new();
+
             for old in overlapping {
                 // Mark as Corrected.
-                queries::fact::set_status(
-                    kg.pool(),
+                queries::fact::set_status_tx(
+                    &mut tx,
                     old.id,
                     FactStatus::Corrected,
                     now,
@@ -518,8 +521,18 @@ async fn handle_correction(
                 .await?;
 
                 // Move to trash (soft-delete with cascade).
-                crate::forget::forget_fact(kg.pool(), old.id, ChangedBy::System, now).await?;
+                let children =
+                    crate::forget::forget_fact_tx(&mut tx, old.id, ChangedBy::System, now).await?;
+                all_children.extend(children);
             }
+
+            tx.commit().await?;
+
+            // Deduplicate children so each orphan is evaluated once.
+            let mut seen = std::collections::HashSet::new();
+            all_children.retain(|(id, _)| seen.insert(*id));
+
+            crate::forget::evaluate_children(kg.pool(), all_children, now).await?;
         }
         Some(datetime_str) => {
             // Temporal correction: parse the datetime and use it as valid_from.
@@ -619,12 +632,27 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
 
     kg.pending_confirmations().write().await.remove(&fact_id);
 
-    // Trigger inference now that the fact is Active.
+    // Trigger inference now that the fact is Active and cascade inferred facts.
     let mut ctx = CascadeContext::new();
-    let _ = kg
+    match kg
         .rule_engine()
         .evaluate_insert(&updated, kg, &mut ctx)
-        .await;
+        .await
+    {
+        Ok(inferred) => {
+            for mut inferred_fact in inferred {
+                inferred_fact.inferred = true;
+                inferred_fact.source_type = SourceType::Inference;
+                inferred_fact.extraction_method = Some(ExtractionMethod::InferenceRule);
+                if let Err(e) = kg.insert_fact_internal(inferred_fact, &mut ctx).await {
+                    tracing::warn!("inference cascade failed: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("inference evaluation failed: {}", e);
+        }
+    }
 
     Ok(updated)
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.29.1] - 2026-06-03
+
+### Fixed
+
+- `mimir-knowledge/src/extract.rs`:
+  - `confirm_fact` now cascades inferred facts instead of discarding them (P1).
+  - `find_existing_fact` dedup query now matches pending-confirmation facts, preventing duplicate sensitive extractions (P1).
+  - `handle_correction` retrospective loop is now atomic: all overlapping facts are marked `Corrected` and soft-deleted in a single transaction before child evaluation (P2).
+- `mimir-knowledge/tests/extraction_test.rs`: corrected misleading comment in `test_casual_extraction` (P3).
+
 ## [0.29.0] - 2026-06-03
 
 ### Added

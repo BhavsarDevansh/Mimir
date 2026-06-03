@@ -113,7 +113,7 @@ async fn test_casual_extraction() {
     assert_eq!(fact.confidence, 0.30);
     assert_eq!(fact.status(), Some(FactStatus::Disputed));
 
-    // The old explicit fact should still exist and be Active.
+    // The old explicit fact should still exist but be Disputed due to casual contradiction.
     let old_facts = tg.kg.get_facts_by_subject(devansh, 10).await.unwrap();
     let explicit = old_facts.iter().find(|f| f.confidence == 1.0).unwrap();
     assert_eq!(explicit.status(), Some(FactStatus::Disputed));

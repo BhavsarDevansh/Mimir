@@ -124,13 +124,12 @@ impl KnowledgeGraph {
         engine.register(Box::new(ContradictionRule));
         engine.register(Box::new(ThresholdRule));
 
-        let pending: HashSet<i32> =
+        let pending_ids: Vec<i32> =
             sqlx::query_scalar("SELECT id FROM facts WHERE pending_confirmation = TRUE")
                 .fetch_all(&pool)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .collect();
+                .await?;
+
+        let pending: HashSet<i32> = pending_ids.into_iter().collect();
 
         Ok(Self {
             pool,

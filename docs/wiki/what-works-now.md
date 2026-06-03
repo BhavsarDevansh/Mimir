@@ -1,7 +1,7 @@
 # What Works in Mimir Today
 
 > **Last updated:** 2026-06-03
-> **Version:** 0.29.0
+> **Version:** 0.29.1
 > **Phase:** Phase 1 (Core Agent) is complete. Phase 2 (Knowledge Graph) library code is complete; daemon integration is pending.
 
 ---

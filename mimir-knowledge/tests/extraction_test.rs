@@ -462,3 +462,70 @@ async fn test_reject_sensitive_fact() {
             .contains(&pending.fact_id)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 12: Pending confirmation 7-day TTL cleanup
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_pending_confirmation_ttl_cleanup() {
+    let tg = TestGraph::new().await;
+
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "test_user",
+        "subject_type": "Person",
+        "predicate": "health_condition",
+        "object": "diabetes",
+        "object_is_entity": false,
+        "is_sensitive": true
+    })]);
+
+    let mock = build_mock_with_tool_output(tool_args);
+    let outcome = tg
+        .kg
+        .extract_facts(&mock, "I have diabetes.")
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.pending_confirmation.len(), 1);
+    let pending = &outcome.pending_confirmation[0];
+    let fact_id = pending.fact_id;
+
+    // Verify the fact exists and is in the cache.
+    let fact = tg.kg.get_fact(fact_id).await.unwrap().unwrap();
+    assert!(fact.pending_confirmation);
+    assert!(
+        tg.kg
+            .pending_confirmations()
+            .read()
+            .await
+            .contains(&fact_id)
+    );
+
+    // Backdate the updated_at timestamp to 8 days ago.
+    let eight_days_ago = chrono::Utc::now() - chrono::Duration::days(8);
+    sqlx::query("UPDATE facts SET updated_at = ? WHERE id = ?")
+        .bind(eight_days_ago)
+        .bind(fact_id)
+        .execute(tg.kg.pool())
+        .await
+        .unwrap();
+
+    // Run the nightly optimization which includes the cleanup.
+    mimir_knowledge::optimization::run_nightly_optimization(&tg.kg)
+        .await
+        .unwrap();
+
+    // Verify the fact has been hard-deleted.
+    assert!(tg.kg.get_fact(fact_id).await.unwrap().is_none());
+
+    // Verify it's removed from the in-memory cache.
+    assert!(
+        !tg.kg
+            .pending_confirmations()
+            .read()
+            .await
+            .contains(&fact_id)
+    );
+}

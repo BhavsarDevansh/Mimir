@@ -371,6 +371,106 @@ enum ProcessResult {
     Corroborated(i32),
 }
 
+/// Insert a sensitive fact atomically with Disputed status and pending_confirmation=TRUE.
+async fn insert_sensitive_fact(
+    kg: &KnowledgeGraph,
+    new_fact: NewFact,
+    now: DateTime<Utc>,
+) -> Result<Fact, KnowledgeError> {
+    let predicate_id = kg.ensure_predicate(&new_fact.predicate).await?;
+
+    // Calculate confidence
+    let confidence = new_fact.confidence.unwrap_or_else(|| {
+        let source_type = source_type_for(Classification::Explicit);
+        crate::confidence::initial(source_type, None)
+    });
+
+    let mut tx = kg.pool().begin().await?;
+
+    // Insert with Disputed status and pending_confirmation=TRUE in a single atomic operation.
+    let fact_id: i64 = sqlx::query_scalar(
+        "INSERT INTO facts \
+         (subject_id, predicate_id, object_id, object_literal, valid_from, valid_until, \
+          confidence, fact_status_id, inferred, inference_depth, pending_confirmation, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         RETURNING id",
+    )
+    .bind(new_fact.subject_id)
+    .bind(predicate_id)
+    .bind(new_fact.object_id)
+    .bind(&new_fact.object_literal)
+    .bind(new_fact.valid_from)
+    .bind(new_fact.valid_until)
+    .bind(confidence)
+    .bind(FactStatus::Disputed as i16)
+    .bind(new_fact.inferred)
+    .bind(new_fact.inference_depth)
+    .bind(true) // pending_confirmation
+    .bind(now)
+    .bind(now)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let fact_id = fact_id as i32;
+
+    // Insert source
+    let extraction_method_id = new_fact.extraction_method.map(|e| e as i16);
+    let connector_type_id = new_fact.connector_type.map(|ct| ct as i16);
+    sqlx::query(
+        "INSERT INTO sources \
+         (fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(fact_id)
+    .bind(new_fact.source_type as i16)
+    .bind(&new_fact.connector_id)
+    .bind(connector_type_id)
+    .bind(&new_fact.raw_reference)
+    .bind(now)
+    .bind(extraction_method_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Audit log
+    let new_value = serde_json::json!({
+        "fact_id": fact_id,
+        "confidence": confidence,
+        "fact_status_id": FactStatus::Disputed as i16,
+        "pending_confirmation": true,
+    })
+    .to_string();
+
+    sqlx::query(
+        "INSERT INTO fact_audit_log \
+         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(fact_id)
+    .bind(ChangeType::Created as i16)
+    .bind(None::<&str>)
+    .bind(new_value)
+    .bind(now)
+    .bind(ChangedBy::System as i16)
+    .bind(Some("Sensitive fact pending confirmation"))
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    // Fetch the created fact
+    let fact: Fact = sqlx::query_as::<_, Fact>(
+        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+         valid_from, valid_until, confidence, fact_status_id, inferred, \
+         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         FROM facts WHERE id = ?",
+    )
+    .bind(fact_id)
+    .fetch_one(kg.pool())
+    .await?;
+
+    Ok(fact)
+}
+
 async fn process_extracted_fact(
     kg: &KnowledgeGraph,
     extracted: ExtractedFact,
@@ -385,19 +485,43 @@ async fn process_extracted_fact(
         .transpose()?;
 
     // 4. Parse temporal.
-    let valid_from = extracted
-        .temporal
-        .as_ref()
-        .and_then(|t| t.valid_from.as_ref())
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone::<Utc>(&Utc));
+    let valid_from = if let Some(temporal) = &extracted.temporal {
+        if let Some(s) = &temporal.valid_from {
+            match DateTime::parse_from_rfc3339(s) {
+                Ok(dt) => Some(dt.with_timezone::<Utc>(&Utc)),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse valid_from temporal bound '{}': {}. Temporal constraint ignored.",
+                        s, e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
-    let valid_until = extracted
-        .temporal
-        .as_ref()
-        .and_then(|t| t.valid_until.as_ref())
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone::<Utc>(&Utc));
+    let valid_until = if let Some(temporal) = &extracted.temporal {
+        if let Some(s) = &temporal.valid_until {
+            match DateTime::parse_from_rfc3339(s) {
+                Ok(dt) => Some(dt.with_timezone::<Utc>(&Utc)),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse valid_until temporal bound '{}': {}. Temporal constraint ignored.",
+                        s, e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     // 5. Resolve entities.
     let subject = resolve_entity(kg, &extracted.subject, subject_type).await?;
@@ -454,23 +578,12 @@ async fn process_extracted_fact(
         handle_correction(kg, &extracted, subject.id, predicate_id, &mut new_fact, now).await?;
     }
 
-    // 10. Insert fact.
-    let fact = kg.insert_fact(new_fact).await?;
-
-    // 11. If sensitive, mark pending confirmation.
+    // 10. Insert fact, handling sensitive facts atomically.
     if extracted.is_sensitive {
-        // Override status to Disputed and set pending flag.
-        let mut tx = kg.pool().begin().await?;
-        sqlx::query(
-            "UPDATE facts SET fact_status_id = ?, pending_confirmation = TRUE, updated_at = ? WHERE id = ?",
-        )
-        .bind(FactStatus::Disputed as i16)
-        .bind(now)
-        .bind(fact.id)
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
+        // For sensitive facts, insert directly with Disputed status and pending_confirmation in one transaction.
+        let fact = insert_sensitive_fact(kg, new_fact, now).await?;
 
+        // Only add to in-memory cache after successful commit.
         kg.pending_confirmations().write().await.insert(fact.id);
 
         return Ok(ProcessResult::Pending(PendingFact {
@@ -481,6 +594,8 @@ async fn process_extracted_fact(
         }));
     }
 
+    // Non-sensitive facts go through the normal path.
+    let fact = kg.insert_fact(new_fact).await?;
     Ok(ProcessResult::Inserted(fact))
 }
 
@@ -536,11 +651,19 @@ async fn handle_correction(
         }
         Some(datetime_str) => {
             // Temporal correction: parse the datetime and use it as valid_from.
-            if let Ok(dt) = DateTime::parse_from_rfc3339(datetime_str) {
-                new_fact.valid_from = Some(dt.with_timezone::<Utc>(&Utc));
+            match DateTime::parse_from_rfc3339(datetime_str) {
+                Ok(dt) => {
+                    new_fact.valid_from = Some(dt.with_timezone::<Utc>(&Utc));
+                    // The existing insert_fact temporal-overlap logic will close the
+                    // sole open-ended predecessor at this datetime automatically.
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse correction_scope datetime '{}': {}. valid_from will not be set.",
+                        datetime_str, e
+                    );
+                }
             }
-            // The existing insert_fact temporal-overlap logic will close the
-            // sole open-ended predecessor at this datetime automatically.
         }
         None => {
             // No scope provided: default to temporal correction with now().

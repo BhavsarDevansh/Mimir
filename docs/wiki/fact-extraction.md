@@ -1,6 +1,8 @@
 # How Mimir Learns Facts
 
-When you chat with Mimir, it continuously extracts facts from what you say and stores them in its knowledge graph. This page explains how the process works, what gets stored, and how you stay in control.
+The fact-extraction pipeline processes chat input to extract and store facts as structured subject-predicate-object triples in the knowledge graph. This page explains how the process works, what gets stored, and how you stay in control.
+
+**Note:** Automatic, always-on wiring from live chat to the knowledge graph (daemon-style integration) is not yet enabled. The extraction pipeline is fully implemented as a library but not yet integrated into the daemon's chat flow.
 
 ## What Gets Extracted
 

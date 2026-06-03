@@ -79,8 +79,42 @@ pub async fn run_nightly_optimization(kg: &KnowledgeGraph) -> Result<(), crate::
     // 4. Threshold nightly re-count.
     ThresholdRule::evaluate_batch(kg).await?;
 
+    // 5. Cleanup stale pending confirmations (7-day TTL).
+    cleanup_stale_pending_confirmations(kg).await?;
+
     // TODO: dormant cleanup pass.
     // TODO: compaction pass.
+
+    Ok(())
+}
+
+/// Remove pending-confirmation facts that have been ignored for 7+ days.
+async fn cleanup_stale_pending_confirmations(
+    kg: &KnowledgeGraph,
+) -> Result<(), crate::KnowledgeError> {
+    let now = kg.now();
+    let cutoff = now - chrono::Duration::days(7);
+
+    // Find all stale pending facts.
+    let stale_ids: Vec<i32> = sqlx::query_scalar(
+        "SELECT id FROM facts \
+         WHERE pending_confirmation = TRUE AND updated_at < ?",
+    )
+    .bind(cutoff)
+    .fetch_all(kg.pool())
+    .await?;
+
+    // Hard-delete each one and remove from in-memory cache.
+    for fact_id in stale_ids {
+        // Delete the fact (sources cascade automatically).
+        sqlx::query("DELETE FROM facts WHERE id = ?")
+            .bind(fact_id)
+            .execute(kg.pool())
+            .await?;
+
+        // Remove from in-memory cache.
+        kg.pending_confirmations().write().await.remove(&fact_id);
+    }
 
     Ok(())
 }

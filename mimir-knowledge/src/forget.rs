@@ -166,7 +166,12 @@ pub(crate) async fn evaluate_children(
                     .bind(child_id)
                     .fetch_optional(pool)
                     .await?;
-            let old_confidence = old_confidence.unwrap_or(0.0);
+
+            // If fact no longer exists, skip further work.
+            let old_confidence = match old_confidence {
+                Some(conf) => conf,
+                None => continue,
+            };
 
             let new_confidence = confidence::recalculate(pool, child_id).await?;
 

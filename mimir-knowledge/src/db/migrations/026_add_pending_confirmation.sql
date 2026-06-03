@@ -3,4 +3,5 @@
 
 ALTER TABLE facts ADD COLUMN pending_confirmation BOOLEAN NOT NULL DEFAULT FALSE;
 
-CREATE INDEX idx_facts_pending ON facts(pending_confirmation) WHERE pending_confirmation = TRUE;
+CREATE INDEX idx_facts_pending ON facts(pending_confirmation)
+WHERE pending_confirmation = TRUE;

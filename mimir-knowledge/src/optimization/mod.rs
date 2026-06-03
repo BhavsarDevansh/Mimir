@@ -3,6 +3,7 @@
 use crate::KnowledgeGraph;
 use crate::inference::rules::contradiction::ContradictionRule;
 use crate::inference::rules::threshold::ThresholdRule;
+use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::fact::NewFact;
 
 /// Check whether any fact with the same triple already exists.
@@ -114,6 +115,23 @@ async fn cleanup_stale_pending_confirmations(
             .bind(fact_id)
             .execute(&mut *tx)
             .await?;
+
+        // Write a system Rejected audit entry before deletion (omitting the
+        // sensitive value per privacy policy for expired pending facts).
+        sqlx::query(
+            "INSERT INTO fact_audit_log \
+             (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(fact_id)
+        .bind(ChangeType::Rejected as i16)
+        .bind(None::<&str>)
+        .bind(None::<&str>)
+        .bind(now)
+        .bind(ChangedBy::NightlyOptimization as i16)
+        .bind(Some("Auto-expired after 7 days without confirmation"))
+        .execute(&mut *tx)
+        .await?;
 
         // Delete the fact (sources cascade automatically).
         sqlx::query("DELETE FROM facts WHERE id = ?")

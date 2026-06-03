@@ -141,7 +141,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Tool registry | ✅ Works | Object-safe `Tool` trait; permissions per tool |
 | Skill registry | ✅ Works | Object-safe `Skill` trait with `SkillContext` |
 | Builtin tools | ✅ Works | `get_current_time`, `search_web`, `memory`, `context_summary`, etc. |
-| Builtin skills | ✅ Works | `greeting`, `weather`, `web_search`, `summarise`, `fact_extract` |
+| Builtin skills | ✅ Works | `research_synthesis`, `test_driven_development` |
 | User skills | ✅ Works | Markdown files in `~/.config/mimir/skills/` |
 | Generated skills | ✅ Works | Auto-created by the agent; tracked with metrics |
 | Metrics tracking | ✅ Works | SQLite-backed invocation counts, success rates, corrections |

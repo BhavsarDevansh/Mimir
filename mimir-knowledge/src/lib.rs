@@ -140,8 +140,7 @@ impl KnowledgeGraph {
         })
     }
 
-    /// Access the underlying connection pool.
-    /// Access the underlying connection pool.
+    /// Access the rule engine.
     pub(crate) fn rule_engine(&self) -> &RuleEngine {
         &self.rule_engine
     }

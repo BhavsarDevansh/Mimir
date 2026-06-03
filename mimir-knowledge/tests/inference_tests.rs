@@ -335,7 +335,7 @@ async fn cycle_safety_cyclic_is_in_no_infinite_loop() {
         .await;
 
     // Should terminate and have some inferred facts (but not infinite)
-    let all_facts: Vec<mimir_knowledge::models::fact::Fact> = sqlx::query_as(        "SELECT id, subject_id, predicate_id, object_id, object_literal, \n         valid_from, valid_until, confidence, fact_status_id, inferred, \n         inference_depth, stale_confidence, created_at, updated_at \n         FROM facts ORDER BY id"    ).fetch_all(tg.kg.pool()).await.unwrap();
+    let all_facts: Vec<mimir_knowledge::models::fact::Fact> = sqlx::query_as(        "SELECT id, subject_id, predicate_id, object_id, object_literal, \n         valid_from, valid_until, confidence, fact_status_id, inferred, \n         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \n         FROM facts ORDER BY id"    ).fetch_all(tg.kg.pool()).await.unwrap();
     for f in &all_facts {
         eprintln!(
             "ALLFACT: id={} subject={} pred_id={} object={} inferred={} depth={} status={:?}",

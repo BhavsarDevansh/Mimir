@@ -455,11 +455,11 @@ async fn cascade_forget_orphan() {
 
     // Create an inferred child fact manually.
     let child: mimir_knowledge::models::fact::Fact = sqlx::query_as(
-        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, created_at, updated_at",
+         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at",
     )
     .bind(alice)
     .bind(2i16)
@@ -468,6 +468,7 @@ async fn cascade_forget_orphan() {
     .bind(FactStatus::Inferred as i16)
     .bind(true)
     .bind(1i32)
+    .bind(false)
     .bind(false)
     .fetch_one(kg.pool())
     .await
@@ -552,11 +553,11 @@ async fn cascade_forget_survives() {
 
     // Inferred child with two parents.
     let child: mimir_knowledge::models::fact::Fact = sqlx::query_as(
-        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, created_at, updated_at",
+         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at",
     )
     .bind(alice)
     .bind(2i16)
@@ -565,6 +566,7 @@ async fn cascade_forget_survives() {
     .bind(FactStatus::Inferred as i16)
     .bind(true)
     .bind(1i32)
+    .bind(false)
     .bind(false)
     .fetch_one(kg.pool())
     .await
@@ -1106,11 +1108,11 @@ async fn forget_cascade_status_change_writes_audit_log() {
 
     // Non-inferred child with confidence that will drop below 0.20 when parent is removed.
     let child: mimir_knowledge::models::fact::Fact = sqlx::query_as(
-        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, subject_id, predicate_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, created_at, updated_at",
+         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at",
     )
     .bind(alice)
     .bind(2i16)
@@ -1119,6 +1121,7 @@ async fn forget_cascade_status_change_writes_audit_log() {
     .bind(FactStatus::Active as i16)
     .bind(false)
     .bind(0i32)
+    .bind(false)
     .bind(false)
     .fetch_one(kg.pool())
     .await
@@ -1258,7 +1261,7 @@ async fn explicit_replaces_inferred() {
 
     // Inferred fact.
     let old_fact: mimir_knowledge::models::fact::Fact = sqlx::query_as(
-        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, subject_id, predicate_id, object_id, object_literal, valid_from, valid_until, confidence, fact_status_id, inferred, inference_depth, stale_confidence, created_at, updated_at",
+        "INSERT INTO facts (subject_id, predicate_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, subject_id, predicate_id, object_id, object_literal, valid_from, valid_until, confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation, created_at, updated_at",
     )
     .bind(alice)
     .bind(1i16)
@@ -1267,6 +1270,7 @@ async fn explicit_replaces_inferred() {
     .bind(FactStatus::Inferred as i16)
     .bind(true)
     .bind(1i32)
+    .bind(false)
     .bind(false)
     .fetch_one(kg.pool())
     .await

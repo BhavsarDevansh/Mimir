@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.29.0] - 2026-06-03
+
+### Added
+
+- Fact extraction pipeline (issue #55):
+  - `mimir-knowledge/src/extract.rs`: full LLM → Rust validation → entity resolution → confidence assignment → sensitive confirmation → fact insertion pipeline.
+  - LLM tool `remember`: structured schema for extracting subject-predicate-object triples with classification (Explicit / Casual / Correction), temporal bounds, and sensitivity flags.
+  - Entity resolution: names matched via exact → alias → FTS5 fuzzy; new entities auto-created with LLM-provided type.
+  - Confidence assignment: classification maps to `SourceType` → `confidence::initial()`; LLM hints are ignored.
+  - Correction handling:
+    - Temporal: `correction_scope` as ISO-8601 datetime closes the sole open-ended predecessor.
+    - Retrospective: `correction_scope = "always"` marks overlapping facts as `Corrected`, moves them to trash, and inserts the new fact.
+  - Sensitive fact confirmation flow:
+    - Sensitive facts inserted as `Disputed` with `pending_confirmation = TRUE`.
+    - In-memory `HashSet<i32>` cache rebuilt from DB on startup.
+    - `confirm_fact`: flips to `Active`, confidence `1.0`, triggers inference.
+    - `reject_fact`: hard-deletes with `Rejected` audit entry.
+  - Corroboration stub for issue #79: duplicate facts returned in `ExtractionOutcome::corroborated` without insertion.
+  - 11 integration tests covering explicit, casual, entity resolution, temporal/retrospective correction, sensitive confirmation/rejection, multiple facts, empty extraction, and invalid LLM output.
+
+### Changed
+
+- `facts` table: added `pending_confirmation BOOLEAN NOT NULL DEFAULT FALSE` (migration 026).
+- `change_types` table: added `rejected` (migration 027).
+- `Fact` model: added `pending_confirmation` field.
+- `ChangeType` enum: added `Rejected = 8`.
+- `ranges_overlap` in `queries/fact.rs`: made `pub` for reuse in extraction pipeline.
+
+
 ## [0.28.1] - 2026-06-02
 
 ### Fixed

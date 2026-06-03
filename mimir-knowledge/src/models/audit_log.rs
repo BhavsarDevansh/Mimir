@@ -16,6 +16,7 @@ pub enum ChangeType {
     SourceAdded = 5,
     Forgotten = 6,
     Restored = 7,
+    Rejected = 8,
 }
 
 const_assert!((ChangeType::Created as i16) != 0);

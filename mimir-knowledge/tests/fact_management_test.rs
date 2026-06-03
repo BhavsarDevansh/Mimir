@@ -467,7 +467,7 @@ async fn cascade_forget_orphan() {
     .bind(0.5f32)
     .bind(FactStatus::Inferred as i16)
     .bind(true)
-    .bind(0i32)
+    .bind(1i32)
     .bind(false)
     .fetch_one(kg.pool())
     .await
@@ -564,7 +564,7 @@ async fn cascade_forget_survives() {
     .bind(0.8f32)
     .bind(FactStatus::Inferred as i16)
     .bind(true)
-    .bind(0i32)
+    .bind(1i32)
     .bind(false)
     .fetch_one(kg.pool())
     .await
@@ -1266,7 +1266,7 @@ async fn explicit_replaces_inferred() {
     .bind(0.5f32)
     .bind(FactStatus::Inferred as i16)
     .bind(true)
-    .bind(0i32)
+    .bind(1i32)
     .bind(false)
     .fetch_one(kg.pool())
     .await

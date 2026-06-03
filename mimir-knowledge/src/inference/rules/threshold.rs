@@ -32,24 +32,26 @@ impl ThresholdRule {
     pub(crate) async fn check_threshold(
         fact: &Fact,
         kg: &KnowledgeGraph,
-    ) -> Result<(), crate::KnowledgeError> {
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    ) -> Result<Option<crate::models::preference::UpsertPreferenceInput>, crate::KnowledgeError>
+    {
         let predicate_name = match kg.predicate_name(fact.predicate_id).await {
             Some(name) => name,
-            None => return Ok(()),
+            None => return Ok(None),
         };
 
         if predicate_name != PREDICATE_REJECTED_ACTION {
-            return Ok(());
+            return Ok(None);
         }
 
         let object_value = match fact.object_id {
             Some(oid) => match kg.get_entity(oid).await {
                 Ok(Some(e)) => e.name,
-                _ => return Ok(()),
+                _ => return Ok(None),
             },
             None => match &fact.object_literal {
                 Some(lit) => lit.clone(),
-                None => return Ok(()),
+                None => return Ok(None),
             },
         };
 
@@ -64,7 +66,7 @@ impl ThresholdRule {
         .bind(FactStatus::Active as i16)
         .bind(fact.object_id)
         .bind(&fact.object_literal)
-        .fetch_one(kg.pool())
+        .fetch_one(&mut **tx)
         .await?;
 
         if count >= 3 {
@@ -83,14 +85,10 @@ impl ThresholdRule {
                 contexts: Vec::new(),
                 sources: Vec::new(),
             };
-
-            // Upsert preference; log but do not fail on duplicates.
-            if let Err(e) = kg.upsert_preference(input).await {
-                tracing::warn!("threshold preference upsert failed: {}", e);
-            }
+            return Ok(Some(input));
         }
 
-        Ok(())
+        Ok(None)
     }
 }
 

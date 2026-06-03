@@ -416,8 +416,10 @@ impl KnowledgeGraph {
                 new_fact.extraction_method = Some(ExtractionMethod::InferenceRule);
             }
 
-            let fact = queries::fact::insert_fact(
-                &self.pool,
+            let mut tx = self.pool.begin().await?;
+
+            let fact = queries::fact::insert_fact_in_tx(
+                &mut tx,
                 &new_fact,
                 predicate_id,
                 confidence,
@@ -436,8 +438,23 @@ impl KnowledgeGraph {
                 .bind(fact.id)
                 .bind(RelationType::InferredFrom as i16)
                 .bind(true)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
+            }
+
+            // Side-effect: check rejected_action thresholds (decoupled from InferenceRule trait).
+            let threshold_input = if new_fact.predicate == PREDICATE_REJECTED_ACTION {
+                ThresholdRule::check_threshold(&fact, self, &mut tx).await?
+            } else {
+                None
+            };
+
+            tx.commit().await?;
+
+            if let Some(input) = threshold_input {
+                if let Err(e) = self.upsert_preference(input).await {
+                    tracing::warn!("threshold preference upsert failed: {}", e);
+                }
             }
 
             // Run inference rules and cascade inferred facts.
@@ -455,11 +472,6 @@ impl KnowledgeGraph {
                 Err(e) => {
                     tracing::warn!("inference evaluation failed: {}", e);
                 }
-            }
-
-            // Side-effect: check rejected_action thresholds (decoupled from InferenceRule trait).
-            if new_fact.predicate == PREDICATE_REJECTED_ACTION {
-                ThresholdRule::check_threshold(&fact, self).await?;
             }
 
             Ok(fact)

@@ -3,7 +3,6 @@
 pub mod rules;
 
 use async_trait::async_trait;
-use futures::StreamExt;
 
 use crate::KnowledgeGraph;
 use crate::models::fact::{Fact, NewFact};
@@ -100,7 +99,7 @@ impl RuleEngine {
         kg: &KnowledgeGraph,
     ) -> Result<Vec<NewFact>, crate::KnowledgeError> {
         let mut results = Vec::new();
-        let mut stream = sqlx::query_as::<_, Fact>(
+        let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
             "SELECT id, subject_id, predicate_id, object_id, object_literal, \
              valid_from, valid_until, confidence, fact_status_id, inferred, \
              inference_depth, stale_confidence, created_at, updated_at \
@@ -109,10 +108,10 @@ impl RuleEngine {
         )
         .bind(crate::models::fact::FactStatus::Active as i16)
         .bind(crate::models::fact::FactStatus::Inferred as i16)
-        .fetch(kg.pool());
+        .fetch_all(kg.pool())
+        .await?;
 
-        while let Some(result) = stream.next().await {
-            let fact = result.map_err(crate::KnowledgeError::from)?;
+        for fact in facts {
             for rule in &self.rules {
                 let mut inferred = rule.evaluate(&fact, kg).await?;
                 results.append(&mut inferred);

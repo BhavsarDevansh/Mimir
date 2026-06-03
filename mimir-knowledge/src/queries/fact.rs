@@ -57,7 +57,18 @@ pub async fn insert_fact(
     now: DateTime<Utc>,
 ) -> Result<Fact, KnowledgeError> {
     let mut tx = pool.begin().await?;
+    let fact = insert_fact_in_tx(&mut tx, new_fact, predicate_id, confidence, now).await?;
+    tx.commit().await?;
+    Ok(fact)
+}
 
+pub async fn insert_fact_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    new_fact: &NewFact,
+    predicate_id: i16,
+    confidence: f32,
+    now: DateTime<Utc>,
+) -> Result<Fact, KnowledgeError> {
     // 0. Validate time range ordering.
     if let (Some(from), Some(until)) = (new_fact.valid_from, new_fact.valid_until) {
         if from > until {
@@ -78,7 +89,7 @@ pub async fn insert_fact(
     )
     .bind(new_fact.subject_id)
     .bind(predicate_id)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await?;
 
     // Collect all overlapping facts.
@@ -115,7 +126,7 @@ pub async fn insert_fact(
                         .bind(new_start)
                         .bind(now)
                         .bind(existing_fact.id)
-                        .execute(&mut *tx)
+                        .execute(&mut **tx)
                         .await?;
 
                     let updated: Fact = sqlx::query_as::<_, Fact>(
@@ -125,7 +136,7 @@ pub async fn insert_fact(
                          FROM facts WHERE id = ?",
                     )
                     .bind(existing_fact.id)
-                    .fetch_one(&mut *tx)
+                    .fetch_one(&mut **tx)
                     .await?;
 
                     let new_json =
@@ -142,7 +153,7 @@ pub async fn insert_fact(
                     .bind(now)
                     .bind(ChangedBy::System as i16)
                     .bind(None::<&str>)
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await?;
                 }
 
@@ -155,7 +166,7 @@ pub async fn insert_fact(
                         .bind(FactStatus::Superseded as i16)
                         .bind(now)
                         .bind(existing_fact.id)
-                        .execute(&mut *tx)
+                        .execute(&mut **tx)
                         .await?;
 
                     let updated: Fact = sqlx::query_as::<_, Fact>(
@@ -165,7 +176,7 @@ pub async fn insert_fact(
                          FROM facts WHERE id = ?",
                     )
                     .bind(existing_fact.id)
-                    .fetch_one(&mut *tx)
+                    .fetch_one(&mut **tx)
                     .await?;
 
                     let new_json =
@@ -182,7 +193,7 @@ pub async fn insert_fact(
                     .bind(now)
                     .bind(ChangedBy::System as i16)
                     .bind(None::<&str>)
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await?;
 
                     facts_to_supersede.push(existing_fact.id);
@@ -207,7 +218,7 @@ pub async fn insert_fact(
                         .bind(FactStatus::Disputed as i16)
                         .bind(now)
                         .bind(existing_fact.id)
-                        .execute(&mut *tx)
+                        .execute(&mut **tx)
                         .await?;
 
                     let new_json =
@@ -225,7 +236,7 @@ pub async fn insert_fact(
                     .bind(now)
                     .bind(ChangedBy::System as i16)
                     .bind(None::<&str>)
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await?;
                 }
                 contradicts_pairs.push(existing_fact.id);
@@ -253,7 +264,7 @@ pub async fn insert_fact(
     .bind(new_fact.inference_depth)
     .bind(now)
     .bind(now)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?;
 
     let fact_id = fact_id as i32;
@@ -278,7 +289,7 @@ pub async fn insert_fact(
     .bind(&new_fact.raw_reference)
     .bind(now)
     .bind(extraction_method_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
 
     // 5. Write created audit entry (column-only snapshot).
@@ -303,7 +314,7 @@ pub async fn insert_fact(
     .bind(now)
     .bind(changed_by_for_source_type(new_fact.source_type) as i16)
     .bind(None::<&str>)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
 
     // 6. Insert superseded edges for any facts replaced by a user edit.
@@ -317,7 +328,7 @@ pub async fn insert_fact(
         .bind(fact_id)
         .bind(RelationType::Supersedes as i16)
         .bind(true)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
 
@@ -332,7 +343,7 @@ pub async fn insert_fact(
         .bind(fact_id)
         .bind(RelationType::Contradicts as i16)
         .bind(false)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
         sqlx::query(
@@ -344,11 +355,9 @@ pub async fn insert_fact(
         .bind(existing_id)
         .bind(RelationType::Contradicts as i16)
         .bind(false)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
-
-    tx.commit().await?;
 
     // 8. Return the inserted fact.
     let fact = sqlx::query_as::<_, Fact>(
@@ -358,7 +367,7 @@ pub async fn insert_fact(
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
-    .fetch_one(pool)
+    .fetch_one(&mut **tx)
     .await?;
 
     Ok(fact)

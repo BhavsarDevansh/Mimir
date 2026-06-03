@@ -4,6 +4,7 @@
 //! zero time-based decay.  See issue #51.
 
 use sqlx::SqlitePool;
+use std::collections::HashSet;
 use std::pin::Pin;
 
 use crate::KnowledgeError;
@@ -133,16 +134,22 @@ pub async fn cascade_confidence_change(
     changed_fact_id: i32,
     depth_budget: Option<u8>,
 ) -> Result<(), KnowledgeError> {
-    cascade_inner(pool, changed_fact_id, depth_budget).await
+    let mut visited = HashSet::new();
+    cascade_inner(pool, changed_fact_id, depth_budget, &mut visited).await
 }
 
 fn cascade_inner<'a>(
     pool: &'a SqlitePool,
     changed_fact_id: i32,
     depth_budget: Option<u8>,
+    visited: &'a mut HashSet<i32>,
 ) -> Pin<Box<dyn std::future::Future<Output = Result<(), KnowledgeError>> + 'a>> {
     Box::pin(async move {
         if depth_budget == Some(0) {
+            return Ok(());
+        }
+
+        if !visited.insert(changed_fact_id) {
             return Ok(());
         }
 
@@ -158,6 +165,9 @@ fn cascade_inner<'a>(
         .await?;
 
         for (child_id, _child_depth) in children {
+            if visited.contains(&child_id) {
+                continue;
+            }
             let new_confidence = recalculate(pool, child_id).await?;
 
             let old_confidence: Option<f32> =
@@ -198,7 +208,13 @@ fn cascade_inner<'a>(
 
                 tx.commit().await?;
 
-                cascade_inner(pool, child_id, depth_budget.map(|d| d.saturating_sub(1))).await?;
+                cascade_inner(
+                    pool,
+                    child_id,
+                    depth_budget.map(|d| d.saturating_sub(1)),
+                    visited,
+                )
+                .await?;
             }
         }
 

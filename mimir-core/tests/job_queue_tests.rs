@@ -4,7 +4,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use chrono::{NaiveTime, Utc};
+use chrono::{NaiveTime, TimeZone, Utc};
 use mimir_core::job_queue::{DailySchedule, Job, JobContext, JobPriority, JobQueue, JobRunStatus};
 
 #[tokio::test]
@@ -90,8 +90,24 @@ async fn daily_schedule_runs_on_next_day_after_scheduled_time() {
 
     let next = schedule.next_after(now);
 
-    assert_eq!(
-        next.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        "2026-06-05T02:00:00Z"
-    );
+    let today = now.date_naive();
+    let expected = chrono::Local
+        .from_local_datetime(&today.and_time(NaiveTime::from_hms_opt(2, 0, 0).unwrap()))
+        .single()
+        .unwrap()
+        .with_timezone(&Utc);
+    let expected = if expected > now {
+        expected
+    } else {
+        chrono::Local
+            .from_local_datetime(
+                &(today + chrono::Duration::days(1))
+                    .and_time(NaiveTime::from_hms_opt(2, 0, 0).unwrap()),
+            )
+            .single()
+            .unwrap()
+            .with_timezone(&Utc)
+    };
+
+    assert_eq!(next, expected);
 }

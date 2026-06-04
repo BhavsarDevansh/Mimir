@@ -94,7 +94,9 @@ impl<'a> OptimizationRunner<'a> {
     }
 
     /// Execute a single pass and record its outcome.
+    /// Execute a single pass and record its outcome.
     pub async fn run_pass(&self, pass: PassName) -> Result<PassSummary, crate::KnowledgeError> {
+        let run_id = self.begin_run("manual").await?;
         let started_at = self.kg.now();
         let result = match pass {
             PassName::Deduplication => self.deterministic_dedup().await,
@@ -109,10 +111,28 @@ impl<'a> OptimizationRunner<'a> {
             PassName::Compaction => self.compaction().await,
         };
 
-        let mut summary = result?;
-        summary.pass = Some(pass);
-        self.record_pass(pass, started_at, &summary, None).await?;
-        Ok(summary)
+        match result {
+            Ok(mut summary) => {
+                summary.pass = Some(pass);
+                self.record_pass(run_id, pass, started_at, &summary, None)
+                    .await?;
+                self.finish_run(run_id, "succeeded", None).await?;
+                Ok(summary)
+            }
+            Err(e) => {
+                self.record_pass(
+                    run_id,
+                    pass,
+                    started_at,
+                    &PassSummary::default(),
+                    Some(&e.to_string()),
+                )
+                .await?;
+                self.finish_run(run_id, "failed", Some(&e.to_string()))
+                    .await?;
+                Err(e)
+            }
+        }
     }
 
     /// Execute the configured nightly pipeline.
@@ -120,6 +140,8 @@ impl<'a> OptimizationRunner<'a> {
         self.run_all_with_yield(|| false).await
     }
 
+    /// Execute the configured nightly pipeline, yielding between passes when
+    /// `should_yield` returns `true`.
     /// Execute the configured nightly pipeline, yielding between passes when
     /// `should_yield` returns `true`.
     pub async fn run_all_with_yield<F>(
@@ -130,7 +152,9 @@ impl<'a> OptimizationRunner<'a> {
         F: FnMut() -> bool,
     {
         self.create_backup().await?;
+        let run_id = self.begin_run("scheduled").await?;
         let mut summaries = Vec::new();
+        let mut overall_error = None;
         for pass in [
             PassName::Deduplication,
             PassName::SemanticDeduplication,
@@ -148,9 +172,100 @@ impl<'a> OptimizationRunner<'a> {
                 // timeout (e.g. JobQueue) is the ultimate safety bound.
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
-            summaries.push(self.run_pass(pass).await?);
+            match self.run_pass_with_run_id(pass, run_id).await {
+                Ok(summary) => summaries.push(summary),
+                Err(e) => {
+                    overall_error = Some(e);
+                    break;
+                }
+            }
+        }
+        let status = if overall_error.is_some() {
+            "failed"
+        } else {
+            "succeeded"
+        };
+        self.finish_run(
+            run_id,
+            status,
+            overall_error.as_ref().map(|e| e.to_string()).as_deref(),
+        )
+        .await?;
+        if let Some(e) = overall_error {
+            return Err(e);
         }
         Ok(summaries)
+    }
+
+    async fn begin_run(&self, trigger: &str) -> Result<i64, crate::KnowledgeError> {
+        let started_at = self.kg.now();
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO optimization_runs (started_at, status, trigger) VALUES (?, ?, ?) RETURNING id",
+        )
+        .bind(started_at)
+        .bind("running")
+        .bind(trigger)
+        .fetch_one(self.kg.pool())
+        .await?;
+        Ok(id)
+    }
+
+    async fn finish_run(
+        &self,
+        run_id: i64,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<(), crate::KnowledgeError> {
+        sqlx::query(
+            "UPDATE optimization_runs SET status = ?, finished_at = ?, error = ? WHERE id = ?",
+        )
+        .bind(status)
+        .bind(self.kg.now())
+        .bind(error)
+        .bind(run_id)
+        .execute(self.kg.pool())
+        .await?;
+        Ok(())
+    }
+
+    async fn run_pass_with_run_id(
+        &self,
+        pass: PassName,
+        run_id: i64,
+    ) -> Result<PassSummary, crate::KnowledgeError> {
+        let started_at = self.kg.now();
+        let result = match pass {
+            PassName::Deduplication => self.deterministic_dedup().await,
+            PassName::SemanticDeduplication => self.semantic_dedup().await,
+            PassName::Contradiction => self.contradiction().await,
+            PassName::InferenceChain => self.inference_chain().await,
+            PassName::ConfidenceRecalc => self.confidence_recalc().await,
+            PassName::DormantCleanup => self.dormant_cleanup().await,
+            PassName::PatternConsolidation => self.pattern_consolidation().await,
+            PassName::PendingConfirmationCleanup => self.pending_confirmation_cleanup().await,
+            PassName::TrashCleanup => self.trash_cleanup().await,
+            PassName::Compaction => self.compaction().await,
+        };
+
+        match result {
+            Ok(mut summary) => {
+                summary.pass = Some(pass);
+                self.record_pass(run_id, pass, started_at, &summary, None)
+                    .await?;
+                Ok(summary)
+            }
+            Err(e) => {
+                self.record_pass(
+                    run_id,
+                    pass,
+                    started_at,
+                    &PassSummary::default(),
+                    Some(&e.to_string()),
+                )
+                .await?;
+                Err(e)
+            }
+        }
     }
 
     async fn deterministic_dedup(&self) -> Result<PassSummary, crate::KnowledgeError> {
@@ -214,6 +329,7 @@ impl<'a> OptimizationRunner<'a> {
              JOIN entities ea ON ea.id = a.subject_id \
              LEFT JOIN entities ob ON ob.id = a.object_id \
              WHERE a.fact_status_id NOT IN (?, ?) AND b.fact_status_id NOT IN (?, ?) \
+             ORDER BY a.id, b.id \
              LIMIT 50",
         )
         .bind(FactStatus::Superseded as i16)
@@ -241,10 +357,12 @@ impl<'a> OptimizationRunner<'a> {
             })
             .collect();
 
+        let tool = dedup_tool_schema();
         let messages = vec![
             Message {
                 role: "system".to_string(),
-                content: "Return only JSON matching {\"candidates\":[{\"fact_a_id\":number,\"fact_b_id\":number,\"suggested_action\":\"merge\"|\"keep_separate\",\"llm_confidence\":number}]}.".to_string(),
+                content: "Use the evaluate_dedup_candidates tool to return your evaluation."
+                    .to_string(),
                 tool_calls: None,
                 tool_call_id: None,
             },
@@ -256,13 +374,27 @@ impl<'a> OptimizationRunner<'a> {
                 tool_call_id: None,
             },
         ];
-        let (response, _) = llm.chat(messages, None).await.map_err(|e| {
-            crate::KnowledgeError::Validation(format!("semantic dedup LLM error: {e}"))
-        })?;
+        let (assistant_msg, _) =
+            llm.chat_message(messages, Some(vec![tool]))
+                .await
+                .map_err(|e| {
+                    crate::KnowledgeError::Validation(format!("semantic dedup LLM error: {e}"))
+                })?;
 
-        let response: SemanticDedupResponse = serde_json::from_str(&response).map_err(|e| {
-            crate::KnowledgeError::Validation(format!("semantic dedup JSON error: {e}"))
+        let tool_calls = assistant_msg.tool_calls.as_ref().ok_or_else(|| {
+            crate::KnowledgeError::Validation(
+                "semantic dedup: no tool calls in LLM response".to_string(),
+            )
         })?;
+        let first = tool_calls.first().ok_or_else(|| {
+            crate::KnowledgeError::Validation(
+                "semantic dedup: empty tool calls in LLM response".to_string(),
+            )
+        })?;
+        let response: SemanticDedupResponse = serde_json::from_str(&first.function.arguments)
+            .map_err(|e| {
+                crate::KnowledgeError::Validation(format!("semantic dedup JSON error: {e}"))
+            })?;
 
         let valid_pairs: HashSet<(i32, i32)> = candidates
             .iter()
@@ -489,6 +621,7 @@ impl<'a> OptimizationRunner<'a> {
 
     async fn record_pass(
         &self,
+        run_id: i64,
         pass: PassName,
         started_at: DateTime<Utc>,
         summary: &PassSummary,
@@ -496,9 +629,10 @@ impl<'a> OptimizationRunner<'a> {
     ) -> Result<(), crate::KnowledgeError> {
         sqlx::query(
             "INSERT INTO optimization_pass_runs \
-             (pass_name, status, started_at, finished_at, facts_merged, dedup_candidates_queued, facts_forgotten, error) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+             (run_id, pass_name, status, started_at, finished_at, facts_merged, dedup_candidates_queued, facts_forgotten, error) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
+        .bind(run_id)
         .bind(pass.as_str())
         .bind(if error.is_some() { "failed" } else { "succeeded" })
         .bind(started_at)
@@ -511,6 +645,39 @@ impl<'a> OptimizationRunner<'a> {
         .await?;
         Ok(())
     }
+}
+
+/// JSON Schema for the `evaluate_dedup_candidates` tool.
+fn dedup_tool_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "evaluate_dedup_candidates",
+            "description": "Evaluate candidate fact pairs for semantic deduplication and return structured results.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "candidates": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "fact_a_id": { "type": "integer" },
+                                "fact_b_id": { "type": "integer" },
+                                "suggested_action": {
+                                    "type": "string",
+                                    "enum": ["merge", "keep_separate"]
+                                },
+                                "llm_confidence": { "type": "number" }
+                            },
+                            "required": ["fact_a_id", "fact_b_id", "suggested_action", "llm_confidence"]
+                        }
+                    }
+                },
+                "required": ["candidates"]
+            }
+        }
+    })
 }
 
 #[derive(Debug, Deserialize)]

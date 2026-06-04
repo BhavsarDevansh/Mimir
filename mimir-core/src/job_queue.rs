@@ -101,13 +101,19 @@ impl DailySchedule {
     /// Return the next UTC instant strictly after `now`.
     pub fn next_after(self, now: DateTime<Utc>) -> DateTime<Utc> {
         let today = now.date_naive();
-        let candidate = Utc
-            .from_utc_datetime(&today.and_time(self.time))
+        let candidate = chrono::Local
+            .from_local_datetime(&today.and_time(self.time))
+            .single()
+            .expect("valid local datetime")
             .with_timezone(&Utc);
         if candidate > now {
             candidate
         } else {
-            Utc.from_utc_datetime(&(today + chrono::Duration::days(1)).and_time(self.time))
+            chrono::Local
+                .from_local_datetime(&(today + chrono::Duration::days(1)).and_time(self.time))
+                .single()
+                .expect("valid local datetime")
+                .with_timezone(&Utc)
         }
     }
 
@@ -198,6 +204,8 @@ pub enum JobError {
     InvalidSchedule(String),
     #[error("job failed: {0}")]
     Handler(String),
+    #[error("job already running: {0}")]
+    JobAlreadyRunning(String),
 }
 
 /// Shared durable job queue.
@@ -285,6 +293,16 @@ impl JobQueue {
             .get(job_id)
             .cloned()
             .ok_or_else(|| JobError::JobNotRegistered(job_id.to_string()))?;
+
+        let running: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM job_runs WHERE job_id = ? AND status = ?")
+                .bind(job_id)
+                .bind(JobRunStatus::Running.as_str())
+                .fetch_one(&self.pool)
+                .await?;
+        if running > 0 {
+            return Err(JobError::JobAlreadyRunning(job_id.to_string()));
+        }
 
         let started_at = Utc::now();
         let run_id: i64 = sqlx::query_scalar(

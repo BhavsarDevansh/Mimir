@@ -3,7 +3,7 @@ mod common;
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
-use mimir_core::llm::types::{Message, Usage};
+use mimir_core::llm::types::{FunctionCall, Message, ToolCall, Usage};
 use mimir_core::llm::{LlmBackend, MockLlmClient};
 use mimir_knowledge::models::fact::FactStatus;
 use mimir_knowledge::models::source::SourceType;
@@ -77,8 +77,21 @@ async fn semantic_dedup_queues_uncertain_llm_candidate() {
 
     let llm: Arc<dyn LlmBackend> = Arc::new(
         MockLlmClient::builder()
-            .push_chat(
-                r#"{"candidates":[{"fact_a_id":1,"fact_b_id":2,"suggested_action":"merge","llm_confidence":0.8}]}"#,
+            .push_chat_message(
+                Message {
+                    role: "assistant".to_string(),
+                    content: String::new(),
+                    tool_calls: Some(vec![ToolCall {
+                        index: 0,
+                        id: "call_1".to_string(),
+                        call_type: "function".to_string(),
+                        function: FunctionCall {
+                            name: "evaluate_dedup_candidates".to_string(),
+                            arguments: r#"{"candidates":[{"fact_a_id":1,"fact_b_id":2,"suggested_action":"merge","llm_confidence":0.8}]}"#.to_string(),
+                        },
+                    }]),
+                    tool_call_id: None,
+                },
                 Usage::default(),
             )
             .build(),
@@ -165,7 +178,23 @@ async fn semantic_dedup_sends_strict_json_prompt_to_llm() {
 
     let mock = Arc::new(
         MockLlmClient::builder()
-            .push_chat(r#"{"candidates":[]}"#, Usage::default())
+            .push_chat_message(
+                Message {
+                    role: "assistant".to_string(),
+                    content: String::new(),
+                    tool_calls: Some(vec![ToolCall {
+                        index: 0,
+                        id: "call_1".to_string(),
+                        call_type: "function".to_string(),
+                        function: FunctionCall {
+                            name: "evaluate_dedup_candidates".to_string(),
+                            arguments: r#"{"candidates":[]}"#.to_string(),
+                        },
+                    }]),
+                    tool_call_id: None,
+                },
+                Usage::default(),
+            )
             .build(),
     );
     let llm: Arc<dyn LlmBackend> = mock.clone();
@@ -182,5 +211,9 @@ async fn semantic_dedup_sends_strict_json_prompt_to_llm() {
 
     let calls = mock.chat_calls();
     assert_eq!(calls.len(), 1);
-    assert!(calls[0].iter().any(|message| matches!(message, Message { role, content, .. } if role == "system" && content.contains("Return only JSON"))));
+    let tools = mock.chat_tools();
+    assert_eq!(tools.len(), 1);
+    let tool = tools[0].as_ref().unwrap().first().unwrap();
+    assert_eq!(tool["type"], "function");
+    assert_eq!(tool["function"]["name"], "evaluate_dedup_candidates");
 }

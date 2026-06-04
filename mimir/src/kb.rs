@@ -297,7 +297,7 @@ pub async fn handle_kb_restore(trash_id: Option<i32>, all: bool) {
     }
 }
 
-pub async fn handle_kb_trash(empty: bool) {
+pub async fn handle_kb_trash(empty: bool, limit: u32, offset: u32) {
     let db_path = match knowledge_db_path() {
         Ok(p) => p,
         Err(e) => {
@@ -329,7 +329,7 @@ pub async fn handle_kb_trash(empty: bool) {
             }
         }
     } else {
-        match kg.list_trash(50, 0).await {
+        match kg.list_trash(limit as i64, offset as i64).await {
             Ok(items) => {
                 if items.is_empty() {
                     println!("Trash is empty.");

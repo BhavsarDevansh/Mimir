@@ -67,7 +67,11 @@ async fn main() {
             cli::KbCommands::Restore { trash_id, all } => {
                 kb::handle_kb_restore(trash_id, all).await
             }
-            cli::KbCommands::Trash { empty } => kb::handle_kb_trash(empty).await,
+            cli::KbCommands::Trash {
+                empty,
+                limit,
+                offset,
+            } => kb::handle_kb_trash(empty, limit, offset).await,
         },
         cli::Commands::Init => init::handle_init().await,
         cli::Commands::Start => start::handle_start().await,

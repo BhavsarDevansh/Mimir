@@ -85,17 +85,23 @@ pub async fn restore_fact(
     let payload: TrashPayload = serde_json::from_str(&row.payload)
         .map_err(|e| KnowledgeError::Validation(format!("Invalid trash payload: {}", e)))?;
 
-    let fact = restore_payload(pool, payload, changed_by, now).await?;
-
-    // Mark trash row restored.
+    // Atomically claim the trash row before restoring.
     let restorer_str = format!("{:?}", changed_by);
-    sqlx::query("UPDATE trash SET restored_at = ?, restorer = ? WHERE id = ?")
-        .bind(now)
-        .bind(&restorer_str)
-        .bind(trash_id)
-        .execute(pool)
-        .await?;
+    let claim = sqlx::query(
+        "UPDATE trash SET restored_at = ?, restorer = ? WHERE id = ? AND restored_at IS NULL",
+    )
+    .bind(now)
+    .bind(&restorer_str)
+    .bind(trash_id)
+    .execute(pool)
+    .await?;
+    if claim.rows_affected() == 0 {
+        return Err(KnowledgeError::Validation(
+            "Trash entry not found or already restored.".to_string(),
+        ));
+    }
 
+    let fact = restore_payload(pool, payload, changed_by, now).await?;
     Ok(fact)
 }
 
@@ -116,7 +122,7 @@ pub async fn restore_all(
     let mut all_deps: Vec<(i32, i32, i16)> = Vec::new();
 
     // Pass 1: restore every fact, building old_id -> new_id map.
-    for row in rows {
+    for row in &rows {
         let payload: TrashPayload = serde_json::from_str(&row.payload)
             .map_err(|e| KnowledgeError::Validation(format!("Invalid trash payload: {}", e)))?;
         let old_id = payload.fact.id;
@@ -131,15 +137,6 @@ pub async fn restore_all(
         for (parent_old, rel_type) in row_deps {
             all_deps.push((old_id, parent_old, rel_type));
         }
-
-        // Mark trash row restored.
-        let restorer_str = format!("{:?}", changed_by);
-        sqlx::query("UPDATE trash SET restored_at = ?, restorer = ? WHERE id = ?")
-            .bind(now)
-            .bind(&restorer_str)
-            .bind(row.id)
-            .execute(pool)
-            .await?;
     }
 
     // Pass 2: rebuild dependencies using the map.
@@ -160,14 +157,28 @@ pub async fn restore_all(
     }
     tx.commit().await?;
 
-    // Recalculate confidence for all restored facts.
-    for fact in &restored_facts {
+    // Recalculate confidence for all restored facts and update in-memory values.
+    for fact in &mut restored_facts {
         let new_conf = confidence::recalculate(pool, fact.id).await?;
         sqlx::query("UPDATE facts SET confidence = ? WHERE id = ?")
             .bind(new_conf)
             .bind(fact.id)
             .execute(pool)
             .await?;
+        fact.confidence = new_conf;
+    }
+
+    // Finalization: mark trash rows restored only after all phases succeed.
+    let restorer_str = format!("{:?}", changed_by);
+    for row in &rows {
+        sqlx::query(
+            "UPDATE trash SET restored_at = ?, restorer = ? WHERE id = ? AND restored_at IS NULL",
+        )
+        .bind(now)
+        .bind(&restorer_str)
+        .bind(row.id)
+        .execute(pool)
+        .await?;
     }
 
     Ok(restored_facts)
@@ -204,7 +215,7 @@ async fn restore_payload(
     changed_by: ChangedBy,
     now: DateTime<Utc>,
 ) -> Result<Fact, KnowledgeError> {
-    let fact = restore_payload_no_deps(pool, payload.clone(), changed_by, now).await?;
+    let mut fact = restore_payload_no_deps(pool, payload.clone(), changed_by, now).await?;
 
     // Rebuild dependencies where parent still exists.
     let mut tx = pool.begin().await?;
@@ -234,6 +245,7 @@ async fn restore_payload(
         .execute(pool)
         .await?;
 
+    fact.confidence = new_conf;
     Ok(fact)
 }
 

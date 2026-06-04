@@ -170,7 +170,7 @@ async fn sensitive_safeguard() {
 
     let alice = create_person(&kg, "Alice").await;
 
-    // allergy is seeded as sensitive by migration 029.
+    // allergy is seeded as sensitive by migration 029, but predicates auto-created by insert_fact are created after migrations run, so the manual UPDATE below is required.
     kg.insert_fact(NewFact {
         subject_id: alice,
         predicate: "allergy".to_string(),

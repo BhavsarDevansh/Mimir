@@ -137,6 +137,12 @@ pub enum KbCommands {
         /// Empty trash immediately.
         #[arg(long)]
         empty: bool,
+        /// Maximum rows to list.
+        #[arg(long, default_value = "50")]
+        limit: u32,
+        /// Rows to skip.
+        #[arg(long, default_value = "0")]
+        offset: u32,
     },
 }
 

@@ -1,6 +1,6 @@
 use chrono::Utc;
 use mimir_knowledge::models::audit_log::ChangedBy;
-use mimir_knowledge::models::fact::{FactStatus, NewFact};
+use mimir_knowledge::models::fact::NewFact;
 use mimir_knowledge::models::source::SourceType;
 use mimir_knowledge::{KnowledgeGraph, forget};
 

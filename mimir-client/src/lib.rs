@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use mimir_api_types::{
-    ChatRequest, ChatResponse, SessionMessagesResponse, SessionSummary, StatusResponse, StreamItem,
-    ToolCallInfo, Usage,
+    ChatRequest, ChatResponse, OptimizationRunNowResponse, OptimizationStatusResponse,
+    SessionMessagesResponse, SessionSummary, StatusResponse, StreamItem, ToolCallInfo, Usage,
 };
 use reqwest::StatusCode;
 use thiserror::Error;
@@ -107,6 +107,40 @@ impl MimirClient {
         let status = resp.status();
         if status.is_success() {
             let body = resp.text().await?;
+            Ok(body)
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
+    /// Query the knowledge graph optimization job status.
+    pub async fn kb_optimization_status(&self) -> Result<OptimizationStatusResponse, ClientError> {
+        let url = format!("{}/kb/optimization/status", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.json::<OptimizationStatusResponse>().await?;
+            Ok(body)
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
+    /// Trigger the knowledge graph optimization job immediately.
+    pub async fn kb_optimization_run_now(&self) -> Result<OptimizationRunNowResponse, ClientError> {
+        let url = format!("{}/kb/optimization/run-now", self.base_url);
+        let resp = self.client.post(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.json::<OptimizationRunNowResponse>().await?;
             Ok(body)
         } else {
             let text = resp.text().await.unwrap_or_default();

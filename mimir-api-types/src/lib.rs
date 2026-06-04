@@ -110,6 +110,36 @@ pub struct StatusResponse {
     pub memory_usage_pct: f64,
 }
 
+/// Summary of a single optimization run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OptimizationRunSummary {
+    pub run_id: i64,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Response body for the KG optimization status endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OptimizationStatusResponse {
+    pub job_id: String,
+    pub priority: String,
+    pub schedule: Option<String>,
+    pub next_run_at: Option<String>,
+    pub last_run: Option<OptimizationRunSummary>,
+}
+
+/// Response body for the KG optimization run-now endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OptimizationRunNowResponse {
+    pub run_id: i64,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub error: Option<String>,
+}
+
 /// An item yielded by the client-side SSE stream parser.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamItem {

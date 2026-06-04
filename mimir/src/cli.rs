@@ -66,6 +66,15 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum KbCommands {
+    /// Manage knowledge graph optimization.
+    Optimization {
+        /// Show optimization job status.
+        #[arg(long)]
+        status: bool,
+        /// Trigger optimization immediately.
+        #[arg(long)]
+        run_now: bool,
+    },
     /// Query the fact audit log.
     Audit {
         /// Filter by entity name.

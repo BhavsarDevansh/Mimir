@@ -22,7 +22,8 @@ use mimir_core::config::ReloadableConfig;
 use mimir_core::llm::{LlmBackend, LlmClient};
 
 use crate::routes::{
-    chat_handler, chat_stream_handler, memory_handler, session_messages_handler, sessions_handler,
+    chat_handler, chat_stream_handler, kb_optimization_run_now_handler,
+    kb_optimization_status_handler, memory_handler, session_messages_handler, sessions_handler,
     status_handler, stop_handler,
 };
 use crate::state::AppState;
@@ -72,6 +73,14 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route("/sessions/{id}/messages", get(session_messages_handler))
         .route("/chat", post(chat_handler))
         .route("/chat/stream", post(chat_stream_handler))
+        .route(
+            "/kb/optimization/status",
+            get(kb_optimization_status_handler),
+        )
+        .route(
+            "/kb/optimization/run-now",
+            post(kb_optimization_run_now_handler).layer(from_fn(require_loopback)),
+        )
         .route("/stop", post(stop_handler).layer(from_fn(require_loopback)))
         .layer(
             ServiceBuilder::new()
@@ -276,6 +285,7 @@ mod tests {
     use mimir_core::{
         config::{Config, ReloadableConfig},
         context::ContextManager,
+        job_queue::JobQueue,
         llm::types::{FunctionCall, LlmError, Message, StreamItem, ToolCall, Usage},
         llm::{LlmBackend, MockLlmClient},
     };
@@ -328,6 +338,24 @@ mod tests {
             ))))
             .unwrap();
 
+        let jobs_db_path = temp.path().join("jobs.db");
+        let job_queue = Arc::new(JobQueue::init(&jobs_db_path).await.unwrap());
+        let last_user_activity = Arc::new(std::sync::atomic::AtomicU64::new(
+            (chrono::Utc::now() - chrono::Duration::minutes(10)).timestamp() as u64,
+        ));
+
+        // Register a dummy optimization job so the kb routes work in tests.
+        let dummy_job = mimir_core::job_queue::Job::new(
+            "knowledge.optimization",
+            mimir_core::job_queue::JobPriority::System,
+            Some(mimir_core::job_queue::DailySchedule::new(
+                chrono::NaiveTime::from_hms_opt(2, 0, 0).unwrap(),
+            )),
+            false,
+            |_ctx: mimir_core::job_queue::JobContext| Box::pin(async move { Ok(()) }),
+        );
+        job_queue.register(dummy_job).await.unwrap();
+
         let state = Arc::new(AppState {
             llm_client: llm,
             context_manager,
@@ -341,6 +369,8 @@ mod tests {
             model_override_cache: Arc::new(DashMap::new()),
             tool_registry: Arc::new(tool_registry),
             knowledge_graph,
+            job_queue,
+            last_user_activity,
         });
 
         (state, temp)
@@ -1054,5 +1084,62 @@ mod tests {
         assert!(names.contains(&"kg_query".to_string()));
         assert!(names.contains(&"kg_related".to_string()));
         assert!(names.contains(&"kg_search".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_kb_optimization_status_returns_job() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/kb/optimization/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: mimir_api_types::OptimizationStatusResponse =
+            serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(resp.job_id, "knowledge.optimization");
+        assert_eq!(resp.priority, "system");
+        assert!(resp.schedule.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_kb_optimization_run_now_triggers_job() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/kb/optimization/run-now")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: mimir_api_types::OptimizationRunNowResponse =
+            serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(resp.status, "succeeded");
     }
 }

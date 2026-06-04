@@ -47,6 +47,17 @@ pub async fn traverse_graph(
         let remaining_budget = max_nodes as usize - visited.len();
         let sql_limit = (remaining_budget * 2) as i64;
 
+        // Guard against empty predicate_filter which would emit "IN ()" that SQLite rejects.
+        if let Some(predicates) = predicate_filter {
+            if predicates.is_empty() {
+                return Ok(TraversalResult {
+                    edges: Vec::new(),
+                    max_depth_reached: 0,
+                    nodes_found: visited.len(),
+                });
+            }
+        }
+
         // Build the IN clause for the frontier.
         let placeholders: Vec<&str> = frontier.iter().map(|_| "?").collect();
         let sql = if let Some(predicates) = predicate_filter {
@@ -110,30 +121,30 @@ pub async fn traverse_graph(
         let names = get_entity_names(pool, &ids_to_resolve).await?;
 
         let mut next_frontier: Vec<u32> = Vec::new();
-        for (subject_id, _, predicate_name, object_id, object_literal, confidence) in rows {
+        for (subject_id, _, predicate_name, object_id, object_literal, confidence) in &rows {
             let subject_name = names
-                .get(&(subject_id as u32))
+                .get(&(*subject_id as u32))
                 .cloned()
                 .unwrap_or_else(|| format!("entity:{}", subject_id));
             let object_str = if let Some(oid) = object_id {
                 names
-                    .get(&(oid as u32))
+                    .get(&(*oid as u32))
                     .cloned()
                     .unwrap_or_else(|| format!("entity:{}", oid))
             } else {
-                object_literal.unwrap_or_default()
+                object_literal.clone().unwrap_or_default()
             };
 
             edges.push(TraversalEdge {
                 depth,
                 subject: subject_name,
-                predicate: predicate_name,
+                predicate: predicate_name.clone(),
                 object: object_str,
-                confidence,
+                confidence: *confidence,
             });
 
             if let Some(oid) = object_id {
-                let oid_u32 = oid as u32;
+                let oid_u32 = *oid as u32;
                 if !visited.contains(&oid_u32) && visited.len() < max_nodes as usize {
                     visited.insert(oid_u32);
                     next_frontier.push(oid_u32);
@@ -141,8 +152,8 @@ pub async fn traverse_graph(
             }
         }
 
-        if !edges.is_empty() {
-            max_depth_reached = depth;
+        if !rows.is_empty() {
+            max_depth_reached = depth + 1;
         }
         frontier = next_frontier;
     }

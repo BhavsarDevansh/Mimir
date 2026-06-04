@@ -142,7 +142,7 @@ async fn test_kg_traverse_depth_cap() {
     let result = traverse_graph(tg.kg.pool(), a as u32, 5, 50, None)
         .await
         .unwrap();
-    assert!(result.max_depth_reached <= 5);
+    assert_eq!(result.max_depth_reached, 1);
 }
 
 #[tokio::test]

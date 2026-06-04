@@ -131,7 +131,11 @@ impl Tool for KgRelatedTool {
 
         // Resolve predicate filters (read-only: do not create missing predicates)
         let mut predicate_ids: Vec<i16> = Vec::new();
-        let user_requested_predicates = input.predicate_filter.is_some();
+        let user_requested_predicates = input
+            .predicate_filter
+            .as_ref()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
         if let Some(filters) = input.predicate_filter {
             if filters.len() > 10 {
                 return Err(ToolError::invalid_arguments(

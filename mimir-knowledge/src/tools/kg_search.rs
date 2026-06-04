@@ -111,7 +111,7 @@ impl Tool for KgSearchTool {
 
         let limit = input.limit.clamp(1, 20);
 
-        let entity_type_filter = match input.entity_type.as_deref() {
+        let entity_type_filter = match input.entity_type.as_deref().map(|s| s.trim()) {
             Some(et) => match parse_entity_type(et) {
                 Some(t) => Some(t),
                 None => {

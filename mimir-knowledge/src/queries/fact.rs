@@ -744,7 +744,7 @@ pub async fn get_facts_by_subject_filtered(
                AND f.fact_status_id NOT IN (5, 6) \
                AND f.predicate_id = ? \
                AND f.confidence >= ? \
-             ORDER BY f.confidence DESC, f.valid_from DESC \
+             ORDER BY f.confidence DESC, f.valid_from DESC, f.id DESC \
              LIMIT ? OFFSET ?",
         )
         .bind(subject_id)
@@ -766,7 +766,7 @@ pub async fn get_facts_by_subject_filtered(
                AND f.pending_confirmation = 0 \
                AND f.fact_status_id NOT IN (5, 6) \
                AND f.confidence >= ? \
-             ORDER BY f.confidence DESC, f.valid_from DESC \
+             ORDER BY f.confidence DESC, f.valid_from DESC, f.id DESC \
              LIMIT ? OFFSET ?",
         )
         .bind(subject_id)

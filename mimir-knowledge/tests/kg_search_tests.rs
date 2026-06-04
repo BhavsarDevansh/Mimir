@@ -66,6 +66,35 @@ async fn test_kg_search_empty_results() {
 #[tokio::test]
 async fn test_kg_search_fts5_injection() {
     let tg = common::TestGraph::new().await;
+    let london = tg.create_place("London").await;
+
+    let f = NewFact {
+        subject_id: london,
+        predicate: "is_in".to_string(),
+        object_id: None,
+        object_literal: Some("United Kingdom".to_string()),
+        valid_from: None,
+        valid_until: None,
+        source_type: SourceType::UserEdit,
+        connector_id: None,
+        connector_type: None,
+        raw_reference: None,
+        extraction_method: None,
+        inferred: false,
+        inference_depth: 0,
+        confidence: Some(0.9),
+        parent_fact_ids: Vec::new(),
+    };
+    tg.kg.insert_fact(f).await.unwrap();
+
+    // Positive match: normal search finds the seeded entity.
+    let results = search_entities(tg.kg.pool(), "London", None, 10)
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].entity.name, "London");
+
+    // Malicious payloads should return no results.
     let results = search_entities(tg.kg.pool(), "\" OR 1=1", None, 10)
         .await
         .unwrap();

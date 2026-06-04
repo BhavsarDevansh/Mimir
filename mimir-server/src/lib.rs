@@ -312,15 +312,21 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let _ = tool_registry.register_native(Arc::new(mimir_knowledge::KgQueryTool::new(
-            Arc::clone(&knowledge_graph),
-        )));
-        let _ = tool_registry.register_native(Arc::new(mimir_knowledge::KgRelatedTool::new(
-            Arc::clone(&knowledge_graph),
-        )));
-        let _ = tool_registry.register_native(Arc::new(mimir_knowledge::KgSearchTool::new(
-            Arc::clone(&knowledge_graph),
-        )));
+        tool_registry
+            .register_native(Arc::new(mimir_knowledge::KgQueryTool::new(Arc::clone(
+                &knowledge_graph,
+            ))))
+            .unwrap();
+        tool_registry
+            .register_native(Arc::new(mimir_knowledge::KgRelatedTool::new(Arc::clone(
+                &knowledge_graph,
+            ))))
+            .unwrap();
+        tool_registry
+            .register_native(Arc::new(mimir_knowledge::KgSearchTool::new(Arc::clone(
+                &knowledge_graph,
+            ))))
+            .unwrap();
 
         let state = Arc::new(AppState {
             llm_client: llm,

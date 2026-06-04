@@ -79,16 +79,18 @@ pub async fn search_entities(
 
     let entity_ids: Vec<i32> = rows.iter().map(|r| r.0).collect();
 
-    // Batch-fetch facts for all matched entities.
+    // Batch-fetch top-5 facts per matched entity using a window function.
     let placeholders: Vec<&str> = entity_ids.iter().map(|_| "?").collect();
     let facts_sql = format!(
-        "SELECT f.subject_id, p.name as predicate_name, f.object_id, f.object_literal, f.confidence \
-         FROM facts f \
-         JOIN predicates p ON p.id = f.predicate_id \
-         WHERE f.subject_id IN ({}) \
-           AND f.pending_confirmation = 0 \
-           AND f.fact_status_id NOT IN (5, 6) \
-         ORDER BY f.confidence DESC",
+        "SELECT subject_id, predicate_name, object_id, object_literal, confidence FROM ( \
+            SELECT f.subject_id, p.name as predicate_name, f.object_id, f.object_literal, f.confidence, \
+                   ROW_NUMBER() OVER (PARTITION BY f.subject_id ORDER BY f.confidence DESC) as rn \
+             FROM facts f \
+             JOIN predicates p ON p.id = f.predicate_id \
+             WHERE f.subject_id IN ({}) \
+               AND f.pending_confirmation = 0 \
+               AND f.fact_status_id NOT IN (5, 6) \
+         ) WHERE rn <= 5",
         placeholders.join(",")
     );
     let mut facts_query = sqlx::query_as::<_, (i32, String, Option<i32>, Option<String>, f32)>(
@@ -100,7 +102,12 @@ pub async fn search_entities(
     let fact_rows = facts_query.fetch_all(pool).await?;
 
     // Batch-fetch object names for facts that reference entities.
-    let object_ids: Vec<i32> = fact_rows.iter().filter_map(|r| r.2).collect();
+    let object_ids: Vec<i32> = fact_rows
+        .iter()
+        .filter_map(|r| r.2)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
     let object_names = if object_ids.is_empty() {
         std::collections::HashMap::new()
     } else {

@@ -97,15 +97,21 @@ impl AppState {
         let knowledge_graph = Arc::new(mimir_knowledge::KnowledgeGraph::init(&kg_db_path).await?);
 
         // Register knowledge graph tools.
-        let _ = tool_registry.register_native(Arc::new(mimir_knowledge::KgQueryTool::new(
+        if let Err(e) = tool_registry.register_native(Arc::new(mimir_knowledge::KgQueryTool::new(
             Arc::clone(&knowledge_graph),
-        )));
-        let _ = tool_registry.register_native(Arc::new(mimir_knowledge::KgRelatedTool::new(
+        ))) {
+            tracing::warn!("Failed to register kg_query tool: {}", e);
+        }
+        if let Err(e) = tool_registry.register_native(Arc::new(
+            mimir_knowledge::KgRelatedTool::new(Arc::clone(&knowledge_graph)),
+        )) {
+            tracing::warn!("Failed to register kg_related tool: {}", e);
+        }
+        if let Err(e) = tool_registry.register_native(Arc::new(mimir_knowledge::KgSearchTool::new(
             Arc::clone(&knowledge_graph),
-        )));
-        let _ = tool_registry.register_native(Arc::new(mimir_knowledge::KgSearchTool::new(
-            Arc::clone(&knowledge_graph),
-        )));
+        ))) {
+            tracing::warn!("Failed to register kg_search tool: {}", e);
+        }
 
         Ok(Self {
             llm_client,

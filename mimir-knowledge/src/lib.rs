@@ -203,6 +203,30 @@ impl KnowledgeGraph {
         Ok(id)
     }
 
+    /// Look up a predicate id by name without creating it.
+    pub async fn get_predicate_id(&self, name: &str) -> Result<Option<i16>, KnowledgeError> {
+        {
+            let cache = self.predicate_cache.read().await;
+            if let Some(&id) = cache.name_to_id.get(name) {
+                return Ok(Some(id));
+            }
+        }
+
+        let row: Option<(i16,)> = sqlx::query_as("SELECT id FROM predicates WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        if let Some((id,)) = row {
+            let mut cache = self.predicate_cache.write().await;
+            cache.name_to_id.insert(name.to_string(), id);
+            cache.id_to_name.insert(id, name.to_string());
+            Ok(Some(id))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Reverse lookup: get the predicate name for a given id.
     pub async fn predicate_name(&self, id: i16) -> Option<String> {
         {

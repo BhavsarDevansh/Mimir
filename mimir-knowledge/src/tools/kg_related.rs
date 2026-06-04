@@ -112,8 +112,26 @@ impl Tool for KgRelatedTool {
         let max_depth = input.max_depth.clamp(1, 5) as u32;
         let max_nodes = input.max_nodes.clamp(1, 200) as u32;
 
-        // Resolve predicate filters
+        // Resolve entity first (needed for early-return on missing predicates)
+        let candidates = get_by_name(self.kg.pool(), entity_name)
+            .await
+            .map_err(|e| {
+                ToolError::execution_failed("kg_related", format!("database error: {}", e))
+            })?;
+
+        if candidates.is_empty() {
+            return Ok(ToolOutput {
+                error: Some("Entity not found".to_string()),
+                ..Default::default()
+            });
+        }
+
+        let best = &candidates[0];
+        let root_id = best.entity.id as u32;
+
+        // Resolve predicate filters (read-only: do not create missing predicates)
         let mut predicate_ids: Vec<i16> = Vec::new();
+        let user_requested_predicates = input.predicate_filter.is_some();
         if let Some(filters) = input.predicate_filter {
             if filters.len() > 10 {
                 return Err(ToolError::invalid_arguments(
@@ -132,35 +150,36 @@ impl Tool for KgRelatedTool {
                 if trimmed.is_empty() {
                     continue;
                 }
-                let pid = self.kg.ensure_predicate(trimmed).await.map_err(|e| {
+                match self.kg.get_predicate_id(trimmed).await.map_err(|e| {
                     ToolError::execution_failed("kg_related", format!("database error: {}", e))
-                })?;
-                predicate_ids.push(pid);
+                })? {
+                    Some(pid) => predicate_ids.push(pid),
+                    None => continue, // skip missing predicates
+                }
             }
         }
 
+        // If the user explicitly requested predicates but none exist, return empty result.
         let predicate_filter = if predicate_ids.is_empty() {
+            if user_requested_predicates {
+                let output = KgRelatedOutput {
+                    root_entity: best.entity.name.clone(),
+                    nodes_found: 1,
+                    max_depth_reached: 0,
+                    edges: Vec::new(),
+                };
+                let result = serde_json::to_value(output).map_err(|e| {
+                    ToolError::execution_failed("kg_related", format!("serialization error: {}", e))
+                })?;
+                return Ok(ToolOutput {
+                    result: Some(result),
+                    ..Default::default()
+                });
+            }
             None
         } else {
             Some(predicate_ids.as_slice())
         };
-
-        // Resolve entity
-        let candidates = get_by_name(self.kg.pool(), entity_name)
-            .await
-            .map_err(|e| {
-                ToolError::execution_failed("kg_related", format!("database error: {}", e))
-            })?;
-
-        if candidates.is_empty() {
-            return Ok(ToolOutput {
-                error: Some("Entity not found".to_string()),
-                ..Default::default()
-            });
-        }
-
-        let best = &candidates[0];
-        let root_id = best.entity.id as u32;
 
         let traversal = traverse_graph(
             self.kg.pool(),

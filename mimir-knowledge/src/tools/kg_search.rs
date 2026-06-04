@@ -111,7 +111,18 @@ impl Tool for KgSearchTool {
 
         let limit = input.limit.clamp(1, 20);
 
-        let entity_type_filter = input.entity_type.as_deref().and_then(parse_entity_type);
+        let entity_type_filter = match input.entity_type.as_deref() {
+            Some(et) => match parse_entity_type(et) {
+                Some(t) => Some(t),
+                None => {
+                    return Err(ToolError::invalid_arguments(
+                        "kg_search",
+                        format!("invalid entity_type: {}", et),
+                    ));
+                }
+            },
+            None => None,
+        };
 
         let results = search_entities(self.kg.pool(), query, entity_type_filter, limit)
             .await

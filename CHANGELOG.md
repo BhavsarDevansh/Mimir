@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.30.1] - 2026-06-04
+
+### Fixed
+
+- **P1**: `kg_query` and `kg_related` no longer mutate the database via `ensure_predicate` during read-only tool calls. Both now use the new read-only `get_predicate_id` lookup; missing predicates return empty results instead of silently inserting rows.
+- **P2**: `AppState` knowledge graph and context database fallbacks now propagate `PathsError` instead of using a broken tilde (`~`) literal path.
+- **P3**: `kg_search` now returns an explicit invalid-arguments error when an unrecognized `entity_type` is supplied, rather than silently ignoring the filter.
+
 ## [0.30.0] - 2026-06-04
 
 ### Added

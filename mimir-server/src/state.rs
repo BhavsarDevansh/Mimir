@@ -61,11 +61,10 @@ impl AppState {
     ) -> anyhow::Result<Self> {
         let cfg = config.snapshot().await;
 
-        let db_path = cfg
-            .context
-            .db_path
-            .clone()
-            .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share/mimir/context.db"));
+        let db_path = match cfg.context.db_path.clone() {
+            Some(p) => p,
+            None => mimir_core::paths::default_db_path()?,
+        };
         let context_manager = Arc::new(ContextManager::new(&db_path).await?);
 
         let memory_path = cfg
@@ -94,8 +93,7 @@ impl AppState {
         }
 
         // Initialise knowledge graph.
-        let kg_db_path = mimir_core::paths::knowledge_db_path()
-            .unwrap_or_else(|_| std::path::PathBuf::from("~/.local/share/mimir/knowledge.db"));
+        let kg_db_path = mimir_core::paths::knowledge_db_path()?;
         let knowledge_graph = Arc::new(mimir_knowledge::KnowledgeGraph::init(&kg_db_path).await?);
 
         // Register knowledge graph tools.

@@ -178,7 +178,7 @@ impl Tool for KgQueryTool {
         let best = &candidates[0];
         let subject_id = best.entity.id;
 
-        // Resolve predicate if provided
+        // Resolve predicate if provided (read-only: do not create missing predicates)
         let predicate_id_opt = if let Some(ref pred) = input.predicate {
             let trimmed = pred.trim();
             if trimmed.is_empty() {
@@ -187,9 +187,35 @@ impl Tool for KgQueryTool {
                     "predicate must be non-empty",
                 ));
             }
-            Some(self.kg.ensure_predicate(trimmed).await.map_err(|e| {
+            match self.kg.get_predicate_id(trimmed).await.map_err(|e| {
                 ToolError::execution_failed("kg_query", format!("database error: {}", e))
-            })?)
+            })? {
+                Some(id) => Some(id),
+                None => {
+                    // Predicate does not exist: return empty result set
+                    let output = KgQueryOutput {
+                        entity: EntitySummary {
+                            id: best.entity.id as u32,
+                            name: best.entity.name.clone(),
+                            entity_type: entity_type_name(best.entity.entity_type_id),
+                        },
+                        total: 0,
+                        offset,
+                        limit,
+                        facts: Vec::new(),
+                    };
+                    let result = serde_json::to_value(output).map_err(|e| {
+                        ToolError::execution_failed(
+                            "kg_query",
+                            format!("serialization error: {}", e),
+                        )
+                    })?;
+                    return Ok(ToolOutput {
+                        result: Some(result),
+                        ..Default::default()
+                    });
+                }
+            }
         } else {
             None
         };

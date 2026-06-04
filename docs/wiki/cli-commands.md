@@ -196,3 +196,74 @@ mimir skill delete <name>          # Delete a user skill
 mimir skill enable <name>          # Enable a skill
 mimir skill disable <name>         # Disable a skill
 ```
+
+## `mimir kb` — Knowledge Graph Commands
+
+Query and manage the Mimir knowledge graph.
+
+### `mimir kb audit`
+
+Query the fact audit log with filters:
+
+```bash
+mimir kb audit --entity Alice --predicate visited --from 2025-01-01 --change_type created
+```
+
+### `mimir kb forget`
+
+Forget facts at various granularities. Facts are soft-deleted to a trash bin with a 30-day expiry.
+
+| Flag | Description |
+|------|-------------|
+| `--fact-id <id>` | Forget a single fact by ID |
+| `--predicate <name>` | Forget all facts with this predicate |
+| `--subject <name>` | Forget all facts where entity is the subject |
+| `--entity <name>` | Forget all facts where entity is subject or object |
+| `--source <name>` | Forget all facts from a given source |
+| `--from <datetime>` | Forget facts created after this date |
+| `--to <datetime>` | Forget facts created before this date |
+| `--all` | Forget everything (full reset) |
+| `--yes` | Skip confirmation for bulk (>100 facts) |
+| `--confirm-sensitive` | Confirm deletion of sensitive predicates |
+| `--archive` | On full reset, archive to trash instead of hard-delete |
+| `--confirmation-phrase <phrase>` | Required "DELETE EVERYTHING" for full reset |
+
+**Safeguards:**
+- Bulk deletions of >100 facts require `--yes`.
+- Deletions involving sensitive predicates (e.g. `allergy`, `password`) require `--confirm-sensitive`.
+- Full reset requires typing `DELETE EVERYTHING` and creates a timestamped database backup.
+
+```bash
+# Forget a single fact
+mimir kb forget --fact-id 42
+
+# Forget all "visited" facts
+mimir kb forget --predicate visited --yes
+
+# Forget everything (creates backup)
+mimir kb forget --all --confirmation-phrase "DELETE EVERYTHING"
+```
+
+### `mimir kb restore`
+
+Restore facts from the trash bin.
+
+```bash
+# Restore a single fact by trash ID
+mimir kb restore --trash-id 7
+
+# Restore everything
+mimir kb restore --all
+```
+
+### `mimir kb trash`
+
+List or empty the trash bin.
+
+```bash
+# List trash contents
+mimir kb trash
+
+# Empty trash immediately
+mimir kb trash --empty
+```

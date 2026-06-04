@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
 > **Last updated:** 2026-06-04
-> **Version:** 0.30.1
-> **Phase:** Phase 1 (Core Agent) is complete. Phase 2 (Knowledge Graph) library code is complete; daemon integration is pending.
+> **Version:** 0.31.0
+> **Phase:** Phase 1 (Core Agent) is complete. Phase 2 (Knowledge Graph) library code is complete; daemon integration is pending. Forgetting system (bulk forget, restore, trash, full reset) implemented in `mimir-knowledge`.
 
 ---
 

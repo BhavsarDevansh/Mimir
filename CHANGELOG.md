@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.31.0] - 2026-06-04
+
+### Added
+
+- Phase 2: Forgetting system -- trash, cascade forget, restore, bulk operations (#57)
+  - Bulk forget by predicate, entity, source, time range, and full reset.
+  - Trash bin with 30-day expiry, restoration, and automatic nightly cleanup.
+  - Cascade forget for inferred facts: orphan removal and confidence recalculation.
+  - Bulk safeguards: >100 facts requires --yes, sensitive predicates require --confirm-sensitive, full reset requires typing DELETE EVERYTHING.
+  - Full reset creates a timestamped SQLite backup via VACUUM INTO.
+  - New CLI commands: mimir kb forget, mimir kb restore, mimir kb trash.
+  - Extended TrashPayload with dependency chains so restored facts rebuild parent links.
+  - Sensitive predicate flag (sensitive BOOLEAN) on predicates table with seeded defaults for medical/financial terms.
+
+
 ## [0.30.1] - 2026-06-04
 
 ### Fixed

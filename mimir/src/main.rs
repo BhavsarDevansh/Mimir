@@ -34,6 +34,40 @@ async fn main() {
                 to,
                 change_type,
             } => handle_kb_audit(entity, predicate, from, to, change_type).await,
+            cli::KbCommands::Forget {
+                fact_id,
+                predicate,
+                subject,
+                entity,
+                source,
+                from,
+                to,
+                all,
+                yes,
+                confirm_sensitive,
+                archive,
+                confirmation_phrase,
+            } => {
+                kb::handle_kb_forget(kb::KbForgetInput {
+                    fact_id,
+                    predicate,
+                    subject,
+                    entity,
+                    source,
+                    from,
+                    to,
+                    all,
+                    yes,
+                    confirm_sensitive,
+                    archive,
+                    confirmation_phrase,
+                })
+                .await
+            }
+            cli::KbCommands::Restore { trash_id, all } => {
+                kb::handle_kb_restore(trash_id, all).await
+            }
+            cli::KbCommands::Trash { empty } => kb::handle_kb_trash(empty).await,
         },
         cli::Commands::Init => init::handle_init().await,
         cli::Commands::Start => start::handle_start().await,

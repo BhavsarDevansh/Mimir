@@ -6,3 +6,4 @@ pub mod enums;
 pub mod fact;
 pub mod preference;
 pub mod source;
+pub mod trash;

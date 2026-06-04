@@ -601,6 +601,47 @@ impl KnowledgeGraph {
         forget::forget_fact(&self.pool, id, changed_by, self.now()).await
     }
 
+    /// Bulk forget facts with filters and safeguards.
+    pub async fn forget_facts(
+        &self,
+        filters: forget::ForgetFilters,
+        opts: forget::ForgetOptions,
+        changed_by: models::audit_log::ChangedBy,
+    ) -> Result<forget::ForgetResult, KnowledgeError> {
+        forget::forget_facts(&self.pool, filters, opts, changed_by, self.now()).await
+    }
+
+    /// Restore a single fact from trash.
+    pub async fn restore_fact(
+        &self,
+        trash_id: i32,
+        changed_by: models::audit_log::ChangedBy,
+    ) -> Result<models::fact::Fact, KnowledgeError> {
+        queries::trash::restore_fact(&self.pool, trash_id, changed_by, self.now()).await
+    }
+
+    /// Restore all facts from trash.
+    pub async fn restore_all(
+        &self,
+        changed_by: models::audit_log::ChangedBy,
+    ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
+        queries::trash::restore_all(&self.pool, changed_by, self.now()).await
+    }
+
+    /// List trash contents.
+    pub async fn list_trash(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<models::trash::TrashListItem>, KnowledgeError> {
+        queries::trash::list_trash(&self.pool, limit, offset).await
+    }
+
+    /// Empty the trash.
+    pub async fn empty_trash(&self) -> Result<u64, KnowledgeError> {
+        queries::trash::empty_trash(&self.pool).await
+    }
+
     /// Retrieve audit log entries for a fact.
     pub async fn get_audit_log(
         &self,

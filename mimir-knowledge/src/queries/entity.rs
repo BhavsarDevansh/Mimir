@@ -112,7 +112,7 @@ pub async fn get_by_id(pool: &SqlitePool, id: i32) -> Result<Option<Entity>, Kno
 /// wrapped in a double-quoted phrase. Internal double quotes are doubled and
 /// asterisks are replaced with spaces so that prefix-operator syntax cannot
 /// appear inside the quoted phrase.
-fn escape_fts5(query: &str) -> String {
+pub fn escape_fts5(query: &str) -> String {
     if query.is_empty() {
         return String::new();
     }
@@ -796,4 +796,33 @@ mod tests {
     fn escape_fts5_parentheses_and_dash_literal() {
         assert_eq!(escape_fts5("(foo-bar)"), "\"(foo-bar)\"");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Batch name resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve names for a set of entity IDs in a single query.
+pub async fn get_entity_names(
+    pool: &SqlitePool,
+    ids: &[u32],
+) -> Result<std::collections::HashMap<u32, String>, KnowledgeError> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
+    let sql = format!(
+        "SELECT id, name FROM entities WHERE id IN ({})",
+        placeholders.join(",")
+    );
+    let mut query = sqlx::query_as::<_, (i32, String)>(sqlx::AssertSqlSafe(&*sql));
+    for &id in ids {
+        query = query.bind(id as i32);
+    }
+    let rows = query.fetch_all(pool).await?;
+    let mut map = std::collections::HashMap::with_capacity(rows.len());
+    for (id, name) in rows {
+        map.insert(id as u32, name);
+    }
+    Ok(map)
 }

@@ -37,6 +37,8 @@ pub struct AppState {
     pub model_override_cache: Arc<DashMap<String, Arc<dyn LlmBackend>>>,
     /// Tool registry for function-calling support.
     pub tool_registry: Arc<ToolRegistry>,
+    /// Knowledge graph for entity and fact queries.
+    pub knowledge_graph: Arc<mimir_knowledge::KnowledgeGraph>,
 }
 
 const MODEL_OVERRIDE_CACHE_CAP: usize = 16;
@@ -91,6 +93,22 @@ impl AppState {
             tracing::warn!("Failed to register memory tool: {}", e);
         }
 
+        // Initialise knowledge graph.
+        let kg_db_path = mimir_core::paths::knowledge_db_path()
+            .unwrap_or_else(|_| std::path::PathBuf::from("~/.local/share/mimir/knowledge.db"));
+        let knowledge_graph = Arc::new(mimir_knowledge::KnowledgeGraph::init(&kg_db_path).await?);
+
+        // Register knowledge graph tools.
+        let _ = tool_registry.register_native(Arc::new(mimir_knowledge::KgQueryTool::new(
+            Arc::clone(&knowledge_graph),
+        )));
+        let _ = tool_registry.register_native(Arc::new(mimir_knowledge::KgRelatedTool::new(
+            Arc::clone(&knowledge_graph),
+        )));
+        let _ = tool_registry.register_native(Arc::new(mimir_knowledge::KgSearchTool::new(
+            Arc::clone(&knowledge_graph),
+        )));
+
         Ok(Self {
             llm_client,
             context_manager,
@@ -103,6 +121,7 @@ impl AppState {
             shutdown_tx,
             model_override_cache: Arc::new(DashMap::new()),
             tool_registry,
+            knowledge_graph,
         })
     }
 

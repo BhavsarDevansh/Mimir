@@ -247,3 +247,5 @@ See `VISION/09-Roadmap/` for full details.
 - Read the per-feature wiki docs in `docs/wiki/` for deep dives on individual subsystems.
 - Check the GitHub Issues board for bug reports and feature requests.
 - Run `mimir status` to verify daemon health and configuration.
+
+- Knowledge Graph LLM tools: `kg_query`, `kg_related`, `kg_search` (Phase 2, Issue #56)

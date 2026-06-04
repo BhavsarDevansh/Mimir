@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.30.0] - 2026-06-04
+
+### Added
+
+- Phase 2: Knowledge Graph LLM tools — `kg_query`, `kg_related`, `kg_search` (#56)
+  - Database migration `028_add_performance_indexes.sql` for tool query performance.
+  - Query layer: `search_entities`, `traverse_graph`, `get_facts_by_subject_filtered`, `get_entity_names`.
+  - Tool implementations in `mimir-knowledge/src/tools/` implementing `mimir_core::Tool`.
+  - Server integration: `AppState` initialises `KnowledgeGraph` and registers all three tools.
+  - Input sanitisation, FTS5 injection defence, and SQL-level exclusion of pending/superseded/forgotten facts.
+  - Comprehensive unit and integration tests.
+
+
 ## [0.29.2] - 2026-06-03
 
 ### Fixed

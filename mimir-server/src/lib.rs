@@ -306,6 +306,22 @@ mod tests {
         ));
         let _ = tool_registry.register_native(memory_tool);
 
+        let kg_db_path = temp.path().join("knowledge.db");
+        let knowledge_graph = Arc::new(
+            mimir_knowledge::KnowledgeGraph::init(&kg_db_path)
+                .await
+                .unwrap(),
+        );
+        let _ = tool_registry.register_native(Arc::new(mimir_knowledge::KgQueryTool::new(
+            Arc::clone(&knowledge_graph),
+        )));
+        let _ = tool_registry.register_native(Arc::new(mimir_knowledge::KgRelatedTool::new(
+            Arc::clone(&knowledge_graph),
+        )));
+        let _ = tool_registry.register_native(Arc::new(mimir_knowledge::KgSearchTool::new(
+            Arc::clone(&knowledge_graph),
+        )));
+
         let state = Arc::new(AppState {
             llm_client: llm,
             context_manager,
@@ -318,6 +334,7 @@ mod tests {
             shutdown_tx,
             model_override_cache: Arc::new(DashMap::new()),
             tool_registry: Arc::new(tool_registry),
+            knowledge_graph,
         });
 
         (state, temp)
@@ -993,5 +1010,43 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_kg_tools_registered() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+
+        let names: Vec<String> = state
+            .tool_registry
+            .list()
+            .into_iter()
+            .map(|m| m.name)
+            .collect();
+
+        assert!(names.contains(&"kg_query".to_string()));
+        assert!(names.contains(&"kg_related".to_string()));
+        assert!(names.contains(&"kg_search".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_kg_tools_in_openai_export() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+
+        let exported = state.tool_registry.export_openai_tools();
+        let names: Vec<String> = exported
+            .iter()
+            .filter_map(|v| {
+                v.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+
+        assert!(names.contains(&"kg_query".to_string()));
+        assert!(names.contains(&"kg_related".to_string()));
+        assert!(names.contains(&"kg_search".to_string()));
     }
 }

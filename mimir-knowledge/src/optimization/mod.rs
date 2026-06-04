@@ -83,7 +83,7 @@ pub async fn run_nightly_optimization(kg: &KnowledgeGraph) -> Result<(), crate::
     // 5. Cleanup stale pending confirmations (7-day TTL).
     cleanup_stale_pending_confirmations(kg).await?;
 
-    // TODO: dormant cleanup pass.
+    crate::queries::trash::hard_delete_expired_trash(kg.pool(), kg.now()).await?;
     // TODO: compaction pass.
 
     Ok(())

@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.31.1] - 2026-06-04
+
+### Fixed
+
+- **P1**: `restore_all` now maps both child and parent IDs through `id_map` when rebuilding `fact_dependencies`, preventing FK violations on restored facts.
+- **P1**: `restore_fact` now marks the trash row as restored, preventing duplicate restores and stale trash listings.
+- **P1**: `hard_delete_all_facts` correctly reports the number of forgotten facts via `rows_affected()` instead of querying the now-empty table.
+- **P1**: `create_backup` escapes single quotes in the backup path before interpolating into `VACUUM INTO`, preventing SQL injection/breakage from `XDG_DATA_HOME` paths containing apostrophes.
+- **P2**: Restoration audit log now references the newly generated fact ID instead of the original deleted ID.
+
+## [0.31.0] - 2026-06-04
+
+### Added
+
+- Phase 2: Forgetting system -- trash, cascade forget, restore, bulk operations (#57)
+  - Bulk forget by predicate, entity, source, time range, and full reset.
+  - Trash bin with 30-day expiry, restoration, and automatic nightly cleanup.
+  - Cascade forget for inferred facts: orphan removal and confidence recalculation.
+  - Bulk safeguards: >100 facts requires --yes, sensitive predicates require --confirm-sensitive, full reset requires typing DELETE EVERYTHING.
+  - Full reset creates a timestamped SQLite backup via VACUUM INTO.
+  - New CLI commands: mimir kb forget, mimir kb restore, mimir kb trash.
+  - Extended TrashPayload with dependency chains so restored facts rebuild parent links.
+  - Sensitive predicate flag (sensitive BOOLEAN) on predicates table with seeded defaults for medical/financial terms.
+
+
 ## [0.30.1] - 2026-06-04
 
 ### Fixed

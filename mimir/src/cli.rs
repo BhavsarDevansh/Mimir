@@ -84,6 +84,66 @@ pub enum KbCommands {
         #[arg(long)]
         change_type: Option<String>,
     },
+    /// Forget facts (single, bulk, or full reset).
+    Forget {
+        /// Single fact ID.
+        #[arg(long)]
+        fact_id: Option<i32>,
+        /// Filter by predicate name.
+        #[arg(long)]
+        predicate: Option<String>,
+        /// Filter by subject entity name.
+        #[arg(long)]
+        subject: Option<String>,
+        /// Filter by entity name (subject or object).
+        #[arg(long)]
+        entity: Option<String>,
+        /// Filter by source connector name.
+        #[arg(long)]
+        source: Option<String>,
+        /// Filter from datetime.
+        #[arg(long)]
+        from: Option<String>,
+        /// Filter to datetime.
+        #[arg(long)]
+        to: Option<String>,
+        /// Forget everything (full reset).
+        #[arg(long)]
+        all: bool,
+        /// Skip confirmation for bulk.
+        #[arg(long)]
+        yes: bool,
+        /// Confirm sensitive predicate deletion.
+        #[arg(long)]
+        confirm_sensitive: bool,
+        /// Archive to trash instead of hard-delete on full reset.
+        #[arg(long)]
+        archive: bool,
+        /// Confirmation phrase for full reset.
+        #[arg(long)]
+        confirmation_phrase: Option<String>,
+    },
+    /// Restore facts from trash.
+    Restore {
+        /// Trash row ID.
+        #[arg(long)]
+        trash_id: Option<i32>,
+        /// Restore everything.
+        #[arg(long)]
+        all: bool,
+    },
+    /// List or empty trash.
+    Trash {
+        /// Empty trash immediately.
+        #[arg(long)]
+        empty: bool,
+        /// Maximum rows to list.
+        #[arg(long, default_value = "50")]
+        limit: u32,
+        /// Rows to skip.
+        #[arg(long, default_value = "0")]
+        offset: u32,
+    },
 }
 
 #[derive(Subcommand)]

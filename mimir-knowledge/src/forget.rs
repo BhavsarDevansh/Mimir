@@ -2,9 +2,10 @@
 //! and hard-delete expired trash rows.
 
 use chrono::{DateTime, Duration, Utc};
-use serde::{Deserialize, Serialize};
 use serde_json;
 use sqlx::SqlitePool;
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::pin::Pin;
 
 use crate::KnowledgeError;
@@ -12,24 +13,49 @@ use crate::confidence;
 use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::fact::Fact;
 use crate::models::source::Source;
+use crate::models::trash::TrashPayload;
 
-/// Payload stored in `trash` for a forgotten fact.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TrashPayload {
-    pub fact: Fact,
-    pub sources: Vec<Source>,
+// ---------------------------------------------------------------------------
+// Bulk forget types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default)]
+pub struct ForgetFilters {
+    pub fact_id: Option<i32>,
+    pub predicate: Option<String>,
+    pub subject: Option<String>,
+    pub entity: Option<String>,
+    pub source: Option<String>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub all: bool,
 }
 
-/// Soft-delete a fact into the trash table, evaluate downstream inferred facts,
-/// and write an audit log entry.
-///
-/// Steps:
-/// 1. Serialize fact + sources into `trash.payload`.
-/// 2. Insert trash row with 30-day expiry.
-/// 3. Delete `fact_dependencies` rows (RESTRICT FK prevents DB cascade).
-/// 4. Delete the fact from `facts` (`sources` / `fact_audit_log` cascade).
-/// 5. For each former child: recalculate confidence; if zero parents +
-///    inferred → recursively forget.
+impl ForgetFilters {
+    pub fn is_full_reset(&self) -> bool {
+        self.all
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ForgetOptions {
+    pub yes: bool,
+    pub confirm_sensitive: bool,
+    pub confirmation_phrase: Option<String>,
+    pub archive: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ForgetResult {
+    pub forgotten_count: u64,
+    pub backup_path: Option<PathBuf>,
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/// Soft-delete a single fact (existing API preserved).
 pub async fn forget_fact(
     pool: &SqlitePool,
     fact_id: i32,
@@ -39,20 +65,198 @@ pub async fn forget_fact(
     forget_fact_inner(pool, fact_id, changed_by, now).await
 }
 
+/// Bulk forget dispatch.
+pub async fn forget_facts(
+    pool: &SqlitePool,
+    filters: ForgetFilters,
+    opts: ForgetOptions,
+    changed_by: ChangedBy,
+    now: DateTime<Utc>,
+) -> Result<ForgetResult, KnowledgeError> {
+    if filters.is_full_reset() {
+        return forget_all(pool, opts, changed_by, now).await;
+    }
+
+    let ids = query_matching_fact_ids(pool, &filters).await?;
+    if ids.is_empty() {
+        return Ok(ForgetResult {
+            forgotten_count: 0,
+            backup_path: None,
+        });
+    }
+
+    let count = ids.len() as u64;
+
+    if count > 100 && !opts.yes {
+        return Err(KnowledgeError::Validation(format!(
+            "Refusing to forget {} facts. Use --yes to confirm.",
+            count
+        )));
+    }
+
+    let sensitive = has_sensitive_match(pool, &filters).await?;
+    if sensitive && !opts.confirm_sensitive {
+        return Err(KnowledgeError::Validation(
+            "This includes sensitive facts. Use --confirm-sensitive.".to_string(),
+        ));
+    }
+
+    let mut all_children: Vec<(i32, bool)> = Vec::new();
+    for chunk in ids.chunks(50) {
+        let mut tx = pool.begin().await?;
+        for fact_id in chunk {
+            let children = forget_fact_tx(&mut tx, *fact_id, changed_by, now).await?;
+            all_children.extend(children);
+        }
+        tx.commit().await?;
+    }
+
+    let deduped: Vec<(i32, bool)> = {
+        let mut seen = HashSet::new();
+        all_children
+            .into_iter()
+            .filter(|(id, _)| seen.insert(*id))
+            .collect()
+    };
+
+    evaluate_children(pool, deduped, now).await?;
+
+    Ok(ForgetResult {
+        forgotten_count: count,
+        backup_path: None,
+    })
+}
+
+/// Hard-delete all facts after creating a backup.
+async fn forget_all(
+    pool: &SqlitePool,
+    opts: ForgetOptions,
+    changed_by: ChangedBy,
+    now: DateTime<Utc>,
+) -> Result<ForgetResult, KnowledgeError> {
+    if opts.confirmation_phrase.as_deref() != Some("DELETE EVERYTHING") {
+        return Err(KnowledgeError::Validation(
+            "Full reset requires typing 'DELETE EVERYTHING'.".to_string(),
+        ));
+    }
+
+    let backup_path = create_backup(pool).await?;
+
+    if opts.archive {
+        let ids: Vec<i32> = sqlx::query_scalar("SELECT id FROM facts")
+            .fetch_all(pool)
+            .await?;
+        let count = ids.len() as u64;
+        let mut all_children: Vec<(i32, bool)> = Vec::new();
+        for chunk in ids.chunks(50) {
+            let mut tx = pool.begin().await?;
+            for fact_id in chunk {
+                let children = forget_fact_tx(&mut tx, *fact_id, changed_by, now).await?;
+                all_children.extend(children);
+            }
+            tx.commit().await?;
+        }
+        let deduped: Vec<(i32, bool)> = {
+            let mut seen = HashSet::new();
+            all_children
+                .into_iter()
+                .filter(|(id, _)| seen.insert(*id))
+                .collect()
+        };
+        evaluate_children(pool, deduped, now).await?;
+        return Ok(ForgetResult {
+            forgotten_count: count,
+            backup_path: Some(backup_path),
+        });
+    }
+
+    let count = hard_delete_all_facts(pool).await?;
+    Ok(ForgetResult {
+        forgotten_count: count,
+        backup_path: Some(backup_path),
+    })
+}
+
+/// Create a timestamped backup of the database.
+async fn create_backup(pool: &SqlitePool) -> Result<PathBuf, KnowledgeError> {
+    let data_dir = mimir_core::paths::data_dir().map_err(|e| {
+        KnowledgeError::Validation(format!("Could not resolve data directory: {}", e))
+    })?;
+    let backup_dir = data_dir.join("backups");
+    tokio::fs::create_dir_all(&backup_dir).await?;
+
+    let timestamp = Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+    let backup_path = backup_dir.join(format!("knowledge.db.bak-{}", timestamp));
+
+    let path_str = backup_path.display().to_string().replace("'", "''");
+    let query = format!("VACUUM INTO '{}'", path_str);
+    sqlx::query(sqlx::AssertSqlSafe(query))
+        .execute(pool)
+        .await?;
+
+    Ok(backup_path)
+}
+
+/// Hard-delete every fact, entity, preference, queue, and trash row.
+async fn hard_delete_all_facts(pool: &SqlitePool) -> Result<u64, KnowledgeError> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query("DELETE FROM fact_dependencies")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM sources").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM fact_audit_log")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM preference_sources")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM preference_contexts")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM preferences")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM entity_dates")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM entity_locations")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM entity_aliases")
+        .execute(&mut *tx)
+        .await?;
+    let delete_result = sqlx::query("DELETE FROM facts").execute(&mut *tx).await?;
+    let count = delete_result.rows_affected();
+    sqlx::query("DELETE FROM entities")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM trash").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM dedup_queue")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM entity_merge_queue")
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    Ok(count)
+}
+
+// ---------------------------------------------------------------------------
+// Core per-fact forget logic
+// ---------------------------------------------------------------------------
+
 /// Core forget logic executed inside a transaction.
-/// Returns the list of former children that need evaluation after the commit.
 pub(crate) async fn forget_fact_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     fact_id: i32,
     changed_by: ChangedBy,
     now: DateTime<Utc>,
 ) -> Result<Vec<(i32, bool)>, KnowledgeError> {
-    // Fetch the fact.
     let fact: Option<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
-         valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
-         FROM facts WHERE id = ?",
+        "SELECT id, subject_id, predicate_id, object_id, object_literal,          valid_from, valid_until, confidence, fact_status_id, inferred,          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
     .fetch_optional(&mut **tx)
@@ -60,11 +264,15 @@ pub(crate) async fn forget_fact_tx(
 
     let fact = fact.ok_or(KnowledgeError::FactNotFound(fact_id))?;
 
-    // Fetch linked sources.
     let sources: Vec<Source> = sqlx::query_as::<_, Source>(
-        "SELECT id, fact_id, source_type_id, connector_id, connector_type_id, raw_reference, \
-         extracted_at, extraction_method_id \
-         FROM sources WHERE fact_id = ?",
+        "SELECT id, fact_id, source_type_id, connector_id, connector_type_id, raw_reference,          extracted_at, extraction_method_id          FROM sources WHERE fact_id = ?",
+    )
+    .bind(fact_id)
+    .fetch_all(&mut **tx)
+    .await?;
+
+    let dependencies: Vec<(i32, i16)> = sqlx::query_as(
+        "SELECT parent_fact_id, relation_type_id FROM fact_dependencies WHERE child_fact_id = ?",
     )
     .bind(fact_id)
     .fetch_all(&mut **tx)
@@ -73,16 +281,15 @@ pub(crate) async fn forget_fact_tx(
     let payload = TrashPayload {
         fact: fact.clone(),
         sources,
+        dependencies,
     };
     let payload_json = serde_json::to_string(&payload)
         .map_err(|e| KnowledgeError::Validation(format!("JSON serialization failed: {}", e)))?;
 
     let expires_at = now + Duration::days(30);
 
-    // Insert trash row.
     sqlx::query(
-        "INSERT INTO trash (original_table, original_id, payload, deleted_at, expires_at) \
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO trash (original_table, original_id, payload, deleted_at, expires_at)          VALUES (?, ?, ?, ?, ?)",
     )
     .bind("facts")
     .bind(fact_id)
@@ -92,13 +299,10 @@ pub(crate) async fn forget_fact_tx(
     .execute(&mut **tx)
     .await?;
 
-    // Audit log before deletion (FK removed by migration 018 so row persists after delete).
     let old_json = serde_json::to_string(&fact)
         .map_err(|e| KnowledgeError::Validation(format!("JSON serialization failed: {}", e)))?;
     sqlx::query(
-        "INSERT INTO fact_audit_log \
-         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO fact_audit_log          (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason)          VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(fact_id)
     .bind(ChangeType::Forgotten as i16)
@@ -110,26 +314,20 @@ pub(crate) async fn forget_fact_tx(
     .execute(&mut **tx)
     .await?;
 
-    // Identify children before removing dependency rows.
     let children: Vec<(i32, bool)> = sqlx::query_as(
-        "SELECT fd.child_fact_id, f.inferred \
-         FROM fact_dependencies fd \
-         JOIN facts f ON f.id = fd.child_fact_id \
-         WHERE fd.parent_fact_id = ? AND fd.relation_type_id = ?",
+        "SELECT fd.child_fact_id, f.inferred          FROM fact_dependencies fd          JOIN facts f ON f.id = fd.child_fact_id          WHERE fd.parent_fact_id = ? AND fd.relation_type_id = ?",
     )
     .bind(fact_id)
     .bind(crate::models::enums::RelationType::InferredFrom as i16)
     .fetch_all(&mut **tx)
     .await?;
 
-    // Remove all dependency rows where this fact is parent or child.
     sqlx::query("DELETE FROM fact_dependencies WHERE parent_fact_id = ? OR child_fact_id = ?")
         .bind(fact_id)
         .bind(fact_id)
         .execute(&mut **tx)
         .await?;
 
-    // Hard-delete the fact. sources cascade; fact_audit_log rows persist (migration 018).
     sqlx::query("DELETE FROM facts WHERE id = ?")
         .bind(fact_id)
         .execute(&mut **tx)
@@ -154,7 +352,6 @@ pub(crate) async fn evaluate_children(
         .await?;
 
         if remaining_parents == 0 && child_inferred {
-            // Child may already have been removed by a previous cascade; ignore NotFound.
             if let Err(e) = forget_fact_inner(pool, child_id, ChangedBy::System, now).await {
                 if !matches!(e, KnowledgeError::FactNotFound(_)) {
                     return Err(e);
@@ -167,7 +364,6 @@ pub(crate) async fn evaluate_children(
                     .fetch_optional(pool)
                     .await?;
 
-            // If fact no longer exists, skip further work.
             let old_confidence = match old_confidence {
                 Some(conf) => conf,
                 None => continue,
@@ -187,9 +383,7 @@ pub(crate) async fn evaluate_children(
                 let old_json = serde_json::json!({"confidence": old_confidence}).to_string();
                 let new_json = serde_json::json!({"confidence": new_confidence}).to_string();
                 sqlx::query(
-                    "INSERT INTO fact_audit_log \
-                     (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO fact_audit_log                      (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason)                      VALUES (?, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(child_id)
                 .bind(ChangeType::ConfidenceChange as i16)
@@ -208,10 +402,7 @@ pub(crate) async fn evaluate_children(
                 let mut tx = pool.begin().await?;
 
                 let old_child: Option<Fact> = sqlx::query_as::<_, Fact>(
-                    "SELECT id, subject_id, predicate_id, object_id, object_literal, \
-                     valid_from, valid_until, confidence, fact_status_id, inferred, \
-                     inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
-                     FROM facts WHERE id = ?",
+                    "SELECT id, subject_id, predicate_id, object_id, object_literal,                      valid_from, valid_until, confidence, fact_status_id, inferred,                      inference_depth, stale_confidence, pending_confirmation, created_at, updated_at                      FROM facts WHERE id = ?",
                 )
                 .bind(child_id)
                 .fetch_optional(&mut *tx)
@@ -231,10 +422,7 @@ pub(crate) async fn evaluate_children(
                         .await?;
 
                     let updated_child: Fact = sqlx::query_as::<_, Fact>(
-                        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
-                         valid_from, valid_until, confidence, fact_status_id, inferred, \
-                         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
-                         FROM facts WHERE id = ?",
+                        "SELECT id, subject_id, predicate_id, object_id, object_literal,                          valid_from, valid_until, confidence, fact_status_id, inferred,                          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at                          FROM facts WHERE id = ?",
                     )
                     .bind(child_id)
                     .fetch_one(&mut *tx)
@@ -245,9 +433,7 @@ pub(crate) async fn evaluate_children(
                             KnowledgeError::Validation(format!("JSON serialization failed: {}", e))
                         })?;
                     sqlx::query(
-                        "INSERT INTO fact_audit_log \
-                         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO fact_audit_log                      (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason)                      VALUES (?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(child_id)
                     .bind(ChangeType::StatusChange as i16)
@@ -273,7 +459,7 @@ fn forget_fact_inner<'a>(
     fact_id: i32,
     changed_by: ChangedBy,
     now: DateTime<Utc>,
-) -> Pin<Box<dyn std::future::Future<Output = Result<(), KnowledgeError>> + 'a>> {
+) -> Pin<Box<dyn std::future::Future<Output = Result<(), KnowledgeError>> + Send + 'a>> {
     Box::pin(async move {
         let mut tx = pool.begin().await?;
         let children = forget_fact_tx(&mut tx, fact_id, changed_by, now).await?;
@@ -282,6 +468,107 @@ fn forget_fact_inner<'a>(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Filter helpers
+// ---------------------------------------------------------------------------
+
+/// Query matching fact IDs for bulk forget.
+/// Query matching fact IDs for bulk forget.
+async fn query_matching_fact_ids(
+    pool: &SqlitePool,
+    filters: &ForgetFilters,
+) -> Result<Vec<i32>, KnowledgeError> {
+    let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT f.id FROM facts f JOIN entities s ON s.id = f.subject_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN predicates p ON p.id = f.predicate_id WHERE 1=1",
+    );
+
+    if let Some(id) = filters.fact_id {
+        builder.push(" AND f.id = ");
+        builder.push_bind(id);
+    }
+    if let Some(ref pred) = filters.predicate {
+        builder.push(" AND p.name = ");
+        builder.push_bind(pred);
+    }
+    if let Some(ref subj) = filters.subject {
+        builder.push(" AND s.name = ");
+        builder.push_bind(subj);
+    }
+    if let Some(ref ent) = filters.entity {
+        builder.push(" AND (s.name = ");
+        builder.push_bind(ent);
+        builder.push(" OR o.name = ");
+        builder.push_bind(ent);
+        builder.push(")");
+    }
+    if let Some(ref src) = filters.source {
+        builder.push(" AND f.id IN (SELECT so.fact_id FROM sources so WHERE so.connector_id = ");
+        builder.push_bind(src);
+        builder.push(" OR so.source_type_id = (SELECT id FROM source_types WHERE name = ");
+        builder.push_bind(src);
+        builder.push("))");
+    }
+    if let Some(from) = filters.from {
+        builder.push(" AND f.created_at >= ");
+        builder.push_bind(from);
+    }
+    if let Some(to) = filters.to {
+        builder.push(" AND f.created_at <= ");
+        builder.push_bind(to);
+    }
+
+    let ids: Vec<i32> = builder.build_query_scalar::<i32>().fetch_all(pool).await?;
+    Ok(ids)
+}
+
+/// Check whether any matching fact is tagged sensitive.
+async fn has_sensitive_match(
+    pool: &SqlitePool,
+    filters: &ForgetFilters,
+) -> Result<bool, KnowledgeError> {
+    let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT 1 FROM facts f JOIN entities s ON s.id = f.subject_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN predicates p ON p.id = f.predicate_id WHERE p.sensitive = TRUE",
+    );
+
+    if let Some(id) = filters.fact_id {
+        builder.push(" AND f.id = ");
+        builder.push_bind(id);
+    }
+    if let Some(ref pred) = filters.predicate {
+        builder.push(" AND p.name = ");
+        builder.push_bind(pred);
+    }
+    if let Some(ref subj) = filters.subject {
+        builder.push(" AND s.name = ");
+        builder.push_bind(subj);
+    }
+    if let Some(ref ent) = filters.entity {
+        builder.push(" AND (s.name = ");
+        builder.push_bind(ent);
+        builder.push(" OR o.name = ");
+        builder.push_bind(ent);
+        builder.push(")");
+    }
+    if let Some(ref src) = filters.source {
+        builder.push(" AND f.id IN (SELECT so.fact_id FROM sources so WHERE so.connector_id = ");
+        builder.push_bind(src);
+        builder.push(" OR so.source_type_id = (SELECT id FROM source_types WHERE name = ");
+        builder.push_bind(src);
+        builder.push("))");
+    }
+    if let Some(from) = filters.from {
+        builder.push(" AND f.created_at >= ");
+        builder.push_bind(from);
+    }
+    if let Some(to) = filters.to {
+        builder.push(" AND f.created_at <= ");
+        builder.push_bind(to);
+    }
+    builder.push(" LIMIT 1");
+
+    let row = builder.build().fetch_optional(pool).await?;
+    Ok(row.is_some())
+}
 /// Hard-delete trash rows that have passed their expiry date.
 pub async fn hard_delete_expired_trash(
     pool: &SqlitePool,

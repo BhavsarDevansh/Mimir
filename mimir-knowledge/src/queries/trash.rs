@@ -85,7 +85,18 @@ pub async fn restore_fact(
     let payload: TrashPayload = serde_json::from_str(&row.payload)
         .map_err(|e| KnowledgeError::Validation(format!("Invalid trash payload: {}", e)))?;
 
-    restore_payload(pool, payload, changed_by, now).await
+    let fact = restore_payload(pool, payload, changed_by, now).await?;
+
+    // Mark trash row restored.
+    let restorer_str = format!("{:?}", changed_by);
+    sqlx::query("UPDATE trash SET restored_at = ?, restorer = ? WHERE id = ?")
+        .bind(now)
+        .bind(&restorer_str)
+        .bind(trash_id)
+        .execute(pool)
+        .await?;
+
+    Ok(fact)
 }
 
 /// Restore all facts from trash (two-pass: facts first, dependencies second).
@@ -133,12 +144,10 @@ pub async fn restore_all(
 
     // Pass 2: rebuild dependencies using the map.
     let mut tx = pool.begin().await?;
-    for (child_new_raw, parent_old, rel_type) in all_deps {
-        let child_new = child_new_raw; // already the new id from restore_payload_no_deps
-        // Wait, we stored old_id -> new_id map. child_new_raw is the new id already because restore_payload_no_deps returns new fact.
-        // Actually we don't need to remap child_new because it is already the new id.
-        // We need to remap parent_old to new parent id if the parent was also restored.
-        if let Some(&parent_new) = id_map.get(&parent_old) {
+    for (child_old, parent_old, rel_type) in &all_deps {
+        if let (Some(&child_new), Some(&parent_new)) =
+            (id_map.get(child_old), id_map.get(parent_old))
+        {
             sqlx::query(
                 "INSERT INTO fact_dependencies (parent_fact_id, child_fact_id, relation_type_id) VALUES (?, ?, ?)",
             )
@@ -308,7 +317,7 @@ async fn restore_payload_no_deps(
     sqlx::query(
         "INSERT INTO fact_audit_log          (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason)          VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(fact.id)
+    .bind(new_fact_id)
     .bind(ChangeType::Restored as i16)
     .bind(None::<&str>)
     .bind(new_value)

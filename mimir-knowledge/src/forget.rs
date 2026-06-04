@@ -188,7 +188,8 @@ async fn create_backup(pool: &SqlitePool) -> Result<PathBuf, KnowledgeError> {
     let timestamp = Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
     let backup_path = backup_dir.join(format!("knowledge.db.bak-{}", timestamp));
 
-    let query = format!("VACUUM INTO '{}'", backup_path.display());
+    let path_str = backup_path.display().to_string().replace("'", "''");
+    let query = format!("VACUUM INTO '{}'", path_str);
     sqlx::query(sqlx::AssertSqlSafe(query))
         .execute(pool)
         .await?;
@@ -225,7 +226,8 @@ async fn hard_delete_all_facts(pool: &SqlitePool) -> Result<u64, KnowledgeError>
     sqlx::query("DELETE FROM entity_aliases")
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM facts").execute(&mut *tx).await?;
+    let delete_result = sqlx::query("DELETE FROM facts").execute(&mut *tx).await?;
+    let count = delete_result.rows_affected();
     sqlx::query("DELETE FROM entities")
         .execute(&mut *tx)
         .await?;
@@ -239,11 +241,7 @@ async fn hard_delete_all_facts(pool: &SqlitePool) -> Result<u64, KnowledgeError>
 
     tx.commit().await?;
 
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM facts")
-        .fetch_one(pool)
-        .await?;
-
-    Ok(count as u64)
+    Ok(count)
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.31.1] - 2026-06-04
+
+### Fixed
+
+- **P1**: `restore_all` now maps both child and parent IDs through `id_map` when rebuilding `fact_dependencies`, preventing FK violations on restored facts.
+- **P1**: `restore_fact` now marks the trash row as restored, preventing duplicate restores and stale trash listings.
+- **P1**: `hard_delete_all_facts` correctly reports the number of forgotten facts via `rows_affected()` instead of querying the now-empty table.
+- **P1**: `create_backup` escapes single quotes in the backup path before interpolating into `VACUUM INTO`, preventing SQL injection/breakage from `XDG_DATA_HOME` paths containing apostrophes.
+- **P2**: Restoration audit log now references the newly generated fact ID instead of the original deleted ID.
+
 ## [0.31.0] - 2026-06-04
 
 ### Added

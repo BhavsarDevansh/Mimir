@@ -12,6 +12,7 @@ pub mod inference;
 pub mod models;
 pub mod optimization;
 pub mod queries;
+pub mod tools;
 
 use clock::{Clock, RealClock};
 use sqlx::SqlitePool;
@@ -98,6 +99,15 @@ pub struct KnowledgeGraph {
     predicate_cache: Arc<RwLock<PredicateCache>>,
     rule_engine: RuleEngine,
     pending_confirmations: Arc<RwLock<HashSet<i32>>>,
+}
+
+impl std::fmt::Debug for KnowledgeGraph {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KnowledgeGraph")
+            .field("pool", &self.pool)
+            .field("rule_engine", &"...")
+            .finish_non_exhaustive()
+    }
 }
 
 impl KnowledgeGraph {
@@ -191,6 +201,30 @@ impl KnowledgeGraph {
         cache.name_to_id.insert(name.to_string(), id);
         cache.id_to_name.insert(id, name.to_string());
         Ok(id)
+    }
+
+    /// Look up a predicate id by name without creating it.
+    pub async fn get_predicate_id(&self, name: &str) -> Result<Option<i16>, KnowledgeError> {
+        {
+            let cache = self.predicate_cache.read().await;
+            if let Some(&id) = cache.name_to_id.get(name) {
+                return Ok(Some(id));
+            }
+        }
+
+        let row: Option<(i16,)> = sqlx::query_as("SELECT id FROM predicates WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        if let Some((id,)) = row {
+            let mut cache = self.predicate_cache.write().await;
+            cache.name_to_id.insert(name.to_string(), id);
+            cache.id_to_name.insert(id, name.to_string());
+            Ok(Some(id))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Reverse lookup: get the predicate name for a given id.
@@ -728,3 +762,6 @@ impl KnowledgeGraph {
         extract::reject_fact(self, fact_id).await
     }
 }
+
+// Re-export knowledge graph tools.
+pub use tools::{KgQueryTool, KgRelatedTool, KgSearchTool};

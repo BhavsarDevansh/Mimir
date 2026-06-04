@@ -492,7 +492,8 @@ async fn process_extracted_fact(
                 Err(e) => {
                     tracing::warn!(
                         "Failed to parse valid_from temporal bound '{}': {}. Temporal constraint ignored.",
-                        s, e
+                        s,
+                        e
                     );
                     None
                 }
@@ -511,7 +512,8 @@ async fn process_extracted_fact(
                 Err(e) => {
                     tracing::warn!(
                         "Failed to parse valid_until temporal bound '{}': {}. Temporal constraint ignored.",
-                        s, e
+                        s,
+                        e
                     );
                     None
                 }
@@ -660,7 +662,8 @@ async fn handle_correction(
                 Err(e) => {
                     tracing::warn!(
                         "Failed to parse correction_scope datetime '{}': {}. valid_from will not be set.",
-                        datetime_str, e
+                        datetime_str,
+                        e
                     );
                 }
             }

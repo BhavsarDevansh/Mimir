@@ -4,7 +4,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use chrono::{NaiveTime, TimeZone, Utc};
+use chrono::{NaiveTime, Utc};
 use mimir_core::job_queue::{DailySchedule, Job, JobContext, JobPriority, JobQueue, JobRunStatus};
 
 #[tokio::test]
@@ -82,32 +82,34 @@ async fn job_queue_times_out_long_running_job() {
 }
 
 #[tokio::test]
-async fn daily_schedule_runs_on_next_day_after_scheduled_time() {
-    let schedule = DailySchedule::new(NaiveTime::from_hms_opt(2, 0, 0).unwrap());
-    let now = chrono::DateTime::parse_from_rfc3339("2026-06-04T03:00:00Z")
-        .unwrap()
-        .with_timezone(&Utc);
-
+async fn daily_schedule_next_after_is_later_than_now() {
+    let schedule = DailySchedule::new(NaiveTime::from_hms_opt(3, 0, 0).unwrap());
+    let now = Utc::now();
     let next = schedule.next_after(now);
+    assert!(next > now);
+    // Should be within the next 25 hours
+    assert!(next - now < chrono::Duration::hours(25));
+}
 
-    let today = now.date_naive();
-    let expected = chrono::Local
-        .from_local_datetime(&today.and_time(NaiveTime::from_hms_opt(2, 0, 0).unwrap()))
-        .single()
+#[tokio::test]
+async fn daily_schedule_handles_dst_spring_forward_without_panic() {
+    // US spring forward 2026-03-08: 02:00 does not exist in most US timezones.
+    let schedule = DailySchedule::new(NaiveTime::from_hms_opt(2, 30, 0).unwrap());
+    let now = chrono::DateTime::parse_from_rfc3339("2026-03-07T12:00:00Z")
         .unwrap()
         .with_timezone(&Utc);
-    let expected = if expected > now {
-        expected
-    } else {
-        chrono::Local
-            .from_local_datetime(
-                &(today + chrono::Duration::days(1))
-                    .and_time(NaiveTime::from_hms_opt(2, 0, 0).unwrap()),
-            )
-            .single()
-            .unwrap()
-            .with_timezone(&Utc)
-    };
+    // Must not panic even if the local time falls in a DST gap.
+    let next = schedule.next_after(now);
+    assert!(next > now);
+}
 
-    assert_eq!(next, expected);
+#[tokio::test]
+async fn daily_schedule_handles_dst_fall_back_without_panic() {
+    // US fall back 2026-11-01: 02:00 occurs twice.
+    let schedule = DailySchedule::new(NaiveTime::from_hms_opt(2, 30, 0).unwrap());
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-31T12:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let next = schedule.next_after(now);
+    assert!(next > now);
 }

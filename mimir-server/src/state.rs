@@ -124,7 +124,7 @@ impl AppState {
         // Initialise job queue.
         let jobs_db_path = mimir_core::paths::jobs_db_path()?;
         let job_queue = Arc::new(JobQueue::init(&jobs_db_path).await?);
-        let last_user_activity = Arc::new(AtomicU64::new(Utc::now().timestamp() as u64));
+        let last_user_activity = Arc::new(AtomicU64::new(0));
 
         // Register knowledge graph optimization job.
         let kg_for_job = Arc::clone(&knowledge_graph);
@@ -132,6 +132,7 @@ impl AppState {
         let activity_for_job = Arc::clone(&last_user_activity);
         let backup_dir = mimir_core::paths::data_dir()?.join("backups");
         let timeout_minutes = cfg.knowledge.optimization.timeout_minutes;
+        let schedule_time = cfg.knowledge.optimization.schedule_time.clone();
         let schedule =
             mimir_core::job_queue::DailySchedule::parse(&cfg.knowledge.optimization.schedule_time)?;
 
@@ -146,11 +147,12 @@ impl AppState {
                 let activity = Arc::clone(&activity_for_job);
                 let backup_dir = backup_dir.clone();
                 let timeout = timeout_minutes;
+                let schedule_time = schedule_time.clone();
                 Box::pin(async move {
                     let opt_config = mimir_knowledge::optimization::OptimizationConfig {
                         backup_dir,
                         timeout_minutes: timeout,
-                        schedule_time: "02:00".to_string(),
+                        schedule_time,
                     };
                     let runner = mimir_knowledge::optimization::OptimizationRunner::new(
                         &kg,

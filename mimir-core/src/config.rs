@@ -242,7 +242,7 @@ impl Default for KnowledgeOptimizationConfig {
             cpu_cores: 1,
             nice_level: 10,
             timeout_minutes: 120,
-            schedule_time: "02:00".to_string(),
+            schedule_time: "03:00".to_string(),
         }
     }
 }

@@ -68,12 +68,17 @@ async fn semantic_dedup_queues_uncertain_llm_candidate() {
     let person = graph.create_person("Devansh").await;
     let rome = graph.create_place("Rome").await;
 
-    graph
+    let fact_a = graph
         .create_fact(person, "visited", Some(rome), SourceType::Connector)
         .await;
-    graph
+    let fact_b = graph
         .create_fact(person, "trip_to", Some(rome), SourceType::Import)
         .await;
+
+    let args = format!(
+        r#"{{"candidates":[{{"fact_a_id":{},"fact_b_id":{},"suggested_action":"merge","llm_confidence":0.8}}]}}"#,
+        fact_a.id, fact_b.id
+    );
 
     let llm: Arc<dyn LlmBackend> = Arc::new(
         MockLlmClient::builder()
@@ -87,7 +92,7 @@ async fn semantic_dedup_queues_uncertain_llm_candidate() {
                         call_type: "function".to_string(),
                         function: FunctionCall {
                             name: "evaluate_dedup_candidates".to_string(),
-                            arguments: r#"{"candidates":[{"fact_a_id":1,"fact_b_id":2,"suggested_action":"merge","llm_confidence":0.8}]}"#.to_string(),
+                            arguments: args,
                         },
                     }]),
                     tool_call_id: None,

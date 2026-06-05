@@ -17,6 +17,7 @@
 - `JobQueue::init(path)` – create or open the queue database.
 - `JobQueue::register(job)` – persist a job definition and store its handler.
 - `JobQueue::run_now(job_id)` – execute a job immediately, recording the run.
+  The corresponding HTTP endpoint (`POST /kb/optimization/run-now`) is restricted to loopback addresses only.
 - `JobQueue::status(job_id)` – get schedule and last run for a job.
 - `JobQueue::list_jobs()` – list all registered jobs with status.
 - `Job::new(id, priority, schedule, yield_on_user_activity, handler)` – construct a job.

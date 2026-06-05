@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS optimization_runs (
 
 CREATE TABLE IF NOT EXISTS optimization_pass_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id INTEGER REFERENCES optimization_runs(id) ON DELETE CASCADE,
+    run_id INTEGER NOT NULL REFERENCES optimization_runs(id) ON DELETE CASCADE,
     pass_name TEXT NOT NULL,
     status TEXT NOT NULL,
     started_at TIMESTAMP NOT NULL,

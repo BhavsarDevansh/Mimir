@@ -1,3 +1,9 @@
+## [0.32.2] - 2026-06-05
+
+### Fixed
+
+- **Review fixes for PR #92**: addressed 14 CodeRabbit review findings across job queue, optimization pipeline, documentation, and daemon routes.
+
 ## [0.32.1] - 2026-06-04
 
 ### Fixed
@@ -22,7 +28,7 @@
   - System jobs yield between pass boundaries when user activity is inside the 5-minute idle window.
   - Daemon routes: `GET /kb/optimization/status` and `POST /kb/optimization/run-now` (loopback-only for run-now).
   - CLI commands: `mimir kb optimization --status` and `mimir kb optimization --run-now`.
-  - Refactored `mimir-knowledge/src/optimization` into pass modules with 7-pass nightly pipeline:
+  - Refactored `mimir-knowledge/src/optimization` into pass modules with 10 nightly passes (7 core optimisation passes plus 3 cleanup steps):
     - Pass 1: deterministic dedup (exact triple merge).
     - Pass 1b: semantic dedup via LLM structured JSON; auto-merge >= 0.9 confidence, queue uncertain pairs.
     - Pass 2: contradiction resolution.

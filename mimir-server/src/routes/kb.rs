@@ -21,7 +21,11 @@ pub async fn kb_optimization_status_handler(
         .await
         .map_err(|e| {
             tracing::error!("Failed to fetch optimization status: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            if e.is_not_registered() {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         })?;
 
     Ok(Json(OptimizationStatusResponse {
@@ -52,7 +56,13 @@ pub async fn kb_optimization_run_now_handler(
         .await
         .map_err(|e| {
             tracing::error!("Failed to run optimization: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            if e.is_not_registered() {
+                StatusCode::NOT_FOUND
+            } else if e.is_already_running() {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         })?;
 
     Ok(Json(OptimizationRunNowResponse {

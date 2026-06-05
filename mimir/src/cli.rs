@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "mimir")]
@@ -67,6 +67,7 @@ pub enum Commands {
 #[derive(Subcommand)]
 pub enum KbCommands {
     /// Manage knowledge graph optimization.
+    #[command(group = ArgGroup::new("action").required(true).args(["status", "run_now"]))]
     Optimization {
         /// Show optimization job status.
         #[arg(long)]

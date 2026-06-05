@@ -152,21 +152,34 @@ impl<'a> OptimizationRunner<'a> {
         F: FnMut() -> bool,
     {
         self.create_backup().await?;
-        let run_id = self.begin_run("scheduled").await?;
+        self.prune_backups().await?;
+        let (run_id, passes) = match self.resume_failed_run().await? {
+            Some((id, remaining)) => {
+                tracing::info!("Resuming optimization run {} from failed pass", id);
+                (id, remaining)
+            }
+            None => {
+                let id = self.begin_run("scheduled").await?;
+                (
+                    id,
+                    vec![
+                        PassName::Deduplication,
+                        PassName::SemanticDeduplication,
+                        PassName::Contradiction,
+                        PassName::InferenceChain,
+                        PassName::ConfidenceRecalc,
+                        PassName::DormantCleanup,
+                        PassName::PatternConsolidation,
+                        PassName::PendingConfirmationCleanup,
+                        PassName::TrashCleanup,
+                        PassName::Compaction,
+                    ],
+                )
+            }
+        };
         let mut summaries = Vec::new();
         let mut overall_error = None;
-        for pass in [
-            PassName::Deduplication,
-            PassName::SemanticDeduplication,
-            PassName::Contradiction,
-            PassName::InferenceChain,
-            PassName::ConfidenceRecalc,
-            PassName::DormantCleanup,
-            PassName::PatternConsolidation,
-            PassName::PendingConfirmationCleanup,
-            PassName::TrashCleanup,
-            PassName::Compaction,
-        ] {
+        for pass in passes {
             while should_yield() {
                 // Best-effort yield: sleep briefly and recheck. The caller's
                 // timeout (e.g. JobQueue) is the ultimate safety bound.
@@ -226,6 +239,51 @@ impl<'a> OptimizationRunner<'a> {
         .execute(self.kg.pool())
         .await?;
         Ok(())
+    }
+
+    /// Check for the most recent failed scheduled run and return its id plus
+    /// the passes that still need to execute.
+    async fn resume_failed_run(
+        &self,
+    ) -> Result<Option<(i64, Vec<PassName>)>, crate::KnowledgeError> {
+        let row = sqlx::query(
+            "SELECT id FROM optimization_runs WHERE status = 'failed' AND trigger = 'scheduled' ORDER BY started_at DESC LIMIT 1",
+        )
+        .fetch_optional(self.kg.pool())
+        .await?;
+        let run_id: i64 = match row {
+            Some(r) => r.try_get("id")?,
+            None => return Ok(None),
+        };
+        let completed: Vec<String> = sqlx::query_scalar(
+            "SELECT pass_name FROM optimization_pass_runs WHERE run_id = ? AND status = 'succeeded'",
+        )
+        .bind(run_id)
+        .fetch_all(self.kg.pool())
+        .await?;
+        let completed_set: std::collections::HashSet<String> = completed.into_iter().collect();
+        let all_passes = vec![
+            PassName::Deduplication,
+            PassName::SemanticDeduplication,
+            PassName::Contradiction,
+            PassName::InferenceChain,
+            PassName::ConfidenceRecalc,
+            PassName::DormantCleanup,
+            PassName::PatternConsolidation,
+            PassName::PendingConfirmationCleanup,
+            PassName::TrashCleanup,
+            PassName::Compaction,
+        ];
+        let remaining: Vec<PassName> = all_passes
+            .into_iter()
+            .filter(|p| !completed_set.contains(p.as_str()))
+            .collect();
+        if remaining.is_empty() {
+            // All passes were actually completed; mark the run as succeeded retroactively.
+            self.finish_run(run_id, "succeeded", None).await?;
+            return Ok(None);
+        }
+        Ok(Some((run_id, remaining)))
     }
 
     async fn run_pass_with_run_id(
@@ -485,12 +543,14 @@ impl<'a> OptimizationRunner<'a> {
     async fn dormant_cleanup(&self) -> Result<PassSummary, crate::KnowledgeError> {
         let cutoff = self.kg.now() - chrono::Duration::days(30);
         let fact_ids: Vec<i32> = sqlx::query_scalar(
-            "SELECT f.id \
+            "SELECT DISTINCT f.id \
              FROM facts f \
-             JOIN sources s ON s.fact_id = f.id \
              WHERE f.fact_status_id = ? \
                AND f.updated_at < ? \
-               AND s.source_type_id != ? \
+               AND NOT EXISTS (
+                   SELECT 1 FROM sources s
+                   WHERE s.fact_id = f.id AND s.source_type_id = ?
+               ) \
                AND EXISTS (
                    SELECT 1 FROM facts c
                    WHERE c.id != f.id
@@ -537,6 +597,29 @@ impl<'a> OptimizationRunner<'a> {
         sqlx::query("ANALYZE").execute(self.kg.pool()).await?;
         sqlx::query("VACUUM").execute(self.kg.pool()).await?;
         Ok(PassSummary::default())
+    }
+
+    /// Remove old backups, keeping the 7 most recent.
+    async fn prune_backups(&self) -> Result<(), crate::KnowledgeError> {
+        let mut entries = tokio::fs::read_dir(&self.config.backup_dir).await?;
+        let mut backups = Vec::new();
+        while let Some(entry) = entries.next_entry().await? {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("knowledge-") && name.ends_with(".db") {
+                let meta = entry.metadata().await?;
+                if let Ok(modified) = meta.modified() {
+                    backups.push((name, modified));
+                }
+            }
+        }
+        backups.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        for (name, _) in backups.into_iter().skip(7) {
+            let path = self.config.backup_dir.join(&name);
+            if let Err(e) = tokio::fs::remove_file(&path).await {
+                tracing::warn!("Failed to remove old backup {}: {}", path.display(), e);
+            }
+        }
+        Ok(())
     }
 
     async fn create_backup(&self) -> Result<(), crate::KnowledgeError> {

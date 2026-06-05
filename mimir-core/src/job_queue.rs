@@ -31,12 +31,12 @@ pub enum JobPriority {
 }
 
 impl JobPriority {
-    fn from_i16(value: i16) -> Self {
+    fn from_i16(value: i16) -> Option<Self> {
         match value {
-            0 => Self::System,
-            1 => Self::Maintenance,
-            2 => Self::User,
-            _ => Self::Maintenance,
+            0 => Some(Self::System),
+            1 => Some(Self::Maintenance),
+            2 => Some(Self::User),
+            _ => None,
         }
     }
 }
@@ -98,22 +98,34 @@ impl DailySchedule {
         Ok(Self::new(time))
     }
 
+    /// Convert a naive local datetime to UTC, handling DST gaps and ambiguities.
+    fn naive_to_utc_local(naive: chrono::NaiveDateTime) -> DateTime<Utc> {
+        match chrono::Local.from_local_datetime(&naive) {
+            chrono::LocalResult::Single(dt) => dt.with_timezone(&Utc),
+            chrono::LocalResult::Ambiguous(earlier, _later) => earlier.with_timezone(&Utc),
+            chrono::LocalResult::None => {
+                // Spring-forward gap: advance by one hour and retry.
+                let shifted = naive + chrono::Duration::hours(1);
+                match chrono::Local.from_local_datetime(&shifted) {
+                    chrono::LocalResult::Single(dt) => dt.with_timezone(&Utc),
+                    chrono::LocalResult::Ambiguous(earlier, _later) => earlier.with_timezone(&Utc),
+                    chrono::LocalResult::None => {
+                        // Fallback to UTC interpretation (should never reach here for 1-hour shifts).
+                        chrono::Utc.from_local_datetime(&naive).single().unwrap()
+                    }
+                }
+            }
+        }
+    }
+
     /// Return the next UTC instant strictly after `now`.
     pub fn next_after(self, now: DateTime<Utc>) -> DateTime<Utc> {
         let today = now.date_naive();
-        let candidate = chrono::Local
-            .from_local_datetime(&today.and_time(self.time))
-            .single()
-            .expect("valid local datetime")
-            .with_timezone(&Utc);
+        let candidate = Self::naive_to_utc_local(today.and_time(self.time));
         if candidate > now {
             candidate
         } else {
-            chrono::Local
-                .from_local_datetime(&(today + chrono::Duration::days(1)).and_time(self.time))
-                .single()
-                .expect("valid local datetime")
-                .with_timezone(&Utc)
+            Self::naive_to_utc_local((today + chrono::Duration::days(1)).and_time(self.time))
         }
     }
 
@@ -206,6 +218,18 @@ pub enum JobError {
     Handler(String),
     #[error("job already running: {0}")]
     JobAlreadyRunning(String),
+}
+
+impl JobError {
+    /// Returns  if this error indicates the requested job is not registered.
+    pub fn is_not_registered(&self) -> bool {
+        matches!(self, Self::JobNotRegistered(_))
+    }
+
+    /// Returns  if this error indicates the job is already running.
+    pub fn is_already_running(&self) -> bool {
+        matches!(self, Self::JobAlreadyRunning(_))
+    }
 }
 
 /// Shared durable job queue.
@@ -357,7 +381,9 @@ impl JobQueue {
 
         Ok(JobStatus {
             job_id: row.try_get("id")?,
-            priority: JobPriority::from_i16(row.try_get::<i16, _>("priority")?),
+            priority: JobPriority::from_i16(row.try_get::<i16, _>("priority")?).ok_or_else(
+                || JobError::Handler(format!("unknown priority value for job {}", job_id)),
+            )?,
             schedule,
             next_run_at: row.try_get("next_run_at")?,
             last_run,

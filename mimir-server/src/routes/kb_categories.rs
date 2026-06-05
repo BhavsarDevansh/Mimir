@@ -58,7 +58,7 @@ pub async fn list_categories(
         .knowledge_graph
         .list_categories(query.parent)
         .await
-        .map_err(|e| error::knowledge_error(e))?;
+        .map_err(error::knowledge_error)?;
 
     let resp: Vec<CategoryResponse> = cats
         .into_iter()
@@ -83,7 +83,7 @@ pub async fn show_category(
         .knowledge_graph
         .get_category(id)
         .await
-        .map_err(|e| error::knowledge_error(e))?;
+        .map_err(error::knowledge_error)?;
 
     let cat = match cat {
         Some(c) => c,
@@ -94,7 +94,7 @@ pub async fn show_category(
         .knowledge_graph
         .get_category_children(id)
         .await
-        .map_err(|e| error::knowledge_error(e))?;
+        .map_err(error::knowledge_error)?;
 
     let resp = CategoryDetailResponse {
         id: cat.id,
@@ -135,7 +135,7 @@ pub async fn create_category(
         .knowledge_graph
         .insert_category(new_cat)
         .await
-        .map_err(|e| error::knowledge_error(e))?;
+        .map_err(error::knowledge_error)?;
 
     Ok(Json(cat))
 }
@@ -149,7 +149,7 @@ pub async fn delete_category(
         .knowledge_graph
         .delete_category(id)
         .await
-        .map_err(|e| error::knowledge_error(e))?;
+        .map_err(error::knowledge_error)?;
 
     Ok(StatusCode::NO_CONTENT)
 }

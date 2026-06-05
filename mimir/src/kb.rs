@@ -418,7 +418,6 @@ pub async fn handle_kb_optimization(status: bool, run_now: bool, base_url: &str)
 }
 
 pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url: &str) {
-    let client = mimir_client::MimirClient::new(base_url);
     match command {
         crate::cli::CategoryCommands::List { parent } => {
             let url = match parent {

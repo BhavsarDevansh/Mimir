@@ -5,6 +5,7 @@ use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
 use crate::models::category::{Category, CategoryWithCount, FactWithCategories, NewCategory};
+use std::collections::BTreeSet;
 
 /// List categories, optionally filtered by parent.
 pub async fn list_categories(
@@ -176,13 +177,19 @@ pub async fn get_facts_matching_all_categories(
     category_ids: &[i32],
     limit: i64,
 ) -> Result<Vec<FactWithCategories>, KnowledgeError> {
-    if category_ids.is_empty() {
+    let unique_ids: Vec<i32> = category_ids
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if unique_ids.is_empty() {
         return Ok(Vec::new());
     }
 
-    let placeholders: Vec<String> = category_ids.iter().map(|_| "?".to_string()).collect();
+    let placeholders: Vec<String> = unique_ids.iter().map(|_| "?".to_string()).collect();
     let in_clause = placeholders.join(",");
-    let count = category_ids.len() as i64;
+    let count = unique_ids.len() as i64;
 
     let sql = format!(
         "SELECT f.id as fact_id, s.name as subject_name, rt.name as relationship_type_name, \
@@ -203,7 +210,7 @@ pub async fn get_facts_matching_all_categories(
     );
 
     let mut query = sqlx::query_as::<_, FactWithCategories>(sqlx::AssertSqlSafe(&*sql));
-    for &id in category_ids {
+    for &id in &unique_ids {
         query = query.bind(id);
     }
     query = query.bind(count).bind(limit);

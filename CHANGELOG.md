@@ -1,3 +1,11 @@
+## [0.33.1] - 2026-06-05
+
+### Fixed
+
+- **P2**: `get_facts_matching_all_categories` now deduplicates input category IDs before querying, preventing empty results when duplicate IDs are passed.
+- **P3**: Removed unused `client` variable in `mimir/src/kb.rs` (`handle_kb_category`).
+- **P3**: Simplified redundant closures in `mimir-server/src/routes/kb_categories.rs` (5 instances of `.map_err(|e| error::knowledge_error(e))?` → `.map_err(error::knowledge_error)?`).
+
 ## [0.32.2] - 2026-06-05
 
 ### Fixed

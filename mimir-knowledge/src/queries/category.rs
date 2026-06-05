@@ -5,6 +5,7 @@ use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
 use crate::models::category::{Category, CategoryWithCount, FactWithCategories, NewCategory};
+use crate::models::fact::FactStatus;
 use std::collections::BTreeSet;
 
 /// List categories, optionally filtered by parent.
@@ -159,12 +160,14 @@ pub async fn get_facts_in_category(
          LEFT JOIN entities o ON o.id = f.object_id \
          JOIN fact_categories fc ON fc.fact_id = f.id \
          LEFT JOIN fact_categories fc2 ON fc2.fact_id = f.id \
-         WHERE fc.category_id = ? AND f.fact_status_id NOT IN (5, 6) AND f.pending_confirmation = 0 \
+         WHERE fc.category_id = ? AND f.fact_status_id NOT IN (?, ?) AND f.pending_confirmation = 0 \
          GROUP BY f.id \
          ORDER BY f.confidence DESC \
          LIMIT ?"
     )
     .bind(category_id)
+    .bind(FactStatus::Superseded as i16)
+    .bind(FactStatus::Forgotten as i16)
     .bind(limit)
     .fetch_all(pool)
     .await?;

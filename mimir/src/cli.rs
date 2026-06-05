@@ -187,6 +187,9 @@ pub enum CategoryCommands {
         /// One-line description.
         #[arg(long)]
         description: Option<String>,
+        /// Memory weight (higher = more important).
+        #[arg(long)]
+        memory_weight: Option<f32>,
     },
     /// Delete a category (only if empty).
     Delete {

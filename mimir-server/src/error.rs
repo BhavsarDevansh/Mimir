@@ -95,6 +95,15 @@ pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
         | KnowledgeError::CategoryNotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, "KG_ERROR"),
     };
-    let body = Json(ApiError::new(e.to_string(), code));
+    let message = match &e {
+        KnowledgeError::Validation(_)
+        | KnowledgeError::DuplicateEntity
+        | KnowledgeError::DuplicatePreference
+        | KnowledgeError::EntityNotFound(_)
+        | KnowledgeError::FactNotFound(_)
+        | KnowledgeError::CategoryNotFound(_) => e.to_string(),
+        _ => "internal knowledge graph error".to_string(),
+    };
+    let body = Json(ApiError::new(message, code));
     (status, body).into_response()
 }

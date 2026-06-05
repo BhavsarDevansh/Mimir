@@ -427,7 +427,13 @@ pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url:
             match reqwest::get(&url).await {
                 Ok(resp) => {
                     if resp.status().is_success() {
-                        let cats: Vec<serde_json::Value> = resp.json().await.unwrap_or_default();
+                        let cats: Vec<serde_json::Value> = match resp.json().await {
+                            Ok(v) => v,
+                            Err(e) => {
+                                eprintln!("Error: failed to parse response: {}", e);
+                                std::process::exit(1);
+                            }
+                        };
                         if cats.is_empty() {
                             println!("No categories found.");
                         } else {
@@ -453,7 +459,13 @@ pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url:
             match reqwest::get(&url).await {
                 Ok(resp) => {
                     if resp.status().is_success() {
-                        let cat: serde_json::Value = resp.json().await.unwrap_or_default();
+                        let cat: serde_json::Value = match resp.json().await {
+                            Ok(v) => v,
+                            Err(e) => {
+                                eprintln!("Error: failed to parse response: {}", e);
+                                std::process::exit(1);
+                            }
+                        };
                         println!(
                             "ID:          {}",
                             cat.get("id").and_then(|v| v.as_i64()).unwrap_or(0)
@@ -499,18 +511,26 @@ pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url:
             name,
             parent,
             description,
+            memory_weight,
         } => {
             let body = serde_json::json!({
                 "id": id,
                 "name": name,
                 "parent_id": parent,
                 "description": description,
+                "memory_weight": memory_weight,
             });
             let url = format!("{}/kb/categories", base_url);
             match reqwest::Client::new().post(&url).json(&body).send().await {
                 Ok(resp) => {
                     if resp.status().is_success() {
-                        let cat: serde_json::Value = resp.json().await.unwrap_or_default();
+                        let cat: serde_json::Value = match resp.json().await {
+                            Ok(v) => v,
+                            Err(e) => {
+                                eprintln!("Error: failed to parse response: {}", e);
+                                std::process::exit(1);
+                            }
+                        };
                         println!(
                             "Created category {} {}",
                             cat.get("id").and_then(|v| v.as_i64()).unwrap_or(0),

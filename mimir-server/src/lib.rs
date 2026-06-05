@@ -1079,6 +1079,8 @@ mod tests {
         assert!(names.contains(&"kg_query".to_string()));
         assert!(names.contains(&"kg_related".to_string()));
         assert!(names.contains(&"kg_search".to_string()));
+        assert!(names.contains(&"expand_catalogue".to_string()));
+        assert!(names.contains(&"get_facts_in_catalogue".to_string()));
     }
 
     #[tokio::test]
@@ -1100,6 +1102,8 @@ mod tests {
         assert!(names.contains(&"kg_query".to_string()));
         assert!(names.contains(&"kg_related".to_string()));
         assert!(names.contains(&"kg_search".to_string()));
+        assert!(names.contains(&"expand_catalogue".to_string()));
+        assert!(names.contains(&"get_facts_in_catalogue".to_string()));
     }
 
     #[tokio::test]

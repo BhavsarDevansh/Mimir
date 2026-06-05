@@ -489,15 +489,26 @@ impl KnowledgeGraph {
             )
             .await?;
 
-            // Insert categories for the fact.
-            for category_id in &new_fact.category_ids {
-                sqlx::query(
-                    "INSERT OR IGNORE INTO fact_categories (fact_id, category_id) VALUES (?, ?)",
-                )
-                .bind(fact.id)
-                .bind(*category_id)
-                .execute(&mut *tx)
-                .await?;
+            // Validate category IDs and insert assignments.
+            if !new_fact.category_ids.is_empty() {
+                let valid_ids: HashSet<i32> = sqlx::query_scalar("SELECT id FROM categories")
+                    .fetch_all(&mut *tx)
+                    .await?
+                    .into_iter()
+                    .collect();
+                for category_id in &new_fact.category_ids {
+                    if !valid_ids.contains(category_id) {
+                        return Err(KnowledgeError::Validation(format!(
+                            "Category {} does not exist",
+                            category_id
+                        )));
+                    }
+                    sqlx::query("INSERT OR IGNORE INTO fact_categories (fact_id, category_id) VALUES (?, ?)")
+                        .bind(fact.id)
+                        .bind(*category_id)
+                        .execute(&mut *tx)
+                        .await?;
+                }
             }
 
             // Write InferredFrom dependencies for inferred facts.

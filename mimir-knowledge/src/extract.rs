@@ -177,10 +177,14 @@ fn remember_tool_schema() -> serde_json::Value {
 
 /// Build the system prompt for fact extraction, including the category taxonomy.
 async fn build_extraction_prompt(kg: &KnowledgeGraph) -> Result<String, KnowledgeError> {
-    let categories = kg.list_categories(None).await?;
+    let roots = kg.list_categories(None).await?;
     let mut guide = String::from("Categorisation Guide:\n");
-    for cat in categories {
-        guide.push_str(&format!("{} {}\n", cat.id, cat.name));
+    for root in roots {
+        guide.push_str(&format!("{} {}\n", root.id, root.name));
+        let children = kg.list_categories(Some(root.id)).await?;
+        for child in children {
+            guide.push_str(&format!("  {} {}\n", child.id, child.name));
+        }
     }
 
     Ok(format!(

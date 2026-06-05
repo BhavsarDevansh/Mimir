@@ -1,3 +1,19 @@
+## [0.33.2] - 2026-06-05
+
+### Fixed
+
+- **Review fixes for PR #107**: addressed 10 CodeRabbit review findings across knowledge graph, server, and CLI.
+  - `extract.rs` prompt now includes sub-categories with indentation so the LLM can pick specific IDs.
+  - `lib.rs` fact insertion now validates category IDs before `INSERT OR IGNORE`, failing loudly on non-existent categories.
+  - `queries/category.rs` replaced magic `NOT IN (5, 6)` with bound `FactStatus::Superseded` / `Forgotten` parameters.
+  - `kg_expand_catalogue.rs` now queries real `fact_count` for each child category instead of hard-coding `0`.
+  - `integration_tests.rs` merge assertion tightened with `object_id` filter to avoid false positives.
+  - `error.rs` no longer leaks raw internal KG error strings in `500` HTTP responses.
+  - `lib.rs` (server) tool-registry tests now assert `expand_catalogue` and `get_facts_in_catalogue` are exported.
+  - `chat.rs` only fetches the catalogue DB when a new session or incognito turn starts, avoiding hot-path latency.
+  - `cli.rs` `category add` now exposes `--memory-weight` to match the server API.
+  - `kb.rs` JSON decode failures are no longer swallowed with `unwrap_or_default()`; they now surface as fatal CLI errors.
+
 ## [0.33.1] - 2026-06-05
 
 ### Fixed

@@ -107,15 +107,27 @@ impl Tool for KgExpandCatalogueTool {
             None
         };
 
-        let child_entries: Vec<CategoryEntry> = children
-            .into_iter()
-            .map(|c| CategoryEntry {
+        let mut child_entries = Vec::new();
+        for c in children {
+            let fact_count = self
+                .kg
+                .get_category(c.id)
+                .await
+                .map_err(|e| {
+                    ToolError::execution_failed(
+                        "expand_catalogue",
+                        format!("database error: {}", e),
+                    )
+                })?
+                .map(|cat| cat.fact_count)
+                .unwrap_or(0);
+            child_entries.push(CategoryEntry {
                 id: c.id,
                 name: c.name,
                 description: c.description,
-                fact_count: 0, // Could query per child but keeping it lightweight
-            })
-            .collect();
+                fact_count,
+            });
+        }
 
         let output = ExpandCatalogueOutput {
             target,

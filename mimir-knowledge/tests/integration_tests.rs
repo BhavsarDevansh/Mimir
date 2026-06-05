@@ -327,11 +327,13 @@ async fn test_dedup_exact_merge() {
     assert!(gone.is_none());
 
     // Fact should now point to x as subject
-    let (subject_id,): (i32,) =
-        sqlx::query_as("SELECT subject_id FROM facts WHERE relationship_type_id = 1")
-            .fetch_one(kg.pool())
-            .await
-            .unwrap();
+    let (subject_id,): (i32,) = sqlx::query_as(
+        "SELECT subject_id FROM facts WHERE relationship_type_id = 1 AND object_id = ?",
+    )
+    .bind(x.id)
+    .fetch_one(kg.pool())
+    .await
+    .unwrap();
     assert_eq!(subject_id, x.id);
 }
 

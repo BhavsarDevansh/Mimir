@@ -94,7 +94,7 @@ pub async fn handle_kb_audit(
 
     let filter = AuditLogFilter {
         entity_name: entity,
-        predicate_name: predicate,
+        relationship_type_name: predicate,
         from: from_dt,
         to: to_dt,
         change_type: ct,
@@ -131,7 +131,7 @@ pub async fn handle_kb_audit(
         let changed_by = row.changed_by_name.as_deref().unwrap_or("-");
         let reason = row.reason.as_deref().unwrap_or("-");
         let entity = row.entity_name.as_deref().unwrap_or("(deleted)");
-        let predicate = row.predicate_name.as_deref().unwrap_or("(deleted)");
+        let predicate = row.relationship_type_name.as_deref().unwrap_or("(deleted)");
         println!(
             "{:>6} {:>6} {:<20} {:<15} {:<18} {:<12} {:<25} {:<25}",
             row.audit_id,
@@ -342,7 +342,7 @@ pub async fn handle_kb_trash(empty: bool, limit: u32, offset: u32) {
                 println!("{}", "-".repeat(113));
                 for item in items {
                     let subject = item.subject_name.as_deref().unwrap_or("-");
-                    let predicate = item.predicate_name.as_deref().unwrap_or("-");
+                    let predicate = item.relationship_type_name.as_deref().unwrap_or("-");
                     let object = item
                         .object_name
                         .as_deref()
@@ -414,5 +414,138 @@ pub async fn handle_kb_optimization(status: bool, run_now: bool, base_url: &str)
     } else {
         eprintln!("Error: specify --status or --run-now");
         std::process::exit(1);
+    }
+}
+
+pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url: &str) {
+    let client = mimir_client::MimirClient::new(base_url);
+    match command {
+        crate::cli::CategoryCommands::List { parent } => {
+            let url = match parent {
+                Some(id) => format!("{}/kb/categories?parent={}", base_url, id),
+                None => format!("{}/kb/categories", base_url),
+            };
+            match reqwest::get(&url).await {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        let cats: Vec<serde_json::Value> = resp.json().await.unwrap_or_default();
+                        if cats.is_empty() {
+                            println!("No categories found.");
+                        } else {
+                            for cat in cats {
+                                let id = cat.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+                                let name = cat.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                                println!("{:>4} {}", id, name);
+                            }
+                        }
+                    } else {
+                        eprintln!("Error: {}", resp.status());
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: failed to list categories: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        crate::cli::CategoryCommands::Show { id } => {
+            let url = format!("{}/kb/categories/{}", base_url, id);
+            match reqwest::get(&url).await {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        let cat: serde_json::Value = resp.json().await.unwrap_or_default();
+                        println!(
+                            "ID:          {}",
+                            cat.get("id").and_then(|v| v.as_i64()).unwrap_or(0)
+                        );
+                        println!(
+                            "Name:        {}",
+                            cat.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                        );
+                        println!(
+                            "Description: {}",
+                            cat.get("description")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("-")
+                        );
+                        println!(
+                            "Fact count:  {}",
+                            cat.get("fact_count").and_then(|v| v.as_i64()).unwrap_or(0)
+                        );
+                        if let Some(children) = cat.get("children").and_then(|v| v.as_array()) {
+                            if !children.is_empty() {
+                                println!("Children:");
+                                for child in children {
+                                    let cid = child.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+                                    let cname =
+                                        child.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                                    println!("  {:>4} {}", cid, cname);
+                                }
+                            }
+                        }
+                    } else {
+                        eprintln!("Error: {}", resp.status());
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: failed to show category: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        crate::cli::CategoryCommands::Add {
+            id,
+            name,
+            parent,
+            description,
+        } => {
+            let body = serde_json::json!({
+                "id": id,
+                "name": name,
+                "parent_id": parent,
+                "description": description,
+            });
+            let url = format!("{}/kb/categories", base_url);
+            match reqwest::Client::new().post(&url).json(&body).send().await {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        let cat: serde_json::Value = resp.json().await.unwrap_or_default();
+                        println!(
+                            "Created category {} {}",
+                            cat.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
+                            cat.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                        );
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        eprintln!("Error: {}", text);
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: failed to create category: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        crate::cli::CategoryCommands::Delete { id } => {
+            let url = format!("{}/kb/categories/{}", base_url, id);
+            match reqwest::Client::new().delete(&url).send().await {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        println!("Deleted category {}", id);
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        eprintln!("Error: {}", text);
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: failed to delete category: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 }

@@ -45,7 +45,7 @@ pub struct ExtractedFact {
     pub classification: Classification,
     pub subject: String,
     pub subject_type: String,
-    pub predicate: String,
+    pub relationship_type: String,
     pub object: String,
     pub object_is_entity: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -56,6 +56,8 @@ pub struct ExtractedFact {
     pub is_sensitive: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub correction_scope: Option<String>,
+    #[serde(default)]
+    pub categories: Vec<String>,
 }
 
 /// Wrapper returned by the `remember` tool.
@@ -73,7 +75,7 @@ pub struct RememberOutput {
 pub struct PendingFact {
     pub fact_id: i32,
     pub subject_name: String,
-    pub predicate: String,
+    pub relationship_type: String,
     pub object_display: String,
 }
 
@@ -96,7 +98,7 @@ fn remember_tool_schema() -> serde_json::Value {
         "type": "function",
         "function": {
             "name": "remember",
-            "description": "Extract structured facts from user messages. Each fact is a subject-predicate-object triple with classification, temporal bounds, and sensitivity flags.",
+            "description": "Extract structured facts from user messages. Each fact is a subject-relationship_type-object triple with classification, temporal bounds, and sensitivity flags.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -119,13 +121,13 @@ fn remember_tool_schema() -> serde_json::Value {
                                     "enum": ["Person", "Place", "Event", "Object", "Concept", "Organization", "Activity", "DateTime"],
                                     "description": "Entity type of the subject."
                                 },
-                                "predicate": {
+                                "relationship_type": {
                                     "type": "string",
                                     "description": "The relationship or property being asserted."
                                 },
                                 "object": {
                                     "type": "string",
-                                    "description": "The value or target of the predicate."
+                                    "description": "The value or target of the relationship_type."
                                 },
                                 "object_is_entity": {
                                     "type": "boolean",
@@ -156,9 +158,14 @@ fn remember_tool_schema() -> serde_json::Value {
                                 "correction_scope": {
                                     "type": "string",
                                     "description": "For Corrections only: an ISO-8601 datetime (when the new truth began) or the literal string 'always' (the old fact was never true)."
+                                },
+                                "categories": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "description": "Dewey Decimal category IDs (e.g., ['200', '210']) that best describe the topic of this fact. Use the Categorisation Guide in the system prompt."
                                 }
                             },
-                            "required": ["classification", "subject", "subject_type", "predicate", "object", "object_is_entity"]
+                            "required": ["classification", "subject", "subject_type", "relationship_type", "object", "object_is_entity"]
                         }
                     }
                 },
@@ -168,18 +175,27 @@ fn remember_tool_schema() -> serde_json::Value {
     })
 }
 
-/// Build the system prompt for fact extraction.
-fn extraction_prompt() -> String {
-    String::from(
+/// Build the system prompt for fact extraction, including the category taxonomy.
+async fn build_extraction_prompt(kg: &KnowledgeGraph) -> Result<String, KnowledgeError> {
+    let categories = kg.list_categories(None).await?;
+    let mut guide = String::from("Categorisation Guide:\n");
+    for cat in categories {
+        guide.push_str(&format!("{} {}\n", cat.id, cat.name));
+    }
+
+    Ok(format!(
         "You are a fact extractor. Your job is to read the user's message and extract \
-any facts about the user into structured triples (subject-predicate-object).\n\n\
+any facts about the user into structured triples (subject-relationship_type-object).\n\n\
 Rules:\n\
 - Classify each fact as Explicit (direct assertion), Casual (passing mention), or Correction.\n\
 - For Corrections, set correction_scope to either an ISO-8601 datetime or the string 'always'.\n\
 - Mark health, financial, relationship, religious, political, or legal facts as is_sensitive.\n\
 - Subject and object types must be one of: Person, Place, Event, Object, Concept, Organization, Activity, DateTime.\n\
+- Assign 1-3 category IDs from the guide below to each fact. Use the MOST specific sub-category available.\n\
+{}\n\
 - Output ONLY via the 'remember' tool. Do not output free text.",
-    )
+        guide
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -241,7 +257,7 @@ fn parse_entity_type(s: &str) -> Result<EntityType, KnowledgeError> {
 async fn find_existing_fact(
     kg: &KnowledgeGraph,
     subject_id: i32,
-    predicate_id: i16,
+    relationship_type_id: i16,
     object_id: Option<i32>,
     object_literal: Option<&str>,
     valid_from: Option<DateTime<Utc>>,
@@ -249,14 +265,14 @@ async fn find_existing_fact(
 ) -> Result<Option<i32>, KnowledgeError> {
     let rows: Vec<(i32,)> = sqlx::query_as(
         "SELECT id FROM facts \
-         WHERE subject_id = ? AND predicate_id = ? \
+         WHERE subject_id = ? AND relationship_type_id = ? \
          AND object_id IS ? AND object_literal IS ? \
          AND (fact_status_id = ? OR pending_confirmation = TRUE) \
          AND ((valid_from IS ?) OR (valid_from = ?)) \
          AND ((valid_until IS ?) OR (valid_until = ?))",
     )
     .bind(subject_id)
-    .bind(predicate_id)
+    .bind(relationship_type_id)
     .bind(object_id)
     .bind(object_literal)
     .bind(FactStatus::Active as i16)
@@ -274,23 +290,23 @@ async fn find_existing_fact(
 // Correction helpers
 // ---------------------------------------------------------------------------
 
-/// Find active facts with the same subject + predicate that overlap the new fact.
+/// Find active facts with the same subject + relationship_type that overlap the new fact.
 async fn find_active_overlapping(
     kg: &KnowledgeGraph,
     subject_id: i32,
-    predicate_id: i16,
+    relationship_type_id: i16,
     valid_from: Option<DateTime<Utc>>,
     valid_until: Option<DateTime<Utc>>,
 ) -> Result<Vec<Fact>, KnowledgeError> {
     let rows: Vec<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts \
-         WHERE subject_id = ? AND predicate_id = ? AND fact_status_id = ?",
+         WHERE subject_id = ? AND relationship_type_id = ? AND fact_status_id = ?",
     )
     .bind(subject_id)
-    .bind(predicate_id)
+    .bind(relationship_type_id)
     .bind(FactStatus::Active as i16)
     .fetch_all(kg.pool())
     .await?;
@@ -323,10 +339,8 @@ pub async fn extract_facts(
     let now = kg.now();
 
     // 1. Call LLM.
-    let messages = vec![
-        Message::system(extraction_prompt()),
-        Message::user(user_message),
-    ];
+    let prompt = build_extraction_prompt(kg).await?;
+    let messages = vec![Message::system(prompt), Message::user(user_message)];
     let tool = remember_tool_schema();
 
     let (assistant_msg, _usage) = llm
@@ -377,7 +391,9 @@ async fn insert_sensitive_fact(
     new_fact: NewFact,
     now: DateTime<Utc>,
 ) -> Result<Fact, KnowledgeError> {
-    let predicate_id = kg.ensure_predicate(&new_fact.predicate).await?;
+    let relationship_type_id = kg
+        .ensure_relationship_type(&new_fact.relationship_type)
+        .await?;
 
     // Calculate confidence
     let confidence = new_fact.confidence.unwrap_or_else(|| {
@@ -390,13 +406,13 @@ async fn insert_sensitive_fact(
     // Insert with Disputed status and pending_confirmation=TRUE in a single atomic operation.
     let fact_id: i64 = sqlx::query_scalar(
         "INSERT INTO facts \
-         (subject_id, predicate_id, object_id, object_literal, valid_from, valid_until, \
+         (subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until, \
           confidence, fact_status_id, inferred, inference_depth, pending_confirmation, created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id",
     )
     .bind(new_fact.subject_id)
-    .bind(predicate_id)
+    .bind(relationship_type_id)
     .bind(new_fact.object_id)
     .bind(&new_fact.object_literal)
     .bind(new_fact.valid_from)
@@ -459,7 +475,7 @@ async fn insert_sensitive_fact(
 
     // Fetch the created fact
     let fact: Fact = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts WHERE id = ?",
@@ -535,14 +551,16 @@ async fn process_extracted_fact(
         (None, Some(extracted.object.clone()))
     };
 
-    // 6. Ensure predicate.
-    let predicate_id = kg.ensure_predicate(&extracted.predicate).await?;
+    // 6. Ensure relationship_type.
+    let relationship_type_id = kg
+        .ensure_relationship_type(&extracted.relationship_type)
+        .await?;
 
     // 7. Dedup / corroboration check (stub for #79).
     if let Some(existing_id) = find_existing_fact(
         kg,
         subject.id,
-        predicate_id,
+        relationship_type_id,
         object_id,
         object_literal.as_deref(),
         valid_from,
@@ -557,10 +575,37 @@ async fn process_extracted_fact(
     let source_type = source_type_for(extracted.classification);
     let confidence = confidence_for(extracted.classification);
 
+    // 8b. Validate and collect category IDs.
+    let mut category_ids = Vec::new();
+    for cat_str in &extracted.categories {
+        if let Ok(id) = cat_str.parse::<i32>() {
+            match kg.get_category(id).await? {
+                Some(_) => category_ids.push(id),
+                None => {
+                    tracing::warn!(
+                        "LLM suggested unknown category {} for fact '{} {} {}'; ignoring",
+                        id,
+                        extracted.subject,
+                        extracted.relationship_type,
+                        extracted.object
+                    );
+                }
+            }
+        } else {
+            tracing::warn!(
+                "LLM suggested invalid category '{}' for fact '{} {} {}'; ignoring",
+                cat_str,
+                extracted.subject,
+                extracted.relationship_type,
+                extracted.object
+            );
+        }
+    }
+
     // 9. Handle corrections.
     let mut new_fact = NewFact {
         subject_id: subject.id,
-        predicate: extracted.predicate.clone(),
+        relationship_type: extracted.relationship_type.clone(),
         object_id,
         object_literal,
         valid_from,
@@ -574,10 +619,19 @@ async fn process_extracted_fact(
         inference_depth: 0,
         confidence: Some(confidence),
         parent_fact_ids: Vec::new(),
+        category_ids,
     };
 
     if extracted.classification == Classification::Correction {
-        handle_correction(kg, &extracted, subject.id, predicate_id, &mut new_fact, now).await?;
+        handle_correction(
+            kg,
+            &extracted,
+            subject.id,
+            relationship_type_id,
+            &mut new_fact,
+            now,
+        )
+        .await?;
     }
 
     // 10. Insert fact, handling sensitive facts atomically.
@@ -591,7 +645,7 @@ async fn process_extracted_fact(
         return Ok(ProcessResult::Pending(PendingFact {
             fact_id: fact.id,
             subject_name: extracted.subject,
-            predicate: extracted.predicate,
+            relationship_type: extracted.relationship_type,
             object_display: extracted.object,
         }));
     }
@@ -605,7 +659,7 @@ async fn handle_correction(
     kg: &KnowledgeGraph,
     extracted: &ExtractedFact,
     subject_id: i32,
-    predicate_id: i16,
+    relationship_type_id: i16,
     new_fact: &mut NewFact,
     now: DateTime<Utc>,
 ) -> Result<(), KnowledgeError> {
@@ -617,7 +671,7 @@ async fn handle_correction(
             let overlapping = find_active_overlapping(
                 kg,
                 subject_id,
-                predicate_id,
+                relationship_type_id,
                 new_fact.valid_from,
                 new_fact.valid_until,
             )
@@ -688,7 +742,7 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
     let mut tx = kg.pool().begin().await?;
 
     let old: Option<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts WHERE id = ?",
@@ -723,7 +777,7 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
     .await?;
 
     let updated: Fact = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts WHERE id = ?",
@@ -790,7 +844,7 @@ pub async fn reject_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<(), Knowle
     let mut tx = kg.pool().begin().await?;
 
     let old: Option<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts WHERE id = ?",

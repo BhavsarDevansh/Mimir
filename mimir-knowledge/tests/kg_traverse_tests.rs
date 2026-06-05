@@ -16,7 +16,7 @@ async fn test_kg_traverse_linear_chain() {
 
     let f1 = NewFact {
         subject_id: a,
-        predicate: "knows".to_string(),
+        relationship_type: "knows".to_string(),
         object_id: Some(b),
         object_literal: None,
         valid_from: None,
@@ -30,10 +30,11 @@ async fn test_kg_traverse_linear_chain() {
         inference_depth: 0,
         confidence: Some(0.9),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     let f2 = NewFact {
         subject_id: b,
-        predicate: "knows".to_string(),
+        relationship_type: "knows".to_string(),
         object_id: Some(c),
         object_literal: None,
         valid_from: None,
@@ -47,6 +48,7 @@ async fn test_kg_traverse_linear_chain() {
         inference_depth: 0,
         confidence: Some(0.9),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     tg.kg.insert_fact(f1).await.unwrap();
     tg.kg.insert_fact(f2).await.unwrap();
@@ -69,7 +71,7 @@ async fn test_kg_traverse_cycle() {
 
     let f1 = NewFact {
         subject_id: a,
-        predicate: "knows".to_string(),
+        relationship_type: "knows".to_string(),
         object_id: Some(b),
         object_literal: None,
         valid_from: None,
@@ -83,10 +85,11 @@ async fn test_kg_traverse_cycle() {
         inference_depth: 0,
         confidence: Some(0.9),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     let f2 = NewFact {
         subject_id: b,
-        predicate: "knows".to_string(),
+        relationship_type: "knows".to_string(),
         object_id: Some(a),
         object_literal: None,
         valid_from: None,
@@ -100,6 +103,7 @@ async fn test_kg_traverse_cycle() {
         inference_depth: 0,
         confidence: Some(0.9),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     tg.kg.insert_fact(f1).await.unwrap();
     tg.kg.insert_fact(f2).await.unwrap();
@@ -121,7 +125,7 @@ async fn test_kg_traverse_depth_cap() {
 
     let f1 = NewFact {
         subject_id: a,
-        predicate: "knows".to_string(),
+        relationship_type: "knows".to_string(),
         object_id: Some(b),
         object_literal: None,
         valid_from: None,
@@ -135,6 +139,7 @@ async fn test_kg_traverse_depth_cap() {
         inference_depth: 0,
         confidence: Some(0.9),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     tg.kg.insert_fact(f1).await.unwrap();
 
@@ -159,7 +164,7 @@ async fn test_kg_traverse_node_cap() {
             .unwrap();
         let f = NewFact {
             subject_id: root,
-            predicate: "knows".to_string(),
+            relationship_type: "knows".to_string(),
             object_id: Some(node.id),
             object_literal: None,
             valid_from: None,
@@ -173,6 +178,7 @@ async fn test_kg_traverse_node_cap() {
             inference_depth: 0,
             confidence: Some(0.9),
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         };
         tg.kg.insert_fact(f).await.unwrap();
     }
@@ -197,7 +203,7 @@ async fn test_kg_traverse_predicate_filter() {
 
     let f1 = NewFact {
         subject_id: a,
-        predicate: "knows".to_string(),
+        relationship_type: "knows".to_string(),
         object_id: Some(b),
         object_literal: None,
         valid_from: None,
@@ -211,10 +217,11 @@ async fn test_kg_traverse_predicate_filter() {
         inference_depth: 0,
         confidence: Some(0.9),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     let f2 = NewFact {
         subject_id: a,
-        predicate: "visited".to_string(),
+        relationship_type: "visited".to_string(),
         object_id: Some(c),
         object_literal: None,
         valid_from: None,
@@ -228,11 +235,12 @@ async fn test_kg_traverse_predicate_filter() {
         inference_depth: 0,
         confidence: Some(0.8),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     tg.kg.insert_fact(f1).await.unwrap();
     tg.kg.insert_fact(f2).await.unwrap();
 
-    let pred_id = tg.kg.ensure_predicate("knows").await.unwrap();
+    let pred_id = tg.kg.ensure_relationship_type("knows").await.unwrap();
     let result = traverse_graph(tg.kg.pool(), a as u32, 1, 50, Some(&[pred_id]))
         .await
         .unwrap();

@@ -179,7 +179,7 @@ impl Tool for KgQueryTool {
         let subject_id = best.entity.id;
 
         // Resolve predicate if provided (read-only: do not create missing predicates)
-        let predicate_id_opt = if let Some(ref pred) = input.predicate {
+        let relationship_type_id_opt = if let Some(ref pred) = input.predicate {
             let trimmed = pred.trim();
             if trimmed.is_empty() {
                 return Err(ToolError::invalid_arguments(
@@ -187,9 +187,13 @@ impl Tool for KgQueryTool {
                     "predicate must be non-empty",
                 ));
             }
-            match self.kg.get_predicate_id(trimmed).await.map_err(|e| {
-                ToolError::execution_failed("kg_query", format!("database error: {}", e))
-            })? {
+            match self
+                .kg
+                .get_relationship_type_id(trimmed)
+                .await
+                .map_err(|e| {
+                    ToolError::execution_failed("kg_query", format!("database error: {}", e))
+                })? {
                 Some(id) => Some(id),
                 None => {
                     // Predicate does not exist: return empty result set
@@ -224,7 +228,7 @@ impl Tool for KgQueryTool {
         let facts = get_facts_by_subject_filtered(
             self.kg.pool(),
             subject_id,
-            predicate_id_opt,
+            relationship_type_id_opt,
             min_confidence,
             offset,
             limit,
@@ -236,9 +240,9 @@ impl Tool for KgQueryTool {
         for f in facts {
             let predicate = self
                 .kg
-                .predicate_name(f.predicate_id)
+                .relationship_type_name(f.relationship_type_id)
                 .await
-                .unwrap_or_else(|| format!("predicate:{}", f.predicate_id));
+                .unwrap_or_else(|| format!("predicate:{}", f.relationship_type_id));
             let sources = f
                 .sources
                 .into_iter()
@@ -264,7 +268,7 @@ impl Tool for KgQueryTool {
         let total = count_facts_by_subject_filtered(
             self.kg.pool(),
             subject_id,
-            predicate_id_opt,
+            relationship_type_id_opt,
             min_confidence,
         )
         .await

@@ -44,7 +44,7 @@ async fn bulk_forget_by_predicate() {
         let f = kg
             .insert_fact(NewFact {
                 subject_id: alice,
-                predicate: "visited".to_string(),
+                relationship_type: "visited".to_string(),
                 object_id: Some(london),
                 object_literal: None,
                 valid_from: None,
@@ -58,6 +58,7 @@ async fn bulk_forget_by_predicate() {
                 inference_depth: 0,
                 confidence: None,
                 parent_fact_ids: Vec::new(),
+                category_ids: Vec::new(),
             })
             .await
             .unwrap();
@@ -68,7 +69,7 @@ async fn bulk_forget_by_predicate() {
     let _other = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(paris),
             object_literal: None,
             valid_from: None,
@@ -82,6 +83,7 @@ async fn bulk_forget_by_predicate() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -107,7 +109,10 @@ async fn bulk_forget_by_predicate() {
 
     // Other predicate fact should remain.
     let remaining = kg
-        .get_facts_by_predicate(kg.get_predicate_id("is_in").await.unwrap().unwrap(), 10)
+        .get_facts_by_relationship_type(
+            kg.get_relationship_type_id("is_in").await.unwrap().unwrap(),
+            10,
+        )
         .await
         .unwrap();
     assert_eq!(remaining.len(), 1);
@@ -126,7 +131,7 @@ async fn bulk_safeguard_over_100() {
     for _ in 0..150 {
         kg.insert_fact(NewFact {
             subject_id: alice,
-            predicate: "visited".to_string(),
+            relationship_type: "visited".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -140,6 +145,7 @@ async fn bulk_safeguard_over_100() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -173,7 +179,7 @@ async fn sensitive_safeguard() {
     // allergy is seeded as sensitive by migration 029, but predicates auto-created by insert_fact are created after migrations run, so the manual UPDATE below is required.
     kg.insert_fact(NewFact {
         subject_id: alice,
-        predicate: "allergy".to_string(),
+        relationship_type: "allergy".to_string(),
         object_id: None,
         object_literal: Some("peanuts".to_string()),
         valid_from: None,
@@ -187,13 +193,18 @@ async fn sensitive_safeguard() {
         inference_depth: 0,
         confidence: None,
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     })
     .await
     .unwrap();
 
     // Mark the auto-created predicate as sensitive.
-    let allergy_pred_id = kg.get_predicate_id("allergy").await.unwrap().unwrap();
-    sqlx::query("UPDATE predicates SET sensitive = TRUE WHERE id = ?")
+    let allergy_pred_id = kg
+        .get_relationship_type_id("allergy")
+        .await
+        .unwrap()
+        .unwrap();
+    sqlx::query("UPDATE relationship_types SET sensitive = TRUE WHERE id = ?")
         .bind(allergy_pred_id)
         .execute(kg.pool())
         .await
@@ -252,7 +263,7 @@ async fn restore_single_fact() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -266,6 +277,7 @@ async fn restore_single_fact() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -298,7 +310,7 @@ async fn restore_all_facts() {
         let f = kg
             .insert_fact(NewFact {
                 subject_id: alice,
-                predicate: "visited".to_string(),
+                relationship_type: "visited".to_string(),
                 object_id: Some(london),
                 object_literal: None,
                 valid_from: None,
@@ -312,6 +324,7 @@ async fn restore_all_facts() {
                 inference_depth: 0,
                 confidence: None,
                 parent_fact_ids: Vec::new(),
+                category_ids: Vec::new(),
             })
             .await
             .unwrap();
@@ -342,7 +355,7 @@ async fn empty_trash_hard_deletes() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -356,6 +369,7 @@ async fn empty_trash_hard_deletes() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -380,7 +394,7 @@ async fn expired_trash_cleanup() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -394,6 +408,7 @@ async fn expired_trash_cleanup() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -427,7 +442,7 @@ async fn cascade_after_bulk_forget() {
     let parent = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -441,6 +456,7 @@ async fn cascade_after_bulk_forget() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -449,7 +465,7 @@ async fn cascade_after_bulk_forget() {
     let child = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "visited".to_string(),
+            relationship_type: "visited".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -463,6 +479,7 @@ async fn cascade_after_bulk_forget() {
             inference_depth: 1,
             confidence: None,
             parent_fact_ids: vec![parent.id],
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();

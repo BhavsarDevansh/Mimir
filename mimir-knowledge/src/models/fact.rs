@@ -26,7 +26,7 @@ const_assert!((FactStatus::Active as i16) != 0);
 pub struct Fact {
     pub id: i32,
     pub subject_id: i32,
-    pub predicate_id: i16,
+    pub relationship_type_id: i16,
     pub object_id: Option<i32>,
     pub object_literal: Option<String>,
     pub valid_from: Option<DateTime<Utc>>,
@@ -61,7 +61,7 @@ impl Fact {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NewFact {
     pub subject_id: i32,
-    pub predicate: String,
+    pub relationship_type: String,
     pub object_id: Option<i32>,
     pub object_literal: Option<String>,
     pub valid_from: Option<DateTime<Utc>>,
@@ -75,13 +75,14 @@ pub struct NewFact {
     pub inference_depth: i32,
     pub confidence: Option<f32>,
     pub parent_fact_ids: Vec<i32>,
+    pub category_ids: Vec<i32>,
 }
 
 impl NewFact {
-    pub fn new(subject_id: i32, predicate: impl Into<String>) -> Self {
+    pub fn new(subject_id: i32, relationship_type: impl Into<String>) -> Self {
         Self {
             subject_id,
-            predicate: predicate.into(),
+            relationship_type: relationship_type.into(),
             object_id: None,
             object_literal: None,
             valid_from: None,
@@ -95,6 +96,7 @@ impl NewFact {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         }
     }
 }

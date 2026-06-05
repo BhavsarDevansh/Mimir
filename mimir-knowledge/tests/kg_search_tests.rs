@@ -14,7 +14,7 @@ async fn test_kg_search_basic() {
 
     let f = NewFact {
         subject_id: london,
-        predicate: "is_in".to_string(),
+        relationship_type: "is_in".to_string(),
         object_id: None,
         object_literal: Some("United Kingdom".to_string()),
         valid_from: None,
@@ -28,6 +28,7 @@ async fn test_kg_search_basic() {
         inference_depth: 0,
         confidence: Some(0.9),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     tg.kg.insert_fact(f).await.unwrap();
 
@@ -70,7 +71,7 @@ async fn test_kg_search_fts5_injection() {
 
     let f = NewFact {
         subject_id: london,
-        predicate: "is_in".to_string(),
+        relationship_type: "is_in".to_string(),
         object_id: None,
         object_literal: Some("United Kingdom".to_string()),
         valid_from: None,
@@ -84,6 +85,7 @@ async fn test_kg_search_fts5_injection() {
         inference_depth: 0,
         confidence: Some(0.9),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     tg.kg.insert_fact(f).await.unwrap();
 

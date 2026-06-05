@@ -25,7 +25,7 @@ async fn create_has_preference_fact(kg: &KnowledgeGraph, subject_id: i32) -> i32
     let fact = kg
         .insert_fact(NewFact {
             subject_id,
-            predicate: "has_preference".to_string(),
+            relationship_type: "has_preference".to_string(),
             object_id: None,
             object_literal: Some("pref".to_string()),
             valid_from: None,
@@ -39,6 +39,7 @@ async fn create_has_preference_fact(kg: &KnowledgeGraph, subject_id: i32) -> i32
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();

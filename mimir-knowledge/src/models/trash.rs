@@ -35,7 +35,7 @@ pub struct TrashListItem {
     pub trash_id: i32,
     pub fact_id: i32,
     pub subject_name: Option<String>,
-    pub predicate_name: Option<String>,
+    pub relationship_type_name: Option<String>,
     pub object_name: Option<String>,
     pub object_literal: Option<String>,
     pub deleted_at: DateTime<Utc>,

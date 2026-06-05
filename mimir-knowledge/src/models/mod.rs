@@ -1,4 +1,5 @@
 pub mod audit_log;
+pub mod category;
 pub mod entity;
 pub mod entity_date;
 pub mod entity_location;

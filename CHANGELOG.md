@@ -315,3 +315,30 @@
 ### Documentation
 
 - Added `docs/wiki/what-works-now.md`: comprehensive user-facing overview of all working features, current limitations, known bugs, and roadmap context.
+
+## [0.33.0] - 2026-06-05
+
+### Added
+
+- **Category taxonomy system** (Dewey Decimal-style):
+  - New `categories` table with hierarchical parent-child relationships.
+  - `fact_categories` junction table allowing facts to belong to multiple categories.
+  - Comprehensive seed taxonomy covering Identity (100), Food & Drink (200), Health (300), Relationships (400), Work (500), Home (600), Entertainment (700), Travel (800), and Schedule (900) with 2-3 levels of depth.
+  - New KG tools: `expand_catalogue` and `get_facts_in_catalogue` for LLM-driven category browsing and fact retrieval.
+  - System prompt injection of top-level catalogue so the LLM knows what knowledge domains exist.
+  - CLI commands: `mimir kb category list`, `show`, `add`, `delete`.
+  - Server routes: `GET /kb/categories`, `GET /kb/categories/{id}`, `POST /kb/categories`, `DELETE /kb/categories/{id}`.
+
+- **Extraction pipeline category assignment**:
+  - LLM suggests 1–3 category IDs per extracted fact via the `remember` tool.
+  - Rust validates all suggested IDs against the database before insertion.
+
+### Changed
+
+- **Renamed `predicates` → `relationship_types`** and `predicate_constraints` → `relationship_constraints` across the entire codebase (DB schema, models, queries, tools, inference rules, tests).
+- Updated all SQL queries, indexes, and foreign keys to use `relationship_type_id`.
+- Updated `MemoryManager` and system prompt integration to read from the knowledge graph catalogue.
+
+### Migration
+
+- Migration `031_category_taxonomy_and_rename_predicates.sql` performs the rename and seeds the full category taxonomy.

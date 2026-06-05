@@ -8,8 +8,8 @@ use crate::inference::InferenceRule;
 use crate::models::fact::{Fact, FactStatus, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
 
-const PREDICATE_VISITED: &str = "visited";
-const PREDICATE_IS_IN: &str = "is_in";
+const RELATIONSHIP_TYPE_VISITED: &str = "visited";
+const RELATIONSHIP_TYPE_IS_IN: &str = "is_in";
 
 pub struct TransitivityRule;
 
@@ -20,32 +20,35 @@ impl InferenceRule for TransitivityRule {
         fact: &Fact,
         kg: &KnowledgeGraph,
     ) -> Result<Vec<NewFact>, crate::KnowledgeError> {
-        let predicate_name = match kg.predicate_name(fact.predicate_id).await {
-            Some(name) => name,
-            None => return Ok(Vec::new()),
-        };
+        let relationship_type_name =
+            match kg.relationship_type_name(fact.relationship_type_id).await {
+                Some(name) => name,
+                None => return Ok(Vec::new()),
+            };
 
         // Only run for predicates we care about.
-        if predicate_name != PREDICATE_VISITED && predicate_name != PREDICATE_IS_IN {
+        if relationship_type_name != RELATIONSHIP_TYPE_VISITED
+            && relationship_type_name != RELATIONSHIP_TYPE_IS_IN
+        {
             return Ok(Vec::new());
         }
 
-        let is_in_id = match kg.ensure_predicate(PREDICATE_IS_IN).await {
+        let is_in_id = match kg.ensure_relationship_type(RELATIONSHIP_TYPE_IS_IN).await {
             Ok(id) => id,
             Err(e) => return Err(e),
         };
 
         let mut results = Vec::new();
 
-        if predicate_name == PREDICATE_VISITED {
+        if relationship_type_name == RELATIONSHIP_TYPE_VISITED {
             // Forward: A-visited-B inserted, look for B-is_in-C → infer A-visited-C.
             if let Some(object_id) = fact.object_id {
                 let parent_facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
-                    "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+                    "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
                      valid_from, valid_until, confidence, fact_status_id, inferred, \
                      inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
                      FROM facts \
-                     WHERE subject_id = ? AND predicate_id = ? AND fact_status_id IN (?, ?)",
+                     WHERE subject_id = ? AND relationship_type_id = ? AND fact_status_id IN (?, ?)",
                 )
                 .bind(object_id)
                 .bind(is_in_id)
@@ -79,7 +82,7 @@ impl InferenceRule for TransitivityRule {
                         }
                         results.push(NewFact {
                             subject_id: fact.subject_id,
-                            predicate: predicate_name.clone(),
+                            relationship_type: relationship_type_name.clone(),
                             object_id: Some(parent_object_id),
                             object_literal: None,
                             valid_from,
@@ -93,29 +96,30 @@ impl InferenceRule for TransitivityRule {
                             inference_depth: depth,
                             confidence: Some(conf),
                             parent_fact_ids: vec![fact.id, parent.id],
+                            category_ids: Vec::new(),
                         });
                     }
                 }
             }
-        } else if predicate_name == PREDICATE_IS_IN {
+        } else if relationship_type_name == RELATIONSHIP_TYPE_IS_IN {
             // We do NOT do forward is_in→is_in lookup to prevent cyclic garbage.
             // (Backward is_in→visited lookup is handled below.)
         }
 
-        if predicate_name == PREDICATE_IS_IN {
+        if relationship_type_name == RELATIONSHIP_TYPE_IS_IN {
             // Backward: B-is_in-C inserted, look for A-visited-B → infer A-visited-C.
             // We do NOT do backward lookup for is_in-to-is_in to avoid self-disputing chains.
-            let visited_id = match kg.ensure_predicate(PREDICATE_VISITED).await {
+            let visited_id = match kg.ensure_relationship_type(RELATIONSHIP_TYPE_VISITED).await {
                 Ok(id) => id,
                 Err(e) => return Err(e),
             };
 
             let trigger_facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
-                "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+                "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
                  valid_from, valid_until, confidence, fact_status_id, inferred, \
                  inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
                  FROM facts \
-                 WHERE object_id = ? AND predicate_id = ? AND fact_status_id IN (?, ?)",
+                 WHERE object_id = ? AND relationship_type_id = ? AND fact_status_id IN (?, ?)",
             )
             .bind(fact.subject_id)
             .bind(visited_id)
@@ -149,7 +153,7 @@ impl InferenceRule for TransitivityRule {
                     }
                     results.push(NewFact {
                         subject_id: trigger.subject_id,
-                        predicate: PREDICATE_VISITED.to_string(),
+                        relationship_type: RELATIONSHIP_TYPE_VISITED.to_string(),
                         object_id: Some(trigger_object_id),
                         object_literal: None,
                         valid_from,
@@ -163,6 +167,7 @@ impl InferenceRule for TransitivityRule {
                         inference_depth: depth,
                         confidence: Some(conf),
                         parent_fact_ids: vec![trigger.id, fact.id],
+                        category_ids: Vec::new(),
                     });
                 }
             }

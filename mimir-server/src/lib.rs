@@ -22,9 +22,10 @@ use mimir_core::config::ReloadableConfig;
 use mimir_core::llm::{LlmBackend, LlmClient};
 
 use crate::routes::{
-    chat_handler, chat_stream_handler, kb_optimization_run_now_handler,
-    kb_optimization_status_handler, memory_handler, session_messages_handler, sessions_handler,
-    status_handler, stop_handler,
+    chat_handler, chat_stream_handler, create_category, delete_category,
+    kb_optimization_run_now_handler, kb_optimization_status_handler, list_categories,
+    memory_handler, session_messages_handler, sessions_handler, show_category, status_handler,
+    stop_handler,
 };
 use crate::state::AppState;
 
@@ -80,6 +81,11 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route(
             "/kb/optimization/run-now",
             post(kb_optimization_run_now_handler).layer(from_fn(require_loopback)),
+        )
+        .route("/kb/categories", get(list_categories).post(create_category))
+        .route(
+            "/kb/categories/{id}",
+            get(show_category).delete(delete_category),
         )
         .route("/stop", post(stop_handler).layer(from_fn(require_loopback)))
         .layer(
@@ -336,6 +342,16 @@ mod tests {
             .register_native(Arc::new(mimir_knowledge::KgSearchTool::new(Arc::clone(
                 &knowledge_graph,
             ))))
+            .unwrap();
+        tool_registry
+            .register_native(Arc::new(mimir_knowledge::KgExpandCatalogueTool::new(
+                Arc::clone(&knowledge_graph),
+            )))
+            .unwrap();
+        tool_registry
+            .register_native(Arc::new(mimir_knowledge::KgFactsInCatalogueTool::new(
+                Arc::clone(&knowledge_graph),
+            )))
             .unwrap();
 
         let jobs_db_path = temp.path().join("jobs.db");

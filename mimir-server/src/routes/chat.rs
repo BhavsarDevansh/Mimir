@@ -38,6 +38,18 @@ async fn resolve_chat_state(
         .await
         .unwrap_or_default();
 
+    // Build catalogue appendix for the system prompt.
+    let catalogue = match state.knowledge_graph.get_top_level_catalogue().await {
+        Ok(cats) if !cats.is_empty() => {
+            let mut lines = vec!["## Knowledge Catalogue".to_string()];
+            for cat in cats {
+                lines.push(format!("{} {}", cat.id, cat.name));
+            }
+            lines.join("\n")
+        }
+        _ => String::new(),
+    };
+
     let incognito = req.incognito == Some(true);
 
     let cfg = state.config.snapshot().await;
@@ -64,7 +76,11 @@ async fn resolve_chat_state(
                 Err(e) => return Err(error::context_error(e)),
             },
             None => {
-                let system_prompt = personality.system_prompt(&memory);
+                let system_prompt = if catalogue.is_empty() {
+                    personality.system_prompt(&memory)
+                } else {
+                    format!("{}\n\n{}", personality.system_prompt(&memory), catalogue)
+                };
                 state
                     .context_manager
                     .create_session(system_prompt)
@@ -75,7 +91,11 @@ async fn resolve_chat_state(
     };
 
     if incognito {
-        let system_prompt = personality.system_prompt(&memory);
+        let system_prompt = if catalogue.is_empty() {
+            personality.system_prompt(&memory)
+        } else {
+            format!("{}\n\n{}", personality.system_prompt(&memory), catalogue)
+        };
         let messages = vec![
             mimir_core::llm::types::Message::system(&system_prompt),
             mimir_core::llm::types::Message::user(&req.message),

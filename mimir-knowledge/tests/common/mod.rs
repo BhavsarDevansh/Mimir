@@ -57,7 +57,7 @@ impl TestGraph {
     ) -> Fact {
         let new_fact = NewFact {
             subject_id: subject,
-            predicate: predicate_name.to_string(),
+            relationship_type: predicate_name.to_string(),
             object_id: object,
             object_literal: None,
             valid_from: None,
@@ -71,6 +71,7 @@ impl TestGraph {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         };
         self.kg.insert_fact(new_fact).await.unwrap()
     }
@@ -86,7 +87,7 @@ impl TestGraph {
     ) -> Fact {
         let new_fact = NewFact {
             subject_id: subject,
-            predicate: predicate_name.to_string(),
+            relationship_type: predicate_name.to_string(),
             object_id: object,
             object_literal: None,
             valid_from,
@@ -100,6 +101,7 @@ impl TestGraph {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         };
         self.kg.insert_fact(new_fact).await.unwrap()
     }

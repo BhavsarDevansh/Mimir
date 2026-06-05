@@ -51,7 +51,7 @@ async fn test_explicit_extraction() {
         "classification": "Explicit",
         "subject": "devansh",
         "subject_type": "Person",
-        "predicate": "favourite_colour",
+        "relationship_type": "favourite_colour",
         "object": "blue",
         "object_is_entity": false,
         "is_sensitive": false
@@ -95,7 +95,7 @@ async fn test_casual_extraction() {
         "classification": "Casual",
         "subject": "devansh",
         "subject_type": "Person",
-        "predicate": "favourite_colour",
+        "relationship_type": "favourite_colour",
         "object": "green",
         "object_is_entity": false,
         "is_sensitive": false
@@ -132,7 +132,7 @@ async fn test_entity_resolution_existing() {
         "classification": "Explicit",
         "subject": "devansh",
         "subject_type": "Person",
-        "predicate": "likes",
+        "relationship_type": "likes",
         "object": "coding",
         "object_is_entity": false,
         "is_sensitive": false
@@ -161,7 +161,7 @@ async fn test_entity_creation_new() {
         "classification": "Explicit",
         "subject": "alice",
         "subject_type": "Person",
-        "predicate": "works_as",
+        "relationship_type": "works_as",
         "object": "engineer",
         "object_is_entity": false,
         "is_sensitive": false
@@ -206,7 +206,7 @@ async fn test_temporal_correction() {
         "classification": "Correction",
         "subject": "devansh",
         "subject_type": "Person",
-        "predicate": "lives_in",
+        "relationship_type": "lives_in",
         "object": "Manchester",
         "object_is_entity": false,
         "correction_scope": scope,
@@ -249,7 +249,7 @@ async fn test_retrospective_correction() {
         "classification": "Correction",
         "subject": "devansh",
         "subject_type": "Person",
-        "predicate": "favourite_colour",
+        "relationship_type": "favourite_colour",
         "object": "green",
         "object_is_entity": false,
         "correction_scope": "always",
@@ -288,7 +288,7 @@ async fn test_sensitive_fact_confirmation() {
         "classification": "Explicit",
         "subject": "devansh",
         "subject_type": "Person",
-        "predicate": "allergy",
+        "relationship_type": "allergy",
         "object": "peanuts",
         "object_is_entity": false,
         "is_sensitive": true
@@ -305,7 +305,7 @@ async fn test_sensitive_fact_confirmation() {
     assert_eq!(outcome.pending_confirmation.len(), 1);
 
     let pending = &outcome.pending_confirmation[0];
-    assert_eq!(pending.predicate, "allergy");
+    assert_eq!(pending.relationship_type, "allergy");
     assert_eq!(pending.object_display, "peanuts");
 
     // Verify DB state.
@@ -342,7 +342,7 @@ async fn test_multiple_facts() {
             "classification": "Explicit",
             "subject": "devansh",
             "subject_type": "Person",
-            "predicate": "favourite_colour",
+            "relationship_type": "favourite_colour",
             "object": "blue",
             "object_is_entity": false,
             "is_sensitive": false
@@ -351,7 +351,7 @@ async fn test_multiple_facts() {
             "classification": "Casual",
             "subject": "devansh",
             "subject_type": "Person",
-            "predicate": "likes",
+            "relationship_type": "likes",
             "object": "pizza",
             "object_is_entity": false,
             "is_sensitive": false
@@ -434,7 +434,7 @@ async fn test_reject_sensitive_fact() {
         "classification": "Explicit",
         "subject": "devansh",
         "subject_type": "Person",
-        "predicate": "allergy",
+        "relationship_type": "allergy",
         "object": "shellfish",
         "object_is_entity": false,
         "is_sensitive": true
@@ -475,7 +475,7 @@ async fn test_pending_confirmation_ttl_cleanup() {
         "classification": "Explicit",
         "subject": "test_user",
         "subject_type": "Person",
-        "predicate": "health_condition",
+        "relationship_type": "health_condition",
         "object": "diabetes",
         "object_is_entity": false,
         "is_sensitive": true

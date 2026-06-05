@@ -15,7 +15,7 @@ async fn test_kg_query_happy_path() {
 
     let new_fact = NewFact {
         subject_id: alice,
-        predicate: "lives_in".to_string(),
+        relationship_type: "lives_in".to_string(),
         object_id: Some(london),
         object_literal: None,
         valid_from: None,
@@ -29,6 +29,7 @@ async fn test_kg_query_happy_path() {
         inference_depth: 0,
         confidence: Some(0.9),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     let fact = tg.kg.insert_fact(new_fact).await.unwrap();
 
@@ -75,7 +76,7 @@ async fn test_kg_query_predicate_filter() {
 
     let f1 = NewFact {
         subject_id: alice,
-        predicate: "lives_in".to_string(),
+        relationship_type: "lives_in".to_string(),
         object_id: Some(london),
         object_literal: None,
         valid_from: None,
@@ -89,10 +90,11 @@ async fn test_kg_query_predicate_filter() {
         inference_depth: 0,
         confidence: Some(0.9),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     let f2 = NewFact {
         subject_id: alice,
-        predicate: "enjoys".to_string(),
+        relationship_type: "enjoys".to_string(),
         object_id: Some(book),
         object_literal: None,
         valid_from: None,
@@ -106,11 +108,12 @@ async fn test_kg_query_predicate_filter() {
         inference_depth: 0,
         confidence: Some(0.8),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     tg.kg.insert_fact(f1).await.unwrap();
     tg.kg.insert_fact(f2).await.unwrap();
 
-    let pred_id = tg.kg.ensure_predicate("lives_in").await.unwrap();
+    let pred_id = tg.kg.ensure_relationship_type("lives_in").await.unwrap();
     let facts = mimir_knowledge::queries::fact::get_facts_by_subject_filtered(
         tg.kg.pool(),
         alice,
@@ -123,7 +126,7 @@ async fn test_kg_query_predicate_filter() {
     .unwrap();
 
     assert_eq!(facts.len(), 1);
-    assert_eq!(facts[0].predicate_id, pred_id);
+    assert_eq!(facts[0].relationship_type_id, pred_id);
 }
 
 #[tokio::test]
@@ -134,7 +137,7 @@ async fn test_kg_query_confidence_filter() {
 
     let f1 = NewFact {
         subject_id: alice,
-        predicate: "lives_in".to_string(),
+        relationship_type: "lives_in".to_string(),
         object_id: Some(london),
         object_literal: None,
         valid_from: None,
@@ -148,10 +151,11 @@ async fn test_kg_query_confidence_filter() {
         inference_depth: 0,
         confidence: Some(0.3),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     let f2 = NewFact {
         subject_id: alice,
-        predicate: "visited".to_string(),
+        relationship_type: "visited".to_string(),
         object_id: Some(london),
         object_literal: None,
         valid_from: None,
@@ -165,6 +169,7 @@ async fn test_kg_query_confidence_filter() {
         inference_depth: 0,
         confidence: Some(0.8),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     tg.kg.insert_fact(f1).await.unwrap();
     tg.kg.insert_fact(f2).await.unwrap();
@@ -193,7 +198,7 @@ async fn test_kg_query_pagination() {
     for i in 0..60 {
         let f = NewFact {
             subject_id: alice,
-            predicate: format!("predicate_{}", i),
+            relationship_type: format!("predicate_{}", i),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -207,6 +212,7 @@ async fn test_kg_query_pagination() {
             inference_depth: 0,
             confidence: Some(0.5 + (i as f32 / 1000.0)),
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         };
         tg.kg.insert_fact(f).await.unwrap();
     }
@@ -244,7 +250,7 @@ async fn test_kg_query_excludes_pending() {
 
     let f = NewFact {
         subject_id: alice,
-        predicate: "lives_in".to_string(),
+        relationship_type: "lives_in".to_string(),
         object_id: Some(london),
         object_literal: None,
         valid_from: None,
@@ -258,6 +264,7 @@ async fn test_kg_query_excludes_pending() {
         inference_depth: 0,
         confidence: Some(0.9),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     tg.kg.insert_fact(f).await.unwrap();
 
@@ -290,7 +297,7 @@ async fn test_kg_query_excludes_superseded_forgotten() {
 
     let f1 = NewFact {
         subject_id: alice,
-        predicate: "lives_in".to_string(),
+        relationship_type: "lives_in".to_string(),
         object_id: Some(london),
         object_literal: None,
         valid_from: None,
@@ -304,6 +311,7 @@ async fn test_kg_query_excludes_superseded_forgotten() {
         inference_depth: 0,
         confidence: Some(0.9),
         parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
     };
     let fact = tg.kg.insert_fact(f1).await.unwrap();
 

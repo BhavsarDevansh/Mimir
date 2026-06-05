@@ -120,6 +120,16 @@ impl AppState {
         ))) {
             tracing::warn!("Failed to register kg_search tool: {}", e);
         }
+        if let Err(e) = tool_registry.register_native(Arc::new(
+            mimir_knowledge::KgExpandCatalogueTool::new(Arc::clone(&knowledge_graph)),
+        )) {
+            tracing::warn!("Failed to register expand_catalogue tool: {}", e);
+        }
+        if let Err(e) = tool_registry.register_native(Arc::new(
+            mimir_knowledge::KgFactsInCatalogueTool::new(Arc::clone(&knowledge_graph)),
+        )) {
+            tracing::warn!("Failed to register get_facts_in_catalogue tool: {}", e);
+        }
 
         // Initialise job queue.
         let jobs_db_path = mimir_core::paths::jobs_db_path()?;

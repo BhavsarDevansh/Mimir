@@ -60,7 +60,7 @@ async fn sources_unique_constraint() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -74,6 +74,7 @@ async fn sources_unique_constraint() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -106,7 +107,7 @@ async fn audit_on_insert_creates_entry() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -120,6 +121,7 @@ async fn audit_on_insert_creates_entry() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -154,7 +156,7 @@ async fn audit_on_temporal_update() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -168,6 +170,7 @@ async fn audit_on_temporal_update() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -206,7 +209,7 @@ async fn audit_on_status_change() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -220,6 +223,7 @@ async fn audit_on_status_change() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -255,7 +259,7 @@ async fn audit_on_forget() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -269,6 +273,7 @@ async fn audit_on_forget() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -302,7 +307,7 @@ async fn audit_on_confidence_cascade() {
     let parent_a = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -316,6 +321,7 @@ async fn audit_on_confidence_cascade() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -323,7 +329,7 @@ async fn audit_on_confidence_cascade() {
     let parent_b = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(paris),
             object_literal: None,
             valid_from: None,
@@ -337,6 +343,7 @@ async fn audit_on_confidence_cascade() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -344,7 +351,7 @@ async fn audit_on_confidence_cascade() {
     let child = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "visited".to_string(),
+            relationship_type: "visited".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -358,6 +365,7 @@ async fn audit_on_confidence_cascade() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -427,7 +435,7 @@ async fn source_crud_adds_source_and_audit() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -441,6 +449,7 @@ async fn source_crud_adds_source_and_audit() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -488,7 +497,7 @@ async fn query_audit_log_filtered() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -502,6 +511,7 @@ async fn query_audit_log_filtered() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -512,7 +522,7 @@ async fn query_audit_log_filtered() {
 
     let filter = AuditLogFilter {
         entity_name: Some("Alice".to_string()),
-        predicate_name: Some("is_in".to_string()),
+        relationship_type_name: Some("is_in".to_string()),
         from: None,
         to: None,
         change_type: Some(ChangeType::StatusChange),
@@ -540,7 +550,7 @@ async fn query_audit_log_includes_forgotten_facts() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -554,6 +564,7 @@ async fn query_audit_log_includes_forgotten_facts() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -562,7 +573,7 @@ async fn query_audit_log_includes_forgotten_facts() {
 
     let filter = AuditLogFilter {
         entity_name: None,
-        predicate_name: None,
+        relationship_type_name: None,
         from: None,
         to: None,
         change_type: Some(ChangeType::Forgotten),
@@ -576,5 +587,5 @@ async fn query_audit_log_includes_forgotten_facts() {
     assert_eq!(rows[0].change_type_name, "forgotten");
     // Names are NULL because the fact was hard-deleted.
     assert!(rows[0].entity_name.is_none());
-    assert!(rows[0].predicate_name.is_none());
+    assert!(rows[0].relationship_type_name.is_none());
 }

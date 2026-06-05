@@ -1,9 +1,13 @@
 //! LLM-callable knowledge graph tools.
 
+mod kg_expand_catalogue;
+mod kg_facts_in_catalogue;
 mod kg_query;
 mod kg_related;
 mod kg_search;
 
+pub use kg_expand_catalogue::KgExpandCatalogueTool;
+pub use kg_facts_in_catalogue::KgFactsInCatalogueTool;
 pub use kg_query::KgQueryTool;
 pub use kg_related::KgRelatedTool;
 pub use kg_search::KgSearchTool;

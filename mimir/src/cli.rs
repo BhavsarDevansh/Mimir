@@ -66,6 +66,12 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum KbCommands {
+    /// Manage knowledge graph categories.
+    Category {
+        #[command(subcommand)]
+        command: CategoryCommands,
+    },
+    /// Manage knowledge graph optimization.
     /// Manage knowledge graph optimization.
     #[command(group = ArgGroup::new("action").required(true).args(["status", "run_now"]))]
     Optimization {
@@ -153,6 +159,39 @@ pub enum KbCommands {
         /// Rows to skip.
         #[arg(long, default_value = "0")]
         offset: u32,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CategoryCommands {
+    /// List categories, optionally filtered by parent.
+    List {
+        /// Filter by parent category ID.
+        #[arg(long)]
+        parent: Option<i32>,
+    },
+    /// Show a single category with its children and fact count.
+    Show {
+        /// Category ID.
+        id: i32,
+    },
+    /// Add a new category.
+    Add {
+        /// Category ID (e.g., 200, 210).
+        id: i32,
+        /// Category name.
+        name: String,
+        /// Parent category ID (omit for top-level).
+        #[arg(long)]
+        parent: Option<i32>,
+        /// One-line description.
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Delete a category (only if empty).
+    Delete {
+        /// Category ID.
+        id: i32,
     },
 }
 

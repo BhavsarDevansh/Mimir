@@ -48,7 +48,7 @@ impl ContradictionRule {
 
         for (id_a, id_b) in rows {
             let fact_a: Option<Fact> = sqlx::query_as::<_, Fact>(
-                "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+                "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
                  valid_from, valid_until, confidence, fact_status_id, inferred, \
                  inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
                  FROM facts WHERE id = ?",
@@ -58,7 +58,7 @@ impl ContradictionRule {
             .await?;
 
             let fact_b: Option<Fact> = sqlx::query_as::<_, Fact>(
-                "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+                "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
                  valid_from, valid_until, confidence, fact_status_id, inferred, \
                  inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
                  FROM facts WHERE id = ?",

@@ -252,7 +252,7 @@ async fn test_user_edit_confidence_is_one() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -266,6 +266,7 @@ async fn test_user_edit_confidence_is_one() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -286,7 +287,7 @@ async fn test_casual_mention_confidence_is_low() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -300,6 +301,7 @@ async fn test_casual_mention_confidence_is_low() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -320,7 +322,7 @@ async fn test_system_confidence_is_one() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -334,6 +336,7 @@ async fn test_system_confidence_is_one() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -354,7 +357,7 @@ async fn test_import_confidence_is_eighty() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -368,6 +371,7 @@ async fn test_import_confidence_is_eighty() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -393,7 +397,7 @@ async fn test_connector_confidence_uses_db_reliability() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            predicate: "is_in".to_string(),
+            relationship_type: "is_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -409,6 +413,7 @@ async fn test_connector_confidence_uses_db_reliability() {
             inference_depth: 0,
             confidence: None,
             parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
         })
         .await
         .unwrap();

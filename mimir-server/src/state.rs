@@ -1,11 +1,14 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+use chrono::Utc;
 use dashmap::DashMap;
 
 use mimir_core::{
     config::ReloadableConfig,
     context::ContextManager,
+    job_queue::{Job, JobContext, JobPriority, JobQueue},
     llm::{LlmBackend, LlmClient},
     memory::loader::MemoryLoader,
     tools::ToolRegistry,
@@ -39,6 +42,11 @@ pub struct AppState {
     pub tool_registry: Arc<ToolRegistry>,
     /// Knowledge graph for entity and fact queries.
     pub knowledge_graph: Arc<mimir_knowledge::KnowledgeGraph>,
+    /// Durable job queue for background tasks.
+    pub job_queue: Arc<JobQueue>,
+    /// Unix timestamp (seconds) of the last user interaction. Used to yield
+    /// system jobs when the user is active.
+    pub last_user_activity: Arc<AtomicU64>,
 }
 
 const MODEL_OVERRIDE_CACHE_CAP: usize = 16;
@@ -113,6 +121,62 @@ impl AppState {
             tracing::warn!("Failed to register kg_search tool: {}", e);
         }
 
+        // Initialise job queue.
+        let jobs_db_path = mimir_core::paths::jobs_db_path()?;
+        let job_queue = Arc::new(JobQueue::init(&jobs_db_path).await?);
+        let last_user_activity = Arc::new(AtomicU64::new(0));
+
+        // Register knowledge graph optimization job.
+        let kg_for_job = Arc::clone(&knowledge_graph);
+        let llm_for_job = Arc::clone(&llm_client);
+        let activity_for_job = Arc::clone(&last_user_activity);
+        let backup_dir = mimir_core::paths::data_dir()?.join("backups");
+        let timeout_minutes = cfg.knowledge.optimization.timeout_minutes;
+        let schedule_time = cfg.knowledge.optimization.schedule_time.clone();
+        let schedule =
+            mimir_core::job_queue::DailySchedule::parse(&cfg.knowledge.optimization.schedule_time)?;
+
+        let opt_job = Job::new(
+            "knowledge.optimization",
+            JobPriority::System,
+            Some(schedule),
+            true,
+            move |_ctx: JobContext| {
+                let kg = Arc::clone(&kg_for_job);
+                let llm = Arc::clone(&llm_for_job);
+                let activity = Arc::clone(&activity_for_job);
+                let backup_dir = backup_dir.clone();
+                let timeout = timeout_minutes;
+                let schedule_time = schedule_time.clone();
+                Box::pin(async move {
+                    let opt_config = mimir_knowledge::optimization::OptimizationConfig {
+                        backup_dir,
+                        timeout_minutes: timeout,
+                        schedule_time,
+                    };
+                    let runner = mimir_knowledge::optimization::OptimizationRunner::new(
+                        &kg,
+                        opt_config,
+                        Some(llm),
+                    );
+                    let five_minutes = chrono::Duration::minutes(5);
+                    runner
+                        .run_all_with_yield(|| {
+                            let last = chrono::DateTime::from_timestamp(
+                                activity.load(Ordering::Relaxed) as i64,
+                                0,
+                            )
+                            .unwrap_or_else(|| Utc::now() - chrono::Duration::days(1));
+                            Utc::now() - last < five_minutes
+                        })
+                        .await
+                        .map_err(|e| mimir_core::job_queue::JobError::Handler(e.to_string()))?;
+                    Ok(())
+                })
+            },
+        );
+        job_queue.register(opt_job).await?;
+
         Ok(Self {
             llm_client,
             context_manager,
@@ -126,7 +190,15 @@ impl AppState {
             model_override_cache: Arc::new(DashMap::new()),
             tool_registry,
             knowledge_graph,
+            job_queue,
+            last_user_activity,
         })
+    }
+
+    /// Record the current time as the most recent user interaction.
+    pub fn record_user_activity(&self) {
+        self.last_user_activity
+            .store(Utc::now().timestamp() as u64, Ordering::Relaxed);
     }
 
     /// Return (or create) the semaphore for a given session id.

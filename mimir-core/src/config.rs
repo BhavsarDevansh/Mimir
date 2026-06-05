@@ -19,6 +19,7 @@ pub struct Config {
     pub context: ContextConfig,
     pub personality: PersonalityConfig,
     pub server: ServerConfig,
+    pub knowledge: KnowledgeConfig,
 }
 
 /// Result of an initialisation attempt.
@@ -116,6 +117,22 @@ impl Default for ServerConfig {
             socket_path: None,
         }
     }
+}
+/// Knowledge graph settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct KnowledgeConfig {
+    pub optimization: KnowledgeOptimizationConfig,
+}
+
+/// Knowledge graph nightly optimization settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KnowledgeOptimizationConfig {
+    pub cpu_cores: u8,
+    pub nice_level: i8,
+    pub timeout_minutes: u16,
+    pub schedule_time: String,
 }
 
 /// How eagerly the agent initiates actions on its own.
@@ -215,6 +232,17 @@ impl Default for ContextConfig {
             max_tokens: None,
             max_turns: 20,
             db_path: paths::default_db_path().ok(),
+        }
+    }
+}
+
+impl Default for KnowledgeOptimizationConfig {
+    fn default() -> Self {
+        Self {
+            cpu_cores: 1,
+            nice_level: 10,
+            timeout_minutes: 120,
+            schedule_time: "03:00".to_string(),
         }
     }
 }
@@ -356,6 +384,12 @@ preset = "transparent"
 [server]
 bind_addr = "127.0.0.1:8080"
 # socket_path = "~/.local/share/mimir/mimir.sock"  # Optional: Unix domain socket for local CLI
+
+[knowledge.optimization]
+cpu_cores = 1
+nice_level = 10
+timeout_minutes = 120
+schedule_time = "02:00"
 "#
         .to_string()
     }
@@ -707,6 +741,7 @@ mod tests {
                 bind_addr: "127.0.0.1:8080".to_string(),
                 socket_path: None,
             },
+            knowledge: KnowledgeConfig::default(),
         };
 
         original.save(&path).unwrap();

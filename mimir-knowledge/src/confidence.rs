@@ -143,7 +143,7 @@ fn cascade_inner<'a>(
     changed_fact_id: i32,
     depth_budget: Option<u8>,
     visited: &'a mut HashSet<i32>,
-) -> Pin<Box<dyn std::future::Future<Output = Result<(), KnowledgeError>> + 'a>> {
+) -> Pin<Box<dyn std::future::Future<Output = Result<(), KnowledgeError>> + Send + 'a>> {
     Box::pin(async move {
         if depth_budget == Some(0) {
             return Ok(());

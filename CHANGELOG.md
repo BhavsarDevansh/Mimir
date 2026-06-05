@@ -1,3 +1,52 @@
+## [0.32.2] - 2026-06-05
+
+### Fixed
+
+- **Review fixes for PR #92**: addressed 14 CodeRabbit review findings across job queue, optimization pipeline, documentation, and daemon routes.
+
+## [0.32.1] - 2026-06-04
+
+### Fixed
+
+- **P1**: `optimization_pass_runs` now linked to parent `optimization_runs` via foreign key `run_id`. `OptimizationRunner` inserts a parent row at pipeline start and updates it on completion or failure. Failed passes are recorded with error text instead of being silently omitted.
+- **P1**: `DailySchedule::next_after` now converts the stored naive local time to UTC using `chrono::Local`, fixing scheduling for non-UTC timezones.
+- **P1**: `chat_stream_handler` now calls `state.record_user_activity()`, ensuring SSE stream interactions update `last_user_activity` and prevent premature job yielding.
+- **P2**: `JobQueue::run_now` now rejects concurrent executions of the same job by checking for an existing `Running` row in `job_runs`.
+- **P2**: `semantic_dedup` candidate query now includes `ORDER BY a.id, b.id` for deterministic candidate selection.
+- **P2**: `semantic_dedup` now uses a structured LLM tool schema (`evaluate_dedup_candidates`) instead of relying on raw JSON parsing from a plain-text prompt.
+
+
+## [0.32.0] - 2026-06-04
+
+### Added
+
+- JobQueue and nightly optimization pipeline (issue #58):
+  - New `mimir-core::job_queue` with durable job definitions, runs, scheduling, and manual triggers.
+  - `JobQueue` persisted in `jobs.db` with `Job`, `JobPriority`, `JobStatus`, `JobRunStatus`, `DailySchedule`, `JobContext`, and `JobRunSummary` public types.
+  - Config support for `[knowledge.optimization]` defaults: `cpu_cores = 1`, `nice_level = 10`, `timeout_minutes = 120`, `schedule_time = "02:00"`.
+  - Daemon tracks user activity in `AppState`; chat routes record interaction time.
+  - System jobs yield between pass boundaries when user activity is inside the 5-minute idle window.
+  - Daemon routes: `GET /kb/optimization/status` and `POST /kb/optimization/run-now` (loopback-only for run-now).
+  - CLI commands: `mimir kb optimization --status` and `mimir kb optimization --run-now`.
+  - Refactored `mimir-knowledge/src/optimization` into pass modules with 10 nightly passes (7 core optimization passes plus 3 cleanup steps):
+    - Pass 1: deterministic dedup (exact triple merge).
+    - Pass 1b: semantic dedup via LLM structured JSON; auto-merge >= 0.9 confidence, queue uncertain pairs.
+    - Pass 2: contradiction resolution.
+    - Pass 3: inference chain re-evaluation.
+    - Pass 4: confidence recalculation.
+    - Pass 5: dormant cleanup (old disputed non-user facts).
+    - Pass 6: pattern consolidation stub.
+    - Pass 7: compaction (FTS rebuild, ANALYZE, VACUUM).
+    - Plus: pending confirmation cleanup (7-day TTL) and trash cleanup.
+  - Pre-pass backup with `VACUUM INTO` to `~/.local/share/mimir/backups/knowledge-YYYY-MM-DD.db` with counter suffix for collisions.
+  - Per-pass run recording in `optimization_pass_runs` table.
+  - Integration tests for daemon routes and CLI client methods.
+
+### Changed
+
+- `run_nightly_optimization` compatibility wrapper now delegates to `OptimizationRunner::run_all`.
+- `cascade_inner` in `confidence.rs` future is now `Send`-safe.
+
 # Changelog
 
 ## [0.31.1] - 2026-06-04

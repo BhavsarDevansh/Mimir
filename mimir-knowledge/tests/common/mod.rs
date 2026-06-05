@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Shared test helpers for mimir-knowledge integration tests.
 
 use chrono::{DateTime, Utc};

@@ -125,6 +125,7 @@ pub async fn chat_handler(
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, axum::response::Response> {
     let (session_id, llm, messages, incognito, _permit) = resolve_chat_state(&state, &req).await?;
+    state.record_user_activity();
 
     let max_rounds = state.config.snapshot().await.agent.max_tool_rounds;
     let tools_opt = state.tool_registry.export_openai_tools_for_llm();
@@ -241,6 +242,7 @@ pub async fn chat_stream_handler(
     axum::response::Response,
 > {
     let (session_id, llm, messages, incognito, permit) = resolve_chat_state(&state, &req).await?;
+    state.record_user_activity();
 
     let max_rounds = state.config.snapshot().await.agent.max_tool_rounds;
     let tools_opt = state.tool_registry.export_openai_tools_for_llm();

@@ -368,3 +368,51 @@ pub async fn handle_kb_trash(empty: bool, limit: u32, offset: u32) {
         }
     }
 }
+
+pub async fn handle_kb_optimization(status: bool, run_now: bool, base_url: &str) {
+    let client = mimir_client::MimirClient::new(base_url);
+
+    if status {
+        match client.kb_optimization_status().await {
+            Ok(resp) => {
+                println!("Job ID: {}", resp.job_id);
+                println!("Priority: {}", resp.priority);
+                if let Some(schedule) = resp.schedule {
+                    println!("Schedule: {}", schedule);
+                }
+                if let Some(next) = resp.next_run_at {
+                    println!("Next run: {}", next);
+                }
+                if let Some(last) = resp.last_run {
+                    println!(
+                        "Last run: id={} status={} started_at={} finished_at={:?} error={:?}",
+                        last.run_id, last.status, last.started_at, last.finished_at, last.error
+                    );
+                } else {
+                    println!("Last run: never");
+                }
+            }
+            Err(e) => {
+                eprintln!("Error: failed to fetch optimization status: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else if run_now {
+        println!("Triggering knowledge graph optimization...");
+        match client.kb_optimization_run_now().await {
+            Ok(resp) => {
+                println!(
+                    "Run completed: id={} status={} started_at={} finished_at={:?} error={:?}",
+                    resp.run_id, resp.status, resp.started_at, resp.finished_at, resp.error
+                );
+            }
+            Err(e) => {
+                eprintln!("Error: failed to run optimization: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        eprintln!("Error: specify --status or --run-now");
+        std::process::exit(1);
+    }
+}

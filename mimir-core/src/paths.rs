@@ -88,6 +88,11 @@ pub fn knowledge_db_path() -> Result<PathBuf, PathsError> {
     data_dir().map(|p| p.join("knowledge.db"))
 }
 
+/// Returns the path to the shared job queue database inside the data directory.
+pub fn jobs_db_path() -> Result<PathBuf, PathsError> {
+    data_dir().map(|p| p.join("jobs.db"))
+}
+
 /// Ensures a directory exists, creating it and all parents if needed.
 ///
 /// Returns `Ok(())` if the directory already existed or was successfully created.
@@ -179,5 +184,11 @@ mod tests {
     fn test_knowledge_db_path_is_data_dir_plus_db() {
         let path = knowledge_db_path().unwrap();
         assert!(path.ends_with("mimir/knowledge.db"));
+    }
+
+    #[test]
+    fn test_jobs_db_path_is_data_dir_plus_db() {
+        let path = jobs_db_path().unwrap();
+        assert!(path.ends_with("mimir/jobs.db"));
     }
 }

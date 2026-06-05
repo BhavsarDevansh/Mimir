@@ -1,5 +1,6 @@
 pub mod config;
 pub mod context;
+pub mod job_queue;
 pub mod llm;
 pub mod memory;
 pub mod paths;

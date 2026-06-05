@@ -2,7 +2,7 @@
 
 ## Overview
 
-The nightly optimization pipeline maintains graph health by running a fixed sequence of 10 passes over the knowledge graph (seven core optimisation passes plus three cleanup steps). It is implemented in `mimir-knowledge/src/optimization/mod.rs` and orchestrated by `OptimizationRunner`.
+The nightly optimization pipeline maintains graph health by running a fixed sequence of 10 passes over the knowledge graph (seven core optimization passes plus three cleanup steps). It is implemented in `mimir-knowledge/src/optimization/mod.rs` and orchestrated by `OptimizationRunner`.
 
 ## Passes
 

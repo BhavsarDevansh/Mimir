@@ -154,9 +154,13 @@ impl Tool for KgRelatedTool {
                 if trimmed.is_empty() {
                     continue;
                 }
-                match self.kg.get_predicate_id(trimmed).await.map_err(|e| {
-                    ToolError::execution_failed("kg_related", format!("database error: {}", e))
-                })? {
+                match self
+                    .kg
+                    .get_relationship_type_id(trimmed)
+                    .await
+                    .map_err(|e| {
+                        ToolError::execution_failed("kg_related", format!("database error: {}", e))
+                    })? {
                     Some(pid) => predicate_ids.push(pid),
                     None => continue, // skip missing predicates
                 }

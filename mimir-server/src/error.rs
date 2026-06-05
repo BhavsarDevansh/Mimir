@@ -75,3 +75,35 @@ pub fn internal(msg: impl Into<String>) -> Response {
     let body = Json(ApiError::new(msg, "INTERNAL_ERROR"));
     (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
 }
+
+/// Return a `NOT_FOUND` response.
+pub fn not_found(msg: impl Into<String>) -> Response {
+    let body = Json(ApiError::new(msg, "NOT_FOUND"));
+    (StatusCode::NOT_FOUND, body).into_response()
+}
+
+/// Convert a knowledge graph error into an HTTP response.
+pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
+    use mimir_knowledge::KnowledgeError;
+    error!("knowledge graph error: {e}");
+    let (status, code) = match &e {
+        KnowledgeError::Validation(_)
+        | KnowledgeError::DuplicateEntity
+        | KnowledgeError::DuplicatePreference => (StatusCode::BAD_REQUEST, "VALIDATION_ERROR"),
+        KnowledgeError::EntityNotFound(_)
+        | KnowledgeError::FactNotFound(_)
+        | KnowledgeError::CategoryNotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "KG_ERROR"),
+    };
+    let message = match &e {
+        KnowledgeError::Validation(_)
+        | KnowledgeError::DuplicateEntity
+        | KnowledgeError::DuplicatePreference
+        | KnowledgeError::EntityNotFound(_)
+        | KnowledgeError::FactNotFound(_)
+        | KnowledgeError::CategoryNotFound(_) => e.to_string(),
+        _ => "internal knowledge graph error".to_string(),
+    };
+    let body = Json(ApiError::new(message, code));
+    (status, body).into_response()
+}

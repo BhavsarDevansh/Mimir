@@ -332,7 +332,7 @@ impl<'a> OptimizationRunner<'a> {
              FROM facts a \
              JOIN facts b ON b.id > a.id \
               AND b.subject_id = a.subject_id \
-              AND b.predicate_id = a.predicate_id \
+              AND b.relationship_type_id = a.relationship_type_id \
               AND COALESCE(b.object_id, -1) = COALESCE(a.object_id, -1) \
               AND COALESCE(b.object_literal, '') = COALESCE(a.object_literal, '') \
               AND COALESCE(b.valid_from, '0001-01-01T00:00:00Z') <= COALESCE(a.valid_until, '9999-12-31T23:59:59Z') \
@@ -374,16 +374,16 @@ impl<'a> OptimizationRunner<'a> {
 
         let candidates = sqlx::query(
             "SELECT a.id AS fact_a_id, b.id AS fact_b_id, \
-                    pa.name AS predicate_a, pb.name AS predicate_b, \
+                    rta.name AS predicate_a, rtb.name AS predicate_b, \
                     ea.name AS subject_name, COALESCE(ob.name, a.object_literal, '') AS object_name \
              FROM facts a \
              JOIN facts b ON b.id > a.id \
               AND b.subject_id = a.subject_id \
               AND COALESCE(b.object_id, -1) = COALESCE(a.object_id, -1) \
               AND COALESCE(b.object_literal, '') = COALESCE(a.object_literal, '') \
-              AND b.predicate_id != a.predicate_id \
-             JOIN predicates pa ON pa.id = a.predicate_id \
-             JOIN predicates pb ON pb.id = b.predicate_id \
+              AND b.relationship_type_id != a.relationship_type_id \
+             JOIN relationship_types rta ON rta.id = a.relationship_type_id \
+             JOIN relationship_types rtb ON rtb.id = b.relationship_type_id \
              JOIN entities ea ON ea.id = a.subject_id \
              LEFT JOIN entities ob ON ob.id = a.object_id \
              WHERE a.fact_status_id NOT IN (?, ?) AND b.fact_status_id NOT IN (?, ?) \
@@ -516,8 +516,11 @@ impl<'a> OptimizationRunner<'a> {
             new_fact.inferred = true;
             new_fact.source_type = SourceType::Inference;
             new_fact.extraction_method = Some(ExtractionMethod::InferenceRule);
-            let predicate_id = self.kg.ensure_predicate(&new_fact.predicate).await?;
-            if fact_already_exists(self.kg, &new_fact, predicate_id).await? {
+            let relationship_type_id = self
+                .kg
+                .ensure_relationship_type(&new_fact.relationship_type)
+                .await?;
+            if fact_already_exists(self.kg, &new_fact, relationship_type_id).await? {
                 continue;
             }
             let mut ctx = crate::inference::CascadeContext::new();
@@ -555,7 +558,7 @@ impl<'a> OptimizationRunner<'a> {
                    SELECT 1 FROM facts c
                    WHERE c.id != f.id
                      AND c.subject_id = f.subject_id
-                     AND c.predicate_id = f.predicate_id
+                     AND c.relationship_type_id = f.relationship_type_id
                      AND c.fact_status_id = ?
                      AND c.confidence > f.confidence
                )",
@@ -858,15 +861,15 @@ async fn merge_fact_pair(
 async fn fact_already_exists(
     kg: &KnowledgeGraph,
     new_fact: &NewFact,
-    predicate_id: i16,
+    relationship_type_id: i16,
 ) -> Result<bool, crate::KnowledgeError> {
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM facts \
-         WHERE subject_id = ? AND predicate_id = ? \
+         WHERE subject_id = ? AND relationship_type_id = ? \
            AND (object_id IS ?) AND (object_literal IS ?)",
     )
     .bind(new_fact.subject_id)
-    .bind(predicate_id)
+    .bind(relationship_type_id)
     .bind(new_fact.object_id)
     .bind(&new_fact.object_literal)
     .fetch_one(kg.pool())

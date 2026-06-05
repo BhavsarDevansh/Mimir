@@ -44,9 +44,9 @@ pub async fn list_trash(
             None
         };
 
-        let predicate_name: Option<String> =
-            sqlx::query_scalar("SELECT name FROM predicates WHERE id = ?")
-                .bind(fact.predicate_id)
+        let relationship_type_name: Option<String> =
+            sqlx::query_scalar("SELECT name FROM relationship_types WHERE id = ?")
+                .bind(fact.relationship_type_id)
                 .fetch_optional(pool)
                 .await?;
 
@@ -54,7 +54,7 @@ pub async fn list_trash(
             trash_id: row.id,
             fact_id: row.original_id,
             subject_name,
-            predicate_name,
+            relationship_type_name,
             object_name,
             object_literal: fact.object_literal.clone(),
             deleted_at: row.deleted_at,
@@ -259,10 +259,10 @@ async fn restore_payload_no_deps(
 
     // Check temporal overlap.
     let overlaps: Vec<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal,          valid_from, valid_until, confidence, fact_status_id, inferred,          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at          FROM facts          WHERE subject_id = ? AND predicate_id = ?",
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal,          valid_from, valid_until, confidence, fact_status_id, inferred,          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at          FROM facts          WHERE subject_id = ? AND relationship_type_id = ?",
     )
     .bind(fact.subject_id)
-    .bind(fact.predicate_id)
+    .bind(fact.relationship_type_id)
     .fetch_all(pool)
     .await?;
 
@@ -288,10 +288,10 @@ async fn restore_payload_no_deps(
     let mut tx = pool.begin().await?;
 
     let new_fact_id: i64 = sqlx::query_scalar(
-        "INSERT INTO facts          (subject_id, predicate_id, object_id, object_literal, valid_from, valid_until,           confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation, created_at, updated_at)          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)          RETURNING id",
+        "INSERT INTO facts          (subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until,           confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation, created_at, updated_at)          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)          RETURNING id",
     )
     .bind(fact.subject_id)
-    .bind(fact.predicate_id)
+    .bind(fact.relationship_type_id)
     .bind(fact.object_id)
     .bind(&fact.object_literal)
     .bind(fact.valid_from)
@@ -342,7 +342,7 @@ async fn restore_payload_no_deps(
     tx.commit().await?;
 
     let restored: Fact = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal,          valid_from, valid_until, confidence, fact_status_id, inferred,          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at          FROM facts WHERE id = ?",
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal,          valid_from, valid_until, confidence, fact_status_id, inferred,          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at          FROM facts WHERE id = ?",
     )
     .bind(new_fact_id)
     .fetch_one(pool)

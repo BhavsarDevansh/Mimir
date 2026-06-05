@@ -256,7 +256,7 @@ pub(crate) async fn forget_fact_tx(
     now: DateTime<Utc>,
 ) -> Result<Vec<(i32, bool)>, KnowledgeError> {
     let fact: Option<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal,          valid_from, valid_until, confidence, fact_status_id, inferred,          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at          FROM facts WHERE id = ?",
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal,          valid_from, valid_until, confidence, fact_status_id, inferred,          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
     .fetch_optional(&mut **tx)
@@ -402,7 +402,7 @@ pub(crate) async fn evaluate_children(
                 let mut tx = pool.begin().await?;
 
                 let old_child: Option<Fact> = sqlx::query_as::<_, Fact>(
-                    "SELECT id, subject_id, predicate_id, object_id, object_literal,                      valid_from, valid_until, confidence, fact_status_id, inferred,                      inference_depth, stale_confidence, pending_confirmation, created_at, updated_at                      FROM facts WHERE id = ?",
+                    "SELECT id, subject_id, relationship_type_id, object_id, object_literal,                      valid_from, valid_until, confidence, fact_status_id, inferred,                      inference_depth, stale_confidence, pending_confirmation, created_at, updated_at                      FROM facts WHERE id = ?",
                 )
                 .bind(child_id)
                 .fetch_optional(&mut *tx)
@@ -422,7 +422,7 @@ pub(crate) async fn evaluate_children(
                         .await?;
 
                     let updated_child: Fact = sqlx::query_as::<_, Fact>(
-                        "SELECT id, subject_id, predicate_id, object_id, object_literal,                          valid_from, valid_until, confidence, fact_status_id, inferred,                          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at                          FROM facts WHERE id = ?",
+                        "SELECT id, subject_id, relationship_type_id, object_id, object_literal,                          valid_from, valid_until, confidence, fact_status_id, inferred,                          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at                          FROM facts WHERE id = ?",
                     )
                     .bind(child_id)
                     .fetch_one(&mut *tx)
@@ -479,7 +479,7 @@ async fn query_matching_fact_ids(
     filters: &ForgetFilters,
 ) -> Result<Vec<i32>, KnowledgeError> {
     let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-        "SELECT f.id FROM facts f JOIN entities s ON s.id = f.subject_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN predicates p ON p.id = f.predicate_id WHERE 1=1",
+        "SELECT f.id FROM facts f JOIN entities s ON s.id = f.subject_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN relationship_types rt ON rt.id = f.relationship_type_id WHERE 1=1",
     );
 
     if let Some(id) = filters.fact_id {
@@ -487,7 +487,7 @@ async fn query_matching_fact_ids(
         builder.push_bind(id);
     }
     if let Some(ref pred) = filters.predicate {
-        builder.push(" AND p.name = ");
+        builder.push(" AND rt.name = ");
         builder.push_bind(pred);
     }
     if let Some(ref subj) = filters.subject {
@@ -527,7 +527,7 @@ async fn has_sensitive_match(
     filters: &ForgetFilters,
 ) -> Result<bool, KnowledgeError> {
     let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-        "SELECT 1 FROM facts f JOIN entities s ON s.id = f.subject_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN predicates p ON p.id = f.predicate_id WHERE p.sensitive = TRUE",
+        "SELECT 1 FROM facts f JOIN entities s ON s.id = f.subject_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN relationship_types rt ON rt.id = f.relationship_type_id WHERE rt.sensitive = TRUE",
     );
 
     if let Some(id) = filters.fact_id {
@@ -535,7 +535,7 @@ async fn has_sensitive_match(
         builder.push_bind(id);
     }
     if let Some(ref pred) = filters.predicate {
-        builder.push(" AND p.name = ");
+        builder.push(" AND rt.name = ");
         builder.push_bind(pred);
     }
     if let Some(ref subj) = filters.subject {

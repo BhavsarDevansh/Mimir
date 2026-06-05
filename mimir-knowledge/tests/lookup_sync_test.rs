@@ -267,16 +267,16 @@ async fn preference_source_types_sync() {
 }
 
 #[tokio::test]
-async fn predicates_sync() {
+async fn relationship_types_sync() {
     let dir = tempfile::tempdir().unwrap();
     let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
         .await
         .unwrap();
     assert_enum_db_sync(
         &kg,
-        "SELECT id, name FROM predicates WHERE id = ?",
-        "SELECT id, name FROM predicates",
-        "SELECT COUNT(*) FROM predicates",
+        "SELECT id, name FROM relationship_types WHERE id = ?",
+        "SELECT id, name FROM relationship_types",
+        "SELECT COUNT(*) FROM relationship_types",
         &[
             (1, "is_in", "is_in"),
             (2, "visited", "visited"),

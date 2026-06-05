@@ -82,11 +82,11 @@ pub async fn search_entities(
     // Batch-fetch top-5 facts per matched entity using a window function.
     let placeholders: Vec<&str> = entity_ids.iter().map(|_| "?").collect();
     let facts_sql = format!(
-        "SELECT subject_id, predicate_name, object_id, object_literal, confidence FROM ( \
-            SELECT f.subject_id, p.name as predicate_name, f.object_id, f.object_literal, f.confidence, \
+        "SELECT subject_id, relationship_type_name, object_id, object_literal, confidence FROM ( \
+            SELECT f.subject_id, rt.name as relationship_type_name, f.object_id, f.object_literal, f.confidence, \
                    ROW_NUMBER() OVER (PARTITION BY f.subject_id ORDER BY f.confidence DESC) as rn \
              FROM facts f \
-             JOIN predicates p ON p.id = f.predicate_id \
+             JOIN relationship_types rt ON rt.id = f.relationship_type_id \
              WHERE f.subject_id IN ({}) \
                AND f.pending_confirmation = 0 \
                AND f.fact_status_id NOT IN (5, 6) \
@@ -126,13 +126,13 @@ pub async fn search_entities(
     // Group facts by subject_id and keep top 5 per entity.
     let mut facts_by_subject: std::collections::HashMap<i32, Vec<FactSummary>> =
         std::collections::HashMap::new();
-    for (subject_id, predicate_name, object_id, object_literal, confidence) in fact_rows {
+    for (subject_id, relationship_type_name, object_id, object_literal, confidence) in fact_rows {
         let object_name = object_id.and_then(|oid| object_names.get(&oid).cloned());
         facts_by_subject
             .entry(subject_id)
             .or_default()
             .push(FactSummary {
-                predicate: predicate_name,
+                predicate: relationship_type_name,
                 object_name,
                 object_literal,
                 confidence,

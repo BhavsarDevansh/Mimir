@@ -35,10 +35,10 @@ async fn deterministic_dedup_merges_identical_fact_triples() {
     assert_eq!(summary.facts_merged, 1);
 
     let active_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM facts WHERE subject_id = ? AND predicate_id = ? AND object_id = ? AND fact_status_id NOT IN (?, ?)",
+        "SELECT COUNT(*) FROM facts WHERE subject_id = ? AND relationship_type_id = ? AND object_id = ? AND fact_status_id NOT IN (?, ?)",
     )
     .bind(person)
-    .bind(first.predicate_id)
+    .bind(first.relationship_type_id)
     .bind(london)
     .bind(FactStatus::Superseded as i16)
     .bind(FactStatus::Forgotten as i16)

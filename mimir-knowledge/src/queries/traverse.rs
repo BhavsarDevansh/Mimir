@@ -63,14 +63,14 @@ pub async fn traverse_graph(
         let sql = if let Some(predicates) = predicate_filter {
             let pred_placeholders: Vec<&str> = predicates.iter().map(|_| "?").collect();
             format!(
-                "SELECT f.subject_id, f.predicate_id, p.name as predicate_name, \
+                "SELECT f.subject_id, f.relationship_type_id, rt.name as predicate_name, \
                         f.object_id, f.object_literal, f.confidence \
                  FROM facts f \
-                 JOIN predicates p ON p.id = f.predicate_id \
+                 JOIN relationship_types rt ON rt.id = f.relationship_type_id \
                  WHERE f.subject_id IN ({}) \
                    AND f.pending_confirmation = 0 \
                    AND f.fact_status_id NOT IN (5, 6) \
-                   AND f.predicate_id IN ({}) \
+                   AND f.relationship_type_id IN ({}) \
                  ORDER BY f.confidence DESC \
                  LIMIT {}",
                 placeholders.join(","),
@@ -79,10 +79,10 @@ pub async fn traverse_graph(
             )
         } else {
             format!(
-                "SELECT f.subject_id, f.predicate_id, p.name as predicate_name, \
+                "SELECT f.subject_id, f.relationship_type_id, rt.name as predicate_name, \
                         f.object_id, f.object_literal, f.confidence \
                  FROM facts f \
-                 JOIN predicates p ON p.id = f.predicate_id \
+                 JOIN relationship_types rt ON rt.id = f.relationship_type_id \
                  WHERE f.subject_id IN ({}) \
                    AND f.pending_confirmation = 0 \
                    AND f.fact_status_id NOT IN (5, 6) \

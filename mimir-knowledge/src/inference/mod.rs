@@ -28,24 +28,24 @@ impl CascadeContext {
     pub fn insert(
         &mut self,
         subject_id: i32,
-        predicate_id: i16,
+        relationship_type_id: i16,
         object_id: Option<i32>,
         object_literal: Option<String>,
     ) {
         self.seen
-            .insert((subject_id, predicate_id, object_id, object_literal));
+            .insert((subject_id, relationship_type_id, object_id, object_literal));
     }
 
     pub fn contains(
         &self,
         subject_id: i32,
-        predicate_id: i16,
+        relationship_type_id: i16,
         object_id: Option<i32>,
         object_literal: Option<&str>,
     ) -> bool {
         self.seen.contains(&(
             subject_id,
-            predicate_id,
+            relationship_type_id,
             object_id,
             object_literal.map(|s| s.to_string()),
         ))
@@ -100,7 +100,7 @@ impl RuleEngine {
     ) -> Result<Vec<NewFact>, crate::KnowledgeError> {
         let mut results = Vec::new();
         let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
-            "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+            "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
              valid_from, valid_until, confidence, fact_status_id, inferred, \
              inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
              FROM facts \

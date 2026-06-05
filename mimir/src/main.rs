@@ -27,6 +27,9 @@ async fn main() {
         cli::Commands::Tool { command } => handle_tool_command(command).await,
         cli::Commands::Skill { command } => handle_skill_command(command).await,
         cli::Commands::Kb { command } => match command {
+            cli::KbCommands::Category { command } => {
+                kb::handle_kb_category(command, &base_url).await
+            }
             cli::KbCommands::Optimization { status, run_now } => {
                 kb::handle_kb_optimization(status, run_now, &base_url).await
             }

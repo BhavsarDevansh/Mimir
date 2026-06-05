@@ -42,22 +42,22 @@ fn changed_by_for_source_type(source_type: SourceType) -> ChangedBy {
 
 /// Insert a new fact with transactional provenance and temporal overlap handling.
 ///
-/// Temporal rules (same `subject_id + predicate_id`):
+/// Temporal rules (same `subject_id + relationship_type_id`):
 /// - Non-overlapping ranges → `Active`
 /// - Overlapping with both unbounded → `Disputed`
 /// - Old open-ended + new explicit starting now → close old at `now()`, new `Active`
 /// - Any other overlap → `Disputed`
 ///
-/// `predicate_id` and `confidence` are resolved by the caller (`KnowledgeGraph`).
+/// `relationship_type_id` and `confidence` are resolved by the caller (`KnowledgeGraph`).
 pub async fn insert_fact(
     pool: &SqlitePool,
     new_fact: &NewFact,
-    predicate_id: i16,
+    relationship_type_id: i16,
     confidence: f32,
     now: DateTime<Utc>,
 ) -> Result<Fact, KnowledgeError> {
     let mut tx = pool.begin().await?;
-    let fact = insert_fact_in_tx(&mut tx, new_fact, predicate_id, confidence, now).await?;
+    let fact = insert_fact_in_tx(&mut tx, new_fact, relationship_type_id, confidence, now).await?;
     tx.commit().await?;
     Ok(fact)
 }
@@ -65,7 +65,7 @@ pub async fn insert_fact(
 pub async fn insert_fact_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     new_fact: &NewFact,
-    predicate_id: i16,
+    relationship_type_id: i16,
     confidence: f32,
     now: DateTime<Utc>,
 ) -> Result<Fact, KnowledgeError> {
@@ -81,14 +81,14 @@ pub async fn insert_fact_in_tx(
 
     // 1. Temporal overlap check against same subject + predicate.
     let existing: Vec<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts \
-         WHERE subject_id = ? AND predicate_id = ?",
+         WHERE subject_id = ? AND relationship_type_id = ?",
     )
     .bind(new_fact.subject_id)
-    .bind(predicate_id)
+    .bind(relationship_type_id)
     .fetch_all(&mut **tx)
     .await?;
 
@@ -130,7 +130,7 @@ pub async fn insert_fact_in_tx(
                         .await?;
 
                     let updated: Fact = sqlx::query_as::<_, Fact>(
-                        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+                        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
                          valid_from, valid_until, confidence, fact_status_id, inferred, \
                          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
                          FROM facts WHERE id = ?",
@@ -170,7 +170,7 @@ pub async fn insert_fact_in_tx(
                         .await?;
 
                     let updated: Fact = sqlx::query_as::<_, Fact>(
-                        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+                        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
                          valid_from, valid_until, confidence, fact_status_id, inferred, \
                          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
                          FROM facts WHERE id = ?",
@@ -247,13 +247,13 @@ pub async fn insert_fact_in_tx(
     // 2. Insert the fact.
     let fact_id: i64 = sqlx::query_scalar(
         "INSERT INTO facts \
-         (subject_id, predicate_id, object_id, object_literal, valid_from, valid_until, \
+         (subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until, \
           confidence, fact_status_id, inferred, inference_depth, pending_confirmation, created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id",
     )
     .bind(new_fact.subject_id)
-    .bind(predicate_id)
+    .bind(relationship_type_id)
     .bind(new_fact.object_id)
     .bind(&new_fact.object_literal)
     .bind(new_fact.valid_from)
@@ -362,7 +362,7 @@ pub async fn insert_fact_in_tx(
 
     // 8. Return the inserted fact.
     let fact = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts WHERE id = ?",
@@ -381,7 +381,7 @@ pub async fn insert_fact_in_tx(
 /// Get a fact by ID.
 pub async fn get_by_id(pool: &SqlitePool, fact_id: i32) -> Result<Option<Fact>, KnowledgeError> {
     let fact: Option<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts WHERE id = ?",
@@ -400,7 +400,7 @@ pub async fn get_by_subject(
     limit: i64,
 ) -> Result<Vec<Fact>, KnowledgeError> {
     let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts WHERE subject_id = ? ORDER BY id ASC LIMIT ?",
@@ -416,16 +416,16 @@ pub async fn get_by_subject(
 /// List facts for a predicate.
 pub async fn get_by_predicate(
     pool: &SqlitePool,
-    predicate_id: i16,
+    relationship_type_id: i16,
     limit: i64,
 ) -> Result<Vec<Fact>, KnowledgeError> {
     let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
-         FROM facts WHERE predicate_id = ? ORDER BY id ASC LIMIT ?",
+         FROM facts WHERE relationship_type_id = ? ORDER BY id ASC LIMIT ?",
     )
-    .bind(predicate_id)
+    .bind(relationship_type_id)
     .bind(limit)
     .fetch_all(pool)
     .await?;
@@ -440,7 +440,7 @@ pub async fn get_by_object(
     limit: i64,
 ) -> Result<Vec<Fact>, KnowledgeError> {
     let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts WHERE object_id = ? ORDER BY id ASC LIMIT ?",
@@ -457,22 +457,22 @@ pub async fn get_by_object(
 pub async fn get_active_facts_at(
     pool: &SqlitePool,
     subject_id: i32,
-    predicate_id: i16,
+    relationship_type_id: i16,
     at: DateTime<Utc>,
 ) -> Result<Vec<Fact>, KnowledgeError> {
     let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts \
-         WHERE subject_id = ? AND predicate_id = ? \
+         WHERE subject_id = ? AND relationship_type_id = ? \
            AND fact_status_id = ? \
            AND (valid_from IS NULL OR valid_from <= ?) \
            AND (valid_until IS NULL OR valid_until > ?) \
          ORDER BY valid_from",
     )
     .bind(subject_id)
-    .bind(predicate_id)
+    .bind(relationship_type_id)
     .bind(FactStatus::Active as i16)
     .bind(at)
     .bind(at)
@@ -497,7 +497,7 @@ pub async fn update_valid_until(
     let mut tx = pool.begin().await?;
 
     let old: Option<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts WHERE id = ?",
@@ -527,7 +527,7 @@ pub async fn update_valid_until(
         .await?;
 
     let updated: Fact = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts WHERE id = ?",
@@ -578,7 +578,7 @@ pub async fn set_status_tx(
     changed_by: ChangedBy,
 ) -> Result<Fact, KnowledgeError> {
     let old: Option<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts WHERE id = ?",
@@ -598,7 +598,7 @@ pub async fn set_status_tx(
         .await?;
 
     let updated: Fact = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
          FROM facts WHERE id = ?",
@@ -684,7 +684,7 @@ pub async fn get_audit_log(
 pub struct FactWithObjectName {
     pub id: i32,
     pub subject_id: i32,
-    pub predicate_id: i16,
+    pub relationship_type_id: i16,
     pub object_id: Option<i32>,
     pub object_literal: Option<String>,
     pub valid_from: Option<DateTime<Utc>>,
@@ -705,7 +705,7 @@ pub struct FactWithObjectName {
 pub struct FactWithSources {
     pub id: i32,
     pub subject_id: i32,
-    pub predicate_id: i16,
+    pub relationship_type_id: i16,
     pub object_id: Option<i32>,
     pub object_literal: Option<String>,
     pub valid_from: Option<DateTime<Utc>>,
@@ -726,14 +726,15 @@ pub struct FactWithSources {
 pub async fn get_facts_by_subject_filtered(
     pool: &SqlitePool,
     subject_id: i32,
-    predicate_id_opt: Option<i16>,
+    relationship_type_id_opt: Option<i16>,
     min_confidence: f32,
     offset: i64,
     limit: i64,
 ) -> Result<Vec<FactWithSources>, KnowledgeError> {
-    let rows: Vec<FactWithObjectName> = if let Some(predicate_id) = predicate_id_opt {
+    let rows: Vec<FactWithObjectName> = if let Some(relationship_type_id) = relationship_type_id_opt
+    {
         sqlx::query_as::<_, FactWithObjectName>(
-            "SELECT f.id, f.subject_id, f.predicate_id, f.object_id, f.object_literal, \
+            "SELECT f.id, f.subject_id, f.relationship_type_id, f.object_id, f.object_literal, \
                     f.valid_from, f.valid_until, f.confidence, f.fact_status_id, f.inferred, \
                     f.inference_depth, f.stale_confidence, f.pending_confirmation, f.created_at, f.updated_at, \
                     e.name as object_name \
@@ -742,13 +743,13 @@ pub async fn get_facts_by_subject_filtered(
              WHERE f.subject_id = ? \
                AND f.pending_confirmation = 0 \
                AND f.fact_status_id NOT IN (5, 6) \
-               AND f.predicate_id = ? \
+               AND f.relationship_type_id = ? \
                AND f.confidence >= ? \
              ORDER BY f.confidence DESC, f.valid_from DESC, f.id DESC \
              LIMIT ? OFFSET ?",
         )
         .bind(subject_id)
-        .bind(predicate_id)
+        .bind(relationship_type_id)
         .bind(min_confidence)
         .bind(limit)
         .bind(offset)
@@ -756,7 +757,7 @@ pub async fn get_facts_by_subject_filtered(
         .await?
     } else {
         sqlx::query_as::<_, FactWithObjectName>(
-            "SELECT f.id, f.subject_id, f.predicate_id, f.object_id, f.object_literal, \
+            "SELECT f.id, f.subject_id, f.relationship_type_id, f.object_id, f.object_literal, \
                     f.valid_from, f.valid_until, f.confidence, f.fact_status_id, f.inferred, \
                     f.inference_depth, f.stale_confidence, f.pending_confirmation, f.created_at, f.updated_at, \
                     e.name as object_name \
@@ -808,7 +809,7 @@ pub async fn get_facts_by_subject_filtered(
         results.push(FactWithSources {
             id: row.id,
             subject_id: row.subject_id,
-            predicate_id: row.predicate_id,
+            relationship_type_id: row.relationship_type_id,
             object_id: row.object_id,
             object_literal: row.object_literal,
             valid_from: row.valid_from,
@@ -833,20 +834,20 @@ pub async fn get_facts_by_subject_filtered(
 pub async fn count_facts_by_subject_filtered(
     pool: &SqlitePool,
     subject_id: i32,
-    predicate_id_opt: Option<i16>,
+    relationship_type_id_opt: Option<i16>,
     min_confidence: f32,
 ) -> Result<i64, KnowledgeError> {
-    let count: i64 = if let Some(predicate_id) = predicate_id_opt {
+    let count: i64 = if let Some(relationship_type_id) = relationship_type_id_opt {
         sqlx::query_scalar(
             "SELECT COUNT(*) FROM facts \
              WHERE subject_id = ? \
                AND pending_confirmation = 0 \
                AND fact_status_id NOT IN (5, 6) \
-               AND predicate_id = ? \
+               AND relationship_type_id = ? \
                AND confidence >= ?",
         )
         .bind(subject_id)
-        .bind(predicate_id)
+        .bind(relationship_type_id)
         .bind(min_confidence)
         .fetch_one(pool)
         .await?

@@ -16,6 +16,20 @@ use tracing::error;
 use crate::error;
 use crate::state::AppState;
 
+/// Build a catalogue appendix for the system prompt.
+async fn build_catalogue(knowledge_graph: &mimir_knowledge::KnowledgeGraph) -> String {
+    match knowledge_graph.get_top_level_catalogue().await {
+        Ok(cats) if !cats.is_empty() => {
+            let mut lines = vec!["## Knowledge Catalogue".to_string()];
+            for cat in cats {
+                lines.push(format!("{} {}", cat.id, cat.name));
+            }
+            lines.join("\n")
+        }
+        _ => String::new(),
+    }
+}
+
 /// Resolve the common chat state shared by both the blocking and streaming handlers.
 ///
 /// Returns `(session_id, llm, messages, incognito, permit_option)` where
@@ -64,7 +78,18 @@ async fn resolve_chat_state(
                 Err(e) => return Err(error::context_error(e)),
             },
             None => {
-                let system_prompt = personality.system_prompt(&memory);
+                let catalogue = build_catalogue(&state.knowledge_graph).await;
+                let system_prompt = if catalogue.is_empty() {
+                    personality.system_prompt(&memory)
+                } else {
+                    format!(
+                        "{}
+
+{}",
+                        personality.system_prompt(&memory),
+                        catalogue
+                    )
+                };
                 state
                     .context_manager
                     .create_session(system_prompt)
@@ -75,7 +100,18 @@ async fn resolve_chat_state(
     };
 
     if incognito {
-        let system_prompt = personality.system_prompt(&memory);
+        let catalogue = build_catalogue(&state.knowledge_graph).await;
+        let system_prompt = if catalogue.is_empty() {
+            personality.system_prompt(&memory)
+        } else {
+            format!(
+                "{}
+
+{}",
+                personality.system_prompt(&memory),
+                catalogue
+            )
+        };
         let messages = vec![
             mimir_core::llm::types::Message::system(&system_prompt),
             mimir_core::llm::types::Message::user(&req.message),

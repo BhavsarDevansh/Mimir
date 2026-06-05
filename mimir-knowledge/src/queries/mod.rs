@@ -1,6 +1,7 @@
-//! Query builders for entities, facts, sources, audit, and preferences.
+//! Query builders for entities, facts, sources, audit, preferences, and categories.
 
 pub mod audit;
+pub mod category;
 pub mod entity;
 pub mod fact;
 pub mod preference;

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::inference::rules::contradiction::ContradictionRule;
-use crate::inference::rules::threshold::{PREDICATE_REJECTED_ACTION, ThresholdRule};
+use crate::inference::rules::threshold::{RELATIONSHIP_TYPE_REJECTED_ACTION, ThresholdRule};
 use crate::inference::rules::transitivity::TransitivityRule;
 use crate::inference::{CascadeContext, RuleEngine};
 use crate::models::enums::RelationType;
@@ -46,8 +46,8 @@ pub enum KnowledgeError {
     #[error("Entity has {0} fact(s) and cannot be deleted")]
     EntityHasFacts(i64),
 
-    #[error("Invalid predicate id {0}")]
-    InvalidPredicate(i16),
+    #[error("Invalid relationship type id {0}")]
+    InvalidRelationshipType(i16),
 
     #[error("Entity {0} not found")]
     EntityNotFound(i32),
@@ -72,15 +72,18 @@ pub enum KnowledgeError {
 
     #[error("Duplicate preference detected")]
     DuplicatePreference,
+
+    #[error("Category {0} not found")]
+    CategoryNotFound(i32),
 }
 
-/// In-memory cache for predicate name ↔ id lookups.
-struct PredicateCache {
+/// In-memory cache for relationship_type name ↔ id lookups.
+struct RelationshipTypeCache {
     name_to_id: HashMap<String, i16>,
     id_to_name: HashMap<i16, String>,
 }
 
-impl PredicateCache {
+impl RelationshipTypeCache {
     fn new() -> Self {
         Self {
             name_to_id: HashMap::new(),
@@ -96,7 +99,7 @@ impl PredicateCache {
 pub struct KnowledgeGraph {
     pool: SqlitePool,
     clock: Arc<dyn Clock>,
-    predicate_cache: Arc<RwLock<PredicateCache>>,
+    relationship_type_cache: Arc<RwLock<RelationshipTypeCache>>,
     rule_engine: RuleEngine,
     pending_confirmations: Arc<RwLock<HashSet<i32>>>,
 }
@@ -144,7 +147,7 @@ impl KnowledgeGraph {
         Ok(Self {
             pool,
             clock,
-            predicate_cache: Arc::new(RwLock::new(PredicateCache::new())),
+            relationship_type_cache: Arc::new(RwLock::new(RelationshipTypeCache::new())),
             rule_engine: engine,
             pending_confirmations: Arc::new(RwLock::new(pending)),
         })
@@ -168,57 +171,62 @@ impl KnowledgeGraph {
     // Predicate registry
     // ------------------------------------------------------------------
 
-    /// Ensure a predicate exists in the database, returning its stable id.
+    /// Ensure a relationship type exists in the database, returning its stable id.
     /// Creates the row silently if missing.
-    pub async fn ensure_predicate(&self, name: &str) -> Result<i16, KnowledgeError> {
+    pub async fn ensure_relationship_type(&self, name: &str) -> Result<i16, KnowledgeError> {
         {
-            let cache = self.predicate_cache.read().await;
+            let cache = self.relationship_type_cache.read().await;
             if let Some(&id) = cache.name_to_id.get(name) {
                 return Ok(id);
             }
         }
 
-        let row: Option<(i16,)> = sqlx::query_as("SELECT id FROM predicates WHERE name = ?")
-            .bind(name)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row: Option<(i16,)> =
+            sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await?;
 
         let id = match row {
             Some((id,)) => id,
             None => {
                 let id: i64 = sqlx::query_scalar(
-                    "INSERT INTO predicates (name, description) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET name = predicates.name RETURNING id",
+                    "INSERT INTO relationship_types (name, description) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
                 )
                 .bind(name)
-                .bind(format!("Auto-created predicate: {}", name))
+                .bind(format!("Auto-created relationship_type: {}", name))
                 .fetch_one(&self.pool)
                 .await?;
                 id as i16
             }
         };
 
-        let mut cache = self.predicate_cache.write().await;
+        let mut cache = self.relationship_type_cache.write().await;
         cache.name_to_id.insert(name.to_string(), id);
         cache.id_to_name.insert(id, name.to_string());
         Ok(id)
     }
 
-    /// Look up a predicate id by name without creating it.
-    pub async fn get_predicate_id(&self, name: &str) -> Result<Option<i16>, KnowledgeError> {
+    /// Look up a relationship type id by name without creating it.
+    pub async fn get_relationship_type_id(
+        &self,
+        name: &str,
+    ) -> Result<Option<i16>, KnowledgeError> {
         {
-            let cache = self.predicate_cache.read().await;
+            let cache = self.relationship_type_cache.read().await;
             if let Some(&id) = cache.name_to_id.get(name) {
                 return Ok(Some(id));
             }
         }
 
-        let row: Option<(i16,)> = sqlx::query_as("SELECT id FROM predicates WHERE name = ?")
-            .bind(name)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row: Option<(i16,)> =
+            sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await?;
 
         if let Some((id,)) = row {
-            let mut cache = self.predicate_cache.write().await;
+            let mut cache = self.relationship_type_cache.write().await;
             cache.name_to_id.insert(name.to_string(), id);
             cache.id_to_name.insert(id, name.to_string());
             Ok(Some(id))
@@ -227,30 +235,30 @@ impl KnowledgeGraph {
         }
     }
 
-    /// Reverse lookup: get the predicate name for a given id.
-    pub async fn predicate_name(&self, id: i16) -> Option<String> {
+    /// Reverse lookup: get the relationship_type name for a given id.
+    pub async fn relationship_type_name(&self, id: i16) -> Option<String> {
         {
-            let cache = self.predicate_cache.read().await;
+            let cache = self.relationship_type_cache.read().await;
             if let Some(name) = cache.id_to_name.get(&id) {
                 return Some(name.clone());
             }
         }
 
         let row: Option<(String,)> =
-            match sqlx::query_as("SELECT name FROM predicates WHERE id = ?")
+            match sqlx::query_as("SELECT name FROM relationship_types WHERE id = ?")
                 .bind(id)
                 .fetch_optional(&self.pool)
                 .await
             {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::warn!("predicate_name lookup failed for id {}: {}", id, e);
+                    tracing::warn!("relationship_type_name lookup failed for id {}: {}", id, e);
                     return None;
                 }
             };
 
         if let Some((ref name,)) = row {
-            let mut cache = self.predicate_cache.write().await;
+            let mut cache = self.relationship_type_cache.write().await;
             cache.name_to_id.insert(name.clone(), id);
             cache.id_to_name.insert(id, name.clone());
         }
@@ -416,12 +424,14 @@ impl KnowledgeGraph {
     ) -> Pin<Box<dyn Future<Output = Result<models::fact::Fact, KnowledgeError>> + Send + 'a>> {
         Box::pin(async move {
             // Resolve predicate name to id.
-            let predicate_id = self.ensure_predicate(&new_fact.predicate).await?;
+            let relationship_type_id = self
+                .ensure_relationship_type(&new_fact.relationship_type)
+                .await?;
 
             // Cycle detection: skip duplicate triples in the same cascade.
             if ctx.contains(
                 new_fact.subject_id,
-                predicate_id,
+                relationship_type_id,
                 new_fact.object_id,
                 new_fact.object_literal.as_deref(),
             ) {
@@ -431,7 +441,7 @@ impl KnowledgeGraph {
             }
             ctx.insert(
                 new_fact.subject_id,
-                predicate_id,
+                relationship_type_id,
                 new_fact.object_id,
                 new_fact.object_literal.clone(),
             );
@@ -473,11 +483,33 @@ impl KnowledgeGraph {
             let fact = queries::fact::insert_fact_in_tx(
                 &mut tx,
                 &new_fact,
-                predicate_id,
+                relationship_type_id,
                 confidence,
                 self.now(),
             )
             .await?;
+
+            // Validate category IDs and insert assignments.
+            if !new_fact.category_ids.is_empty() {
+                let valid_ids: HashSet<i32> = sqlx::query_scalar("SELECT id FROM categories")
+                    .fetch_all(&mut *tx)
+                    .await?
+                    .into_iter()
+                    .collect();
+                for category_id in &new_fact.category_ids {
+                    if !valid_ids.contains(category_id) {
+                        return Err(KnowledgeError::Validation(format!(
+                            "Category {} does not exist",
+                            category_id
+                        )));
+                    }
+                    sqlx::query("INSERT OR IGNORE INTO fact_categories (fact_id, category_id) VALUES (?, ?)")
+                        .bind(fact.id)
+                        .bind(*category_id)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+            }
 
             // Write InferredFrom dependencies for inferred facts.
             for parent_id in &new_fact.parent_fact_ids {
@@ -495,7 +527,8 @@ impl KnowledgeGraph {
             }
 
             // Side-effect: check rejected_action thresholds (decoupled from InferenceRule trait).
-            let threshold_input = if new_fact.predicate == PREDICATE_REJECTED_ACTION {
+            let threshold_input = if new_fact.relationship_type == RELATIONSHIP_TYPE_REJECTED_ACTION
+            {
                 ThresholdRule::check_threshold(&fact, self, &mut tx).await?
             } else {
                 None
@@ -545,12 +578,12 @@ impl KnowledgeGraph {
     }
 
     /// List facts for a predicate.
-    pub async fn get_facts_by_predicate(
+    pub async fn get_facts_by_relationship_type(
         &self,
-        predicate_id: i16,
+        relationship_type_id: i16,
         limit: i64,
     ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
-        queries::fact::get_by_predicate(&self.pool, predicate_id, limit).await
+        queries::fact::get_by_predicate(&self.pool, relationship_type_id, limit).await
     }
 
     /// List facts for an object entity.
@@ -566,10 +599,10 @@ impl KnowledgeGraph {
     pub async fn get_active_facts_at(
         &self,
         subject_id: i32,
-        predicate_id: i16,
+        relationship_type_id: i16,
         at: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
-        queries::fact::get_active_facts_at(&self.pool, subject_id, predicate_id, at).await
+        queries::fact::get_active_facts_at(&self.pool, subject_id, relationship_type_id, at).await
     }
 
     /// Update a fact's valid-until timestamp.
@@ -802,7 +835,82 @@ impl KnowledgeGraph {
     pub async fn reject_fact(&self, fact_id: i32) -> Result<(), KnowledgeError> {
         extract::reject_fact(self, fact_id).await
     }
+
+    // ------------------------------------------------------------------
+    // Category delegates
+    // ------------------------------------------------------------------
+
+    pub async fn list_categories(
+        &self,
+        parent_id: Option<i32>,
+    ) -> Result<Vec<models::category::Category>, KnowledgeError> {
+        queries::category::list_categories(&self.pool, parent_id).await
+    }
+
+    pub async fn get_category(
+        &self,
+        id: i32,
+    ) -> Result<Option<models::category::CategoryWithCount>, KnowledgeError> {
+        queries::category::get_category(&self.pool, id).await
+    }
+
+    pub async fn get_category_children(
+        &self,
+        parent_id: i32,
+    ) -> Result<Vec<models::category::Category>, KnowledgeError> {
+        queries::category::get_children(&self.pool, parent_id).await
+    }
+
+    pub async fn insert_category(
+        &self,
+        new_category: models::category::NewCategory,
+    ) -> Result<models::category::Category, KnowledgeError> {
+        queries::category::insert_category(&self.pool, &new_category, self.now()).await
+    }
+
+    pub async fn delete_category(&self, id: i32) -> Result<(), KnowledgeError> {
+        queries::category::delete_category(&self.pool, id).await
+    }
+
+    pub async fn get_categories_for_fact(
+        &self,
+        fact_id: i32,
+    ) -> Result<Vec<models::category::Category>, KnowledgeError> {
+        queries::category::get_categories_for_fact(&self.pool, fact_id).await
+    }
+
+    pub async fn get_facts_in_category(
+        &self,
+        category_id: i32,
+        limit: i64,
+    ) -> Result<Vec<models::category::FactWithCategories>, KnowledgeError> {
+        queries::category::get_facts_in_category(&self.pool, category_id, limit).await
+    }
+
+    pub async fn get_facts_matching_all_categories(
+        &self,
+        category_ids: &[i32],
+        limit: i64,
+    ) -> Result<Vec<models::category::FactWithCategories>, KnowledgeError> {
+        queries::category::get_facts_matching_all_categories(&self.pool, category_ids, limit).await
+    }
+
+    pub async fn get_facts_matching_any_categories(
+        &self,
+        category_ids: &[i32],
+        limit: i64,
+    ) -> Result<Vec<models::category::FactWithCategories>, KnowledgeError> {
+        queries::category::get_facts_matching_any_categories(&self.pool, category_ids, limit).await
+    }
+
+    pub async fn get_top_level_catalogue(
+        &self,
+    ) -> Result<Vec<models::category::Category>, KnowledgeError> {
+        queries::category::list_categories(&self.pool, None).await
+    }
 }
 
 // Re-export knowledge graph tools.
-pub use tools::{KgQueryTool, KgRelatedTool, KgSearchTool};
+pub use tools::{
+    KgExpandCatalogueTool, KgFactsInCatalogueTool, KgQueryTool, KgRelatedTool, KgSearchTool,
+};

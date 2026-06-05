@@ -1,3 +1,27 @@
+## [0.33.2] - 2026-06-05
+
+### Fixed
+
+- **Review fixes for PR #107**: addressed 10 CodeRabbit review findings across knowledge graph, server, and CLI.
+  - `extract.rs` prompt now includes sub-categories with indentation so the LLM can pick specific IDs.
+  - `lib.rs` fact insertion now validates category IDs before `INSERT OR IGNORE`, failing loudly on non-existent categories.
+  - `queries/category.rs` replaced magic `NOT IN (5, 6)` with bound `FactStatus::Superseded` / `Forgotten` parameters.
+  - `kg_expand_catalogue.rs` now queries real `fact_count` for each child category instead of hard-coding `0`.
+  - `integration_tests.rs` merge assertion tightened with `object_id` filter to avoid false positives.
+  - `error.rs` no longer leaks raw internal KG error strings in `500` HTTP responses.
+  - `lib.rs` (server) tool-registry tests now assert `expand_catalogue` and `get_facts_in_catalogue` are exported.
+  - `chat.rs` only fetches the catalogue DB when a new session or incognito turn starts, avoiding hot-path latency.
+  - `cli.rs` `category add` now exposes `--memory-weight` to match the server API.
+  - `kb.rs` JSON decode failures are no longer swallowed with `unwrap_or_default()`; they now surface as fatal CLI errors.
+
+## [0.33.1] - 2026-06-05
+
+### Fixed
+
+- **P2**: `get_facts_matching_all_categories` now deduplicates input category IDs before querying, preventing empty results when duplicate IDs are passed.
+- **P3**: Removed unused `client` variable in `mimir/src/kb.rs` (`handle_kb_category`).
+- **P3**: Simplified redundant closures in `mimir-server/src/routes/kb_categories.rs` (5 instances of `.map_err(|e| error::knowledge_error(e))?` → `.map_err(error::knowledge_error)?`).
+
 ## [0.32.2] - 2026-06-05
 
 ### Fixed
@@ -315,3 +339,30 @@
 ### Documentation
 
 - Added `docs/wiki/what-works-now.md`: comprehensive user-facing overview of all working features, current limitations, known bugs, and roadmap context.
+
+## [0.33.0] - 2026-06-05
+
+### Added
+
+- **Category taxonomy system** (Dewey Decimal-style):
+  - New `categories` table with hierarchical parent-child relationships.
+  - `fact_categories` junction table allowing facts to belong to multiple categories.
+  - Comprehensive seed taxonomy covering Identity (100), Food & Drink (200), Health (300), Relationships (400), Work (500), Home (600), Entertainment (700), Travel (800), and Schedule (900) with 2-3 levels of depth.
+  - New KG tools: `expand_catalogue` and `get_facts_in_catalogue` for LLM-driven category browsing and fact retrieval.
+  - System prompt injection of top-level catalogue so the LLM knows what knowledge domains exist.
+  - CLI commands: `mimir kb category list`, `show`, `add`, `delete`.
+  - Server routes: `GET /kb/categories`, `GET /kb/categories/{id}`, `POST /kb/categories`, `DELETE /kb/categories/{id}`.
+
+- **Extraction pipeline category assignment**:
+  - LLM suggests 1–3 category IDs per extracted fact via the `remember` tool.
+  - Rust validates all suggested IDs against the database before insertion.
+
+### Changed
+
+- **Renamed `predicates` → `relationship_types`** and `predicate_constraints` → `relationship_constraints` across the entire codebase (DB schema, models, queries, tools, inference rules, tests).
+- Updated all SQL queries, indexes, and foreign keys to use `relationship_type_id`.
+- Updated `MemoryManager` and system prompt integration to read from the knowledge graph catalogue.
+
+### Migration
+
+- Migration `031_category_taxonomy_and_rename_predicates.sql` performs the rename and seeds the full category taxonomy.

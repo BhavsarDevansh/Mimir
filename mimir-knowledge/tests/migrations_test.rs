@@ -45,8 +45,10 @@ async fn all_migrations_apply_cleanly() {
     assert!(names.contains(&"source_types".to_string()));
     assert!(names.contains(&"preference_categories".to_string()));
     assert!(names.contains(&"preference_source_types".to_string()));
-    assert!(names.contains(&"predicates".to_string()));
-    assert!(names.contains(&"predicate_constraints".to_string()));
+    assert!(names.contains(&"relationship_types".to_string()));
+    assert!(names.contains(&"relationship_constraints".to_string()));
+    assert!(names.contains(&"categories".to_string()));
+    assert!(names.contains(&"fact_categories".to_string()));
     assert!(names.contains(&"extraction_methods".to_string()));
     assert!(names.contains(&"change_types".to_string()));
     assert!(names.contains(&"changed_by_types".to_string()));
@@ -69,7 +71,7 @@ async fn lookup_tables_seeded_correctly() {
         ("SELECT COUNT(*) FROM source_types", 6),
         ("SELECT COUNT(*) FROM preference_categories", 7),
         ("SELECT COUNT(*) FROM preference_source_types", 3),
-        ("SELECT COUNT(*) FROM predicates", 12),
+        ("SELECT COUNT(*) FROM relationship_types", 12),
     ];
 
     for (query, expected) in queries {

@@ -8,7 +8,7 @@ use crate::models::audit_log::ChangedBy;
 use crate::models::fact::{Fact, FactStatus, NewFact};
 use crate::models::preference::{NewPreference, PreferenceCategory, UpsertPreferenceInput};
 
-pub(crate) const PREDICATE_REJECTED_ACTION: &str = "rejected_action";
+pub(crate) const RELATIONSHIP_TYPE_REJECTED_ACTION: &str = "rejected_action";
 const KEY_PREFIX: &str = "reject_";
 
 pub struct ThresholdRule;
@@ -35,12 +35,13 @@ impl ThresholdRule {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     ) -> Result<Option<crate::models::preference::UpsertPreferenceInput>, crate::KnowledgeError>
     {
-        let predicate_name = match kg.predicate_name(fact.predicate_id).await {
-            Some(name) => name,
-            None => return Ok(None),
-        };
+        let relationship_type_name =
+            match kg.relationship_type_name(fact.relationship_type_id).await {
+                Some(name) => name,
+                None => return Ok(None),
+            };
 
-        if predicate_name != PREDICATE_REJECTED_ACTION {
+        if relationship_type_name != RELATIONSHIP_TYPE_REJECTED_ACTION {
             return Ok(None);
         }
 
@@ -57,12 +58,12 @@ impl ThresholdRule {
 
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM facts \
-             WHERE subject_id = ? AND predicate_id = ? \
+             WHERE subject_id = ? AND relationship_type_id = ? \
                AND fact_status_id = ? \
                AND (object_id IS ?) AND (object_literal IS ?)",
         )
         .bind(fact.subject_id)
-        .bind(fact.predicate_id)
+        .bind(fact.relationship_type_id)
         .bind(FactStatus::Active as i16)
         .bind(fact.object_id)
         .bind(&fact.object_literal)
@@ -106,7 +107,7 @@ impl ThresholdRule {
 
         for (pref_id, source_fact_id) in prefs {
             let source: Option<Fact> = sqlx::query_as::<_, Fact>(
-                "SELECT id, subject_id, predicate_id, object_id, object_literal, \
+                "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
                  valid_from, valid_until, confidence, fact_status_id, inferred, \
                  inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
                  FROM facts WHERE id = ?",
@@ -131,12 +132,12 @@ impl ThresholdRule {
 
             let count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM facts \
-                 WHERE subject_id = ? AND predicate_id = ? \
+                 WHERE subject_id = ? AND relationship_type_id = ? \
                    AND fact_status_id = ? \
                    AND (object_id IS ?) AND (object_literal IS ?)",
             )
             .bind(source.subject_id)
-            .bind(source.predicate_id)
+            .bind(source.relationship_type_id)
             .bind(FactStatus::Active as i16)
             .bind(source.object_id)
             .bind(&source.object_literal)

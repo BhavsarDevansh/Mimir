@@ -12,7 +12,7 @@ use crate::models::audit_log::ChangeType;
 #[derive(Debug, Clone, Default)]
 pub struct AuditLogFilter {
     pub entity_name: Option<String>,
-    pub predicate_name: Option<String>,
+    pub relationship_type_name: Option<String>,
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
     pub change_type: Option<ChangeType>,
@@ -26,7 +26,7 @@ pub struct AuditLogRow {
     pub audit_id: i32,
     pub fact_id: i32,
     pub entity_name: Option<String>,
-    pub predicate_name: Option<String>,
+    pub relationship_type_name: Option<String>,
     pub change_type_name: String,
     pub changed_by_name: Option<String>,
     pub old_value: Option<String>,
@@ -45,7 +45,7 @@ pub async fn query_audit_log(
             fal.id AS audit_id, \
             fal.fact_id, \
             e.name AS entity_name, \
-            p.name AS predicate_name, \
+            rt.name AS relationship_type_name, \
             ct.name AS change_type_name, \
             cbt.name AS changed_by_name, \
             fal.old_value, \
@@ -55,7 +55,7 @@ pub async fn query_audit_log(
          FROM fact_audit_log fal \
          LEFT JOIN facts f ON f.id = fal.fact_id \
          LEFT JOIN entities e ON e.id = f.subject_id \
-         LEFT JOIN predicates p ON p.id = f.predicate_id \
+         LEFT JOIN relationship_types rt ON rt.id = f.relationship_type_id \
          JOIN change_types ct ON ct.id = fal.change_type_id \
          LEFT JOIN changed_by_types cbt ON cbt.id = fal.changed_by_id \
          WHERE 1=1",
@@ -65,8 +65,8 @@ pub async fn query_audit_log(
         builder.push(" AND e.name = ");
         builder.push_bind(name);
     }
-    if let Some(ref name) = filter.predicate_name {
-        builder.push(" AND p.name = ");
+    if let Some(ref name) = filter.relationship_type_name {
+        builder.push(" AND rt.name = ");
         builder.push_bind(name);
     }
     if let Some(from) = filter.from {

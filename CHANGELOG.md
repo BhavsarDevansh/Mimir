@@ -366,3 +366,19 @@
 ### Migration
 
 - Migration `031_category_taxonomy_and_rename_predicates.sql` performs the rename and seeds the full category taxonomy.
+
+## [0.34.0] - 2026-06-06
+
+### Added
+
+- **Issue #108**: Fact Ranking & Selection Engine (`mimir-knowledge`).
+  - Introduced `memory_priorities` lookup table (Critical, High, Normal, Low) and `memory_priority_id` on `facts`.
+  - Added `default_memory_priority_id` to `relationship_types` for automatic priority assignment at insertion.
+  - Implemented scoring formula: `confidence × category.memory_weight × temporal_boost × priority_boost × centrality_boost`.
+  - Temporal boost: `10.0 / sqrt(max(days, 0.5))` for future-dated facts (upcoming events, birthdays).
+  - Centrality boost: entity connection count with in-memory `HashMap` cache, incrementally updated on mutation.
+  - Budget fill algorithm: identity facts first (~200-char soft reservation), then greedy score-based fill to 2500-char limit.
+  - Structured buckets: `identity`, `relationships`, `preferences`, `upcoming`, `general`.
+  - Deterministic fallback renderer in Rust for when LLM condensation is unavailable.
+  - `system_state` read/write queries for cached `condensed_memory`.
+  - Unit and integration tests covering scoring, temporal boost, budget fill, renderer, and centrality cache.

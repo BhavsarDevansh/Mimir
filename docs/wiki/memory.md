@@ -1,80 +1,33 @@
-# Working Memory (memory.md)
 
-## What Is It?
+---
 
-`memory.md` is Mimir's **executive summary** — a small file (about one page) that Mimir reads at the start of every conversation. It contains the facts Mimir needs to know *immediately*: your name, where you are, what you're working on, and what you care about.
+## Phase 2 Update (2026-06-06)
 
-Think of it as the index card on Mimir's desk, not the whole library.
+Mimir is transitioning from a static `memory.md` file to a **dynamic, knowledge-graph-backed memory system**. Facts are now stored in SQLite and ranked on demand by a Rust scoring engine.
 
-## Where Does It Live?
+### How Memory Works Now
 
-```shell
-~/.config/mimir/memory.md
-```
+Instead of reading a text file, Mimir:
 
-If the file doesn't exist yet, Mimir creates it automatically with a friendly template.
+1. Queries the Knowledge Graph for facts about you
+2. Scores each fact using a weighted formula (confidence, category, recency, priority, centrality)
+3. Selects the top facts that fit within a 2500-character budget
+4. Renders them as concise plain text (or sends them to an LLM for condensation)
+5. Caches the result in `system_state` for instant retrieval
 
-## What's Inside?
+### What Affects Your Memory Ranking
 
-`memory.md` is entirely agent-managed — Mimir decides what to write, how to group it, and when to rewrite it. There are no rigid sections or prefixes.
+| Factor | What it means |
+|--------|---------------|
+| Confidence | How certain Mimir is (based on source quality and corroboration) |
+| Category | Identity facts (1.0) rank higher than hobbies (0.55) |
+| Temporal boost | Upcoming birthdays and appointments get a recency boost |
+| Priority | Critical facts (partner, allergies) get a 2× multiplier |
+| Centrality | Facts about well-connected entities (people you mention often) rank higher |
 
-The default template is a single placeholder line:
+### What This Means for You
 
-```markdown
-Mimir memory [0/2500]
-
-No memories yet.
-```
-
-As Mimir learns, it replaces the placeholder and adds compact, self-contained notes — one thought per line or bullet. Mimir groups related facts together, but the structure is organic, not prescribed.
-
-Example after learning about the user:
-
-```markdown
-Mimir memory [247/2500]
-
-Devansh, born [DD MMM YYYY].
-Lives in [CITY].
-Software Developer (C# Fullstack).
-Married to [WIFE]; her birthday [DD MM YYYY].
-```
-
-When something changes, Mimir uses `replace` on the exact existing note rather than appending a duplicate.
-
-## Size Limit
-
-Mimir keeps this file small on purpose: **2,500 characters maximum** (about 900 tokens). This makes every conversation fast and cheap.
-
-When memory gets full, Mimir can consolidate entries — for example, merging three separate facts about your computer into one concise line.
-
-## Can I Edit It?
-
-Yes! You can open `~/.config/mimir/memory.md` in any text editor and change it directly. Mimir will pick up your changes the next time a session starts.
-
-You can also ask Mimir to update it for you:
-
-> "Remember that I switched to Neovim."
-
-Mimir has a built-in `memory` tool that lets it add, replace, and remove entries in `memory.md` automatically. When you tell it something new, it will call the tool to persist the fact so future sessions remember it.
-
-## Frozen Snapshots
-
-During a conversation, Mimir loads `memory.md` **once** at the start and keeps that version for the whole chat. If Mimir updates the file mid-conversation, the change is saved to disk but won't appear until the next session.
-
-This keeps Mimir fast and consistent — it doesn't suddenly "forget" something partway through a conversation because the file changed.
-
-## Best Practices
-
-- **Keep it high-signal**: Only put things that affect *most* conversations.
-- **Update it regularly**: When you move, switch projects, or change preferences, make sure Mimir knows.
-- **Let Mimir manage it**: The agent is designed to add, replace, and remove entries automatically as it learns.
-- **Don't put secrets here**: The file is plain text on disk. Store sensitive data in the Knowledge Graph (Phase 2) with appropriate flags.
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| File is missing | Mimir creates it automatically on first run. |
-| Changes don't appear | Wait for the next session — snapshots are frozen mid-session. |
-| Too full | Ask Mimir to consolidate, or manually remove stale entries. |
-| Wrong information | Edit the file directly, or tell Mimir to replace the specific line. |
+- No need to manually edit `memory.md` — Mimir builds your memory automatically from conversations
+- The memory block is always current (regenerated when facts change)
+- You can still inspect what Mimir knows via `mimir memory` and `mimir kg query`
+- If you want a fact pinned or deprioritised, that will be supported in a future update

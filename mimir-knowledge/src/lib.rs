@@ -28,7 +28,7 @@ use crate::inference::rules::threshold::{RELATIONSHIP_TYPE_REJECTED_ACTION, Thre
 use crate::inference::rules::transitivity::TransitivityRule;
 use crate::inference::{CascadeContext, RuleEngine};
 use crate::models::enums::RelationType;
-use crate::models::fact::NewFact;
+use crate::models::fact::{FactStatus, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
 
 /// Errors that can occur during knowledge graph initialization or operation.
@@ -102,6 +102,7 @@ pub struct KnowledgeGraph {
     relationship_type_cache: Arc<RwLock<RelationshipTypeCache>>,
     rule_engine: RuleEngine,
     pending_confirmations: Arc<RwLock<HashSet<i32>>>,
+    centrality_cache: Arc<RwLock<HashMap<i32, f32>>>,
 }
 
 impl std::fmt::Debug for KnowledgeGraph {
@@ -148,6 +149,7 @@ impl KnowledgeGraph {
             pool,
             clock,
             relationship_type_cache: Arc::new(RwLock::new(RelationshipTypeCache::new())),
+            centrality_cache: Arc::new(RwLock::new(HashMap::new())),
             rule_engine: engine,
             pending_confirmations: Arc::new(RwLock::new(pending)),
         })
@@ -269,6 +271,107 @@ impl KnowledgeGraph {
     /// Current timestamp according to the configured clock.
     pub fn now(&self) -> chrono::DateTime<chrono::Utc> {
         self.clock.now()
+    }
+
+    // ------------------------------------------------------------------
+    // Centrality cache
+    // ------------------------------------------------------------------
+
+    /// Populate the centrality cache by scanning all facts in the graph.
+    /// Called once on first memory build; subsequent builds use cached values.
+    pub async fn populate_centrality_cache(&self) -> Result<(), KnowledgeError> {
+        let mut cache = self.centrality_cache.write().await;
+        let rows: Vec<(i32, i64)> = sqlx::query_as(
+            r#"SELECT entity_id, COUNT(*) FROM (
+                SELECT subject_id AS entity_id FROM facts WHERE fact_status_id NOT IN (?, ?)
+                UNION ALL
+                SELECT object_id AS entity_id FROM facts WHERE object_id IS NOT NULL AND fact_status_id NOT IN (?, ?)
+            )
+            GROUP BY entity_id"#,
+        )
+        .bind(FactStatus::Superseded as i16)
+        .bind(FactStatus::Forgotten as i16)
+        .bind(FactStatus::Superseded as i16)
+        .bind(FactStatus::Forgotten as i16)
+        .fetch_all(&self.pool)
+        .await?;
+
+        for (entity_id, count) in rows {
+            let boost = 1.0 + (count as f32).min(50.0) / 50.0;
+            cache.insert(entity_id, boost);
+        }
+
+        Ok(())
+    }
+
+    /// Increment centrality for an entity (used on fact insertion).
+    pub fn bump_centrality(&self, entity_id: i32) {
+        let cache = self.centrality_cache.clone();
+        tokio::spawn(async move {
+            let mut lock = cache.write().await;
+            let entry = lock.entry(entity_id).or_insert(1.0);
+            let count = ((*entry - 1.0) * 50.0 + 1.0).min(50.0);
+            *entry = 1.0 + count / 50.0;
+        });
+    }
+
+    /// Decrement centrality for an entity (used on fact forget).
+    pub fn drop_centrality(&self, entity_id: i32) {
+        let cache = self.centrality_cache.clone();
+        tokio::spawn(async move {
+            let mut lock = cache.write().await;
+            if let Some(entry) = lock.get_mut(&entity_id) {
+                let count = ((*entry - 1.0) * 50.0 - 1.0).max(0.0);
+                *entry = 1.0 + count / 50.0;
+                if *entry <= 1.0 {
+                    lock.remove(&entity_id);
+                }
+            }
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Memory API delegates
+    // ------------------------------------------------------------------
+
+    /// Build a ranked memory schema for the given subject.
+    pub async fn build_memory_schema(
+        &self,
+        subject_id: i32,
+        budget: usize,
+        min_confidence: f32,
+    ) -> Result<models::memory::MemorySchema, KnowledgeError> {
+        let cache = self.centrality_cache.read().await;
+        if cache.is_empty() {
+            drop(cache);
+            self.populate_centrality_cache().await?;
+        }
+        let cache = self.centrality_cache.read().await;
+        let schema = queries::memory::build_memory_schema(
+            &self.pool,
+            subject_id,
+            budget,
+            min_confidence,
+            self.now(),
+            &cache,
+        )
+        .await?;
+        Ok(schema)
+    }
+
+    /// Render a MemorySchema into deterministic plain text.
+    pub fn render_memory_schema(&self, schema: &models::memory::MemorySchema) -> String {
+        queries::memory::render_memory_schema(schema)
+    }
+
+    /// Read the cached condensed memory from system_state.
+    pub async fn get_condensed_memory(&self) -> Result<Option<String>, KnowledgeError> {
+        queries::system_state::get_system_state(&self.pool, "condensed_memory").await
+    }
+
+    /// Write condensed memory to system_state.
+    pub async fn set_condensed_memory(&self, text: &str) -> Result<(), KnowledgeError> {
+        queries::system_state::set_system_state(&self.pool, "condensed_memory", text).await
     }
 
     // ------------------------------------------------------------------
@@ -559,6 +662,10 @@ impl KnowledgeGraph {
                 }
             }
 
+            self.bump_centrality(fact.subject_id);
+            if let Some(oid) = fact.object_id {
+                self.bump_centrality(oid);
+            }
             Ok(fact)
         })
     }
@@ -631,6 +738,11 @@ impl KnowledgeGraph {
         id: i32,
         changed_by: models::audit_log::ChangedBy,
     ) -> Result<(), KnowledgeError> {
+        let fact = self.get_fact(id).await?.ok_or_else(|| KnowledgeError::FactNotFound(id))?;
+        self.drop_centrality(fact.subject_id);
+        if let Some(oid) = fact.object_id {
+            self.drop_centrality(oid);
+        }
         forget::forget_fact(&self.pool, id, changed_by, self.now()).await
     }
 
@@ -650,7 +762,12 @@ impl KnowledgeGraph {
         trash_id: i32,
         changed_by: models::audit_log::ChangedBy,
     ) -> Result<models::fact::Fact, KnowledgeError> {
-        queries::trash::restore_fact(&self.pool, trash_id, changed_by, self.now()).await
+        let restored = queries::trash::restore_fact(&self.pool, trash_id, changed_by, self.now()).await?;
+        self.bump_centrality(restored.subject_id);
+        if let Some(oid) = restored.object_id {
+            self.bump_centrality(oid);
+        }
+        Ok(restored)
     }
 
     /// Restore all facts from trash.

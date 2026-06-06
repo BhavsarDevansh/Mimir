@@ -9,3 +9,5 @@ pub mod search;
 pub mod source;
 pub mod trash;
 pub mod traverse;
+pub mod memory;
+pub mod system_state;

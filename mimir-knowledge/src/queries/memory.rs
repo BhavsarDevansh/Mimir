@@ -99,10 +99,14 @@ pub async fn build_memory_schema(
         // Centrality uses the subject entity's connection count.
         let centrality_boost = centrality_cache.get(&subject_id).copied().unwrap_or(1.0);
 
-        let score = raw.confidence * memory_weight * temporal_boost * priority_boost * centrality_boost;
+        let score =
+            raw.confidence * memory_weight * temporal_boost * priority_boost * centrality_boost;
 
-        let object_display = raw.object_name.unwrap_or_else(|| raw.object_literal.unwrap_or_default());
-        let char_estimate = estimate_chars(&raw.subject_name, &raw.relationship_type, &object_display);
+        let object_display = raw
+            .object_name
+            .unwrap_or_else(|| raw.object_literal.unwrap_or_default());
+        let char_estimate =
+            estimate_chars(&raw.subject_name, &raw.relationship_type, &object_display);
 
         let bucket = determine_bucket(&cat_ids);
 
@@ -124,7 +128,11 @@ pub async fn build_memory_schema(
     }
 
     // Sort by score descending
-    ranked.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Fill budget greedily: identity first, then by score.
     let mut schema = MemorySchema::new();
@@ -155,7 +163,11 @@ pub async fn build_memory_schema(
     remaining_budget = remaining_budget.saturating_sub(identity_used);
 
     // Phase 2: fill remaining budget by score across all non-identity buckets.
-    non_identity.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    non_identity.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for fact in non_identity {
         if fact.char_estimate <= remaining_budget {
@@ -221,18 +233,15 @@ pub fn determine_bucket(category_ids: &[i32]) -> MemoryBucket {
         } else if (400..=499).contains(&id) {
             has_relationships = true;
         } else if [
-            300, 301, 302, 303, 304, 305, 306, 307, 308, 309,
-            310, 311, 312, 313, 314, 315, 316, 317, 318, 319,
-            320, 321, 322, 323, 324, 325, 326, 327, 328, 329,
-            330, 331, 332, 333, 334, 335, 336, 337, 338, 339,
-            340, 341, 342, 343, 344, 345, 346, 347, 348, 349,
-            350, 351, 352, 353, 354, 355, 356, 357, 358, 359,
-            360, 361, 362, 363, 364, 365, 366, 367, 368, 369,
-            370, 371, 372, 373, 374, 375, 376, 377, 378, 379,
-            380, 381, 382, 383, 384, 385, 386, 387, 388, 389,
-            390, 391, 392, 393, 394, 395, 396, 397, 398, 399,
-            460, 480, 570, 670, 680, 690, 830, 870,
-        ].contains(&id)
+            300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316,
+            317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333,
+            334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348, 349, 350,
+            351, 352, 353, 354, 355, 356, 357, 358, 359, 360, 361, 362, 363, 364, 365, 366, 367,
+            368, 369, 370, 371, 372, 373, 374, 375, 376, 377, 378, 379, 380, 381, 382, 383, 384,
+            385, 386, 387, 388, 389, 390, 391, 392, 393, 394, 395, 396, 397, 398, 399, 460, 480,
+            570, 670, 680, 690, 830, 870,
+        ]
+        .contains(&id)
         {
             has_preferences = true;
         }
@@ -259,13 +268,11 @@ fn estimate_chars(subject: &str, relationship: &str, object: &str) -> usize {
 
 /// Truncate a fact to fit the remaining budget, appending `…`.
 fn truncate_fact(mut fact: RankedFact, budget: usize) -> RankedFact {
-    if budget <= 3 {
+    let max_obj = budget.saturating_sub(fact.subject_name.len() + fact.relationship_type.len() + 3);
+    if max_obj == 0 {
         fact.object_display = "…".to_string();
-    } else {
-        let max_obj = budget.saturating_sub(fact.subject_name.len() + fact.relationship_type.len() + 3);
-        if max_obj > 0 && fact.object_display.len() > max_obj {
-            fact.object_display = format!("{}…", &fact.object_display[..max_obj.saturating_sub(1)]);
-        }
+    } else if fact.object_display.len() > max_obj {
+        fact.object_display = format!("{}…", &fact.object_display[..max_obj.saturating_sub(1)]);
     }
     fact.char_estimate = budget;
     fact
@@ -317,7 +324,10 @@ fn render_bucket(out: &mut String, header: &str, facts: &[RankedFact]) {
 fn render_fact_line(fact: &RankedFact) -> String {
     let rel = &fact.relationship_type;
     match rel.as_str() {
-        "has_partner" => format!("{} is partnered with {}", fact.subject_name, fact.object_display),
+        "has_partner" => format!(
+            "{} is partnered with {}",
+            fact.subject_name, fact.object_display
+        ),
         "has_parent" => format!("{} has parent {}", fact.subject_name, fact.object_display),
         "born_on" => format!("{} was born on {}", fact.subject_name, fact.object_display),
         "died_on" => format!("{} died on {}", fact.subject_name, fact.object_display),
@@ -326,7 +336,10 @@ fn render_fact_line(fact: &RankedFact) -> String {
         "owns" => format!("{} owns {}", fact.subject_name, fact.object_display),
         "visited" => format!("{} visited {}", fact.subject_name, fact.object_display),
         "created_on" => format!("{} created on {}", fact.subject_name, fact.object_display),
-        "rejected_action" => format!("{} rejected action {}", fact.subject_name, fact.object_display),
+        "rejected_action" => format!(
+            "{} rejected action {}",
+            fact.subject_name, fact.object_display
+        ),
         _ => format!(
             "{} {} {}",
             fact.subject_name,
@@ -348,7 +361,11 @@ mod tests {
     fn temporal_boost_zero_days() {
         let now = Utc::now();
         let boost = compute_temporal_boost(Some(now + chrono::Duration::seconds(1)), now);
-        assert!((boost - 14.14).abs() < 0.01, "expected ~14.14, got {}", boost);
+        assert!(
+            (boost - 14.14).abs() < 0.01,
+            "expected ~14.14, got {}",
+            boost
+        );
     }
 
     #[test]

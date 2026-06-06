@@ -5,7 +5,7 @@ pub mod entity_date;
 pub mod entity_location;
 pub mod enums;
 pub mod fact;
+pub mod memory;
 pub mod preference;
 pub mod source;
 pub mod trash;
-pub mod memory;

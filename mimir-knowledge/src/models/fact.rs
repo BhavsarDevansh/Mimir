@@ -36,6 +36,7 @@ pub struct Fact {
     pub inferred: bool,
     pub inference_depth: i32,
     pub stale_confidence: bool,
+    pub memory_priority_id: i16,
     pub created_at: DateTime<Utc>,
     pub pending_confirmation: bool,
     pub updated_at: DateTime<Utc>,

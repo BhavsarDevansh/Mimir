@@ -738,12 +738,16 @@ impl KnowledgeGraph {
         id: i32,
         changed_by: models::audit_log::ChangedBy,
     ) -> Result<(), KnowledgeError> {
-        let fact = self.get_fact(id).await?.ok_or_else(|| KnowledgeError::FactNotFound(id))?;
+        let fact = self
+            .get_fact(id)
+            .await?
+            .ok_or_else(|| KnowledgeError::FactNotFound(id))?;
+        forget::forget_fact(&self.pool, id, changed_by, self.now()).await?;
         self.drop_centrality(fact.subject_id);
         if let Some(oid) = fact.object_id {
             self.drop_centrality(oid);
         }
-        forget::forget_fact(&self.pool, id, changed_by, self.now()).await
+        Ok(())
     }
 
     /// Bulk forget facts with filters and safeguards.
@@ -762,7 +766,8 @@ impl KnowledgeGraph {
         trash_id: i32,
         changed_by: models::audit_log::ChangedBy,
     ) -> Result<models::fact::Fact, KnowledgeError> {
-        let restored = queries::trash::restore_fact(&self.pool, trash_id, changed_by, self.now()).await?;
+        let restored =
+            queries::trash::restore_fact(&self.pool, trash_id, changed_by, self.now()).await?;
         self.bump_centrality(restored.subject_id);
         if let Some(oid) = restored.object_id {
             self.bump_centrality(oid);

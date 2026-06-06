@@ -1,4 +1,13 @@
 ## [0.33.2] - 2026-06-05
+## [0.34.1] - 2026-06-06
+
+### Fixed
+
+- **Review fixes for PR #108**: addressed 3 critical review findings in fact ranking engine.
+  - Wired up `memory_priority_id` from `relationship_types.default_memory_priority_id` during fact insertion (`queries/fact.rs`, `extract.rs`, `models/fact.rs`).
+  - Moved `drop_centrality` cache decrements to occur **after** `forget_fact` database transaction succeeds (`lib.rs`), preventing permanent cache drift on DB errors.
+  - Fixed `truncate_fact` budget edge case (`queries/memory.rs`) so that when remaining budget is smaller than `subject + relationship + 3` overhead, `object_display` is correctly truncated to `…` instead of silently exceeding the budget.
+
 
 ### Fixed
 

@@ -19,7 +19,10 @@ async fn memory_ranking_builds_schema_and_buckets_facts() {
         .unwrap();
 
     // Create the user entity.
-    let user = kg.create_entity("Devansh", EntityType::Person, &[]).await.unwrap();
+    let user = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
 
     // Insert an identity fact (category 150 = Identity & Biography).
     let mut identity = NewFact::new(user.id, "works_as");
@@ -59,19 +62,42 @@ async fn memory_ranking_builds_schema_and_buckets_facts() {
 
     // Identity should have at least the works_as fact.
     assert!(!schema.identity.is_empty(), "expected identity facts");
-    assert!(schema.identity.iter().any(|f| f.relationship_type == "works_as"));
+    assert!(
+        schema
+            .identity
+            .iter()
+            .any(|f| f.relationship_type == "works_as")
+    );
 
     // Relationships should have has_partner.
-    assert!(!schema.relationships.is_empty(), "expected relationship facts");
-    assert!(schema.relationships.iter().any(|f| f.relationship_type == "has_partner"));
+    assert!(
+        !schema.relationships.is_empty(),
+        "expected relationship facts"
+    );
+    assert!(
+        schema
+            .relationships
+            .iter()
+            .any(|f| f.relationship_type == "has_partner")
+    );
 
     // Preferences should have likes_food.
     assert!(!schema.preferences.is_empty(), "expected preference facts");
-    assert!(schema.preferences.iter().any(|f| f.relationship_type == "likes_food"));
+    assert!(
+        schema
+            .preferences
+            .iter()
+            .any(|f| f.relationship_type == "likes_food")
+    );
 
     // Upcoming should have has_appointment.
     assert!(!schema.upcoming.is_empty(), "expected upcoming facts");
-    assert!(schema.upcoming.iter().any(|f| f.relationship_type == "has_appointment"));
+    assert!(
+        schema
+            .upcoming
+            .iter()
+            .any(|f| f.relationship_type == "has_appointment")
+    );
 }
 
 #[tokio::test]
@@ -83,7 +109,10 @@ async fn memory_ranking_applies_temporal_boost() {
         .await
         .unwrap();
 
-    let user = kg.create_entity("Devansh", EntityType::Person, &[]).await.unwrap();
+    let user = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
 
     // Fact A: atemporal, higher confidence.
     let mut atemporal = NewFact::new(user.id, "works_as");
@@ -137,7 +166,10 @@ async fn memory_renderer_produces_plain_text() {
         .await
         .unwrap();
 
-    let user = kg.create_entity("Devansh", EntityType::Person, &[]).await.unwrap();
+    let user = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
 
     let mut fact = NewFact::new(user.id, "has_partner");
     fact.object_literal = Some("Alice".to_string());
@@ -169,7 +201,9 @@ async fn system_state_round_trip() {
 
     assert!(kg.get_condensed_memory().await.unwrap().is_none());
 
-    kg.set_condensed_memory("Devansh works as a developer.").await.unwrap();
+    kg.set_condensed_memory("Devansh works as a developer.")
+        .await
+        .unwrap();
     let val = kg.get_condensed_memory().await.unwrap();
     assert_eq!(val, Some("Devansh works as a developer.".to_string()));
 }
@@ -183,7 +217,10 @@ async fn centrality_cache_populates_on_first_build() {
         .await
         .unwrap();
 
-    let user = kg.create_entity("Devansh", EntityType::Person, &[]).await.unwrap();
+    let user = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
 
     // Insert multiple facts referencing the same user.
     for i in 0..10 {

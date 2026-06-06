@@ -5,7 +5,10 @@ use sqlx::SqlitePool;
 use crate::KnowledgeError;
 
 /// Read a value from system_state by key.
-pub async fn get_system_state(pool: &SqlitePool, key: &str) -> Result<Option<String>, KnowledgeError> {
+pub async fn get_system_state(
+    pool: &SqlitePool,
+    key: &str,
+) -> Result<Option<String>, KnowledgeError> {
     let value: Option<String> = sqlx::query_scalar("SELECT value FROM system_state WHERE key = ?")
         .bind(key)
         .fetch_optional(pool)

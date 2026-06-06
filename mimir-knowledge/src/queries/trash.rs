@@ -259,7 +259,7 @@ async fn restore_payload_no_deps(
 
     // Check temporal overlap.
     let overlaps: Vec<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, relationship_type_id, object_id, object_literal,          valid_from, valid_until, confidence, fact_status_id, inferred,          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at          FROM facts          WHERE subject_id = ? AND relationship_type_id = ?",
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal,          valid_from, valid_until, confidence, fact_status_id, inferred,          inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at          FROM facts          WHERE subject_id = ? AND relationship_type_id = ?",
     )
     .bind(fact.subject_id)
     .bind(fact.relationship_type_id)
@@ -288,7 +288,7 @@ async fn restore_payload_no_deps(
     let mut tx = pool.begin().await?;
 
     let new_fact_id: i64 = sqlx::query_scalar(
-        "INSERT INTO facts          (subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until,           confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation, created_at, updated_at)          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)          RETURNING id",
+        "INSERT INTO facts          (subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until,           confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at)          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)          RETURNING id",
     )
     .bind(fact.subject_id)
     .bind(fact.relationship_type_id)
@@ -302,6 +302,7 @@ async fn restore_payload_no_deps(
     .bind(fact.inference_depth)
     .bind(fact.stale_confidence)
     .bind(fact.pending_confirmation)
+    .bind(fact.memory_priority_id)
     .bind(fact.created_at)
     .bind(now)
     .fetch_one(&mut *tx)
@@ -342,7 +343,7 @@ async fn restore_payload_no_deps(
     tx.commit().await?;
 
     let restored: Fact = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, relationship_type_id, object_id, object_literal,          valid_from, valid_until, confidence, fact_status_id, inferred,          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at          FROM facts WHERE id = ?",
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal,          valid_from, valid_until, confidence, fact_status_id, inferred,          inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at          FROM facts WHERE id = ?",
     )
     .bind(new_fact_id)
     .fetch_one(pool)

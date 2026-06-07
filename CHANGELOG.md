@@ -1,4 +1,19 @@
 ## [0.33.2] - 2026-06-05
+
+## [0.34.2] - 2026-06-07
+
+### Fixed
+
+- **Addressed PR #113 review feedback** (CodeRabbit AI review round 2):
+  - Added serde default for `memory_priority_id` in `Fact` model to preserve legacy trash payload deserialization.
+  - Replaced magic priority ID fallback (`3`) with semantic SQL lookup against `memory_priorities` table.
+  - Fixed fire-and-forget centrality cache updates by making `bump_centrality` and `drop_centrality` async.
+  - Eliminated TOCTOU race in `build_memory_schema` cache population with a read-then-populate pattern.
+  - Replaced hardcoded category ID lists in `determine_bucket` with named constants.
+  - Fixed potential UTF-8 panic in `truncate_fact` with char-aware truncation.
+  - Reformatted SQL strings across `trash.rs` and `inference_tests.rs` for readability.
+  - Updated documentation version references and corrected incomplete sentences.
+
 ## [0.34.1] - 2026-06-06
 
 ### Fixed

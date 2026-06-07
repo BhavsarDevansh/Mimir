@@ -16,7 +16,11 @@ pub async fn list_trash(
     offset: i64,
 ) -> Result<Vec<TrashListItem>, KnowledgeError> {
     let rows: Vec<TrashEntry> = sqlx::query_as::<_, TrashEntry>(
-        "SELECT id, original_table, original_id, payload, deleted_at, expires_at, restored_at, restorer          FROM trash          WHERE restored_at IS NULL AND original_table = 'facts'          ORDER BY deleted_at DESC          LIMIT ? OFFSET ?",
+        "SELECT id, original_table, original_id, payload, deleted_at, expires_at, restored_at, restorer \
+         FROM trash \
+         WHERE restored_at IS NULL AND original_table = 'facts' \
+         ORDER BY deleted_at DESC \
+         LIMIT ? OFFSET ?",
     )
     .bind(limit)
     .bind(offset)
@@ -73,7 +77,9 @@ pub async fn restore_fact(
     now: DateTime<Utc>,
 ) -> Result<Fact, KnowledgeError> {
     let row: Option<TrashEntry> = sqlx::query_as::<_, TrashEntry>(
-        "SELECT id, original_table, original_id, payload, deleted_at, expires_at, restored_at, restorer          FROM trash WHERE id = ? AND restored_at IS NULL",
+        "SELECT id, original_table, original_id, payload, deleted_at, expires_at, restored_at, restorer \
+         FROM trash \
+         WHERE id = ? AND restored_at IS NULL",
     )
     .bind(trash_id)
     .fetch_optional(pool)
@@ -112,7 +118,9 @@ pub async fn restore_all(
     now: DateTime<Utc>,
 ) -> Result<Vec<Fact>, KnowledgeError> {
     let rows: Vec<TrashEntry> = sqlx::query_as::<_, TrashEntry>(
-        "SELECT id, original_table, original_id, payload, deleted_at, expires_at, restored_at, restorer          FROM trash WHERE restored_at IS NULL AND original_table = 'facts'",
+        "SELECT id, original_table, original_id, payload, deleted_at, expires_at, restored_at, restorer \
+         FROM trash \
+         WHERE restored_at IS NULL AND original_table = 'facts'",
     )
     .fetch_all(pool)
     .await?;
@@ -259,7 +267,11 @@ async fn restore_payload_no_deps(
 
     // Check temporal overlap.
     let overlaps: Vec<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, relationship_type_id, object_id, object_literal,          valid_from, valid_until, confidence, fact_status_id, inferred,          inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at          FROM facts          WHERE subject_id = ? AND relationship_type_id = ?",
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
+         valid_from, valid_until, confidence, fact_status_id, inferred, \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
+         FROM facts \
+         WHERE subject_id = ? AND relationship_type_id = ?",
     )
     .bind(fact.subject_id)
     .bind(fact.relationship_type_id)
@@ -288,7 +300,11 @@ async fn restore_payload_no_deps(
     let mut tx = pool.begin().await?;
 
     let new_fact_id: i64 = sqlx::query_scalar(
-        "INSERT INTO facts          (subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until,           confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at)          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)          RETURNING id",
+        "INSERT INTO facts \
+         (subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until, \
+          confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         RETURNING id",
     )
     .bind(fact.subject_id)
     .bind(fact.relationship_type_id)

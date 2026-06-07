@@ -21,6 +21,10 @@ pub enum FactStatus {
 
 const_assert!((FactStatus::Active as i16) != 0);
 
+fn default_memory_priority_id() -> i16 {
+    3 // Normal
+}
+
 /// A directed, temporal edge between entities (or a literal value).
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow, Serialize, Deserialize)]
 pub struct Fact {
@@ -36,6 +40,7 @@ pub struct Fact {
     pub inferred: bool,
     pub inference_depth: i32,
     pub stale_confidence: bool,
+    #[serde(default = "default_memory_priority_id")]
     pub memory_priority_id: i16,
     pub created_at: DateTime<Utc>,
     pub pending_confirmation: bool,

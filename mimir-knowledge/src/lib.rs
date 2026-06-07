@@ -305,29 +305,23 @@ impl KnowledgeGraph {
     }
 
     /// Increment centrality for an entity (used on fact insertion).
-    pub fn bump_centrality(&self, entity_id: i32) {
-        let cache = self.centrality_cache.clone();
-        tokio::spawn(async move {
-            let mut lock = cache.write().await;
-            let entry = lock.entry(entity_id).or_insert(1.0);
-            let count = ((*entry - 1.0) * 50.0 + 1.0).min(50.0);
-            *entry = 1.0 + count / 50.0;
-        });
+    pub async fn bump_centrality(&self, entity_id: i32) {
+        let mut lock = self.centrality_cache.write().await;
+        let entry = lock.entry(entity_id).or_insert(1.0);
+        let count = ((*entry - 1.0) * 50.0 + 1.0).min(50.0);
+        *entry = 1.0 + count / 50.0;
     }
 
     /// Decrement centrality for an entity (used on fact forget).
-    pub fn drop_centrality(&self, entity_id: i32) {
-        let cache = self.centrality_cache.clone();
-        tokio::spawn(async move {
-            let mut lock = cache.write().await;
-            if let Some(entry) = lock.get_mut(&entity_id) {
-                let count = ((*entry - 1.0) * 50.0 - 1.0).max(0.0);
-                *entry = 1.0 + count / 50.0;
-                if *entry <= 1.0 {
-                    lock.remove(&entity_id);
-                }
+    pub async fn drop_centrality(&self, entity_id: i32) {
+        let mut lock = self.centrality_cache.write().await;
+        if let Some(entry) = lock.get_mut(&entity_id) {
+            let count = ((*entry - 1.0) * 50.0 - 1.0).max(0.0);
+            *entry = 1.0 + count / 50.0;
+            if *entry <= 1.0 {
+                lock.remove(&entity_id);
             }
-        });
+        }
     }
 
     // ------------------------------------------------------------------
@@ -341,11 +335,24 @@ impl KnowledgeGraph {
         budget: usize,
         min_confidence: f32,
     ) -> Result<models::memory::MemorySchema, KnowledgeError> {
-        let cache = self.centrality_cache.read().await;
-        if cache.is_empty() {
-            drop(cache);
-            self.populate_centrality_cache().await?;
+        {
+            let cache = self.centrality_cache.read().await;
+            if !cache.is_empty() {
+                let schema = queries::memory::build_memory_schema(
+                    &self.pool,
+                    subject_id,
+                    budget,
+                    min_confidence,
+                    self.now(),
+                    &cache,
+                )
+                .await?;
+                return Ok(schema);
+            }
         }
+        // Cache is empty. populate_centrality_cache acquires its own write lock,
+        // so concurrent callers serialize safely; the race is benign.
+        self.populate_centrality_cache().await?;
         let cache = self.centrality_cache.read().await;
         let schema = queries::memory::build_memory_schema(
             &self.pool,
@@ -662,9 +669,9 @@ impl KnowledgeGraph {
                 }
             }
 
-            self.bump_centrality(fact.subject_id);
+            self.bump_centrality(fact.subject_id).await;
             if let Some(oid) = fact.object_id {
-                self.bump_centrality(oid);
+                self.bump_centrality(oid).await;
             }
             Ok(fact)
         })
@@ -743,9 +750,9 @@ impl KnowledgeGraph {
             .await?
             .ok_or_else(|| KnowledgeError::FactNotFound(id))?;
         forget::forget_fact(&self.pool, id, changed_by, self.now()).await?;
-        self.drop_centrality(fact.subject_id);
+        self.drop_centrality(fact.subject_id).await;
         if let Some(oid) = fact.object_id {
-            self.drop_centrality(oid);
+            self.drop_centrality(oid).await;
         }
         Ok(())
     }
@@ -768,9 +775,9 @@ impl KnowledgeGraph {
     ) -> Result<models::fact::Fact, KnowledgeError> {
         let restored =
             queries::trash::restore_fact(&self.pool, trash_id, changed_by, self.now()).await?;
-        self.bump_centrality(restored.subject_id);
+        self.bump_centrality(restored.subject_id).await;
         if let Some(oid) = restored.object_id {
-            self.bump_centrality(oid);
+            self.bump_centrality(oid).await;
         }
         Ok(restored)
     }

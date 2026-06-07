@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-06-04
-> **Version:** 0.33.2
-> **Phase:** Phase 1 (Core Agent) is complete. Phase 2 (Knowledge Graph) library code is complete. Issue #108 (Fact Ranking & Selection Engine) is implemented in . Daemon integration is pending. Forgetting system (bulk forget, restore, trash, full reset) implemented in `mimir-knowledge`.
+> **Last updated:** 2026-06-06
+> **Version:** 0.34.1
+> **Phase:** Phase 1 (Core Agent) is complete. Phase 2 (Knowledge Graph) library code is complete. Issue #108 (Fact Ranking & Selection Engine) is implemented in `mimir-knowledge`. Daemon integration is pending. Forgetting system (bulk forget, restore, trash, full reset) implemented in `mimir-knowledge`.
 
 ---
 

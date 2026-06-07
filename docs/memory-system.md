@@ -148,7 +148,7 @@ Mimir is migrating from file-based `memory.md` to a **knowledge-graph-backed ran
 
 ### Scoring Formula
 
-```
+```text
 score = confidence × category.memory_weight × temporal_boost × priority_boost × centrality_boost
 ```
 

@@ -246,7 +246,10 @@ pub async fn insert_fact_in_tx(
 
     // 2. Resolve memory priority from relationship type.
     let memory_priority_id: i16 = sqlx::query_scalar(
-        "SELECT COALESCE(default_memory_priority_id, 3) FROM relationship_types WHERE id = ?",
+        "SELECT COALESCE(r.default_memory_priority_id, p.id) \
+         FROM relationship_types r \
+         CROSS JOIN memory_priorities p \
+         WHERE r.id = ? AND p.name = 'Normal'",
     )
     .bind(relationship_type_id)
     .fetch_one(&mut **tx)

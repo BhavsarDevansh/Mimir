@@ -9,6 +9,23 @@ use crate::models::fact::FactStatus;
 use crate::models::memory::{MemoryBucket, MemoryPriority, MemorySchema, RankedFact};
 
 // ---------------------------------------------------------------------------
+// Bucket category ID constants
+// ---------------------------------------------------------------------------
+const IDENTITY_CATEGORY_RANGE: std::ops::RangeInclusive<i32> = 100..=199;
+const UPCOMING_CATEGORY_RANGE: std::ops::RangeInclusive<i32> = 900..=999;
+const RELATIONSHIP_CATEGORY_RANGE: std::ops::RangeInclusive<i32> = 400..=499;
+#[rustfmt::skip]
+const PREFERENCE_CATEGORY_IDS: &[i32] = &[
+    300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316,
+    317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333,
+    334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348, 349, 350,
+    351, 352, 353, 354, 355, 356, 357, 358, 359, 360, 361, 362, 363, 364, 365, 366, 367,
+    368, 369, 370, 371, 372, 373, 374, 375, 376, 377, 378, 379, 380, 381, 382, 383, 384,
+    385, 386, 387, 388, 389, 390, 391, 392, 393, 394, 395, 396, 397, 398, 399, 460, 480,
+    570, 670, 680, 690, 830, 870,
+];
+
+// ---------------------------------------------------------------------------
 // Raw row from the enriched fact query
 // ---------------------------------------------------------------------------
 
@@ -96,7 +113,8 @@ pub async fn build_memory_schema(
         };
         let priority_boost = priority.boost();
 
-        // Centrality uses the subject entity's connection count.
+        // Centrality reflects how connected the memory subject is in the graph.
+        // All facts in this schema share the same subject, so we use subject_id.
         let centrality_boost = centrality_cache.get(&subject_id).copied().unwrap_or(1.0);
 
         let score =
@@ -226,23 +244,13 @@ pub fn determine_bucket(category_ids: &[i32]) -> MemoryBucket {
     let mut has_preferences = false;
 
     for &id in category_ids {
-        if (100..=199).contains(&id) {
+        if IDENTITY_CATEGORY_RANGE.contains(&id) {
             has_identity = true;
-        } else if (900..=999).contains(&id) {
+        } else if UPCOMING_CATEGORY_RANGE.contains(&id) {
             has_upcoming = true;
-        } else if (400..=499).contains(&id) {
+        } else if RELATIONSHIP_CATEGORY_RANGE.contains(&id) {
             has_relationships = true;
-        } else if [
-            300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316,
-            317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333,
-            334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348, 349, 350,
-            351, 352, 353, 354, 355, 356, 357, 358, 359, 360, 361, 362, 363, 364, 365, 366, 367,
-            368, 369, 370, 371, 372, 373, 374, 375, 376, 377, 378, 379, 380, 381, 382, 383, 384,
-            385, 386, 387, 388, 389, 390, 391, 392, 393, 394, 395, 396, 397, 398, 399, 460, 480,
-            570, 670, 680, 690, 830, 870,
-        ]
-        .contains(&id)
-        {
+        } else if PREFERENCE_CATEGORY_IDS.contains(&id) {
             has_preferences = true;
         }
     }
@@ -267,12 +275,21 @@ fn estimate_chars(subject: &str, relationship: &str, object: &str) -> usize {
 }
 
 /// Truncate a fact to fit the remaining budget, appending `…`.
+/// Uses char-aware slicing to avoid panicking on multi-byte UTF-8 characters.
 fn truncate_fact(mut fact: RankedFact, budget: usize) -> RankedFact {
     let max_obj = budget.saturating_sub(fact.subject_name.len() + fact.relationship_type.len() + 3);
     if max_obj == 0 {
         fact.object_display = "…".to_string();
     } else if fact.object_display.len() > max_obj {
-        fact.object_display = format!("{}…", &fact.object_display[..max_obj.saturating_sub(1)]);
+        let limit = max_obj.saturating_sub(1);
+        let mut truncated = String::with_capacity(limit);
+        for ch in fact.object_display.chars() {
+            if truncated.len() + ch.len_utf8() > limit {
+                break;
+            }
+            truncated.push(ch);
+        }
+        fact.object_display = format!("{}…", truncated);
     }
     fact.char_estimate = budget;
     fact

@@ -256,7 +256,7 @@ pub(crate) async fn forget_fact_tx(
     now: DateTime<Utc>,
 ) -> Result<Vec<(i32, bool)>, KnowledgeError> {
     let fact: Option<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, relationship_type_id, object_id, object_literal,          valid_from, valid_until, confidence, fact_status_id, inferred,          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at          FROM facts WHERE id = ?",
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal,          valid_from, valid_until, confidence, fact_status_id, inferred,          inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
     .fetch_optional(&mut **tx)
@@ -402,7 +402,7 @@ pub(crate) async fn evaluate_children(
                 let mut tx = pool.begin().await?;
 
                 let old_child: Option<Fact> = sqlx::query_as::<_, Fact>(
-                    "SELECT id, subject_id, relationship_type_id, object_id, object_literal,                      valid_from, valid_until, confidence, fact_status_id, inferred,                      inference_depth, stale_confidence, pending_confirmation, created_at, updated_at                      FROM facts WHERE id = ?",
+                    "SELECT id, subject_id, relationship_type_id, object_id, object_literal,                      valid_from, valid_until, confidence, fact_status_id, inferred,                      inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at                      FROM facts WHERE id = ?",
                 )
                 .bind(child_id)
                 .fetch_optional(&mut *tx)
@@ -422,7 +422,7 @@ pub(crate) async fn evaluate_children(
                         .await?;
 
                     let updated_child: Fact = sqlx::query_as::<_, Fact>(
-                        "SELECT id, subject_id, relationship_type_id, object_id, object_literal,                          valid_from, valid_until, confidence, fact_status_id, inferred,                          inference_depth, stale_confidence, pending_confirmation, created_at, updated_at                          FROM facts WHERE id = ?",
+                        "SELECT id, subject_id, relationship_type_id, object_id, object_literal,                          valid_from, valid_until, confidence, fact_status_id, inferred,                          inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at                          FROM facts WHERE id = ?",
                     )
                     .bind(child_id)
                     .fetch_one(&mut *tx)

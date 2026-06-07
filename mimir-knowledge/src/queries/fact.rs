@@ -83,7 +83,7 @@ pub async fn insert_fact_in_tx(
     let existing: Vec<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts \
          WHERE subject_id = ? AND relationship_type_id = ?",
     )
@@ -132,7 +132,7 @@ pub async fn insert_fact_in_tx(
                     let updated: Fact = sqlx::query_as::<_, Fact>(
                         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
                          valid_from, valid_until, confidence, fact_status_id, inferred, \
-                         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+                         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
                          FROM facts WHERE id = ?",
                     )
                     .bind(existing_fact.id)
@@ -172,7 +172,7 @@ pub async fn insert_fact_in_tx(
                     let updated: Fact = sqlx::query_as::<_, Fact>(
                         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
                          valid_from, valid_until, confidence, fact_status_id, inferred, \
-                         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+                         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
                          FROM facts WHERE id = ?",
                     )
                     .bind(existing_fact.id)
@@ -244,12 +244,23 @@ pub async fn insert_fact_in_tx(
         }
     }
 
-    // 2. Insert the fact.
+    // 2. Resolve memory priority from relationship type.
+    let memory_priority_id: i16 = sqlx::query_scalar(
+        "SELECT COALESCE(r.default_memory_priority_id, p.id) \
+         FROM relationship_types r \
+         CROSS JOIN memory_priorities p \
+         WHERE r.id = ? AND p.name = 'Normal'",
+    )
+    .bind(relationship_type_id)
+    .fetch_one(&mut **tx)
+    .await?;
+
+    // 3. Insert the fact.
     let fact_id: i64 = sqlx::query_scalar(
         "INSERT INTO facts \
          (subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until, \
-          confidence, fact_status_id, inferred, inference_depth, pending_confirmation, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+          confidence, fact_status_id, inferred, inference_depth, pending_confirmation, memory_priority_id, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id",
     )
     .bind(new_fact.subject_id)
@@ -263,6 +274,7 @@ pub async fn insert_fact_in_tx(
     .bind(new_fact.inferred)
     .bind(new_fact.inference_depth)
     .bind(false)
+    .bind(memory_priority_id)
     .bind(now)
     .bind(now)
     .fetch_one(&mut **tx)
@@ -270,13 +282,13 @@ pub async fn insert_fact_in_tx(
 
     let fact_id = fact_id as i32;
 
-    // 3. Resolve extraction method.
+    // 4. Resolve extraction method.
     let extraction_method_id = new_fact
         .extraction_method
         .map(|e| e as i16)
         .or_else(|| default_extraction_method(new_fact.source_type));
 
-    // 4. Insert the source row.
+    // 5. Insert the source row.
     let connector_type_id = new_fact.connector_type.map(|ct| ct as i16);
     sqlx::query(
         "INSERT INTO sources \
@@ -293,7 +305,7 @@ pub async fn insert_fact_in_tx(
     .execute(&mut **tx)
     .await?;
 
-    // 5. Write created audit entry (column-only snapshot).
+    // 6. Write created audit entry (column-only snapshot).
     let new_value = serde_json::json!({
         "fact_id": fact_id,
         "confidence": confidence,
@@ -360,11 +372,11 @@ pub async fn insert_fact_in_tx(
         .await?;
     }
 
-    // 8. Return the inserted fact.
+    // 9. Return the inserted fact.
     let fact = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
@@ -383,7 +395,7 @@ pub async fn get_by_id(pool: &SqlitePool, fact_id: i32) -> Result<Option<Fact>, 
     let fact: Option<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
@@ -402,7 +414,7 @@ pub async fn get_by_subject(
     let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts WHERE subject_id = ? ORDER BY id ASC LIMIT ?",
     )
     .bind(subject_id)
@@ -422,7 +434,7 @@ pub async fn get_by_predicate(
     let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts WHERE relationship_type_id = ? ORDER BY id ASC LIMIT ?",
     )
     .bind(relationship_type_id)
@@ -442,7 +454,7 @@ pub async fn get_by_object(
     let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts WHERE object_id = ? ORDER BY id ASC LIMIT ?",
     )
     .bind(object_id)
@@ -463,7 +475,7 @@ pub async fn get_active_facts_at(
     let facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts \
          WHERE subject_id = ? AND relationship_type_id = ? \
            AND fact_status_id = ? \
@@ -499,7 +511,7 @@ pub async fn update_valid_until(
     let old: Option<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
@@ -529,7 +541,7 @@ pub async fn update_valid_until(
     let updated: Fact = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
@@ -580,7 +592,7 @@ pub async fn set_status_tx(
     let old: Option<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
@@ -600,7 +612,7 @@ pub async fn set_status_tx(
     let updated: Fact = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)

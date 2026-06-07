@@ -139,3 +139,67 @@ The underlying `MemoryManager` is created on the first tool execution. This allo
 - **LLM-driven consolidation**: The Reasoning Engine (Phase 4) will decide what to merge/evict.
 - **Hot-reload watch**: `notify` crate integration to detect external user edits.
 - **Obsidian sync**: Import/export with YAML frontmatter (Phase 2).
+
+---
+
+## Phase 2: Knowledge Graph Ranking Engine (Issue #108)
+
+Mimir is migrating from file-based `memory.md` to a **knowledge-graph-backed ranking engine** inside `mimir-knowledge`. Facts are selected and scored in Rust, then rendered on demand.
+
+### Scoring Formula
+
+```text
+score = confidence × category.memory_weight × temporal_boost × priority_boost × centrality_boost
+```
+
+| Term | Source | Range |
+|------|--------|-------|
+| `confidence` | `facts.confidence` (structural) | 0.0–1.0 |
+| `category.memory_weight` | `categories` table | 0.50–1.00 |
+| `temporal_boost` | Future `valid_from` / entity dates | 1.0–14.14 |
+| `priority_boost` | `memory_priority_id` on facts | 0.5–2.0 |
+| `centrality_boost` | Entity connection count (in-memory cache) | 1.0–2.0 |
+
+### Memory Priority Tiers
+
+| Tier | Boost | Typical facts |
+|------|-------|---------------|
+| Critical | 2.0 | Partner, severe allergies, core identity |
+| High | 1.5 | Job, home, team support |
+| Normal | 1.0 | Visited places, possessions |
+| Low | 0.5 | Casual food likes, passing mentions |
+
+Defaults are assigned per relationship type at insertion time and can be overridden by audit jobs or user action.
+
+### Budget Fill Algorithm
+
+1. Pull facts ≥ `min_confidence` (default 0.7) for the subject.
+2. Identity facts (categories 100–199) go first, with a soft ~200-char reservation.
+3. Sort remaining by score descending.
+4. Greedily fill the 2500-char budget.
+5. Truncate the last entry with `…` if it exceeds remaining space.
+
+### Structured Buckets
+
+Facts are bucketed into:
+- `identity` — categories 100–199
+- `upcoming` — categories 900–999
+- `relationships` — categories 400–499
+- `preferences` — food, social, work, travel preferences
+- `general` — everything else
+
+### Deterministic Fallback Renderer
+
+When LLM condensation (Issue #109) is unavailable or fails, the Rust renderer produces plain text:
+- Identity facts rendered first, no header
+- Other buckets prefixed with readable headers
+- Common relationship types get human-readable templates
+- Unknown types fall back to `{subject} {relationship} {object}`
+
+### Centrality Cache
+
+Entity connection counts are cached in an in-memory `HashMap` inside `KnowledgeGraph`. Populated once on first memory build, incrementally updated on fact insertion/forget/restore. No global DB scans in steady state.
+
+### Condensed Memory Storage
+
+The final rendered text is stored in `system_state` (`key = 'condensed_memory'`). `mimir memory` reads instantly — no computation on every call.

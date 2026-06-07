@@ -50,7 +50,7 @@ impl ContradictionRule {
             let fact_a: Option<Fact> = sqlx::query_as::<_, Fact>(
                 "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
                  valid_from, valid_until, confidence, fact_status_id, inferred, \
-                 inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+                 inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
                  FROM facts WHERE id = ?",
             )
             .bind(id_a)
@@ -60,7 +60,7 @@ impl ContradictionRule {
             let fact_b: Option<Fact> = sqlx::query_as::<_, Fact>(
                 "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
                  valid_from, valid_until, confidence, fact_status_id, inferred, \
-                 inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+                 inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
                  FROM facts WHERE id = ?",
             )
             .bind(id_b)

@@ -1,5 +1,29 @@
 ## [0.33.2] - 2026-06-05
 
+## [0.34.2] - 2026-06-07
+
+### Fixed
+
+- **Addressed PR #113 review feedback** (CodeRabbit AI review round 2):
+  - Added serde default for `memory_priority_id` in `Fact` model to preserve legacy trash payload deserialization.
+  - Replaced magic priority ID fallback (`3`) with semantic SQL lookup against `memory_priorities` table.
+  - Fixed fire-and-forget centrality cache updates by making `bump_centrality` and `drop_centrality` async.
+  - Eliminated TOCTOU race in `build_memory_schema` cache population with a read-then-populate pattern.
+  - Replaced hardcoded category ID lists in `determine_bucket` with named constants.
+  - Fixed potential UTF-8 panic in `truncate_fact` with char-aware truncation.
+  - Reformatted SQL strings across `trash.rs` and `inference_tests.rs` for readability.
+  - Updated documentation version references and corrected incomplete sentences.
+
+## [0.34.1] - 2026-06-06
+
+### Fixed
+
+- **Review fixes for PR #108**: addressed 3 critical review findings in fact ranking engine.
+  - Wired up `memory_priority_id` from `relationship_types.default_memory_priority_id` during fact insertion (`queries/fact.rs`, `extract.rs`, `models/fact.rs`).
+  - Moved `drop_centrality` cache decrements to occur **after** `forget_fact` database transaction succeeds (`lib.rs`), preventing permanent cache drift on DB errors.
+  - Fixed `truncate_fact` budget edge case (`queries/memory.rs`) so that when remaining budget is smaller than `subject + relationship + 3` overhead, `object_display` is correctly truncated to `…` instead of silently exceeding the budget.
+
+
 ### Fixed
 
 - **Review fixes for PR #107**: addressed 10 CodeRabbit review findings across knowledge graph, server, and CLI.
@@ -366,3 +390,19 @@
 ### Migration
 
 - Migration `031_category_taxonomy_and_rename_predicates.sql` performs the rename and seeds the full category taxonomy.
+
+## [0.34.0] - 2026-06-06
+
+### Added
+
+- **Issue #108**: Fact Ranking & Selection Engine (`mimir-knowledge`).
+  - Introduced `memory_priorities` lookup table (Critical, High, Normal, Low) and `memory_priority_id` on `facts`.
+  - Added `default_memory_priority_id` to `relationship_types` for automatic priority assignment at insertion.
+  - Implemented scoring formula: `confidence × category.memory_weight × temporal_boost × priority_boost × centrality_boost`.
+  - Temporal boost: `10.0 / sqrt(max(days, 0.5))` for future-dated facts (upcoming events, birthdays).
+  - Centrality boost: entity connection count with in-memory `HashMap` cache, incrementally updated on mutation.
+  - Budget fill algorithm: identity facts first (~200-char soft reservation), then greedy score-based fill to 2500-char limit.
+  - Structured buckets: `identity`, `relationships`, `preferences`, `upcoming`, `general`.
+  - Deterministic fallback renderer in Rust for when LLM condensation is unavailable.
+  - `system_state` read/write queries for cached `condensed_memory`.
+  - Unit and integration tests covering scoring, temporal boost, budget fill, renderer, and centrality cache.

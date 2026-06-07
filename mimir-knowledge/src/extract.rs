@@ -305,7 +305,7 @@ async fn find_active_overlapping(
     let rows: Vec<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts \
          WHERE subject_id = ? AND relationship_type_id = ? AND fact_status_id = ?",
     )
@@ -408,11 +408,21 @@ async fn insert_sensitive_fact(
     let mut tx = kg.pool().begin().await?;
 
     // Insert with Disputed status and pending_confirmation=TRUE in a single atomic operation.
+    let memory_priority_id: i16 = sqlx::query_scalar(
+        "SELECT COALESCE(r.default_memory_priority_id, p.id) \
+         FROM relationship_types r \
+         CROSS JOIN memory_priorities p \
+         WHERE r.id = ? AND p.name = 'Normal'",
+    )
+    .bind(relationship_type_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
     let fact_id: i64 = sqlx::query_scalar(
         "INSERT INTO facts \
          (subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until, \
-          confidence, fact_status_id, inferred, inference_depth, pending_confirmation, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+          confidence, fact_status_id, inferred, inference_depth, pending_confirmation, memory_priority_id, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id",
     )
     .bind(new_fact.subject_id)
@@ -426,6 +436,7 @@ async fn insert_sensitive_fact(
     .bind(new_fact.inferred)
     .bind(new_fact.inference_depth)
     .bind(true) // pending_confirmation
+    .bind(memory_priority_id)
     .bind(now)
     .bind(now)
     .fetch_one(&mut *tx)
@@ -481,7 +492,7 @@ async fn insert_sensitive_fact(
     let fact: Fact = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
@@ -748,7 +759,7 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
     let old: Option<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
@@ -783,7 +794,7 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
     let updated: Fact = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)
@@ -850,7 +861,7 @@ pub async fn reject_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<(), Knowle
     let old: Option<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
          FROM facts WHERE id = ?",
     )
     .bind(fact_id)

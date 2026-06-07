@@ -472,7 +472,7 @@ async fn cascade_forget_orphan() {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at",
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at",
     )
     .bind(alice)
     .bind(2i16)
@@ -572,7 +572,7 @@ async fn cascade_forget_survives() {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at",
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at",
     )
     .bind(alice)
     .bind(2i16)
@@ -1145,7 +1145,7 @@ async fn forget_cascade_status_change_writes_audit_log() {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, created_at, updated_at",
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at",
     )
     .bind(alice)
     .bind(2i16)
@@ -1296,7 +1296,7 @@ async fn explicit_replaces_inferred() {
 
     // Inferred fact.
     let old_fact: mimir_knowledge::models::fact::Fact = sqlx::query_as(
-        "INSERT INTO facts (subject_id, relationship_type_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until, confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation, created_at, updated_at",
+        "INSERT INTO facts (subject_id, relationship_type_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until, confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at",
     )
     .bind(alice)
     .bind(1i16)

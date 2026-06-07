@@ -28,7 +28,8 @@ Mimir is built in **Rust** with a modular, local-first architecture:
 
 - **Core Agent** — CLI, chat interface, LLM orchestration, tool calling, skills, personality system, and working memory
 - **HTTP Server** — Axum-based daemon with SSE streaming, session management, and graceful shutdown
-- **Storage Layer** — SQLite for conversation history, skill metrics, and configuration
+- **Storage Layer** — SQLite for conversation history, skill metrics, configuration, and the knowledge graph
+- **Knowledge Graph** — Live memory condensation, entity/fact storage, temporal reasoning, and event-driven regeneration
 
 ## Installation
 
@@ -49,8 +50,11 @@ mimir chat
 # Check daemon status and configuration
 mimir status
 
-# View and edit working memory
+# View the live condensed memory block
 mimir memory
+
+# Force memory condensation immediately
+mimir memory --refresh
 
 # Query the knowledge graph audit log
 mimir kb audit --entity "Alice" --change-type status_change
@@ -69,7 +73,9 @@ Mimir auto-initialises its config directory on first run. The main config file l
 
 You can override settings with environment variables (e.g. `MIMIR_BASE_URL`, `MIMIR_MEMORY_PATH`).
 
-Run `mimir init` for a guided first-run setup including optional systemd user service installation.
+Run `mimir init` for a guided first-run setup including identity configuration and optional systemd user service installation.
+
+> **Note:** The legacy `memory.md` file is deprecated. Memory is now served live from the knowledge graph.
 
 ## Documentation
 

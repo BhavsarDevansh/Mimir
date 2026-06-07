@@ -48,9 +48,31 @@ async fn resolve_chat_state(
     ),
     axum::response::Response,
 > {
-    let memory = tokio::fs::read_to_string(&state.memory_path)
+    let condensed = state
+        .knowledge_graph
+        .get_condensed_memory()
         .await
+        .unwrap_or(None)
         .unwrap_or_default();
+    let upcoming = if let Some(uid) = state.user_entity_id {
+        state
+            .knowledge_graph
+            .render_upcoming_section(uid, 30, 10)
+            .await
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let memory = if upcoming.is_empty() {
+        condensed
+    } else {
+        format!(
+            "{}
+
+{}",
+            condensed, upcoming
+        )
+    };
 
     let incognito = req.incognito == Some(true);
 

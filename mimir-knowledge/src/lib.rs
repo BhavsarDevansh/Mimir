@@ -4,6 +4,7 @@
 //! and full-text search via SQLite FTS5.
 
 pub mod clock;
+pub mod condensation;
 pub mod confidence;
 pub mod db;
 pub mod extract;
@@ -21,6 +22,7 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::RwLock;
 
 use crate::inference::rules::contradiction::ContradictionRule;
@@ -103,6 +105,7 @@ pub struct KnowledgeGraph {
     rule_engine: RuleEngine,
     pending_confirmations: Arc<RwLock<HashSet<i32>>>,
     centrality_cache: Arc<RwLock<HashMap<i32, f32>>>,
+    condensation_dirty: AtomicBool,
 }
 
 impl std::fmt::Debug for KnowledgeGraph {
@@ -152,6 +155,7 @@ impl KnowledgeGraph {
             centrality_cache: Arc::new(RwLock::new(HashMap::new())),
             rule_engine: engine,
             pending_confirmations: Arc::new(RwLock::new(pending)),
+            condensation_dirty: AtomicBool::new(false),
         })
     }
 
@@ -273,6 +277,24 @@ impl KnowledgeGraph {
         self.clock.now()
     }
 
+    /// Read whether condensation needs to run.
+    pub fn condensation_dirty(&self) -> bool {
+        self.condensation_dirty
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Mark condensation as dirty (call after any fact mutation).
+    pub fn set_condensation_dirty(&self) {
+        self.condensation_dirty
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Clear the condensation dirty flag.
+    pub fn clear_condensation_dirty(&self) {
+        self.condensation_dirty
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
     // ------------------------------------------------------------------
     // Centrality cache
     // ------------------------------------------------------------------
@@ -335,32 +357,49 @@ impl KnowledgeGraph {
         budget: usize,
         min_confidence: f32,
     ) -> Result<models::memory::MemorySchema, KnowledgeError> {
+        self.build_memory_schema_with_opts(
+            subject_id,
+            budget,
+            min_confidence,
+            queries::memory::BuildMemoryOptions::default(),
+        )
+        .await
+    }
+
+    /// Build a ranked memory schema with filtering options.
+    pub async fn build_memory_schema_with_opts(
+        &self,
+        subject_id: i32,
+        budget: usize,
+        min_confidence: f32,
+        opts: queries::memory::BuildMemoryOptions,
+    ) -> Result<models::memory::MemorySchema, KnowledgeError> {
         {
             let cache = self.centrality_cache.read().await;
             if !cache.is_empty() {
-                let schema = queries::memory::build_memory_schema(
+                let schema = queries::memory::build_memory_schema_with_opts(
                     &self.pool,
                     subject_id,
                     budget,
                     min_confidence,
                     self.now(),
                     &cache,
+                    opts,
                 )
                 .await?;
                 return Ok(schema);
             }
         }
-        // Cache is empty. populate_centrality_cache acquires its own write lock,
-        // so concurrent callers serialize safely; the race is benign.
         self.populate_centrality_cache().await?;
         let cache = self.centrality_cache.read().await;
-        let schema = queries::memory::build_memory_schema(
+        let schema = queries::memory::build_memory_schema_with_opts(
             &self.pool,
             subject_id,
             budget,
             min_confidence,
             self.now(),
             &cache,
+            opts,
         )
         .await?;
         Ok(schema)
@@ -369,6 +408,23 @@ impl KnowledgeGraph {
     /// Render a MemorySchema into deterministic plain text.
     pub fn render_memory_schema(&self, schema: &models::memory::MemorySchema) -> String {
         queries::memory::render_memory_schema(schema)
+    }
+
+    /// Render the upcoming events section for a subject entity.
+    pub async fn render_upcoming_section(
+        &self,
+        subject_id: i32,
+        days_ahead: i64,
+        limit: usize,
+    ) -> Result<String, KnowledgeError> {
+        queries::memory::render_upcoming_section(
+            &self.pool,
+            subject_id,
+            self.now(),
+            days_ahead,
+            limit,
+        )
+        .await
     }
 
     /// Read the cached condensed memory from system_state.
@@ -673,6 +729,7 @@ impl KnowledgeGraph {
             if let Some(oid) = fact.object_id {
                 self.bump_centrality(oid).await;
             }
+            self.set_condensation_dirty();
             Ok(fact)
         })
     }
@@ -726,7 +783,11 @@ impl KnowledgeGraph {
         valid_until: Option<chrono::DateTime<chrono::Utc>>,
         changed_by: models::audit_log::ChangedBy,
     ) -> Result<models::fact::Fact, KnowledgeError> {
-        queries::fact::update_valid_until(&self.pool, id, valid_until, self.now(), changed_by).await
+        let fact =
+            queries::fact::update_valid_until(&self.pool, id, valid_until, self.now(), changed_by)
+                .await?;
+        self.set_condensation_dirty();
+        Ok(fact)
     }
 
     /// Update a fact's lifecycle status.
@@ -736,7 +797,10 @@ impl KnowledgeGraph {
         status: models::fact::FactStatus,
         changed_by: models::audit_log::ChangedBy,
     ) -> Result<models::fact::Fact, KnowledgeError> {
-        queries::fact::set_status(&self.pool, id, status, self.now(), changed_by).await
+        let fact =
+            queries::fact::set_status(&self.pool, id, status, self.now(), changed_by).await?;
+        self.set_condensation_dirty();
+        Ok(fact)
     }
 
     /// Soft-delete a fact to trash, cascading to inferred children.
@@ -754,6 +818,7 @@ impl KnowledgeGraph {
         if let Some(oid) = fact.object_id {
             self.drop_centrality(oid).await;
         }
+        self.set_condensation_dirty();
         Ok(())
     }
 
@@ -764,7 +829,10 @@ impl KnowledgeGraph {
         opts: forget::ForgetOptions,
         changed_by: models::audit_log::ChangedBy,
     ) -> Result<forget::ForgetResult, KnowledgeError> {
-        forget::forget_facts(&self.pool, filters, opts, changed_by, self.now()).await
+        let result =
+            forget::forget_facts(&self.pool, filters, opts, changed_by, self.now()).await?;
+        self.set_condensation_dirty();
+        Ok(result)
     }
 
     /// Restore a single fact from trash.
@@ -779,6 +847,7 @@ impl KnowledgeGraph {
         if let Some(oid) = restored.object_id {
             self.bump_centrality(oid).await;
         }
+        self.set_condensation_dirty();
         Ok(restored)
     }
 
@@ -787,7 +856,9 @@ impl KnowledgeGraph {
         &self,
         changed_by: models::audit_log::ChangedBy,
     ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
-        queries::trash::restore_all(&self.pool, changed_by, self.now()).await
+        let restored = queries::trash::restore_all(&self.pool, changed_by, self.now()).await?;
+        self.set_condensation_dirty();
+        Ok(restored)
     }
 
     /// List trash contents.

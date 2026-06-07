@@ -100,13 +100,30 @@ impl MimirClient {
         }
     }
 
-    /// Return the current contents of `memory.md`.
+    /// Return the current contents of the live memory block.
     pub async fn memory(&self) -> Result<String, ClientError> {
         let url = format!("{}/memory", self.base_url);
         let resp = self.client.get(&url).send().await?;
         let status = resp.status();
         if status.is_success() {
             let body = resp.text().await?;
+            Ok(body)
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
+    /// Trigger memory condensation immediately.
+    pub async fn memory_refresh(&self) -> Result<OptimizationRunNowResponse, ClientError> {
+        let url = format!("{}/memory/refresh", self.base_url);
+        let resp = self.client.post(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.json::<OptimizationRunNowResponse>().await?;
             Ok(body)
         } else {
             let text = resp.text().await.unwrap_or_default();

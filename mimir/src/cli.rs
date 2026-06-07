@@ -60,8 +60,13 @@ pub enum Commands {
     Chat,
     /// Display system status and connectivity.
     Status,
-    /// Print the contents of memory.md.
-    Memory,
+    /// Print the live condensed memory block.
+    #[command(arg_required_else_help = false)]
+    Memory {
+        /// Trigger condensation immediately.
+        #[arg(long)]
+        refresh: bool,
+    },
 }
 
 #[derive(Subcommand)]

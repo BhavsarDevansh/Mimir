@@ -92,6 +92,9 @@ impl Tool for MemoryTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError> {
+        tracing::warn!(
+            "MemoryTool writing to memory.md is deprecated; facts should be inserted into the knowledge graph instead."
+        );
         let action = args
             .get("action")
             .and_then(|v| v.as_str())

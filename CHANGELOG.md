@@ -1,3 +1,26 @@
+# Changelog
+
+## [0.35.0] — 2026-06-07
+
+### Added
+- **Live Memory System (Issue #109)** — Replaced static `memory.md` with an event-driven, knowledge-graph-backed memory block.
+  - Stable facts are condensed by the LLM and cached in `system_state.condensed_memory`.
+  - Upcoming events (entity dates + temporal facts) are rendered fresh on every request.
+  - Regeneration triggers: fact mutations, explicit `mimir memory --refresh`, and nightly optimization completion.
+  - Pure formatting LLM prompt with deterministic fallback on failure or oversized output.
+  - Sensitive facts are excluded from the LLM condensation pipeline.
+- **Identity configuration** — `mimir init` now prompts for full name and preferred name, stored in `[identity]` config section.
+- **User entity auto-resolution** — Daemon resolves the user entity from config at startup, creating it in the KG if missing.
+
+### Changed
+- `/memory` HTTP route now returns the live condensed memory block instead of `memory.md`.
+- Chat system prompt now injects the live memory block from the knowledge graph.
+- `build_memory_schema` supports `exclude_buckets` and `exclude_sensitive` options.
+- `OptimizationRunner` now supports an `on_complete` callback for post-optimization hooks.
+
+### Deprecated
+- `memory.md` file-based memory is deprecated. `MemoryTool` writes are now logged as warnings.
+
 ## [0.33.2] - 2026-06-05
 
 ## [0.34.2] - 2026-06-07

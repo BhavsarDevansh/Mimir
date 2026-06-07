@@ -24,8 +24,8 @@ use mimir_core::llm::{LlmBackend, LlmClient};
 use crate::routes::{
     chat_handler, chat_stream_handler, create_category, delete_category,
     kb_optimization_run_now_handler, kb_optimization_status_handler, list_categories,
-    memory_handler, session_messages_handler, sessions_handler, show_category, status_handler,
-    stop_handler,
+    memory_handler, memory_refresh_handler, session_messages_handler, sessions_handler,
+    show_category, status_handler, stop_handler,
 };
 use crate::state::AppState;
 
@@ -70,6 +70,10 @@ pub fn build_app(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/status", get(status_handler))
         .route("/memory", get(memory_handler))
+        .route(
+            "/memory/refresh",
+            post(memory_refresh_handler).layer(from_fn(require_loopback)),
+        )
         .route("/sessions", get(sessions_handler))
         .route("/sessions/{id}/messages", get(session_messages_handler))
         .route("/chat", post(chat_handler))
@@ -386,6 +390,8 @@ mod tests {
             tool_registry: Arc::new(tool_registry),
             knowledge_graph,
             job_queue,
+            user_entity_id: None,
+            condensation_queued: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_user_activity,
         });
 
@@ -835,9 +841,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_memory_returns_content() {
+    async fn test_memory_returns_condensed_content() {
         let mock = Arc::new(MockLlmClient::builder().build());
         let (state, _temp) = test_state(mock).await;
+
+        // Seed condensed memory in the knowledge graph
+        state
+            .knowledge_graph
+            .set_condensed_memory("Test memory content from KG.")
+            .await
+            .unwrap();
+
         let app = super::build_app(state);
 
         let response = app
@@ -855,7 +869,7 @@ mod tests {
             .await
             .unwrap();
         let text = String::from_utf8(body_bytes.to_vec()).unwrap();
-        assert!(text.contains("Test memory content"));
+        assert!(text.contains("Test memory content from KG."));
     }
 
     #[tokio::test]

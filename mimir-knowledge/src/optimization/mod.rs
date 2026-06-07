@@ -140,6 +140,22 @@ impl<'a> OptimizationRunner<'a> {
         self.run_all_with_yield(|| false).await
     }
 
+    /// Execute the pipeline with an async callback invoked on successful completion.
+    pub async fn run_all_with_callback<F, C, CFut>(
+        &self,
+        mut should_yield: F,
+        on_complete: C,
+    ) -> Result<Vec<PassSummary>, crate::KnowledgeError>
+    where
+        F: FnMut() -> bool,
+        C: FnOnce() -> CFut,
+        CFut: std::future::Future<Output = ()> + Send,
+    {
+        let result = self.run_all_with_yield(&mut should_yield).await?;
+        on_complete().await;
+        Ok(result)
+    }
+
     /// Execute the configured nightly pipeline, yielding between passes when
     /// `should_yield` returns `true`.
     /// Execute the configured nightly pipeline, yielding between passes when

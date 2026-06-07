@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 use chrono::Utc;
@@ -47,6 +47,10 @@ pub struct AppState {
     /// Unix timestamp (seconds) of the last user interaction. Used to yield
     /// system jobs when the user is active.
     pub last_user_activity: Arc<AtomicU64>,
+    /// Cached user entity ID in the knowledge graph (resolved at startup).
+    pub user_entity_id: Option<i32>,
+    /// Whether the memory condensation job is already queued.
+    pub condensation_queued: Arc<AtomicBool>,
 }
 
 const MODEL_OVERRIDE_CACHE_CAP: usize = 16;
@@ -104,6 +108,48 @@ impl AppState {
         let kg_db_path = mimir_core::paths::knowledge_db_path()?;
         let knowledge_graph = Arc::new(mimir_knowledge::KnowledgeGraph::init(&kg_db_path).await?);
 
+        // Resolve user entity from config identity.
+        let user_entity_id = if cfg.identity.name.trim().is_empty() {
+            tracing::warn!(
+                "identity.name is empty; skipping user entity resolution. memory condensation will not run."
+            );
+            None
+        } else {
+            match knowledge_graph.search_entities(&cfg.identity.name, 1).await {
+                Ok(mut results) if !results.is_empty() => {
+                    tracing::info!(
+                        "Resolved user entity: {} (id={})",
+                        results[0].entity.name,
+                        results[0].entity.id
+                    );
+                    Some(results.remove(0).entity.id)
+                }
+                _ => {
+                    tracing::info!(
+                        "User entity '{}' not found; creating as User type",
+                        cfg.identity.name
+                    );
+                    match knowledge_graph
+                        .create_entity(
+                            &cfg.identity.name,
+                            mimir_knowledge::models::entity::EntityType::Person,
+                            &[],
+                        )
+                        .await
+                    {
+                        Ok(entity) => Some(entity.id),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to create user entity: {}; condensation disabled",
+                                e
+                            );
+                            None
+                        }
+                    }
+                }
+            }
+        };
+
         // Register knowledge graph tools.
         if let Err(e) = tool_registry.register_native(Arc::new(mimir_knowledge::KgQueryTool::new(
             Arc::clone(&knowledge_graph),
@@ -146,6 +192,7 @@ impl AppState {
         let schedule =
             mimir_core::job_queue::DailySchedule::parse(&cfg.knowledge.optimization.schedule_time)?;
 
+        let jq_for_opt = Arc::clone(&job_queue);
         let opt_job = Job::new(
             "knowledge.optimization",
             JobPriority::System,
@@ -155,6 +202,7 @@ impl AppState {
                 let kg = Arc::clone(&kg_for_job);
                 let llm = Arc::clone(&llm_for_job);
                 let activity = Arc::clone(&activity_for_job);
+                let jq = Arc::clone(&jq_for_opt);
                 let backup_dir = backup_dir.clone();
                 let timeout = timeout_minutes;
                 let schedule_time = schedule_time.clone();
@@ -171,14 +219,24 @@ impl AppState {
                     );
                     let five_minutes = chrono::Duration::minutes(5);
                     runner
-                        .run_all_with_yield(|| {
-                            let last = chrono::DateTime::from_timestamp(
-                                activity.load(Ordering::Relaxed) as i64,
-                                0,
-                            )
-                            .unwrap_or_else(|| Utc::now() - chrono::Duration::days(1));
-                            Utc::now() - last < five_minutes
-                        })
+                        .run_all_with_callback(
+                            || {
+                                let last = chrono::DateTime::from_timestamp(
+                                    activity.load(Ordering::Relaxed) as i64,
+                                    0,
+                                )
+                                .unwrap_or_else(|| Utc::now() - chrono::Duration::days(1));
+                                Utc::now() - last < five_minutes
+                            },
+                            || async move {
+                                if let Err(e) = jq.run_now("memory.condensation").await {
+                                    tracing::warn!(
+                                        "Failed to trigger post-optimization condensation: {}",
+                                        e
+                                    );
+                                }
+                            },
+                        )
                         .await
                         .map_err(|e| mimir_core::job_queue::JobError::Handler(e.to_string()))?;
                     Ok(())
@@ -186,6 +244,43 @@ impl AppState {
             },
         );
         job_queue.register(opt_job).await?;
+
+        // Register memory condensation job.
+        let condensation_queued = Arc::new(AtomicBool::new(false));
+        let cond_queued_for_job = Arc::clone(&condensation_queued);
+        let kg_for_cond = Arc::clone(&knowledge_graph);
+        let llm_for_cond = Arc::clone(&llm_client);
+        let user_id_for_cond = user_entity_id;
+        let char_limit = cfg.memory.char_limit as usize;
+
+        let cond_job = Job::new(
+            "memory.condensation",
+            JobPriority::System,
+            None,
+            true,
+            move |_ctx: JobContext| {
+                let kg = Arc::clone(&kg_for_cond);
+                let llm = Arc::clone(&llm_for_cond);
+                let queued = Arc::clone(&cond_queued_for_job);
+                let uid = user_id_for_cond;
+                let limit = char_limit;
+                Box::pin(async move {
+                    queued.store(false, Ordering::Relaxed);
+                    if let Some(subject_id) = uid {
+                        let condenser = mimir_knowledge::condensation::MemoryCondenser::new(
+                            kg, llm, subject_id, limit,
+                        );
+                        if let Err(e) = condenser.run().await {
+                            tracing::warn!("memory.condensation job failed: {}", e);
+                        }
+                    } else {
+                        tracing::debug!("memory.condensation: no user entity configured; skipping");
+                    }
+                    Ok(())
+                })
+            },
+        );
+        job_queue.register(cond_job).await?;
 
         Ok(Self {
             llm_client,
@@ -202,6 +297,8 @@ impl AppState {
             knowledge_graph,
             job_queue,
             last_user_activity,
+            user_entity_id,
+            condensation_queued,
         })
     }
 

@@ -85,72 +85,21 @@ pub async fn build_memory_schema_with_opts(
     centrality_cache: &HashMap<i32, f32>,
     opts: BuildMemoryOptions,
 ) -> Result<MemorySchema, KnowledgeError> {
-    let rows: Vec<RawRankedFact> = if opts.exclude_sensitive {
-        sqlx::query_as(
-            "SELECT \
-                f.id AS fact_id, \
-                s.name AS subject_name, \
-                rt.name AS relationship_type, \
-                COALESCE(o.name, f.object_literal) AS object_name, \
-                f.object_literal, \
-                f.confidence, \
-                f.valid_from, \
-                GROUP_CONCAT(fc.category_id) AS category_ids, \
-                MAX(c.memory_weight) AS memory_weight, \
-                f.memory_priority_id \
-             FROM facts f \
-             JOIN entities s ON s.id = f.subject_id \
-             JOIN relationship_types rt ON rt.id = f.relationship_type_id \
-             LEFT JOIN entities o ON o.id = f.object_id \
-             LEFT JOIN fact_categories fc ON fc.fact_id = f.id \
-             LEFT JOIN categories c ON c.id = fc.category_id \
-             WHERE f.subject_id = ? \
-               AND f.pending_confirmation = 0 \
-               AND f.fact_status_id NOT IN (?, ?) \
-               AND f.confidence >= ? \
-               AND rt.sensitive = FALSE \
-             GROUP BY f.id \
-             ORDER BY f.confidence DESC",
-        )
+    let mut sql = String::from(
+        "SELECT f.id AS fact_id, s.name AS subject_name, rt.name AS relationship_type, COALESCE(o.name, f.object_literal) AS object_name, f.object_literal, f.confidence, f.valid_from, GROUP_CONCAT(fc.category_id) AS category_ids, MAX(c.memory_weight) AS memory_weight, f.memory_priority_id FROM facts f JOIN entities s ON s.id = f.subject_id JOIN relationship_types rt ON rt.id = f.relationship_type_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN fact_categories fc ON fc.fact_id = f.id LEFT JOIN categories c ON c.id = fc.category_id WHERE f.subject_id = ? AND f.pending_confirmation = 0 AND f.fact_status_id NOT IN (?, ?) AND f.confidence >= ?",
+    );
+    if opts.exclude_sensitive {
+        sql.push_str(" AND rt.sensitive = FALSE");
+    }
+    sql.push_str(" GROUP BY f.id ORDER BY f.confidence DESC");
+
+    let rows: Vec<RawRankedFact> = sqlx::query_as::<_, RawRankedFact>(sqlx::AssertSqlSafe(&*sql))
         .bind(subject_id)
         .bind(FactStatus::Superseded as i16)
         .bind(FactStatus::Forgotten as i16)
         .bind(min_confidence)
         .fetch_all(pool)
-        .await?
-    } else {
-        sqlx::query_as(
-            "SELECT \
-                f.id AS fact_id, \
-                s.name AS subject_name, \
-                rt.name AS relationship_type, \
-                COALESCE(o.name, f.object_literal) AS object_name, \
-                f.object_literal, \
-                f.confidence, \
-                f.valid_from, \
-                GROUP_CONCAT(fc.category_id) AS category_ids, \
-                MAX(c.memory_weight) AS memory_weight, \
-                f.memory_priority_id \
-             FROM facts f \
-             JOIN entities s ON s.id = f.subject_id \
-             JOIN relationship_types rt ON rt.id = f.relationship_type_id \
-             LEFT JOIN entities o ON o.id = f.object_id \
-             LEFT JOIN fact_categories fc ON fc.fact_id = f.id \
-             LEFT JOIN categories c ON c.id = fc.category_id \
-             WHERE f.subject_id = ? \
-               AND f.pending_confirmation = 0 \
-               AND f.fact_status_id NOT IN (?, ?) \
-               AND f.confidence >= ? \
-             GROUP BY f.id \
-             ORDER BY f.confidence DESC",
-        )
-        .bind(subject_id)
-        .bind(FactStatus::Superseded as i16)
-        .bind(FactStatus::Forgotten as i16)
-        .bind(min_confidence)
-        .fetch_all(pool)
-        .await?
-    };
+        .await?;
 
     let mut ranked: Vec<RankedFact> = Vec::with_capacity(rows.len());
 
@@ -267,7 +216,7 @@ pub async fn build_memory_schema_with_opts(
                 _ => schema.general.push(truncated),
             }
             remaining_budget = 0;
-            break;
+            continue;
         } else if !consumes_budget {
             // Excluded from budget: always include, never count against budget
             match fact.bucket {
@@ -460,14 +409,8 @@ pub async fn render_upcoming_section(
     let mut items: Vec<(DateTime<Utc>, String)> = Vec::new();
 
     for date in dates {
-        let recurrence = match date.recurrence_type_id {
-            1 => RecurrenceType::None,
-            2 => RecurrenceType::Daily,
-            3 => RecurrenceType::Weekly,
-            4 => RecurrenceType::Monthly,
-            5 => RecurrenceType::Yearly,
-            _ => RecurrenceType::None,
-        };
+        let recurrence =
+            RecurrenceType::try_from(date.recurrence_type_id).unwrap_or(RecurrenceType::None);
         if let Some(next) = next_occurrence(&date.date_value, recurrence, now) {
             let label = date.custom_label.as_deref().unwrap_or("Event");
             let days = (next - now).num_days();

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use chrono::Utc;
@@ -49,8 +49,6 @@ pub struct AppState {
     pub last_user_activity: Arc<AtomicU64>,
     /// Cached user entity ID in the knowledge graph (resolved at startup).
     pub user_entity_id: Option<i32>,
-    /// Whether the memory condensation job is already queued.
-    pub condensation_queued: Arc<AtomicBool>,
 }
 
 const MODEL_OVERRIDE_CACHE_CAP: usize = 16;
@@ -246,8 +244,6 @@ impl AppState {
         job_queue.register(opt_job).await?;
 
         // Register memory condensation job.
-        let condensation_queued = Arc::new(AtomicBool::new(false));
-        let cond_queued_for_job = Arc::clone(&condensation_queued);
         let kg_for_cond = Arc::clone(&knowledge_graph);
         let llm_for_cond = Arc::clone(&llm_client);
         let user_id_for_cond = user_entity_id;
@@ -261,11 +257,9 @@ impl AppState {
             move |_ctx: JobContext| {
                 let kg = Arc::clone(&kg_for_cond);
                 let llm = Arc::clone(&llm_for_cond);
-                let queued = Arc::clone(&cond_queued_for_job);
                 let uid = user_id_for_cond;
                 let limit = char_limit;
                 Box::pin(async move {
-                    queued.store(false, Ordering::Relaxed);
                     if let Some(subject_id) = uid {
                         let condenser = mimir_knowledge::condensation::MemoryCondenser::new(
                             kg, llm, subject_id, limit,
@@ -298,7 +292,6 @@ impl AppState {
             job_queue,
             last_user_activity,
             user_entity_id,
-            condensation_queued,
         })
     }
 

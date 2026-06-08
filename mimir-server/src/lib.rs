@@ -164,6 +164,31 @@ pub async fn start_server_with_llm_and_listener(
     let state = Arc::new(AppState::from_config_with_llm(Arc::clone(&config), llm_client).await?);
     let shutdown_rx = state.shutdown_tx.subscribe();
 
+    // ---- Auto-trigger memory condensation when dirty ----
+    {
+        let kg = Arc::clone(&state.knowledge_graph);
+        let jq = Arc::clone(&state.job_queue);
+        let mut shutdown_rx = state.shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx.changed() => break,
+                    _ = interval.tick() => {
+                        if kg.condensation_dirty() {
+                            if let Err(e) = jq.run_now("memory.condensation").await {
+                                if !e.is_already_running() {
+                                    tracing::warn!("Auto-trigger memory condensation failed: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     // ---- File watcher for config hot-reload ----
     let config_path = config.path().to_path_buf();
     if let Some(parent) = config_path.parent().map(|p| p.to_path_buf()) {
@@ -391,7 +416,6 @@ mod tests {
             knowledge_graph,
             job_queue,
             user_entity_id: None,
-            condensation_queued: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_user_activity,
         });
 

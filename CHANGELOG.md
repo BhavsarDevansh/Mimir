@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.35.1] — 2026-06-08
+
+### Fixed
+- Addressed PR #114 review feedback:
+  - Status endpoint now reads live condensed memory and upcoming section from the knowledge graph instead of the deprecated `memory.md` file.
+  - `condensation_dirty` flag now automatically triggers the memory condensation job via a background watcher in the daemon.
+  - Removed unused `whoami` dependency from `mimir-core`.
+  - Removed dead `condensation_queued` field from `AppState`.
+  - Centralised `recurrence_type_id` to `RecurrenceType` mapping via `TryFrom<i16>` in the enums module.
+  - Chat system prompt builder now logs warnings when knowledge graph memory queries fail.
+  - DRYed the SQL query in `build_memory_schema_with_opts` by constructing it once with a conditional predicate.
+  - Fixed budget truncation loop so facts in `exclude_from_budget` buckets are still collected after the character budget is exhausted.
+
 ## [0.35.0] — 2026-06-07
 
 ### Added
@@ -119,6 +132,19 @@
 - `cascade_inner` in `confidence.rs` future is now `Send`-safe.
 
 # Changelog
+
+## [0.35.1] — 2026-06-08
+
+### Fixed
+- Addressed PR #114 review feedback:
+  - Status endpoint now reads live condensed memory and upcoming section from the knowledge graph instead of the deprecated `memory.md` file.
+  - `condensation_dirty` flag now automatically triggers the memory condensation job via a background watcher in the daemon.
+  - Removed unused `whoami` dependency from `mimir-core`.
+  - Removed dead `condensation_queued` field from `AppState`.
+  - Centralised `recurrence_type_id` to `RecurrenceType` mapping via `TryFrom<i16>` in the enums module.
+  - Chat system prompt builder now logs warnings when knowledge graph memory queries fail.
+  - DRYed the SQL query in `build_memory_schema_with_opts` by constructing it once with a conditional predicate.
+  - Fixed budget truncation loop so facts in `exclude_from_budget` buckets are still collected after the character budget is exhausted.
 
 ## [0.31.1] - 2026-06-04
 

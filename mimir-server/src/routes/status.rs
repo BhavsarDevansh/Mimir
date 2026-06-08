@@ -21,17 +21,38 @@ pub async fn status_handler(State(state): State<Arc<AppState>>) -> Json<StatusRe
         Err(_) => (false, None),
     };
 
-    let memory_exists = tokio::fs::try_exists(&state.memory_path)
-        .await
-        .unwrap_or(false);
-    let memory_chars = if memory_exists {
-        match tokio::fs::read_to_string(&state.memory_path).await {
-            Ok(content) => content.chars().count(),
-            Err(_) => 0,
+    let condensed = match state.knowledge_graph.get_condensed_memory().await {
+        Ok(Some(text)) => text,
+        Ok(None) => String::new(),
+        Err(e) => {
+            tracing::warn!("Failed to read condensed memory for status: {}", e);
+            String::new()
+        }
+    };
+    let upcoming = if let Some(uid) = state.user_entity_id {
+        match state
+            .knowledge_graph
+            .render_upcoming_section(uid, 30, 10)
+            .await
+        {
+            Ok(text) => text,
+            Err(e) => {
+                tracing::warn!("Failed to render upcoming section for status: {}", e);
+                String::new()
+            }
         }
     } else {
-        0
+        String::new()
     };
+
+    let memory_text = if upcoming.is_empty() {
+        condensed
+    } else {
+        format!("{}\n\n{}", condensed, upcoming)
+    };
+
+    let memory_chars = memory_text.chars().count();
+    let memory_exists = !memory_text.is_empty();
 
     let cfg = state.config.snapshot().await;
     let memory_limit = cfg.memory.char_limit as usize;

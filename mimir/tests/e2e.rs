@@ -16,11 +16,9 @@ fn e2e_ask_no_stream_round_trip() {
     std::fs::create_dir_all(&home_dir).unwrap();
 
     // Ensure the in-process server uses the temp directories.
-    unsafe {
-        std::env::set_var("XDG_CONFIG_HOME", config_dir.to_str().unwrap());
-        std::env::set_var("XDG_DATA_HOME", data_dir.to_str().unwrap());
-        std::env::set_var("HOME", home_dir.to_str().unwrap());
-    }
+    std::env::set_var("XDG_CONFIG_HOME", config_dir.to_str().unwrap());
+    std::env::set_var("XDG_DATA_HOME", data_dir.to_str().unwrap());
+    std::env::set_var("HOME", home_dir.to_str().unwrap());
 
     let db_path = data_dir.join("mimir").join("context.db");
 

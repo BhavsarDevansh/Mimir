@@ -29,9 +29,25 @@ pub async fn handle_init() {
                     .unwrap_or_else(|_| whoami::username());
 
                 let mut cfg = Config::load(Some(&config_file)).unwrap_or_default();
+                let resolved_name = {
+                    let t = name.trim();
+                    if t.is_empty() {
+                        whoami::realname()
+                    } else {
+                        t.to_string()
+                    }
+                };
+                let resolved_preferred = {
+                    let t = preferred.trim();
+                    if t.is_empty() {
+                        whoami::username()
+                    } else {
+                        t.to_string()
+                    }
+                };
                 cfg.identity = IdentityConfig {
-                    name: name.trim().to_string(),
-                    preferred_name: preferred.trim().to_string(),
+                    name: resolved_name,
+                    preferred_name: resolved_preferred,
                 };
                 if let Err(e) = cfg.save(&config_file) {
                     eprintln!("Warning: failed to save identity to config: {}", e);

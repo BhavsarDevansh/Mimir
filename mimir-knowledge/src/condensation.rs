@@ -91,13 +91,11 @@ impl MemoryCondenser {
             }
             Ok(text) => {
                 tracing::warn!(
-                    "memory.condensation: LLM output exceeded limit ({} > {} chars); truncating",
+                    "memory.condensation: LLM output exceeded limit ({} > {} chars); using deterministic fallback",
                     text.chars().count(),
                     self.char_limit
                 );
-                let mut truncated: String = text.chars().take(self.char_limit - 1).collect();
-                truncated.push('…');
-                truncated
+                deterministic
             }
             Err(e) => {
                 tracing::warn!(

@@ -426,7 +426,7 @@ pub async fn render_upcoming_section(
                 format!(
                     "- {}: {} ({}, {})",
                     label,
-                    date.date_value,
+                    next.date_naive(),
                     next.format("%d %B"),
                     when
                 ),

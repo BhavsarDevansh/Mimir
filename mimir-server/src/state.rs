@@ -122,7 +122,7 @@ impl AppState {
                     );
                     Some(results.remove(0).entity.id)
                 }
-                _ => {
+                Ok(_) => {
                     tracing::info!(
                         "User entity '{}' not found; creating as User type",
                         cfg.identity.name
@@ -144,6 +144,14 @@ impl AppState {
                             None
                         }
                     }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to resolve user entity '{}': {}; condensation disabled",
+                        cfg.identity.name,
+                        e
+                    );
+                    None
                 }
             }
         };
@@ -264,9 +272,10 @@ impl AppState {
                         let condenser = mimir_knowledge::condensation::MemoryCondenser::new(
                             kg, llm, subject_id, limit,
                         );
-                        if let Err(e) = condenser.run().await {
-                            tracing::warn!("memory.condensation job failed: {}", e);
-                        }
+                        condenser
+                            .run()
+                            .await
+                            .map_err(|e| mimir_core::job_queue::JobError::Handler(e.to_string()))?;
                     } else {
                         tracing::debug!("memory.condensation: no user entity configured; skipping");
                     }

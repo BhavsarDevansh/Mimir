@@ -6,8 +6,13 @@ pub async fn handle_memory(base_url: &str, refresh: bool) {
     if refresh {
         match client.memory_refresh().await {
             Ok(resp) => {
-                println!("Memory condensation triggered.");
                 println!("Run ID: {}, Status: {}", resp.run_id, resp.status);
+                if let Some(err) = resp.error.as_deref() {
+                    eprintln!("Memory condensation reported an error: {}", err);
+                    std::process::exit(1);
+                } else {
+                    println!("Memory condensation triggered.");
+                }
             }
             Err(e) => {
                 eprintln!("Failed to trigger memory refresh: {}", e);

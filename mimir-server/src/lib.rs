@@ -165,7 +165,7 @@ pub async fn start_server_with_llm_and_listener(
     let shutdown_rx = state.shutdown_tx.subscribe();
 
     // ---- Auto-trigger memory condensation when dirty ----
-    {
+    if state.user_entity_id.is_some() {
         let kg = Arc::clone(&state.knowledge_graph);
         let jq = Arc::clone(&state.job_queue);
         let mut shutdown_rx = state.shutdown_tx.subscribe();
@@ -187,6 +187,8 @@ pub async fn start_server_with_llm_and_listener(
                 }
             }
         });
+    } else {
+        tracing::debug!("Skipping auto condensation trigger loop: no user entity configured");
     }
 
     // ---- File watcher for config hot-reload ----
@@ -1199,5 +1201,102 @@ mod tests {
         let resp: mimir_api_types::OptimizationRunNowResponse =
             serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(resp.status, "succeeded");
+    }
+
+    #[tokio::test]
+    async fn test_memory_refresh_non_loopback_rejected() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/memory/refresh")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [192, 168, 1, 1],
+                        0,
+                    ))))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_memory_refresh_not_registered_returns_404() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/memory/refresh")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_memory_refresh_already_running_returns_409() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+
+        // Register a slow condensation job so we can race it.
+        let slow_job = mimir_core::job_queue::Job::new(
+            "memory.condensation",
+            mimir_core::job_queue::JobPriority::System,
+            None,
+            true,
+            |_ctx: mimir_core::job_queue::JobContext| {
+                Box::pin(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    Ok(())
+                })
+            },
+        );
+        state.job_queue.register(slow_job).await.unwrap();
+
+        let app = super::build_app(Arc::clone(&state));
+
+        // Start a run in the background via the job queue directly.
+        let jq = Arc::clone(&state.job_queue);
+        let _bg = tokio::spawn(async move {
+            let _ = jq.run_now("memory.condensation").await;
+        });
+
+        // Give the background task a moment to insert the Running row.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/memory/refresh")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 }

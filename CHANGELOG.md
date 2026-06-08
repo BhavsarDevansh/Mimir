@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.35.2] — 2026-06-08
+
+### Fixed
+- Addressed PR #114 review feedback (CodeRabbit AI):
+  - Removed duplicate 0.35.1 section from CHANGELOG.
+  - Fixed oversize LLM output handling in memory condensation to use deterministic fallback instead of truncation, preventing underflow at `char_limit == 0`.
+  - Recurring event output now uses the computed next occurrence date instead of the stored historical date.
+  - Search failures during user entity resolution are now handled separately from "not found", preventing duplicate entity creation on transient errors.
+  - Memory condensation job failures are now propagated to the job queue result instead of being silently swallowed.
+  - Auto-trigger condensation loop is now skipped when no user entity is configured, preventing perpetual 30-second re-triggers.
+  - `mimir init` now falls back to system identity when blank/whitespace input is provided.
+  - `mimir memory --refresh` now surfaces server-side errors in the CLI output and exits with a non-zero status on failure.
+  - Added client tests for `memory_refresh()` success and error paths.
+  - Added server route tests for `/memory/refresh` non-loopback rejection, not-registered, and already-running cases.
+
 ## [0.35.1] — 2026-06-08
 
 ### Fixed
@@ -130,21 +145,6 @@
 
 - `run_nightly_optimization` compatibility wrapper now delegates to `OptimizationRunner::run_all`.
 - `cascade_inner` in `confidence.rs` future is now `Send`-safe.
-
-# Changelog
-
-## [0.35.1] — 2026-06-08
-
-### Fixed
-- Addressed PR #114 review feedback:
-  - Status endpoint now reads live condensed memory and upcoming section from the knowledge graph instead of the deprecated `memory.md` file.
-  - `condensation_dirty` flag now automatically triggers the memory condensation job via a background watcher in the daemon.
-  - Removed unused `whoami` dependency from `mimir-core`.
-  - Removed dead `condensation_queued` field from `AppState`.
-  - Centralised `recurrence_type_id` to `RecurrenceType` mapping via `TryFrom<i16>` in the enums module.
-  - Chat system prompt builder now logs warnings when knowledge graph memory queries fail.
-  - DRYed the SQL query in `build_memory_schema_with_opts` by constructing it once with a conditional predicate.
-  - Fixed budget truncation loop so facts in `exclude_from_budget` buckets are still collected after the character budget is exhausted.
 
 ## [0.31.1] - 2026-06-04
 

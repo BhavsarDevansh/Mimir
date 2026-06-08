@@ -662,4 +662,43 @@ mod tests {
             matches!(err, ClientError::Server { status: 404, message } if message == "not found")
         );
     }
+
+    #[tokio::test]
+    async fn test_memory_refresh_success() {
+        let server = MockServer::start().await;
+        let payload = OptimizationRunNowResponse {
+            run_id: 42,
+            status: "succeeded".to_string(),
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            finished_at: None,
+            error: None,
+        };
+        Mock::given(method("POST"))
+            .and(path("/memory/refresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let result = client.memory_refresh().await.unwrap();
+        assert_eq!(result.run_id, 42);
+        assert_eq!(result.status, "succeeded");
+        assert!(result.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_memory_refresh_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/memory/refresh"))
+            .respond_with(ResponseTemplate::new(409).set_body_string("already running"))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let err = client.memory_refresh().await.unwrap_err();
+        assert!(
+            matches!(err, ClientError::Server { status: 409, message } if message == "already running")
+        );
+    }
 }

@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
 > **Last updated:** 2026-06-07
-> **Version:** 0.34.2
-> **Phase:** Phase 1 (Core Agent) is complete. Phase 2 (Knowledge Graph) library code is complete. Issue #108 (Fact Ranking & Selection Engine) is implemented in `mimir-knowledge`. Daemon integration is pending. Forgetting system (bulk forget, restore, trash, full reset) implemented in `mimir-knowledge`.
+> **Version:** 0.35.0
+> **Phase:** Phase 2 (Knowledge Graph) — Issue #108 (Fact Ranking & Selection Engine) and Issue #109 (LLM Condensation Pipeline & Regeneration Triggers) are implemented. The live memory system is now wired into the daemon. Forgetting system (bulk forget, restore, trash, full reset) implemented in `mimir-knowledge`.
 
 ---
 
@@ -34,7 +34,7 @@ Library crates provide code organisation:
 - `mimir-server` — Axum routes, state, middleware (library, no binary)
 - `mimir-client` — HTTP client for talking to the daemon
 - `mimir-api-types` — Shared request/response types
-- `mimir-knowledge` — SQLite knowledge graph (Phase 2; library is complete but **not yet wired into the daemon**)
+- `mimir-knowledge` — SQLite knowledge graph (Phase 2; wired into daemon via live memory block and condensation pipeline)
 
 ---
 

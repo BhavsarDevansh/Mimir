@@ -4,7 +4,7 @@
 //! a friendly welcome message guiding the user to the next step.
 
 use is_terminal::IsTerminal;
-use mimir_core::config::{Config, InitResult};
+use mimir_core::config::{Config, IdentityConfig, InitResult};
 use mimir_core::memory::MemoryLoader;
 
 pub async fn handle_init() {
@@ -17,6 +17,44 @@ pub async fn handle_init() {
             println!("Created config directory: {}", config_dir.display());
             println!("Created data directory:    {}", data_dir.display());
             println!("Created default config:    {}", config_file.display());
+
+            if std::io::stdin().is_terminal() {
+                let name = inquire::Text::new("What is your full name?")
+                    .with_placeholder(&whoami::realname())
+                    .prompt()
+                    .unwrap_or_else(|_| whoami::realname());
+                let preferred = inquire::Text::new("How would you like to be addressed?")
+                    .with_placeholder(&whoami::username())
+                    .prompt()
+                    .unwrap_or_else(|_| whoami::username());
+
+                let mut cfg = Config::load(Some(&config_file)).unwrap_or_default();
+                let resolved_name = {
+                    let t = name.trim();
+                    if t.is_empty() {
+                        whoami::realname()
+                    } else {
+                        t.to_string()
+                    }
+                };
+                let resolved_preferred = {
+                    let t = preferred.trim();
+                    if t.is_empty() {
+                        whoami::username()
+                    } else {
+                        t.to_string()
+                    }
+                };
+                cfg.identity = IdentityConfig {
+                    name: resolved_name,
+                    preferred_name: resolved_preferred,
+                };
+                if let Err(e) = cfg.save(&config_file) {
+                    eprintln!("Warning: failed to save identity to config: {}", e);
+                } else {
+                    println!("Saved identity to config.");
+                }
+            }
         }
         Ok(InitResult::AlreadyInitialized) => {
             println!("Mimir is already initialized.");

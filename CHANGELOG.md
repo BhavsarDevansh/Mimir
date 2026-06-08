@@ -1,3 +1,54 @@
+# Changelog
+
+## [0.35.2] — 2026-06-08
+
+### Fixed
+- Addressed PR #114 review feedback (CodeRabbit AI):
+  - Removed duplicate 0.35.1 section from CHANGELOG.
+  - Fixed oversize LLM output handling in memory condensation to use deterministic fallback instead of truncation, preventing underflow at `char_limit == 0`.
+  - Recurring event output now uses the computed next occurrence date instead of the stored historical date.
+  - Search failures during user entity resolution are now handled separately from "not found", preventing duplicate entity creation on transient errors.
+  - Memory condensation job failures are now propagated to the job queue result instead of being silently swallowed.
+  - Auto-trigger condensation loop is now skipped when no user entity is configured, preventing perpetual 30-second re-triggers.
+  - `mimir init` now falls back to system identity when blank/whitespace input is provided.
+  - `mimir memory --refresh` now surfaces server-side errors in the CLI output and exits with a non-zero status on failure.
+  - Added client tests for `memory_refresh()` success and error paths.
+  - Added server route tests for `/memory/refresh` non-loopback rejection, not-registered, and already-running cases.
+
+## [0.35.1] — 2026-06-08
+
+### Fixed
+- Addressed PR #114 review feedback:
+  - Status endpoint now reads live condensed memory and upcoming section from the knowledge graph instead of the deprecated `memory.md` file.
+  - `condensation_dirty` flag now automatically triggers the memory condensation job via a background watcher in the daemon.
+  - Removed unused `whoami` dependency from `mimir-core`.
+  - Removed dead `condensation_queued` field from `AppState`.
+  - Centralised `recurrence_type_id` to `RecurrenceType` mapping via `TryFrom<i16>` in the enums module.
+  - Chat system prompt builder now logs warnings when knowledge graph memory queries fail.
+  - DRYed the SQL query in `build_memory_schema_with_opts` by constructing it once with a conditional predicate.
+  - Fixed budget truncation loop so facts in `exclude_from_budget` buckets are still collected after the character budget is exhausted.
+
+## [0.35.0] — 2026-06-07
+
+### Added
+- **Live Memory System (Issue #109)** — Replaced static `memory.md` with an event-driven, knowledge-graph-backed memory block.
+  - Stable facts are condensed by the LLM and cached in `system_state.condensed_memory`.
+  - Upcoming events (entity dates + temporal facts) are rendered fresh on every request.
+  - Regeneration triggers: fact mutations, explicit `mimir memory --refresh`, and nightly optimization completion.
+  - Pure formatting LLM prompt with deterministic fallback on failure or oversized output.
+  - Sensitive facts are excluded from the LLM condensation pipeline.
+- **Identity configuration** — `mimir init` now prompts for full name and preferred name, stored in `[identity]` config section.
+- **User entity auto-resolution** — Daemon resolves the user entity from config at startup, creating it in the KG if missing.
+
+### Changed
+- `/memory` HTTP route now returns the live condensed memory block instead of `memory.md`.
+- Chat system prompt now injects the live memory block from the knowledge graph.
+- `build_memory_schema` supports `exclude_buckets` and `exclude_sensitive` options.
+- `OptimizationRunner` now supports an `on_complete` callback for post-optimization hooks.
+
+### Deprecated
+- `memory.md` file-based memory is deprecated. `MemoryTool` writes are now logged as warnings.
+
 ## [0.33.2] - 2026-06-05
 
 ## [0.34.2] - 2026-06-07
@@ -94,8 +145,6 @@
 
 - `run_nightly_optimization` compatibility wrapper now delegates to `OptimizationRunner::run_all`.
 - `cascade_inner` in `confidence.rs` future is now `Send`-safe.
-
-# Changelog
 
 ## [0.31.1] - 2026-06-04
 

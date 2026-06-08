@@ -36,6 +36,21 @@ pub enum RecurrenceType {
     Yearly = 5,
 }
 
+impl TryFrom<i16> for RecurrenceType {
+    type Error = ();
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        match value {
+            x if x == Self::None as i16 => Ok(Self::None),
+            x if x == Self::Daily as i16 => Ok(Self::Daily),
+            x if x == Self::Weekly as i16 => Ok(Self::Weekly),
+            x if x == Self::Monthly as i16 => Ok(Self::Monthly),
+            x if x == Self::Yearly as i16 => Ok(Self::Yearly),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Classification of locations associated with entities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Type, serde::Serialize, serde::Deserialize)]
 #[repr(i16)]

@@ -7,6 +7,14 @@ use std::collections::HashMap;
 use crate::KnowledgeError;
 use crate::models::fact::FactStatus;
 use crate::models::memory::{MemoryBucket, MemoryPriority, MemorySchema, RankedFact};
+/// Options controlling which facts are included in a memory schema build.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BuildMemoryOptions {
+    /// Buckets whose facts are collected but do not consume the character budget.
+    pub exclude_from_budget: Vec<MemoryBucket>,
+    /// If true, exclude facts whose relationship type is marked sensitive.
+    pub exclude_sensitive: bool,
+}
 
 // ---------------------------------------------------------------------------
 // Bucket category ID constants
@@ -55,37 +63,43 @@ pub async fn build_memory_schema(
     now: DateTime<Utc>,
     centrality_cache: &HashMap<i32, f32>,
 ) -> Result<MemorySchema, KnowledgeError> {
-    let rows: Vec<RawRankedFact> = sqlx::query_as(
-        "SELECT \
-            f.id AS fact_id, \
-            s.name AS subject_name, \
-            rt.name AS relationship_type, \
-            COALESCE(o.name, f.object_literal) AS object_name, \
-            f.object_literal, \
-            f.confidence, \
-            f.valid_from, \
-            GROUP_CONCAT(fc.category_id) AS category_ids, \
-            MAX(c.memory_weight) AS memory_weight, \
-            f.memory_priority_id \
-         FROM facts f \
-         JOIN entities s ON s.id = f.subject_id \
-         JOIN relationship_types rt ON rt.id = f.relationship_type_id \
-         LEFT JOIN entities o ON o.id = f.object_id \
-         LEFT JOIN fact_categories fc ON fc.fact_id = f.id \
-         LEFT JOIN categories c ON c.id = fc.category_id \
-         WHERE f.subject_id = ? \
-           AND f.pending_confirmation = 0 \
-           AND f.fact_status_id NOT IN (?, ?) \
-           AND f.confidence >= ? \
-         GROUP BY f.id \
-         ORDER BY f.confidence DESC",
+    build_memory_schema_with_opts(
+        pool,
+        subject_id,
+        budget,
+        min_confidence,
+        now,
+        centrality_cache,
+        BuildMemoryOptions::default(),
     )
-    .bind(subject_id)
-    .bind(FactStatus::Superseded as i16)
-    .bind(FactStatus::Forgotten as i16)
-    .bind(min_confidence)
-    .fetch_all(pool)
-    .await?;
+    .await
+}
+
+/// Build a ranked memory schema with filtering options.
+pub async fn build_memory_schema_with_opts(
+    pool: &SqlitePool,
+    subject_id: i32,
+    budget: usize,
+    min_confidence: f32,
+    now: DateTime<Utc>,
+    centrality_cache: &HashMap<i32, f32>,
+    opts: BuildMemoryOptions,
+) -> Result<MemorySchema, KnowledgeError> {
+    let mut sql = String::from(
+        "SELECT f.id AS fact_id, s.name AS subject_name, rt.name AS relationship_type, COALESCE(o.name, f.object_literal) AS object_name, f.object_literal, f.confidence, f.valid_from, GROUP_CONCAT(fc.category_id) AS category_ids, MAX(c.memory_weight) AS memory_weight, f.memory_priority_id FROM facts f JOIN entities s ON s.id = f.subject_id JOIN relationship_types rt ON rt.id = f.relationship_type_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN fact_categories fc ON fc.fact_id = f.id LEFT JOIN categories c ON c.id = fc.category_id WHERE f.subject_id = ? AND f.pending_confirmation = 0 AND f.fact_status_id NOT IN (?, ?) AND f.confidence >= ?",
+    );
+    if opts.exclude_sensitive {
+        sql.push_str(" AND rt.sensitive = FALSE");
+    }
+    sql.push_str(" GROUP BY f.id ORDER BY f.confidence DESC");
+
+    let rows: Vec<RawRankedFact> = sqlx::query_as::<_, RawRankedFact>(sqlx::AssertSqlSafe(&*sql))
+        .bind(subject_id)
+        .bind(FactStatus::Superseded as i16)
+        .bind(FactStatus::Forgotten as i16)
+        .bind(min_confidence)
+        .fetch_all(pool)
+        .await?;
 
     let mut ranked: Vec<RankedFact> = Vec::with_capacity(rows.len());
 
@@ -181,8 +195,10 @@ pub async fn build_memory_schema(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    let excluded_budget: Vec<MemoryBucket> = opts.exclude_from_budget.clone();
     for fact in non_identity {
-        if fact.char_estimate <= remaining_budget {
+        let consumes_budget = !excluded_budget.contains(&fact.bucket);
+        if consumes_budget && fact.char_estimate <= remaining_budget {
             remaining_budget -= fact.char_estimate;
             match fact.bucket {
                 MemoryBucket::Relationships => schema.relationships.push(fact),
@@ -190,7 +206,7 @@ pub async fn build_memory_schema(
                 MemoryBucket::Upcoming => schema.upcoming.push(fact),
                 _ => schema.general.push(fact),
             }
-        } else if remaining_budget > 0 {
+        } else if consumes_budget && remaining_budget > 0 {
             // Truncate last entry with …
             let truncated = truncate_fact(fact, remaining_budget);
             match truncated.bucket {
@@ -200,7 +216,15 @@ pub async fn build_memory_schema(
                 _ => schema.general.push(truncated),
             }
             remaining_budget = 0;
-            break;
+            continue;
+        } else if !consumes_budget {
+            // Excluded from budget: always include, never count against budget
+            match fact.bucket {
+                MemoryBucket::Relationships => schema.relationships.push(fact),
+                MemoryBucket::Preferences => schema.preferences.push(fact),
+                MemoryBucket::Upcoming => schema.upcoming.push(fact),
+                _ => schema.general.push(fact),
+            }
         }
     }
 
@@ -362,6 +386,136 @@ fn render_fact_line(fact: &RankedFact) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Upcoming section (fresh per request, no LLM)
+// ---------------------------------------------------------------------------
+
+/// Render upcoming events for the given subject entity.
+/// Combines entity dates (with recurrence) and upcoming facts (category 900–999).
+/// Sorted by next occurrence, capped at `limit`.
+pub async fn render_upcoming_section(
+    pool: &SqlitePool,
+    subject_id: i32,
+    now: DateTime<Utc>,
+    days_ahead: i64,
+    limit: usize,
+) -> Result<String, KnowledgeError> {
+    use crate::models::entity_date::next_occurrence;
+    use crate::models::enums::RecurrenceType;
+
+    // 1. Entity dates
+    let dates =
+        crate::queries::entity::get_upcoming_dates(pool, subject_id, days_ahead, now).await?;
+    let mut items: Vec<(DateTime<Utc>, String)> = Vec::new();
+
+    for date in dates {
+        let recurrence =
+            RecurrenceType::try_from(date.recurrence_type_id).unwrap_or(RecurrenceType::None);
+        if let Some(next) = next_occurrence(&date.date_value, recurrence, now) {
+            let label = date.custom_label.as_deref().unwrap_or("Event");
+            let days = (next - now).num_days();
+            let when = if days == 0 {
+                "today".to_string()
+            } else if days == 1 {
+                "in 1 day".to_string()
+            } else {
+                format!("in {} days", days)
+            };
+            items.push((
+                next,
+                format!(
+                    "- {}: {} ({}, {})",
+                    label,
+                    next.date_naive(),
+                    next.format("%d %B"),
+                    when
+                ),
+            ));
+        }
+    }
+
+    // 2. Upcoming facts (category 900–999)
+    let upcoming_rows: Vec<RawRankedFact> = sqlx::query_as(
+        "SELECT \
+            f.id AS fact_id, \
+            s.name AS subject_name, \
+            rt.name AS relationship_type, \
+            COALESCE(o.name, f.object_literal) AS object_name, \
+            f.object_literal, \
+            f.confidence, \
+            f.valid_from, \
+            GROUP_CONCAT(fc.category_id) AS category_ids, \
+            MAX(c.memory_weight) AS memory_weight, \
+            f.memory_priority_id \
+         FROM facts f \
+         JOIN entities s ON s.id = f.subject_id \
+         JOIN relationship_types rt ON rt.id = f.relationship_type_id \
+         LEFT JOIN entities o ON o.id = f.object_id \
+         LEFT JOIN fact_categories fc ON fc.fact_id = f.id \
+         LEFT JOIN categories c ON c.id = fc.category_id \
+         WHERE f.subject_id = ? \
+           AND f.pending_confirmation = 0 \
+           AND f.fact_status_id NOT IN (?, ?) \
+           AND f.confidence >= 0.5 \
+           AND f.valid_from IS NOT NULL \
+           AND f.valid_from >= ? \
+           AND f.valid_from <= ? \
+           AND fc.category_id BETWEEN 900 AND 999 \
+         GROUP BY f.id \
+         ORDER BY f.valid_from \
+         LIMIT ?",
+    )
+    .bind(subject_id)
+    .bind(FactStatus::Superseded as i16)
+    .bind(FactStatus::Forgotten as i16)
+    .bind(now)
+    .bind(now + chrono::Duration::days(days_ahead))
+    .bind(limit as i64)
+    .fetch_all(pool)
+    .await?;
+
+    for raw in upcoming_rows {
+        let object_display = raw
+            .object_name
+            .unwrap_or_else(|| raw.object_literal.unwrap_or_default());
+        let rel = raw.relationship_type.replace('_', " ");
+        let when = if let Some(vf) = raw.valid_from {
+            let days = (vf - now).num_days();
+            if days == 0 {
+                "today".to_string()
+            } else if days == 1 {
+                "in 1 day".to_string()
+            } else {
+                format!("in {} days", days)
+            }
+        } else {
+            String::new()
+        };
+        let line = format!(
+            "- {} {} {} ({}, {})",
+            raw.subject_name,
+            rel,
+            object_display,
+            raw.valid_from
+                .map(|d| d.format("%d %B").to_string())
+                .unwrap_or_default(),
+            when
+        );
+        if let Some(vf) = raw.valid_from {
+            items.push((vf, line));
+        }
+    }
+
+    items.sort_by_key(|a| a.0);
+    items.truncate(limit);
+
+    if items.is_empty() {
+        Ok(String::new())
+    } else {
+        let lines: Vec<String> = items.into_iter().map(|(_, line)| line).collect();
+        Ok(format!("Upcoming:\n{}\n", lines.join("\n")))
+    }
+}
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

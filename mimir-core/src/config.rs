@@ -20,6 +20,7 @@ pub struct Config {
     pub personality: PersonalityConfig,
     pub server: ServerConfig,
     pub knowledge: KnowledgeConfig,
+    pub identity: IdentityConfig,
 }
 
 /// Result of an initialisation attempt.
@@ -118,6 +119,14 @@ impl Default for ServerConfig {
         }
     }
 }
+/// User identity settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct IdentityConfig {
+    pub name: String,
+    pub preferred_name: String,
+}
+
 /// Knowledge graph settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -385,6 +394,11 @@ preset = "transparent"
 bind_addr = "127.0.0.1:8080"
 # socket_path = "~/.local/share/mimir/mimir.sock"  # Optional: Unix domain socket for local CLI
 
+[identity]
+# Set during init; the daemon uses this to identify the user entity in the knowledge graph.
+name = ""
+preferred_name = ""
+
 [knowledge.optimization]
 cpu_cores = 1
 nice_level = 10
@@ -476,6 +490,12 @@ schedule_time = "02:00"
         }
         if let Ok(v) = std::env::var("MIMIR_SERVER_BIND_ADDR") {
             self.server.bind_addr = v;
+        }
+        if let Ok(v) = std::env::var("MIMIR_IDENTITY_NAME") {
+            self.identity.name = v;
+        }
+        if let Ok(v) = std::env::var("MIMIR_IDENTITY_PREFERRED_NAME") {
+            self.identity.preferred_name = v;
         }
         if let Ok(v) = std::env::var("MIMIR_SERVER_SOCKET_PATH") {
             self.server.socket_path = if v.trim().is_empty() { None } else { Some(v) };
@@ -598,6 +618,7 @@ mod tests {
         assert_eq!(config.llm.model, "gpt-4o");
         assert_eq!(config.agent.name, "Mimir");
         assert_eq!(config.memory.char_limit, 2500);
+        assert_eq!(config.identity.name, "");
         assert_eq!(config.memory.path, None);
         assert_eq!(config.llm.max_tokens, None);
         assert_eq!(config.context.max_tokens, None);
@@ -741,6 +762,7 @@ mod tests {
                 bind_addr: "127.0.0.1:8080".to_string(),
                 socket_path: None,
             },
+            identity: IdentityConfig::default(),
             knowledge: KnowledgeConfig::default(),
         };
 
@@ -836,6 +858,7 @@ db_path = "~/.local/share/mimir/context.db"
         assert_eq!(config.llm.model, "gpt-4o");
         assert_eq!(config.agent.name, "Mimir");
         assert_eq!(config.memory.char_limit, 2500);
+        assert_eq!(config.identity.name, "");
         assert_eq!(config.memory.path, None);
         assert_eq!(config.llm.max_tokens, None);
         assert_eq!(config.context.max_tokens, None);

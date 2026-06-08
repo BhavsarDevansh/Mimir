@@ -141,14 +141,14 @@ async fn main() {
             }
             status::handle_status(&base_url).await;
         }
-        cli::Commands::Memory => {
+        cli::Commands::Memory { refresh } => {
             if let Err(e) =
                 daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
             {
                 eprintln!("{}", e);
                 std::process::exit(1);
             }
-            memory_cmd::handle_memory(&base_url).await;
+            memory_cmd::handle_memory(&base_url, refresh).await;
         }
     }
 }

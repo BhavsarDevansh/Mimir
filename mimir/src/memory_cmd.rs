@@ -1,8 +1,26 @@
-//! Memory viewer. Loads and prints the contents of `memory.md` to stdout.
+//! Memory viewer. Loads and prints the live condensed memory block to stdout.
 use mimir_client::MimirClient;
 
-pub async fn handle_memory(base_url: &str) {
+pub async fn handle_memory(base_url: &str, refresh: bool) {
     let client = MimirClient::new(base_url);
+    if refresh {
+        match client.memory_refresh().await {
+            Ok(resp) => {
+                println!("Run ID: {}, Status: {}", resp.run_id, resp.status);
+                if let Some(err) = resp.error.as_deref() {
+                    eprintln!("Memory condensation reported an error: {}", err);
+                    std::process::exit(1);
+                } else {
+                    println!("Memory condensation triggered.");
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to trigger memory refresh: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     match client.memory().await {
         Ok(content) => {
             println!("{}", content);

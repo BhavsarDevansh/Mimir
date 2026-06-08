@@ -80,7 +80,6 @@ pub async fn status_handler(State(state): State<Arc<AppState>>) -> Json<StatusRe
         config_exists,
         llm_reachable,
         context_window,
-        memory_path: state.memory_path.to_string_lossy().to_string(),
         memory_exists,
         memory_chars,
         memory_limit,

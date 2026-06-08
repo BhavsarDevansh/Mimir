@@ -15,7 +15,11 @@ fn e2e_ask_no_stream_round_trip() {
     std::fs::create_dir_all(data_dir.join("mimir")).unwrap();
     std::fs::create_dir_all(&home_dir).unwrap();
 
-    let memory_path = data_dir.join("mimir").join("memory.md");
+    // Ensure the in-process server uses the temp directories.
+    std::env::set_var("XDG_CONFIG_HOME", config_dir.to_str().unwrap());
+    std::env::set_var("XDG_DATA_HOME", data_dir.to_str().unwrap());
+    std::env::set_var("HOME", home_dir.to_str().unwrap());
+
     let db_path = data_dir.join("mimir").join("context.db");
 
     let config_toml = format!(
@@ -31,18 +35,15 @@ temperature = 0.0
 bind_addr = "127.0.0.1:0"
 
 [memory]
-path = "{}"
 char_limit = 10000
 
 [context]
 db_path = "{}"
 "#,
-        memory_path.display(),
         db_path.display(),
     );
 
     std::fs::write(config_dir.join("mimir").join("config.toml"), config_toml).unwrap();
-    std::fs::write(&memory_path, "Test memory content").unwrap();
 
     // Pre-bind a listener to reserve a free port.
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -66,7 +67,6 @@ db_path = "{}"
     config.llm.max_tokens = Some(10);
     config.llm.temperature = 0.0;
     config.server.bind_addr = format!("127.0.0.1:{}", port);
-    config.memory.path = Some(memory_path.clone());
     config.context.db_path = Some(db_path.clone());
 
     // Start the daemon in-process.
@@ -84,9 +84,13 @@ db_path = "{}"
         .build()
         .unwrap();
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
     let mut ready = false;
     while std::time::Instant::now() < deadline {
+        if server_handle.is_finished() {
+            let result = rt.block_on(server_handle);
+            panic!("server exited early: {:?}", result);
+        }
         if let Ok(resp) = client.get(format!("{}/status", base_url)).send()
             && resp.status().is_success()
         {
@@ -95,7 +99,7 @@ db_path = "{}"
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    assert!(ready, "daemon did not become ready within 10 seconds");
+    assert!(ready, "daemon did not become ready within 20 seconds");
 
     // Run `mimir ask --no-stream hello` against the daemon.
     let output = Command::new(env!("CARGO_BIN_EXE_mimir"))

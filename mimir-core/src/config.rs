@@ -53,7 +53,6 @@ pub struct LlmConfig {
     pub endpoint: String,
     pub api_key: String,
     pub model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     pub temperature: f32,
 }
@@ -73,8 +72,6 @@ pub struct AgentConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MemoryConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<PathBuf>,
     pub enabled: bool,
     pub char_limit: u16,
     pub auto_manage: bool,
@@ -85,7 +82,6 @@ pub struct MemoryConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ContextConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     pub max_turns: u16,
     pub db_path: Option<PathBuf>,
@@ -107,7 +103,6 @@ pub struct ServerConfig {
     /// Path to the Unix domain socket for local CLI communication.
     /// Set to None to disable Unix socket.
     /// Defaults to None (auto-detected from data dir on Unix platforms).
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub socket_path: Option<String>,
 }
 
@@ -226,7 +221,6 @@ impl Default for AgentConfig {
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            path: None,
             enabled: true,
             char_limit: 2500,
             auto_manage: true,
@@ -467,11 +461,6 @@ schedule_time = "02:00"
         {
             self.memory.temporal_horizon = n;
         }
-        if let Ok(v) = std::env::var("MIMIR_MEMORY_PATH")
-            && !v.trim().is_empty()
-        {
-            self.memory.path = Some(PathBuf::from(v));
-        }
         if let Ok(v) = std::env::var("MIMIR_CONTEXT_MAX_TOKENS")
             && let Ok(n) = v.parse::<u32>()
         {
@@ -619,7 +608,6 @@ mod tests {
         assert_eq!(config.agent.name, "Mimir");
         assert_eq!(config.memory.char_limit, 2500);
         assert_eq!(config.identity.name, "");
-        assert_eq!(config.memory.path, None);
         assert_eq!(config.llm.max_tokens, None);
         assert_eq!(config.context.max_tokens, None);
         assert_eq!(config.context.max_turns, 20);
@@ -694,37 +682,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
-    fn test_env_override_memory_path() {
-        unsafe {
-            std::env::set_var("MIMIR_MEMORY_PATH", "/tmp/mimir/memory.md");
-        }
-        let mut config = Config::default();
-        config.apply_env_overrides();
-        assert_eq!(
-            config.memory.path,
-            Some(PathBuf::from("/tmp/mimir/memory.md"))
-        );
-        unsafe {
-            std::env::remove_var("MIMIR_MEMORY_PATH");
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn test_env_override_memory_path_blank_is_ignored() {
-        unsafe {
-            std::env::set_var("MIMIR_MEMORY_PATH", "   ");
-        }
-        let mut config = Config::default();
-        config.apply_env_overrides();
-        assert_eq!(config.memory.path, None);
-        unsafe {
-            std::env::remove_var("MIMIR_MEMORY_PATH");
-        }
-    }
-
-    #[test]
     fn test_save_and_load() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -744,7 +701,6 @@ mod tests {
                 max_tool_rounds: 100,
             },
             memory: MemoryConfig {
-                path: None,
                 enabled: false,
                 char_limit: 100,
                 auto_manage: false,
@@ -859,7 +815,6 @@ db_path = "~/.local/share/mimir/context.db"
         assert_eq!(config.agent.name, "Mimir");
         assert_eq!(config.memory.char_limit, 2500);
         assert_eq!(config.identity.name, "");
-        assert_eq!(config.memory.path, None);
         assert_eq!(config.llm.max_tokens, None);
         assert_eq!(config.context.max_tokens, None);
         assert_eq!(config.context.max_turns, 20);

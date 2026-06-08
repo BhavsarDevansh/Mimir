@@ -15,7 +15,8 @@ impl MemoryLoader {
     /// does not already exist. Returns `true` if the file was created, `false`
     /// if it already existed.
     pub async fn init() -> Result<bool> {
-        let path = paths::memory_path()
+        let path = paths::config_dir()
+            .map(|p| p.join("memory.md"))
             .context("Cannot initialise memory.md: unable to resolve platform path")?;
 
         if let Some(parent) = path.parent() {
@@ -76,7 +77,9 @@ No memories yet."#
 
     /// Return the platform-specific path for memory.md.
     pub fn get_memory_path() -> std::path::PathBuf {
-        paths::memory_path().unwrap_or_else(|_| std::path::PathBuf::from("memory.md"))
+        paths::config_dir()
+            .map(|p| p.join("memory.md"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("memory.md"))
     }
 }
 

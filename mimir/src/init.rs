@@ -5,7 +5,6 @@
 
 use is_terminal::IsTerminal;
 use mimir_core::config::{Config, IdentityConfig, InitResult};
-use mimir_core::memory::MemoryLoader;
 
 pub async fn handle_init() {
     match Config::init() {
@@ -62,17 +61,6 @@ pub async fn handle_init() {
         Err(e) => {
             eprintln!("Error: failed to initialise Mimir: {e}");
             std::process::exit(1);
-        }
-    }
-
-    match MemoryLoader::init().await {
-        Ok(true) => {
-            let path = mimir_core::paths::memory_path().unwrap_or_default();
-            println!("Created default memory:    {}", path.display());
-        }
-        Ok(false) => {}
-        Err(e) => {
-            eprintln!("Warning: failed to create memory.md: {e}");
         }
     }
 

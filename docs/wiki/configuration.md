@@ -38,7 +38,7 @@ This creates:
 - `~/.config/mimir/` — config directory
 - `~/.local/share/mimir/` — data directory
 - `~/.config/mimir/config.toml` — default config with helpful comments
-- `~/.config/mimir/memory.md` — working memory template
+- `~/.local/share/mimir/knowledge.db` — knowledge graph database
 
 Existing files are never overwritten. Running `mimir init` again prints "Mimir is already initialized."
 
@@ -105,7 +105,7 @@ mimir ask "Hello"
 | `MIMIR_AGENT_PROACTIVITY` | When the agent acts on its own | `never`, `important_only`, `always` |
 | `MIMIR_AGENT_VERBOSE_REASONING` | Show chain-of-thought | `true` or `false` |
 | `MIMIR_MEMORY_ENABLED` | Enable working memory | `true` or `false` |
-| `MIMIR_MEMORY_CHAR_LIMIT` | Character budget for memory.md | `2500` |
+| `MIMIR_MEMORY_CHAR_LIMIT` | Character budget for condensed memory | `2500` |
 | `MIMIR_MEMORY_AUTO_MANAGE` | Auto-truncate old memory | `true` or `false` |
 | `MIMIR_MEMORY_TEMPORAL_HORIZON` | Days of memory to retain | `30` |
 | `MIMIR_SERVER_BIND_ADDR` | TCP bind address for the daemon | `127.0.0.1:8080` |

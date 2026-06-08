@@ -81,7 +81,7 @@ Displays:
 
 ### `mimir memory`
 
-Loads and prints `memory.md` content to stdout.
+Prints the live condensed memory block from the knowledge graph.
 
 ## Key Design Decisions
 

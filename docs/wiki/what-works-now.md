@@ -54,7 +54,6 @@ cargo build --workspace --release
 
 This creates:
 - `~/.config/mimir/config.toml`
-- `~/.config/mimir/memory.md`
 - `~/.local/share/mimir/` (data directory)
 
 ### 3. Configure
@@ -105,13 +104,13 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 
 | Command | Status | Description |
 |---------|--------|-------------|
-| `mimir init` | ✅ Works | First-run bootstrap: creates directories, default config, memory.md, and optionally installs a systemd user service |
+| `mimir init` | ✅ Works | First-run bootstrap: creates directories, default config, and optionally installs a systemd user service |
 | `mimir start` | ✅ Works | Runs the daemon in the foreground (binds to TCP localhost) |
 | `mimir stop` | ✅ Works | Graceful shutdown via POST `/stop` |
 | `mimir ask` | ✅ Works | Single-shot query with streaming, piping, model/personality override, incognito mode, and verbose token usage |
 | `mimir chat` | ✅ Works | Interactive REPL with session history, `/history` resume, `/memory`, `/status`, `/clear`, `/help`, multi-line input, and SSE streaming |
 | `mimir status` | ✅ Works | Health check: config, LLM reachability, queue depth, memory usage |
-| `mimir memory` | ✅ Works | Prints the current contents of `memory.md` |
+| `mimir memory` | ✅ Works | Prints the live condensed memory block from the knowledge graph |
 | `mimir tool list` | ✅ Works | Lists registered tools and their permissions |
 | `mimir tool enable/disable/permission` | ✅ Works | Change tool permission levels (saved to `tools.toml`) |
 | `mimir skill list/show/add/delete/enable/disable` | ✅ Works | Manage skills (built-in, user-added, and generated) |
@@ -150,9 +149,9 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `memory.md` working memory | ✅ Works | Small text file (~2,500 chars) injected into every system prompt |
-| Agent-managed updates | ✅ Works | The `memory` tool lets Mimir add, replace, and remove entries |
-| Frozen snapshots | ✅ Works | `memory.md` is read once per session; mid-session edits don't affect the current chat |
+| `memory.md` working memory | ✅ Works | Live condensed memory (~2,500 chars) ranked from the knowledge graph and injected into every system prompt |
+| Agent-managed updates | ✅ Works | Facts are extracted automatically from conversations and inserted into the knowledge graph |
+| Frozen snapshots | ✅ Works | Condensed memory is read from `system_state` once per session; changes don't affect the current chat |
 | Manual editing | ✅ Works | Edit the file directly; changes apply to the next session |
 | Size limit enforcement | ✅ Works | Configurable `char_limit` (default 2,500) |
 
@@ -171,7 +170,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Presets | ✅ Works | `transparent`, `concise`, `warm`, `formal` |
-| System prompt generation | ✅ Works | Combines preset + `memory.md` content |
+| System prompt generation | ✅ Works | Combines preset + condensed memory from the knowledge graph |
 | CLI override | ✅ Works | `--personality` flag on `mimir ask` |
 
 ### Deployment & Operations
@@ -209,7 +208,7 @@ The daemon exposes an OpenAI-compatible chat endpoint plus Mimir-specific manage
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/status` | Health, config, LLM reachability, memory usage |
-| `GET` | `/memory` | Raw contents of `memory.md` |
+| `GET` | `/memory` | Live condensed memory block from the knowledge graph |
 | `GET` | `/sessions` | List conversation sessions |
 | `GET` | `/sessions/{id}/messages` | Messages for a session (from last compaction) |
 | `POST` | `/chat` | Blocking chat with agentic tool loop |
@@ -225,7 +224,7 @@ The daemon exposes an OpenAI-compatible chat endpoint plus Mimir-specific manage
 | [#71](https://github.com/BhavsarDevansh/Mimir/issues/71) — `mimir chat` streaming bug | Streaming may fail in some environments | Use `mimir ask` for single-shot queries; restart daemon if stream stalls |
 | [#45](https://github.com/BhavsarDevansh/Mimir/issues/45) — UTC time | `get_current_time` returns UTC | Ask Mimir to convert to your timezone verbally |
 | [#25](https://github.com/BhavsarDevansh/Mimir/issues/25) — Unix socket transport | TCP is the only transport | TCP on `127.0.0.1:8080` is secure for local use |
-| Knowledge graph not wired up | No `mimir kb` commands, no automatic fact extraction from chat | Use `memory.md` for now; knowledge graph will arrive in a future release once the pipeline is wired into the daemon |
+| Knowledge graph not wired up | No `mimir kb` commands, no automatic fact extraction from chat | Knowledge graph is now the primary memory system; `mimir memory` and `mimir kb` commands are available |
 
 ---
 

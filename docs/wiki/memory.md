@@ -2,7 +2,7 @@
 
 ---
 
-## Phase 2 Update (2026-06-06)
+## Phase 2 Update (2026-06-06) — Now Default
 
 Mimir is transitioning from a static `memory.md` file to a **dynamic, knowledge-graph-backed memory system**. Facts are now stored in SQLite and ranked on demand by a Rust scoring engine.
 

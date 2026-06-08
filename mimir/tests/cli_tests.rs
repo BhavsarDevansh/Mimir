@@ -227,3 +227,25 @@ fn test_stop_help_flag() {
         "stop --help should describe the command"
     );
 }
+
+// ---------------------------------------------------------------------------
+// memory flag parsing tests (no daemon required)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_memory_refresh_flag_accepted() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mimir"))
+        .args(["memory", "--help"])
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "mimir memory --help exited with non-zero status"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        stdout.contains("--refresh"),
+        "memory --help should list --refresh flag"
+    );
+}

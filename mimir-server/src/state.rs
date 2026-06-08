@@ -10,20 +10,19 @@ use mimir_core::{
     context::ContextManager,
     job_queue::{Job, JobContext, JobPriority, JobQueue},
     llm::{LlmBackend, LlmClient},
-    memory::loader::MemoryLoader,
     tools::ToolRegistry,
 };
 
 /// Shared application state for the HTTP server.
 ///
 /// Holds all long-lived resources: the LLM client (backed by a worker pool),
-/// the conversation context manager, memory loader, and per-session semaphores
+/// the conversation context manager, per-session semaphores
 /// to prevent concurrent mutation of the same session.
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub llm_client: Arc<dyn LlmBackend>,
     pub context_manager: Arc<ContextManager>,
-    pub memory_path: std::path::PathBuf,
+
     /// Live reloadable configuration.
     pub config: Arc<ReloadableConfig>,
     /// Per-session semaphore to serialise concurrent requests for the same session.
@@ -77,12 +76,6 @@ impl AppState {
         };
         let context_manager = Arc::new(ContextManager::new(&db_path).await?);
 
-        let memory_path = cfg
-            .memory
-            .path
-            .clone()
-            .unwrap_or_else(MemoryLoader::get_memory_path);
-
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
 
         let tool_registry = Arc::new(ToolRegistry::with_builtins());
@@ -91,15 +84,6 @@ impl AppState {
             && let Err(e) = tool_registry.load_tools_config(&path)
         {
             tracing::warn!("Failed to load tools config: {}", e);
-        }
-
-        // Register the memory tool with the configured path and limit.
-        let memory_tool = Arc::new(mimir_core::tools::MemoryTool::new(
-            memory_path.clone(),
-            cfg.memory.char_limit,
-        ));
-        if let Err(e) = tool_registry.register_native(memory_tool) {
-            tracing::warn!("Failed to register memory tool: {}", e);
         }
 
         // Initialise knowledge graph.
@@ -288,7 +272,6 @@ impl AppState {
         Ok(Self {
             llm_client,
             context_manager,
-            memory_path,
             config,
             session_locks: Arc::new(DashMap::new()),
             start_time: Instant::now(),
@@ -322,21 +305,13 @@ impl AppState {
     ///
     /// 1. Close the SQLite pool (flushes WAL).
     /// 2. Shut down the LLM worker pool and drop HTTP clients.
-    /// 3. Sync memory.md to disk.
+    /// 3. Signal completion.
     pub async fn shutdown(&self) {
         tracing::info!("Shutting down ContextManager...");
         self.context_manager.close().await;
 
         tracing::info!("Shutting down LLM client...");
         self.llm_client.shutdown().await;
-
-        if let Ok(file) = tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(&self.memory_path)
-            .await
-        {
-            let _ = file.sync_all().await;
-        }
 
         tracing::info!("Shutdown complete.");
     }

@@ -73,7 +73,7 @@ Keep-alive pings are sent every 10 seconds.
 
 #### `GET /memory`
 
-**Response:** plain text containing the current `memory.md` contents.
+**Response:** Live condensed memory block from the knowledge graph (condensed stable facts + upcoming events).
 
 #### `GET /sessions`
 

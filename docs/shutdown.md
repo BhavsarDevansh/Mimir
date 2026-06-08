@@ -28,8 +28,6 @@ When any of these signals fire, the server enters graceful shutdown:
    - On shutdown signal, workers break their loop, dropping their local `reqwest::Client` and closing idle HTTP connections.
    - `shutdown()` awaits each worker handle with a 5-second timeout.
 
-3. **Memory sync to disk**
-   - Opens `memory.md` and calls `sync_all()` to ensure all buffered writes reach the filesystem.
 
 ## Timeout Behavior
 

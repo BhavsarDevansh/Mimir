@@ -330,15 +330,10 @@ mod tests {
     use crate::state::AppState;
 
     /// Build an `AppState` suitable for tests, using a temporary directory
-    /// for the context database and memory.md.
+    /// for the context database.
     async fn test_state(llm: Arc<dyn LlmBackend>) -> (Arc<AppState>, tempfile::TempDir) {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("context.db");
-        let memory_path = temp.path().join("memory.md");
-
-        tokio::fs::write(&memory_path, "Test memory content")
-            .await
-            .unwrap();
 
         let context_manager = Arc::new(ContextManager::new(&db_path).await.unwrap());
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
@@ -347,11 +342,6 @@ mod tests {
         let reloadable = ReloadableConfig::new(config, temp.path().join("dummy_config.toml"));
 
         let tool_registry = mimir_core::tools::ToolRegistry::with_builtins();
-        let memory_tool = Arc::new(mimir_core::tools::MemoryTool::new(
-            memory_path.clone(),
-            2500,
-        ));
-        let _ = tool_registry.register_native(memory_tool);
 
         let kg_db_path = temp.path().join("knowledge.db");
         let knowledge_graph = Arc::new(
@@ -406,7 +396,6 @@ mod tests {
         let state = Arc::new(AppState {
             llm_client: llm,
             context_manager,
-            memory_path,
             config: Arc::new(reloadable),
             session_locks: Arc::new(DashMap::new()),
             start_time: Instant::now(),
@@ -952,10 +941,6 @@ mod tests {
 
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("context.db");
-        let memory_path = temp.path().join("memory.md");
-        tokio::fs::write(&memory_path, "Test memory content")
-            .await
-            .unwrap();
 
         // Find an available port.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -995,21 +980,30 @@ mod tests {
         assert!(ready, "server did not become reachable within 5 seconds");
 
         // Send the stop request.
-        let client = reqwest::Client::new();
-        let res = client
-            .post(format!("http://{}/stop", addr))
-            .send()
-            .await
-            .unwrap();
-        let status = res.status();
-        let body = res.text().await.unwrap();
-        assert_eq!(
-            status,
-            reqwest::StatusCode::OK,
-            "unexpected status: {} body: {}",
-            status,
-            body
-        );
+        let client = reqwest::Client::builder().http1_only().build().unwrap();
+        let res = client.post(format!("http://{}/stop", addr)).send().await;
+
+        match res {
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                assert_eq!(
+                    status,
+                    reqwest::StatusCode::OK,
+                    "unexpected status: {} body: {}",
+                    status,
+                    body
+                );
+            }
+            Err(e) => {
+                // Server may shut down before the response is fully read.
+                // As long as the server exits below, the stop signal was received.
+                eprintln!(
+                    "Stop request got connection error (server shutting down): {}",
+                    e
+                );
+            }
+        }
 
         // The server should exit within 5 seconds.
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;

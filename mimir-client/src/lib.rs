@@ -445,7 +445,6 @@ mod tests {
             config_exists: false,
             llm_reachable: true,
             context_window: None,
-            memory_path: "/tmp".to_string(),
             memory_exists: false,
             memory_chars: 0,
             memory_limit: 0,

@@ -74,11 +74,6 @@ pub fn config_path() -> Result<PathBuf, PathsError> {
     config_dir().map(|p| p.join("config.toml"))
 }
 
-/// Returns the path to `memory.md` inside the config directory.
-pub fn memory_path() -> Result<PathBuf, PathsError> {
-    config_dir().map(|p| p.join("memory.md"))
-}
-
 /// Returns the path to the context database inside the data directory.
 pub fn default_db_path() -> Result<PathBuf, PathsError> {
     data_dir().map(|p| p.join("context.db"))
@@ -129,12 +124,6 @@ mod tests {
     fn test_config_path_is_config_dir_plus_toml() {
         let path = config_path().unwrap();
         assert!(path.ends_with("mimir/config.toml"));
-    }
-
-    #[test]
-    fn test_memory_path_is_config_dir_plus_md() {
-        let path = memory_path().unwrap();
-        assert!(path.ends_with("mimir/memory.md"));
     }
 
     #[test]

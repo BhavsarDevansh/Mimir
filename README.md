@@ -71,7 +71,7 @@ Mimir auto-initialises its config directory on first run. The main config file l
 ~/.config/mimir/config.toml
 ```
 
-You can override settings with environment variables (e.g. `MIMIR_BASE_URL`, `MIMIR_MEMORY_PATH`).
+You can override settings with environment variables (e.g. `MIMIR_BASE_URL`).
 
 Run `mimir init` for a guided first-run setup including identity configuration and optional systemd user service installation.
 

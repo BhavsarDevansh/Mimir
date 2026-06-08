@@ -98,7 +98,7 @@ mimir chat
 |---------|-------------|
 | `/exit` | Exit the REPL |
 | `/clear` | Reset the conversation (start a new session) |
-| `/memory` | Show current memory.md contents |
+| `/memory` | Show live condensed memory from the knowledge graph |
 | `/status` | Quick health check |
 | `/history` | Resume a previous conversation |
 | `/help` | Show available commands |
@@ -140,7 +140,6 @@ Output (Linux/XDG example):
 Created config directory: ~/.config/mimir
 Created data directory:    ~/.local/share/mimir
 Created default config:    ~/.config/mimir/config.toml
-Created default memory:    ~/.config/mimir/memory.md
 
 Next: set your API key in the config file or via MIMIR_LLM_API_KEY.
 Then run: mimir ask hello

@@ -30,8 +30,7 @@ pub async fn handle_status(base_url: &str) {
                 status.llm_reachable, status.context_window
             );
             println!(
-                "Memory: {} ({}), {} / {} chars ({:.1}%)",
-                status.memory_path,
+                "Memory: {}, {} / {} chars ({:.1}%)",
                 if status.memory_exists {
                     "exists"
                 } else {

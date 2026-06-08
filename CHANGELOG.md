@@ -1,4 +1,25 @@
 # Changelog
+## [0.36.0] — 2026-06-08
+
+### Removed
+- **Issue #110**: Removed all remaining file-based memory.md scaffolding.
+  - memory.path and MIMIR_MEMORY_PATH env override removed from MemoryConfig.
+  - MemoryTool unregistered from daemon and CLI tool list.
+  - MemoryLoader::init() no longer called during mimir init.
+  - AppState no longer carries memory_path or syncs memory.md on shutdown.
+  - StatusResponse no longer includes memory_path.
+  - mimir-core/src/paths.rs no longer exports memory_path().
+
+### Changed
+- mimir memory CLI and /memory server route now exclusively serve knowledge-graph-backed condensed memory.
+- mimir status and chat REPL /status display no longer show the deprecated memory.md path.
+
+### Added
+- CLI parsing test for mimir memory --refresh flag.
+
+### Documentation
+- Updated docs/memory-system.md, docs/cli.md, docs/chat-server.md, docs/shutdown.md, docs/wiki/memory.md, docs/wiki/what-works-now.md, docs/wiki/cli-commands.md, docs/wiki/configuration.md, and docs/wiki/tools.md to remove memory.md references and describe the KG-backed system.
+
 ## [0.35.3] - 2026-06-08
 
 ### Fixed

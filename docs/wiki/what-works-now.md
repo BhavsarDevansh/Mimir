@@ -152,7 +152,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Knowledge graph memory | ✅ Works | Live condensed memory (~2,500 chars) ranked from the knowledge graph and injected into every system prompt |
 | Agent-managed updates | ✅ Works | Facts are extracted automatically from conversations and inserted into the knowledge graph |
 | Frozen snapshots | ✅ Works | Condensed memory is read from `system_state` once per session; changes don't affect the current chat |
-| Manual editing | ✅ Works | Edit the file directly; changes apply to the next session |
+| Knowledge-graph managed | ✅ Works | Manage memory via the knowledge-graph UI/CLI or import/export tools; no memory.md file |
 | Size limit enforcement | ✅ Works | Configurable `char_limit` (default 2,500) |
 
 ### Configuration
@@ -160,7 +160,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Feature | Status | Notes |
 |---------|--------|-------|
 | TOML config file | ✅ Works | `~/.config/mimir/config.toml` |
-| Environment overrides | ✅ Works | `MIMIR_LLM_API_KEY`, `MIMIR_BASE_URL`, `MIMIR_MEMORY_PATH`, etc. |
+| Environment overrides | ✅ Works | `MIMIR_LLM_API_KEY`, `MIMIR_BASE_URL`, etc. |
 | XDG path resolution | ✅ Works | Respects `XDG_CONFIG_HOME` and `XDG_DATA_HOME` |
 | Hot-reload | ✅ Works | Non-sensitive config changes apply without restarting the daemon |
 | Auto-initialisation | ✅ Works | First use creates defaults automatically |
@@ -224,7 +224,7 @@ The daemon exposes an OpenAI-compatible chat endpoint plus Mimir-specific manage
 | [#71](https://github.com/BhavsarDevansh/Mimir/issues/71) — `mimir chat` streaming bug | Streaming may fail in some environments | Use `mimir ask` for single-shot queries; restart daemon if stream stalls |
 | [#45](https://github.com/BhavsarDevansh/Mimir/issues/45) — UTC time | `get_current_time` returns UTC | Ask Mimir to convert to your timezone verbally |
 | [#25](https://github.com/BhavsarDevansh/Mimir/issues/25) — Unix socket transport | TCP is the only transport | TCP on `127.0.0.1:8080` is secure for local use |
-| Knowledge graph not wired up | No `mimir kb` commands, no automatic fact extraction from chat | Knowledge graph is now the primary memory system; `mimir memory` and `mimir kb` commands are available |
+| | | 
 
 ---
 

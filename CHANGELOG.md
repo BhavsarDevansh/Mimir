@@ -1,4 +1,9 @@
 # Changelog
+## [0.35.3] - 2026-06-08
+
+### Fixed
+- Fixed `sqlx::migrate!` not recognising `-- no-transaction` in migrations 031, 032, and 033 because the directive was preceded by comment headers. This caused those migrations to run inside transactions, which in turn caused `PRAGMA foreign_keys = OFF` to be ignored. Migration 033's `DROP TABLE relationship_types` then triggered an `ON DELETE CASCADE` that silently emptied `relationship_constraints`, breaking `test_predicate_validation`.
+
 
 ## [0.35.2] — 2026-06-08
 

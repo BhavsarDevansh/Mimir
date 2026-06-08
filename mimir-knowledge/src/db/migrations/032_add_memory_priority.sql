@@ -1,7 +1,7 @@
+-- no-transaction
 -- ============================================================================
 -- 032: Memory priority system for fact ranking in memory condensation
 -- ============================================================================
--- no-transaction
 PRAGMA foreign_keys = OFF;
 
 -- Lookup table for memory priority tiers used by the ranking engine.

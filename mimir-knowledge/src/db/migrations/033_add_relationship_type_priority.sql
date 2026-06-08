@@ -1,7 +1,7 @@
+-- no-transaction
 -- ============================================================================
 -- 033: Default memory priority per relationship type for auto-assignment
 -- ============================================================================
--- no-transaction
 PRAGMA foreign_keys = OFF;
 
 -- SQLite cannot ALTER TABLE ADD COLUMN with REFERENCES + non-NULL default.

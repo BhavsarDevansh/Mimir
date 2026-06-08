@@ -164,7 +164,7 @@ fn compute_top_n_hash(schema: &MemorySchema, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::memory::{MemoryBucket, MemoryPriority, MemorySchema, RankedFact};
+    use crate::models::memory::{MemoryBucket, MemorySchema, RankedFact};
 
     #[test]
     fn top_n_hash_empty_schema() {

@@ -6,7 +6,7 @@ mod output;
 mod permission;
 mod registry;
 
-pub use builtins::{EchoTool, GetCurrentTimeTool, GetWeatherTool, MemoryTool};
+pub use builtins::{EchoTool, GetCurrentTimeTool, GetWeatherTool};
 pub use cli::{CliTool, CliToolConfig};
 pub use config::ToolsConfig;
 pub use error::ToolError;

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.37.0] — 2026-06-08
+
+### Removed
+
+- **Issue #111**: Deleted the legacy `memory.md` file-backed memory system entirely.
+  - Removed `mimir-core/src/memory/` directory (`MemoryManager`, `MemoryLoader`, `MemorySnapshot`).
+  - Removed `MemoryTool` from `mimir-core/src/tools/builtins/`.
+  - Removed `memory_manager` benchmark from `mimir-core`.
+  - Cleaned stale `# path = "${CONFIG_DIR}/memory.md"` example comments from config TOML strings.
+
+### Changed
+
+- Memory is now exclusively knowledge-graph-backed via `mimir-knowledge`.
+- `mimir-core` no longer exports a `memory` module; all memory access flows through `mimir-knowledge::KnowledgeGraph`.
+
+
 ## [0.36.0] — 2026-06-08
 
 ### Removed

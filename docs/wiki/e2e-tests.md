@@ -10,7 +10,7 @@ This builds the real `mimir` binary, starts the server in-process with a mock LL
 
 ## What the Test Covers
 
-- **Config isolation**: The test creates a temporary directory with its own `config.toml`, SQLite database, and `memory.md`.
+- **Config isolation**: The test creates a temporary directory with its own `config.toml` and SQLite database.
 - **Daemon lifecycle**: Starts the server in-process via `mimir_server::start_server_with_llm_and_listener`, polls `/status`, sends `mimir ask` via the real binary, and gracefully stops with `mimir stop`.
 - **Mock LLM round-trip**: Asserts that the CLI correctly forwards the user query and prints the mock assistant response.
 

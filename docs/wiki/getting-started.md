@@ -44,12 +44,11 @@ Key sections:
 - `[llm]` — endpoint URL, model name, API key, temperature
 - `[server]` — bind address (default `127.0.0.1:8080`)
 - `[personality]` — default preset (`transparent`, `concise`, `warm`, `formal`)
-- `[memory]` — path to `memory.md` working memory file
+- `[memory]` — character budget and auto-management for the knowledge graph memory
 
 Environment variables override config values:
 
 - `MIMIR_BASE_URL` — override the daemon base URL for CLI commands
-- `MIMIR_MEMORY_PATH` — override the memory file location
 
 ## Quick Start
 

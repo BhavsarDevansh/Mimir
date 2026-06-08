@@ -3,7 +3,7 @@ name = "mimir-core"
 version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Core library for Mimir: LLM client, config, memory, context, tools, skills"
+description = "Core library for Mimir: LLM client, config, context, tools, skills"
 repository.workspace = true
 homepage.workspace = true
 edition.workspace = true
@@ -43,11 +43,6 @@ mock-llm = []
 [[bench]]
 name = "context_manager"
 harness = false
-
-[[bench]]
-name = "memory_manager"
-harness = false
-
 [[bench]]
 name = "tool_registry"
 harness = false

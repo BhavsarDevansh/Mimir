@@ -4,7 +4,7 @@
 
 ## Phase 2 Update (2026-06-06) — Now Default
 
-Mimir is transitioning from a static `memory.md` file to a **dynamic, knowledge-graph-backed memory system**. Facts are now stored in SQLite and ranked on demand by a Rust scoring engine.
+Mimir uses a **dynamic, knowledge-graph-backed memory system**. Facts are now stored in SQLite and ranked on demand by a Rust scoring engine.
 
 ### How Memory Works Now
 
@@ -28,7 +28,7 @@ Instead of reading a text file, Mimir:
 
 ### What This Means for You
 
-- No need to manually edit `memory.md` — Mimir builds your memory automatically from conversations
+- No need to manually edit memory — Mimir builds your memory automatically from conversations
 - The memory block is always current (regenerated when facts change)
 - You can still inspect what Mimir knows via `mimir memory` and `mimir kg query`
 - If you want a fact pinned or deprioritised, that will be supported in a future update

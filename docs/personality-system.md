@@ -44,7 +44,7 @@ pub fn system_prompt(&self, memory_content: &str) -> String
   {preset_system_prompt}
 
   ## Persistent Memory Context
-  {memory_md_content}
+  {condensed_memory}
   ```
 
 This composition is the responsibility of `Personality`; the caller passes the resulting string to `ContextManager::create_session`.

@@ -23,7 +23,7 @@ bind_addr = "127.0.0.1:8080"
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/status` | `GET` | Health check and runtime statistics |
-| `/memory` | `GET` | Current `memory.md` contents |
+| `/memory` | `GET` | Live condensed memory block from the knowledge graph |
 | `/chat` | `POST` | Blocking chat completion |
 | `/chat/stream` | `POST` | SSE streaming chat completion |
 
@@ -41,7 +41,7 @@ Returns version, uptime, and queue depths.
 curl http://127.0.0.1:8080/memory
 ```
 
-Returns the raw contents of `memory.md`.
+Returns the live condensed memory block (stable facts + upcoming events) from the knowledge graph.
 
 ### Chat
 

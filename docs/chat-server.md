@@ -9,7 +9,7 @@ The Mimir chat server is an Axum HTTP daemon that runs in-process as part of the
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/status` | Health check and runtime introspection |
-| `GET` | `/memory` | Current contents of `memory.md` |
+| `GET` | `/memory` | Live condensed memory block from the knowledge graph |
 | `GET` | `/sessions` | List conversation sessions |
 | `GET` | `/sessions/{id}/messages` | Messages for a session from last compaction |
 | `POST` | `/chat` | Blocking chat completion |

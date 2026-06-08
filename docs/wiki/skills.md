@@ -36,7 +36,7 @@ tags: [productivity, summary]
 1. Look at the last 7 days in the knowledge graph.
 2. Check calendar for meetings and travel.
 3. Synthesize into a concise narrative.
-4. Ask if the user wants it saved to memory.md.
+4. Ask if the user wants it inserted into the knowledge graph via fact extraction.
 ```
 
 The Markdown body is sent to the LLM as instructions, so you can write skills in plain English.

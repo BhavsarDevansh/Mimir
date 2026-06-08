@@ -1,0 +1,57 @@
+# Memory System
+
+## Overview
+
+Mimir's memory system is a **knowledge-graph-backed, on-demand rendered memory block**. It replaced the legacy `memory.md` file-based system in v0.37.0 (Issue #111).
+
+Instead of reading a static text file, Mimir:
+
+1. Queries the Knowledge Graph (`mimir-knowledge`) for facts about the user
+2. Scores each fact using a weighted formula: `confidence × category.memory_weight × temporal_boost × priority × centrality`
+3. Selects top facts within a configurable character budget (default 2,500)
+4. Renders them as a structured schema (`MemorySchema`) sent to an LLM for condensation into natural prose
+5. Caches the condensed result in `system_state` (`key = "condensed_memory"`) for instant retrieval
+
+## Architecture
+
+### Fact Ranking & Selection
+
+Implemented in `mimir-knowledge/src/queries/memory.rs`.
+
+- **Identity facts** always rank first (name, pronouns, birthdate)
+- **Temporal boost** increases score for upcoming events (birthdays, appointments) based on proximity
+- **Priority** (`memory_priority_id`) gives critical facts a 2× multiplier
+- **Centrality** boosts facts about well-connected entities (people mentioned often)
+- **Fill algorithm**: Sort by score descending, greedily fill the character budget, truncate last entry with `…` if exceeded
+
+### LLM Condensation Pipeline
+
+Implemented in `mimir-knowledge/src/condensation.rs`.
+
+- Builds a `MemorySchema` excluding upcoming and sensitive facts
+- Computes a hash of the top-N stable facts
+- If the hash matches the stored hash, skips the LLM call (no-op)
+- Otherwise, calls the LLM with a pure formatting prompt (no conditional logic, no decision-making)
+- Validates output length against budget
+- Falls back to deterministic Rust template rendering on LLM failure or oversize output
+- Stores result in `system_state`
+
+### Regeneration Triggers
+
+Condensed memory is regenerated when:
+- A fact is inserted/updated/deleted that ranks in top-N for memory inclusion
+- `mimir memory --refresh` is called explicitly
+- Nightly optimization completes (confidence recalculation may re-rank facts)
+
+### Context Injection
+
+The daemon injects the condensed memory block into the system prompt before each chat turn, combined with an upcoming events section. The prompt phrasing is "Key facts I know about you:" (not "Here is everything I remember"), signalling to the LLM that the subset is curated and it should use KG tools if it needs more.
+
+## Files
+
+- `mimir-knowledge/src/queries/memory.rs` — ranking, scoring, budget fill
+- `mimir-knowledge/src/models/memory.rs` — `MemorySchema`, `MemoryBucket`, `RankedFact`
+- `mimir-knowledge/src/condensation.rs` — LLM condensation pipeline
+- `mimir-knowledge/src/queries/system_state.rs` — `condensed_memory` cache read/write
+- `mimir-server/src/routes/memory.rs` — `/memory` GET and `/memory/refresh` POST
+- `mimir-server/src/routes/chat.rs` — system prompt memory injection

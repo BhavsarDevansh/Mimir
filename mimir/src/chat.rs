@@ -212,7 +212,7 @@ fn print_help() {
     println!("Commands:");
     println!("  /exit    - Exit the REPL");
     println!("  /clear   - Reset the conversation session");
-    println!("  /memory  - Show memory.md contents");
+    println!("  /memory  - Show the live condensed memory block");
     println!("  /status  - Quick health check");
     println!("  /history - Resume a previous conversation");
     println!();

@@ -75,7 +75,7 @@ You can override settings with environment variables (e.g. `MIMIR_BASE_URL`).
 
 Run `mimir init` for a guided first-run setup including identity configuration and optional systemd user service installation.
 
-> **Note:** The legacy `memory.md` file is deprecated. Memory is now served live from the knowledge graph.
+> **Note:** The legacy `memory.md` file-backed memory system was removed in v0.37.0. Memory is now served live from the knowledge graph.
 
 ## Documentation
 

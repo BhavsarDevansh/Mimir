@@ -31,7 +31,6 @@ When shutdown is triggered:
 - In-flight requests are allowed to finish (within a 30-second limit).
 - The SQLite database pool is closed, flushing any pending writes.
 - LLM worker threads are stopped and their HTTP connections closed.
-- The `memory.md` file is synced to disk.
 
 ## Best Practices
 

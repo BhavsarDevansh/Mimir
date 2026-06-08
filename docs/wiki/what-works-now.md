@@ -1,6 +1,6 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-06-07
+> **Last updated:** 2026-06-08
 > **Version:** 0.35.0
 > **Phase:** Phase 2 (Knowledge Graph) — Issue #108 (Fact Ranking & Selection Engine) and Issue #109 (LLM Condensation Pipeline & Regeneration Triggers) are implemented. The live memory system is now wired into the daemon. Forgetting system (bulk forget, restore, trash, full reset) implemented in `mimir-knowledge`.
 
@@ -149,7 +149,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `memory.md` working memory | ✅ Works | Live condensed memory (~2,500 chars) ranked from the knowledge graph and injected into every system prompt |
+| Knowledge graph memory | ✅ Works | Live condensed memory (~2,500 chars) ranked from the knowledge graph and injected into every system prompt |
 | Agent-managed updates | ✅ Works | Facts are extracted automatically from conversations and inserted into the knowledge graph |
 | Frozen snapshots | ✅ Works | Condensed memory is read from `system_state` once per session; changes don't affect the current chat |
 | Manual editing | ✅ Works | Edit the file directly; changes apply to the next session |

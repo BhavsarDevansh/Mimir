@@ -67,7 +67,7 @@ The parser accumulates bytes into a buffer, splits on `\n\n` (SSE event boundari
 | `chat` | `POST /chat` | Non-streaming chat completion |
 | `chat_stream` | `POST /chat/stream` | Returns an `impl Stream<Item = Result<StreamItem, ClientError>>` |
 | `status` | `GET /status` | Rich status metadata |
-| `memory` | `GET /memory` | Plain-text contents of `memory.md` |
+| `memory` | `GET /memory` | Live condensed memory block from the knowledge graph |
 | `stop` | `POST /stop` | Triggers graceful daemon shutdown |
 
 ### Error Types

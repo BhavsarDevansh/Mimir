@@ -27,15 +27,6 @@ binaries (`harness = false`).
 | `context_export_messages` | `SELECT * FROM messages` for a 40-message session |
 | `context_trim_to_budget` | Token-aware trimming of 50 message pairs |
 
-### `memory_manager`
-
-| Benchmark | What it measures |
-|-----------|------------------|
-| `memory_add_small` | Append 11 bytes to `memory.md` |
-| `memory_add_large` | Append 5000 bytes to `memory.md` |
-| `memory_replace` | In-place string replacement with disk write |
-| `memory_usage_calculation` | `chars().count()` and percentage math |
-
 ### `tool_registry`
 
 | Benchmark | What it measures |

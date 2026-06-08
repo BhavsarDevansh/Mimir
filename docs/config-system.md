@@ -40,7 +40,6 @@ Centralised XDG-aware path resolution in `mimir-core/src/paths.rs`:
 | `data_dir()` | `Result<PathBuf, PathsError>` | `~/.local/share/mimir` |
 | `cache_dir()` | `Result<PathBuf, PathsError>` | `~/.cache/mimir` |
 | `config_path()` | `Result<PathBuf, PathsError>` | `config_dir()/config.toml` |
-| `memory_path()` | `Result<PathBuf, PathsError>` | `config_dir()/memory.md` |
 | `default_db_path()` | `Result<PathBuf, PathsError>` | `data_dir()/context.db` |
 | `ensure_dir()` | `Result<(), PathsError>` | Idempotent `create_dir_all` |
 

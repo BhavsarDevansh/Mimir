@@ -373,7 +373,6 @@ enabled = true
 char_limit = 2500
 auto_manage = true
 temporal_horizon = 30
-# path = "${CONFIG_DIR}/memory.md"  # Optional: override memory file location
 
 [context]
 max_turns = 20
@@ -747,7 +746,6 @@ enabled = true
 char_limit = 2500
 auto_manage = true
 temporal_horizon = 30
-# path = "${CONFIG_DIR}/memory.md"  # Optional: override memory file location
 
 [context]
 max_tokens = 4096

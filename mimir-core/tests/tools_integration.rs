@@ -1,6 +1,5 @@
 use mimir_core::tools::*;
 use serde_json::json;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 #[tokio::test]

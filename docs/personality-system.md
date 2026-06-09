@@ -43,7 +43,7 @@ pub fn system_prompt(&self, memory_content: &str) -> String
   ```text
   {preset_system_prompt}
 
-  ## Persistent Memory Context
+  Key facts I know about you:
   {condensed_memory}
   ```
 

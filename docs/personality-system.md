@@ -45,6 +45,8 @@ pub fn system_prompt(&self, memory_content: &str) -> String
 
   Key facts I know about you:
   {condensed_memory}
+
+  Note: This is not an exhaustive list. Use kg_query, kg_related, or kg_search tools if you need more information.
   ```
 
 This composition is the responsibility of `Personality`; the caller passes the resulting string to `ContextManager::create_session`.

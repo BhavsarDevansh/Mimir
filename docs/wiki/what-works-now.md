@@ -170,7 +170,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Presets | ✅ Works | `transparent`, `concise`, `warm`, `formal` |
-| System prompt generation | ✅ Works | Combines preset + condensed memory from the knowledge graph |
+| System prompt generation | ✅ Works | Combines preset + condensed memory from the knowledge graph; explicitly marked as non-exhaustive with a note directing the LLM to KG tools |
 | CLI override | ✅ Works | `--personality` flag on `mimir ask` |
 
 ### Deployment & Operations

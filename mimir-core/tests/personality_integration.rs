@@ -22,6 +22,11 @@ async fn personality_system_prompt_injected_into_session() {
     assert_eq!(exported[0].role, "system");
     assert!(exported[0].content.contains("transparent"));
     assert!(exported[0].content.contains("Key facts I know about you:"));
+    assert!(
+        exported[0]
+            .content
+            .contains("Note: This is not an exhaustive list.")
+    );
     assert!(exported[0].content.contains("User likes Rust and coffee."));
 }
 
@@ -40,5 +45,10 @@ async fn personality_empty_memory_omits_section_in_session() {
     assert_eq!(exported.len(), 1);
     assert_eq!(exported[0].role, "system");
     assert!(!exported[0].content.contains("Key facts I know about you:"));
+    assert!(
+        !exported[0]
+            .content
+            .contains("Note: This is not an exhaustive list.")
+    );
     assert!(exported[0].content.contains("bullet points"));
 }

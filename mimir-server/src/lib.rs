@@ -1341,6 +1341,10 @@ mod tests {
             content.contains("User enjoys hiking and sourdough bread."),
             "system prompt should contain the seeded KG memory"
         );
+        assert!(
+            content.contains("Note: This is not an exhaustive list."),
+            "system prompt should contain the non-exhaustive note"
+        );
     }
 
     #[tokio::test]
@@ -1397,6 +1401,10 @@ mod tests {
         assert!(
             content.contains("User enjoys hiking and sourdough bread."),
             "system prompt should contain the seeded KG memory"
+        );
+        assert!(
+            content.contains("Note: This is not an exhaustive list."),
+            "system prompt should contain the non-exhaustive note"
         );
     }
 }

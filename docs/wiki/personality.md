@@ -22,6 +22,21 @@ More conversational and companion-like. Acknowledges context naturally. Good whe
 
 Structured, full sentences, no contractions, precise terminology. Good for professional contexts.
 
+## Memory Context
+
+When Mimir has learned facts about you from the knowledge graph, it injects a short memory section into the system prompt before each chat turn:
+
+```
+Key facts I know about you:
+[condensed memory text]
+
+Note: This is not an exhaustive list. Use kg_query, kg_related, or kg_search tools if you need more information.
+```
+
+This note is intentional — it signals the LLM that the injected memory is a curated subset, not a complete record. If the LLM needs deeper or more specific information, it should use the knowledge-graph tools rather than relying solely on the condensed summary.
+
+If no memory facts exist yet, the section is omitted entirely.
+
 ## How to Select a Preset
 
 Edit `~/.config/mimir/config.toml`:

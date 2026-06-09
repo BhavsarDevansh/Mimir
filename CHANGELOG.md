@@ -519,3 +519,15 @@
   - Deterministic fallback renderer in Rust for when LLM condensation is unavailable.
   - `system_state` read/write queries for cached `condensed_memory`.
   - Unit and integration tests covering scoring, temporal boost, budget fill, renderer, and centrality cache.
+
+## [0.38.1] — 2026-06-09
+
+### Added
+
+- **Issue #60**: Added explicit non-exhaustive note to context-injected system prompt.
+  - When condensed memory is present, the system prompt now appends: "Note: This is not an exhaustive list. Use kg_query, kg_related, or kg_search tools if you need more information."
+  - Signals the LLM that the injected memory is a curated subset, prompting tool use for deeper queries.
+  - Completes the Layer 2 context injection design from Phase 2 Knowledge Graph architecture.
+  - Updated `Personality::system_prompt()` in `mimir-core/src/personality.rs`.
+  - Updated unit tests, integration tests, and server integration tests to assert the note is present.
+  - Updated documentation in `docs/personality-system.md`, `docs/wiki/personality.md`, and `docs/wiki/what-works-now.md`.

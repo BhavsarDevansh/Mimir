@@ -66,7 +66,7 @@ impl Personality {
             preset_prompt
         } else {
             format!(
-                "{}\n\nKey facts I know about you:\n{}",
+                "{}\n\nKey facts I know about you:\n{}\n\nNote: This is not an exhaustive list. Use kg_query, kg_related, or kg_search tools if you need more information.",
                 preset_prompt,
                 memory_content.trim()
             )
@@ -254,6 +254,7 @@ mod tests {
         let prompt = p.system_prompt("User likes cats.");
         assert!(prompt.starts_with(&Personality::built_in_transparent()));
         assert!(prompt.contains("Key facts I know about you:"));
+        assert!(prompt.contains("Note: This is not an exhaustive list."));
         assert!(prompt.contains("User likes cats."));
     }
 
@@ -263,6 +264,7 @@ mod tests {
         let prompt = p.system_prompt("");
         assert!(!prompt.contains("Key facts I know about you:"));
         assert_eq!(prompt, Personality::built_in_transparent());
+        assert!(!prompt.contains("Note: This is not an exhaustive list."));
     }
 
     #[test]

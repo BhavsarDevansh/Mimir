@@ -21,7 +21,7 @@ async fn personality_system_prompt_injected_into_session() {
     assert_eq!(exported.len(), 1);
     assert_eq!(exported[0].role, "system");
     assert!(exported[0].content.contains("transparent"));
-    assert!(exported[0].content.contains("## Persistent Memory Context"));
+    assert!(exported[0].content.contains("Key facts I know about you:"));
     assert!(exported[0].content.contains("User likes Rust and coffee."));
 }
 
@@ -39,6 +39,6 @@ async fn personality_empty_memory_omits_section_in_session() {
     let exported = mgr.export_messages(&sid).await.unwrap();
     assert_eq!(exported.len(), 1);
     assert_eq!(exported[0].role, "system");
-    assert!(!exported[0].content.contains("## Persistent Memory Context"));
+    assert!(!exported[0].content.contains("Key facts I know about you:"));
     assert!(exported[0].content.contains("bullet points"));
 }

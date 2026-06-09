@@ -66,7 +66,7 @@ impl Personality {
             preset_prompt
         } else {
             format!(
-                "{}\n\n## Persistent Memory Context\n{}",
+                "{}\n\nKey facts I know about you:\n{}",
                 preset_prompt,
                 memory_content.trim()
             )
@@ -253,7 +253,7 @@ mod tests {
         let p = Personality::from_path(Path::new("/nonexistent"), "transparent");
         let prompt = p.system_prompt("User likes cats.");
         assert!(prompt.starts_with(&Personality::built_in_transparent()));
-        assert!(prompt.contains("## Persistent Memory Context"));
+        assert!(prompt.contains("Key facts I know about you:"));
         assert!(prompt.contains("User likes cats."));
     }
 
@@ -261,7 +261,7 @@ mod tests {
     fn test_system_prompt_empty_memory_omits_section() {
         let p = Personality::from_path(Path::new("/nonexistent"), "transparent");
         let prompt = p.system_prompt("");
-        assert!(!prompt.contains("## Persistent Memory Context"));
+        assert!(!prompt.contains("Key facts I know about you:"));
         assert_eq!(prompt, Personality::built_in_transparent());
     }
 

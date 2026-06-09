@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.38.0] — 2026-06-09
+
+### Changed
+
+- **Issue #112**: Switched chat context injection wording from `## Persistent Memory Context` to `Key facts I know about you:`.
+  - Signals to the LLM that the injected memory is a curated subset, not an exhaustive record.
+  - LLM should continue to use KG tools (`kg_query`, `kg_search`) for deeper or exhaustive queries.
+- Updated `Personality::system_prompt()` in `mimir-core/src/personality.rs` to use the new wording.
+- Updated unit and integration tests in `mimir-core` to assert the new prompt text.
+
+### Added
+
+- Added server integration tests in `mimir-server/src/lib.rs`:
+  - `test_chat_injects_kg_memory_into_system_prompt`: verifies blocking `/chat` injects KG condensed memory into the system prompt.
+  - `test_chat_stream_injects_kg_memory_into_system_prompt`: verifies SSE `/chat/stream` injects KG condensed memory into the system prompt.
+
+
 ## [0.37.0] — 2026-06-08
 
 ### Removed

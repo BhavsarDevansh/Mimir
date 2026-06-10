@@ -241,6 +241,45 @@ impl KnowledgeGraph {
         Ok(id)
     }
 
+    /// Same as [`Self::ensure_relationship_type`] but operates inside an existing transaction.
+    pub(crate) async fn ensure_relationship_type_in_tx(
+        &self,
+        tx: &mut sqlx::SqliteTransaction<'_>,
+        name: &str,
+    ) -> Result<i16, KnowledgeError> {
+        {
+            let cache = self.relationship_type_cache.read().await;
+            if let Some(&id) = cache.name_to_id.get(name) {
+                return Ok(id);
+            }
+        }
+
+        let row: Option<(i16,)> =
+            sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
+                .bind(name)
+                .fetch_optional(&mut **tx)
+                .await?;
+
+        let id = match row {
+            Some((id,)) => id,
+            None => {
+                let id: i64 = sqlx::query_scalar(
+                    "INSERT INTO relationship_types (name, description) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
+                )
+                .bind(name)
+                .bind(format!("Auto-created relationship_type: {}", name))
+                .fetch_one(&mut **tx)
+                .await?;
+                id as i16
+            }
+        };
+
+        let mut cache = self.relationship_type_cache.write().await;
+        cache.name_to_id.insert(name.to_string(), id);
+        cache.id_to_name.insert(id, name.to_string());
+        Ok(id)
+    }
+
     /// Look up a relationship type id by name without creating it.
     pub async fn get_relationship_type_id(
         &self,
@@ -652,7 +691,7 @@ impl KnowledgeGraph {
 
         for new_fact in &facts {
             let relationship_type_id = self
-                .ensure_relationship_type(&new_fact.relationship_type)
+                .ensure_relationship_type_in_tx(&mut tx, &new_fact.relationship_type)
                 .await?;
 
             let confidence = if let Some(conf) = new_fact.confidence {

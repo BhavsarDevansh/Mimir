@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.40.4] — 2026-06-10
+
+### Fixed
+
+- **Code review feedback for PR #125** (additional findings addressed):
+  - Fixed typo in `scripts/uninstall.sh` where `error()` redirected with `\u0026\u00262` instead of `\u003e\u00262`.
+  - Fixed `insert_facts_batch` atomicity by calling `ensure_relationship_type_in_tx` inside the batch transaction instead of autocommitting via `ensure_relationship_type`.
+  - Moved `preferred_name` alias registration and auto-merge side effects in `process_extracted_fact` to after the dedup/corroboration check, preventing irreversible mutations on duplicate facts.
+  - Aligned `generate_service_file` implementation with its docs and test by removing the unused `cache_dir` parameter and updating callers.
+
 ## [0.40.3] — 2026-06-10
 
 ### Fixed

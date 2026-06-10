@@ -692,6 +692,26 @@ pub(crate) async fn process_extracted_fact(
         (None, Some(extracted.object.clone()))
     };
 
+    // Ensure relationship_type.
+    let relationship_type_id = kg
+        .ensure_relationship_type(&extracted.relationship_type)
+        .await?;
+
+    // Dedup / corroboration check (stub for #79).
+    if let Some(existing_id) = find_existing_fact(
+        kg,
+        subject.id,
+        relationship_type_id,
+        object_id,
+        object_literal.as_deref(),
+        valid_from,
+        valid_until,
+    )
+    .await?
+    {
+        return Ok(ProcessResult::Corroborated(existing_id));
+    }
+
     // If this fact establishes a preferred name, register the object as an alias
     // so future lookups by that short name resolve to the canonical entity.
     if extracted.relationship_type == "preferred_name" {
@@ -738,26 +758,6 @@ pub(crate) async fn process_extracted_fact(
                 }
             }
         }
-    }
-
-    // Ensure relationship_type.
-    let relationship_type_id = kg
-        .ensure_relationship_type(&extracted.relationship_type)
-        .await?;
-
-    // Dedup / corroboration check (stub for #79).
-    if let Some(existing_id) = find_existing_fact(
-        kg,
-        subject.id,
-        relationship_type_id,
-        object_id,
-        object_literal.as_deref(),
-        valid_from,
-        valid_until,
-    )
-    .await?
-    {
-        return Ok(ProcessResult::Corroborated(existing_id));
     }
 
     // Map classification to source + confidence.

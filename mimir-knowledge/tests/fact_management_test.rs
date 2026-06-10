@@ -1560,3 +1560,65 @@ async fn explicit_replaces_already_superseded_is_idempotent() {
             .unwrap();
     assert_eq!(f1_edges, 1);
 }
+
+// ---------------------------------------------------------------------------
+// Multiple atemporal facts with same subject+pred but different objects
+// should NOT supersede each other (regression test for hobby-loss bug).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn multiple_atemporal_facts_different_objects_all_persist() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let alice = create_person(&kg, "Alice").await;
+
+    // Insert three hobbies with no temporal bounds — all should survive.
+    let hobbies = ["Geopolitics", "Software Development", "tinkering"];
+    let mut fact_ids = Vec::new();
+    for hobby in &hobbies {
+        let f = kg
+            .insert_fact(NewFact {
+                subject_id: alice,
+                relationship_type: "hobby".to_string(),
+                object_id: None,
+                object_literal: Some(hobby.to_string()),
+                valid_from: None,
+                valid_until: None,
+                source_type: SourceType::UserEdit,
+                connector_id: None,
+                raw_reference: None,
+                extraction_method: None,
+                connector_type: None,
+                inferred: false,
+                inference_depth: 0,
+                confidence: None,
+                parent_fact_ids: Vec::new(),
+                category_ids: Vec::new(),
+            })
+            .await
+            .unwrap();
+        fact_ids.push(f.id);
+        assert_eq!(f.status().unwrap(), FactStatus::Active);
+    }
+
+    // All three should still be active.
+    for &fid in &fact_ids {
+        let f = kg.get_fact(fid).await.unwrap().unwrap();
+        assert_eq!(f.status().unwrap(), FactStatus::Active);
+    }
+
+    // Query by subject+pred should return all three.
+    let hobby_rt_id = kg.ensure_relationship_type("hobby").await.unwrap();
+    let all_facts = kg
+        .get_facts_by_subject_and_predicate(alice, hobby_rt_id)
+        .await
+        .unwrap();
+    let active: Vec<_> = all_facts
+        .into_iter()
+        .filter(|f| f.status() == Some(FactStatus::Active))
+        .collect();
+    assert_eq!(active.len(), 3);
+}

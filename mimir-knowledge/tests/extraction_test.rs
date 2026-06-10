@@ -86,25 +86,27 @@ async fn test_explicit_extraction() {
 async fn test_casual_extraction() {
     let tg = TestGraph::new().await;
     let devansh = tg.create_person("devansh").await;
+    let auckland = tg.create_place("Auckland").await;
 
-    // Pre-insert an explicit favourite_colour.
-    tg.create_fact(devansh, "favourite_colour", None, SourceType::UserEdit)
+    // Pre-insert an explicit based_in fact (single-valued predicate).
+    tg.create_fact(devansh, "based_in", Some(auckland), SourceType::UserEdit)
         .await;
 
     let tool_args = make_remember_tool_output(vec![serde_json::json!({
         "classification": "Casual",
         "subject": "devansh",
         "subject_type": "Person",
-        "relationship_type": "favourite_colour",
-        "object": "green",
-        "object_is_entity": false,
+        "relationship_type": "based_in",
+        "object": "London",
+        "object_is_entity": true,
+        "object_type": "Place",
         "is_sensitive": false
     })]);
 
     let mock = build_mock_with_tool_output(tool_args);
     let outcome = tg
         .kg
-        .extract_facts(&mock, "Green is a nice colour.")
+        .extract_facts(&mock, "London is a nice city.")
         .await
         .unwrap();
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.40.5] — 2026-06-10
+
+### Fixed
+
+- Fixed fact-loss bug where multiple atemporal facts with the same subject and predicate but different objects (e.g. multiple hobbies) would incorrectly supersede each other, leaving only the last-inserted fact. The temporal overlap logic in `insert_fact_in_tx` now respects a `MULTI_VALUED_PREDICATES` allow-list (`hobby`, `likes`, `has_pets`, `has_sibling`, etc.) so that independent values for these predicates coexist instead of overwriting one another.
+
 ## [0.40.4] — 2026-06-10
 
 ### Fixed

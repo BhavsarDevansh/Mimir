@@ -704,6 +704,7 @@ impl KnowledgeGraph {
                 &mut tx,
                 new_fact,
                 relationship_type_id,
+                &new_fact.relationship_type,
                 confidence,
                 now,
             )
@@ -800,6 +801,7 @@ impl KnowledgeGraph {
                 &mut tx,
                 &new_fact,
                 relationship_type_id,
+                &new_fact.relationship_type,
                 confidence,
                 self.now(),
             )

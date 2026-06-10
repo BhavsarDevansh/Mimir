@@ -120,6 +120,7 @@ If `compacted_at` is set on the session, only messages with `created_at >= compa
 4. **Enqueue** — Messages are exported and the request is enqueued in the `LlmWorkerPool`. If the pool is full, a `503` error is returned before the 200 response is committed.
 5. **Tool Calls** — If the LLM responds with `tool_calls` (OpenAI function-calling format), each tool is executed via `ToolRegistry`, the results are appended as `role: tool` messages, and a follow-up LLM request is made to obtain the final assistant text. Both the blocking (`/chat`) and streaming (`/chat/stream`) endpoints support this loop. In streaming mode, tool-call deltas are accumulated internally and the final text is streamed after execution.
 6. **Storage** — The final assistant response is appended via `ContextManager::add_assistant_message`.
+7. **Fact Extraction** — For non-incognito sessions, the fact-extraction pipeline (`KnowledgeGraph::extract_facts`) runs in a background task, parsing the user message for structured facts and inserting them into the knowledge graph. Sensitive facts are gated pending user confirmation.
 
 ## Concurrency
 

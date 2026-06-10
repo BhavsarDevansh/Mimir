@@ -8,6 +8,10 @@
 
 The fact extraction pipeline transforms a raw user message into structured, validated, and stored facts in the knowledge graph. The pipeline is deterministic Rust; the LLM only provides structured extraction output. All validation, confidence assignment, entity resolution, and insertion decisions are made in Rust.
 
+## Trigger
+
+The pipeline is triggered automatically by both chat endpoints (`/chat` and `/chat/stream`) after a successful, non-incognito turn. A background task calls `KnowledgeGraph::extract_facts` so the HTTP response is never delayed. Incognito sessions skip extraction to avoid polluting the knowledge graph.
+
 ## Architecture
 
 ```

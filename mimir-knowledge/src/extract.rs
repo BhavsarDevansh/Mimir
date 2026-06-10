@@ -438,19 +438,53 @@ pub async fn extract_facts(
         .map_err(|e| KnowledgeError::Validation(format!("LLM call failed: {}", e)))?;
 
     // 2. Parse tool calls.
-    let tool_calls = assistant_msg
-        .tool_calls
-        .ok_or_else(|| KnowledgeError::Validation("LLM did not emit a tool call.".to_string()))?;
+    // Some local LLM backends (e.g. Ollama + Gemma) do not reliably emit
+    // structured tool calls even when tools are provided. We therefore fall
+    // back to parsing the assistant text content as JSON.
+    let extracted: RememberOutput = if let Some(tool_calls) = assistant_msg.tool_calls {
+        let first_call = tool_calls.into_iter().next().ok_or_else(|| {
+            KnowledgeError::Validation("LLM tool call list was empty.".to_string())
+        })?;
 
-    let first_call = tool_calls
-        .into_iter()
-        .next()
-        .ok_or_else(|| KnowledgeError::Validation("LLM tool call list was empty.".to_string()))?;
-
-    let extracted: RememberOutput =
         serde_json::from_str(&first_call.function.arguments).map_err(|e| {
             KnowledgeError::Validation(format!("Failed to parse tool arguments: {}", e))
-        })?;
+        })?
+    } else {
+        let text = assistant_msg.content.trim();
+        if text.is_empty() {
+            return Err(KnowledgeError::Validation(
+                "LLM did not emit a tool call.".to_string(),
+            ));
+        }
+
+        // Attempt to strip a Markdown code block if present.
+        let json_text = if text.starts_with("```") {
+            text.lines()
+                .skip_while(|l| l.starts_with("```"))
+                .take_while(|l| !l.starts_with("```"))
+                .collect::<Vec<_>>()
+                .join(
+                    "
+",
+                )
+        } else {
+            text.to_string()
+        };
+
+        let json_text = json_text.trim();
+
+        // Try {"facts": [...]} first, then a bare array.
+        if let Ok(wrapper) = serde_json::from_str::<RememberOutput>(json_text) {
+            wrapper
+        } else if let Ok(facts) = serde_json::from_str::<Vec<ExtractedFact>>(json_text) {
+            RememberOutput { facts }
+        } else {
+            return Err(KnowledgeError::Validation(format!(
+                "LLM did not emit a tool call and response could not be parsed as JSON: {}",
+                json_text.chars().take(200).collect::<String>()
+            )));
+        }
+    };
 
     let mut all_facts: Vec<ExtractedFact> = Vec::new();
     for fact in extracted.facts {

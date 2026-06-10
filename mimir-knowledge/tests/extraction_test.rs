@@ -656,3 +656,109 @@ async fn test_preferred_name_creates_alias() {
         mimir_knowledge::queries::entity::MatchKind::ExactAlias
     );
 }
+
+// ---------------------------------------------------------------------------
+// Fallback extraction: LLM returns JSON text instead of a tool call
+// (common with Ollama + Gemma when tool_choice is unsupported).
+// ---------------------------------------------------------------------------
+
+fn build_mock_with_text_output(content: String) -> Arc<dyn mimir_core::llm::backend::LlmBackend> {
+    let msg = Message {
+        role: "assistant".to_string(),
+        content,
+        tool_calls: None,
+        tool_call_id: None,
+    };
+
+    Arc::new(
+        MockLlmClient::builder()
+            .push_chat_message(msg, Usage::default())
+            .build(),
+    )
+}
+
+#[tokio::test]
+async fn test_text_fallback_with_wrapper() {
+    let tg = TestGraph::new().await;
+
+    let text = serde_json::json!({
+        "facts": [{
+            "classification": "Explicit",
+            "subject": "devansh",
+            "subject_type": "Person",
+            "relationship_type": "favourite_colour",
+            "object": "green",
+            "object_is_entity": false,
+            "is_sensitive": false
+        }]
+    })
+    .to_string();
+
+    let mock = build_mock_with_text_output(text);
+    let result = tg
+        .kg
+        .extract_facts(&mock, "My favourite colour is green.")
+        .await
+        .unwrap();
+
+    assert_eq!(result.inserted.len(), 1);
+    assert_eq!(result.inserted[0].object_literal.as_deref(), Some("green"));
+}
+
+#[tokio::test]
+async fn test_text_fallback_with_markdown_block() {
+    let tg = TestGraph::new().await;
+
+    let text = format!(
+        "```json\n{}\n```",
+        serde_json::json!({
+            "facts": [{
+                "classification": "Explicit",
+                "subject": "devansh",
+                "subject_type": "Person",
+                "relationship_type": "favourite_colour",
+                "object": "yellow",
+                "object_is_entity": false,
+                "is_sensitive": false
+            }]
+        })
+    );
+
+    let mock = build_mock_with_text_output(text);
+    let result = tg
+        .kg
+        .extract_facts(&mock, "My favourite colour is yellow.")
+        .await
+        .unwrap();
+
+    assert_eq!(result.inserted.len(), 1);
+    assert_eq!(result.inserted[0].object_literal.as_deref(), Some("yellow"));
+}
+
+#[tokio::test]
+async fn test_text_fallback_with_bare_array() {
+    let tg = TestGraph::new().await;
+
+    let text = serde_json::json!([
+        {
+            "classification": "Explicit",
+            "subject": "devansh",
+            "subject_type": "Person",
+            "relationship_type": "favourite_colour",
+            "object": "red",
+            "object_is_entity": false,
+            "is_sensitive": false
+        }
+    ])
+    .to_string();
+
+    let mock = build_mock_with_text_output(text);
+    let result = tg
+        .kg
+        .extract_facts(&mock, "My favourite colour is red.")
+        .await
+        .unwrap();
+
+    assert_eq!(result.inserted.len(), 1);
+    assert_eq!(result.inserted[0].object_literal.as_deref(), Some("red"));
+}

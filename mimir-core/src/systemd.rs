@@ -140,6 +140,10 @@ pub fn install_service_file(content: &str, dir: &Path) -> Result<PathBuf, System
 pub fn generate_and_install_service_file(exe_path: &Path) -> Result<PathBuf, SystemdError> {
     let config = crate::paths::config_dir()?;
     let data = crate::paths::data_dir()?;
+    // systemd ReadWritePaths requires the directories to exist before the
+    // service starts; create them now so the generated unit is valid.
+    crate::paths::ensure_dir(&config)?;
+    crate::paths::ensure_dir(&data)?;
     let content = generate_service_file(exe_path, &config, &data);
     let dir = systemd_user_dir()?;
     install_service_file(&content, &dir)

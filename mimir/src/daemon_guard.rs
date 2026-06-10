@@ -122,12 +122,21 @@ struct RealProcessSpawner;
 
 impl ProcessSpawner for RealProcessSpawner {
     fn spawn(&self, exe: &Path) -> Result<(), DaemonGuardError> {
-        std::process::Command::new(exe)
-            .arg("start")
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("start")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
+            .stderr(std::process::Stdio::null());
+
+        // Detach from the parent process group so Ctrl-C in the terminal
+        // does not propagate to the background daemon.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+
+        cmd.spawn()
             .map_err(|e| DaemonGuardError::Spawn(e.to_string()))?;
         Ok(())
     }

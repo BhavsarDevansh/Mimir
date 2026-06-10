@@ -1,3 +1,17 @@
+## [0.40.7] — 2026-06-10
+
+### Fixed
+
+- Fact extraction now falls back to parsing the assistant's text content as JSON
+  when the LLM does not emit a structured tool call. This resolves intermittent
+  extraction failures with backends such as Ollama + Gemma that do not support
+  `tool_choice`.
+- The daemon guard spawns the background server in its own Unix process group,
+  preventing Ctrl-C in the terminal from killing the daemon.
+- `generate_and_install_service_file` now ensures config and data directories
+  exist before writing the systemd unit, preventing NAMESPACE failures when
+  `ReadWritePaths` references missing directories.
+
 # Changelog
 
 ## [0.40.6] — 2026-06-10

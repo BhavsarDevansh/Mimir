@@ -1216,4 +1216,5 @@ impl KnowledgeGraph {
 // Re-export knowledge graph tools.
 pub use tools::{
     KgExpandCatalogueTool, KgFactsInCatalogueTool, KgQueryTool, KgRelatedTool, KgSearchTool,
+    RememberTool,
 };

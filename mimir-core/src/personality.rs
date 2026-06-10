@@ -66,7 +66,7 @@ impl Personality {
             preset_prompt
         } else {
             format!(
-                "{}\n\nKey facts I know about you:\n{}\n\nNote: This is not an exhaustive list. Use kg_query, kg_related, or kg_search tools if you need more information.",
+                "{}\n\nKey facts I know about you:\n{}\n\nNote: This is not an exhaustive list. Use kg_query, kg_related, or kg_search tools if you need more information. Use the remember tool whenever the user shares something worth saving.",
                 preset_prompt,
                 memory_content.trim()
             )

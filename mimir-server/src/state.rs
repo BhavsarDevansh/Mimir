@@ -175,6 +175,11 @@ impl AppState {
         )) {
             tracing::warn!("Failed to register get_facts_in_catalogue tool: {}", e);
         }
+        if let Err(e) = tool_registry.register_native(Arc::new(mimir_knowledge::RememberTool::new(
+            Arc::clone(&knowledge_graph),
+        ))) {
+            tracing::warn!("Failed to register remember tool: {}", e);
+        }
 
         // Initialise job queue.
         let jobs_db_path = mimir_core::paths::jobs_db_path()?;

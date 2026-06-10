@@ -2,7 +2,15 @@
 
 The fact-extraction pipeline processes chat input to extract and store facts as structured subject-predicate-object triples in the knowledge graph. This page explains how the process works, what gets stored, and how you stay in control.
 
-**Note:** Automatic, always-on wiring from live chat to the knowledge graph (daemon-style integration) is not yet enabled. The extraction pipeline is fully implemented as a library but not yet integrated into the daemon's chat flow.
+**Note:** The extraction pipeline is automatically triggered after every non-incognito chat interaction. Facts are extracted in the background without delaying your response. Additionally, the LLM has a `remember` tool it can call proactively during conversation to write facts directly.
+
+## Fact Quality
+
+The extraction pipeline applies Rust-side normalisation and splitting to improve the quality of extracted facts:
+
+- **Predicate normalisation**: Common LLM synonyms are mapped to canonical names. For example, `attended` → `studied_at`, `hobbies` → `hobby`.
+- **List splitting**: When the LLM outputs a single fact with a comma-separated list (e.g., `hobby → "Geopolitics, Software Development, Tech"`), the pipeline automatically splits it into three independent facts.
+- **Deduplication**: Before inserting a new fact, the pipeline checks if an identical active fact already exists. If so, it increments the confidence instead of creating a duplicate.
 
 ## What Gets Extracted
 

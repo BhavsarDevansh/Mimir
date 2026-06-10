@@ -529,3 +529,85 @@ async fn test_pending_confirmation_ttl_cleanup() {
             .contains(&fact_id)
     );
 }
+
+#[tokio::test]
+async fn test_normalize_predicate_attended_to_studied_at() {
+    let tg = TestGraph::new().await;
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "Devansh",
+        "subject_type": "Person",
+        "relationship_type": "attended",
+        "object": "University of Auckland",
+        "object_is_entity": false,
+        "categories": [],
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let result = tg
+        .kg
+        .extract_facts(&mock, "I attended University of Auckland.")
+        .await
+        .unwrap();
+
+    assert_eq!(result.inserted.len(), 1);
+    let fact = &result.inserted[0];
+    let pred = tg
+        .kg
+        .relationship_type_name(fact.relationship_type_id)
+        .await;
+    assert_eq!(pred.as_deref(), Some("studied_at"));
+    assert_eq!(
+        fact.object_literal.as_deref(),
+        Some("University of Auckland")
+    );
+}
+
+#[tokio::test]
+async fn test_split_hobbies_into_individual_facts() {
+    let tg = TestGraph::new().await;
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "Devansh",
+        "subject_type": "Person",
+        "relationship_type": "hobbies",
+        "object": "Geopolitics, Software Development, Tech",
+        "object_is_entity": false,
+        "categories": [],
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let result = tg
+        .kg
+        .extract_facts(
+            &mock,
+            "My hobbies are Geopolitics, Software Development, and Tech.",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.inserted.len(),
+        3,
+        "expected 3 hobby facts, got {:?}",
+        result.inserted
+    );
+    let preds: Vec<Option<String>> = futures::future::join_all(
+        result
+            .inserted
+            .iter()
+            .map(|f| tg.kg.relationship_type_name(f.relationship_type_id)),
+    )
+    .await;
+    for p in &preds {
+        assert_eq!(p.as_deref(), Some("hobby"));
+    }
+    let objects: Vec<Option<&str>> = result
+        .inserted
+        .iter()
+        .map(|f| f.object_literal.as_deref())
+        .collect();
+    assert!(objects.contains(&Some("Geopolitics")));
+    assert!(objects.contains(&Some("Software Development")));
+    assert!(objects.contains(&Some("Tech")));
+}

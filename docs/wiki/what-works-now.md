@@ -1,7 +1,7 @@
 # What Works in Mimir Today
 
 > **Last updated:** 2026-06-10
-> **Version:** 0.39.0
+> **Version:** 0.40.0
 > **Phase:** Phase 2 (Knowledge Graph) — Issue #108 (Fact Ranking & Selection Engine) and Issue #109 (LLM Condensation Pipeline & Regeneration Triggers) are implemented. The live memory system is now wired into the daemon. Forgetting system (bulk forget, restore, trash, full reset) implemented in `mimir-knowledge`.
 
 ---

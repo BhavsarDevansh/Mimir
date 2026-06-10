@@ -876,7 +876,10 @@ impl KnowledgeGraph {
         changed_by: models::audit_log::ChangedBy,
     ) -> Result<models::fact::Fact, KnowledgeError> {
         // Fetch current fact to compare status
-        let old_fact = self.get_fact(id).await?.ok_or(KnowledgeError::FactNotFound(id))?;
+        let old_fact = self
+            .get_fact(id)
+            .await?
+            .ok_or(KnowledgeError::FactNotFound(id))?;
         let old_status = old_fact.status();
 
         let fact = queries::fact::update_fact(

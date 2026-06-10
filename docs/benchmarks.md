@@ -51,3 +51,22 @@ cargo bench -p mimir-core
 # Single suite
 cargo bench -p mimir-core --bench context_manager
 ```
+
+## `mimir-knowledge`
+
+| Benchmark | What it measures |
+|-----------|------------------|
+| `entity_resolution_exact` | Exact name lookup by `get_by_name` with 10k facts |
+| `entity_resolution_alias` | Alias lookup with 10k facts |
+| `fts5_search` | FTS5 full-text search over entities with 10k facts |
+| `graph_traversal_depth_3` | Retrieve facts by subject with a 3-hop chain |
+| `inference_chain_100` | Transitivity inference across a 100-fact `is_in` chain |
+| `memory_condensation` | Build and render ranked memory schema from 10k facts |
+
+```bash
+# Run all knowledge graph benchmarks
+cargo bench -p mimir-knowledge
+
+# Run a single benchmark
+cargo bench -p mimir-knowledge --bench kg_benchmarks -- entity_resolution_exact
+```

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.40.0] — 2026-06-10
+
+### Added
+- **Issue #63**: Comprehensive testing suite for `mimir-knowledge`.
+  - Inline unit tests for confidence model, clock, entity/fact models, and forget logic.
+  - Temporal point-in-time DB integration test (`tests/temporal_point_in_time.rs`).
+  - Criterion benchmark suite (`mimir-knowledge/benches/kg_benchmarks.rs`) with 10k-fact dataset covering entity resolution, FTS5, graph traversal, inference chain, and memory condensation.
+  - `Clock::today()` and `MockClock::advance(Duration)` for deterministic temporal testing.
+
+### Changed
+- `MockClock::advance_seconds(i64)` replaced with `advance(&self, duration: Duration)`.
+
+# Changelog
+
 ## [0.39.0] — 2026-06-10
 
 ### Added

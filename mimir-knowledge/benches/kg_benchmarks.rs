@@ -6,7 +6,7 @@ use mimir_knowledge::models::source::SourceType;
 use mimir_knowledge::queries;
 
 /// Seed ~10 000 facts into a fresh knowledge graph.
-async fn seed_10k_facts(kg: &KnowledgeGraph) {
+async fn seed_10k_facts(kg: &KnowledgeGraph) -> (Vec<i32>, Vec<i32>) {
     let _is_in_id = kg.ensure_relationship_type("is_in").await.unwrap();
     let _visited_id = kg.ensure_relationship_type("visited").await.unwrap();
     let _knows_id = kg.ensure_relationship_type("knows").await.unwrap();
@@ -67,6 +67,7 @@ async fn seed_10k_facts(kg: &KnowledgeGraph) {
         };
         kg.insert_fact(nf).await.unwrap();
     }
+    (person_ids, place_ids)
 }
 
 fn bench_entity_resolution_exact(c: &mut Criterion) {
@@ -147,13 +148,13 @@ fn bench_facts_by_subject_with_chain(c: &mut Criterion) {
                 let dir = tempfile::tempdir().unwrap();
                 let db = dir.path().join("kg.db");
                 let kg = rt.block_on(KnowledgeGraph::init(&db)).unwrap();
-                rt.block_on(seed_10k_facts(&kg));
-                // Build a linear chain: Person0 → Person1 → Person2 → Person3 via "knows"
+                let (person_ids, _place_ids) = rt.block_on(seed_10k_facts(&kg));
+                // Build a linear chain using actual seeded person IDs
                 for i in 0..3 {
                     let nf = NewFact {
-                        subject_id: i + 1,
+                        subject_id: person_ids[i],
                         relationship_type: "knows".to_string(),
-                        object_id: Some(i + 2),
+                        object_id: Some(person_ids[i + 1]),
                         object_literal: None,
                         valid_from: None,
                         valid_until: None,
@@ -170,11 +171,11 @@ fn bench_facts_by_subject_with_chain(c: &mut Criterion) {
                     };
                     rt.block_on(kg.insert_fact(nf)).unwrap();
                 }
-                (kg, dir)
+                (kg, dir, person_ids)
             },
-            |(kg, _dir)| {
+            |(kg, _dir, person_ids)| {
                 rt.block_on(async {
-                    let results = kg.get_facts_by_subject(1, 100).await.unwrap();
+                    let results = kg.get_facts_by_subject(person_ids[0], 100).await.unwrap();
                     std::hint::black_box(results);
                 });
             },
@@ -270,12 +271,15 @@ fn bench_memory_condensation(c: &mut Criterion) {
                 let dir = tempfile::tempdir().unwrap();
                 let db = dir.path().join("kg.db");
                 let kg = rt.block_on(KnowledgeGraph::init(&db)).unwrap();
-                rt.block_on(seed_10k_facts(&kg));
-                (kg, dir)
+                let (person_ids, _) = rt.block_on(seed_10k_facts(&kg));
+                (kg, dir, person_ids)
             },
-            |(kg, _dir)| {
+            |(kg, _dir, person_ids)| {
                 rt.block_on(async {
-                    let mem = kg.build_memory_schema(1, 2500, 0.5).await.unwrap();
+                    let mem = kg
+                        .build_memory_schema(person_ids[0], 2500, 0.5)
+                        .await
+                        .unwrap();
                     let text = kg.render_memory_schema(&mem);
                     std::hint::black_box(text);
                 });

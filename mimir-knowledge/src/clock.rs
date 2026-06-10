@@ -22,35 +22,26 @@ impl Clock for RealClock {
 
 /// Deterministic fake clock for tests.
 pub struct MockClock {
-    seconds: AtomicI64,
-    nanos: AtomicI64,
+    total_nanos: AtomicI64,
 }
 
 impl MockClock {
     pub fn new(start: DateTime<Utc>) -> Self {
         Self {
-            seconds: AtomicI64::new(start.timestamp()),
-            nanos: AtomicI64::new(start.timestamp_subsec_nanos() as i64),
+            total_nanos: AtomicI64::new(start.timestamp_nanos_opt().expect("valid timestamp")),
         }
     }
 
     pub fn advance(&self, duration: Duration) {
-        let total_nanos = duration.num_nanoseconds().unwrap_or(0);
-        let secs = total_nanos.div_euclid(1_000_000_000);
-        let nanos = total_nanos.rem_euclid(1_000_000_000);
-        self.seconds.fetch_add(secs, Ordering::SeqCst);
-        self.nanos.fetch_add(nanos, Ordering::SeqCst);
+        let delta = duration.num_nanoseconds().unwrap_or(0);
+        self.total_nanos.fetch_add(delta, Ordering::SeqCst);
     }
 }
 
 impl Clock for MockClock {
     fn now(&self) -> DateTime<Utc> {
-        let secs = self.seconds.load(Ordering::SeqCst);
-        let nanos = self.nanos.load(Ordering::SeqCst);
-        // Normalize cumulative nanos overflow into seconds.
-        let extra_secs = nanos.div_euclid(1_000_000_000);
-        let norm_nanos = nanos.rem_euclid(1_000_000_000) as u32;
-        DateTime::from_timestamp(secs + extra_secs, norm_nanos).expect("valid timestamp")
+        let nanos = self.total_nanos.load(Ordering::SeqCst);
+        DateTime::from_timestamp_nanos(nanos)
     }
 }
 

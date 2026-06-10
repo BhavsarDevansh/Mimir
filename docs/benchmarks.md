@@ -53,7 +53,6 @@ cargo bench -p mimir-core --bench context_manager
 ```
 
 ## `mimir-knowledge`
-## `mimir-knowledge`
 
 | Benchmark | What it measures |
 |-----------|------------------|

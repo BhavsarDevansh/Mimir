@@ -197,7 +197,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | FTS5 search | ✅ Works | Full-text search over entities and aliases |
 | **Fact extraction pipeline** | ✅ Works | LLM → Rust validation → entity resolution → confidence → sensitive confirmation → insert (issue #55) |
 | **Daemon integration** | ✅ Works | All `mimir kb` commands route through daemon HTTP; no direct DB access from CLI |
-| **`mimir kb` CLI** | 🔄 Partial | `mimir kb audit` available; full CRUD planned for Phase 2 |
+| **`mimir kb` CLI** | ✅ Works | All `mimir kb` commands route through daemon HTTP; audit and CRUD supported via daemon |
 
 ---
 

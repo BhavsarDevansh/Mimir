@@ -112,6 +112,7 @@ pub enum KbCommands {
         json: bool,
     },
     /// Edit a fact's mutable fields.
+    #[command(group = ArgGroup::new("edits").required(true).args(["confidence", "valid_from", "valid_until", "object", "status"]))]
     Edit {
         /// Fact ID.
         fact_id: i32,

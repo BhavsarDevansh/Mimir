@@ -213,7 +213,7 @@ fn change_type_name(change_type_id: i16) -> String {
         3 => "confidence_change",
         4 => "temporal_update",
         5 => "source_added",
-        6 => "Forgotten",
+        6 => "forgotten",
         7 => "restored",
         8 => "rejected",
         _ => "Unknown",

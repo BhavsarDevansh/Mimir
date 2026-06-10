@@ -375,11 +375,12 @@ impl MimirClient {
         offset: u32,
         limit: u32,
     ) -> Result<TrashListResponse, ClientError> {
-        let url = format!(
-            "{}/kb/trash?offset={}&limit={}",
-            self.base_url, offset, limit
-        );
-        let resp = self.client.get(&url).send().await?;
+        let url = format!("{}/kb/trash", self.base_url);
+        let params = [
+            ("offset", offset.to_string()),
+            ("limit", limit.to_string()),
+        ];
+        let resp = self.client.get(&url).query(&params).send().await?;
         let status = resp.status();
         if status.is_success() {
             let body = resp.json::<TrashListResponse>().await?;

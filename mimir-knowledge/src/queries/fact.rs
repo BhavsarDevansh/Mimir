@@ -71,12 +71,12 @@ pub async fn update_fact(
             serde_json::json!({"valid_from": old.valid_from, "valid_until": old.valid_until})
                 .to_string();
         let new_json =
-            serde_json::json!({"valid_from": valid_from, "valid_until": valid_until}).to_string();
+            serde_json::json!({"valid_from": new_from, "valid_until": new_until}).to_string();
         sqlx::query(
             "UPDATE facts SET valid_from = ?, valid_until = ?, updated_at = ? WHERE id = ?",
         )
-        .bind(valid_from)
-        .bind(valid_until)
+        .bind(new_from)
+        .bind(new_until)
         .bind(now)
         .bind(fact_id)
         .execute(&mut *tx)

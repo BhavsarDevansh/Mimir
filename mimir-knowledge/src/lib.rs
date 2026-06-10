@@ -299,6 +299,12 @@ impl KnowledgeGraph {
     // Centrality cache
     // ------------------------------------------------------------------
 
+    /// Clear the centrality cache, forcing a rebuild on next use.
+    pub async fn set_centrality_dirty(&self) {
+        let mut cache = self.centrality_cache.write().await;
+        cache.clear();
+    }
+
     /// Populate the centrality cache by scanning all facts in the graph.
     /// Called once on first memory build; subsequent builds use cached values.
     pub async fn populate_centrality_cache(&self) -> Result<(), KnowledgeError> {
@@ -852,6 +858,7 @@ impl KnowledgeGraph {
     ) -> Result<models::fact::Fact, KnowledgeError> {
         let fact =
             queries::fact::set_status(&self.pool, id, status, self.now(), changed_by).await?;
+        self.set_centrality_dirty().await;
         self.set_condensation_dirty();
         Ok(fact)
     }
@@ -868,6 +875,10 @@ impl KnowledgeGraph {
         status: Option<models::fact::FactStatus>,
         changed_by: models::audit_log::ChangedBy,
     ) -> Result<models::fact::Fact, KnowledgeError> {
+        // Fetch current fact to compare status
+        let old_fact = self.get_fact(id).await?.ok_or(KnowledgeError::FactNotFound(id))?;
+        let old_status = old_fact.status();
+
         let fact = queries::fact::update_fact(
             &self.pool,
             id,
@@ -880,6 +891,14 @@ impl KnowledgeGraph {
             changed_by,
         )
         .await?;
+
+        // If status changed, invalidate centrality cache
+        if let Some(new_status) = status {
+            if old_status != Some(new_status) {
+                self.set_centrality_dirty().await;
+            }
+        }
+
         self.set_condensation_dirty();
         Ok(fact)
     }

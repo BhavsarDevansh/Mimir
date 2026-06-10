@@ -1,7 +1,7 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-06-08
-> **Version:** 0.37.0
+> **Last updated:** 2026-06-10
+> **Version:** 0.39.0
 > **Phase:** Phase 2 (Knowledge Graph) — Issue #108 (Fact Ranking & Selection Engine) and Issue #109 (LLM Condensation Pipeline & Regeneration Triggers) are implemented. The live memory system is now wired into the daemon. Forgetting system (bulk forget, restore, trash, full reset) implemented in `mimir-knowledge`.
 
 ---
@@ -114,7 +114,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | `mimir tool list` | ✅ Works | Lists registered tools and their permissions |
 | `mimir tool enable/disable/permission` | ✅ Works | Change tool permission levels (saved to `tools.toml`) |
 | `mimir skill list/show/add/delete/enable/disable` | ✅ Works | Manage skills (built-in, user-added, and generated) |
-| `mimir kb` | 🔄 Partial | `mimir kb audit` available; full CRUD planned for Phase 2 |
+| `mimir kb` | ✅ Works | All `mimir kb` commands route through daemon HTTP; audit and CRUD supported via daemon |
 
 ### Chat & Conversation
 
@@ -196,8 +196,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Forgetting system | ✅ Works | Trash, cascade forget, restore, bulk operations |
 | FTS5 search | ✅ Works | Full-text search over entities and aliases |
 | **Fact extraction pipeline** | ✅ Works | LLM → Rust validation → entity resolution → confidence → sensitive confirmation → insert (issue #55) |
-| **Daemon integration** | ❌ Not yet | The crate is **not wired into** `mimir-server` or the CLI |
-| **`mimir kb` CLI** | 🔄 Partial | `mimir kb audit` available; full CRUD planned for Phase 2 |
+| **`mimir kb` CLI (daemon-routed)** | ✅ Works | All `mimir kb` commands route through daemon HTTP (no direct DB access); audit and CRUD supported via daemon |
 
 ---
 
@@ -214,6 +213,16 @@ The daemon exposes an OpenAI-compatible chat endpoint plus Mimir-specific manage
 | `POST` | `/chat` | Blocking chat with agentic tool loop |
 | `POST` | `/chat/stream` | SSE streaming chat |
 | `POST` | `/stop` | Graceful shutdown (loopback only) |
+| `GET` | `/kb/query` | Query facts for an entity |
+| `GET` | `/kb/facts/{id}` | Show a single fact with sources, deps, audit |
+| `PATCH` | `/kb/facts/{id}` | Edit mutable fact fields |
+| `POST` | `/kb/facts/forget` | Forget facts (single or bulk) |
+| `GET` | `/kb/browse` | Graph traversal from an entity |
+| `GET` | `/kb/profile` | Generate entity profile from top-confidence facts |
+| `GET` | `/kb/audit` | Query the fact audit log |
+| `GET` | `/kb/trash` | List trash contents |
+| `POST` | `/kb/trash/restore` | Restore facts from trash |
+| `DELETE` | `/kb/trash` | Empty trash permanently |
 
 ---
 
@@ -231,7 +240,7 @@ The daemon exposes an OpenAI-compatible chat endpoint plus Mimir-specific manage
 ## Roadmap Summary
 
 - **Phase 1 — Core Agent** ✅ Complete
-- **Phase 2 — Knowledge Graph** 🔄 Library complete; daemon integration pending
+- **Phase 2 — Knowledge Graph** ✅ Complete
 - **Phase 3 — Connectors** ⏳ Planned (calendar, email, file watchers)
 - **Phase 4 — Reasoning** ⏳ Planned (inference engine expansion)
 - **Phase 5 — Proactive Agent** ⏳ Planned (events, reminders, domain surfacing)
@@ -247,4 +256,3 @@ See `VISION/09-Roadmap/` for full details.
 - Check the GitHub Issues board for bug reports and feature requests.
 - Run `mimir status` to verify daemon health and configuration.
 
-- Knowledge Graph LLM tools: `kg_query`, `kg_related`, `kg_search` (Phase 2, Issue #56)

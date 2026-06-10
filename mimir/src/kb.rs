@@ -1,18 +1,19 @@
 use chrono::{DateTime, Utc};
-use mimir_core::paths::knowledge_db_path;
-use mimir_knowledge::queries::audit::AuditLogFilter;
-use mimir_knowledge::{KnowledgeError, KnowledgeGraph};
+use colored::Colorize;
+use mimir_api_types::{
+    AuditQueryRequest, BrowseRequest, FactEditRequest, FactQueryParams, ForgetRequest,
+    ProfileRequest, RestoreRequest,
+};
+use mimir_client::MimirClient;
 
+#[allow(dead_code)]
 fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
-    // RFC 3339 / ISO 8601 with timezone offset.
     if let Ok(dt) = s.parse::<DateTime<Utc>>() {
         return Some(dt);
     }
-    // Naive date → midnight UTC.
     if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        return Some(d.and_hms_opt(0, 0, 0)?.and_utc());
+        return d.and_hms_opt(0, 0, 0).map(|t| t.and_utc());
     }
-    // Naive datetime without timezone.
     for fmt in [
         "%Y-%m-%dT%H:%M:%S",
         "%Y-%m-%d %H:%M:%S",
@@ -26,20 +27,293 @@ fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
     None
 }
 
-fn parse_change_type(s: &str) -> Option<mimir_knowledge::models::audit_log::ChangeType> {
-    match s.to_lowercase().as_str() {
-        "created" => Some(mimir_knowledge::models::audit_log::ChangeType::Created),
-        "status_change" => Some(mimir_knowledge::models::audit_log::ChangeType::StatusChange),
-        "confidence_change" => {
-            Some(mimir_knowledge::models::audit_log::ChangeType::ConfidenceChange)
-        }
-        "temporal_update" => Some(mimir_knowledge::models::audit_log::ChangeType::TemporalUpdate),
-        "source_added" => Some(mimir_knowledge::models::audit_log::ChangeType::SourceAdded),
-        "forgotten" => Some(mimir_knowledge::models::audit_log::ChangeType::Forgotten),
-        "restored" => Some(mimir_knowledge::models::audit_log::ChangeType::Restored),
-        _ => None,
+// ------------------------------------------------------------------
+// Confidence color helper
+// ------------------------------------------------------------------
+
+fn confidence_color(conf: f32) -> colored::Color {
+    if conf > 0.9 {
+        colored::Color::Green
+    } else if conf >= 0.7 {
+        colored::Color::Yellow
+    } else {
+        colored::Color::Red
     }
 }
+
+// ------------------------------------------------------------------
+// kb query
+// ------------------------------------------------------------------
+
+pub async fn handle_kb_query(
+    entity: String,
+    predicate: Option<String>,
+    min_confidence: Option<f32>,
+    json: bool,
+    base_url: &str,
+) {
+    let client = MimirClient::new(base_url);
+    let req = FactQueryParams {
+        entity,
+        predicate,
+        min_confidence,
+        offset: None,
+        limit: None,
+    };
+
+    match client.kb_query(req).await {
+        Ok(resp) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&resp).unwrap());
+                return;
+            }
+            if resp.facts.is_empty() {
+                println!("No facts found.");
+                return;
+            }
+            use tabled::{Table, Tabled, settings::Style};
+            #[derive(Tabled)]
+            struct FactTableRow {
+                id: i32,
+                predicate: String,
+                object: String,
+                confidence: String,
+                status: String,
+            }
+            let rows: Vec<FactTableRow> = resp
+                .facts
+                .iter()
+                .map(|f| FactTableRow {
+                    id: f.id,
+                    predicate: f.predicate.clone(),
+                    object: f.object.clone().unwrap_or_default(),
+                    confidence: format!("{:.2}", f.confidence),
+                    status: f.status.clone(),
+                })
+                .collect();
+            let mut table = Table::new(rows);
+            table.with(Style::modern());
+            println!("{}", table);
+            println!("Total: {}", resp.total);
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// kb show
+// ------------------------------------------------------------------
+
+pub async fn handle_kb_show(fact_id: i32, json: bool, base_url: &str) {
+    let client = MimirClient::new(base_url);
+    match client.kb_show(fact_id).await {
+        Ok(resp) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&resp).unwrap());
+                return;
+            }
+            let f = &resp.fact;
+            println!("Fact ID:       {}", f.id);
+            println!("Subject:       {}", f.subject);
+            println!("Predicate:     {}", f.predicate);
+            println!("Object:        {}", f.object.clone().unwrap_or_default());
+            let conf_str = format!("{:.2}", f.confidence);
+            println!(
+                "Confidence:    {}",
+                conf_str.color(confidence_color(f.confidence))
+            );
+            println!("Status:        {}", f.status);
+            println!("Inferred:      {}", f.inferred);
+            if let Some(ref vf) = f.valid_from {
+                println!("Valid from:    {}", vf);
+            }
+            if let Some(ref vu) = f.valid_until {
+                println!("Valid until:   {}", vu);
+            }
+            if !resp.sources.is_empty() {
+                println!("\nSources:");
+                for s in &resp.sources {
+                    println!("  - {} ({})", s.source_type, s.extracted_at);
+                    if let Some(ref rid) = s.raw_reference {
+                        println!("    Reference: {}", rid);
+                    }
+                }
+            }
+            if !resp.dependencies.is_empty() {
+                println!("\nDependencies:");
+                for d in &resp.dependencies {
+                    println!(
+                        "  - {}: {} -> {}",
+                        d.relation_type, d.parent_fact_id, d.child_fact_id
+                    );
+                }
+            }
+            if !resp.audit_log.is_empty() {
+                println!("\nAudit log (last 10):");
+                for a in resp.audit_log.iter().take(10) {
+                    println!(
+                        "  [{}] {}: {} -> {} by {} at {}",
+                        a.audit_id,
+                        a.change_type,
+                        a.old_value.as_deref().unwrap_or("-"),
+                        a.new_value.as_deref().unwrap_or("-"),
+                        a.changed_by.as_deref().unwrap_or("?"),
+                        a.changed_at
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// kb edit
+// ------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_kb_edit(
+    fact_id: i32,
+    confidence: Option<f32>,
+    valid_from: Option<String>,
+    valid_until: Option<String>,
+    object: Option<String>,
+    status: Option<String>,
+    json: bool,
+    base_url: &str,
+) {
+    let client = MimirClient::new(base_url);
+    let req = FactEditRequest {
+        confidence,
+        valid_from,
+        valid_until,
+        object_literal: object,
+        status,
+    };
+    match client.kb_edit(fact_id, req).await {
+        Ok(resp) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&resp).unwrap());
+                return;
+            }
+            let f = &resp.fact;
+            println!("Updated fact {}:", f.id);
+            println!(
+                "  {} {} {} (confidence: {:.2}, status: {})",
+                f.subject,
+                f.predicate,
+                f.object.clone().unwrap_or_default(),
+                f.confidence,
+                f.status
+            );
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// kb browse
+// ------------------------------------------------------------------
+
+pub async fn handle_kb_browse(
+    entity: String,
+    depth: Option<u32>,
+    limit: u32,
+    offset: u32,
+    json: bool,
+    base_url: &str,
+) {
+    let client = MimirClient::new(base_url);
+    let req = BrowseRequest {
+        entity,
+        depth: depth.unwrap_or(2).min(5),
+        offset: Some(offset),
+        limit: Some(limit),
+    };
+    match client.kb_browse(req).await {
+        Ok(resp) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&resp).unwrap());
+                return;
+            }
+            if resp.edges.is_empty() {
+                println!("No connections found.");
+                return;
+            }
+            println!(
+                "Browsed {} edges (total {}):",
+                resp.edges.len(),
+                resp.total_edges
+            );
+            for edge in &resp.edges {
+                let indent = "  ".repeat(edge.depth as usize);
+                let conf_str = format!("{:.2}", edge.confidence);
+                println!(
+                    "{}{} --[{}]--> {} ({})",
+                    indent,
+                    edge.subject,
+                    edge.predicate,
+                    edge.object,
+                    conf_str.color(confidence_color(edge.confidence))
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// kb profile
+// ------------------------------------------------------------------
+
+pub async fn handle_kb_profile(entity: Option<String>, json: bool, base_url: &str) {
+    let client = MimirClient::new(base_url);
+    let req = ProfileRequest { entity };
+    match client.kb_profile(req).await {
+        Ok(resp) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&resp).unwrap());
+                return;
+            }
+            println!("Profile for: {}\n", resp.entity_name);
+            for group in &resp.groups {
+                println!("## {}", group.category);
+                for fact in &group.facts {
+                    let conf_str = format!("{:.2}", fact.confidence);
+                    println!(
+                        "  - {} {} {} (confidence: {}, status: {})",
+                        fact.subject,
+                        fact.predicate,
+                        fact.object.clone().unwrap_or_default(),
+                        conf_str.color(confidence_color(fact.confidence)),
+                        fact.status
+                    );
+                }
+                println!();
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// kb audit
+// ------------------------------------------------------------------
 
 pub async fn handle_kb_audit(
     entity: Option<String>,
@@ -47,105 +321,66 @@ pub async fn handle_kb_audit(
     from: Option<String>,
     to: Option<String>,
     change_type: Option<String>,
+    json: bool,
+    base_url: &str,
 ) {
-    let db_path = match knowledge_db_path() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error: could not resolve knowledge DB path: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    let kg = match KnowledgeGraph::init(&db_path).await {
-        Ok(g) => g,
-        Err(KnowledgeError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("Error: no knowledge graph found. Run `mimir init` first.");
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("Error: failed to open knowledge graph: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    let ct = change_type.as_deref().and_then(parse_change_type);
-    if let Some(ref raw) = change_type {
-        if ct.is_none() {
-            eprintln!("Error: invalid change_type '{}'", raw);
-            std::process::exit(1);
-        }
-    }
-
-    let from_dt = from.as_deref().and_then(parse_datetime);
-    if let Some(ref raw) = from {
-        if from_dt.is_none() {
-            eprintln!("Error: invalid --from datetime '{}'", raw);
-            std::process::exit(1);
-        }
-    }
-
-    let to_dt = to.as_deref().and_then(parse_datetime);
-    if let Some(ref raw) = to {
-        if to_dt.is_none() {
-            eprintln!("Error: invalid --to datetime '{}'", raw);
-            std::process::exit(1);
-        }
-    }
-
-    let filter = AuditLogFilter {
-        entity_name: entity,
-        relationship_type_name: predicate,
-        from: from_dt,
-        to: to_dt,
-        change_type: ct,
-        limit: None,
+    let client = MimirClient::new(base_url);
+    let req = AuditQueryRequest {
+        entity,
+        predicate,
+        from,
+        to,
+        change_type,
         offset: None,
+        limit: None,
     };
-
-    let rows = match kg.query_audit_log(filter).await {
-        Ok(r) => r,
+    match client.kb_audit(req).await {
+        Ok(resp) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&resp).unwrap());
+                return;
+            }
+            if resp.entries.is_empty() {
+                println!("No audit log entries found.");
+                return;
+            }
+            use tabled::{Table, Tabled, settings::Style};
+            #[derive(Tabled)]
+            struct AuditTableRow {
+                audit_id: i32,
+                fact_id: i32,
+                entity: String,
+                predicate: String,
+                change_type: String,
+                changed_at: String,
+            }
+            let rows: Vec<AuditTableRow> = resp
+                .entries
+                .iter()
+                .map(|e| AuditTableRow {
+                    audit_id: e.audit_id,
+                    fact_id: e.fact_id,
+                    entity: e.entity_name.clone().unwrap_or_default(),
+                    predicate: e.predicate_name.clone().unwrap_or_default(),
+                    change_type: e.change_type.clone(),
+                    changed_at: e.changed_at.clone(),
+                })
+                .collect();
+            let mut table = Table::new(rows);
+            table.with(Style::modern());
+            println!("{}", table);
+            println!("Total: {}", resp.total);
+        }
         Err(e) => {
-            eprintln!("Error querying audit log: {e}");
+            eprintln!("Error: {}", e);
             std::process::exit(1);
         }
-    };
-
-    if rows.is_empty() {
-        println!("No audit log entries found.");
-        return;
-    }
-
-    println!(
-        "{:>6} {:>6} {:<20} {:<15} {:<18} {:<12} {:<25} {:<25}",
-        "audit_id",
-        "fact_id",
-        "entity",
-        "predicate",
-        "change_type",
-        "changed_by",
-        "changed_at",
-        "reason"
-    );
-    println!("{}", "-".repeat(130));
-    for row in rows {
-        let changed_by = row.changed_by_name.as_deref().unwrap_or("-");
-        let reason = row.reason.as_deref().unwrap_or("-");
-        let entity = row.entity_name.as_deref().unwrap_or("(deleted)");
-        let predicate = row.relationship_type_name.as_deref().unwrap_or("(deleted)");
-        println!(
-            "{:>6} {:>6} {:<20} {:<15} {:<18} {:<12} {:<25} {:<25}",
-            row.audit_id,
-            row.fact_id,
-            entity,
-            predicate,
-            row.change_type_name,
-            changed_by,
-            row.changed_at
-                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            reason,
-        );
     }
 }
+
+// ------------------------------------------------------------------
+// kb forget
+// ------------------------------------------------------------------
 
 #[derive(Debug, Default)]
 pub struct KbForgetInput {
@@ -163,218 +398,133 @@ pub struct KbForgetInput {
     pub confirmation_phrase: Option<String>,
 }
 
-pub async fn handle_kb_forget(input: KbForgetInput) {
-    let db_path = match knowledge_db_path() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error: could not resolve knowledge DB path: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    let kg = match KnowledgeGraph::init(&db_path).await {
-        Ok(g) => g,
-        Err(KnowledgeError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("Error: no knowledge graph found. Run `mimir init` first.");
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("Error: failed to open knowledge graph: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    let filters = mimir_knowledge::forget::ForgetFilters {
+pub async fn handle_kb_forget(input: KbForgetInput, base_url: &str) {
+    let client = MimirClient::new(base_url);
+    let req = ForgetRequest {
         fact_id: input.fact_id,
         predicate: input.predicate,
         subject: input.subject,
         entity: input.entity,
         source: input.source,
-        from: input.from.as_deref().and_then(parse_datetime),
-        to: input.to.as_deref().and_then(parse_datetime),
+        from: input.from,
+        to: input.to,
         all: input.all,
-    };
-
-    if let Some(ref raw) = input.from {
-        if filters.from.is_none() {
-            eprintln!("Error: invalid --from datetime '{}'", raw);
-            std::process::exit(1);
-        }
-    }
-    if let Some(ref raw) = input.to {
-        if filters.to.is_none() {
-            eprintln!("Error: invalid --to datetime '{}'", raw);
-            std::process::exit(1);
-        }
-    }
-
-    let opts = mimir_knowledge::forget::ForgetOptions {
         yes: input.yes,
         confirm_sensitive: input.confirm_sensitive,
         confirmation_phrase: input.confirmation_phrase,
         archive: input.archive,
     };
-
-    match kg
-        .forget_facts(
-            filters,
-            opts,
-            mimir_knowledge::models::audit_log::ChangedBy::User,
-        )
-        .await
-    {
-        Ok(result) => {
+    match client.kb_forget(req).await {
+        Ok(resp) => {
             if input.all {
-                if let Some(path) = result.backup_path {
-                    println!("Backup created: {}", path.display());
+                if let Some(ref path) = resp.backup_path {
+                    println!("Backup created: {}", path);
                 }
-                println!("{} facts forgotten.", result.forgotten_count);
+                println!("{} facts forgotten.", resp.forgotten_count);
             } else {
-                println!("{} fact(s) moved to trash.", result.forgotten_count);
+                println!("{} fact(s) moved to trash.", resp.forgotten_count);
             }
         }
         Err(e) => {
-            eprintln!("Error: {e}");
+            eprintln!("Error: {}", e);
             std::process::exit(1);
         }
     }
 }
 
-pub async fn handle_kb_restore(trash_id: Option<i32>, all: bool) {
-    let db_path = match knowledge_db_path() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error: could not resolve knowledge DB path: {e}");
-            std::process::exit(1);
-        }
-    };
+// ------------------------------------------------------------------
+// kb restore
+// ------------------------------------------------------------------
 
-    let kg = match KnowledgeGraph::init(&db_path).await {
-        Ok(g) => g,
-        Err(KnowledgeError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("Error: no knowledge graph found. Run `mimir init` first.");
-            std::process::exit(1);
+pub async fn handle_kb_restore(trash_id: Option<i32>, all: bool, base_url: &str) {
+    let client = MimirClient::new(base_url);
+    let req = RestoreRequest { trash_id, all };
+    match client.kb_restore(req).await {
+        Ok(resp) => {
+            println!("Restored {} fact(s) from trash.", resp.restored_count);
         }
         Err(e) => {
-            eprintln!("Error: failed to open knowledge graph: {e}");
+            eprintln!("Error: {}", e);
             std::process::exit(1);
-        }
-    };
-
-    if all {
-        match kg
-            .restore_all(mimir_knowledge::models::audit_log::ChangedBy::User)
-            .await
-        {
-            Ok(facts) => {
-                println!("Restored {} fact(s) from trash.", facts.len());
-            }
-            Err(e) => {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
-        }
-    } else {
-        let id = match trash_id {
-            Some(id) => id,
-            None => {
-                eprintln!("Error: --trash-id required or use --all");
-                std::process::exit(1);
-            }
-        };
-        match kg
-            .restore_fact(id, mimir_knowledge::models::audit_log::ChangedBy::User)
-            .await
-        {
-            Ok(fact) => {
-                println!("Restored fact {}.", fact.id);
-            }
-            Err(e) => {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
         }
     }
 }
 
-pub async fn handle_kb_trash(empty: bool, limit: u32, offset: u32) {
-    let db_path = match knowledge_db_path() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error: could not resolve knowledge DB path: {e}");
-            std::process::exit(1);
-        }
-    };
+// ------------------------------------------------------------------
+// kb trash
+// ------------------------------------------------------------------
 
-    let kg = match KnowledgeGraph::init(&db_path).await {
-        Ok(g) => g,
-        Err(KnowledgeError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("Error: no knowledge graph found. Run `mimir init` first.");
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("Error: failed to open knowledge graph: {e}");
-            std::process::exit(1);
-        }
-    };
-
+pub async fn handle_kb_trash(empty: bool, limit: u32, offset: u32, json: bool, base_url: &str) {
+    let client = MimirClient::new(base_url);
     if empty {
-        match kg.empty_trash().await {
-            Ok(count) => {
-                println!("Emptied {} trash row(s).", count);
+        match client.kb_trash_empty().await {
+            Ok(()) => {
+                println!("Trash emptied.");
             }
             Err(e) => {
-                eprintln!("Error: {e}");
+                eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
         }
-    } else {
-        match kg.list_trash(limit as i64, offset as i64).await {
-            Ok(items) => {
-                if items.is_empty() {
-                    println!("Trash is empty.");
-                    return;
-                }
-                println!(
-                    "{:<8} {:<20} {:<15} {:<20} {:<25} {:<25}",
-                    "trash_id", "subject", "predicate", "object", "deleted_at", "expires_at"
-                );
-                println!("{}", "-".repeat(113));
-                for item in items {
-                    let subject = item.subject_name.as_deref().unwrap_or("-");
-                    let predicate = item.relationship_type_name.as_deref().unwrap_or("-");
-                    let object = item
-                        .object_name
-                        .as_deref()
-                        .or(item.object_literal.as_deref())
-                        .unwrap_or("-");
-                    println!(
-                        "{:<8} {:<20} {:<15} {:<20} {:<25} {:<25}",
-                        item.trash_id,
-                        subject,
-                        predicate,
-                        object,
-                        item.deleted_at
-                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                        item.expires_at
-                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    );
-                }
+        return;
+    }
+    match client.kb_trash(offset, limit).await {
+        Ok(resp) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&resp).unwrap());
+                return;
             }
-            Err(e) => {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
+            if resp.items.is_empty() {
+                println!("Trash is empty.");
+                return;
             }
+            use tabled::{Table, Tabled, settings::Style};
+            #[derive(Tabled)]
+            struct TrashTableRow {
+                trash_id: i32,
+                subject: String,
+                predicate: String,
+                object: String,
+                deleted_at: String,
+                expires_at: String,
+            }
+            let rows: Vec<TrashTableRow> = resp
+                .items
+                .iter()
+                .map(|i| TrashTableRow {
+                    trash_id: i.trash_id,
+                    subject: i.subject.clone().unwrap_or_default(),
+                    predicate: i.predicate.clone().unwrap_or_default(),
+                    object: i.object.clone().unwrap_or_default(),
+                    deleted_at: i.deleted_at.clone(),
+                    expires_at: i.expires_at.clone(),
+                })
+                .collect();
+            let mut table = Table::new(rows);
+            table.with(Style::modern());
+            println!("{}", table);
+            println!("Total: {}", resp.total);
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
         }
     }
 }
 
-pub async fn handle_kb_optimization(status: bool, run_now: bool, base_url: &str) {
-    let client = mimir_client::MimirClient::new(base_url);
+// ------------------------------------------------------------------
+// kb optimization
+// ------------------------------------------------------------------
 
+pub async fn handle_kb_optimization(status: bool, run_now: bool, json: bool, base_url: &str) {
+    let client = MimirClient::new(base_url);
     if status {
         match client.kb_optimization_status().await {
             Ok(resp) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&resp).unwrap());
+                    return;
+                }
                 println!("Job ID: {}", resp.job_id);
                 println!("Priority: {}", resp.priority);
                 if let Some(schedule) = resp.schedule {
@@ -393,55 +543,91 @@ pub async fn handle_kb_optimization(status: bool, run_now: bool, base_url: &str)
                 }
             }
             Err(e) => {
-                eprintln!("Error: failed to fetch optimization status: {e}");
+                eprintln!("Error: failed to fetch optimization status: {}", e);
                 std::process::exit(1);
             }
         }
     } else if run_now {
-        println!("Triggering knowledge graph optimization...");
         match client.kb_optimization_run_now().await {
             Ok(resp) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&resp).unwrap());
+                    return;
+                }
                 println!(
-                    "Run completed: id={} status={} started_at={} finished_at={:?} error={:?}",
+                    "Optimization run id={} status={} started_at={} finished_at={:?} error={:?}",
                     resp.run_id, resp.status, resp.started_at, resp.finished_at, resp.error
                 );
             }
             Err(e) => {
-                eprintln!("Error: failed to run optimization: {e}");
+                eprintln!("Error: failed to run optimization: {}", e);
                 std::process::exit(1);
             }
         }
-    } else {
-        eprintln!("Error: specify --status or --run-now");
-        std::process::exit(1);
     }
 }
+
+// ------------------------------------------------------------------
+// kb category
+// ------------------------------------------------------------------
 
 pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url: &str) {
     match command {
         crate::cli::CategoryCommands::List { parent } => {
-            let url = match parent {
-                Some(id) => format!("{}/kb/categories?parent={}", base_url, id),
-                None => format!("{}/kb/categories", base_url),
+            let url = format!("{}/kb/categories", base_url);
+            let query = if let Some(p) = parent {
+                format!("?parent={}", p)
+            } else {
+                String::new()
             };
+            let url = format!("{}{}", url, query);
             match reqwest::get(&url).await {
                 Ok(resp) => {
                     if resp.status().is_success() {
-                        let cats: Vec<serde_json::Value> = match resp.json().await {
+                        let cats: serde_json::Value = match resp.json().await {
                             Ok(v) => v,
                             Err(e) => {
                                 eprintln!("Error: failed to parse response: {}", e);
                                 std::process::exit(1);
                             }
                         };
-                        if cats.is_empty() {
-                            println!("No categories found.");
-                        } else {
-                            for cat in cats {
-                                let id = cat.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-                                let name = cat.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-                                println!("{:>4} {}", id, name);
+                        if let Some(arr) = cats.as_array() {
+                            if arr.is_empty() {
+                                println!("No categories.");
+                                return;
                             }
+                            use tabled::{Table, Tabled, settings::Style};
+                            #[derive(Tabled)]
+                            struct CatRow {
+                                id: i64,
+                                name: String,
+                                parent_id: String,
+                                description: String,
+                            }
+                            let rows: Vec<CatRow> = arr
+                                .iter()
+                                .map(|c| CatRow {
+                                    id: c.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
+                                    name: c
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("?")
+                                        .to_string(),
+                                    parent_id: c
+                                        .get("parent_id")
+                                        .and_then(|v| v.as_i64())
+                                        .map(|i| i.to_string())
+                                        .unwrap_or_else(|| "-".to_string()),
+                                    description: c
+                                        .get("description")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("-")
+                                        .to_string(),
+                                })
+                                .collect();
+                            let mut table = Table::new(rows);
+                            table.with(Style::modern());
+                            println!("{}", table);
                         }
                     } else {
                         eprintln!("Error: {}", resp.status());

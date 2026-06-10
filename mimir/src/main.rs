@@ -15,7 +15,6 @@ mod stop;
 use clap::Parser;
 use cli::Cli;
 use commands::{handle_skill_command, handle_tool_command};
-use kb::handle_kb_audit;
 
 #[tokio::main]
 async fn main() {
@@ -28,10 +27,100 @@ async fn main() {
         cli::Commands::Skill { command } => handle_skill_command(command).await,
         cli::Commands::Kb { command } => match command {
             cli::KbCommands::Category { command } => {
+                if let Err(e) =
+                    daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
+                {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
                 kb::handle_kb_category(command, &base_url).await
             }
-            cli::KbCommands::Optimization { status, run_now } => {
-                kb::handle_kb_optimization(status, run_now, &base_url).await
+            cli::KbCommands::Optimization {
+                status,
+                run_now,
+                json,
+            } => {
+                if let Err(e) =
+                    daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
+                {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+                kb::handle_kb_optimization(status, run_now, json, &base_url).await
+            }
+            cli::KbCommands::Query {
+                entity,
+                predicate,
+                min_confidence,
+                json,
+            } => {
+                if let Err(e) =
+                    daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
+                {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+                kb::handle_kb_query(entity, predicate, min_confidence, json, &base_url).await;
+            }
+            cli::KbCommands::Show { fact_id, json } => {
+                if let Err(e) =
+                    daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
+                {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+                kb::handle_kb_show(fact_id, json, &base_url).await;
+            }
+            cli::KbCommands::Edit {
+                fact_id,
+                confidence,
+                valid_from,
+                valid_until,
+                object,
+                status,
+                json,
+            } => {
+                if let Err(e) =
+                    daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
+                {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+                kb::handle_kb_edit(
+                    fact_id,
+                    confidence,
+                    valid_from,
+                    valid_until,
+                    object,
+                    status,
+                    json,
+                    &base_url,
+                )
+                .await;
+            }
+            cli::KbCommands::Browse {
+                entity,
+                depth,
+                limit,
+                offset,
+                json,
+            } => {
+                if let Err(e) =
+                    daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
+                {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+                kb::handle_kb_browse(entity, depth, limit, offset, json, &base_url).await;
+            }
+            cli::KbCommands::Profile { entity, json } => {
+                if let Err(e) =
+                    daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
+                {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+                kb::handle_kb_profile(entity, json, &base_url).await;
             }
             cli::KbCommands::Audit {
                 entity,
@@ -39,7 +128,17 @@ async fn main() {
                 from,
                 to,
                 change_type,
-            } => handle_kb_audit(entity, predicate, from, to, change_type).await,
+                json,
+            } => {
+                if let Err(e) =
+                    daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
+                {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+                kb::handle_kb_audit(entity, predicate, from, to, change_type, json, &base_url)
+                    .await;
+            }
             cli::KbCommands::Forget {
                 fact_id,
                 predicate,
@@ -54,30 +153,54 @@ async fn main() {
                 archive,
                 confirmation_phrase,
             } => {
-                kb::handle_kb_forget(kb::KbForgetInput {
-                    fact_id,
-                    predicate,
-                    subject,
-                    entity,
-                    source,
-                    from,
-                    to,
-                    all,
-                    yes,
-                    confirm_sensitive,
-                    archive,
-                    confirmation_phrase,
-                })
-                .await
+                if let Err(e) =
+                    daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
+                {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+                kb::handle_kb_forget(
+                    kb::KbForgetInput {
+                        fact_id,
+                        predicate,
+                        subject,
+                        entity,
+                        source,
+                        from,
+                        to,
+                        all,
+                        yes,
+                        confirm_sensitive,
+                        archive,
+                        confirmation_phrase,
+                    },
+                    &base_url,
+                )
+                .await;
             }
             cli::KbCommands::Restore { trash_id, all } => {
-                kb::handle_kb_restore(trash_id, all).await
+                if let Err(e) =
+                    daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
+                {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+                kb::handle_kb_restore(trash_id, all, &base_url).await;
             }
             cli::KbCommands::Trash {
                 empty,
                 limit,
                 offset,
-            } => kb::handle_kb_trash(empty, limit, offset).await,
+                json,
+            } => {
+                if let Err(e) =
+                    daemon_guard::ensure_daemon_running(&base_url, &mut daemon_started).await
+                {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+                kb::handle_kb_trash(empty, limit, offset, json, &base_url).await;
+            }
         },
         cli::Commands::Init => init::handle_init().await,
         cli::Commands::Start => start::handle_start().await,

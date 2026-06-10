@@ -198,7 +198,54 @@ mimir skill disable <name>         # Disable a skill
 
 ## `mimir kb` — Knowledge Graph Commands
 
-Query and manage the Mimir knowledge graph.
+Query and manage the Mimir knowledge graph. All commands talk to the daemon over HTTP — no direct SQLite access from the CLI.
+
+Every command supports `--json` for structured, scriptable output.
+
+### `mimir kb query`
+
+Query facts for an entity. Results are colour-coded by confidence (green >0.9, yellow 0.7–0.9, red <0.7).
+
+```bash
+mimir kb query "Alice"
+mimir kb query "Alice" --predicate visited --min-confidence 0.8 --json
+```
+
+### `mimir kb show`
+
+Show full detail for a single fact: sources, dependencies, and audit log.
+
+```bash
+mimir kb show 42
+mimir kb show 42 --json
+```
+
+### `mimir kb edit`
+
+Edit mutable fields on a fact. No `$EDITOR` mode — this is structured data.
+
+```bash
+mimir kb edit 42 --confidence 0.95
+mimir kb edit 42 --valid-until 2026-12-31 --status Active
+```
+
+### `mimir kb browse`
+
+Browse the knowledge graph starting from an entity. Outputs an indented tree.
+
+```bash
+mimir kb browse --entity "Alice" --depth 2
+mimir kb browse --entity "Alice" --depth 3 --limit 100 --json
+```
+
+### `mimir kb profile`
+
+Generate a Rust-built biography from the top-20 highest-confidence facts, grouped by category.
+
+```bash
+mimir kb profile
+mimir kb profile --entity "Alice" --json
+```
 
 ### `mimir kb audit`
 

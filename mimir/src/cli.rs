@@ -77,7 +77,6 @@ pub enum KbCommands {
         command: CategoryCommands,
     },
     /// Manage knowledge graph optimization.
-    /// Manage knowledge graph optimization.
     #[command(group = ArgGroup::new("action").required(true).args(["status", "run_now"]))]
     Optimization {
         /// Show optimization job status.
@@ -86,6 +85,81 @@ pub enum KbCommands {
         /// Trigger optimization immediately.
         #[arg(long)]
         run_now: bool,
+        /// Output raw JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Query facts for an entity.
+    Query {
+        /// Entity name to query.
+        entity: String,
+        /// Filter by predicate name.
+        #[arg(long)]
+        predicate: Option<String>,
+        /// Minimum confidence threshold.
+        #[arg(long)]
+        min_confidence: Option<f32>,
+        /// Output raw JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a single fact by ID.
+    Show {
+        /// Fact ID.
+        fact_id: i32,
+        /// Output raw JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Edit a fact's mutable fields.
+    #[command(group = ArgGroup::new("edits").required(true).args(["confidence", "valid_from", "valid_until", "object", "status"]))]
+    Edit {
+        /// Fact ID.
+        fact_id: i32,
+        /// Update confidence.
+        #[arg(long)]
+        confidence: Option<f32>,
+        /// Update valid-from timestamp.
+        #[arg(long)]
+        valid_from: Option<String>,
+        /// Update valid-until timestamp.
+        #[arg(long)]
+        valid_until: Option<String>,
+        /// Update object literal.
+        #[arg(long)]
+        object: Option<String>,
+        /// Update status (Active, Inferred, Disputed, Corrected, Superseded, Forgotten).
+        #[arg(long)]
+        status: Option<String>,
+        /// Output raw JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Browse the knowledge graph from an entity.
+    Browse {
+        /// Entity name to start from.
+        entity: String,
+        /// Graph traversal depth (default 2, max 5).
+        #[arg(long)]
+        depth: Option<u32>,
+        /// Maximum rows to return.
+        #[arg(long, default_value = "50")]
+        limit: u32,
+        /// Rows to skip.
+        #[arg(long, default_value = "0")]
+        offset: u32,
+        /// Output raw JSON instead of a tree.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Generate a profile from top-confidence facts.
+    Profile {
+        /// Entity name (defaults to configured user).
+        #[arg(long)]
+        entity: Option<String>,
+        /// Output raw JSON instead of prose.
+        #[arg(long)]
+        json: bool,
     },
     /// Query the fact audit log.
     Audit {
@@ -104,6 +178,9 @@ pub enum KbCommands {
         /// Filter by change type.
         #[arg(long)]
         change_type: Option<String>,
+        /// Output raw JSON instead of a table.
+        #[arg(long)]
+        json: bool,
     },
     /// Forget facts (single, bulk, or full reset).
     Forget {
@@ -164,6 +241,9 @@ pub enum KbCommands {
         /// Rows to skip.
         #[arg(long, default_value = "0")]
         offset: u32,
+        /// Output raw JSON instead of a table.
+        #[arg(long)]
+        json: bool,
     },
 }
 

@@ -149,6 +149,272 @@ pub enum StreamItem {
     SessionId(String),
 }
 
+// ---------------------------------------------------------------------------
+// Knowledge Graph — CLI types
+// ---------------------------------------------------------------------------
+
+/// Request to query facts for an entity.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct FactQueryParams {
+    pub entity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_confidence: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// A single fact in query results.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FactRow {
+    pub id: i32,
+    pub subject: String,
+    pub predicate: String,
+    pub object: Option<String>,
+    pub confidence: f32,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<String>,
+    pub inferred: bool,
+}
+
+/// Response for fact queries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FactQueryResponse {
+    pub total: i64,
+    pub offset: u32,
+    pub limit: u32,
+    pub facts: Vec<FactRow>,
+}
+
+/// Source attached to a fact (detail view).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SourceRow {
+    pub source_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connector_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_reference: Option<String>,
+    pub extracted_at: String,
+}
+
+/// Dependency edge for a fact.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DependencyRow {
+    pub relation_type: String,
+    pub parent_fact_id: i32,
+    pub child_fact_id: i32,
+}
+
+/// Audit log entry for a fact.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AuditRow {
+    pub audit_id: i32,
+    pub fact_id: i32,
+    pub change_type: String,
+    pub entity_name: Option<String>,
+    pub predicate_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_value: Option<String>,
+    pub changed_at: String,
+    pub changed_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Detailed view of a single fact.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FactDetailResponse {
+    pub fact: FactRow,
+    pub sources: Vec<SourceRow>,
+    pub dependencies: Vec<DependencyRow>,
+    pub audit_log: Vec<AuditRow>,
+}
+
+/// Request to edit a fact.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct FactEditRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_literal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
+/// Response after editing a fact.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FactEditResponse {
+    pub fact: FactRow,
+}
+
+/// Request to browse the knowledge graph.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct BrowseRequest {
+    pub entity: String,
+    #[serde(default = "default_browse_depth")]
+    pub depth: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+fn default_browse_depth() -> u32 {
+    2
+}
+
+/// A single edge in a browse traversal.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BrowseEdge {
+    pub depth: u32,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub confidence: f32,
+}
+
+/// Response for browse queries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BrowseResponse {
+    pub total_edges: usize,
+    pub offset: u32,
+    pub limit: u32,
+    pub edges: Vec<BrowseEdge>,
+}
+
+/// Request to generate a profile.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ProfileRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity: Option<String>,
+}
+
+/// A group of facts in a profile.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProfileGroup {
+    pub category: String,
+    pub facts: Vec<FactRow>,
+}
+
+/// Response for profile queries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProfileResponse {
+    pub entity_name: String,
+    pub groups: Vec<ProfileGroup>,
+}
+
+/// Request to query the audit log.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct AuditQueryRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// Response for audit log queries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AuditQueryResponse {
+    pub total: i64,
+    pub offset: u32,
+    pub limit: u32,
+    pub entries: Vec<AuditRow>,
+}
+
+/// Request to forget facts.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ForgetRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fact_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub all: bool,
+    #[serde(default)]
+    pub yes: bool,
+    #[serde(default)]
+    pub confirm_sensitive: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmation_phrase: Option<String>,
+    #[serde(default)]
+    pub archive: bool,
+}
+
+/// Response after forgetting facts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ForgetResponse {
+    pub forgotten_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backup_path: Option<String>,
+}
+
+/// Request to restore facts from trash.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct RestoreRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trash_id: Option<i32>,
+    #[serde(default)]
+    pub all: bool,
+}
+
+/// Response after restoring facts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RestoreResponse {
+    pub restored_count: usize,
+}
+
+/// A single row in the trash list.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TrashRow {
+    pub trash_id: i32,
+    pub subject: Option<String>,
+    pub predicate: Option<String>,
+    pub object: Option<String>,
+    pub deleted_at: String,
+    pub expires_at: String,
+}
+
+/// Response for trash list queries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TrashListResponse {
+    pub total: i64,
+    pub offset: u32,
+    pub limit: u32,
+    pub items: Vec<TrashRow>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

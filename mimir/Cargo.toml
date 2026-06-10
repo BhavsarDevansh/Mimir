@@ -37,6 +37,7 @@ reqwest = { version = "0.13", features = ["json"] }
 thiserror = "2.0"
 chrono = "0.4"
 colored = "3"
+tabled = "0.21"
 
 [dev-dependencies]
 tempfile = "3"

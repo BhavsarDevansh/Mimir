@@ -373,45 +373,31 @@ pub(crate) async fn seed_identity_facts(
     use mimir_knowledge::models::fact::NewFact;
     use mimir_knowledge::models::source::SourceType;
 
-    let existing = kg.get_facts_by_subject(subject_id, 1000).await?;
+    // Resolve predicate IDs via the cached registry.
+    let has_name_id = kg.ensure_relationship_type("has_name").await?;
+    let pref_name_id = kg.ensure_relationship_type("preferred_name").await?;
 
-    let mut has_name = false;
-    let mut has_preferred = false;
+    // Targeted existence checks: query only the two relevant predicates.
+    let has_name_facts = kg
+        .get_facts_by_subject_and_predicate(subject_id, has_name_id)
+        .await?;
+    let pref_name_facts = kg
+        .get_facts_by_subject_and_predicate(subject_id, pref_name_id)
+        .await?;
 
-    for fact in &existing {
-        let pred = kg.relationship_type_name(fact.relationship_type_id).await;
-        let is_active = fact.status() == Some(FactStatus::Active);
-        if pred.as_deref() == Some("has_name")
-            && is_active
-            && fact.object_literal.as_deref() == Some(name)
-        {
-            has_name = true;
-        }
-        if pred.as_deref() == Some("preferred_name")
-            && is_active
-            && fact.object_literal.as_deref() == Some(preferred)
-        {
-            has_preferred = true;
-        }
-    }
+    let has_name = has_name_facts.iter().any(|f| {
+        f.status() == Some(FactStatus::Active) && f.object_literal.as_deref() == Some(name)
+    });
+    let has_preferred = pref_name_facts.iter().any(|f| {
+        f.status() == Some(FactStatus::Active) && f.object_literal.as_deref() == Some(preferred)
+    });
 
-    if !has_name && !name.is_empty() {
-        let mut nf = NewFact::new(subject_id, "has_name");
-        nf.object_literal = Some(name.to_string());
-        nf.source_type = SourceType::System;
-        nf.category_ids = vec![110];
-        kg.insert_fact(nf).await?;
-    }
-
+    // Alias and merge logic (idempotent; safe to run outside the insert tx).
     if !preferred.is_empty() && preferred.to_lowercase() != name.to_lowercase() {
-        // Always ensure the short name is registered as an alias so lookups
-        // resolve to the canonical entity.
         if let Err(e) = kg.add_alias(subject_id, preferred).await {
             tracing::warn!("Failed to add preferred-name alias '{}': {}", preferred, e);
         }
 
-        // If a bare-name duplicate entity already exists (e.g. "Devansh" vs
-        // "Devansh Bhavsar"), auto-merge it into the canonical entity.
         if let Ok(candidates) =
             mimir_knowledge::queries::entity::get_by_name(kg.pool(), preferred).await
         {
@@ -438,14 +424,29 @@ pub(crate) async fn seed_identity_facts(
                 }
             }
         }
+    }
 
-        if !has_preferred {
-            let mut nf = NewFact::new(subject_id, "preferred_name");
-            nf.object_literal = Some(preferred.to_string());
-            nf.source_type = SourceType::System;
-            nf.category_ids = vec![110];
-            kg.insert_fact(nf).await?;
-        }
+    // Collect facts to insert and perform the writes atomically.
+    let mut facts_to_insert: Vec<NewFact> = Vec::with_capacity(2);
+
+    if !has_name && !name.is_empty() {
+        let mut nf = NewFact::new(subject_id, "has_name");
+        nf.object_literal = Some(name.to_string());
+        nf.source_type = SourceType::System;
+        nf.category_ids = vec![110];
+        facts_to_insert.push(nf);
+    }
+
+    if !preferred.is_empty() && preferred.to_lowercase() != name.to_lowercase() && !has_preferred {
+        let mut nf = NewFact::new(subject_id, "preferred_name");
+        nf.object_literal = Some(preferred.to_string());
+        nf.source_type = SourceType::System;
+        nf.category_ids = vec![110];
+        facts_to_insert.push(nf);
+    }
+
+    if !facts_to_insert.is_empty() {
+        kg.insert_facts_batch(facts_to_insert).await?;
     }
 
     Ok(())

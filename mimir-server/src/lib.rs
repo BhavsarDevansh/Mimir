@@ -2112,43 +2112,48 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        // Yield so the background extraction task can run.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        // Query KG for the extracted fact.
-        let search = state
-            .knowledge_graph
-            .search_entities("Devansh", 1)
-            .await
-            .unwrap();
-
-        assert!(
-            !search.is_empty(),
-            "expected entity 'Devansh' to be created"
-        );
-        let entity = &search[0].entity;
-
-        let facts = state
-            .knowledge_graph
-            .get_facts_by_subject(entity.id, 100)
-            .await
-            .unwrap();
-
+        // Poll with timeout so the test is deterministic, not timing-dependent.
         let mut found = false;
-        for f in &facts {
-            let pred = state
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            let search = state
                 .knowledge_graph
-                .relationship_type_name(f.relationship_type_id)
-                .await;
-            if pred.as_deref() == Some("favourite_colour")
-                && f.object_literal.as_deref() == Some("blue")
-            {
-                found = true;
+                .search_entities("Devansh", 1)
+                .await
+                .unwrap();
+            if search.is_empty() {
+                continue;
+            }
+            let entity = &search[0].entity;
+
+            let facts = state
+                .knowledge_graph
+                .get_facts_by_subject(entity.id, 100)
+                .await
+                .unwrap();
+
+            for f in &facts {
+                let pred = state
+                    .knowledge_graph
+                    .relationship_type_name(f.relationship_type_id)
+                    .await;
+                if pred.as_deref() == Some("favourite_colour")
+                    && f.object_literal.as_deref() == Some("blue")
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
                 break;
             }
         }
 
-        assert!(found, "expected favourite_colour=blue fact to be extracted");
+        assert!(
+            found,
+            "expected favourite_colour=blue fact to be extracted within 2.5s"
+        );
     }
 
     #[tokio::test]

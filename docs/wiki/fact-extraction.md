@@ -69,3 +69,10 @@ You can always:
 - Confirm or reject pending sensitive facts
 - Edit or delete any fact
 - Export everything to Markdown
+
+### Recent Improvements (v0.40.3)
+
+- **Stronger predicate normalisation**: The extraction pipeline now recognises more LLM variations such as `name`, `nickname`, `favorite_food`, `color`, and `colour`, mapping them to canonical forms automatically. Leading and trailing whitespace is also stripped before normalisation.
+- **Expanded list splitting**: Multi-value predicates like `has_pets`, `has_child`, `has_parent`, `has_sibling`, and `has_partner` are now eligible for comma-separated list splitting, improving fact granularity.
+- **Better error reporting**: The `remember` tool now surfaces full error messages in its output, making it easier to diagnose extraction failures.
+- **Empty-message guard**: The background extraction task no longer spawns for empty or whitespace-only chat messages.

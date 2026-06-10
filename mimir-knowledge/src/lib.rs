@@ -178,6 +178,33 @@ impl KnowledgeGraph {
     // Predicate registry
     // ------------------------------------------------------------------
 
+    /// Look up a relationship type by name without creating it.
+    /// Returns `None` if the type does not exist.
+    pub async fn relationship_type_id(&self, name: &str) -> Option<i16> {
+        {
+            let cache = self.relationship_type_cache.read().await;
+            if let Some(&id) = cache.name_to_id.get(name) {
+                return Some(id);
+            }
+        }
+
+        let row: Option<(i16,)> =
+            sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await
+                .ok()?;
+
+        if let Some((id,)) = row {
+            let mut cache = self.relationship_type_cache.write().await;
+            cache.name_to_id.insert(name.to_string(), id);
+            cache.id_to_name.insert(id, name.to_string());
+            Some(id)
+        } else {
+            None
+        }
+    }
+
     /// Ensure a relationship type exists in the database, returning its stable id.
     /// Creates the row silently if missing.
     pub async fn ensure_relationship_type(&self, name: &str) -> Result<i16, KnowledgeError> {
@@ -590,6 +617,83 @@ impl KnowledgeGraph {
             .await
     }
 
+    /// Insert multiple facts atomically in a single transaction.
+    /// Skips rule-engine passes; callers should trigger them separately if needed.
+    pub async fn insert_facts_batch(
+        &self,
+        facts: Vec<models::fact::NewFact>,
+    ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
+        use std::collections::HashSet;
+
+        if facts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let now = self.now();
+
+        let valid_ids: HashSet<i32> = sqlx::query_scalar("SELECT id FROM categories")
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .collect();
+
+        let mut results = Vec::with_capacity(facts.len());
+        for new_fact in &facts {
+            for category_id in &new_fact.category_ids {
+                if !valid_ids.contains(category_id) {
+                    return Err(KnowledgeError::Validation(format!(
+                        "Category {} does not exist",
+                        category_id
+                    )));
+                }
+            }
+        }
+
+        for new_fact in &facts {
+            let relationship_type_id = self
+                .ensure_relationship_type(&new_fact.relationship_type)
+                .await?;
+
+            let confidence = if let Some(conf) = new_fact.confidence {
+                conf
+            } else {
+                crate::confidence::initial(new_fact.source_type, None)
+            };
+
+            let fact = queries::fact::insert_fact_in_tx(
+                &mut tx,
+                new_fact,
+                relationship_type_id,
+                confidence,
+                now,
+            )
+            .await?;
+
+            if !new_fact.category_ids.is_empty() {
+                for category_id in &new_fact.category_ids {
+                    sqlx::query(
+                        "INSERT OR IGNORE INTO fact_categories (fact_id, category_id) VALUES (?, ?)")
+                        .bind(fact.id)
+                        .bind(category_id)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+            }
+
+            results.push(fact);
+        }
+
+        tx.commit().await?;
+
+        for fact in &results {
+            self.bump_centrality(fact.subject_id).await;
+        }
+        self.set_condensation_dirty();
+
+        Ok(results)
+    }
+
     pub(crate) fn insert_fact_internal<'a>(
         &'a self,
         mut new_fact: NewFact,
@@ -771,6 +875,22 @@ impl KnowledgeGraph {
         limit: i64,
     ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
         queries::fact::get_by_object(&self.pool, object_id, limit).await
+    }
+
+    /// List facts for a specific subject and predicate.
+    pub async fn get_facts_by_subject_and_predicate(
+        &self,
+        subject_id: i32,
+        relationship_type_id: i16,
+    ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
+        let facts: Vec<models::fact::Fact> = sqlx::query_as::<_, models::fact::Fact>(
+            "SELECT id, subject_id, relationship_type_id, object_id, object_literal,              valid_from, valid_until, confidence, fact_status_id, inferred,              inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at              FROM facts WHERE subject_id = ? AND relationship_type_id = ? ORDER BY id ASC"
+        )
+        .bind(subject_id)
+        .bind(relationship_type_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(facts)
     }
 
     /// Query facts for a subject with optional predicate filter, confidence threshold,

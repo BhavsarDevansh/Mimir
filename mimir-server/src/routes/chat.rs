@@ -37,6 +37,9 @@ fn spawn_fact_extraction(
     llm: Arc<dyn mimir_core::llm::LlmBackend>,
     message: String,
 ) {
+    if message.trim().is_empty() {
+        return;
+    }
     tokio::spawn(async move {
         match kg.extract_facts(&llm, &message).await {
             Ok(outcome) => {
@@ -360,7 +363,7 @@ pub async fn chat_stream_handler(
     let session_id_clone = session_id.clone();
     let llm_clone = Arc::clone(&llm);
     let tool_registry_clone = Arc::clone(&state.tool_registry);
-    let user_message_clone = req.message.clone();
+    let user_message = req.message.clone();
 
     tokio::spawn(async move {
         let _permit = permit;
@@ -488,7 +491,7 @@ pub async fn chat_stream_handler(
                     spawn_fact_extraction(
                         Arc::clone(&state_clone.knowledge_graph),
                         Arc::clone(&llm_clone),
-                        user_message_clone.clone(),
+                        user_message.clone(),
                     );
                 }
                 break 'outer;

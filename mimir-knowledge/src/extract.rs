@@ -255,7 +255,8 @@ fn parse_entity_type(s: &str) -> Result<EntityType, KnowledgeError> {
 
 /// Map common LLM predicate synonyms to canonical names.
 fn normalize_predicate(pred: &str) -> String {
-    let lowered = pred.to_lowercase().replace(' ', "_");
+    let trimmed = pred.trim();
+    let lowered = trimmed.to_lowercase().replace(' ', "_");
     match lowered.as_str() {
         "attended" | "went_to" | "graduated_from" | "alumni_of" => "studied_at".to_string(),
         "hobbies" | "interests" => "hobby".to_string(),
@@ -272,6 +273,12 @@ fn normalize_predicate(pred: &str) -> String {
         }
         "father" | "mother" | "parents" => "has_parent".to_string(),
         "son" | "daughter" | "children" => "has_child".to_string(),
+        "name" => "has_name".to_string(),
+        "nickname" | "nick_name" | "called" | "goes_by" => "preferred_name".to_string(),
+        "favorite_food" | "fav_food" | "favourite_food" => "favourite_food".to_string(),
+        "favorite_colour" | "favorite_color" | "fav_color" | "fav_colour" | "color" | "colour" => {
+            "favourite_colour".to_string()
+        }
         "food_allergy" | "medical_condition" | "condition" => "health_condition".to_string(),
         _ => lowered,
     }
@@ -282,13 +289,18 @@ fn normalize_predicate(pred: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Predicates that typically represent a collection of independent values.
-const LIST_PREDICATES: [&str; 6] = [
+const LIST_PREDICATES: [&str; 11] = [
     "hobby",
     "likes",
     "dislikes",
     "favourite_colour",
     "favourite_food",
     "skill",
+    "has_pets",
+    "has_child",
+    "has_parent",
+    "has_sibling",
+    "has_partner",
 ];
 
 /// If a fact has a comma-separated object literal and its predicate is in the

@@ -128,3 +128,13 @@ Stop conditions: `depth >= max_depth`, `visited.len() >= max_nodes`, or empty fr
 - `mimir-knowledge/src/tools/mod.rs`
 - `mimir-knowledge/src/lib.rs` (exports)
 - `mimir-server/src/state.rs` (integration)
+
+## Batch Insertion
+
+`KnowledgeGraph::insert_facts_batch(Vec<NewFact>)` inserts multiple facts atomically in a single SQLite transaction. It resolves relationship types, validates categories, writes rows via `queries::fact::insert_fact_in_tx`, assigns categories, and bumps centrality — all inside one `BEGIN … COMMIT` block. Rule-engine passes are skipped; callers should trigger them separately if needed.
+
+## Targeted Predicate Lookup
+
+`KnowledgeGraph::relationship_type_id(&str)` performs a cached, non-mutating lookup of a relationship type by name, returning `None` if it does not exist (unlike `ensure_relationship_type`, which creates missing rows).
+
+`KnowledgeGraph::get_facts_by_subject_and_predicate(subject_id, relationship_type_id)` returns only facts matching a specific subject–predicate pair, avoiding full-table scans.

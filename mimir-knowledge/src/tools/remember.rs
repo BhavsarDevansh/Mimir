@@ -28,7 +28,7 @@ impl Tool for RememberTool {
     }
 
     fn description(&self) -> &str {
-        "Extract and persist structured facts to the knowledge graph.          Use this tool whenever the user shares information about themselves,          their preferences, their life, or anything you should remember for future          conversations. Each fact is a subject-relationship_type-object triple with          classification, temporal bounds, and sensitivity flags."
+        "Extract and persist structured facts to the knowledge graph. Use this tool whenever the user shares information about themselves, their preferences, their life, or anything you should remember for future conversations. Each fact is a subject-relationship_type-object triple with classification, temporal bounds, and sensitivity flags."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -63,9 +63,12 @@ impl Tool for RememberTool {
                     ));
                 }
                 if !outcome.errors.is_empty() {
+                    let error_msgs: Vec<String> =
+                        outcome.errors.iter().map(|e| e.to_string()).collect();
                     parts.push(format!(
-                        "{} error(s) during processing.",
-                        outcome.errors.len()
+                        "{} error(s) during processing: {}",
+                        outcome.errors.len(),
+                        error_msgs.join("; ")
                     ));
                 }
                 if parts.is_empty() {

@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.40.3] — 2026-06-10
+
+### Fixed
+
+- **Code review feedback for PR #125** (8 findings addressed):
+  - Strengthened `normalize_predicate` to handle `name` → `has_name`, `nickname` → `preferred_name`, `favorite_food`/`color`/`colour` variants, and trimmed leading/trailing whitespace.
+  - Expanded `LIST_PREDICATES` to include `has_pets`, `has_child`, `has_parent`, `has_sibling`, and `has_partner`.
+  - Removed extra whitespace from the `remember` tool description.
+  - `remember` tool output now includes actual error messages instead of just counts.
+  - Replaced flaky `tokio::time::sleep(200ms)` in chat integration test with a deterministic polling loop and timeout.
+  - `spawn_fact_extraction` now skips empty/whitespace-only messages.
+  - Renamed `user_message_clone` to `user_message` in `chat_stream_handler` to clarify ownership.
+  - Optimized `seed_identity_facts`: replaced full 1,000-fact scan with targeted predicate-specific queries; both identity inserts are now performed atomically via `KnowledgeGraph::insert_facts_batch`.
+
+### Changed
+
+- Added `relationship_type_id`, `get_facts_by_subject_and_predicate`, and `insert_facts_batch` to `KnowledgeGraph` API.
+
 ## [0.40.2] — 2026-06-10
 
 ### Fixed

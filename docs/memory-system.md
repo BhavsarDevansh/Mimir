@@ -12,6 +12,15 @@ Instead of reading a static text file, Mimir:
 4. Renders them as a structured schema (`MemorySchema`) sent to an LLM for condensation into natural prose
 5. Caches the condensed result in `system_state` (`key = "condensed_memory"`) for instant retrieval
 
+## Identity Fact Seeding
+
+When the server starts, it resolves the user entity from `[identity].name` in config. If the entity exists (or is created), the server seeds two identity facts automatically:
+
+- `has_name` — the user's full name from `identity.name`
+- `preferred_name` — the user's preferred name from `identity.preferred_name` (only if it differs from the full name)
+
+These facts are categorised as Identity (category ID 110) so they rank at the top of the memory schema. Seeding is idempotent — if an active fact with the same predicate and literal already exists, it is skipped. This ensures Mimir knows the user's name immediately after initialization, without requiring a separate conversation to extract it.
+
 ## Architecture
 
 ### Fact Ranking & Selection

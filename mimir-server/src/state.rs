@@ -140,6 +140,15 @@ impl AppState {
             }
         };
 
+        // Seed identity facts for the user entity so Mimir knows the user's name.
+        if let Some(uid) = user_entity_id {
+            let name = cfg.identity.name.trim();
+            let preferred = cfg.identity.preferred_name.trim();
+            if let Err(e) = seed_identity_facts(&knowledge_graph, uid, name, preferred).await {
+                tracing::warn!("Failed to seed identity facts: {}", e);
+            }
+        }
+
         // Register knowledge graph tools.
         if let Err(e) = tool_registry.register_native(Arc::new(mimir_knowledge::KgQueryTool::new(
             Arc::clone(&knowledge_graph),
@@ -345,4 +354,57 @@ impl AppState {
         self.model_override_cache.insert(model, Arc::clone(&client));
         client
     }
+}
+
+/// Insert name/preferred-name facts for the user entity if they do not already exist.
+/// Facts are categorised as Identity (110) so they appear in the identity bucket of memory.
+pub(crate) async fn seed_identity_facts(
+    kg: &mimir_knowledge::KnowledgeGraph,
+    subject_id: i32,
+    name: &str,
+    preferred: &str,
+) -> Result<(), mimir_knowledge::KnowledgeError> {
+    use mimir_knowledge::models::fact::FactStatus;
+    use mimir_knowledge::models::fact::NewFact;
+    use mimir_knowledge::models::source::SourceType;
+
+    let existing = kg.get_facts_by_subject(subject_id, 1000).await?;
+
+    let mut has_name = false;
+    let mut has_preferred = false;
+
+    for fact in &existing {
+        let pred = kg.relationship_type_name(fact.relationship_type_id).await;
+        let is_active = fact.status() == Some(FactStatus::Active);
+        if pred.as_deref() == Some("has_name")
+            && is_active
+            && fact.object_literal.as_deref() == Some(name)
+        {
+            has_name = true;
+        }
+        if pred.as_deref() == Some("preferred_name")
+            && is_active
+            && fact.object_literal.as_deref() == Some(preferred)
+        {
+            has_preferred = true;
+        }
+    }
+
+    if !has_name && !name.is_empty() {
+        let mut nf = NewFact::new(subject_id, "has_name");
+        nf.object_literal = Some(name.to_string());
+        nf.source_type = SourceType::System;
+        nf.category_ids = vec![110];
+        kg.insert_fact(nf).await?;
+    }
+
+    if !has_preferred && !preferred.is_empty() && preferred.to_lowercase() != name.to_lowercase() {
+        let mut nf = NewFact::new(subject_id, "preferred_name");
+        nf.object_literal = Some(preferred.to_string());
+        nf.source_type = SourceType::System;
+        nf.category_ids = vec![110];
+        kg.insert_fact(nf).await?;
+    }
+
+    Ok(())
 }

@@ -352,14 +352,16 @@ mod tests {
 
     /// Build an `AppState` suitable for tests, using a temporary directory
     /// for the context database.
-    async fn test_state(llm: Arc<dyn LlmBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+    async fn test_state_with_config(
+        llm: Arc<dyn LlmBackend>,
+        config: Config,
+    ) -> (Arc<AppState>, tempfile::TempDir) {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("context.db");
 
         let context_manager = Arc::new(ContextManager::new(&db_path).await.unwrap());
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
 
-        let config = Config::default();
         let reloadable = ReloadableConfig::new(config, temp.path().join("dummy_config.toml"));
 
         let tool_registry = mimir_core::tools::ToolRegistry::with_builtins();
@@ -432,6 +434,10 @@ mod tests {
         });
 
         (state, temp)
+    }
+
+    async fn test_state(llm: Arc<dyn LlmBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+        test_state_with_config(llm, Config::default()).await
     }
 
     #[tokio::test]
@@ -1868,5 +1874,114 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_seed_identity_facts_creates_name_and_preferred_name() {
+        let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+
+        // Create a user entity manually since test_state does not resolve identity.
+        let entity = state
+            .knowledge_graph
+            .create_entity(
+                "Alice Smith",
+                mimir_knowledge::models::entity::EntityType::Person,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Seed identity facts
+        crate::state::seed_identity_facts(
+            &state.knowledge_graph,
+            entity.id,
+            "Alice Smith",
+            "Alice",
+        )
+        .await
+        .unwrap();
+
+        // Verify facts exist
+        let facts = state
+            .knowledge_graph
+            .get_facts_by_subject(entity.id, 1000)
+            .await
+            .unwrap();
+
+        let mut found_name = false;
+        let mut found_preferred = false;
+        for fact in &facts {
+            let pred = state
+                .knowledge_graph
+                .relationship_type_name(fact.relationship_type_id)
+                .await;
+            if pred.as_deref() == Some("has_name")
+                && fact.object_literal.as_deref() == Some("Alice Smith")
+            {
+                found_name = true;
+            }
+            if pred.as_deref() == Some("preferred_name")
+                && fact.object_literal.as_deref() == Some("Alice")
+            {
+                found_preferred = true;
+            }
+        }
+        assert!(found_name, "expected has_name fact for Alice Smith");
+        assert!(found_preferred, "expected preferred_name fact for Alice");
+    }
+
+    #[tokio::test]
+    async fn test_seed_identity_facts_is_idempotent() {
+        let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+
+        let entity = state
+            .knowledge_graph
+            .create_entity(
+                "Bob",
+                mimir_knowledge::models::entity::EntityType::Person,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Call twice with same values
+        crate::state::seed_identity_facts(&state.knowledge_graph, entity.id, "Bob", "Bobby")
+            .await
+            .unwrap();
+        crate::state::seed_identity_facts(&state.knowledge_graph, entity.id, "Bob", "Bobby")
+            .await
+            .unwrap();
+
+        let facts = state
+            .knowledge_graph
+            .get_facts_by_subject(entity.id, 1000)
+            .await
+            .unwrap();
+
+        let mut name_count = 0;
+        let mut pref_count = 0;
+        for f in &facts {
+            let pred = state
+                .knowledge_graph
+                .relationship_type_name(f.relationship_type_id)
+                .await;
+            if f.status() == Some(mimir_knowledge::models::fact::FactStatus::Active) {
+                if pred.as_deref() == Some("has_name") && f.object_literal.as_deref() == Some("Bob")
+                {
+                    name_count += 1;
+                }
+                if pred.as_deref() == Some("preferred_name")
+                    && f.object_literal.as_deref() == Some("Bobby")
+                {
+                    pref_count += 1;
+                }
+            }
+        }
+
+        assert_eq!(name_count, 1, "expected exactly one active has_name fact");
+        assert_eq!(
+            pref_count, 1,
+            "expected exactly one active preferred_name fact"
+        );
     }
 }

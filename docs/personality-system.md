@@ -49,6 +49,8 @@ pub fn system_prompt(&self, memory_content: &str) -> String
   Note: This is not an exhaustive list. Use kg_query, kg_related, or kg_search tools if you need more information.
   ```
 
+Built-in presets do **not** instruct the LLM to use a `memory` tool. Memory facts are injected automatically by the server from the knowledge graph condensation pipeline; the LLM only sees the available KG query tools (`kg_query`, `kg_search`, etc.) in the tool registry.
+
 This composition is the responsibility of `Personality`; the caller passes the resulting string to `ContextManager::create_session`.
 
 ### Preset Resolution Order

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.40.1] — 2026-06-10
+
+### Fixed
+
+- **Personality prompts**: Removed references to a non-existent `memory` tool from `transparent`, `concise`, and `warm` presets. The LLM was instructed to use a tool that was not registered, causing `ToolError::NotFound("memory")` during conversations.
+- **Identity seeding**: When the server starts, it now inserts `has_name` and `preferred_name` facts into the knowledge graph for the user entity (if not already present). This ensures Mimir can learn the user's identity through the existing memory condensation pipeline instead of relying on prompt injection.
+
 ## [0.40.0] — 2026-06-10
 
 ### Added

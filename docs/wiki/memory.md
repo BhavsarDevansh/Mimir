@@ -32,3 +32,7 @@ Instead of reading a text file, Mimir:
 - The memory block is always current (regenerated when facts change)
 - You can still inspect what Mimir knows via `mimir memory` and `mimir kg query`
 - If you want a fact pinned or deprioritised, that will be supported in a future update
+
+### Your Name
+
+When you run `mimir init` and provide your name, Mimir stores it as a fact in the knowledge graph during the next server startup. This means your name is available in memory right away — no need to tell Mimir again in chat.

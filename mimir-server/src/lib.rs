@@ -1984,4 +1984,105 @@ mod tests {
             "expected exactly one active preferred_name fact"
         );
     }
+
+    #[tokio::test]
+    async fn test_chat_extracts_facts_after_response() {
+        // Build the extraction response (assistant message with remember tool call).
+        let remember_output = mimir_knowledge::extract::RememberOutput {
+            facts: vec![mimir_knowledge::extract::ExtractedFact {
+                classification: mimir_knowledge::extract::Classification::Explicit,
+                subject: "Devansh".to_string(),
+                subject_type: "Person".to_string(),
+                relationship_type: "favourite_colour".to_string(),
+                object: "blue".to_string(),
+                object_is_entity: false,
+                object_type: None,
+                temporal: None,
+                is_sensitive: false,
+                correction_scope: None,
+                categories: vec![],
+            }],
+        };
+        let extraction_msg = Message {
+            role: "assistant".to_string(),
+            content: "".to_string(),
+            tool_calls: Some(vec![ToolCall {
+                index: 0,
+                id: "call_remember".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "remember".to_string(),
+                    arguments: serde_json::to_string(&remember_output).unwrap(),
+                },
+            }]),
+            tool_call_id: None,
+        };
+
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_chat("Got it!", Usage::default())
+                .push_chat_message(extraction_msg, Usage::default())
+                .build(),
+        );
+
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state.clone());
+
+        let body = serde_json::to_string(&serde_json::json!({
+            "message": "My favourite colour is blue."
+        }))
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Yield so the background extraction task can run.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // Query KG for the extracted fact.
+        let search = state
+            .knowledge_graph
+            .search_entities("Devansh", 1)
+            .await
+            .unwrap();
+
+        assert!(
+            !search.is_empty(),
+            "expected entity 'Devansh' to be created"
+        );
+        let entity = &search[0].entity;
+
+        let facts = state
+            .knowledge_graph
+            .get_facts_by_subject(entity.id, 100)
+            .await
+            .unwrap();
+
+        let mut found = false;
+        for f in &facts {
+            let pred = state
+                .knowledge_graph
+                .relationship_type_name(f.relationship_type_id)
+                .await;
+            if pred.as_deref() == Some("favourite_colour")
+                && f.object_literal.as_deref() == Some("blue")
+            {
+                found = true;
+                break;
+            }
+        }
+
+        assert!(found, "expected favourite_colour=blue fact to be extracted");
+    }
 }

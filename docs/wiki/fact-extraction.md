@@ -2,7 +2,7 @@
 
 The fact-extraction pipeline processes chat input to extract and store facts as structured subject-predicate-object triples in the knowledge graph. This page explains how the process works, what gets stored, and how you stay in control.
 
-**Note:** Automatic, always-on wiring from live chat to the knowledge graph (daemon-style integration) is not yet enabled. The extraction pipeline is fully implemented as a library but not yet integrated into the daemon's chat flow.
+**Note:** The extraction pipeline is automatically triggered after every non-incognito chat interaction. Facts are extracted in the background without delaying your response.
 
 ## What Gets Extracted
 

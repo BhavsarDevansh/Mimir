@@ -248,10 +248,8 @@ impl MimirClient {
     /// Browse the knowledge graph from an entity.
     pub async fn kb_browse(&self, req: BrowseRequest) -> Result<BrowseResponse, ClientError> {
         let url = format!("{}/kb/browse", self.base_url);
-        let mut params: Vec<(&str, String)> = vec![
-            ("entity", req.entity),
-            ("depth", req.depth.to_string()),
-        ];
+        let mut params: Vec<(&str, String)> =
+            vec![("entity", req.entity), ("depth", req.depth.to_string())];
         if let Some(o) = req.offset {
             params.push(("offset", o.to_string()));
         }
@@ -376,10 +374,7 @@ impl MimirClient {
         limit: u32,
     ) -> Result<TrashListResponse, ClientError> {
         let url = format!("{}/kb/trash", self.base_url);
-        let params = [
-            ("offset", offset.to_string()),
-            ("limit", limit.to_string()),
-        ];
+        let params = [("offset", offset.to_string()), ("limit", limit.to_string())];
         let resp = self.client.get(&url).query(&params).send().await?;
         let status = resp.status();
         if status.is_success() {

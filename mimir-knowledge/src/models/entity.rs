@@ -31,3 +31,36 @@ pub struct Entity {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entity_type_discriminant_values() {
+        assert_eq!(EntityType::Person as i16, 1);
+        assert_eq!(EntityType::Place as i16, 2);
+        assert_eq!(EntityType::Event as i16, 3);
+        assert_eq!(EntityType::Object as i16, 4);
+        assert_eq!(EntityType::Concept as i16, 5);
+        assert_eq!(EntityType::Organization as i16, 6);
+        assert_eq!(EntityType::Activity as i16, 7);
+        assert_eq!(EntityType::DateTime as i16, 8);
+    }
+
+    #[test]
+    fn entity_construction_basic() {
+        let now = Utc::now();
+        let e = Entity {
+            id: 42,
+            name: "Alice".into(),
+            entity_type_id: EntityType::Person as i16,
+            aliases: Some(r#"["Al","Ali"]"#.into()),
+            created_at: now,
+            updated_at: now,
+        };
+        assert_eq!(e.id, 42);
+        assert_eq!(e.name, "Alice");
+        assert_eq!(e.entity_type_id, 1);
+    }
+}

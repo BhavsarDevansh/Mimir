@@ -581,3 +581,16 @@ pub async fn hard_delete_expired_trash(
 
     Ok(result.rows_affected())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forget_filters_full_reset() {
+        let mut f = ForgetFilters::default();
+        assert!(!f.is_full_reset());
+        f.all = true;
+        assert!(f.is_full_reset());
+    }
+}

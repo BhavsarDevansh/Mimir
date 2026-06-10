@@ -106,3 +106,57 @@ impl NewFact {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fact_status_roundtrip() {
+        assert_eq!(FactStatus::Active as i16, 1);
+        assert_eq!(FactStatus::Inferred as i16, 2);
+        assert_eq!(FactStatus::Disputed as i16, 3);
+        assert_eq!(FactStatus::Corrected as i16, 4);
+        assert_eq!(FactStatus::Superseded as i16, 5);
+        assert_eq!(FactStatus::Forgotten as i16, 6);
+    }
+
+    #[test]
+    fn fact_status_method_maps_correctly() {
+        let mut fact = Fact {
+            id: 1,
+            subject_id: 1,
+            relationship_type_id: 1,
+            object_id: None,
+            object_literal: None,
+            valid_from: None,
+            valid_until: None,
+            confidence: 1.0,
+            fact_status_id: FactStatus::Active as i16,
+            inferred: false,
+            inference_depth: 0,
+            stale_confidence: false,
+            memory_priority_id: 3,
+            created_at: Utc::now(),
+            pending_confirmation: false,
+            updated_at: Utc::now(),
+        };
+        assert_eq!(fact.status(), Some(FactStatus::Active));
+
+        fact.fact_status_id = 99;
+        assert_eq!(fact.status(), None);
+    }
+
+    #[test]
+    fn new_fact_defaults() {
+        let nf = NewFact::new(7, "likes");
+        assert_eq!(nf.subject_id, 7);
+        assert_eq!(nf.relationship_type, "likes");
+        assert_eq!(nf.object_id, None);
+        assert!(!nf.inferred);
+        assert_eq!(nf.inference_depth, 0);
+        assert_eq!(nf.confidence, None);
+        assert!(nf.parent_fact_ids.is_empty());
+        assert!(nf.category_ids.is_empty());
+    }
+}

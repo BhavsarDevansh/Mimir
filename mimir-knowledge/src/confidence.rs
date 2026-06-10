@@ -270,3 +270,108 @@ pub async fn connector_reliability(
 
     Ok(score.unwrap_or_else(|| default_connector_score(connector_type)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::source::SourceType;
+
+    #[test]
+    fn initial_user_edit_is_one() {
+        assert_eq!(initial(SourceType::UserEdit, None), 1.0);
+    }
+
+    #[test]
+    fn initial_system_is_one() {
+        assert_eq!(initial(SourceType::System, None), 1.0);
+    }
+
+    #[test]
+    fn initial_interaction_is_zero_point_three() {
+        assert_eq!(initial(SourceType::Interaction, None), 0.30);
+    }
+
+    #[test]
+    fn initial_import_is_zero_point_eight() {
+        assert_eq!(initial(SourceType::Import, None), 0.80);
+    }
+
+    #[test]
+    fn initial_connector_without_type_defaults() {
+        assert_eq!(initial(SourceType::Connector, None), 0.80);
+    }
+
+    #[test]
+    fn initial_connector_calendar_is_nine() {
+        assert_eq!(
+            initial(SourceType::Connector, Some(ConnectorType::Calendar)),
+            0.90
+        );
+    }
+
+    #[test]
+    fn initial_inference_is_zero() {
+        assert_eq!(initial(SourceType::Inference, None), 0.0);
+    }
+
+    #[test]
+    fn inference_confidence_single_parent() {
+        let parents = vec![(1.0f32, true)];
+        let conf = inference_confidence(&parents, 1, 1);
+        // sum=1.0, penalty=0.8^1=0.8, breadth(1)=0.6 → 1.0*0.8*0.6 = 0.48
+        assert!((conf - 0.48).abs() < 0.001, "expected 0.48, got {}", conf);
+    }
+
+    #[test]
+    fn inference_confidence_two_parents() {
+        let parents = vec![(1.0f32, true), (1.0f32, true)];
+        let conf = inference_confidence(&parents, 1, 2);
+        // sum=2.0, penalty=0.8, breadth(2)=0.75 → 2.0*0.8*0.75 = 1.2, clamped to 0.95
+        assert_eq!(conf, 0.95);
+    }
+
+    #[test]
+    fn inference_confidence_negative_parent() {
+        let parents = vec![(1.0f32, true), (0.5f32, false)];
+        let conf = inference_confidence(&parents, 0, 2);
+        // sum=1.0 - 0.5 = 0.5, penalty=1.0, breadth(2)=0.75 → 0.375
+        assert!((conf - 0.375).abs() < 0.001);
+    }
+
+    #[test]
+    fn inference_confidence_caps_at_ninety_five() {
+        let parents = vec![
+            (1.0f32, true),
+            (1.0f32, true),
+            (1.0f32, true),
+            (1.0f32, true),
+        ];
+        let conf = inference_confidence(&parents, 0, 4);
+        assert_eq!(conf, 0.95);
+    }
+
+    #[test]
+    fn inference_confidence_floor_at_zero() {
+        let parents = vec![(0.5f32, false)];
+        let conf = inference_confidence(&parents, 0, 1);
+        assert_eq!(conf, 0.0);
+    }
+
+    #[test]
+    fn breadth_factor_table() {
+        assert_eq!(breadth_factor(0), 0.0);
+        assert_eq!(breadth_factor(1), 0.6);
+        assert_eq!(breadth_factor(2), 0.75);
+        assert_eq!(breadth_factor(3), 0.9);
+        assert_eq!(breadth_factor(4), 1.0);
+        assert_eq!(breadth_factor(99), 1.0);
+    }
+
+    #[test]
+    fn default_connector_scores() {
+        assert_eq!(default_connector_score(ConnectorType::Gmail), 0.85);
+        assert_eq!(default_connector_score(ConnectorType::Calendar), 0.90);
+        assert_eq!(default_connector_score(ConnectorType::Photos), 0.80);
+        assert_eq!(default_connector_score(ConnectorType::LinkedIn), 0.75);
+    }
+}

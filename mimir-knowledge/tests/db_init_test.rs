@@ -39,7 +39,7 @@ async fn init_with_mock_clock_returns_deterministic_timestamps() {
 
     assert_eq!(kg.now(), fixed);
 
-    clock.advance_seconds(3600);
+    clock.advance(chrono::Duration::seconds(3600));
     assert_eq!(kg.now(), fixed + chrono::Duration::seconds(3600));
 }
 

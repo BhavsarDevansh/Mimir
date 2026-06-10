@@ -35,8 +35,9 @@ impl MockClock {
     }
 
     pub fn advance(&self, duration: Duration) {
-        let secs = duration.num_seconds();
-        let nanos = duration.num_nanoseconds().unwrap_or(0) - secs * 1_000_000_000;
+        let total_nanos = duration.num_nanoseconds().unwrap_or(0);
+        let secs = total_nanos.div_euclid(1_000_000_000);
+        let nanos = total_nanos.rem_euclid(1_000_000_000);
         self.seconds.fetch_add(secs, Ordering::SeqCst);
         self.nanos.fetch_add(nanos, Ordering::SeqCst);
     }
@@ -44,11 +45,12 @@ impl MockClock {
 
 impl Clock for MockClock {
     fn now(&self) -> DateTime<Utc> {
-        DateTime::from_timestamp(
-            self.seconds.load(Ordering::SeqCst),
-            self.nanos.load(Ordering::SeqCst) as u32,
-        )
-        .expect("valid timestamp")
+        let secs = self.seconds.load(Ordering::SeqCst);
+        let nanos = self.nanos.load(Ordering::SeqCst);
+        // Normalize cumulative nanos overflow into seconds.
+        let extra_secs = nanos.div_euclid(1_000_000_000);
+        let norm_nanos = nanos.rem_euclid(1_000_000_000) as u32;
+        DateTime::from_timestamp(secs + extra_secs, norm_nanos).expect("valid timestamp")
     }
 }
 
@@ -73,6 +75,26 @@ mod tests {
         let clock = MockClock::new(fixed);
         clock.advance(Duration::days(7));
         assert_eq!(clock.now(), fixed + Duration::days(7));
+    }
+
+    #[test]
+    fn mock_clock_advance_negative_duration() {
+        let fixed = DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let clock = MockClock::new(fixed);
+        clock.advance(Duration::days(-3));
+        assert_eq!(clock.now(), fixed - Duration::days(3));
+    }
+
+    #[test]
+    fn mock_clock_advance_negative_subsecond() {
+        let fixed = DateTime::parse_from_rfc3339("2024-03-15T12:00:00.500Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let clock = MockClock::new(fixed);
+        clock.advance(Duration::milliseconds(-200));
+        assert_eq!(clock.now(), fixed - Duration::milliseconds(200));
     }
 
     #[test]

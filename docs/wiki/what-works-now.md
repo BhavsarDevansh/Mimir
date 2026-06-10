@@ -114,7 +114,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | `mimir tool list` | ✅ Works | Lists registered tools and their permissions |
 | `mimir tool enable/disable/permission` | ✅ Works | Change tool permission levels (saved to `tools.toml`) |
 | `mimir skill list/show/add/delete/enable/disable` | ✅ Works | Manage skills (built-in, user-added, and generated) |
-| `mimir kb` | 🔄 Partial | `mimir kb audit` available; full CRUD planned for Phase 2 |
+| `mimir kb` | ✅ Works | All `mimir kb` commands route through daemon HTTP; audit and CRUD supported via daemon |
 
 ### Chat & Conversation
 
@@ -241,7 +241,7 @@ The daemon exposes an OpenAI-compatible chat endpoint plus Mimir-specific manage
 ## Roadmap Summary
 
 - **Phase 1 — Core Agent** ✅ Complete
-- **Phase 2 — Knowledge Graph** 🔄 Library complete; daemon integration pending
+- **Phase 2 — Knowledge Graph** ✅ Complete
 - **Phase 3 — Connectors** ⏳ Planned (calendar, email, file watchers)
 - **Phase 4 — Reasoning** ⏳ Planned (inference engine expansion)
 - **Phase 5 — Proactive Agent** ⏳ Planned (events, reminders, domain surfacing)

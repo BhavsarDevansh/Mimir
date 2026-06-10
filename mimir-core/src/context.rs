@@ -781,7 +781,6 @@ fn expand_tilde_with_home(path: &Path, home: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
 
     async fn setup_manager() -> (ContextManager, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();

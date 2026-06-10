@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.40.6] — 2026-06-10
+
+### Fixed
+
+- Addressed remaining CodeRabbit review feedback for PR #125:
+  - Fixed CHANGELOG entry for uninstall.sh redirect typo to use literal characters.
+  - Aligned test-only init_at() with production init() by ensuring cache directory exists.
+  - Replaced silent unwrap_or((0,)) with explicit match on the fact-count query during auto-merge to avoid treating DB errors as zero facts.
+  - Documented the auto-merge threshold (fact_count <= 2) in process_extracted_fact.
+  - Optimised category validation in insert_facts_batch to query only referenced category IDs instead of the full table.
+  - Tidied SQL formatting in get_facts_by_subject_and_predicate.
+  - Documented the alias score adjustment (1.1) in entity search queries.
+  - Removed unreachable Windows path checks from the Linux-only resolve_executable_path function.
+  - Added defensive mimir substring check in uninstall.sh remove_dir before rm -rf.
+  - Removed unused serial_test::serial imports in mimir-core tests.
+
 ## [0.40.5] — 2026-06-10
 
 ### Fixed
@@ -11,7 +27,7 @@
 ### Fixed
 
 - **Code review feedback for PR #125** (additional findings addressed):
-  - Fixed typo in `scripts/uninstall.sh` where `error()` redirected with `\u0026\u00262` instead of `\u003e\u00262`.
+  - Fixed typo in `scripts/uninstall.sh` where `error()` redirected with `&&2` instead of `>&2`.
   - Fixed `insert_facts_batch` atomicity by calling `ensure_relationship_type_in_tx` inside the batch transaction instead of autocommitting via `ensure_relationship_type`.
   - Moved `preferred_name` alias registration and auto-merge side effects in `process_extracted_fact` to after the dedup/corroboration check, preventing irreversible mutations on duplicate facts.
   - Aligned `generate_service_file` implementation with its docs and test by removing the unused `cache_dir` parameter and updating callers.

@@ -671,11 +671,33 @@ impl KnowledgeGraph {
         let mut tx = self.pool.begin().await?;
         let now = self.now();
 
-        let valid_ids: HashSet<i32> = sqlx::query_scalar("SELECT id FROM categories")
-            .fetch_all(&mut *tx)
-            .await?
-            .into_iter()
+        let referenced_ids: HashSet<i32> = facts
+            .iter()
+            .flat_map(|f| &f.category_ids)
+            .copied()
             .collect();
+
+        let valid_ids: HashSet<i32> = if referenced_ids.is_empty() {
+            HashSet::new()
+        } else {
+            let mut builder =
+                sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT id FROM categories WHERE id IN (");
+            let mut first = true;
+            for id in &referenced_ids {
+                if !first {
+                    builder.push(", ");
+                }
+                builder.push_bind(id);
+                first = false;
+            }
+            builder.push(")");
+            builder
+                .build_query_scalar::<i32>()
+                .fetch_all(&mut *tx)
+                .await?
+                .into_iter()
+                .collect()
+        };
 
         let mut results = Vec::with_capacity(facts.len());
         for new_fact in &facts {
@@ -925,7 +947,7 @@ impl KnowledgeGraph {
         relationship_type_id: i16,
     ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
         let facts: Vec<models::fact::Fact> = sqlx::query_as::<_, models::fact::Fact>(
-            "SELECT id, subject_id, relationship_type_id, object_id, object_literal,              valid_from, valid_until, confidence, fact_status_id, inferred,              inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at              FROM facts WHERE subject_id = ? AND relationship_type_id = ? ORDER BY id ASC"
+            "SELECT id, subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until, confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at FROM facts WHERE subject_id = ? AND relationship_type_id = ? ORDER BY id ASC"
         )
         .bind(subject_id)
         .bind(relationship_type_id)

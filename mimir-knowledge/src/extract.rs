@@ -733,26 +733,40 @@ pub(crate) async fn process_extracted_fact(
                     continue;
                 }
                 if cand.entity.name.to_lowercase() == alias.to_lowercase() {
-                    let (fact_count,): (i64,) = sqlx::query_as(
+                    match sqlx::query_as::<_, (i64,)>(
                         "SELECT COUNT(*) FROM facts WHERE subject_id = ? OR object_id = ?",
                     )
                     .bind(cand.entity.id)
                     .bind(cand.entity.id)
                     .fetch_one(kg.pool())
                     .await
-                    .unwrap_or((0,));
-                    if fact_count <= 2 {
-                        if let Err(e) =
-                            queries::entity::auto_merge_pair(kg.pool(), subject.id, cand.entity.id)
-                                .await
-                        {
-                            tracing::warn!(
-                                "Failed to auto-merge duplicate entity {} into {}: {}",
-                                cand.entity.id,
+                    {
+                        Ok((fact_count,)) if fact_count <= 2 => {
+                            // Auto-merge only if the duplicate has very few facts (≤2), suggesting it
+                            // was created accidentally before the alias was wired up.
+                            if let Err(e) = queries::entity::auto_merge_pair(
+                                kg.pool(),
                                 subject.id,
+                                cand.entity.id,
+                            )
+                            .await
+                            {
+                                tracing::warn!(
+                                    "Failed to auto-merge duplicate entity {} into {}: {}",
+                                    cand.entity.id,
+                                    subject.id,
+                                    e
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to count facts for candidate entity {} during auto-merge check: {}",
+                                cand.entity.id,
                                 e
                             );
                         }
+                        _ => {}
                     }
                     break;
                 }

@@ -358,6 +358,8 @@ impl Config {
     ) -> Result<InitResult, ConfigError> {
         paths::ensure_dir(config_dir)?;
         paths::ensure_dir(data_dir)?;
+        let cache_dir = paths::cache_dir()?;
+        paths::ensure_dir(&cache_dir)?;
 
         let cfg_path = config_dir.join("config.toml");
 
@@ -643,7 +645,6 @@ impl ReloadableConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
     use std::io::Write;
 
     #[test]

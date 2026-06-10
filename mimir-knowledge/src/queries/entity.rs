@@ -162,7 +162,7 @@ pub async fn get_by_name(
                     results.push(AliasSearchResult {
                         entity: e,
                         match_kind: MatchKind::ExactAlias,
-                        score: 1.1,
+                        score: 1.1, // Aliases outrank exact-name matches to prefer canonical entities.
                     });
                 }
             }

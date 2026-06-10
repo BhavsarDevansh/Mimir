@@ -116,10 +116,8 @@ pub async fn handle_init() {
 #[cfg(target_os = "linux")]
 fn resolve_executable_path(current: &std::path::Path) -> std::path::PathBuf {
     let path_str = current.to_string_lossy();
-    let looks_like_cargo_build = path_str.contains("/target/debug/")
-        || path_str.contains("/target/release/")
-        || path_str.contains("\\target\\debug\\")
-        || path_str.contains("\\target\\release\\");
+    let looks_like_cargo_build =
+        path_str.contains("/target/debug/") || path_str.contains("/target/release/");
 
     if looks_like_cargo_build {
         if let Some(paths) = std::env::var_os("PATH") {

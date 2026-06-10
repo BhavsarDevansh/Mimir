@@ -164,6 +164,11 @@ remove_dir() {
     local label="$1"
     local dir="$2"
 
+    # Defensive check: ensure path contains "mimir" before destructive rm -rf
+    if [[ "$dir" != *mimir* ]]; then
+        die "Safety check failed: path '$dir' does not contain 'mimir'"
+    fi
+
     if [[ ! -e "$dir" ]]; then
         info "$label not found at $dir — nothing to remove"
         return 0

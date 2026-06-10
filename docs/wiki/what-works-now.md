@@ -196,8 +196,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Forgetting system | ✅ Works | Trash, cascade forget, restore, bulk operations |
 | FTS5 search | ✅ Works | Full-text search over entities and aliases |
 | **Fact extraction pipeline** | ✅ Works | LLM → Rust validation → entity resolution → confidence → sensitive confirmation → insert (issue #55) |
-| **Daemon integration** | ✅ Works | All `mimir kb` commands route through daemon HTTP; no direct DB access from CLI |
-| **`mimir kb` CLI** | ✅ Works | All `mimir kb` commands route through daemon HTTP; audit and CRUD supported via daemon |
+| **`mimir kb` CLI (daemon-routed)** | ✅ Works | All `mimir kb` commands route through daemon HTTP (no direct DB access); audit and CRUD supported via daemon |
 
 ---
 
@@ -257,4 +256,3 @@ See `VISION/09-Roadmap/` for full details.
 - Check the GitHub Issues board for bug reports and feature requests.
 - Run `mimir status` to verify daemon health and configuration.
 
-- Knowledge Graph LLM tools: `kg_query`, `kg_related`, `kg_search` (Phase 2, Issue #56)

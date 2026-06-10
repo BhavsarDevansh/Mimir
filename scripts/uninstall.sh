@@ -16,6 +16,7 @@ SCRIPT_NAME="${0##*/}"
 CONFIRM="prompt"
 REMOVE_DATA=false
 REMOVE_CONFIG=false
+REMOVE_BINARY=false
 
 # ---------------------------------------------------------------------------
 # Paths (resolved via dirs conventions; XDG vars honoured)
@@ -43,13 +44,14 @@ Usage:
   $SCRIPT_NAME [options]
 
 Options:
-  -y, --yes      Full uninstall without confirmation (implies --data and --config)
+  -y, --yes      Full uninstall without confirmation (implies --data, --config, and --binary)
   -d, --data     Remove the data directory ($DATA_DIR)
   -c, --config   Remove the config directory ($CONFIG_DIR)
+  -b, --binary   Remove the mimir binary
   -h, --help     Show this help message
 
 With no options the script stops the systemd service (if present) and then
-interactively asks whether to delete the data, config, and cache directories.
+interactively asks whether to delete the data, config, cache, and binary.
 USAGE
 }
 
@@ -62,6 +64,7 @@ while [[ $# -gt 0 ]]; do
             CONFIRM="auto"
             REMOVE_DATA=true
             REMOVE_CONFIG=true
+            REMOVE_BINARY=true
             shift
             ;;
         -d|--data)
@@ -70,6 +73,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -c|--config)
             REMOVE_CONFIG=true
+            shift
+            ;;
+        -b|--binary)
+            REMOVE_BINARY=true
             shift
             ;;
         -h|--help)
@@ -117,6 +124,40 @@ remove_systemd_service() {
 }
 
 # ---------------------------------------------------------------------------
+# Binary removal
+# ---------------------------------------------------------------------------
+locate_binary() {
+    # Try PATH first, then common install locations
+    if command -v mimir >/dev/null 2>&1; then
+        command -v mimir
+        return 0
+    fi
+    local candidates=(
+        "$HOME/.local/bin/mimir"
+        "$HOME/.cargo/bin/mimir"
+    )
+    for cand in "${candidates[@]}"; do
+        if [[ -f "$cand" ]]; then
+            printf '%s\n' "$cand"
+            return 0
+        fi
+    done
+    return 1
+}
+
+remove_binary() {
+    local binary_path
+    binary_path=$(locate_binary) || {
+        info "mimir binary not found in PATH or common locations — nothing to remove"
+        return 0
+    }
+
+    info "Removing mimir binary: $binary_path"
+    rm -f "$binary_path"
+    info "Binary removed"
+}
+
+# ---------------------------------------------------------------------------
 # Directory removal
 # ---------------------------------------------------------------------------
 remove_dir() {
@@ -161,11 +202,14 @@ main() {
     local do_data=false
     local do_config=false
     local do_cache=false
+    local do_binary=false
+    local binary_path=""
 
     if [[ "$CONFIRM" == "auto" ]]; then
         do_data=true
         do_config=true
         do_cache=true
+        do_binary=true
     else
         # --data was passed → remove data without asking
         if [[ "$REMOVE_DATA" == true ]]; then
@@ -183,6 +227,16 @@ main() {
 
         # Cache is always asked (no dedicated flag)
         prompt_confirm "Remove cache directory ($CACHE_DIR)?" && do_cache=true
+
+        # Binary is always asked (no dedicated flag, but --binary forces it)
+        if [[ "$REMOVE_BINARY" == true ]]; then
+            do_binary=true
+        else
+            binary_path=$(locate_binary 2>/dev/null || true)
+            if [[ -n "$binary_path" ]]; then
+                prompt_confirm "Remove mimir binary ($binary_path)?" && do_binary=true
+            fi
+        fi
     fi
 
     # Summary
@@ -192,6 +246,7 @@ main() {
     [[ "$do_data"   == true ]] && echo "  • Remove data directory:   $DATA_DIR"
     [[ "$do_config" == true ]] && echo "  • Remove config directory: $CONFIG_DIR"
     [[ "$do_cache"  == true ]] && echo "  • Remove cache directory:  $CACHE_DIR"
+    [[ "$do_binary" == true ]] && echo "  • Remove mimir binary:     ${binary_path:-$(locate_binary 2>/dev/null || true)}"
     echo
 
     if [[ "$CONFIRM" == "prompt" ]]; then
@@ -205,6 +260,7 @@ main() {
     [[ "$do_data"   == true ]] && remove_dir "Data directory" "$DATA_DIR"
     [[ "$do_config" == true ]] && remove_dir "Config directory" "$CONFIG_DIR"
     [[ "$do_cache"  == true ]] && remove_dir "Cache directory" "$CACHE_DIR"
+    [[ "$do_binary" == true ]] && remove_binary
 
     echo
     info "Uninstall complete."

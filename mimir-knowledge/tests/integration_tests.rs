@@ -83,6 +83,39 @@ async fn test_alias_resolution_exact() {
 }
 
 #[tokio::test]
+async fn test_alias_outranks_exact_name_when_bare_duplicate_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    // Canonical entity with alias
+    let canonical = kg
+        .create_entity("Bob Smith", EntityType::Person, &["Bob"])
+        .await
+        .unwrap();
+
+    // Bare-name duplicate (accidentally created before alias was wired)
+    let duplicate = kg
+        .create_entity("Bob", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    // Searching for "Bob" should return the canonical entity first because
+    // alias matches now outrank exact name matches.
+    let results = mimir_knowledge::queries::entity::get_by_name(kg.pool(), "Bob")
+        .await
+        .unwrap();
+    assert!(!results.is_empty());
+    assert_eq!(results[0].entity.id, canonical.id);
+    assert_eq!(results[0].match_kind, MatchKind::ExactAlias);
+
+    // The duplicate should appear second (exact name match).
+    assert_eq!(results[1].entity.id, duplicate.id);
+    assert_eq!(results[1].match_kind, MatchKind::ExactName);
+}
+
+#[tokio::test]
 async fn test_alias_resolution_fuzzy() {
     let dir = tempfile::tempdir().unwrap();
     let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))

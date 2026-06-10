@@ -403,12 +403,49 @@ pub(crate) async fn seed_identity_facts(
         kg.insert_fact(nf).await?;
     }
 
-    if !has_preferred && !preferred.is_empty() && preferred.to_lowercase() != name.to_lowercase() {
-        let mut nf = NewFact::new(subject_id, "preferred_name");
-        nf.object_literal = Some(preferred.to_string());
-        nf.source_type = SourceType::System;
-        nf.category_ids = vec![110];
-        kg.insert_fact(nf).await?;
+    if !preferred.is_empty() && preferred.to_lowercase() != name.to_lowercase() {
+        // Always ensure the short name is registered as an alias so lookups
+        // resolve to the canonical entity.
+        if let Err(e) = kg.add_alias(subject_id, preferred).await {
+            tracing::warn!("Failed to add preferred-name alias '{}': {}", preferred, e);
+        }
+
+        // If a bare-name duplicate entity already exists (e.g. "Devansh" vs
+        // "Devansh Bhavsar"), auto-merge it into the canonical entity.
+        if let Ok(candidates) =
+            mimir_knowledge::queries::entity::get_by_name(kg.pool(), preferred).await
+        {
+            for cand in candidates {
+                if cand.entity.id == subject_id {
+                    continue;
+                }
+                if cand.entity.name.to_lowercase() == preferred.to_lowercase() {
+                    if let Err(e) = mimir_knowledge::queries::entity::auto_merge_pair(
+                        kg.pool(),
+                        subject_id,
+                        cand.entity.id,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            "Failed to auto-merge duplicate entity {} into {}: {}",
+                            cand.entity.id,
+                            subject_id,
+                            e
+                        );
+                    }
+                    break;
+                }
+            }
+        }
+
+        if !has_preferred {
+            let mut nf = NewFact::new(subject_id, "preferred_name");
+            nf.object_literal = Some(preferred.to_string());
+            nf.source_type = SourceType::System;
+            nf.category_ids = vec![110];
+            kg.insert_fact(nf).await?;
+        }
     }
 
     Ok(())

@@ -611,3 +611,46 @@ async fn test_split_hobbies_into_individual_facts() {
     assert!(objects.contains(&Some("Software Development")));
     assert!(objects.contains(&Some("Tech")));
 }
+
+#[tokio::test]
+async fn test_preferred_name_creates_alias() {
+    let tg = TestGraph::new().await;
+
+    // Seed the canonical entity
+    let canonical = tg
+        .kg
+        .create_entity("Devansh Bhavsar", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    // Simulate the LLM extracting a preferred_name fact
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "Devansh Bhavsar",
+        "subject_type": "Person",
+        "relationship_type": "preferred_name",
+        "object": "Devansh",
+        "object_is_entity": false,
+        "categories": ["110"],
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let result = tg
+        .kg
+        .extract_facts(&mock, "I go by Devansh.")
+        .await
+        .unwrap();
+
+    assert_eq!(result.inserted.len(), 1);
+
+    // The alias should now exist, so get_by_name("Devansh") resolves to the canonical entity
+    let resolved = mimir_knowledge::queries::entity::get_by_name(tg.kg.pool(), "Devansh")
+        .await
+        .unwrap();
+    assert!(!resolved.is_empty());
+    assert_eq!(resolved[0].entity.id, canonical.id);
+    assert_eq!(
+        resolved[0].match_kind,
+        mimir_knowledge::queries::entity::MatchKind::ExactAlias
+    );
+}

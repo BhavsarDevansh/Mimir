@@ -769,6 +769,16 @@ fn expand_tilde(path: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
+fn expand_tilde_with_home(path: &Path, home: &Path) -> PathBuf {
+    if let Some(s) = path.to_str()
+        && let Some(stripped) = s.strip_prefix("~/")
+    {
+        return home.join(stripped);
+    }
+    path.to_path_buf()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serial_test::serial;
@@ -963,59 +973,30 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn db_path_with_tilde_expanded() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
 
-        // Temporarily override HOME so tilde expansion points to tempdir.
-        #[cfg(unix)]
-        let orig = std::env::var_os("HOME");
-        #[cfg(unix)]
-        unsafe {
-            std::env::set_var("HOME", home);
-        }
+        // Test tilde expansion directly without mutating process env.
+        let expanded = expand_tilde_with_home(
+            std::path::Path::new("~/nonexistent_test_mimir_ctx.db"),
+            home,
+        );
+        assert_eq!(expanded, home.join("nonexistent_test_mimir_ctx.db"));
 
-        #[cfg(windows)]
-        let orig = std::env::var_os("USERPROFILE");
-        #[cfg(windows)]
-        unsafe {
-            std::env::set_var("USERPROFILE", home);
-        }
-
-        let db = home.join("nonexistent_test_mimir_ctx.db");
-        let mgr = ContextManager::new("~/nonexistent_test_mimir_ctx.db").await;
-        assert!(mgr.is_ok(), "ContextManager should succeed with tilde path");
-
-        // Verify the DB file was created under the mocked HOME.
+        let mgr = ContextManager::new(expanded.to_str().unwrap()).await;
         assert!(
-            db.exists() || home.join("nonexistent_test_mimir_ctx.db").exists(),
-            "DB file should be created under mocked HOME"
+            mgr.is_ok(),
+            "ContextManager should succeed with expanded path"
+        );
+        assert!(
+            expanded.exists(),
+            "DB file should be created under temp HOME"
         );
 
         // Clean up session if created (best-effort).
         if let Ok(ref m) = mgr {
             let _ = m.delete_session("x").await;
-        }
-
-        // Restore HOME / USERPROFILE to original state.
-        #[cfg(unix)]
-        match orig {
-            Some(val) => unsafe {
-                std::env::set_var("HOME", val);
-            },
-            None => unsafe {
-                std::env::remove_var("HOME");
-            },
-        }
-        #[cfg(windows)]
-        match orig {
-            Some(val) => unsafe {
-                std::env::set_var("USERPROFILE", val);
-            },
-            None => unsafe {
-                std::env::remove_var("USERPROFILE");
-            },
         }
     }
 

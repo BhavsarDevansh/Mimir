@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 mod ask;
 mod chat;
 mod cli;

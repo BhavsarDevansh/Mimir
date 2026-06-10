@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 pub mod error;
 pub mod routes;
 pub mod state;
@@ -1990,6 +1991,63 @@ mod tests {
             pref_count, 1,
             "expected exactly one active preferred_name fact"
         );
+    }
+
+    #[tokio::test]
+    async fn test_seed_identity_facts_adds_alias_and_merges_duplicate() {
+        let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+
+        // Canonical entity
+        let canonical = state
+            .knowledge_graph
+            .create_entity(
+                "Devansh Bhavsar",
+                mimir_knowledge::models::entity::EntityType::Person,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Bare-name duplicate (simulating old bug)
+        let duplicate = state
+            .knowledge_graph
+            .create_entity(
+                "Devansh",
+                mimir_knowledge::models::entity::EntityType::Person,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Seed identity facts – should add alias and auto-merge duplicate
+        crate::state::seed_identity_facts(
+            &state.knowledge_graph,
+            canonical.id,
+            "Devansh Bhavsar",
+            "Devansh",
+        )
+        .await
+        .unwrap();
+
+        // Alias should now exist
+        let resolved =
+            mimir_knowledge::queries::entity::get_by_name(state.knowledge_graph.pool(), "Devansh")
+                .await
+                .unwrap();
+        assert!(!resolved.is_empty());
+        assert_eq!(resolved[0].entity.id, canonical.id);
+        assert_eq!(
+            resolved[0].match_kind,
+            mimir_knowledge::queries::entity::MatchKind::ExactAlias
+        );
+
+        // Duplicate entity should have been merged away
+        let gone = state
+            .knowledge_graph
+            .get_entity(duplicate.id)
+            .await
+            .unwrap();
+        assert!(gone.is_none(), "expected duplicate entity to be merged");
     }
 
     #[tokio::test]

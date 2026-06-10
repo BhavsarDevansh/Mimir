@@ -84,10 +84,16 @@ async fn run_systemctl(args: &[&str]) -> Result<(), SystemdError> {
 ///
 /// `exe_path` should be the absolute path to the `mimir` binary.
 /// `config_dir` and `data_dir` are the Mimir directories.
-pub fn generate_service_file(exe_path: &Path, config_dir: &Path, data_dir: &Path) -> String {
+pub fn generate_service_file(
+    exe_path: &Path,
+    config_dir: &Path,
+    data_dir: &Path,
+    cache_dir: &Path,
+) -> String {
     let exe = exe_path.display();
     let config = config_dir.display();
     let data = data_dir.display();
+    let cache = cache_dir.display();
 
     format!(
         r#"[Unit]
@@ -105,7 +111,7 @@ RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths="{config}" "{data}"
+ReadWritePaths="{config}" "{data}" "{cache}"
 PrivateTmp=true
 
 # Logging → journalctl --user -u mimir
@@ -140,7 +146,8 @@ pub fn install_service_file(content: &str, dir: &Path) -> Result<PathBuf, System
 pub fn generate_and_install_service_file(exe_path: &Path) -> Result<PathBuf, SystemdError> {
     let config = crate::paths::config_dir()?;
     let data = crate::paths::data_dir()?;
-    let content = generate_service_file(exe_path, &config, &data);
+    let cache = crate::paths::cache_dir()?;
+    let content = generate_service_file(exe_path, &config, &data, &cache);
     let dir = systemd_user_dir()?;
     install_service_file(&content, &dir)
 }
@@ -185,7 +192,8 @@ mod tests {
         let config = PathBuf::from("/home/user/.config/mimir");
         let data = PathBuf::from("/home/user/.local/share/mimir");
 
-        let content = generate_service_file(&exe, &config, &data);
+        let cache = PathBuf::from("/home/user/.cache/mimir");
+        let content = generate_service_file(&exe, &config, &data, &cache);
 
         assert!(content.contains("[Unit]"), "should contain [Unit]");
         assert!(content.contains("[Service]"), "should contain [Service]");

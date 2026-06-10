@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 //! `mimir-knowledge` — SQLite-based knowledge graph for Mimir.
 //!
 //! Provides entity and fact storage, temporal queries, provenance tracking,

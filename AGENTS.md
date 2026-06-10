@@ -104,3 +104,12 @@ Mimir is **not a public library** — it is a personal, self-hosted application.
 6. Update `docs/` and `docs/wiki/`.
 7. Run code review and action every finding.
 8. Proceed only after review returns **zero** findings.
+
+## Safety Policy
+
+The Mimir codebase maintains a strict **no-unsafe** guarantee:
+
+- `#![deny(unsafe_code)]` is enforced at the crate root of every workspace member.
+- No `unsafe` blocks, `unsafe fn`, or `unsafe impl` are permitted in any source or test file.
+- Process environment mutation (`std::env::set_var` / `remove_var`) is banned because it is `unsafe` in Rust 2024 edition. Tests must use dependency injection, explicit parameters, or temporary files instead of mutating global state.
+- If a third-party API requires `unsafe`, wrap it in a dedicated crate or module outside the main workspace, or choose a safe alternative.

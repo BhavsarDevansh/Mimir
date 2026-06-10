@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use mimir_api_types::{

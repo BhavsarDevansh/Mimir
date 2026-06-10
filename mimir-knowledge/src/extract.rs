@@ -680,6 +680,54 @@ pub(crate) async fn process_extracted_fact(
         (None, Some(extracted.object.clone()))
     };
 
+    // If this fact establishes a preferred name, register the object as an alias
+    // so future lookups by that short name resolve to the canonical entity.
+    if extracted.relationship_type == "preferred_name" {
+        let alias = &extracted.object;
+        if let Err(e) = kg.add_alias(subject.id, alias).await {
+            tracing::warn!(
+                "Failed to add preferred-name alias '{}' to entity {}: {}",
+                alias,
+                subject.id,
+                e
+            );
+        }
+
+        // If a bare-name duplicate entity exists (created before the alias was
+        // wired up), auto-merge it when it looks accidental (very few facts).
+        if let Ok(candidates) = queries::entity::get_by_name(kg.pool(), alias).await {
+            for cand in candidates {
+                if cand.entity.id == subject.id {
+                    continue;
+                }
+                if cand.entity.name.to_lowercase() == alias.to_lowercase() {
+                    let (fact_count,): (i64,) = sqlx::query_as(
+                        "SELECT COUNT(*) FROM facts WHERE subject_id = ? OR object_id = ?",
+                    )
+                    .bind(cand.entity.id)
+                    .bind(cand.entity.id)
+                    .fetch_one(kg.pool())
+                    .await
+                    .unwrap_or((0,));
+                    if fact_count <= 2 {
+                        if let Err(e) =
+                            queries::entity::auto_merge_pair(kg.pool(), subject.id, cand.entity.id)
+                                .await
+                        {
+                            tracing::warn!(
+                                "Failed to auto-merge duplicate entity {} into {}: {}",
+                                cand.entity.id,
+                                subject.id,
+                                e
+                            );
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     // Ensure relationship_type.
     let relationship_type_id = kg
         .ensure_relationship_type(&extracted.relationship_type)

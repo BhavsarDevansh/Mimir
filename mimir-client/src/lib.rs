@@ -1,8 +1,12 @@
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use mimir_api_types::{
-    ChatRequest, ChatResponse, OptimizationRunNowResponse, OptimizationStatusResponse,
-    SessionMessagesResponse, SessionSummary, StatusResponse, StreamItem, ToolCallInfo, Usage,
+    AuditQueryRequest, AuditQueryResponse, BrowseRequest, BrowseResponse, ChatRequest,
+    ChatResponse, FactDetailResponse, FactEditRequest, FactEditResponse, FactQueryParams,
+    FactQueryResponse, ForgetRequest, ForgetResponse, OptimizationRunNowResponse,
+    OptimizationStatusResponse, ProfileRequest, ProfileResponse, RestoreRequest, RestoreResponse,
+    SessionMessagesResponse, SessionSummary, StatusResponse, StreamItem, ToolCallInfo,
+    TrashListResponse, Usage,
 };
 use reqwest::StatusCode;
 use thiserror::Error;
@@ -168,7 +172,251 @@ impl MimirClient {
         }
     }
 
-    /// Trigger a graceful shutdown of the daemon.
+    // Trigger a graceful shutdown of the daemon.
+    // ------------------------------------------------------------------
+    // Knowledge Graph (kb) commands
+    // ------------------------------------------------------------------
+
+    /// Query facts for an entity.
+    pub async fn kb_query(&self, req: FactQueryParams) -> Result<FactQueryResponse, ClientError> {
+        let mut url = format!("{}/kb/query", self.base_url);
+        let mut params = vec![format!("entity={}", req.entity)];
+        if let Some(p) = req.predicate {
+            params.push(format!("predicate={}", p));
+        }
+        if let Some(c) = req.min_confidence {
+            params.push(format!("min_confidence={}", c));
+        }
+        if let Some(o) = req.offset {
+            params.push(format!("offset={}", o));
+        }
+        if let Some(l) = req.limit {
+            params.push(format!("limit={}", l));
+        }
+        url = format!("{}?{}", url, params.join("&"));
+        let resp = self.client.get(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.json::<FactQueryResponse>().await?;
+            Ok(body)
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
+    /// Show a single fact by ID.
+    pub async fn kb_show(&self, fact_id: i32) -> Result<FactDetailResponse, ClientError> {
+        let url = format!("{}/kb/facts/{}", self.base_url, fact_id);
+        let resp = self.client.get(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.json::<FactDetailResponse>().await?;
+            Ok(body)
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
+    /// Edit a single fact.
+    pub async fn kb_edit(
+        &self,
+        fact_id: i32,
+        req: FactEditRequest,
+    ) -> Result<FactEditResponse, ClientError> {
+        let url = format!("{}/kb/facts/{}", self.base_url, fact_id);
+        let resp = self.client.patch(&url).json(&req).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.json::<FactEditResponse>().await?;
+            Ok(body)
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
+    /// Browse the knowledge graph from an entity.
+    pub async fn kb_browse(&self, req: BrowseRequest) -> Result<BrowseResponse, ClientError> {
+        let mut url = format!("{}/kb/browse", self.base_url);
+        let mut params = vec![
+            format!("entity={}", req.entity),
+            format!("depth={}", req.depth),
+        ];
+        if let Some(o) = req.offset {
+            params.push(format!("offset={}", o));
+        }
+        if let Some(l) = req.limit {
+            params.push(format!("limit={}", l));
+        }
+        url = format!("{}?{}", url, params.join("&"));
+        let resp = self.client.get(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.json::<BrowseResponse>().await?;
+            Ok(body)
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
+    /// Get a profile for an entity.
+    pub async fn kb_profile(&self, req: ProfileRequest) -> Result<ProfileResponse, ClientError> {
+        let mut url = format!("{}/kb/profile", self.base_url);
+        let mut params = vec![];
+        if let Some(e) = req.entity {
+            params.push(format!("entity={}", e));
+        }
+        if !params.is_empty() {
+            url = format!("{}?{}", url, params.join("&"));
+        }
+        let resp = self.client.get(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.json::<ProfileResponse>().await?;
+            Ok(body)
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
+    /// Query the audit log.
+    pub async fn kb_audit(
+        &self,
+        req: AuditQueryRequest,
+    ) -> Result<AuditQueryResponse, ClientError> {
+        let mut url = format!("{}/kb/audit", self.base_url);
+        let mut params = vec![];
+        if let Some(e) = req.entity {
+            params.push(format!("entity={}", e));
+        }
+        if let Some(p) = req.predicate {
+            params.push(format!("predicate={}", p));
+        }
+        if let Some(f) = req.from {
+            params.push(format!("from={}", f));
+        }
+        if let Some(t) = req.to {
+            params.push(format!("to={}", t));
+        }
+        if let Some(c) = req.change_type {
+            params.push(format!("change_type={}", c));
+        }
+        if let Some(o) = req.offset {
+            params.push(format!("offset={}", o));
+        }
+        if let Some(l) = req.limit {
+            params.push(format!("limit={}", l));
+        }
+        if !params.is_empty() {
+            url = format!("{}?{}", url, params.join("&"));
+        }
+        let resp = self.client.get(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.json::<AuditQueryResponse>().await?;
+            Ok(body)
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
+    /// Forget facts (single or bulk).
+    pub async fn kb_forget(&self, req: ForgetRequest) -> Result<ForgetResponse, ClientError> {
+        let url = format!("{}/kb/facts/forget", self.base_url);
+        let resp = self.client.post(&url).json(&req).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.json::<ForgetResponse>().await?;
+            Ok(body)
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
+    /// Restore facts from trash.
+    pub async fn kb_restore(&self, req: RestoreRequest) -> Result<RestoreResponse, ClientError> {
+        let url = format!("{}/kb/trash/restore", self.base_url);
+        let resp = self.client.post(&url).json(&req).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.json::<RestoreResponse>().await?;
+            Ok(body)
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
+    /// List trash contents.
+    pub async fn kb_trash(
+        &self,
+        offset: u32,
+        limit: u32,
+    ) -> Result<TrashListResponse, ClientError> {
+        let url = format!(
+            "{}/kb/trash?offset={}&limit={}",
+            self.base_url, offset, limit
+        );
+        let resp = self.client.get(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.json::<TrashListResponse>().await?;
+            Ok(body)
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
+    /// Empty the trash.
+    pub async fn kb_trash_empty(&self) -> Result<(), ClientError> {
+        let url = format!("{}/kb/trash", self.base_url);
+        let resp = self.client.delete(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+
     pub async fn stop(&self) -> Result<(), ClientError> {
         let url = format!("{}/stop", self.base_url);
         let resp = self.client.post(&url).send().await?;

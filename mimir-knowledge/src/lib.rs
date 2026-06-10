@@ -766,6 +766,59 @@ impl KnowledgeGraph {
         queries::fact::get_by_object(&self.pool, object_id, limit).await
     }
 
+    /// Query facts for a subject with optional predicate filter, confidence threshold,
+    /// and pagination. Returns enriched rows with object names and sources.
+    pub async fn query_facts(
+        &self,
+        subject_id: i32,
+        relationship_type_id: Option<i16>,
+        min_confidence: f32,
+        offset: i64,
+        limit: i64,
+    ) -> Result<Vec<queries::fact::FactWithSources>, KnowledgeError> {
+        queries::fact::get_facts_by_subject_filtered(
+            &self.pool,
+            subject_id,
+            relationship_type_id,
+            min_confidence,
+            offset,
+            limit,
+        )
+        .await
+    }
+
+    /// Count facts for a subject with optional predicate filter and confidence threshold.
+    pub async fn count_facts(
+        &self,
+        subject_id: i32,
+        relationship_type_id: Option<i16>,
+        min_confidence: f32,
+    ) -> Result<i64, KnowledgeError> {
+        queries::fact::count_facts_by_subject_filtered(
+            &self.pool,
+            subject_id,
+            relationship_type_id,
+            min_confidence,
+        )
+        .await
+    }
+
+    /// Get dependency edges for a fact.
+    pub async fn get_fact_dependencies(
+        &self,
+        fact_id: i32,
+    ) -> Result<Vec<(i32, i32, i16)>, KnowledgeError> {
+        let rows: Vec<(i32, i32, i16)> = sqlx::query_as(
+            "SELECT parent_fact_id, child_fact_id, relation_type_id FROM fact_dependencies WHERE parent_fact_id = ? OR child_fact_id = ?"
+        )
+        .bind(fact_id)
+        .bind(fact_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(KnowledgeError::Pool)?;
+        Ok(rows)
+    }
+
     /// Return facts active at a specific point in time.
     pub async fn get_active_facts_at(
         &self,
@@ -799,6 +852,34 @@ impl KnowledgeGraph {
     ) -> Result<models::fact::Fact, KnowledgeError> {
         let fact =
             queries::fact::set_status(&self.pool, id, status, self.now(), changed_by).await?;
+        self.set_condensation_dirty();
+        Ok(fact)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// Update mutable fields on a fact in a single transaction.
+    pub async fn update_fact(
+        &self,
+        id: i32,
+        confidence: Option<f32>,
+        valid_from: Option<chrono::DateTime<chrono::Utc>>,
+        valid_until: Option<chrono::DateTime<chrono::Utc>>,
+        object_literal: Option<String>,
+        status: Option<models::fact::FactStatus>,
+        changed_by: models::audit_log::ChangedBy,
+    ) -> Result<models::fact::Fact, KnowledgeError> {
+        let fact = queries::fact::update_fact(
+            &self.pool,
+            id,
+            confidence,
+            valid_from,
+            valid_until,
+            object_literal,
+            status,
+            self.now(),
+            changed_by,
+        )
+        .await?;
         self.set_condensation_dirty();
         Ok(fact)
     }

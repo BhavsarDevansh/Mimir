@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.39.0] — 2026-06-10
+
+### Added
+
+- **Issue #61**: Full `mimir kb` CLI command suite (Phase A).
+  - New commands: `kb query`, `kb show`, `kb edit`, `kb browse`, `kb profile`.
+  - Existing commands (`kb audit`, `kb forget`, `kb restore`, `kb trash`) rewritten to go through the daemon via HTTP instead of opening SQLite directly.
+  - All commands support `--json` for scripting output.
+  - Human-readable output uses `tabled` for tables and `colored` for confidence color-coding (green >0.9, yellow 0.7–0.9, red <0.7).
+  - Server routes added under `/kb/`: `query`, `facts/:id`, `facts/forget`, `browse`, `profile`, `audit`, `trash`, `trash/restore`.
+  - Shared API types added to `mimir-api-types`: `FactQueryParams`, `FactDetailResponse`, `FactEditRequest`, `BrowseRequest`, `ProfileRequest`, `AuditQueryRequest`, `ForgetRequest`, `RestoreRequest`, `TrashListResponse`, and supporting row types.
+  - New `update_fact` method in `mimir-knowledge` for structured field editing with transactional audit logging.
+  - Server integration tests for all new routes.
+
+### Changed
+
+- CORS configuration now allows `PATCH` and `DELETE` methods.
+
 ## [0.38.0] — 2026-06-09
 
 ### Changed

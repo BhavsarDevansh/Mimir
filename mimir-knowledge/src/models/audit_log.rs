@@ -17,6 +17,7 @@ pub enum ChangeType {
     Forgotten = 6,
     Restored = 7,
     Rejected = 8,
+    ContentUpdate = 9,
 }
 
 const_assert!((ChangeType::Created as i16) != 0);

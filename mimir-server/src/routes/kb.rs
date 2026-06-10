@@ -187,7 +187,7 @@ fn status_name(status_id: i16) -> String {
         3 => "Disputed",
         4 => "Corrected",
         5 => "Superseded",
-        6 => "forgotten",
+        6 => "Forgotten",
         _ => "Unknown",
     }
     .to_string()
@@ -213,7 +213,7 @@ fn change_type_name(change_type_id: i16) -> String {
         3 => "confidence_change",
         4 => "temporal_update",
         5 => "source_added",
-        6 => "forgotten",
+        6 => "Forgotten",
         7 => "restored",
         8 => "rejected",
         _ => "Unknown",
@@ -661,6 +661,7 @@ pub async fn kb_audit_handler(
             "forgotten" => Some(ChangeType::Forgotten),
             "restored" => Some(ChangeType::Restored),
             "rejected" => Some(ChangeType::Rejected),
+            "content_update" => Some(ChangeType::ContentUpdate),
             _ => None,
         });
 

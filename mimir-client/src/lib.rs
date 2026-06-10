@@ -179,22 +179,21 @@ impl MimirClient {
 
     /// Query facts for an entity.
     pub async fn kb_query(&self, req: FactQueryParams) -> Result<FactQueryResponse, ClientError> {
-        let mut url = format!("{}/kb/query", self.base_url);
-        let mut params = vec![format!("entity={}", req.entity)];
+        let url = format!("{}/kb/query", self.base_url);
+        let mut params = vec![("entity", req.entity)];
         if let Some(p) = req.predicate {
-            params.push(format!("predicate={}", p));
+            params.push(("predicate", p));
         }
         if let Some(c) = req.min_confidence {
-            params.push(format!("min_confidence={}", c));
+            params.push(("min_confidence", c.to_string()));
         }
         if let Some(o) = req.offset {
-            params.push(format!("offset={}", o));
+            params.push(("offset", o.to_string()));
         }
         if let Some(l) = req.limit {
-            params.push(format!("limit={}", l));
+            params.push(("limit", l.to_string()));
         }
-        url = format!("{}?{}", url, params.join("&"));
-        let resp = self.client.get(&url).send().await?;
+        let resp = self.client.get(&url).query(&params).send().await?;
         let status = resp.status();
         if status.is_success() {
             let body = resp.json::<FactQueryResponse>().await?;
@@ -248,19 +247,18 @@ impl MimirClient {
 
     /// Browse the knowledge graph from an entity.
     pub async fn kb_browse(&self, req: BrowseRequest) -> Result<BrowseResponse, ClientError> {
-        let mut url = format!("{}/kb/browse", self.base_url);
-        let mut params = vec![
-            format!("entity={}", req.entity),
-            format!("depth={}", req.depth),
+        let url = format!("{}/kb/browse", self.base_url);
+        let mut params: Vec<(&str, String)> = vec![
+            ("entity", req.entity),
+            ("depth", req.depth.to_string()),
         ];
         if let Some(o) = req.offset {
-            params.push(format!("offset={}", o));
+            params.push(("offset", o.to_string()));
         }
         if let Some(l) = req.limit {
-            params.push(format!("limit={}", l));
+            params.push(("limit", l.to_string()));
         }
-        url = format!("{}?{}", url, params.join("&"));
-        let resp = self.client.get(&url).send().await?;
+        let resp = self.client.get(&url).query(&params).send().await?;
         let status = resp.status();
         if status.is_success() {
             let body = resp.json::<BrowseResponse>().await?;
@@ -276,15 +274,12 @@ impl MimirClient {
 
     /// Get a profile for an entity.
     pub async fn kb_profile(&self, req: ProfileRequest) -> Result<ProfileResponse, ClientError> {
-        let mut url = format!("{}/kb/profile", self.base_url);
-        let mut params = vec![];
+        let url = format!("{}/kb/profile", self.base_url);
+        let mut params: Vec<(&str, String)> = vec![];
         if let Some(e) = req.entity {
-            params.push(format!("entity={}", e));
+            params.push(("entity", e));
         }
-        if !params.is_empty() {
-            url = format!("{}?{}", url, params.join("&"));
-        }
-        let resp = self.client.get(&url).send().await?;
+        let resp = self.client.get(&url).query(&params).send().await?;
         let status = resp.status();
         if status.is_success() {
             let body = resp.json::<ProfileResponse>().await?;
@@ -303,33 +298,30 @@ impl MimirClient {
         &self,
         req: AuditQueryRequest,
     ) -> Result<AuditQueryResponse, ClientError> {
-        let mut url = format!("{}/kb/audit", self.base_url);
-        let mut params = vec![];
+        let url = format!("{}/kb/audit", self.base_url);
+        let mut params: Vec<(&str, String)> = vec![];
         if let Some(e) = req.entity {
-            params.push(format!("entity={}", e));
+            params.push(("entity", e));
         }
         if let Some(p) = req.predicate {
-            params.push(format!("predicate={}", p));
+            params.push(("predicate", p));
         }
         if let Some(f) = req.from {
-            params.push(format!("from={}", f));
+            params.push(("from", f));
         }
         if let Some(t) = req.to {
-            params.push(format!("to={}", t));
+            params.push(("to", t));
         }
         if let Some(c) = req.change_type {
-            params.push(format!("change_type={}", c));
+            params.push(("change_type", c));
         }
         if let Some(o) = req.offset {
-            params.push(format!("offset={}", o));
+            params.push(("offset", o.to_string()));
         }
         if let Some(l) = req.limit {
-            params.push(format!("limit={}", l));
+            params.push(("limit", l.to_string()));
         }
-        if !params.is_empty() {
-            url = format!("{}?{}", url, params.join("&"));
-        }
-        let resp = self.client.get(&url).send().await?;
+        let resp = self.client.get(&url).query(&params).send().await?;
         let status = resp.status();
         if status.is_success() {
             let body = resp.json::<AuditQueryResponse>().await?;

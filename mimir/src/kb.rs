@@ -516,11 +516,15 @@ pub async fn handle_kb_trash(empty: bool, limit: u32, offset: u32, json: bool, b
 // kb optimization
 // ------------------------------------------------------------------
 
-pub async fn handle_kb_optimization(status: bool, run_now: bool, _json: bool, base_url: &str) {
+pub async fn handle_kb_optimization(status: bool, run_now: bool, json: bool, base_url: &str) {
     let client = MimirClient::new(base_url);
     if status {
         match client.kb_optimization_status().await {
             Ok(resp) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&resp).unwrap());
+                    return;
+                }
                 println!("Job ID: {}", resp.job_id);
                 println!("Priority: {}", resp.priority);
                 if let Some(schedule) = resp.schedule {
@@ -546,6 +550,10 @@ pub async fn handle_kb_optimization(status: bool, run_now: bool, _json: bool, ba
     } else if run_now {
         match client.kb_optimization_run_now().await {
             Ok(resp) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&resp).unwrap());
+                    return;
+                }
                 println!(
                     "Optimization run id={} status={} started_at={} finished_at={:?} error={:?}",
                     resp.run_id, resp.status, resp.started_at, resp.finished_at, resp.error

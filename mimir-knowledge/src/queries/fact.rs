@@ -100,7 +100,7 @@ pub async fn update_fact(
             .await?;
         updates.push((
             "object_literal",
-            ChangeType::TemporalUpdate,
+            ChangeType::ContentUpdate,
             Some(old_json),
             Some(new_json),
         ));

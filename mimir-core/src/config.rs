@@ -560,6 +560,16 @@ schedule_time = "02:00"
         if let Some(v) = getenv("MIMIR_SERVER_SOCKET_PATH") {
             self.server.socket_path = if v.trim().is_empty() { None } else { Some(v) };
         }
+        if let Some(v) = getenv("MIMIR_SCHEDULER_DEBOUNCE_SECONDS")
+            && let Ok(n) = v.parse::<u8>()
+        {
+            self.scheduler.debounce_seconds = n;
+        }
+        if let Some(v) = getenv("MIMIR_SCHEDULER_COOLDOWN_SECONDS")
+            && let Ok(n) = v.parse::<u16>()
+        {
+            self.scheduler.cooldown_seconds = n;
+        }
     }
 
     /// Apply environment variable overrides from the real process environment.

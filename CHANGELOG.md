@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.41.3] — 2026-06-11
+
+### Fixed
+
+- **Code review feedback for PR #144** (additional finding addressed):
+  - Added `MIMIR_SCHEDULER_DEBOUNCE_SECONDS` and `MIMIR_SCHEDULER_COOLDOWN_SECONDS` environment variable overrides in `mimir-core/src/config.rs`, following the existing `apply_env_overrides_with` pattern.
+
 ## [0.41.2] — 2026-06-11
 
 ### Fixed

@@ -389,14 +389,14 @@ pub(crate) async fn seed_identity_facts(
         f.status() == Some(FactStatus::Active)
             && f.object_literal
                 .as_deref()
-                .map(|lit| lit.eq_ignore_ascii_case(name))
+                .map(|lit| lit.to_lowercase() == name.to_lowercase())
                 .unwrap_or(false)
     });
     let has_preferred = pref_name_facts.iter().any(|f| {
         f.status() == Some(FactStatus::Active)
             && f.object_literal
                 .as_deref()
-                .map(|lit| lit.eq_ignore_ascii_case(preferred))
+                .map(|lit| lit.to_lowercase() == preferred.to_lowercase())
                 .unwrap_or(false)
     });
 

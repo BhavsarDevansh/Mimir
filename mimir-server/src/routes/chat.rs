@@ -30,6 +30,42 @@ async fn build_catalogue(knowledge_graph: &mimir_knowledge::KnowledgeGraph) -> S
     }
 }
 
+/// Spawn a background task to extract facts from a user message into the
+/// knowledge graph. Errors and outcomes are logged; callers are not blocked.
+fn spawn_fact_extraction(
+    kg: Arc<mimir_knowledge::KnowledgeGraph>,
+    llm: Arc<dyn mimir_core::llm::LlmBackend>,
+    message: String,
+) {
+    if message.trim().is_empty() {
+        return;
+    }
+    tokio::spawn(async move {
+        match kg.extract_facts(&llm, &message).await {
+            Ok(outcome) => {
+                if !outcome.inserted.is_empty() {
+                    tracing::info!(
+                        "Extracted {} facts from chat message",
+                        outcome.inserted.len()
+                    );
+                }
+                if !outcome.pending_confirmation.is_empty() {
+                    tracing::info!(
+                        "{} facts pending user confirmation",
+                        outcome.pending_confirmation.len()
+                    );
+                }
+                if !outcome.errors.is_empty() {
+                    tracing::warn!("Fact extraction errors: {:?}", outcome.errors);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to extract facts from chat message: {}", e);
+            }
+        }
+    });
+}
+
 /// Resolve the common chat state shared by both the blocking and streaming handlers.
 ///
 /// Returns `(session_id, llm, messages, incognito, permit_option)` where
@@ -279,6 +315,14 @@ pub async fn chat_handler(
             .add_assistant_message(&session_id, &response_text)
             .await
             .map_err(error::context_error)?;
+
+        // Extract facts from the user message asynchronously so the HTTP
+        // response is not delayed.
+        spawn_fact_extraction(
+            Arc::clone(&state.knowledge_graph),
+            Arc::clone(&llm),
+            req.message.clone(),
+        );
     }
 
     Ok(Json(ChatResponse {
@@ -319,6 +363,7 @@ pub async fn chat_stream_handler(
     let session_id_clone = session_id.clone();
     let llm_clone = Arc::clone(&llm);
     let tool_registry_clone = Arc::clone(&state.tool_registry);
+    let user_message = req.message.clone();
 
     tokio::spawn(async move {
         let _permit = permit;
@@ -441,6 +486,13 @@ pub async fn chat_stream_handler(
                     {
                         error!("failed to persist assistant message: {e}");
                     }
+
+                    // Extract facts from the user message.
+                    spawn_fact_extraction(
+                        Arc::clone(&state_clone.knowledge_graph),
+                        Arc::clone(&llm_clone),
+                        user_message.clone(),
+                    );
                 }
                 break 'outer;
             }

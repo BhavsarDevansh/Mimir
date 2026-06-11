@@ -93,7 +93,8 @@ pub struct ExtractionOutcome {
 // ---------------------------------------------------------------------------
 
 /// Build the JSON Schema for the `remember` tool.
-fn remember_tool_schema() -> serde_json::Value {
+/// Build the JSON Schema for the `remember` tool.
+pub fn remember_tool_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "function",
         "function": {
@@ -175,6 +176,11 @@ fn remember_tool_schema() -> serde_json::Value {
     })
 }
 
+/// Return just the inner `parameters` schema for use with the `Tool` trait.
+pub fn remember_tool_params_schema() -> serde_json::Value {
+    remember_tool_schema()["function"]["parameters"].clone()
+}
+
 /// Build the system prompt for fact extraction, including the category taxonomy.
 async fn build_extraction_prompt(kg: &KnowledgeGraph) -> Result<String, KnowledgeError> {
     let roots = kg.list_categories(None).await?;
@@ -188,16 +194,7 @@ async fn build_extraction_prompt(kg: &KnowledgeGraph) -> Result<String, Knowledg
     }
 
     Ok(format!(
-        "You are a fact extractor. Your job is to read the user's message and extract \
-any facts about the user into structured triples (subject-relationship_type-object).\n\n\
-Rules:\n\
-- Classify each fact as Explicit (direct assertion), Casual (passing mention), or Correction.\n\
-- For Corrections, set correction_scope to either an ISO-8601 datetime or the string 'always'.\n\
-- Mark health, financial, relationship, religious, political, or legal facts as is_sensitive.\n\
-- Subject and object types must be one of: Person, Place, Event, Object, Concept, Organization, Activity, DateTime.\n\
-- Assign 1-3 category IDs from the guide below to each fact. Use the MOST specific sub-category available.\n\
-{}\n\
-- Output ONLY via the 'remember' tool. Do not output free text.",
+        "You are a fact extractor. Read the user message and emit structured facts via the 'remember' tool.\n\n### Rules\n- Classify each fact as Explicit, Casual, or Correction.\n- For Corrections, set correction_scope to 'always' or an ISO-8601 datetime.\n- Mark health, financial, relationship, religious, political, or legal facts as is_sensitive=true.\n- Subject and object types must be one of: Person, Place, Event, Object, Concept, Organization, Activity, DateTime.\n- Assign 1-3 category IDs from the guide below to each fact. Use the MOST specific sub-category available.\n{}\n### Predicate standards (critical)\nUse the EXACT predicate name below for the matching scenario. Do NOT invent synonyms.\n- Education\n  * Where someone studied   → studied_at (NOT 'attended')\n  * What someone studied    → studied\n  * Degree completed        → completed_degree\n  * Degree status           → educational_status\n- Employment\n  * Employer                → works_at\n  * Job title               → job_title\n  * Profession              → works_as\n- Residence\n  * Current city/country    → based_in\n  * Previous city           → lived_in\n- Personal\n  * Hobby (one per fact)    → hobby (NOT 'hobbies')\n  * Favourite thing         → favourite_{{thing}}\n  * Name                    → has_name\n  * Preferred name          → preferred_name\n  * Pet ownership           → has_pets\n- Family\n  * Sibling                 → has_sibling\n  * Partner                 → has_partner\n  * Parent                  → has_parent\n  * Child                   → has_child\n### Splitting lists\nWhen a user lists multiple items for the same predicate, emit ONE fact PER item.\nBAD (one fact):  hobby → 'Geopolitics, Software Development, Tech'\nGOOD (three facts):\n  hobby → 'Geopolitics'\n  hobby → 'Software Development'\n  hobby → 'Tech'\n### Deduplication\nBefore emitting a fact, ask yourself: 'Have I already emitted a fact with the same subject and the same meaning?' If yes, do not emit the duplicate — instead strengthen the confidence by marking it Explicit.\nExample: If you already emitted studied_at='University of Auckland', do NOT also emit attended='University of Auckland'.\n### Output\nEmit ONLY via the 'remember' tool. Do not output free text.",
         guide
     ))
 }
@@ -249,6 +246,94 @@ fn parse_entity_type(s: &str) -> Result<EntityType, KnowledgeError> {
             "Invalid entity_type: {}",
             s
         ))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Predicate normalisation
+// ---------------------------------------------------------------------------
+
+/// Map common LLM predicate synonyms to canonical names.
+fn normalize_predicate(pred: &str) -> String {
+    let trimmed = pred.trim();
+    let lowered = trimmed.to_lowercase().replace(' ', "_");
+    match lowered.as_str() {
+        "attended" | "went_to" | "graduated_from" | "alumni_of" => "studied_at".to_string(),
+        "hobbies" | "interests" => "hobby".to_string(),
+        "likes" => "likes".to_string(),
+        "dislikes" => "dislikes".to_string(),
+        "works_for" | "employer" => "works_at".to_string(),
+        "profession" | "occupation" => "works_as".to_string(),
+        "resides_in" | "current_city" => "based_in".to_string(),
+        "previously_lived_in" | "former_city" => "lived_in".to_string(),
+        "pet" | "pets" | "owns_pet" => "has_pets".to_string(),
+        "brother" | "sister" | "siblings" => "has_sibling".to_string(),
+        "spouse" | "boyfriend" | "girlfriend" | "partner" | "wife" | "husband" => {
+            "has_partner".to_string()
+        }
+        "father" | "mother" | "parents" => "has_parent".to_string(),
+        "son" | "daughter" | "children" => "has_child".to_string(),
+        "name" => "has_name".to_string(),
+        "nickname" | "nick_name" | "called" | "goes_by" => "preferred_name".to_string(),
+        "favorite_food" | "fav_food" | "favourite_food" => "favourite_food".to_string(),
+        "favorite_colour" | "favorite_color" | "fav_color" | "fav_colour" | "color" | "colour" => {
+            "favourite_colour".to_string()
+        }
+        "food_allergy" | "medical_condition" | "condition" => "health_condition".to_string(),
+        _ => lowered,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// List splitting
+// ---------------------------------------------------------------------------
+
+/// Predicates that typically represent a collection of independent values.
+const LIST_PREDICATES: [&str; 11] = [
+    "hobby",
+    "likes",
+    "dislikes",
+    "favourite_colour",
+    "favourite_food",
+    "skill",
+    "has_pets",
+    "has_child",
+    "has_parent",
+    "has_sibling",
+    "has_partner",
+];
+
+/// If a fact has a comma-separated object literal and its predicate is in the
+/// `LIST_PREDICATES` allow-list, expand it into multiple `ExtractedFact`s.
+///
+/// We only split on simple commas to avoid breaking phrases like
+/// "Manchester, UK" — that predicate won't be in the allow-list anyway.
+fn split_list_objects(fact: &ExtractedFact) -> Vec<ExtractedFact> {
+    let canon = normalize_predicate(&fact.relationship_type);
+    if !LIST_PREDICATES.contains(&canon.as_str()) {
+        return vec![fact.clone()];
+    }
+    let parts: Vec<&str> = fact.object.split(',').collect();
+    if parts.len() <= 1 {
+        return vec![fact.clone()];
+    }
+
+    let mut result = Vec::with_capacity(parts.len());
+    for part in parts {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut f = fact.clone();
+        f.object = trimmed.to_string();
+        f.relationship_type = canon.clone();
+        result.push(f);
+    }
+
+    if result.is_empty() {
+        vec![fact.clone()]
+    } else {
+        result
     }
 }
 
@@ -353,23 +438,63 @@ pub async fn extract_facts(
         .map_err(|e| KnowledgeError::Validation(format!("LLM call failed: {}", e)))?;
 
     // 2. Parse tool calls.
-    let tool_calls = assistant_msg
-        .tool_calls
-        .ok_or_else(|| KnowledgeError::Validation("LLM did not emit a tool call.".to_string()))?;
+    // Some local LLM backends (e.g. Ollama + Gemma) do not reliably emit
+    // structured tool calls even when tools are provided. We therefore fall
+    // back to parsing the assistant text content as JSON.
+    let extracted: RememberOutput = if let Some(tool_calls) = assistant_msg.tool_calls {
+        let first_call = tool_calls.into_iter().next().ok_or_else(|| {
+            KnowledgeError::Validation("LLM tool call list was empty.".to_string())
+        })?;
 
-    let first_call = tool_calls
-        .into_iter()
-        .next()
-        .ok_or_else(|| KnowledgeError::Validation("LLM tool call list was empty.".to_string()))?;
-
-    let extracted: RememberOutput =
         serde_json::from_str(&first_call.function.arguments).map_err(|e| {
             KnowledgeError::Validation(format!("Failed to parse tool arguments: {}", e))
-        })?;
+        })?
+    } else {
+        let text = assistant_msg.content.trim();
+        if text.is_empty() {
+            return Err(KnowledgeError::Validation(
+                "LLM did not emit a tool call.".to_string(),
+            ));
+        }
+
+        // Attempt to strip a Markdown code block if present.
+        let json_text = if text.starts_with("```") {
+            text.lines()
+                .skip_while(|l| l.starts_with("```"))
+                .take_while(|l| !l.starts_with("```"))
+                .collect::<Vec<_>>()
+                .join(
+                    "
+",
+                )
+        } else {
+            text.to_string()
+        };
+
+        let json_text = json_text.trim();
+
+        // Try {"facts": [...]} first, then a bare array.
+        if let Ok(wrapper) = serde_json::from_str::<RememberOutput>(json_text) {
+            wrapper
+        } else if let Ok(facts) = serde_json::from_str::<Vec<ExtractedFact>>(json_text) {
+            RememberOutput { facts }
+        } else {
+            return Err(KnowledgeError::Validation(format!(
+                "LLM did not emit a tool call and response could not be parsed as JSON: {}",
+                json_text.chars().take(200).collect::<String>()
+            )));
+        }
+    };
+
+    let mut all_facts: Vec<ExtractedFact> = Vec::new();
+    for fact in extracted.facts {
+        let expanded = split_list_objects(&fact);
+        all_facts.extend(expanded);
+    }
 
     let mut outcome = ExtractionOutcome::default();
 
-    for fact in extracted.facts {
+    for fact in all_facts {
         match process_extracted_fact(kg, fact, now).await {
             Ok(result) => match result {
                 ProcessResult::Inserted(f) => outcome.inserted.push(f),
@@ -383,7 +508,7 @@ pub async fn extract_facts(
     Ok(outcome)
 }
 
-enum ProcessResult {
+pub(crate) enum ProcessResult {
     Inserted(Fact),
     Pending(PendingFact),
     Corroborated(i32),
@@ -502,12 +627,47 @@ async fn insert_sensitive_fact(
     Ok(fact)
 }
 
-async fn process_extracted_fact(
+/// Process a `RememberOutput` by applying the same validation, dedup,
+/// confidence assignment, and insertion logic used by the full extraction pipeline.
+///
+/// This is the entrypoint for the `remember` tool: the LLM has already structured
+/// the facts, so we only need to validate and persist them.
+pub async fn process_remember_output(
     kg: &KnowledgeGraph,
-    extracted: ExtractedFact,
+    output: RememberOutput,
+) -> Result<ExtractionOutcome, KnowledgeError> {
+    let now = kg.now();
+    let mut all_facts: Vec<ExtractedFact> = Vec::new();
+    for fact in output.facts {
+        let expanded = split_list_objects(&fact);
+        all_facts.extend(expanded);
+    }
+
+    let mut outcome = ExtractionOutcome::default();
+
+    for fact in all_facts {
+        match process_extracted_fact(kg, fact, now).await {
+            Ok(result) => match result {
+                ProcessResult::Inserted(f) => outcome.inserted.push(f),
+                ProcessResult::Pending(p) => outcome.pending_confirmation.push(p),
+                ProcessResult::Corroborated(id) => outcome.corroborated.push(id),
+            },
+            Err(e) => outcome.errors.push(e),
+        }
+    }
+
+    Ok(outcome)
+}
+
+pub(crate) async fn process_extracted_fact(
+    kg: &KnowledgeGraph,
+    mut extracted: ExtractedFact,
     now: DateTime<Utc>,
 ) -> Result<ProcessResult, KnowledgeError> {
-    // 3. Validate entity types.
+    // 3. Normalise predicate before any downstream logic.
+    extracted.relationship_type = normalize_predicate(&extracted.relationship_type);
+
+    // Validate entity types.
     let subject_type = parse_entity_type(&extracted.subject_type)?;
     let object_type = extracted
         .object_type
@@ -515,7 +675,7 @@ async fn process_extracted_fact(
         .map(|s| parse_entity_type(s))
         .transpose()?;
 
-    // 4. Parse temporal.
+    // Parse temporal.
     let valid_from = if let Some(temporal) = &extracted.temporal {
         if let Some(s) = &temporal.valid_from {
             match DateTime::parse_from_rfc3339(s) {
@@ -556,7 +716,7 @@ async fn process_extracted_fact(
         None
     };
 
-    // 5. Resolve entities.
+    // Resolve entities.
     let subject = resolve_entity(kg, &extracted.subject, subject_type).await?;
     let (object_id, object_literal) = if extracted.object_is_entity {
         let ot = object_type.unwrap_or(EntityType::Concept);
@@ -566,12 +726,12 @@ async fn process_extracted_fact(
         (None, Some(extracted.object.clone()))
     };
 
-    // 6. Ensure relationship_type.
+    // Ensure relationship_type.
     let relationship_type_id = kg
         .ensure_relationship_type(&extracted.relationship_type)
         .await?;
 
-    // 7. Dedup / corroboration check (stub for #79).
+    // Dedup / corroboration check (stub for #79).
     if let Some(existing_id) = find_existing_fact(
         kg,
         subject.id,
@@ -586,11 +746,73 @@ async fn process_extracted_fact(
         return Ok(ProcessResult::Corroborated(existing_id));
     }
 
-    // 8. Map classification to source + confidence.
+    // If this fact establishes a preferred name, register the object as an alias
+    // so future lookups by that short name resolve to the canonical entity.
+    if extracted.relationship_type == "preferred_name" {
+        let alias = &extracted.object;
+        if let Err(e) = kg.add_alias(subject.id, alias).await {
+            tracing::warn!(
+                "Failed to add preferred-name alias '{}' to entity {}: {}",
+                alias,
+                subject.id,
+                e
+            );
+        }
+
+        // If a bare-name duplicate entity exists (created before the alias was
+        // wired up), auto-merge it when it looks accidental (very few facts).
+        if let Ok(candidates) = queries::entity::get_by_name(kg.pool(), alias).await {
+            for cand in candidates {
+                if cand.entity.id == subject.id {
+                    continue;
+                }
+                if cand.entity.name.to_lowercase() == alias.to_lowercase() {
+                    match sqlx::query_as::<_, (i64,)>(
+                        "SELECT COUNT(*) FROM facts WHERE subject_id = ? OR object_id = ?",
+                    )
+                    .bind(cand.entity.id)
+                    .bind(cand.entity.id)
+                    .fetch_one(kg.pool())
+                    .await
+                    {
+                        Ok((fact_count,)) if fact_count <= 2 => {
+                            // Auto-merge only if the duplicate has very few facts (≤2), suggesting it
+                            // was created accidentally before the alias was wired up.
+                            if let Err(e) = queries::entity::auto_merge_pair(
+                                kg.pool(),
+                                subject.id,
+                                cand.entity.id,
+                            )
+                            .await
+                            {
+                                tracing::warn!(
+                                    "Failed to auto-merge duplicate entity {} into {}: {}",
+                                    cand.entity.id,
+                                    subject.id,
+                                    e
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to count facts for candidate entity {} during auto-merge check: {}",
+                                cand.entity.id,
+                                e
+                            );
+                        }
+                        _ => {}
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // Map classification to source + confidence.
     let source_type = source_type_for(extracted.classification);
     let confidence = confidence_for(extracted.classification);
 
-    // 8b. Validate and collect category IDs.
+    // Validate and collect category IDs.
     let mut category_ids = Vec::new();
     for cat_str in &extracted.categories {
         if let Ok(id) = cat_str.parse::<i32>() {
@@ -617,7 +839,7 @@ async fn process_extracted_fact(
         }
     }
 
-    // 9. Handle corrections.
+    // Handle corrections.
     let mut new_fact = NewFact {
         subject_id: subject.id,
         relationship_type: extracted.relationship_type.clone(),
@@ -649,7 +871,7 @@ async fn process_extracted_fact(
         .await?;
     }
 
-    // 10. Insert fact, handling sensitive facts atomically.
+    // Insert fact, handling sensitive facts atomically.
     if extracted.is_sensitive {
         // For sensitive facts, insert directly with Disputed status and pending_confirmation in one transaction.
         let fact = insert_sensitive_fact(kg, new_fact, now).await?;

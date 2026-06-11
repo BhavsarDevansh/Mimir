@@ -114,11 +114,39 @@ pub async fn handle_init() {
 }
 
 #[cfg(target_os = "linux")]
+fn resolve_executable_path(current: &std::path::Path) -> std::path::PathBuf {
+    let path_str = current.to_string_lossy();
+    let looks_like_cargo_build =
+        path_str.contains("/target/debug/") || path_str.contains("/target/release/");
+
+    if looks_like_cargo_build {
+        if let Some(paths) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&paths) {
+                let candidate = dir.join("mimir");
+                if candidate.is_file() {
+                    eprintln!(
+                        "Warning: current executable appears to be a debug build.\n         Using {} for the systemd service instead.",
+                        candidate.display()
+                    );
+                    return candidate;
+                }
+            }
+        }
+        eprintln!(
+            "Warning: current executable appears to be a debug build ({})\n         and no 'mimir' was found in PATH. The generated service file may break if this binary is removed.",
+            current.display()
+        );
+    }
+
+    current.to_path_buf()
+}
+
+#[cfg(target_os = "linux")]
 async fn install_systemd_service() {
     use mimir_core::systemd::SystemdRunner;
 
     let exe = match std::env::current_exe() {
-        Ok(p) => p,
+        Ok(p) => resolve_executable_path(&p),
         Err(e) => {
             eprintln!("Warning: could not resolve current executable path: {e}");
             print_systemd_manual();

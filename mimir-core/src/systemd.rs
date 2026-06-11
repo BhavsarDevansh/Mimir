@@ -83,17 +83,11 @@ async fn run_systemctl(args: &[&str]) -> Result<(), SystemdError> {
 /// Generate a systemd user service file with absolute paths and full hardening.
 ///
 /// `exe_path` should be the absolute path to the `mimir` binary.
-/// `config_dir`, `data_dir`, and `cache_dir` are the Mimir directories.
-pub fn generate_service_file(
-    exe_path: &Path,
-    config_dir: &Path,
-    data_dir: &Path,
-    cache_dir: &Path,
-) -> String {
+/// `config_dir` and `data_dir` are the Mimir directories.
+pub fn generate_service_file(exe_path: &Path, config_dir: &Path, data_dir: &Path) -> String {
     let exe = exe_path.display();
     let config = config_dir.display();
     let data = data_dir.display();
-    let cache = cache_dir.display();
 
     format!(
         r#"[Unit]
@@ -111,7 +105,7 @@ RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths="{config}" "{data}" "{cache}"
+ReadWritePaths="{config}" "{data}"
 PrivateTmp=true
 
 # Logging → journalctl --user -u mimir
@@ -146,8 +140,11 @@ pub fn install_service_file(content: &str, dir: &Path) -> Result<PathBuf, System
 pub fn generate_and_install_service_file(exe_path: &Path) -> Result<PathBuf, SystemdError> {
     let config = crate::paths::config_dir()?;
     let data = crate::paths::data_dir()?;
-    let cache = crate::paths::cache_dir()?;
-    let content = generate_service_file(exe_path, &config, &data, &cache);
+    // systemd ReadWritePaths requires the directories to exist before the
+    // service starts; create them now so the generated unit is valid.
+    crate::paths::ensure_dir(&config)?;
+    crate::paths::ensure_dir(&data)?;
+    let content = generate_service_file(exe_path, &config, &data);
     let dir = systemd_user_dir()?;
     install_service_file(&content, &dir)
 }
@@ -191,9 +188,8 @@ mod tests {
         let exe = PathBuf::from("/home/user/.cargo/bin/mimir");
         let config = PathBuf::from("/home/user/.config/mimir");
         let data = PathBuf::from("/home/user/.local/share/mimir");
-        let cache = PathBuf::from("/home/user/.cache/mimir");
 
-        let content = generate_service_file(&exe, &config, &data, &cache);
+        let content = generate_service_file(&exe, &config, &data);
 
         assert!(content.contains("[Unit]"), "should contain [Unit]");
         assert!(content.contains("[Service]"), "should contain [Service]");
@@ -223,8 +219,11 @@ mod tests {
             "should contain PrivateTmp=true"
         );
         assert!(
-            content.contains("ReadWritePaths=\"/home/user/.config/mimir\" \"/home/user/.local/share/mimir\" \"/home/user/.cache/mimir\""),
-            "should contain absolute ReadWritePaths for config, data, and cache"
+            content.lines().any(|l| {
+                l.trim()
+                    == r#"ReadWritePaths="/home/user/.config/mimir" "/home/user/.local/share/mimir""#
+            }),
+            "should contain exact ReadWritePaths for config and data only"
         );
         assert!(
             content.contains("StandardOutput=journal"),

@@ -86,25 +86,27 @@ async fn test_explicit_extraction() {
 async fn test_casual_extraction() {
     let tg = TestGraph::new().await;
     let devansh = tg.create_person("devansh").await;
+    let auckland = tg.create_place("Auckland").await;
 
-    // Pre-insert an explicit favourite_colour.
-    tg.create_fact(devansh, "favourite_colour", None, SourceType::UserEdit)
+    // Pre-insert an explicit based_in fact (single-valued predicate).
+    tg.create_fact(devansh, "based_in", Some(auckland), SourceType::UserEdit)
         .await;
 
     let tool_args = make_remember_tool_output(vec![serde_json::json!({
         "classification": "Casual",
         "subject": "devansh",
         "subject_type": "Person",
-        "relationship_type": "favourite_colour",
-        "object": "green",
-        "object_is_entity": false,
+        "relationship_type": "based_in",
+        "object": "London",
+        "object_is_entity": true,
+        "object_type": "Place",
         "is_sensitive": false
     })]);
 
     let mock = build_mock_with_tool_output(tool_args);
     let outcome = tg
         .kg
-        .extract_facts(&mock, "Green is a nice colour.")
+        .extract_facts(&mock, "London is a nice city.")
         .await
         .unwrap();
 
@@ -528,4 +530,235 @@ async fn test_pending_confirmation_ttl_cleanup() {
             .await
             .contains(&fact_id)
     );
+}
+
+#[tokio::test]
+async fn test_normalize_predicate_attended_to_studied_at() {
+    let tg = TestGraph::new().await;
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "Devansh",
+        "subject_type": "Person",
+        "relationship_type": "attended",
+        "object": "University of Auckland",
+        "object_is_entity": false,
+        "categories": [],
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let result = tg
+        .kg
+        .extract_facts(&mock, "I attended University of Auckland.")
+        .await
+        .unwrap();
+
+    assert_eq!(result.inserted.len(), 1);
+    let fact = &result.inserted[0];
+    let pred = tg
+        .kg
+        .relationship_type_name(fact.relationship_type_id)
+        .await;
+    assert_eq!(pred.as_deref(), Some("studied_at"));
+    assert_eq!(
+        fact.object_literal.as_deref(),
+        Some("University of Auckland")
+    );
+}
+
+#[tokio::test]
+async fn test_split_hobbies_into_individual_facts() {
+    let tg = TestGraph::new().await;
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "Devansh",
+        "subject_type": "Person",
+        "relationship_type": "hobbies",
+        "object": "Geopolitics, Software Development, Tech",
+        "object_is_entity": false,
+        "categories": [],
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let result = tg
+        .kg
+        .extract_facts(
+            &mock,
+            "My hobbies are Geopolitics, Software Development, and Tech.",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.inserted.len(),
+        3,
+        "expected 3 hobby facts, got {:?}",
+        result.inserted
+    );
+    let preds: Vec<Option<String>> = futures::future::join_all(
+        result
+            .inserted
+            .iter()
+            .map(|f| tg.kg.relationship_type_name(f.relationship_type_id)),
+    )
+    .await;
+    for p in &preds {
+        assert_eq!(p.as_deref(), Some("hobby"));
+    }
+    let objects: Vec<Option<&str>> = result
+        .inserted
+        .iter()
+        .map(|f| f.object_literal.as_deref())
+        .collect();
+    assert!(objects.contains(&Some("Geopolitics")));
+    assert!(objects.contains(&Some("Software Development")));
+    assert!(objects.contains(&Some("Tech")));
+}
+
+#[tokio::test]
+async fn test_preferred_name_creates_alias() {
+    let tg = TestGraph::new().await;
+
+    // Seed the canonical entity
+    let canonical = tg
+        .kg
+        .create_entity("Devansh Bhavsar", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    // Simulate the LLM extracting a preferred_name fact
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "Devansh Bhavsar",
+        "subject_type": "Person",
+        "relationship_type": "preferred_name",
+        "object": "Devansh",
+        "object_is_entity": false,
+        "categories": ["110"],
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let result = tg
+        .kg
+        .extract_facts(&mock, "I go by Devansh.")
+        .await
+        .unwrap();
+
+    assert_eq!(result.inserted.len(), 1);
+
+    // The alias should now exist, so get_by_name("Devansh") resolves to the canonical entity
+    let resolved = mimir_knowledge::queries::entity::get_by_name(tg.kg.pool(), "Devansh")
+        .await
+        .unwrap();
+    assert!(!resolved.is_empty());
+    assert_eq!(resolved[0].entity.id, canonical.id);
+    assert_eq!(
+        resolved[0].match_kind,
+        mimir_knowledge::queries::entity::MatchKind::ExactAlias
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fallback extraction: LLM returns JSON text instead of a tool call
+// (common with Ollama + Gemma when tool_choice is unsupported).
+// ---------------------------------------------------------------------------
+
+fn build_mock_with_text_output(content: String) -> Arc<dyn mimir_core::llm::backend::LlmBackend> {
+    let msg = Message {
+        role: "assistant".to_string(),
+        content,
+        tool_calls: None,
+        tool_call_id: None,
+    };
+
+    Arc::new(
+        MockLlmClient::builder()
+            .push_chat_message(msg, Usage::default())
+            .build(),
+    )
+}
+
+#[tokio::test]
+async fn test_text_fallback_with_wrapper() {
+    let tg = TestGraph::new().await;
+
+    let text = serde_json::json!({
+        "facts": [{
+            "classification": "Explicit",
+            "subject": "devansh",
+            "subject_type": "Person",
+            "relationship_type": "favourite_colour",
+            "object": "green",
+            "object_is_entity": false,
+            "is_sensitive": false
+        }]
+    })
+    .to_string();
+
+    let mock = build_mock_with_text_output(text);
+    let result = tg
+        .kg
+        .extract_facts(&mock, "My favourite colour is green.")
+        .await
+        .unwrap();
+
+    assert_eq!(result.inserted.len(), 1);
+    assert_eq!(result.inserted[0].object_literal.as_deref(), Some("green"));
+}
+
+#[tokio::test]
+async fn test_text_fallback_with_markdown_block() {
+    let tg = TestGraph::new().await;
+
+    let text = format!(
+        "```json\n{}\n```",
+        serde_json::json!({
+            "facts": [{
+                "classification": "Explicit",
+                "subject": "devansh",
+                "subject_type": "Person",
+                "relationship_type": "favourite_colour",
+                "object": "yellow",
+                "object_is_entity": false,
+                "is_sensitive": false
+            }]
+        })
+    );
+
+    let mock = build_mock_with_text_output(text);
+    let result = tg
+        .kg
+        .extract_facts(&mock, "My favourite colour is yellow.")
+        .await
+        .unwrap();
+
+    assert_eq!(result.inserted.len(), 1);
+    assert_eq!(result.inserted[0].object_literal.as_deref(), Some("yellow"));
+}
+
+#[tokio::test]
+async fn test_text_fallback_with_bare_array() {
+    let tg = TestGraph::new().await;
+
+    let text = serde_json::json!([
+        {
+            "classification": "Explicit",
+            "subject": "devansh",
+            "subject_type": "Person",
+            "relationship_type": "favourite_colour",
+            "object": "red",
+            "object_is_entity": false,
+            "is_sensitive": false
+        }
+    ])
+    .to_string();
+
+    let mock = build_mock_with_text_output(text);
+    let result = tg
+        .kg
+        .extract_facts(&mock, "My favourite colour is red.")
+        .await
+        .unwrap();
+
+    assert_eq!(result.inserted.len(), 1);
+    assert_eq!(result.inserted[0].object_literal.as_deref(), Some("red"));
 }

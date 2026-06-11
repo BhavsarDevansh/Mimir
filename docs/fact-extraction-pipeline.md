@@ -8,6 +8,12 @@
 
 The fact extraction pipeline transforms a raw user message into structured, validated, and stored facts in the knowledge graph. The pipeline is deterministic Rust; the LLM only provides structured extraction output. All validation, confidence assignment, entity resolution, and insertion decisions are made in Rust.
 
+## Trigger
+
+The pipeline is triggered automatically by both chat endpoints (`/chat` and `/chat/stream`) after a successful, non-incognito turn. A background task calls `KnowledgeGraph::extract_facts` so the HTTP response is never delayed. Incognito sessions skip extraction to avoid polluting the knowledge graph.
+
+Additionally, the LLM can proactively call the `remember` tool during conversation. This gives the LLM explicit write access to the knowledge graph, letting it persist facts immediately rather than waiting for the background pipeline.
+
 ## Architecture
 
 ```
@@ -145,3 +151,16 @@ pub async fn reject_fact(&self, fact_id: i32) -> Result<(), KnowledgeError>
 11. `test_reject_sensitive_fact` — Rejection deletes fact and clears cache.
 
 All tests use `MockLlmClient` with `mimir-core`'s `mock-llm` feature for deterministic, fast validation.
+
+## Predicate Normalisation (v0.40.3)
+
+`normalize_predicate` trims whitespace and maps additional common LLM variants:
+
+| Variant(s) | Canonical |
+|---|---|
+| `name` | `has_name` |
+| `nickname`, `nick_name`, `called`, `goes_by` | `preferred_name` |
+| `favorite_food`, `fav_food`, `favourite_food` | `favourite_food` |
+| `favorite_colour`, `favorite_color`, `fav_color`, `fav_colour`, `color`, `colour` | `favourite_colour` |
+
+The `LIST_PREDICATES` allow-list was expanded to include `has_pets`, `has_child`, `has_parent`, `has_sibling`, and `has_partner` so comma-separated values for these predicates are correctly split into individual facts.

@@ -140,6 +140,15 @@ impl AppState {
             }
         };
 
+        // Seed identity facts for the user entity so Mimir knows the user's name.
+        if let Some(uid) = user_entity_id {
+            let name = cfg.identity.name.trim();
+            let preferred = cfg.identity.preferred_name.trim();
+            if let Err(e) = seed_identity_facts(&knowledge_graph, uid, name, preferred).await {
+                tracing::warn!("Failed to seed identity facts: {}", e);
+            }
+        }
+
         // Register knowledge graph tools.
         if let Err(e) = tool_registry.register_native(Arc::new(mimir_knowledge::KgQueryTool::new(
             Arc::clone(&knowledge_graph),
@@ -165,6 +174,11 @@ impl AppState {
             mimir_knowledge::KgFactsInCatalogueTool::new(Arc::clone(&knowledge_graph)),
         )) {
             tracing::warn!("Failed to register get_facts_in_catalogue tool: {}", e);
+        }
+        if let Err(e) = tool_registry.register_native(Arc::new(mimir_knowledge::RememberTool::new(
+            Arc::clone(&knowledge_graph),
+        ))) {
+            tracing::warn!("Failed to register remember tool: {}", e);
         }
 
         // Initialise job queue.
@@ -345,4 +359,76 @@ impl AppState {
         self.model_override_cache.insert(model, Arc::clone(&client));
         client
     }
+}
+
+/// Insert name/preferred-name facts for the user entity if they do not already exist.
+/// Facts are categorised as Identity (110) so they appear in the identity bucket of memory.
+pub(crate) async fn seed_identity_facts(
+    kg: &mimir_knowledge::KnowledgeGraph,
+    subject_id: i32,
+    name: &str,
+    preferred: &str,
+) -> Result<(), mimir_knowledge::KnowledgeError> {
+    use mimir_knowledge::models::fact::FactStatus;
+    use mimir_knowledge::models::fact::NewFact;
+    use mimir_knowledge::models::source::SourceType;
+
+    // Resolve predicate IDs via the cached registry.
+    let has_name_id = kg.ensure_relationship_type("has_name").await?;
+    let pref_name_id = kg.ensure_relationship_type("preferred_name").await?;
+
+    // Targeted existence checks: query only the two relevant predicates.
+    let has_name_facts = kg
+        .get_facts_by_subject_and_predicate(subject_id, has_name_id)
+        .await?;
+    let pref_name_facts = kg
+        .get_facts_by_subject_and_predicate(subject_id, pref_name_id)
+        .await?;
+
+    let has_name = has_name_facts.iter().any(|f| {
+        f.status() == Some(FactStatus::Active)
+            && f.object_literal
+                .as_deref()
+                .map(|lit| lit.to_lowercase() == name.to_lowercase())
+                .unwrap_or(false)
+    });
+    let has_preferred = pref_name_facts.iter().any(|f| {
+        f.status() == Some(FactStatus::Active)
+            && f.object_literal
+                .as_deref()
+                .map(|lit| lit.to_lowercase() == preferred.to_lowercase())
+                .unwrap_or(false)
+    });
+
+    // Alias logic (idempotent; safe to run outside the insert tx).
+    if !preferred.is_empty() && preferred.to_lowercase() != name.to_lowercase() {
+        if let Err(e) = kg.add_alias(subject_id, preferred).await {
+            tracing::warn!("Failed to add preferred-name alias '{}': {}", preferred, e);
+        }
+    }
+
+    // Collect facts to insert and perform the writes atomically.
+    let mut facts_to_insert: Vec<NewFact> = Vec::with_capacity(2);
+
+    if !has_name && !name.is_empty() {
+        let mut nf = NewFact::new(subject_id, "has_name");
+        nf.object_literal = Some(name.to_string());
+        nf.source_type = SourceType::System;
+        nf.category_ids = vec![110];
+        facts_to_insert.push(nf);
+    }
+
+    if !preferred.is_empty() && preferred.to_lowercase() != name.to_lowercase() && !has_preferred {
+        let mut nf = NewFact::new(subject_id, "preferred_name");
+        nf.object_literal = Some(preferred.to_string());
+        nf.source_type = SourceType::System;
+        nf.category_ids = vec![110];
+        facts_to_insert.push(nf);
+    }
+
+    if !facts_to_insert.is_empty() {
+        kg.insert_facts_batch(facts_to_insert).await?;
+    }
+
+    Ok(())
 }

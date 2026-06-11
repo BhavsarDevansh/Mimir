@@ -5,12 +5,14 @@ mod kg_facts_in_catalogue;
 mod kg_query;
 mod kg_related;
 mod kg_search;
+mod remember;
 
 pub use kg_expand_catalogue::KgExpandCatalogueTool;
 pub use kg_facts_in_catalogue::KgFactsInCatalogueTool;
 pub use kg_query::KgQueryTool;
 pub use kg_related::KgRelatedTool;
 pub use kg_search::KgSearchTool;
+pub use remember::RememberTool;
 
 /// Map a fact_status_id to its human-readable name.
 pub(crate) fn fact_status_name(id: i16) -> String {

@@ -2,7 +2,15 @@
 
 The fact-extraction pipeline processes chat input to extract and store facts as structured subject-predicate-object triples in the knowledge graph. This page explains how the process works, what gets stored, and how you stay in control.
 
-**Note:** Automatic, always-on wiring from live chat to the knowledge graph (daemon-style integration) is not yet enabled. The extraction pipeline is fully implemented as a library but not yet integrated into the daemon's chat flow.
+**Note:** The extraction pipeline is automatically triggered after every non-incognito chat interaction. Facts are extracted in the background without delaying your response. Additionally, the LLM has a `remember` tool it can call proactively during conversation to write facts directly.
+
+## Fact Quality
+
+The extraction pipeline applies Rust-side normalisation and splitting to improve the quality of extracted facts:
+
+- **Predicate normalisation**: Common LLM synonyms are mapped to canonical names. For example, `attended` → `studied_at`, `hobbies` → `hobby`.
+- **List splitting**: When the LLM outputs a single fact with a comma-separated list (e.g., `hobby → "Geopolitics, Software Development, Tech"`), the pipeline automatically splits it into three independent facts.
+- **Deduplication**: Before inserting a new fact, the pipeline checks if an identical active fact already exists. If so, it increments the confidence instead of creating a duplicate.
 
 ## What Gets Extracted
 
@@ -61,3 +69,10 @@ You can always:
 - Confirm or reject pending sensitive facts
 - Edit or delete any fact
 - Export everything to Markdown
+
+### Recent Improvements (v0.40.3)
+
+- **Stronger predicate normalisation**: The extraction pipeline now recognises more LLM variations such as `name`, `nickname`, `favorite_food`, `color`, and `colour`, mapping them to canonical forms automatically. Leading and trailing whitespace is also stripped before normalisation.
+- **Expanded list splitting**: Multi-value predicates like `has_pets`, `has_child`, `has_parent`, `has_sibling`, and `has_partner` are now eligible for comma-separated list splitting, improving fact granularity.
+- **Better error reporting**: The `remember` tool now surfaces full error messages in its output, making it easier to diagnose extraction failures.
+- **Empty-message guard**: The background extraction task no longer spawns for empty or whitespace-only chat messages.

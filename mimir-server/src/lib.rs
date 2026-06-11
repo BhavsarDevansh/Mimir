@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 pub mod error;
 pub mod routes;
 pub mod state;
@@ -352,14 +353,16 @@ mod tests {
 
     /// Build an `AppState` suitable for tests, using a temporary directory
     /// for the context database.
-    async fn test_state(llm: Arc<dyn LlmBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+    async fn test_state_with_config(
+        llm: Arc<dyn LlmBackend>,
+        config: Config,
+    ) -> (Arc<AppState>, tempfile::TempDir) {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("context.db");
 
         let context_manager = Arc::new(ContextManager::new(&db_path).await.unwrap());
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
 
-        let config = Config::default();
         let reloadable = ReloadableConfig::new(config, temp.path().join("dummy_config.toml"));
 
         let tool_registry = mimir_core::tools::ToolRegistry::with_builtins();
@@ -394,6 +397,11 @@ mod tests {
             .register_native(Arc::new(mimir_knowledge::KgFactsInCatalogueTool::new(
                 Arc::clone(&knowledge_graph),
             )))
+            .unwrap();
+        tool_registry
+            .register_native(Arc::new(mimir_knowledge::RememberTool::new(Arc::clone(
+                &knowledge_graph,
+            ))))
             .unwrap();
 
         let jobs_db_path = temp.path().join("jobs.db");
@@ -432,6 +440,10 @@ mod tests {
         });
 
         (state, temp)
+    }
+
+    async fn test_state(llm: Arc<dyn LlmBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+        test_state_with_config(llm, Config::default()).await
     }
 
     #[tokio::test]
@@ -1136,6 +1148,7 @@ mod tests {
         assert!(names.contains(&"kg_search".to_string()));
         assert!(names.contains(&"expand_catalogue".to_string()));
         assert!(names.contains(&"get_facts_in_catalogue".to_string()));
+        assert!(names.contains(&"remember".to_string()));
     }
 
     #[tokio::test]
@@ -1159,6 +1172,7 @@ mod tests {
         assert!(names.contains(&"kg_search".to_string()));
         assert!(names.contains(&"expand_catalogue".to_string()));
         assert!(names.contains(&"get_facts_in_catalogue".to_string()));
+        assert!(names.contains(&"remember".to_string()));
     }
 
     #[tokio::test]
@@ -1868,5 +1882,346 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_seed_identity_facts_creates_name_and_preferred_name() {
+        let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+
+        // Create a user entity manually since test_state does not resolve identity.
+        let entity = state
+            .knowledge_graph
+            .create_entity(
+                "Alice Smith",
+                mimir_knowledge::models::entity::EntityType::Person,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Seed identity facts
+        crate::state::seed_identity_facts(
+            &state.knowledge_graph,
+            entity.id,
+            "Alice Smith",
+            "Alice",
+        )
+        .await
+        .unwrap();
+
+        // Verify facts exist
+        let facts = state
+            .knowledge_graph
+            .get_facts_by_subject(entity.id, 1000)
+            .await
+            .unwrap();
+
+        let mut found_name = false;
+        let mut found_preferred = false;
+        for fact in &facts {
+            let pred = state
+                .knowledge_graph
+                .relationship_type_name(fact.relationship_type_id)
+                .await;
+            if pred.as_deref() == Some("has_name")
+                && fact.object_literal.as_deref() == Some("Alice Smith")
+            {
+                found_name = true;
+            }
+            if pred.as_deref() == Some("preferred_name")
+                && fact.object_literal.as_deref() == Some("Alice")
+            {
+                found_preferred = true;
+            }
+        }
+        assert!(found_name, "expected has_name fact for Alice Smith");
+        assert!(found_preferred, "expected preferred_name fact for Alice");
+    }
+
+    #[tokio::test]
+    async fn test_seed_identity_facts_is_idempotent() {
+        let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+
+        let entity = state
+            .knowledge_graph
+            .create_entity(
+                "Bob",
+                mimir_knowledge::models::entity::EntityType::Person,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Call twice with same values
+        crate::state::seed_identity_facts(&state.knowledge_graph, entity.id, "Bob", "Bobby")
+            .await
+            .unwrap();
+        crate::state::seed_identity_facts(&state.knowledge_graph, entity.id, "Bob", "Bobby")
+            .await
+            .unwrap();
+
+        let facts = state
+            .knowledge_graph
+            .get_facts_by_subject(entity.id, 1000)
+            .await
+            .unwrap();
+
+        let mut name_count = 0;
+        let mut pref_count = 0;
+        for f in &facts {
+            let pred = state
+                .knowledge_graph
+                .relationship_type_name(f.relationship_type_id)
+                .await;
+            if f.status() == Some(mimir_knowledge::models::fact::FactStatus::Active) {
+                if pred.as_deref() == Some("has_name") && f.object_literal.as_deref() == Some("Bob")
+                {
+                    name_count += 1;
+                }
+                if pred.as_deref() == Some("preferred_name")
+                    && f.object_literal.as_deref() == Some("Bobby")
+                {
+                    pref_count += 1;
+                }
+            }
+        }
+
+        assert_eq!(name_count, 1, "expected exactly one active has_name fact");
+        assert_eq!(
+            pref_count, 1,
+            "expected exactly one active preferred_name fact"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_seed_identity_facts_adds_alias_and_merges_duplicate() {
+        let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+
+        // Canonical entity
+        let canonical = state
+            .knowledge_graph
+            .create_entity(
+                "Devansh Bhavsar",
+                mimir_knowledge::models::entity::EntityType::Person,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Bare-name duplicate (simulating old bug)
+        let duplicate = state
+            .knowledge_graph
+            .create_entity(
+                "Devansh",
+                mimir_knowledge::models::entity::EntityType::Person,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Seed identity facts – should add alias and auto-merge duplicate
+        crate::state::seed_identity_facts(
+            &state.knowledge_graph,
+            canonical.id,
+            "Devansh Bhavsar",
+            "Devansh",
+        )
+        .await
+        .unwrap();
+
+        // Alias should now exist
+        let resolved =
+            mimir_knowledge::queries::entity::get_by_name(state.knowledge_graph.pool(), "Devansh")
+                .await
+                .unwrap();
+        assert!(!resolved.is_empty());
+        assert_eq!(resolved[0].entity.id, canonical.id);
+        assert_eq!(
+            resolved[0].match_kind,
+            mimir_knowledge::queries::entity::MatchKind::ExactAlias
+        );
+
+        // Duplicate entity should have been merged away
+        let gone = state
+            .knowledge_graph
+            .get_entity(duplicate.id)
+            .await
+            .unwrap();
+        assert!(gone.is_none(), "expected duplicate entity to be merged");
+    }
+
+    #[tokio::test]
+    async fn test_chat_extracts_facts_after_response() {
+        // Build the extraction response (assistant message with remember tool call).
+        let remember_output = mimir_knowledge::extract::RememberOutput {
+            facts: vec![mimir_knowledge::extract::ExtractedFact {
+                classification: mimir_knowledge::extract::Classification::Explicit,
+                subject: "Devansh".to_string(),
+                subject_type: "Person".to_string(),
+                relationship_type: "favourite_colour".to_string(),
+                object: "blue".to_string(),
+                object_is_entity: false,
+                object_type: None,
+                temporal: None,
+                is_sensitive: false,
+                correction_scope: None,
+                categories: vec![],
+            }],
+        };
+        let extraction_msg = Message {
+            role: "assistant".to_string(),
+            content: "".to_string(),
+            tool_calls: Some(vec![ToolCall {
+                index: 0,
+                id: "call_remember".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "remember".to_string(),
+                    arguments: serde_json::to_string(&remember_output).unwrap(),
+                },
+            }]),
+            tool_call_id: None,
+        };
+
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_chat("Got it!", Usage::default())
+                .push_chat_message(extraction_msg, Usage::default())
+                .build(),
+        );
+
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state.clone());
+
+        let body = serde_json::to_string(&serde_json::json!({
+            "message": "My favourite colour is blue."
+        }))
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Poll with timeout so the test is deterministic, not timing-dependent.
+        let mut found = false;
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            let search = state
+                .knowledge_graph
+                .search_entities("Devansh", 1)
+                .await
+                .unwrap();
+            if search.is_empty() {
+                continue;
+            }
+            let entity = &search[0].entity;
+
+            let facts = state
+                .knowledge_graph
+                .get_facts_by_subject(entity.id, 100)
+                .await
+                .unwrap();
+
+            for f in &facts {
+                let pred = state
+                    .knowledge_graph
+                    .relationship_type_name(f.relationship_type_id)
+                    .await;
+                if pred.as_deref() == Some("favourite_colour")
+                    && f.object_literal.as_deref() == Some("blue")
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+        }
+
+        assert!(
+            found,
+            "expected favourite_colour=blue fact to be extracted within 2.5s"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_remember_tool_executes_and_writes_facts() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+
+        // Call the remember tool directly through the registry.
+        let args = serde_json::json!({
+            "facts": [
+                {
+                    "classification": "Explicit",
+                    "subject": "Alice",
+                    "subject_type": "Person",
+                    "relationship_type": "favourite_colour",
+                    "object": "red",
+                    "object_is_entity": false,
+                    "is_sensitive": false,
+                    "categories": []
+                }
+            ]
+        });
+
+        let output = state
+            .tool_registry
+            .execute("remember", args)
+            .await
+            .expect("remember tool should succeed");
+
+        let text = output.to_llm_text();
+        assert!(
+            text.contains("inserted") || text.contains("matched"),
+            "expected success text, got: {}",
+            text
+        );
+
+        // Verify the fact exists.
+        let search = state
+            .knowledge_graph
+            .search_entities("Alice", 1)
+            .await
+            .unwrap();
+        assert!(!search.is_empty(), "expected entity 'Alice' to be created");
+        let entity = &search[0].entity;
+
+        let facts = state
+            .knowledge_graph
+            .get_facts_by_subject(entity.id, 100)
+            .await
+            .unwrap();
+
+        let mut found = false;
+        for f in &facts {
+            let pred = state
+                .knowledge_graph
+                .relationship_type_name(f.relationship_type_id)
+                .await;
+            if pred.as_deref() == Some("favourite_colour")
+                && f.object_literal.as_deref() == Some("red")
+            {
+                found = true;
+                break;
+            }
+        }
+
+        assert!(
+            found,
+            "expected favourite_colour=red fact to be written via remember tool"
+        );
     }
 }

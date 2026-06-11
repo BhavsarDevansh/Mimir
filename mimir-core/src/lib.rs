@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 pub mod config;
 pub mod context;
 pub mod job_queue;

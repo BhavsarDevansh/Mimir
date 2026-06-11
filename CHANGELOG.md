@@ -1,5 +1,93 @@
 # Changelog
 
+## [0.40.7] — 2026-06-10
+
+### Fixed
+
+- Fact extraction now falls back to parsing the assistant's text content as JSON
+  when the LLM does not emit a structured tool call. This resolves intermittent
+  extraction failures with backends such as Ollama + Gemma that do not support
+  `tool_choice`.
+- The daemon guard spawns the background server in its own Unix process group,
+  preventing Ctrl-C in the terminal from killing the daemon.
+- `generate_and_install_service_file` now ensures config and data directories
+  exist before writing the systemd unit, preventing NAMESPACE failures when
+  `ReadWritePaths` references missing directories.
+
+## [0.40.6] — 2026-06-10
+
+### Fixed
+
+- Addressed remaining CodeRabbit review feedback for PR #125:
+  - Fixed CHANGELOG entry for uninstall.sh redirect typo to use literal characters.
+  - Aligned test-only init_at() with production init() by ensuring cache directory exists.
+  - Replaced silent unwrap_or((0,)) with explicit match on the fact-count query during auto-merge to avoid treating DB errors as zero facts.
+  - Documented the auto-merge threshold (fact_count <= 2) in process_extracted_fact.
+  - Optimized category validation in insert_facts_batch to query only referenced category IDs instead of the full table.
+  - Tidied SQL formatting in get_facts_by_subject_and_predicate.
+  - Documented the alias score adjustment (1.1) in entity search queries.
+  - Removed unreachable Windows path checks from the Linux-only resolve_executable_path function.
+  - Added defensive mimir substring check in uninstall.sh remove_dir before rm -rf.
+  - Removed unused serial_test::serial imports in mimir-core tests.
+
+## [0.40.5] — 2026-06-10
+
+### Fixed
+
+- Fixed fact-loss bug where multiple atemporal facts with the same subject and predicate but different objects (e.g. multiple hobbies) would incorrectly supersede each other, leaving only the last-inserted fact. The temporal overlap logic in `insert_fact_in_tx` now respects a `MULTI_VALUED_PREDICATES` allow-list (`hobby`, `likes`, `has_pets`, `has_sibling`, etc.) so that independent values for these predicates coexist instead of overwriting one another.
+
+## [0.40.4] — 2026-06-10
+
+### Fixed
+
+- **Code review feedback for PR #125** (additional findings addressed):
+  - Fixed typo in `scripts/uninstall.sh` where `error()` redirected with `&&2` instead of `>&2`.
+  - Fixed `insert_facts_batch` atomicity by calling `ensure_relationship_type_in_tx` inside the batch transaction instead of autocommitting via `ensure_relationship_type`.
+  - Moved `preferred_name` alias registration and auto-merge side effects in `process_extracted_fact` to after the dedup/corroboration check, preventing irreversible mutations on duplicate facts.
+  - Aligned `generate_service_file` implementation with its docs and test by removing the unused `cache_dir` parameter and updating callers.
+
+## [0.40.3] — 2026-06-10
+
+### Fixed
+
+- **Code review feedback for PR #125** (8 findings addressed):
+  - Strengthened `normalize_predicate` to handle `name` → `has_name`, `nickname` → `preferred_name`, `favorite_food`/`color`/`colour` variants, and trimmed leading/trailing whitespace.
+  - Expanded `LIST_PREDICATES` to include `has_pets`, `has_child`, `has_parent`, `has_sibling`, and `has_partner`.
+  - Removed extra whitespace from the `remember` tool description.
+  - `remember` tool output now includes actual error messages instead of just counts.
+  - Replaced flaky `tokio::time::sleep(200ms)` in chat integration test with a deterministic polling loop and timeout.
+  - `spawn_fact_extraction` now skips empty/whitespace-only messages.
+  - Renamed `user_message_clone` to `user_message` in `chat_stream_handler` to clarify ownership.
+  - Optimized `seed_identity_facts`: replaced full 1,000-fact scan with targeted predicate-specific queries; both identity inserts are now performed atomically via `KnowledgeGraph::insert_facts_batch`.
+
+### Changed
+
+- Added `relationship_type_id`, `get_facts_by_subject_and_predicate`, and `insert_facts_batch` to `KnowledgeGraph` API.
+
+## [0.40.2] — 2026-06-10
+
+### Fixed
+
+- **Chat fact extraction wired up**: The fact-extraction pipeline (`mimir-knowledge/src/extract.rs`) was fully implemented but never triggered from chat. Both `/chat` and `/chat/stream` endpoints now spawn a background task after persisting the assistant response to extract facts from the user message. This fixes the long-standing issue where Mimir could query the knowledge graph but never write to it from conversation.
+- **DRY refactor**: Extracted the duplicated extraction-spawning logic into `spawn_fact_extraction` in `mimir-server/src/routes/chat.rs`.
+
+- **`remember` tool**: Registered `RememberTool` in the tool registry so the LLM can proactively write facts during conversation. The tool accepts structured `RememberOutput` and processes each fact through the same validation, dedup, confidence-assignment, and insertion pipeline used by background extraction.
+- **System prompt updated**: The injected memory note now tells the LLM to use the `remember` tool whenever the user shares something worth saving.
+- **Extraction prompt enriched**: Added detailed predicate standards (e.g., `studied_at` not `attended`, `hobby` not `hobbies`), explicit list-splitting instructions, and deduplication guidance to the fact extraction system prompt.
+- **Predicate normalisation**: Rust-side `normalize_predicate` maps common LLM synonyms to canonical names (e.g., `attended` → `studied_at`, `hobbies` → `hobby`).
+- **Comma-separated list splitting**: `split_list_objects` expands single facts with comma-separated values into multiple independent facts for allow-listed predicates (e.g., `hobby: "A, B, C"` → three separate `hobby` facts).
+
+### Changed
+
+- **Documentation**: Updated `docs/fact-extraction-pipeline.md`, `docs/chat-server.md`, and `docs/wiki/fact-extraction.md` to reflect that extraction is now live in the daemon.
+
+## [0.40.1] — 2026-06-10
+
+### Fixed
+
+- **Personality prompts**: Removed references to a non-existent `memory` tool from `transparent`, `concise`, and `warm` presets. The LLM was instructed to use a tool that was not registered, causing `ToolError::NotFound("memory")` during conversations.
+- **Identity seeding**: When the server starts, it now inserts `has_name` and `preferred_name` facts into the knowledge graph for the user entity (if not already present). This ensures Mimir can learn the user's identity through the existing memory condensation pipeline instead of relying on prompt injection.
+
 ## [0.40.0] — 2026-06-10
 
 ### Added

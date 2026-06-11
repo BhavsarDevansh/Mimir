@@ -6,6 +6,22 @@ use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
 use crate::models::audit_log::{ChangeType, ChangedBy};
+
+/// Predicates that represent a collection of independent values.
+/// Facts with these predicates and different objects should coexist.
+pub const MULTI_VALUED_PREDICATES: [&str; 11] = [
+    "hobby",
+    "likes",
+    "dislikes",
+    "favourite_colour",
+    "favourite_food",
+    "skill",
+    "has_pets",
+    "has_child",
+    "has_parent",
+    "has_sibling",
+    "has_partner",
+];
 use crate::models::enums::RelationType;
 use crate::models::fact::{Fact, FactStatus, NewFact};
 use crate::models::source::{ExtractionMethod, Source, SourceType};
@@ -196,7 +212,15 @@ pub async fn insert_fact(
     now: DateTime<Utc>,
 ) -> Result<Fact, KnowledgeError> {
     let mut tx = pool.begin().await?;
-    let fact = insert_fact_in_tx(&mut tx, new_fact, relationship_type_id, confidence, now).await?;
+    let fact = insert_fact_in_tx(
+        &mut tx,
+        new_fact,
+        relationship_type_id,
+        &new_fact.relationship_type,
+        confidence,
+        now,
+    )
+    .await?;
     tx.commit().await?;
     Ok(fact)
 }
@@ -205,6 +229,7 @@ pub async fn insert_fact_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     new_fact: &NewFact,
     relationship_type_id: i16,
+    relationship_type_name: &str,
     confidence: f32,
     now: DateTime<Utc>,
 ) -> Result<Fact, KnowledgeError> {
@@ -232,9 +257,20 @@ pub async fn insert_fact_in_tx(
     .await?;
 
     // Collect all overlapping facts.
+    // For multi-valued predicates (e.g. hobby, has_sibling), facts with
+    // different objects are independent and should not supersede each other.
+    let is_multi_valued = MULTI_VALUED_PREDICATES.contains(&relationship_type_name);
     let overlaps: Vec<&Fact> = existing
         .iter()
         .filter(|ef| {
+            let same_object = match (new_fact.object_id, new_fact.object_literal.as_deref()) {
+                (Some(new_oid), _) => ef.object_id == Some(new_oid),
+                (None, Some(new_lit)) => ef.object_literal.as_deref() == Some(new_lit),
+                (None, None) => ef.object_id.is_none() && ef.object_literal.is_none(),
+            };
+            if !same_object && is_multi_valued {
+                return false;
+            }
             ranges_overlap(
                 ef.valid_from,
                 ef.valid_until,

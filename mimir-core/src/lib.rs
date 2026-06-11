@@ -5,6 +5,7 @@ pub mod job_queue;
 pub mod llm;
 pub mod paths;
 pub mod personality;
+pub mod scheduler;
 pub mod skills;
 pub mod systemd;
 pub mod tools;

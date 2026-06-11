@@ -17,6 +17,7 @@ enabled = true
 char_limit = 2500
 auto_manage = true
 temporal_horizon = 30
+condensation_top_n = 500
 
 [context]
 max_turns = 20
@@ -25,6 +26,10 @@ db_path = "~/.local/share/mimir/context.db"
 
 [personality]
 preset = "transparent"
+
+[scheduler]
+debounce_seconds = 5
+cooldown_seconds = 60
 
 [server]
 bind_addr = "127.0.0.1:8080"

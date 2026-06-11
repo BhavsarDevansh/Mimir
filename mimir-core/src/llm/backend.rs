@@ -89,6 +89,11 @@ pub trait LlmBackend: Send + Sync + Debug {
         true
     }
 
+    /// Number of jobs currently being processed by workers.
+    fn in_flight_count(&self) -> usize {
+        0
+    }
+
     /// Gracefully shut down the backend, releasing resources.
     ///
     /// The default implementation is a no-op so existing mocks are unaffected.

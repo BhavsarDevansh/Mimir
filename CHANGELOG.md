@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.41.0] — 2026-06-11
+
+### Added
+
+- Unified `BackgroundScheduler` in `mimir-core` that deduplicates, debounces, and gates all background jobs on user downtime and LLM idle state.
+- `DaemonJob` typed enum replaces stringly-typed job IDs for `JobQueue::run_now` and `status`.
+- Demand-driven memory condensation: `KnowledgeGraph` emits a `tokio::sync::Notify` on dirty; a listener submits `DaemonJob::MemoryCondensation` to the scheduler.
+- Configurable `memory.condensation_top_n` (default 500) replaces hard-coded top-20 hash in condensation pipeline.
+- `[scheduler]` config section with `debounce_seconds` (default 5) and `cooldown_seconds` (default 60).
+- `LlmWorkerPool` tracks in-flight job count via `in_flight_count()`, exposed through `LlmBackend`.
+
+### Changed
+
+- Replaced fixed 30-second interval loop for auto-condensation with event-driven scheduler.
+- `POST /memory/refresh` now uses `force_submit` to bypass scheduler gates.
+- Nightly optimization callback now submits condensation through the scheduler instead of direct `run_now`.
+- `JobQueue::list_jobs()` added for scheduled-job polling.
+
+### Fixed
+
+- `relationship_type_id` no longer uses `?` on `Result` inside `Option`-returning function (Rust 2024 edition compatibility).
+
 ## [0.40.7] — 2026-06-10
 
 ### Fixed

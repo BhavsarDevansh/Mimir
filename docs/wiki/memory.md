@@ -12,9 +12,19 @@ Instead of reading a text file, Mimir:
 
 1. Queries the Knowledge Graph for facts about you
 2. Scores each fact using a weighted formula (confidence, category, recency, priority, centrality)
-3. Selects the top facts that fit within a 2500-character budget
+3. Selects the top facts that fit within a 2500-character budget (default top-N for condensation hash is 500)
 4. Renders them as concise plain text (or sends them to an LLM for condensation)
 5. Caches the result in `system_state` for instant retrieval
+
+### Regeneration Triggers
+
+Memory is regenerated **on demand** when facts change, not on a fixed timer. The background scheduler ensures condensation only runs during LLM downtime so it never slows down your conversations.
+
+You can also force regeneration immediately:
+
+```bash
+mimir memory --refresh
+```
 
 ### What Affects Your Memory Ranking
 
@@ -26,10 +36,18 @@ Instead of reading a text file, Mimir:
 | Priority | Critical facts (partner, allergies) get a 2× multiplier |
 | Centrality | Facts about well-connected entities (people you mention often) rank higher |
 
+### Configuration
+
+```toml
+[memory]
+char_limit = 2500
+condensation_top_n = 500
+```
+
 ### What This Means for You
 
 - No need to manually edit memory — Mimir builds your memory automatically from conversations
-- The memory block is always current (regenerated when facts change)
+- The memory block is always current (regenerated when facts change, gated by scheduler)
 - You can still inspect what Mimir knows via `mimir memory` and `mimir kg query`
 - If you want a fact pinned or deprioritised, that will be supported in a future update
 

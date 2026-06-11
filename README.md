@@ -29,7 +29,7 @@ Mimir is built in **Rust** with a modular, local-first architecture:
 - **Core Agent** — CLI, chat interface, LLM orchestration, tool calling, skills, personality system, and working memory
 - **HTTP Server** — Axum-based daemon with SSE streaming, session management, and graceful shutdown
 - **Storage Layer** — SQLite for conversation history, skill metrics, configuration, and the knowledge graph
-- **Knowledge Graph** — Live memory condensation, entity/fact storage, temporal reasoning, and event-driven regeneration
+- **Knowledge Graph** — Live memory condensation, entity/fact storage, temporal reasoning, and event-driven regeneration via the unified background scheduler
 
 ## Installation
 

@@ -21,6 +21,7 @@ pub struct Config {
     pub server: ServerConfig,
     pub knowledge: KnowledgeConfig,
     pub identity: IdentityConfig,
+    pub scheduler: SchedulerConfig,
 }
 
 /// Result of an initialisation attempt.
@@ -76,6 +77,8 @@ pub struct MemoryConfig {
     pub char_limit: u16,
     pub auto_manage: bool,
     pub temporal_horizon: u8,
+    /// Number of top-ranked facts to include in the condensation hash.
+    pub condensation_top_n: u16,
 }
 
 /// Conversation context manager settings.
@@ -114,6 +117,16 @@ impl Default for ServerConfig {
         }
     }
 }
+/// Background scheduler settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SchedulerConfig {
+    /// Seconds to wait after a job submission before dispatching.
+    pub debounce_seconds: u8,
+    /// Seconds to wait after last user activity before dispatching.
+    pub cooldown_seconds: u16,
+}
+
 /// User identity settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -225,6 +238,7 @@ impl Default for MemoryConfig {
             char_limit: 2500,
             auto_manage: true,
             temporal_horizon: 30,
+            condensation_top_n: 500,
         }
     }
 }
@@ -246,6 +260,15 @@ impl Default for KnowledgeOptimizationConfig {
             nice_level: 10,
             timeout_minutes: 120,
             schedule_time: "03:00".to_string(),
+        }
+    }
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            debounce_seconds: 5,
+            cooldown_seconds: 60,
         }
     }
 }
@@ -414,6 +437,11 @@ enabled = true
 char_limit = 2500
 auto_manage = true
 temporal_horizon = 30
+condensation_top_n = 500
+
+[scheduler]
+debounce_seconds = 5
+cooldown_seconds = 60
 
 [context]
 max_turns = 20
@@ -743,6 +771,7 @@ mod tests {
                 char_limit: 100,
                 auto_manage: false,
                 temporal_horizon: 7,
+                condensation_top_n: 500,
             },
             context: ContextConfig {
                 max_tokens: Some(2048),
@@ -758,6 +787,7 @@ mod tests {
             },
             identity: IdentityConfig::default(),
             knowledge: KnowledgeConfig::default(),
+            scheduler: SchedulerConfig::default(),
         };
 
         original.save(&path).unwrap();
@@ -785,6 +815,11 @@ enabled = true
 char_limit = 2500
 auto_manage = true
 temporal_horizon = 30
+condensation_top_n = 500
+
+[scheduler]
+debounce_seconds = 5
+cooldown_seconds = 60
 
 [context]
 max_tokens = 4096

@@ -183,34 +183,36 @@ pub async fn start_server_with_llm_and_listener(
     llm_client: Arc<dyn LlmBackend>,
     listener: tokio::net::TcpListener,
 ) -> anyhow::Result<()> {
-    let state = Arc::new(AppState::from_config_with_llm(Arc::clone(&config), llm_client).await?);
+    let (app_state, scheduler_shutdown_rx) =
+        AppState::from_config_with_llm(Arc::clone(&config), llm_client).await?;
+    let state = Arc::new(app_state);
     let shutdown_rx = state.shutdown_tx.subscribe();
 
-    // ---- Auto-trigger memory condensation when dirty ----
+    // ---- Start background scheduler dispatch loop ----
+    let sched = Arc::clone(&state.scheduler);
+    let sched_shutdown_rx = scheduler_shutdown_rx;
+    tokio::spawn(async move {
+        sched.start(sched_shutdown_rx).await;
+    });
+
+    // ---- Listen for KG dirty signal and submit condensation ----
     if state.user_entity_id.is_some() {
-        let kg = Arc::clone(&state.knowledge_graph);
-        let jq = Arc::clone(&state.job_queue);
+        let notify = state.knowledge_graph.condensation_notify();
+        let sched = Arc::clone(&state.scheduler);
         let mut shutdown_rx = state.shutdown_tx.subscribe();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
                     _ = shutdown_rx.changed() => break,
-                    _ = interval.tick() => {
-                        if kg.condensation_dirty() {
-                            if let Err(e) = jq.run_now("memory.condensation").await {
-                                if !e.is_already_running() {
-                                    tracing::warn!("Auto-trigger memory condensation failed: {}", e);
-                                }
-                            }
-                        }
+                    _ = notify.notified() => {
+                        use mimir_core::scheduler::DaemonJob;
+                        sched.submit(DaemonJob::MemoryCondensation);
                     }
                 }
             }
         });
     } else {
-        tracing::debug!("Skipping auto condensation trigger loop: no user entity configured");
+        tracing::debug!("Skipping condensation notify listener: no user entity configured");
     }
 
     // ---- File watcher for config hot-reload ----
@@ -422,6 +424,14 @@ mod tests {
         );
         job_queue.register(dummy_job).await.unwrap();
 
+        // Dummy scheduler for tests.
+        let (scheduler, _sched_rx) = mimir_core::scheduler::BackgroundScheduler::new(
+            Arc::clone(&job_queue),
+            Arc::clone(&llm),
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(1),
+        );
+
         let state = Arc::new(AppState {
             llm_client: llm,
             context_manager,
@@ -435,6 +445,7 @@ mod tests {
             tool_registry: Arc::new(tool_registry),
             knowledge_graph,
             job_queue,
+            scheduler,
             user_entity_id: None,
             last_user_activity,
         });

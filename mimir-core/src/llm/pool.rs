@@ -2,6 +2,7 @@ use futures::StreamExt;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::Stream;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot, watch};
@@ -39,6 +40,7 @@ struct PoolInner {
     notify: Notify,
     shutdown_tx: watch::Sender<bool>,
     handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    in_flight: AtomicUsize,
 }
 
 /// A priority-based worker pool for LLM requests.
@@ -76,6 +78,7 @@ impl LlmWorkerPool {
             notify: Notify::new(),
             shutdown_tx,
             handles: Mutex::new(Vec::new()),
+            in_flight: AtomicUsize::new(0),
         });
 
         for i in 0..config.worker_threads {
@@ -245,6 +248,11 @@ impl LlmWorkerPool {
     /// Current depth of the system queue.
     pub async fn system_queue_depth(&self) -> usize {
         self.inner.system_queue.lock().await.len()
+    }
+
+    /// Number of jobs currently being processed by workers.
+    pub fn in_flight_count(&self) -> usize {
+        self.inner.in_flight.load(Ordering::Relaxed)
     }
 
     /// Wait for the next available job, prioritising user queue over system queue.

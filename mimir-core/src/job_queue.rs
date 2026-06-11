@@ -390,6 +390,38 @@ impl JobQueue {
         })
     }
 
+    /// List all registered jobs with their current status.
+    pub async fn list_jobs(&self) -> Result<Vec<JobStatus>, JobError> {
+        let rows = sqlx::query("SELECT id, priority, schedule, next_run_at FROM jobs ORDER BY id")
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut statuses = Vec::with_capacity(rows.len());
+        for row in rows {
+            let job_id: String = row.try_get("id")?;
+            let schedule: Option<String> = row.try_get("schedule")?;
+            let schedule = schedule.as_deref().map(DailySchedule::parse).transpose()?;
+            let last_run = self.last_run(&job_id).await?;
+
+            let job_id_clone = job_id.clone();
+            statuses.push(JobStatus {
+                job_id,
+                priority: JobPriority::from_i16(row.try_get::<i16, _>("priority")?).ok_or_else(
+                    || {
+                        JobError::Handler(format!(
+                            "unknown priority value for job {}",
+                            job_id_clone
+                        ))
+                    },
+                )?,
+                schedule,
+                next_run_at: row.try_get("next_run_at")?,
+                last_run,
+            });
+        }
+        Ok(statuses)
+    }
+
     async fn last_run(&self, job_id: &str) -> Result<Option<JobRunSummary>, JobError> {
         let row = sqlx::query(
             "SELECT id, job_id, status, started_at, finished_at, error \

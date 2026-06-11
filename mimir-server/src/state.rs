@@ -210,7 +210,6 @@ impl AppState {
         let schedule =
             mimir_core::job_queue::DailySchedule::parse(&cfg.knowledge.optimization.schedule_time)?;
 
-        let jq_for_opt = Arc::clone(&job_queue);
         let scheduler_for_opt = Arc::clone(&scheduler);
         let opt_job = Job::new(
             "knowledge.optimization",
@@ -221,7 +220,6 @@ impl AppState {
                 let kg = Arc::clone(&kg_for_job);
                 let llm = Arc::clone(&llm_for_job);
                 let activity = Arc::clone(&activity_for_job);
-                let _jq = Arc::clone(&jq_for_opt);
                 let scheduler = Arc::clone(&scheduler_for_opt);
                 let backup_dir = backup_dir.clone();
                 let timeout = timeout_minutes;

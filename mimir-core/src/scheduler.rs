@@ -32,6 +32,15 @@ impl DaemonJob {
             DaemonJob::KnowledgeOptimization => "knowledge.optimization",
         }
     }
+
+    /// Parse a persistent job ID back into a [`DaemonJob`] variant.
+    pub fn from_job_id(id: &str) -> Option<Self> {
+        match id {
+            "memory.condensation" => Some(DaemonJob::MemoryCondensation),
+            "knowledge.optimization" => Some(DaemonJob::KnowledgeOptimization),
+            _ => None,
+        }
+    }
 }
 
 /// Lightweight status returned by [`BackgroundScheduler::submit`].
@@ -294,14 +303,10 @@ impl BackgroundScheduler {
                     if let Some(next_run) = status.next_run_at {
                         if next_run <= now {
                             // Map string job_id back to DaemonJob if known.
-                            let job = match status.job_id.as_str() {
-                                "memory.condensation" => Some(DaemonJob::MemoryCondensation),
-                                "knowledge.optimization" => Some(DaemonJob::KnowledgeOptimization),
-                                _ => {
-                                    warn!("scheduler: unknown scheduled job '{}'", status.job_id);
-                                    None
-                                }
-                            };
+                            let job = DaemonJob::from_job_id(&status.job_id);
+                            if job.is_none() {
+                                warn!("scheduler: unknown scheduled job '{}'", status.job_id);
+                            }
                             if let Some(job) = job {
                                 info!("scheduler: scheduled job {:?} is due ({})", job, next_run);
                                 let _ = self.submit(job);

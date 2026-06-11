@@ -191,11 +191,17 @@ impl KnowledgeGraph {
         }
 
         let row: Option<(i16,)> =
-            sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
+            match sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
                 .bind(name)
                 .fetch_optional(&self.pool)
                 .await
-                .ok()?;
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("relationship_type_id lookup failed for '{}': {}", name, e);
+                    return None;
+                }
+            };
 
         if let Some((id,)) = row {
             let mut cache = self.relationship_type_cache.write().await;

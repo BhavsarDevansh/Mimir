@@ -31,7 +31,7 @@ timeout_minutes = 120
 
 ## What if I use Mimir while it runs?
 
-The optimizer checks whether you are actively chatting. If you have interacted within the last few minutes, it pauses between passes so it never slows down your session. The background scheduler also gates the optimization start on LLM downtime, ensuring it does not compete with your conversations.
+The optimizer checks whether you are actively chatting. If you have interacted within the last minute, it pauses between passes so it never slows down your session. The background scheduler also gates the optimization start on LLM downtime, ensuring it does not compete with your conversations.
 
 ## Troubleshooting
 

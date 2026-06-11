@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.41.2] — 2026-06-11
+
+### Fixed
+
+- **Code review feedback for PR #144** (5 findings addressed):
+  - Removed unused `jq_for_opt` clone in `mimir-server/src/state.rs` optimisation job closure.
+  - Added `DaemonJob::from_job_id()` helper to eliminate duplicated string-to-variant mapping in `mimir-core/src/scheduler.rs`.
+  - Log SQL errors in `relationship_type_id` instead of silently swallowing them with `.ok()?`.
+  - Clarified memory condensation documentation: separated 2500-character budget from top-N limit (500).
+  - Corrected nightly-optimization wiki to state "last minute" instead of "last few minutes" to match the 60-second cooldown default.
+
 ## [0.41.1] — 2026-06-11
 
 ### Fixed

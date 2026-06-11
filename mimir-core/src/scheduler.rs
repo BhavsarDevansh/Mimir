@@ -66,7 +66,6 @@ pub struct BackgroundScheduler {
     user_notify: Notify,
     debounce: Duration,
     cooldown: Duration,
-    #[allow(dead_code)]
     shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
 
@@ -105,6 +104,19 @@ impl BackgroundScheduler {
     /// - The job will be dispatched after `debounce` + `cooldown` have
     ///   elapsed and the LLM pool is idle.
     pub fn submit(&self, job: DaemonJob) -> SubmitStatus {
+        let running = self.running.lock().unwrap();
+        if running.as_ref() == Some(&job) {
+            drop(running);
+            self.last_submit_time.store(
+                chrono::Utc::now().timestamp_millis() as u64,
+                Ordering::Relaxed,
+            );
+            self.job_notify.notify_one();
+            debug!("scheduler: {:?} already running, debounce extended", job);
+            return SubmitStatus::AlreadyPending;
+        }
+        drop(running);
+
         let mut pending = self.pending.lock().unwrap();
         let is_new = pending.insert(job);
         drop(pending);
@@ -144,6 +156,11 @@ impl BackgroundScheduler {
             Ordering::Relaxed,
         );
         self.user_notify.notify_one();
+    }
+
+    /// Signal the dispatch loop to shut down gracefully.
+    pub fn shutdown(&self) {
+        let _ = self.shutdown_tx.send(true);
     }
 
     /// Start the dispatch loop.
@@ -367,6 +384,27 @@ mod tests {
         assert_eq!(pending.len(), 2);
         assert!(pending.contains(&DaemonJob::MemoryCondensation));
         assert!(pending.contains(&DaemonJob::KnowledgeOptimization));
+    }
+
+    #[tokio::test]
+    async fn test_submit_dedupes_running() {
+        let (jq, _temp) = test_job_queue().await;
+        let llm = Arc::new(MockLlmClient::builder().build());
+        let (sched, _shutdown_rx) =
+            BackgroundScheduler::new(jq, llm, Duration::from_secs(1), Duration::from_secs(1));
+
+        // Simulate a job already running.
+        *sched.running.lock().unwrap() = Some(DaemonJob::MemoryCondensation);
+
+        assert_eq!(
+            sched.submit(DaemonJob::MemoryCondensation),
+            SubmitStatus::AlreadyPending
+        );
+
+        // Job should NOT be added to pending because it is already running.
+        let pending = sched.pending.lock().unwrap();
+        assert!(!pending.contains(&DaemonJob::MemoryCondensation));
+        assert!(pending.is_empty());
     }
 
     #[tokio::test]

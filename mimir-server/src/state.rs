@@ -339,6 +339,9 @@ impl AppState {
     /// 2. Shut down the LLM worker pool and drop HTTP clients.
     /// 3. Signal completion.
     pub async fn shutdown(&self) {
+        tracing::info!("Shutting down scheduler...");
+        self.scheduler.shutdown();
+
         tracing::info!("Shutting down ContextManager...");
         self.context_manager.close().await;
 

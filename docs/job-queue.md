@@ -39,10 +39,11 @@ pub enum DaemonJob {
 ### BackgroundScheduler
 
 - `BackgroundScheduler::new(job_queue, llm, debounce, cooldown)` — create scheduler and shutdown receiver.
-- `scheduler.submit(job)` — queue a job for deduped, debounced, cooldown-gated dispatch.
+- `scheduler.submit(job)` — queue a job for deduped, debounced, cooldown-gated dispatch. Also deduplicates against the job currently running.
 - `scheduler.force_submit(job)` — bypass all gates and run immediately through `JobQueue`.
 - `scheduler.notify_user_activity()` — reset the cooldown timer.
 - `scheduler.start(shutdown_rx)` — spawn the dispatch loop.
+- `scheduler.shutdown()` — signal the dispatch loop to exit gracefully.
 
 ## Configuration
 

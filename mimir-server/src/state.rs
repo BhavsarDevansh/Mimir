@@ -386,43 +386,24 @@ pub(crate) async fn seed_identity_facts(
         .await?;
 
     let has_name = has_name_facts.iter().any(|f| {
-        f.status() == Some(FactStatus::Active) && f.object_literal.as_deref() == Some(name)
+        f.status() == Some(FactStatus::Active)
+            && f.object_literal
+                .as_deref()
+                .map(|lit| lit.eq_ignore_ascii_case(name))
+                .unwrap_or(false)
     });
     let has_preferred = pref_name_facts.iter().any(|f| {
-        f.status() == Some(FactStatus::Active) && f.object_literal.as_deref() == Some(preferred)
+        f.status() == Some(FactStatus::Active)
+            && f.object_literal
+                .as_deref()
+                .map(|lit| lit.eq_ignore_ascii_case(preferred))
+                .unwrap_or(false)
     });
 
-    // Alias and merge logic (idempotent; safe to run outside the insert tx).
+    // Alias logic (idempotent; safe to run outside the insert tx).
     if !preferred.is_empty() && preferred.to_lowercase() != name.to_lowercase() {
         if let Err(e) = kg.add_alias(subject_id, preferred).await {
             tracing::warn!("Failed to add preferred-name alias '{}': {}", preferred, e);
-        }
-
-        if let Ok(candidates) =
-            mimir_knowledge::queries::entity::get_by_name(kg.pool(), preferred).await
-        {
-            for cand in candidates {
-                if cand.entity.id == subject_id {
-                    continue;
-                }
-                if cand.entity.name.to_lowercase() == preferred.to_lowercase() {
-                    if let Err(e) = mimir_knowledge::queries::entity::auto_merge_pair(
-                        kg.pool(),
-                        subject_id,
-                        cand.entity.id,
-                    )
-                    .await
-                    {
-                        tracing::warn!(
-                            "Failed to auto-merge duplicate entity {} into {}: {}",
-                            cand.entity.id,
-                            subject_id,
-                            e
-                        );
-                    }
-                    break;
-                }
-            }
         }
     }
 

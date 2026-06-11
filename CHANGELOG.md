@@ -1,3 +1,5 @@
+# Changelog
+
 ## [0.40.7] — 2026-06-10
 
 ### Fixed
@@ -12,8 +14,6 @@
   exist before writing the systemd unit, preventing NAMESPACE failures when
   `ReadWritePaths` references missing directories.
 
-# Changelog
-
 ## [0.40.6] — 2026-06-10
 
 ### Fixed
@@ -23,7 +23,7 @@
   - Aligned test-only init_at() with production init() by ensuring cache directory exists.
   - Replaced silent unwrap_or((0,)) with explicit match on the fact-count query during auto-merge to avoid treating DB errors as zero facts.
   - Documented the auto-merge threshold (fact_count <= 2) in process_extracted_fact.
-  - Optimised category validation in insert_facts_batch to query only referenced category IDs instead of the full table.
+  - Optimized category validation in insert_facts_batch to query only referenced category IDs instead of the full table.
   - Tidied SQL formatting in get_facts_by_subject_and_predicate.
   - Documented the alias score adjustment (1.1) in entity search queries.
   - Removed unreachable Windows path checks from the Linux-only resolve_executable_path function.

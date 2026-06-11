@@ -192,8 +192,7 @@ impl KnowledgeGraph {
             sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
                 .bind(name)
                 .fetch_optional(&self.pool)
-                .await
-                .ok()?;
+                .await?;
 
         if let Some((id,)) = row {
             let mut cache = self.relationship_type_cache.write().await;
@@ -750,6 +749,9 @@ impl KnowledgeGraph {
 
         for fact in &results {
             self.bump_centrality(fact.subject_id).await;
+            if let Some(object_id) = fact.object_id {
+                self.bump_centrality(object_id).await;
+            }
         }
         self.set_condensation_dirty();
 

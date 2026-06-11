@@ -355,11 +355,11 @@ impl Config {
     pub fn init_at(
         config_dir: &std::path::Path,
         data_dir: &std::path::Path,
+        cache_dir: &std::path::Path,
     ) -> Result<InitResult, ConfigError> {
         paths::ensure_dir(config_dir)?;
         paths::ensure_dir(data_dir)?;
-        let cache_dir = paths::cache_dir()?;
-        paths::ensure_dir(&cache_dir)?;
+        paths::ensure_dir(cache_dir)?;
 
         let cfg_path = config_dir.join("config.toml");
 
@@ -842,7 +842,8 @@ db_path = "~/.local/share/mimir/context.db"
         let dir = tempfile::tempdir().unwrap();
         let cfg_dir = dir.path().join("config");
         let data_dir = dir.path().join("data");
-        Config::init_at(&cfg_dir, &data_dir).unwrap();
+        let cache_dir = dir.path().join("cache");
+        Config::init_at(&cfg_dir, &data_dir, &cache_dir).unwrap();
         let cfg_path = cfg_dir.join("config.toml");
 
         let config = Config::load(Some(&cfg_path)).unwrap();
@@ -930,8 +931,9 @@ preset = "formal"
         let dir = tempfile::tempdir().unwrap();
         let cfg_home = dir.path().join("config");
         let data_home = dir.path().join("data");
+        let cache_home = dir.path().join("cache");
 
-        let result = Config::init_at(&cfg_home, &data_home).unwrap();
+        let result = Config::init_at(&cfg_home, &data_home, &cache_home).unwrap();
         match result {
             InitResult::Created {
                 config_dir,
@@ -959,11 +961,12 @@ preset = "formal"
         let dir = tempfile::tempdir().unwrap();
         let cfg_home = dir.path().join("config");
         let data_home = dir.path().join("data");
+        let cache_home = dir.path().join("cache");
 
-        let result1 = Config::init_at(&cfg_home, &data_home).unwrap();
+        let result1 = Config::init_at(&cfg_home, &data_home, &cache_home).unwrap();
         assert!(matches!(result1, InitResult::Created { .. }));
 
-        let result2 = Config::init_at(&cfg_home, &data_home).unwrap();
+        let result2 = Config::init_at(&cfg_home, &data_home, &cache_home).unwrap();
         assert!(matches!(result2, InitResult::AlreadyInitialized));
 
         // Config file should not have been overwritten.
@@ -992,6 +995,7 @@ preset = "formal"
         Config::init_at(
             cfg_path.parent().unwrap(),
             dir.path().join("data").as_path(),
+            dir.path().join("cache").as_path(),
         )
         .unwrap();
         assert!(cfg_path.exists());
@@ -1016,9 +1020,10 @@ preset = "formal"
         let dir = tempfile::tempdir().unwrap();
         let cfg_home = dir.path().join("config");
         let data_home = dir.path().join("data");
+        let cache_home = dir.path().join("cache");
 
         // Write a custom config first.
-        Config::init_at(&cfg_home, &data_home).unwrap();
+        Config::init_at(&cfg_home, &data_home, &cache_home).unwrap();
         let cfg_path = cfg_home.join("config.toml");
         let custom = r#"
 [llm]
@@ -1027,7 +1032,7 @@ model = "custom-model"
         std::fs::write(&cfg_path, custom).unwrap();
 
         // init again — should not overwrite.
-        let result = Config::init_at(&cfg_home, &data_home).unwrap();
+        let result = Config::init_at(&cfg_home, &data_home, &cache_home).unwrap();
         assert!(matches!(result, InitResult::AlreadyInitialized));
 
         let contents = std::fs::read_to_string(&cfg_path).unwrap();

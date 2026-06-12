@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.42.2] — 2026-06-12
+
+### Fixed
+
+- `init_schema` now only rebuilds the FTS5 index when `messages_fts` is newly created, eliminating unnecessary startup latency and I/O for large conversation histories.
+- `seed_identity_facts` inserts identity facts before the alias/auto-merge block, ensuring the canonical entity always has at least as many facts as any qualifying duplicate and preventing `auto_merge_pair` from deleting it.
+- Removed dead `escape_fts5` duplicate from `mimir-knowledge/src/queries/entity.rs`; all callers already use `mimir_core::fts5::escape_fts5`.
+
 ## [0.42.1] — 2026-06-12
 
 ### Fixed

@@ -2061,6 +2061,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_seed_identity_facts_preserves_canonical_when_duplicate_has_more_facts() {
+        let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+
+        // Canonical entity with no facts yet
+        let canonical = state
+            .knowledge_graph
+            .create_entity(
+                "Devansh Bhavsar",
+                mimir_knowledge::models::entity::EntityType::Person,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Duplicate entity that already has a couple of facts
+        let duplicate = state
+            .knowledge_graph
+            .create_entity(
+                "Devansh",
+                mimir_knowledge::models::entity::EntityType::Person,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Give the duplicate two facts so it outranks the canonical pre-fix
+        use mimir_knowledge::models::fact::NewFact;
+        use mimir_knowledge::models::source::SourceType;
+        let mut f1 = NewFact::new(duplicate.id, "has_name");
+        f1.object_literal = Some("Devansh".to_string());
+        f1.source_type = SourceType::System;
+        let mut f2 = NewFact::new(duplicate.id, "works_at");
+        f2.object_literal = Some("Acme".to_string());
+        f2.source_type = SourceType::System;
+        state
+            .knowledge_graph
+            .insert_facts_batch(vec![f1, f2])
+            .await
+            .unwrap();
+
+        // Seed identity facts – canonical should survive because its facts are
+        // inserted *before* the auto-merge check.
+        crate::state::seed_identity_facts(
+            &state.knowledge_graph,
+            canonical.id,
+            "Devansh Bhavsar",
+            "Devansh",
+        )
+        .await
+        .unwrap();
+
+        // Canonical entity must still exist
+        let canonical_still = state
+            .knowledge_graph
+            .get_entity(canonical.id)
+            .await
+            .unwrap();
+        assert!(
+            canonical_still.is_some(),
+            "canonical entity must survive auto-merge"
+        );
+
+        // Duplicate entity should have been merged away
+        let gone = state
+            .knowledge_graph
+            .get_entity(duplicate.id)
+            .await
+            .unwrap();
+        assert!(gone.is_none(), "expected duplicate entity to be merged");
+    }
+
+    #[tokio::test]
     async fn test_chat_extracts_facts_after_response() {
         // Build the extraction response (assistant message with remember tool call).
         let remember_output = mimir_knowledge::extract::RememberOutput {

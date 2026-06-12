@@ -105,21 +105,6 @@ pub async fn get_by_id(pool: &SqlitePool, id: i32) -> Result<Option<Entity>, Kno
     Ok(entity)
 }
 
-/// Escape a raw string for safe use in an FTS5 MATCH expression.
-///
-/// FTS5 treats spaces, `OR`, `AND`, `NOT`, `*`, `-`, `(` and `)` as query
-/// operators. To avoid syntax errors and force literal matching, the input is
-/// wrapped in a double-quoted phrase. Internal double quotes are doubled and
-/// asterisks are replaced with spaces so that prefix-operator syntax cannot
-/// appear inside the quoted phrase.
-pub fn escape_fts5(query: &str) -> String {
-    if query.is_empty() {
-        return String::new();
-    }
-    let escaped = query.replace('"', "\"\"").replace('*', " ");
-    format!("\"{}\"", escaped)
-}
-
 /// Search for entities by exact name match, then exact alias match, then FTS5 fuzzy.
 /// Results are sorted by score descending and capped at 10.
 pub async fn get_by_name(

@@ -433,6 +433,32 @@ pub(crate) async fn seed_identity_facts(
                 .unwrap_or(false)
     });
 
+    // Collect facts to insert and perform the writes atomically.
+    // Insert identity facts *before* alias/auto-merge so the canonical entity
+    // always has at least as many facts as any qualifying duplicate, ensuring
+    // auto_merge_pair preserves subject_id as the survivor.
+    let mut facts_to_insert: Vec<NewFact> = Vec::with_capacity(2);
+
+    if !has_name && !name.is_empty() {
+        let mut nf = NewFact::new(subject_id, "has_name");
+        nf.object_literal = Some(name.to_string());
+        nf.source_type = SourceType::System;
+        nf.category_ids = vec![110];
+        facts_to_insert.push(nf);
+    }
+
+    if !preferred.is_empty() && preferred.to_lowercase() != name.to_lowercase() && !has_preferred {
+        let mut nf = NewFact::new(subject_id, "preferred_name");
+        nf.object_literal = Some(preferred.to_string());
+        nf.source_type = SourceType::System;
+        nf.category_ids = vec![110];
+        facts_to_insert.push(nf);
+    }
+
+    if !facts_to_insert.is_empty() {
+        kg.insert_facts_batch(facts_to_insert).await?;
+    }
+
     // Alias logic (idempotent; safe to run outside the insert tx).
     if !preferred.is_empty() && preferred.to_lowercase() != name.to_lowercase() {
         if let Err(e) = kg.add_alias(subject_id, preferred).await {
@@ -478,29 +504,6 @@ pub(crate) async fn seed_identity_facts(
                 }
             }
         }
-    }
-
-    // Collect facts to insert and perform the writes atomically.
-    let mut facts_to_insert: Vec<NewFact> = Vec::with_capacity(2);
-
-    if !has_name && !name.is_empty() {
-        let mut nf = NewFact::new(subject_id, "has_name");
-        nf.object_literal = Some(name.to_string());
-        nf.source_type = SourceType::System;
-        nf.category_ids = vec![110];
-        facts_to_insert.push(nf);
-    }
-
-    if !preferred.is_empty() && preferred.to_lowercase() != name.to_lowercase() && !has_preferred {
-        let mut nf = NewFact::new(subject_id, "preferred_name");
-        nf.object_literal = Some(preferred.to_string());
-        nf.source_type = SourceType::System;
-        nf.category_ids = vec![110];
-        facts_to_insert.push(nf);
-    }
-
-    if !facts_to_insert.is_empty() {
-        kg.insert_facts_batch(facts_to_insert).await?;
     }
 
     Ok(())

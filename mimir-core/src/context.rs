@@ -607,18 +607,31 @@ impl ContextManager {
         }
 
         // FTS5 virtual table for full-text search over messages.
-        sqlx::query(
-            r#"
-            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-                role,
-                content,
-                content='messages',
-                content_rowid='id'
-            )
-            "#,
+        let fts_exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts'",
         )
-        .execute(pool)
+        .fetch_one(pool)
         .await?;
+
+        if fts_exists == 0 {
+            sqlx::query(
+                r#"
+                CREATE VIRTUAL TABLE messages_fts USING fts5(
+                    role,
+                    content,
+                    content='messages',
+                    content_rowid='id'
+                )
+                "#,
+            )
+            .execute(pool)
+            .await?;
+
+            // Backfill index for existing messages (only needed on first creation).
+            sqlx::query("INSERT INTO messages_fts(messages_fts) VALUES('rebuild');")
+                .execute(pool)
+                .await?;
+        }
 
         sqlx::query(
             r#"
@@ -654,11 +667,6 @@ impl ContextManager {
         )
         .execute(pool)
         .await?;
-
-        // Rebuild FTS5 index to ensure it is in sync with messages table.
-        sqlx::query("INSERT INTO messages_fts(messages_fts) VALUES('rebuild');")
-            .execute(pool)
-            .await?;
 
         Ok(())
     }

@@ -563,19 +563,26 @@ impl KnowledgeGraph {
 
     /// Count facts that reference an entity (as subject or object).
     ///
-    /// This counts **all** referencing facts with no `fact_status_id` filter.
-    /// The result is used by auto-merge gating in `seed_identity_facts`, which
-    /// treats a very low count (e.g. <= 2) as a signal of an accidental duplicate.
-    /// Note: the `OR` predicate may limit index utilisation on very large fact
-    /// tables; consider a covering index on `(subject_id, object_id)` or a union
-    /// query if this becomes a bottleneck.
+    /// Count every fact that references the entity, regardless of
+    /// `fact_status_id`.  We intentionally include revoked or deleted facts
+    /// because any non-zero reference history indicates meaningful entity
+    /// usage; the auto-merge gate in `seed_identity_facts` therefore treats a
+    /// very low count (e.g. <= 2) as a signal of an accidental duplicate.
+    ///
+    /// Uses a `UNION` query so that separate indexes on `subject_id` and
+    /// `object_id` can both be exploited.
     pub async fn count_entity_facts(&self, id: i32) -> Result<i64, KnowledgeError> {
-        let (count,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM facts WHERE subject_id = ? OR object_id = ?")
-                .bind(id)
-                .bind(id)
-                .fetch_one(&self.pool)
-                .await?;
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM (
+                SELECT id FROM facts WHERE subject_id = ?
+                UNION
+                SELECT id FROM facts WHERE object_id = ?
+            )",
+        )
+        .bind(id)
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(count)
     }
 

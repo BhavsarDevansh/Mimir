@@ -531,6 +531,13 @@ impl LlmBackend for LlmClient {
         self.user_queue_has_capacity().await
     }
 
+    fn in_flight_count(&self) -> usize {
+        match &self.pool {
+            Some(pool) => pool.in_flight_count(),
+            None => 0,
+        }
+    }
+
     fn with_model_override(&self, model: String) -> Option<Arc<dyn LlmBackend>> {
         let mut clone = self.clone();
         clone.config.model = model;

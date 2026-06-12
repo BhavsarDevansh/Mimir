@@ -37,6 +37,7 @@ pub struct MockLlmClient {
     system_queue_depth_val: Mutex<usize>,
     worker_threads_val: u8,
     user_queue_has_capacity_val: Mutex<bool>,
+    in_flight_count_val: Mutex<usize>,
     chat_records: Mutex<Vec<CallRecord>>,
     stream_records: Mutex<Vec<CallRecord>>,
 }
@@ -58,6 +59,7 @@ impl MockLlmClient {
                 system_queue_depth_val: Mutex::new(0),
                 worker_threads_val: 0,
                 user_queue_has_capacity_val: Mutex::new(true),
+                in_flight_count_val: Mutex::new(0),
                 chat_records: Mutex::new(Vec::new()),
                 stream_records: Mutex::new(Vec::new()),
             },
@@ -176,6 +178,12 @@ impl MockLlmClientBuilder {
         self
     }
 
+    /// Set the value returned by [`LlmBackend::in_flight_count`].
+    pub fn in_flight_count(self, n: usize) -> Self {
+        *self.client.in_flight_count_val.lock().unwrap() = n;
+        self
+    }
+
     /// Build the [`MockLlmClient`].
     pub fn build(self) -> MockLlmClient {
         self.client
@@ -235,6 +243,10 @@ impl LlmBackend for MockLlmClient {
 
     async fn user_queue_has_capacity(&self) -> bool {
         *self.user_queue_has_capacity_val.lock().unwrap()
+    }
+
+    fn in_flight_count(&self) -> usize {
+        *self.in_flight_count_val.lock().unwrap()
     }
 }
 

@@ -2,6 +2,7 @@ use futures::StreamExt;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::Stream;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot, watch};
@@ -39,6 +40,23 @@ struct PoolInner {
     notify: Notify,
     shutdown_tx: watch::Sender<bool>,
     handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    in_flight: AtomicUsize,
+}
+
+/// Guard that increments `in_flight` on creation and decrements on drop.
+struct InFlightGuard<'a>(&'a AtomicUsize);
+
+impl<'a> InFlightGuard<'a> {
+    fn new(counter: &'a AtomicUsize) -> Self {
+        counter.fetch_add(1, Ordering::Relaxed);
+        Self(counter)
+    }
+}
+
+impl<'a> Drop for InFlightGuard<'a> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// A priority-based worker pool for LLM requests.
@@ -76,6 +94,7 @@ impl LlmWorkerPool {
             notify: Notify::new(),
             shutdown_tx,
             handles: Mutex::new(Vec::new()),
+            in_flight: AtomicUsize::new(0),
         });
 
         for i in 0..config.worker_threads {
@@ -96,6 +115,7 @@ impl LlmWorkerPool {
                         }
                         job = Self::next_job(&inner_spawn) => {
                             if let Some(job) = job {
+                                let _guard = InFlightGuard::new(&inner_spawn.in_flight);
                                 Self::process_job(&client, job).await;
                             }
                         }
@@ -245,6 +265,11 @@ impl LlmWorkerPool {
     /// Current depth of the system queue.
     pub async fn system_queue_depth(&self) -> usize {
         self.inner.system_queue.lock().await.len()
+    }
+
+    /// Number of jobs currently being processed by workers.
+    pub fn in_flight_count(&self) -> usize {
+        self.inner.in_flight.load(Ordering::Relaxed)
     }
 
     /// Wait for the next available job, prioritising user queue over system queue.
@@ -516,5 +541,75 @@ mod tests {
         // but the workers have exited. We verify by checking that a second
         // shutdown is a no-op (no handles left to await).
         pool.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_in_flight_counter_tracks_active_jobs() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let n = stream.peek(&mut buf).await.unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]);
+            assert!(req.contains("/chat/completions"));
+
+            // Sleep while "processing" so the counter stays elevated.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+
+            let body = r#"{"id":"1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK
+Content-Length: {}
+Content-Type: application/json
+
+{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        });
+
+        let config = LlmConfig {
+            endpoint: format!("http://{}/v1", addr),
+            api_key: "test".to_string(),
+            model: "gpt-4o".to_string(),
+            max_tokens: Some(10),
+            temperature: 0.0,
+        };
+
+        let pool = LlmWorkerPool::new(config, tiny_pool_config())
+            .await
+            .unwrap();
+
+        // Spawn the enqueue so it actually enters the queue while we observe.
+        let pool_clone = pool.clone();
+        let job = tokio::spawn(async move {
+            pool_clone
+                .enqueue_chat(vec![Message::user("hello")], None)
+                .await
+        });
+
+        // Poll until in_flight becomes 1 (job picked up by worker).
+        let mut found_in_flight = false;
+        for _ in 0..100 {
+            let count = pool.in_flight_count();
+            if count == 1 {
+                found_in_flight = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(found_in_flight, "expected in_flight_count to reach 1");
+
+        // Wait for the job to complete.
+        let _ = job.await.unwrap();
+
+        assert_eq!(
+            pool.in_flight_count(),
+            0,
+            "expected in_flight_count to be 0 after completion"
+        );
     }
 }

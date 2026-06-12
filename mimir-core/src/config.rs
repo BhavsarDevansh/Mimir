@@ -21,6 +21,7 @@ pub struct Config {
     pub server: ServerConfig,
     pub knowledge: KnowledgeConfig,
     pub identity: IdentityConfig,
+    pub scheduler: SchedulerConfig,
 }
 
 /// Result of an initialisation attempt.
@@ -76,6 +77,8 @@ pub struct MemoryConfig {
     pub char_limit: u16,
     pub auto_manage: bool,
     pub temporal_horizon: u8,
+    /// Number of top-ranked facts to include in the condensation hash.
+    pub condensation_top_n: u16,
 }
 
 /// Conversation context manager settings.
@@ -114,6 +117,16 @@ impl Default for ServerConfig {
         }
     }
 }
+/// Background scheduler settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SchedulerConfig {
+    /// Seconds to wait after a job submission before dispatching.
+    pub debounce_seconds: u8,
+    /// Seconds to wait after last user activity before dispatching.
+    pub cooldown_seconds: u16,
+}
+
 /// User identity settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -225,6 +238,7 @@ impl Default for MemoryConfig {
             char_limit: 2500,
             auto_manage: true,
             temporal_horizon: 30,
+            condensation_top_n: 500,
         }
     }
 }
@@ -246,6 +260,15 @@ impl Default for KnowledgeOptimizationConfig {
             nice_level: 10,
             timeout_minutes: 120,
             schedule_time: "03:00".to_string(),
+        }
+    }
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            debounce_seconds: 5,
+            cooldown_seconds: 60,
         }
     }
 }
@@ -414,6 +437,11 @@ enabled = true
 char_limit = 2500
 auto_manage = true
 temporal_horizon = 30
+condensation_top_n = 500
+
+[scheduler]
+debounce_seconds = 5
+cooldown_seconds = 60
 
 [context]
 max_turns = 20
@@ -531,6 +559,16 @@ schedule_time = "02:00"
         }
         if let Some(v) = getenv("MIMIR_SERVER_SOCKET_PATH") {
             self.server.socket_path = if v.trim().is_empty() { None } else { Some(v) };
+        }
+        if let Some(v) = getenv("MIMIR_SCHEDULER_DEBOUNCE_SECONDS")
+            && let Ok(n) = v.parse::<u8>()
+        {
+            self.scheduler.debounce_seconds = n;
+        }
+        if let Some(v) = getenv("MIMIR_SCHEDULER_COOLDOWN_SECONDS")
+            && let Ok(n) = v.parse::<u16>()
+        {
+            self.scheduler.cooldown_seconds = n;
         }
     }
 
@@ -743,6 +781,7 @@ mod tests {
                 char_limit: 100,
                 auto_manage: false,
                 temporal_horizon: 7,
+                condensation_top_n: 500,
             },
             context: ContextConfig {
                 max_tokens: Some(2048),
@@ -758,6 +797,7 @@ mod tests {
             },
             identity: IdentityConfig::default(),
             knowledge: KnowledgeConfig::default(),
+            scheduler: SchedulerConfig::default(),
         };
 
         original.save(&path).unwrap();
@@ -785,6 +825,11 @@ enabled = true
 char_limit = 2500
 auto_manage = true
 temporal_horizon = 30
+condensation_top_n = 500
+
+[scheduler]
+debounce_seconds = 5
+cooldown_seconds = 60
 
 [context]
 max_tokens = 4096
@@ -924,6 +969,60 @@ preset = "formal"
             }
         });
         assert_eq!(config.personality.preset, "concise");
+    }
+
+    #[test]
+    fn test_env_override_scheduler_debounce_seconds() {
+        let mut config = Config::default();
+        config.apply_env_overrides_with(|key| {
+            if key == "MIMIR_SCHEDULER_DEBOUNCE_SECONDS" {
+                Some("10".to_string())
+            } else {
+                None
+            }
+        });
+        assert_eq!(config.scheduler.debounce_seconds, 10);
+    }
+
+    #[test]
+    fn test_env_override_scheduler_debounce_seconds_invalid_ignored() {
+        let mut config = Config::default();
+        config.apply_env_overrides_with(|key| {
+            if key == "MIMIR_SCHEDULER_DEBOUNCE_SECONDS" {
+                Some("not_a_number".to_string())
+            } else {
+                None
+            }
+        });
+        // Should remain at default value
+        assert_eq!(config.scheduler.debounce_seconds, 5);
+    }
+
+    #[test]
+    fn test_env_override_scheduler_cooldown_seconds() {
+        let mut config = Config::default();
+        config.apply_env_overrides_with(|key| {
+            if key == "MIMIR_SCHEDULER_COOLDOWN_SECONDS" {
+                Some("120".to_string())
+            } else {
+                None
+            }
+        });
+        assert_eq!(config.scheduler.cooldown_seconds, 120);
+    }
+
+    #[test]
+    fn test_env_override_scheduler_cooldown_seconds_invalid_ignored() {
+        let mut config = Config::default();
+        config.apply_env_overrides_with(|key| {
+            if key == "MIMIR_SCHEDULER_COOLDOWN_SECONDS" {
+                Some("invalid".to_string())
+            } else {
+                None
+            }
+        });
+        // Should remain at default value
+        assert_eq!(config.scheduler.cooldown_seconds, 60);
     }
 
     #[test]

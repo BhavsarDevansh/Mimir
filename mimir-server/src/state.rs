@@ -10,6 +10,7 @@ use mimir_core::{
     context::ContextManager,
     job_queue::{Job, JobContext, JobPriority, JobQueue},
     llm::{LlmBackend, LlmClient},
+    scheduler::{BackgroundScheduler, DaemonJob},
     tools::ToolRegistry,
 };
 
@@ -43,6 +44,8 @@ pub struct AppState {
     pub knowledge_graph: Arc<mimir_knowledge::KnowledgeGraph>,
     /// Durable job queue for background tasks.
     pub job_queue: Arc<JobQueue>,
+    /// Unified background scheduler (dedupe, debounce, idle-gate).
+    pub scheduler: Arc<BackgroundScheduler>,
     /// Unix timestamp (seconds) of the last user interaction. Used to yield
     /// system jobs when the user is active.
     pub last_user_activity: Arc<AtomicU64>,
@@ -54,7 +57,9 @@ const MODEL_OVERRIDE_CACHE_CAP: usize = 16;
 
 impl AppState {
     /// Build `AppState` from the global [`ReloadableConfig`].
-    pub async fn from_config(config: Arc<ReloadableConfig>) -> anyhow::Result<Self> {
+    pub async fn from_config(
+        config: Arc<ReloadableConfig>,
+    ) -> anyhow::Result<(Self, tokio::sync::watch::Receiver<bool>)> {
         let llm_client: Arc<dyn LlmBackend> =
             Arc::new(LlmClient::new(config.snapshot().await.llm.clone()).await);
         Self::from_config_with_llm(config, llm_client).await
@@ -67,7 +72,7 @@ impl AppState {
     pub async fn from_config_with_llm(
         config: Arc<ReloadableConfig>,
         llm_client: Arc<dyn LlmBackend>,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<(Self, tokio::sync::watch::Receiver<bool>)> {
         let cfg = config.snapshot().await;
 
         let db_path = match cfg.context.db_path.clone() {
@@ -186,6 +191,15 @@ impl AppState {
         let job_queue = Arc::new(JobQueue::init(&jobs_db_path).await?);
         let last_user_activity = Arc::new(AtomicU64::new(0));
 
+        // Initialise background scheduler.
+        let scheduler_cfg = cfg.scheduler.clone();
+        let (scheduler, scheduler_shutdown_rx) = BackgroundScheduler::new(
+            Arc::clone(&job_queue),
+            Arc::clone(&llm_client),
+            std::time::Duration::from_secs(scheduler_cfg.debounce_seconds as u64),
+            std::time::Duration::from_secs(scheduler_cfg.cooldown_seconds as u64),
+        );
+
         // Register knowledge graph optimization job.
         let kg_for_job = Arc::clone(&knowledge_graph);
         let llm_for_job = Arc::clone(&llm_client);
@@ -196,7 +210,7 @@ impl AppState {
         let schedule =
             mimir_core::job_queue::DailySchedule::parse(&cfg.knowledge.optimization.schedule_time)?;
 
-        let jq_for_opt = Arc::clone(&job_queue);
+        let scheduler_for_opt = Arc::clone(&scheduler);
         let opt_job = Job::new(
             "knowledge.optimization",
             JobPriority::System,
@@ -206,7 +220,7 @@ impl AppState {
                 let kg = Arc::clone(&kg_for_job);
                 let llm = Arc::clone(&llm_for_job);
                 let activity = Arc::clone(&activity_for_job);
-                let jq = Arc::clone(&jq_for_opt);
+                let scheduler = Arc::clone(&scheduler_for_opt);
                 let backup_dir = backup_dir.clone();
                 let timeout = timeout_minutes;
                 let schedule_time = schedule_time.clone();
@@ -233,12 +247,7 @@ impl AppState {
                                 Utc::now() - last < five_minutes
                             },
                             || async move {
-                                if let Err(e) = jq.run_now("memory.condensation").await {
-                                    tracing::warn!(
-                                        "Failed to trigger post-optimization condensation: {}",
-                                        e
-                                    );
-                                }
+                                scheduler.submit(DaemonJob::MemoryCondensation);
                             },
                         )
                         .await
@@ -254,6 +263,7 @@ impl AppState {
         let llm_for_cond = Arc::clone(&llm_client);
         let user_id_for_cond = user_entity_id;
         let char_limit = cfg.memory.char_limit as usize;
+        let top_n = cfg.memory.condensation_top_n as usize;
 
         let cond_job = Job::new(
             "memory.condensation",
@@ -265,10 +275,11 @@ impl AppState {
                 let llm = Arc::clone(&llm_for_cond);
                 let uid = user_id_for_cond;
                 let limit = char_limit;
+                let top_n = top_n;
                 Box::pin(async move {
                     if let Some(subject_id) = uid {
                         let condenser = mimir_knowledge::condensation::MemoryCondenser::new(
-                            kg, llm, subject_id, limit,
+                            kg, llm, subject_id, limit, top_n,
                         );
                         condenser
                             .run()
@@ -283,28 +294,33 @@ impl AppState {
         );
         job_queue.register(cond_job).await?;
 
-        Ok(Self {
-            llm_client,
-            context_manager,
-            config,
-            session_locks: Arc::new(DashMap::new()),
-            start_time: Instant::now(),
-            endpoint: cfg.llm.endpoint.clone(),
-            model: cfg.llm.model.clone(),
-            shutdown_tx,
-            model_override_cache: Arc::new(DashMap::new()),
-            tool_registry,
-            knowledge_graph,
-            job_queue,
-            last_user_activity,
-            user_entity_id,
-        })
+        Ok((
+            Self {
+                llm_client,
+                context_manager,
+                config,
+                session_locks: Arc::new(DashMap::new()),
+                start_time: Instant::now(),
+                endpoint: cfg.llm.endpoint.clone(),
+                model: cfg.llm.model.clone(),
+                shutdown_tx,
+                model_override_cache: Arc::new(DashMap::new()),
+                tool_registry,
+                knowledge_graph,
+                job_queue,
+                scheduler,
+                last_user_activity,
+                user_entity_id,
+            },
+            scheduler_shutdown_rx,
+        ))
     }
 
     /// Record the current time as the most recent user interaction.
     pub fn record_user_activity(&self) {
         self.last_user_activity
             .store(Utc::now().timestamp() as u64, Ordering::Relaxed);
+        self.scheduler.notify_user_activity();
     }
 
     /// Return (or create) the semaphore for a given session id.
@@ -321,6 +337,9 @@ impl AppState {
     /// 2. Shut down the LLM worker pool and drop HTTP clients.
     /// 3. Signal completion.
     pub async fn shutdown(&self) {
+        tracing::info!("Shutting down scheduler...");
+        self.scheduler.shutdown();
+
         tracing::info!("Shutting down ContextManager...");
         self.context_manager.close().await;
 

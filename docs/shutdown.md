@@ -18,11 +18,15 @@ When any of these signals fire, the server enters graceful shutdown:
 
 `AppState::shutdown()` performs the following steps:
 
-1. **SQLite pool close** (`ContextManager::close()`)
+1. **Scheduler shutdown** (`BackgroundScheduler::shutdown()`)
+   - Signals the scheduler's private `watch::Sender` so the dispatch loop breaks cleanly.
+   - This prevents new background jobs from starting during teardown and ensures any in-flight job's DB record is updated before the runtime drops.
+
+2. **SQLite pool close** (`ContextManager::close()`)
    - Calls `sqlx::SqlitePool::close().await` to flush WAL and close connections.
    - After this, any further DB operations fail with a database error.
 
-2. **LLM worker pool shutdown** (`LlmClient::shutdown()`)
+3. **LLM worker pool shutdown** (`LlmClient::shutdown()`)
    - Sends `true` on the worker pool's `shutdown_tx` watch channel.
    - Each worker task uses `tokio::select!` to race between `next_job()` and `shutdown_rx.changed()`.
    - On shutdown signal, workers break their loop, dropping their local `reqwest::Client` and closing idle HTTP connections.
@@ -41,6 +45,7 @@ The server future is wrapped in `tokio::time::timeout(Duration::from_secs(30), s
 
 - `mimir-server/src/lib.rs` — `shutdown_signal()` and `start_server()`
 - `mimir-server/src/state.rs` — `AppState::shutdown()`
+- `mimir-core/src/scheduler.rs` — `BackgroundScheduler::shutdown()`
 - `mimir-core/src/context.rs` — `ContextManager::close()`
 - `mimir-core/src/llm/pool.rs` — `LlmWorkerPool::shutdown()`
 - `mimir-core/src/llm/client.rs` — `LlmClient::shutdown()`

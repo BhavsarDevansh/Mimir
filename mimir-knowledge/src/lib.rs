@@ -24,7 +24,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use tokio::sync::RwLock;
+use tokio::sync::{Notify, RwLock};
 
 use crate::inference::rules::contradiction::ContradictionRule;
 use crate::inference::rules::threshold::{RELATIONSHIP_TYPE_REJECTED_ACTION, ThresholdRule};
@@ -107,6 +107,7 @@ pub struct KnowledgeGraph {
     pending_confirmations: Arc<RwLock<HashSet<i32>>>,
     centrality_cache: Arc<RwLock<HashMap<i32, f32>>>,
     condensation_dirty: AtomicBool,
+    condensation_notify: Arc<Notify>,
 }
 
 impl std::fmt::Debug for KnowledgeGraph {
@@ -157,6 +158,7 @@ impl KnowledgeGraph {
             rule_engine: engine,
             pending_confirmations: Arc::new(RwLock::new(pending)),
             condensation_dirty: AtomicBool::new(false),
+            condensation_notify: Arc::new(Notify::new()),
         })
     }
 
@@ -189,10 +191,17 @@ impl KnowledgeGraph {
         }
 
         let row: Option<(i16,)> =
-            sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
+            match sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
                 .bind(name)
                 .fetch_optional(&self.pool)
-                .await?;
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("relationship_type_id lookup failed for '{}': {}", name, e);
+                    return None;
+                }
+            };
 
         if let Some((id,)) = row {
             let mut cache = self.relationship_type_cache.write().await;
@@ -349,10 +358,16 @@ impl KnowledgeGraph {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Access the notify channel that fires whenever condensation becomes dirty.
+    pub fn condensation_notify(&self) -> Arc<Notify> {
+        Arc::clone(&self.condensation_notify)
+    }
+
     /// Mark condensation as dirty (call after any fact mutation).
     pub fn set_condensation_dirty(&self) {
         self.condensation_dirty
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.condensation_notify.notify_one();
     }
 
     /// Clear the condensation dirty flag.

@@ -30,7 +30,8 @@ Each worker loops:
 1. Pop from user queue.
 2. If user queue is empty, pop from system queue.
 3. If both are empty, wait on `Notify`.
-4. Process the job using a direct `LlmClient` (no pool recursion).
+4. Increment the `in_flight` counter, process the job using a direct `LlmClient`, then decrement the counter on completion (including on panic — a drop guard guarantees the decrement).
+5. The counter is exposed via `LlmBackend::in_flight_count()` so the scheduler can gate background work on true pool idleness.
 
 ### Backpressure
 

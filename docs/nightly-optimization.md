@@ -31,9 +31,15 @@ timeout_minutes = 120
 schedule_time = "02:00"
 ```
 
+## Background Scheduler Integration
+
+The optimization job is registered in the durable `JobQueue` with a daily schedule. The `BackgroundScheduler` polls for scheduled jobs every 60 seconds. When the optimization job is due, it is submitted through the scheduler and follows the same dedupe/debounce/idle rules as any other background job.
+
+After optimization completes, its callback submits `DaemonJob::MemoryCondensation` through the scheduler (not directly via `JobQueue::run_now`), ensuring condensation also waits for user downtime before running.
+
 ## Yielding on User Activity
 
-`OptimizationRunner::run_all_with_yield` accepts a `should_yield` closure. The daemon supplies a closure that returns `true` when the last chat interaction is within 5 minutes, causing the runner to sleep for 5 seconds between passes.
+`OptimizationRunner::run_all_with_yield` accepts a `should_yield` closure. The daemon supplies a closure that returns `true` when the last chat interaction is within 5 minutes, causing the runner to sleep for 5 seconds between passes. This is now complemented by the scheduler's cooldown gate, which prevents the job from starting at all if the user is active.
 
 ## Run Recording
 

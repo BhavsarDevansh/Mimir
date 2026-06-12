@@ -17,7 +17,6 @@ use crate::models::memory::{MemoryBucket, MemorySchema};
 use crate::queries::memory::BuildMemoryOptions;
 
 const LAST_HASH_KEY: &str = "last_condensed_hash";
-const TOP_N_HASH_COUNT: usize = 20;
 
 /// Orchestrates memory condensation for a single subject entity.
 pub struct MemoryCondenser {
@@ -25,6 +24,7 @@ pub struct MemoryCondenser {
     llm: Arc<dyn LlmBackend>,
     subject_id: i32,
     char_limit: usize,
+    top_n: usize,
 }
 
 impl MemoryCondenser {
@@ -33,12 +33,14 @@ impl MemoryCondenser {
         llm: Arc<dyn LlmBackend>,
         subject_id: i32,
         char_limit: usize,
+        top_n: usize,
     ) -> Self {
         Self {
             kg,
             llm,
             subject_id,
             char_limit,
+            top_n,
         }
     }
 
@@ -67,7 +69,7 @@ impl MemoryCondenser {
             .build_memory_schema_with_opts(self.subject_id, self.char_limit, 0.5, opts)
             .await?;
 
-        let top_n_hash = compute_top_n_hash(&schema, TOP_N_HASH_COUNT);
+        let top_n_hash = compute_top_n_hash(&schema, self.top_n);
 
         let stored_hash: Option<String> =
             crate::queries::system_state::get_system_state(self.kg.pool(), LAST_HASH_KEY).await?;

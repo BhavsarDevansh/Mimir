@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.41.3] — 2026-06-11
+
+### Fixed
+
+- **Code review feedback for PR #144** (additional finding addressed):
+  - Added `MIMIR_SCHEDULER_DEBOUNCE_SECONDS` and `MIMIR_SCHEDULER_COOLDOWN_SECONDS` environment variable overrides in `mimir-core/src/config.rs`, following the existing `apply_env_overrides_with` pattern.
+
+## [0.41.2] — 2026-06-11
+
+### Fixed
+
+- **Code review feedback for PR #144** (5 findings addressed):
+  - Removed unused `jq_for_opt` clone in `mimir-server/src/state.rs` optimisation job closure.
+  - Added `DaemonJob::from_job_id()` helper to eliminate duplicated string-to-variant mapping in `mimir-core/src/scheduler.rs`.
+  - Log SQL errors in `relationship_type_id` instead of silently swallowing them with `.ok()?`.
+  - Clarified memory condensation documentation: separated 2500-character budget from top-N limit (500).
+  - Corrected nightly-optimization wiki to state "last minute" instead of "last few minutes" to match the 60-second cooldown default.
+
+## [0.41.1] — 2026-06-11
+
+### Fixed
+
+- `LlmWorkerPool` `in_flight` counter is now incremented and decremented around every job processed by workers. Previously the counter was always zero, causing the scheduler's idle gate to incorrectly allow background jobs while LLM requests were in flight.
+- `BackgroundScheduler::submit()` now correctly deduplicates against jobs that are already *running*, not just pending. Prevents back-to-back execution when a submit arrives during an active run.
+- `BackgroundScheduler::shutdown()` is now called during `AppState::shutdown()`, wiring the scheduler's private shutdown channel into the daemon's graceful teardown sequence. Prevents stale "Running" DB rows when the runtime drops mid-job.
+
+## [0.41.0] — 2026-06-11
+
+### Added
+
+- Unified `BackgroundScheduler` in `mimir-core` that deduplicates, debounces, and gates all background jobs on user downtime and LLM idle state.
+- `DaemonJob` typed enum replaces stringly-typed job IDs for `JobQueue::run_now` and `status`.
+- Demand-driven memory condensation: `KnowledgeGraph` emits a `tokio::sync::Notify` on dirty; a listener submits `DaemonJob::MemoryCondensation` to the scheduler.
+- Configurable `memory.condensation_top_n` (default 500) replaces hard-coded top-20 hash in condensation pipeline.
+- `[scheduler]` config section with `debounce_seconds` (default 5) and `cooldown_seconds` (default 60).
+- `LlmWorkerPool` tracks in-flight job count via `in_flight_count()`, exposed through `LlmBackend`.
+
+### Changed
+
+- Replaced fixed 30-second interval loop for auto-condensation with event-driven scheduler.
+- `POST /memory/refresh` now uses `force_submit` to bypass scheduler gates.
+- Nightly optimization callback now submits condensation through the scheduler instead of direct `run_now`.
+- `JobQueue::list_jobs()` added for scheduled-job polling.
+
+### Fixed
+
+- `relationship_type_id` no longer uses `?` on `Result` inside `Option`-returning function (Rust 2024 edition compatibility).
+
 ## [0.40.7] — 2026-06-10
 
 ### Fixed

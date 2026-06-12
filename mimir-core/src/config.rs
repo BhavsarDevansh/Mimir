@@ -972,6 +972,60 @@ preset = "formal"
     }
 
     #[test]
+    fn test_env_override_scheduler_debounce_seconds() {
+        let mut config = Config::default();
+        config.apply_env_overrides_with(|key| {
+            if key == "MIMIR_SCHEDULER_DEBOUNCE_SECONDS" {
+                Some("10".to_string())
+            } else {
+                None
+            }
+        });
+        assert_eq!(config.scheduler.debounce_seconds, 10);
+    }
+
+    #[test]
+    fn test_env_override_scheduler_debounce_seconds_invalid_ignored() {
+        let mut config = Config::default();
+        config.apply_env_overrides_with(|key| {
+            if key == "MIMIR_SCHEDULER_DEBOUNCE_SECONDS" {
+                Some("not_a_number".to_string())
+            } else {
+                None
+            }
+        });
+        // Should remain at default value
+        assert_eq!(config.scheduler.debounce_seconds, 5);
+    }
+
+    #[test]
+    fn test_env_override_scheduler_cooldown_seconds() {
+        let mut config = Config::default();
+        config.apply_env_overrides_with(|key| {
+            if key == "MIMIR_SCHEDULER_COOLDOWN_SECONDS" {
+                Some("120".to_string())
+            } else {
+                None
+            }
+        });
+        assert_eq!(config.scheduler.cooldown_seconds, 120);
+    }
+
+    #[test]
+    fn test_env_override_scheduler_cooldown_seconds_invalid_ignored() {
+        let mut config = Config::default();
+        config.apply_env_overrides_with(|key| {
+            if key == "MIMIR_SCHEDULER_COOLDOWN_SECONDS" {
+                Some("invalid".to_string())
+            } else {
+                None
+            }
+        });
+        // Should remain at default value
+        assert_eq!(config.scheduler.cooldown_seconds, 60);
+    }
+
+    #[test]
     fn test_init_creates_config_dir_and_file() {
         let dir = tempfile::tempdir().unwrap();
         let cfg_home = dir.path().join("config");

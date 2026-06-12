@@ -519,6 +519,20 @@ pub async fn chat_stream_handler(
                         mimir_core::tools::snake_to_title_case(&tool_call.function.name)
                     });
 
+                // Emit tool_call_start so the client sees Mimir is working.
+                let start_info = serde_json::json!({
+                    "name": tool_call.function.name,
+                    "display_name": display_name,
+                });
+                let start_json = serde_json::to_string(&start_info).unwrap_or_default();
+                if event_tx
+                    .send(Event::default().event("tool_call_start").data(start_json))
+                    .await
+                    .is_err()
+                {
+                    break 'outer;
+                }
+
                 let (llm_text, display_text) = match tool_registry_clone
                     .execute(
                         &tool_call.function.name,

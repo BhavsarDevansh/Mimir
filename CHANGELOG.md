@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.43.0] — 2026-06-12
+
+### Added
+
+- **Agentic context retrieval** (Issue #128). The main LLM can now call `retrieve_context` to launch a dedicated RetrievalAgent. The agent runs an ephemeral, internal LLM session with only retrieval tools (`kg_query`, `kg_related`, `kg_search`, `search_conversation_history`), investigating the knowledge graph and conversation history for up to 25 rounds before returning a structured `RetrievedContext`. This enables multi-step, parallel research for complex questions (e.g. "What should I make for dinner with Mary, Bob, and Tom?").
+- New `RetrievedContext`, `RetrievedEntity`, `RetrievedFact`, `RetrievedRelation`, and `ConversationSnippet` types in `mimir-knowledge/src/retrieval/types.rs`.
+- `FinishRetrievalTool` — internal termination signal used by the RetrievalAgent to signal completion.
+- SSE `event: tool_call_start` in the streaming chat handler, emitted before each tool execution to give users real-time visibility into Mimir's research phase.
+
+### Changed
+
+- Bumped workspace version to 0.43.0.
+
 ## [0.42.2] — 2026-06-12
 
 ### Fixed

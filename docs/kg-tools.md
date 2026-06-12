@@ -138,3 +138,73 @@ Stop conditions: `depth >= max_depth`, `visited.len() >= max_nodes`, or empty fr
 `KnowledgeGraph::relationship_type_id(&str)` performs a cached, non-mutating lookup of a relationship type by name, returning `None` if it does not exist (unlike `ensure_relationship_type`, which creates missing rows).
 
 `KnowledgeGraph::get_facts_by_subject_and_predicate(subject_id, relationship_type_id)` returns only facts matching a specific subject–predicate pair, avoiding full-table scans.
+
+## retrieve_context
+
+### Tool Schema
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "task": {
+      "type": "string",
+      "description": "Specific research task. Describe the entity(ies) and what information you need."
+    }
+  },
+  "required": ["task"],
+  "additionalProperties": false
+}
+```
+
+### Description
+
+Launches a dedicated **RetrievalAgent** — an ephemeral LLM session with only retrieval tools — to investigate the knowledge graph and conversation history. The agent runs autonomously for up to 25 tool-call rounds, querying entities, traversing relationships, and searching past conversations. When satisfied, it calls `finish_retrieval` and returns a structured `RetrievedContext`.
+
+### Output
+
+The tool returns a `ToolOutput` whose `result` field contains a JSON-serialized `RetrievedContext`:
+
+```json
+{
+  "entities": [
+    {
+      "name": "Mary",
+      "entity_type": "Person",
+      "facts": [
+        {
+          "predicate": "allergic_to",
+          "object_literal": "shellfish",
+          "confidence": 0.95,
+          "status": "Active",
+          "inferred": false
+        }
+      ]
+    }
+  ],
+  "relations": [],
+  "conversation_snippets": [
+    {
+      "session_id": 42,
+      "role": "user",
+      "snippet": "Mary said she loved Thai food",
+      "created_at": "2026-05-01T12:00:00Z"
+    }
+  ],
+  "finish_reason": "Found all relevant preferences",
+  "rounds_used": 3
+}
+```
+
+The `stdout` field contains a human-readable summary:
+
+```
+Retrieved 1 facts across 1 entities, 0 relations, and 1 conversation snippets
+```
+
+### Files
+
+- `mimir-knowledge/src/retrieval/agent.rs`
+- `mimir-knowledge/src/retrieval/types.rs`
+- `mimir-knowledge/src/tools/retrieve_context.rs`
+- `mimir-server/src/state.rs` (registration)

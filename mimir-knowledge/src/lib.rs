@@ -14,6 +14,7 @@ pub mod inference;
 pub mod models;
 pub mod optimization;
 pub mod queries;
+pub mod retrieval;
 pub mod tools;
 
 use clock::{Clock, RealClock};
@@ -1442,5 +1443,5 @@ impl KnowledgeGraph {
 // Re-export knowledge graph tools.
 pub use tools::{
     KgExpandCatalogueTool, KgFactsInCatalogueTool, KgQueryTool, KgRelatedTool, KgSearchTool,
-    RememberTool,
+    RememberTool, RetrieveContextTool,
 };

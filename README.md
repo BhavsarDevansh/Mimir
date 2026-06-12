@@ -30,6 +30,7 @@ Mimir is built in **Rust** with a modular, local-first architecture:
 - **HTTP Server** — Axum-based daemon with SSE streaming, session management, and graceful shutdown
 - **Storage Layer** — SQLite for conversation history, skill metrics, configuration, and the knowledge graph
 - **Knowledge Graph** — Live memory condensation, entity/fact storage, temporal reasoning, and event-driven regeneration via the unified background scheduler
+- **Retrieval Agent** — Dedicated ephemeral research agents that investigate the knowledge graph and conversation history on behalf of the main agent before answering complex questions
 
 ## Installation
 

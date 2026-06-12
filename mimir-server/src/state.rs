@@ -54,6 +54,10 @@ pub struct AppState {
 }
 
 const MODEL_OVERRIDE_CACHE_CAP: usize = 16;
+/// Maximum number of facts an entity may have to be considered an accidental
+/// duplicate during auto-merge in `seed_identity_facts`. Entities with more
+/// facts than this threshold are assumed to be intentional, distinct records.
+const ACCIDENTAL_DUPLICATE_FACT_THRESHOLD: i64 = 2;
 
 impl AppState {
     /// Build `AppState` from the global [`ReloadableConfig`].
@@ -84,20 +88,24 @@ impl AppState {
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
 
         let tool_registry = Arc::new(ToolRegistry::new());
-        tool_registry
-            .register_native(Arc::new(mimir_core::tools::GetCurrentTimeTool))
-            .ok();
-        tool_registry
-            .register_native(Arc::new(mimir_core::tools::EchoTool))
-            .ok();
-        tool_registry
-            .register_native(Arc::new(mimir_core::tools::GetWeatherTool::new()))
-            .ok();
-        tool_registry
-            .register_native(Arc::new(
-                mimir_core::tools::SearchConversationHistoryTool::new(Arc::clone(&context_manager)),
-            ))
-            .ok();
+        if let Err(e) =
+            tool_registry.register_native(Arc::new(mimir_core::tools::GetCurrentTimeTool))
+        {
+            tracing::warn!("Failed to register get_current_time tool: {}", e);
+        }
+        if let Err(e) = tool_registry.register_native(Arc::new(mimir_core::tools::EchoTool)) {
+            tracing::warn!("Failed to register echo tool: {}", e);
+        }
+        if let Err(e) =
+            tool_registry.register_native(Arc::new(mimir_core::tools::GetWeatherTool::new()))
+        {
+            tracing::warn!("Failed to register get_weather tool: {}", e);
+        }
+        if let Err(e) = tool_registry.register_native(Arc::new(
+            mimir_core::tools::SearchConversationHistoryTool::new(Arc::clone(&context_manager)),
+        )) {
+            tracing::warn!("Failed to register search_conversation_history tool: {}", e);
+        }
         if let Some(path) = mimir_core::tools::ToolsConfig::default_path()
             && path.exists()
             && let Err(e) = tool_registry.load_tools_config(&path)
@@ -467,6 +475,9 @@ pub(crate) async fn seed_identity_facts(
 
         // If a bare-name duplicate entity exists (created before the alias was
         // wired up), auto-merge it when it looks accidental (very few facts).
+        // A threshold of 2 was chosen because a legitimate entity should have at
+        // least a name fact and a preferred-name fact; anything less suggests an
+        // accidental duplicate created before the alias was wired.
         if let Ok(candidates) =
             mimir_knowledge::queries::entity::get_by_name(kg.pool(), preferred).await
         {
@@ -476,7 +487,7 @@ pub(crate) async fn seed_identity_facts(
                 }
                 if cand.entity.name.to_lowercase() == preferred.to_lowercase() {
                     match kg.count_entity_facts(cand.entity.id).await {
-                        Ok(fact_count) if fact_count <= 2 => {
+                        Ok(fact_count) if fact_count <= ACCIDENTAL_DUPLICATE_FACT_THRESHOLD => {
                             if let Err(e) = mimir_knowledge::queries::entity::auto_merge_pair(
                                 kg.pool(),
                                 subject_id,

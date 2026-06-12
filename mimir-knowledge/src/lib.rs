@@ -562,6 +562,13 @@ impl KnowledgeGraph {
     }
 
     /// Count facts that reference an entity (as subject or object).
+    ///
+    /// This counts **all** referencing facts with no `fact_status_id` filter.
+    /// The result is used by auto-merge gating in `seed_identity_facts`, which
+    /// treats a very low count (e.g. <= 2) as a signal of an accidental duplicate.
+    /// Note: the `OR` predicate may limit index utilisation on very large fact
+    /// tables; consider a covering index on `(subject_id, object_id)` or a union
+    /// query if this becomes a bottleneck.
     pub async fn count_entity_facts(&self, id: i32) -> Result<i64, KnowledgeError> {
         let (count,): (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM facts WHERE subject_id = ? OR object_id = ?")

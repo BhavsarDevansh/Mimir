@@ -41,6 +41,10 @@ pub async fn search_entities(
 ) -> Result<Vec<SearchResult>, KnowledgeError> {
     let escaped = escape_fts5(query);
 
+    if escaped.is_empty() {
+        return Ok(Vec::new());
+    }
+
     // FTS5 search joined to entities and entity types.
     let rows = if let Some(et) = entity_type_filter {
         sqlx::query_as::<_, (i32, String, i16, String, f64)>(

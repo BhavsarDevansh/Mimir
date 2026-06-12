@@ -40,11 +40,13 @@ Each result includes:
 **User:** "Remind me what we decided about the API timeout last week."
 
 **Agent internally calls:**
+
 ```json
 { "query": "API timeout", "limit": 3 }
 ```
 
 **Tool returns:**
+
 ```json
 [
   {

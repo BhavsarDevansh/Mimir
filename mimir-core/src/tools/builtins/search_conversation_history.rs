@@ -42,6 +42,7 @@ impl Tool for SearchConversationHistoryTool {
                 "limit": {
                     "type": "integer",
                     "default": 5,
+                    "minimum": 1,
                     "maximum": 20,
                     "description": "Maximum number of results to return."
                 },
@@ -61,6 +62,12 @@ impl Tool for SearchConversationHistoryTool {
 
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError> {
         let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+        if query.is_empty() {
+            return Err(ToolError::invalid_arguments(
+                self.name(),
+                "query is required and must be non-empty",
+            ));
+        }
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
         let session_id = args.get("session_id").and_then(|v| v.as_i64());
 

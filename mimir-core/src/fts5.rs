@@ -7,11 +7,18 @@
 /// wrapped in a double-quoted phrase. Internal double quotes are doubled and
 /// asterisks are replaced with spaces so that prefix-operator syntax cannot
 /// appear inside the quoted phrase.
+///
+/// Whitespace-only inputs are returned as empty strings to avoid overly broad
+/// matches.
 pub fn escape_fts5(query: &str) -> String {
     if query.is_empty() {
         return String::new();
     }
     let escaped = query.replace('"', "\"\"").replace('*', " ");
+    let trimmed = escaped.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
     format!("\"{}\"", escaped)
 }
 
@@ -50,5 +57,12 @@ mod tests {
     #[test]
     fn escape_fts5_parentheses_and_dash_literal() {
         assert_eq!(escape_fts5("(foo-bar)"), "\"(foo-bar)\"");
+    }
+
+    #[test]
+    fn escape_fts5_whitespace_only_returns_empty() {
+        assert_eq!(escape_fts5("   "), "");
+        assert_eq!(escape_fts5("*"), "");
+        assert_eq!(escape_fts5("  *  "), "");
     }
 }

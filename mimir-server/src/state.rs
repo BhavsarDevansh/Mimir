@@ -27,7 +27,7 @@ pub struct AppState {
     /// Live reloadable configuration.
     pub config: Arc<ReloadableConfig>,
     /// Per-session semaphore to serialise concurrent requests for the same session.
-    pub session_locks: Arc<DashMap<String, Arc<tokio::sync::Semaphore>>>,
+    pub session_locks: Arc<DashMap<i64, Arc<tokio::sync::Semaphore>>>,
     pub start_time: Instant,
     /// LLM endpoint URL (for status reporting).
     pub endpoint: String,
@@ -54,6 +54,10 @@ pub struct AppState {
 }
 
 const MODEL_OVERRIDE_CACHE_CAP: usize = 16;
+/// Maximum number of facts an entity may have to be considered an accidental
+/// duplicate during auto-merge in `seed_identity_facts`. Entities with more
+/// facts than this threshold are assumed to be intentional, distinct records.
+const ACCIDENTAL_DUPLICATE_FACT_THRESHOLD: i64 = 2;
 
 impl AppState {
     /// Build `AppState` from the global [`ReloadableConfig`].
@@ -83,7 +87,25 @@ impl AppState {
 
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
 
-        let tool_registry = Arc::new(ToolRegistry::with_builtins());
+        let tool_registry = Arc::new(ToolRegistry::new());
+        if let Err(e) =
+            tool_registry.register_native(Arc::new(mimir_core::tools::GetCurrentTimeTool))
+        {
+            tracing::warn!("Failed to register get_current_time tool: {}", e);
+        }
+        if let Err(e) = tool_registry.register_native(Arc::new(mimir_core::tools::EchoTool)) {
+            tracing::warn!("Failed to register echo tool: {}", e);
+        }
+        if let Err(e) =
+            tool_registry.register_native(Arc::new(mimir_core::tools::GetWeatherTool::new()))
+        {
+            tracing::warn!("Failed to register get_weather tool: {}", e);
+        }
+        if let Err(e) = tool_registry.register_native(Arc::new(
+            mimir_core::tools::SearchConversationHistoryTool::new(Arc::clone(&context_manager)),
+        )) {
+            tracing::warn!("Failed to register search_conversation_history tool: {}", e);
+        }
         if let Some(path) = mimir_core::tools::ToolsConfig::default_path()
             && path.exists()
             && let Err(e) = tool_registry.load_tools_config(&path)
@@ -324,9 +346,9 @@ impl AppState {
     }
 
     /// Return (or create) the semaphore for a given session id.
-    pub fn session_semaphore(&self, session_id: &str) -> Arc<tokio::sync::Semaphore> {
+    pub fn session_semaphore(&self, session_id: i64) -> Arc<tokio::sync::Semaphore> {
         self.session_locks
-            .entry(session_id.to_string())
+            .entry(session_id)
             .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(1)))
             .clone()
     }
@@ -419,14 +441,10 @@ pub(crate) async fn seed_identity_facts(
                 .unwrap_or(false)
     });
 
-    // Alias logic (idempotent; safe to run outside the insert tx).
-    if !preferred.is_empty() && preferred.to_lowercase() != name.to_lowercase() {
-        if let Err(e) = kg.add_alias(subject_id, preferred).await {
-            tracing::warn!("Failed to add preferred-name alias '{}': {}", preferred, e);
-        }
-    }
-
     // Collect facts to insert and perform the writes atomically.
+    // Insert identity facts *before* alias/auto-merge so the canonical entity
+    // always has at least as many facts as any qualifying duplicate, ensuring
+    // auto_merge_pair preserves subject_id as the survivor.
     let mut facts_to_insert: Vec<NewFact> = Vec::with_capacity(2);
 
     if !has_name && !name.is_empty() {
@@ -447,6 +465,56 @@ pub(crate) async fn seed_identity_facts(
 
     if !facts_to_insert.is_empty() {
         kg.insert_facts_batch(facts_to_insert).await?;
+    }
+
+    // Alias logic (idempotent; safe to run outside the insert tx).
+    if !preferred.is_empty() && preferred.to_lowercase() != name.to_lowercase() {
+        if let Err(e) = kg.add_alias(subject_id, preferred).await {
+            tracing::warn!("Failed to add preferred-name alias '{}': {}", preferred, e);
+        }
+
+        // If a bare-name duplicate entity exists (created before the alias was
+        // wired up), auto-merge it when it looks accidental (very few facts).
+        // A threshold of 2 was chosen because a legitimate entity should have at
+        // least a name fact and a preferred-name fact; anything less suggests an
+        // accidental duplicate created before the alias was wired.
+        if let Ok(candidates) =
+            mimir_knowledge::queries::entity::get_by_name(kg.pool(), preferred).await
+        {
+            for cand in candidates {
+                if cand.entity.id == subject_id {
+                    continue;
+                }
+                if cand.entity.name.to_lowercase() == preferred.to_lowercase() {
+                    match kg.count_entity_facts(cand.entity.id).await {
+                        Ok(fact_count) if fact_count <= ACCIDENTAL_DUPLICATE_FACT_THRESHOLD => {
+                            if let Err(e) = mimir_knowledge::queries::entity::auto_merge_pair(
+                                kg.pool(),
+                                subject_id,
+                                cand.entity.id,
+                            )
+                            .await
+                            {
+                                tracing::warn!(
+                                    "Failed to auto-merge duplicate entity {} into {}: {}",
+                                    cand.entity.id,
+                                    subject_id,
+                                    e
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to count facts for candidate entity {} during auto-merge check: {}",
+                                cand.entity.id,
+                                e
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 
     Ok(())

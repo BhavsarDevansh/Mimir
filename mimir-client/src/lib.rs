@@ -442,14 +442,14 @@ impl MimirClient {
     /// Fetch messages for a single session from the last compaction point.
     pub async fn session_messages(
         &self,
-        session_id: &str,
+        session_id: i64,
     ) -> Result<SessionMessagesResponse, ClientError> {
         let mut url = reqwest::Url::parse(&self.base_url)
             .map_err(|e| ClientError::Connection(format!("invalid base URL: {}", e)))?;
         url.path_segments_mut()
             .map_err(|_| ClientError::Connection("cannot be a base URL".to_string()))?
             .push("sessions")
-            .push(session_id)
+            .push(&session_id.to_string())
             .push("messages");
         let resp = self.client.get(url).send().await?;
         let status = resp.status();
@@ -543,8 +543,8 @@ fn parse_sse_event(event: &str) -> Option<Result<StreamItem, ClientError>> {
         "session_id" => match serde_json::from_str::<serde_json::Value>(&data) {
             Ok(v) => v
                 .get("session_id")
-                .and_then(|s| s.as_str())
-                .map_or_else(|| None, |s| Some(Ok(StreamItem::SessionId(s.to_string())))),
+                .and_then(|s| s.as_i64())
+                .map(|id| Ok(StreamItem::SessionId(id.to_string()))),
             Err(_) => None,
         },
         "error" => Some(Err(ClientError::Server {
@@ -586,7 +586,7 @@ mod tests {
     async fn test_chat_roundtrip() {
         let server = MockServer::start().await;
         let resp = ChatResponse {
-            session_id: "s1".to_string(),
+            session_id: 1,
             response: "hi".to_string(),
             usage: Usage::default(),
             tool_calls: vec![],
@@ -606,7 +606,7 @@ mod tests {
             incognito: None,
         };
         let result = client.chat(req).await.unwrap();
-        assert_eq!(result.session_id, "s1");
+        assert_eq!(result.session_id, 1);
         assert_eq!(result.response, "hi");
     }
 
@@ -773,7 +773,7 @@ mod tests {
     async fn test_sessions_parsing() {
         let server = MockServer::start().await;
         let payload = vec![SessionSummary {
-            session_id: "sess-1".to_string(),
+            session_id: 1,
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-02T00:00:00Z".to_string(),
             preview: Some("hello".to_string()),
@@ -787,7 +787,7 @@ mod tests {
         let client = MimirClient::new(server.uri());
         let result = client.sessions().await.unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].session_id, "sess-1");
+        assert_eq!(result[0].session_id, 1);
         assert_eq!(result[0].preview, Some("hello".to_string()));
     }
 
@@ -795,7 +795,7 @@ mod tests {
     async fn test_session_messages_parsing() {
         let server = MockServer::start().await;
         let payload = SessionMessagesResponse {
-            session_id: "sess-1".to_string(),
+            session_id: 1,
             messages: vec![mimir_api_types::ChatMessage {
                 role: "user".to_string(),
                 content: "hi".to_string(),
@@ -803,14 +803,14 @@ mod tests {
             }],
         };
         Mock::given(method("GET"))
-            .and(path("/sessions/sess-1/messages"))
+            .and(path("/sessions/1/messages"))
             .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
             .mount(&server)
             .await;
 
         let client = MimirClient::new(server.uri());
-        let result = client.session_messages("sess-1").await.unwrap();
-        assert_eq!(result.session_id, "sess-1");
+        let result = client.session_messages(1).await.unwrap();
+        assert_eq!(result.session_id, 1);
         assert_eq!(result.messages.len(), 1);
         assert_eq!(result.messages[0].role, "user");
     }
@@ -860,12 +860,12 @@ mod tests {
 
     #[test]
     fn test_parse_sse_session_id_event() {
-        let event = "event: session_id\ndata: {\"session_id\":\"sess-abc-123\"}\n\n";
+        let event = "event: session_id\ndata: {\"session_id\":123}\n\n";
         let result = parse_sse_event(event);
         assert!(result.is_some());
         let item = result.unwrap();
         match item {
-            Ok(StreamItem::SessionId(s)) => assert_eq!(s, "sess-abc-123"),
+            Ok(StreamItem::SessionId(s)) => assert_eq!(s, "123"),
             other => panic!("expected SessionId, got {:?}", other),
         }
     }
@@ -887,13 +887,13 @@ mod tests {
     async fn test_session_messages_404() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/sessions/bad-id/messages"))
+            .and(path("/sessions/999999/messages"))
             .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
             .mount(&server)
             .await;
 
         let client = MimirClient::new(server.uri());
-        let err = client.session_messages("bad-id").await.unwrap_err();
+        let err = client.session_messages(999_999).await.unwrap_err();
         assert!(
             matches!(err, ClientError::Server { status: 404, message } if message == "not found")
         );

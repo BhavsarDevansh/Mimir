@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
 use crate::models::entity::EntityType;
-use crate::queries::entity::escape_fts5;
+use mimir_core::fts5::escape_fts5;
 
 /// Summary of a matched entity.
 #[derive(Debug, Clone, Serialize)]
@@ -40,6 +40,10 @@ pub async fn search_entities(
     limit: i64,
 ) -> Result<Vec<SearchResult>, KnowledgeError> {
     let escaped = escape_fts5(query);
+
+    if escaped.is_empty() {
+        return Ok(Vec::new());
+    }
 
     // FTS5 search joined to entities and entity types.
     let rows = if let Some(et) = entity_type_filter {

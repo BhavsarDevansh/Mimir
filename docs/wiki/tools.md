@@ -11,6 +11,7 @@ Mimir ships with a small set of native tools:
 | `get_current_time` | Returns the current date and time | Auto |
 | `echo` | Echoes back whatever you send it | Auto |
 | `get_weather` | Fetches current weather for a location via wttr.in | Auto |
+| `search_conversation_history` | Searches past conversations via FTS5 and returns ranked snippets | Auto |
 
 > **Note:** The `memory` tool was removed in v0.37.0. Use knowledge graph fact extraction instead.
 

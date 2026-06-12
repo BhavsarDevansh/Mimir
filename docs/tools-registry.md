@@ -92,6 +92,16 @@ Centralised error enum covering permission, timeout, invalid arguments, missing 
 - Unknown locations are detected even when wttr.in returns HTTP 200 with a plain-text error body
 - Requests for unavailable forecast dates return an error listing the available dates
 
+### `SearchConversationHistoryTool`
+- Name: `search_conversation_history`
+- Parameters:
+  - `query` (string, required): keyword or phrase to search for
+  - `limit` (integer, optional): max results, default 5, max 20
+  - `session_id` (integer, optional): restrict search to a single conversation
+- Searches past conversation history via SQLite FTS5 and returns BM25-ranked contextual snippets
+- Snippet markers: `<<<` and `>>>` highlight the matched term in context
+- Permission: `Auto`
+
 ## CLI Tool Wrapper
 
 ### `CliToolConfig`

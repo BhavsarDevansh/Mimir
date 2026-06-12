@@ -10,7 +10,7 @@ use rustyline::error::ReadlineError;
 
 pub async fn handle_chat(base_url: &str) {
     let client = MimirClient::new(base_url);
-    let mut session_id: Option<String> = None;
+    let mut session_id: Option<i64> = None;
 
     let history_path = dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -156,7 +156,7 @@ pub async fn handle_chat(base_url: &str) {
         };
 
         let req = ChatRequest {
-            session_id: session_id.clone(),
+            session_id,
             message: line,
             model: None,
             personality_preset: None,
@@ -175,7 +175,7 @@ pub async fn handle_chat(base_url: &str) {
                         }
                         Ok(mimir_api_types::StreamItem::Usage(_)) => {}
                         Ok(mimir_api_types::StreamItem::SessionId(id)) => {
-                            session_id = Some(id);
+                            session_id = id.parse().ok();
                         }
                         Ok(mimir_api_types::StreamItem::ToolCall(info)) => {
                             eprintln!(
@@ -221,7 +221,7 @@ fn print_help() {
 
 async fn handle_history(
     client: &MimirClient,
-    session_id: &mut Option<String>,
+    session_id: &mut Option<i64>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let sessions = client.sessions().await?;
     if sessions.is_empty() {
@@ -265,8 +265,8 @@ async fn handle_history(
     };
 
     let selected = &sessions[idx];
-    let sid = selected.session_id.clone();
-    let resp = client.session_messages(&sid).await?;
+    let sid = selected.session_id;
+    let resp = client.session_messages(sid).await?;
 
     *session_id = Some(sid);
 

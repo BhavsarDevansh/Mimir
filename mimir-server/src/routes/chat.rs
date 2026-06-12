@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use axum::{
@@ -15,6 +16,8 @@ use tracing::error;
 
 use crate::error;
 use crate::state::AppState;
+
+static INCOGNITO_COUNTER: AtomicI64 = AtomicI64::new(-1);
 
 /// Build a catalogue appendix for the system prompt.
 async fn build_catalogue(knowledge_graph: &mimir_knowledge::KnowledgeGraph) -> String {
@@ -76,7 +79,7 @@ async fn resolve_chat_state(
     req: &ChatRequest,
 ) -> Result<
     (
-        String,
+        i64,
         Arc<dyn mimir_core::llm::LlmBackend>,
         Vec<mimir_core::llm::types::Message>,
         bool,
@@ -133,11 +136,11 @@ async fn resolve_chat_state(
     let llm = state.resolve_llm(req.model.clone());
 
     let session_id = if incognito {
-        uuid::Uuid::new_v4().to_string()
+        INCOGNITO_COUNTER.fetch_sub(1, Ordering::SeqCst)
     } else {
         match &req.session_id {
-            Some(id) => match state.context_manager.export_messages(id).await {
-                Ok(_) => id.clone(),
+            Some(id) => match state.context_manager.export_messages(*id).await {
+                Ok(_) => *id,
                 Err(mimir_core::context::ContextError::SessionNotFound(_)) => {
                     return Err(error::session_not_found());
                 }
@@ -185,7 +188,7 @@ async fn resolve_chat_state(
         Ok((session_id, llm, messages, incognito, None))
     } else {
         let permit = state
-            .session_semaphore(&session_id)
+            .session_semaphore(session_id)
             .acquire_owned()
             .await
             .map_err(|_| {
@@ -195,19 +198,19 @@ async fn resolve_chat_state(
 
         state
             .context_manager
-            .add_user_message(&session_id, &req.message)
+            .add_user_message(session_id, &req.message)
             .await
             .map_err(error::context_error)?;
 
         state
             .context_manager
-            .trim_to_budget(&session_id, cfg.context.max_tokens, cfg.context.max_turns)
+            .trim_to_budget(session_id, cfg.context.max_tokens, cfg.context.max_turns)
             .await
             .map_err(error::context_error)?;
 
         let messages = state
             .context_manager
-            .export_messages(&session_id)
+            .export_messages(session_id)
             .await
             .map_err(error::context_error)?;
 
@@ -312,7 +315,7 @@ pub async fn chat_handler(
     if !incognito {
         state
             .context_manager
-            .add_assistant_message(&session_id, &response_text)
+            .add_assistant_message(session_id, &response_text)
             .await
             .map_err(error::context_error)?;
 
@@ -360,7 +363,7 @@ pub async fn chat_stream_handler(
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<Event>(16);
 
     let state_clone = Arc::clone(&state);
-    let session_id_clone = session_id.clone();
+    let session_id_clone = session_id;
     let llm_clone = Arc::clone(&llm);
     let tool_registry_clone = Arc::clone(&state.tool_registry);
     let user_message = req.message.clone();
@@ -481,7 +484,7 @@ pub async fn chat_stream_handler(
                 if !incognito && !full_response.is_empty() {
                     if let Err(e) = state_clone
                         .context_manager
-                        .add_assistant_message(&session_id_clone, &full_response)
+                        .add_assistant_message(session_id_clone, &full_response)
                         .await
                     {
                         error!("failed to persist assistant message: {e}");

@@ -5,11 +5,11 @@ use tokio::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 
-use sqlx::{Row, SqlitePool, sqlite::SqliteConnectOptions};
+use sqlx::{Acquire, Row, SqlitePool, sqlite::SqliteConnectOptions};
 use thiserror::Error;
 use tracing::{debug, info, warn};
-use uuid::Uuid;
 
+use crate::fts5::escape_fts5;
 use crate::llm::types::Message;
 
 /// Errors that can occur when interacting with the context manager.
@@ -32,7 +32,7 @@ pub enum ContextError {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ContextMessage {
     pub id: i64,
-    pub session_id: String,
+    pub session_id: i64,
     pub role: String,
     pub content: String,
     pub created_at: DateTime<Utc>,
@@ -42,8 +42,8 @@ pub struct ContextMessage {
 /// A persisted conversation session.
 #[derive(Debug, Clone)]
 pub struct Session {
-    /// Unique session identifier (UUIDv4).
-    pub id: String,
+    /// Unique session identifier (auto-incrementing integer).
+    pub id: i64,
     /// The system prompt that defines behaviour for this session.
     pub system_prompt: String,
     /// When the session was created.
@@ -64,11 +64,12 @@ pub struct ConversationExport {
     pub session: Session,
     pub messages: Vec<ContextMessage>,
 }
+
 /// A lightweight summary of a conversation session for listing.
 #[derive(Debug, Clone)]
 pub struct SessionSummary {
-    /// Unique session identifier (UUIDv4).
-    pub id: String,
+    /// Unique session identifier (auto-incrementing integer).
+    pub id: i64,
     /// When the session was created.
     pub created_at: DateTime<Utc>,
     /// When the session was last updated.
@@ -77,11 +78,20 @@ pub struct SessionSummary {
     pub preview: Option<String>,
 }
 
+/// Result of a full-text search over conversation messages.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MessageSearchResult {
+    pub session_id: i64,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+    pub snippet: String,
+}
+
 /// Manages multi-turn conversation state backed by SQLite.
 #[derive(Debug, Clone)]
 pub struct ContextManager {
     pool: Arc<SqlitePool>,
-    sessions: Arc<Mutex<HashSet<String>>>,
+    sessions: Arc<Mutex<HashSet<i64>>>,
 }
 
 impl ContextManager {
@@ -125,12 +135,11 @@ impl ContextManager {
         })
     }
 
-    /// Create a new session with the given system prompt and return its UUID.
+    /// Create a new session with the given system prompt and return its integer ID.
     pub async fn create_session(
         &self,
         system_prompt: impl Into<String>,
-    ) -> Result<String, ContextError> {
-        let id = Uuid::new_v4().to_string();
+    ) -> Result<i64, ContextError> {
         let now = Utc::now();
         let prompt = system_prompt.into();
 
@@ -138,15 +147,18 @@ impl ContextManager {
 
         sqlx::query(
             r#"
-            INSERT INTO sessions (id, system_prompt, created_at, updated_at, compacted_at)
-            VALUES (?1, ?2, ?3, ?3, NULL)
+            INSERT INTO sessions (system_prompt, created_at, updated_at, compacted_at)
+            VALUES (?1, ?2, ?2, NULL)
             "#,
         )
-        .bind(&id)
         .bind(&prompt)
         .bind(now)
         .execute(&mut *tx)
         .await?;
+
+        let id: i64 = sqlx::query_scalar("SELECT last_insert_rowid()")
+            .fetch_one(&mut *tx)
+            .await?;
 
         sqlx::query(
             r#"
@@ -154,7 +166,7 @@ impl ContextManager {
             VALUES (?1, 'system', ?2, ?3)
             "#,
         )
-        .bind(&id)
+        .bind(id)
         .bind(&prompt)
         .bind(now)
         .execute(&mut *tx)
@@ -162,7 +174,7 @@ impl ContextManager {
 
         tx.commit().await?;
 
-        self.sessions.lock().await.insert(id.clone());
+        self.sessions.lock().await.insert(id);
         debug!(session_id = %id, "created session");
         Ok(id)
     }
@@ -170,7 +182,7 @@ impl ContextManager {
     /// Add a user message to the session.
     pub async fn add_user_message(
         &self,
-        session_id: &str,
+        session_id: i64,
         content: impl Into<String>,
     ) -> Result<(), ContextError> {
         self.add_message(session_id, "user", content).await
@@ -179,7 +191,7 @@ impl ContextManager {
     /// Add an assistant message to the session.
     pub async fn add_assistant_message(
         &self,
-        session_id: &str,
+        session_id: i64,
         content: impl Into<String>,
     ) -> Result<(), ContextError> {
         self.add_message(session_id, "assistant", content).await
@@ -193,7 +205,7 @@ impl ContextManager {
     /// Zero or negative deltas are ignored.
     pub async fn record_usage(
         &self,
-        session_id: &str,
+        session_id: i64,
         prompt_tokens: u32,
         completion_tokens: u32,
     ) -> Result<(), ContextError> {
@@ -284,7 +296,7 @@ impl ContextManager {
     /// The system prompt is never removed.
     pub async fn trim_to_budget(
         &self,
-        session_id: &str,
+        session_id: i64,
         max_tokens: Option<u32>,
         max_turns: u16,
     ) -> Result<(), ContextError> {
@@ -358,7 +370,7 @@ impl ContextManager {
     }
 
     /// Fetch all messages for a session, ordered by creation time.
-    async fn fetch_messages(&self, session_id: &str) -> Result<Vec<ContextMessage>, ContextError> {
+    async fn fetch_messages(&self, session_id: i64) -> Result<Vec<ContextMessage>, ContextError> {
         sqlx::query_as::<_, ContextMessage>(
             r#"
             SELECT id, session_id, role, content, created_at, token_count
@@ -377,7 +389,7 @@ impl ContextManager {
     ///
     /// The earliest system message (if any) is placed first; all remaining
     /// messages are appended in chronological order.
-    pub async fn export_messages(&self, session_id: &str) -> Result<Vec<Message>, ContextError> {
+    pub async fn export_messages(&self, session_id: i64) -> Result<Vec<Message>, ContextError> {
         self.ensure_session_exists(session_id).await?;
 
         let system: Vec<ContextMessage> = sqlx::query_as::<_, ContextMessage>(
@@ -428,7 +440,7 @@ impl ContextManager {
     /// Export the full conversation for audit or logging.
     pub async fn export_conversation(
         &self,
-        session_id: &str,
+        session_id: i64,
     ) -> Result<ConversationExport, ContextError> {
         self.ensure_session_exists(session_id).await?;
 
@@ -440,7 +452,7 @@ impl ContextManager {
     }
 
     /// Delete a session and all of its messages.
-    pub async fn delete_session(&self, session_id: &str) -> Result<(), ContextError> {
+    pub async fn delete_session(&self, session_id: i64) -> Result<(), ContextError> {
         self.ensure_session_exists(session_id).await?;
 
         sqlx::query("DELETE FROM sessions WHERE id = ?1")
@@ -448,7 +460,7 @@ impl ContextManager {
             .execute(self.pool.as_ref())
             .await?;
 
-        self.sessions.lock().await.remove(session_id);
+        self.sessions.lock().await.remove(&session_id);
         info!(session_id = %session_id, "deleted session");
         Ok(())
     }
@@ -461,15 +473,89 @@ impl ContextManager {
         self.pool.close().await;
     }
 
+    /// Search conversation messages using FTS5.
+    ///
+    /// Results are BM25-ranked and include contextual snippets around matches.
+    /// If `session_id` is provided, only messages from that session are searched.
+    pub async fn search_messages(
+        &self,
+        query: &str,
+        limit: usize,
+        session_id: Option<i64>,
+    ) -> Result<Vec<MessageSearchResult>, ContextError> {
+        let safe_query = escape_fts5(query);
+        if safe_query.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let limit = limit.min(100) as i64;
+
+        let rows = if let Some(sid) = session_id {
+            sqlx::query(
+                r#"
+                SELECT m.session_id, m.role, m.created_at,
+                       snippet(messages_fts, -1, '<<<', '>>>', '...', 10) as snippet
+                FROM messages_fts
+                JOIN messages m ON m.id = messages_fts.rowid
+                WHERE messages_fts MATCH ?1 AND m.session_id = ?2
+                ORDER BY messages_fts.rank
+                LIMIT ?3
+                "#,
+            )
+            .bind(&safe_query)
+            .bind(sid)
+            .bind(limit)
+            .fetch_all(self.pool.as_ref())
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT m.session_id, m.role, m.created_at,
+                       snippet(messages_fts, -1, '<<<', '>>>', '...', 10) as snippet
+                FROM messages_fts
+                JOIN messages m ON m.id = messages_fts.rowid
+                WHERE messages_fts MATCH ?1
+                ORDER BY messages_fts.rank
+                LIMIT ?2
+                "#,
+            )
+            .bind(&safe_query)
+            .bind(limit)
+            .fetch_all(self.pool.as_ref())
+            .await?
+        };
+
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            results.push(MessageSearchResult {
+                session_id: row.try_get("session_id")?,
+                role: row.try_get("role")?,
+                created_at: row.try_get("created_at")?,
+                snippet: row.try_get("snippet")?,
+            });
+        }
+        Ok(results)
+    }
+
     // ------------------------------------------------------------------
     // Private helpers
     // ------------------------------------------------------------------
 
     async fn init_schema(pool: &SqlitePool) -> Result<(), ContextError> {
+        // Detect legacy TEXT session IDs and migrate if necessary.
+        let session_id_type: Option<String> =
+            sqlx::query_scalar("SELECT type FROM pragma_table_info('sessions') WHERE name = 'id'")
+                .fetch_optional(pool)
+                .await?;
+
+        if session_id_type.as_deref() == Some("TEXT") {
+            migrate_text_to_integer(pool).await?;
+        }
+
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 system_prompt TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -487,7 +573,7 @@ impl ContextManager {
             r#"
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
                 created_at TEXT NOT NULL,
@@ -520,12 +606,74 @@ impl ContextManager {
                 .await?;
         }
 
+        // FTS5 virtual table for full-text search over messages.
+        let fts_exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts'",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if fts_exists == 0 {
+            sqlx::query(
+                r#"
+                CREATE VIRTUAL TABLE messages_fts USING fts5(
+                    role,
+                    content,
+                    content='messages',
+                    content_rowid='id'
+                )
+                "#,
+            )
+            .execute(pool)
+            .await?;
+
+            // Backfill index for existing messages (only needed on first creation).
+            sqlx::query("INSERT INTO messages_fts(messages_fts) VALUES('rebuild');")
+                .execute(pool)
+                .await?;
+        }
+
+        sqlx::query(
+            r#"
+            CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_fts(rowid, role, content)
+                VALUES (new.id, new.role, new.content);
+            END;
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, role, content)
+                VALUES ('delete', old.id, old.role, old.content);
+            END;
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, role, content)
+                VALUES ('delete', old.id, old.role, old.content);
+                INSERT INTO messages_fts(rowid, role, content)
+                VALUES (new.id, new.role, new.content);
+            END;
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
         Ok(())
     }
 
     async fn add_message(
         &self,
-        session_id: &str,
+        session_id: i64,
         role: &str,
         content: impl Into<String>,
     ) -> Result<(), ContextError> {
@@ -554,8 +702,8 @@ impl ContextManager {
         Ok(())
     }
 
-    async fn ensure_session_exists(&self, session_id: &str) -> Result<(), ContextError> {
-        if self.sessions.lock().await.contains(session_id) {
+    async fn ensure_session_exists(&self, session_id: i64) -> Result<(), ContextError> {
+        if self.sessions.lock().await.contains(&session_id) {
             return Ok(());
         }
 
@@ -568,7 +716,7 @@ impl ContextManager {
             return Err(ContextError::SessionNotFound(session_id.to_string()));
         }
 
-        self.sessions.lock().await.insert(session_id.to_string());
+        self.sessions.lock().await.insert(session_id);
         Ok(())
     }
 
@@ -609,7 +757,7 @@ impl ContextManager {
     /// messages if the session has never been compacted).
     pub async fn get_messages_after_compaction(
         &self,
-        session_id: &str,
+        session_id: i64,
     ) -> Result<Vec<ContextMessage>, ContextError> {
         self.ensure_session_exists(session_id).await?;
 
@@ -639,7 +787,7 @@ impl ContextManager {
         Ok(messages)
     }
 
-    async fn load_session(&self, session_id: &str) -> Result<Session, ContextError> {
+    async fn load_session(&self, session_id: i64) -> Result<Session, ContextError> {
         let row = sqlx::query(
             r#"
             SELECT id, system_prompt, created_at, updated_at,
@@ -669,7 +817,7 @@ impl ContextManager {
     /// the remaining messages' total token count is <= `max_tokens`.
     async fn count_pairs_to_remove_by_tokens(
         &self,
-        session_id: &str,
+        session_id: i64,
         max_tokens: u32,
     ) -> Result<i64, ContextError> {
         let rows: Vec<(i64, String, Option<i64>)> = sqlx::query_as(
@@ -712,7 +860,7 @@ impl ContextManager {
     }
 
     /// Delete the oldest `n` complete (user, assistant) pairs from the session.
-    async fn delete_oldest_pairs(&self, session_id: &str, n: i64) -> Result<(), ContextError> {
+    async fn delete_oldest_pairs(&self, session_id: i64, n: i64) -> Result<(), ContextError> {
         if n <= 0 {
             return Ok(());
         }
@@ -758,6 +906,138 @@ impl ContextManager {
     }
 }
 
+async fn migrate_text_to_integer(pool: &SqlitePool) -> Result<(), ContextError> {
+    let mut conn = pool.acquire().await?;
+
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await?;
+
+    let mut tx = conn.begin().await?;
+
+    // Create new sessions table with INTEGER PRIMARY KEY.
+    sqlx::query(
+        r#"
+        CREATE TABLE sessions_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            system_prompt TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            cumulative_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+            cumulative_completion_tokens INTEGER NOT NULL DEFAULT 0,
+            summary TEXT,
+            compacted_at TEXT
+        )
+        "#,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // Migrate sessions in created_at order, capturing new integer IDs.
+    #[derive(sqlx::FromRow)]
+    struct OldSession {
+        id: String,
+        system_prompt: String,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+        cumulative_prompt_tokens: i64,
+        cumulative_completion_tokens: i64,
+        summary: Option<String>,
+        compacted_at: Option<DateTime<Utc>>,
+    }
+
+    let old_sessions: Vec<OldSession> =
+        sqlx::query_as("SELECT * FROM sessions ORDER BY created_at")
+            .fetch_all(&mut *tx)
+            .await?;
+
+    let mut mapping = Vec::with_capacity(old_sessions.len());
+    for old in old_sessions {
+        sqlx::query(
+            r#"
+            INSERT INTO sessions_new (system_prompt, created_at, updated_at,
+                cumulative_prompt_tokens, cumulative_completion_tokens, summary, compacted_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+        )
+        .bind(&old.system_prompt)
+        .bind(old.created_at)
+        .bind(old.updated_at)
+        .bind(old.cumulative_prompt_tokens)
+        .bind(old.cumulative_completion_tokens)
+        .bind(&old.summary)
+        .bind(old.compacted_at)
+        .execute(&mut *tx)
+        .await?;
+
+        let new_id: i64 = sqlx::query_scalar("SELECT last_insert_rowid()")
+            .fetch_one(&mut *tx)
+            .await?;
+        mapping.push((old.id, new_id));
+    }
+
+    // Create new messages table with INTEGER session_id.
+    sqlx::query(
+        r#"
+        CREATE TABLE messages_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL REFERENCES sessions_new(id) ON DELETE CASCADE,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            token_count INTEGER
+        )
+        "#,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // Migrate messages preserving original id values.
+    for (old_sid, new_sid) in &mapping {
+        sqlx::query(
+            r#"
+            INSERT INTO messages_new (id, session_id, role, content, created_at, token_count)
+            SELECT id, ?1, role, content, created_at, token_count
+            FROM messages WHERE session_id = ?2
+            "#,
+        )
+        .bind(new_sid)
+        .bind(old_sid)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // Drop old tables.
+    sqlx::query("DROP TABLE messages").execute(&mut *tx).await?;
+    sqlx::query("DROP TABLE sessions").execute(&mut *tx).await?;
+
+    // Rename new tables.
+    sqlx::query("ALTER TABLE sessions_new RENAME TO sessions")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("ALTER TABLE messages_new RENAME TO messages")
+        .execute(&mut *tx)
+        .await?;
+
+    // Recreate index.
+    sqlx::query(
+        r#"
+        CREATE INDEX idx_messages_session ON messages(session_id, created_at)
+        "#,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut *conn)
+        .await?;
+
+    info!("Migrated sessions.id from TEXT to INTEGER PRIMARY KEY");
+    Ok(())
+}
+
 fn expand_tilde(path: &Path) -> PathBuf {
     if let Some(s) = path.to_str()
         && let Some(stripped) = s.strip_prefix("~/")
@@ -790,14 +1070,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_creation_generates_uuid() {
+    async fn create_session_returns_i64() {
         let (mgr, _dir) = setup_manager().await;
         let id = mgr
             .create_session("You are a test assistant")
             .await
             .unwrap();
-        assert!(!id.is_empty());
-        assert!(Uuid::parse_str(&id).is_ok());
+        assert!(id > 0, "expected positive i64 session id, got {id}");
     }
 
     #[tokio::test]
@@ -805,10 +1084,10 @@ mod tests {
         let (mgr, _dir) = setup_manager().await;
         let sid = mgr.create_session("sys").await.unwrap();
 
-        mgr.add_user_message(&sid, "hello").await.unwrap();
-        mgr.add_assistant_message(&sid, "hi there").await.unwrap();
+        mgr.add_user_message(sid, "hello").await.unwrap();
+        mgr.add_assistant_message(sid, "hi there").await.unwrap();
 
-        let msgs = mgr.export_messages(&sid).await.unwrap();
+        let msgs = mgr.export_messages(sid).await.unwrap();
         assert_eq!(msgs.len(), 3);
         assert_eq!(msgs[0].role, "system");
         assert_eq!(msgs[1].role, "user");
@@ -821,17 +1100,17 @@ mod tests {
         let sid = mgr.create_session("sys").await.unwrap();
 
         for i in 0..25 {
-            mgr.add_user_message(&sid, format!("msg {}", i))
+            mgr.add_user_message(sid, format!("msg {}", i))
                 .await
                 .unwrap();
-            mgr.add_assistant_message(&sid, format!("reply {}", i))
+            mgr.add_assistant_message(sid, format!("reply {}", i))
                 .await
                 .unwrap();
         }
 
-        mgr.trim_to_budget(&sid, Some(4096), 20).await.unwrap();
+        mgr.trim_to_budget(sid, Some(4096), 20).await.unwrap();
 
-        let msgs = mgr.export_messages(&sid).await.unwrap();
+        let msgs = mgr.export_messages(sid).await.unwrap();
         assert_eq!(msgs.len(), 41);
         assert_eq!(msgs[0].role, "system");
     }
@@ -842,18 +1121,18 @@ mod tests {
         let sid = mgr.create_session("sys").await.unwrap();
 
         for i in 0..10 {
-            mgr.add_user_message(&sid, format!("u{}", i)).await.unwrap();
-            mgr.add_assistant_message(&sid, format!("a{}", i))
+            mgr.add_user_message(sid, format!("u{}", i)).await.unwrap();
+            mgr.add_assistant_message(sid, format!("a{}", i))
                 .await
                 .unwrap();
-            mgr.record_usage(&sid, ((i + 1) * 500) as u32, ((i + 1) * 500) as u32)
+            mgr.record_usage(sid, ((i + 1) * 500) as u32, ((i + 1) * 500) as u32)
                 .await
                 .unwrap();
         }
 
-        mgr.trim_to_budget(&sid, Some(2000), 100).await.unwrap();
+        mgr.trim_to_budget(sid, Some(2000), 100).await.unwrap();
 
-        let msgs = mgr.export_messages(&sid).await.unwrap();
+        let msgs = mgr.export_messages(sid).await.unwrap();
         assert!(
             msgs.len() <= 9,
             "expected at most 9 messages, got {}",
@@ -868,14 +1147,14 @@ mod tests {
         let sid = mgr.create_session("precious system prompt").await.unwrap();
 
         for i in 0..5 {
-            mgr.add_user_message(&sid, format!("u{}", i)).await.unwrap();
-            mgr.add_assistant_message(&sid, format!("a{}", i))
+            mgr.add_user_message(sid, format!("u{}", i)).await.unwrap();
+            mgr.add_assistant_message(sid, format!("a{}", i))
                 .await
                 .unwrap();
         }
 
-        mgr.trim_to_budget(&sid, Some(1), 1).await.unwrap();
-        let msgs = mgr.export_messages(&sid).await.unwrap();
+        mgr.trim_to_budget(sid, Some(1), 1).await.unwrap();
+        let msgs = mgr.export_messages(sid).await.unwrap();
         assert_eq!(msgs[0].role, "system");
         assert_eq!(msgs[0].content, "precious system prompt");
     }
@@ -884,10 +1163,10 @@ mod tests {
     async fn export_messages_orders_system_first() {
         let (mgr, _dir) = setup_manager().await;
         let sid = mgr.create_session("sys").await.unwrap();
-        mgr.add_user_message(&sid, "u1").await.unwrap();
-        mgr.add_assistant_message(&sid, "a1").await.unwrap();
+        mgr.add_user_message(sid, "u1").await.unwrap();
+        mgr.add_assistant_message(sid, "a1").await.unwrap();
 
-        let msgs = mgr.export_messages(&sid).await.unwrap();
+        let msgs = mgr.export_messages(sid).await.unwrap();
         assert_eq!(msgs[0].role, "system");
         assert_eq!(msgs[1].role, "user");
         assert_eq!(msgs[2].role, "assistant");
@@ -898,27 +1177,27 @@ mod tests {
         let (mgr, _dir) = setup_manager().await;
         let sid = mgr.create_session("sys").await.unwrap();
 
-        mgr.add_user_message(&sid, "hello").await.unwrap();
-        mgr.add_assistant_message(&sid, "world").await.unwrap();
-        mgr.record_usage(&sid, 10, 5).await.unwrap();
+        mgr.add_user_message(sid, "hello").await.unwrap();
+        mgr.add_assistant_message(sid, "world").await.unwrap();
+        mgr.record_usage(sid, 10, 5).await.unwrap();
 
-        let conv = mgr.export_conversation(&sid).await.unwrap();
+        let conv = mgr.export_conversation(sid).await.unwrap();
         assert_eq!(conv.session.cumulative_prompt_tokens, 10);
         assert_eq!(conv.session.cumulative_completion_tokens, 5);
 
-        mgr.add_user_message(&sid, "how?").await.unwrap();
-        mgr.add_assistant_message(&sid, "fine").await.unwrap();
+        mgr.add_user_message(sid, "how?").await.unwrap();
+        mgr.add_assistant_message(sid, "fine").await.unwrap();
         // Pass deltas, not cumulative totals.
-        mgr.record_usage(&sid, 15, 7).await.unwrap();
+        mgr.record_usage(sid, 15, 7).await.unwrap();
 
-        let conv2 = mgr.export_conversation(&sid).await.unwrap();
+        let conv2 = mgr.export_conversation(sid).await.unwrap();
         assert_eq!(conv2.session.cumulative_prompt_tokens, 25);
         assert_eq!(conv2.session.cumulative_completion_tokens, 12);
 
         let rows: Vec<ContextMessage> = sqlx::query_as::<_, ContextMessage>(
             "SELECT * FROM messages WHERE session_id = ?1 AND role = 'user' ORDER BY created_at ASC"
         )
-        .bind(&sid)
+        .bind(sid)
         .fetch_all(mgr.pool.as_ref())
         .await
         .unwrap();
@@ -933,7 +1212,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_session_returns_error() {
         let (mgr, _dir) = setup_manager().await;
-        let result = mgr.add_user_message("not-a-real-id", "x").await;
+        let result = mgr.add_user_message(999_999, "x").await;
         assert!(matches!(result, Err(ContextError::SessionNotFound(_))));
     }
 
@@ -941,10 +1220,10 @@ mod tests {
     async fn delete_session_cascade_removes_messages() {
         let (mgr, _dir) = setup_manager().await;
         let sid = mgr.create_session("sys").await.unwrap();
-        mgr.add_user_message(&sid, "u1").await.unwrap();
-        mgr.delete_session(&sid).await.unwrap();
+        mgr.add_user_message(sid, "u1").await.unwrap();
+        mgr.delete_session(sid).await.unwrap();
 
-        let result = mgr.export_messages(&sid).await;
+        let result = mgr.export_messages(sid).await;
         assert!(matches!(result, Err(ContextError::SessionNotFound(_))));
     }
 
@@ -956,18 +1235,18 @@ mod tests {
         {
             let mgr = ContextManager::new(&db).await.unwrap();
             let sid = mgr.create_session("sys").await.unwrap();
-            mgr.add_user_message(&sid, "hello").await.unwrap();
-            mgr.add_assistant_message(&sid, "world").await.unwrap();
+            mgr.add_user_message(sid, "hello").await.unwrap();
+            mgr.add_assistant_message(sid, "world").await.unwrap();
         }
 
         let mgr2 = ContextManager::new(&db).await.unwrap();
-        let sids: Vec<String> = sqlx::query_scalar("SELECT id FROM sessions")
+        let sids: Vec<i64> = sqlx::query_scalar("SELECT id FROM sessions")
             .fetch_all(mgr2.pool.as_ref())
             .await
             .unwrap();
         assert_eq!(sids.len(), 1);
 
-        let msgs = mgr2.export_messages(&sids[0]).await.unwrap();
+        let msgs = mgr2.export_messages(sids[0]).await.unwrap();
         assert_eq!(msgs.len(), 3);
     }
 
@@ -995,7 +1274,10 @@ mod tests {
 
         // Clean up session if created (best-effort).
         if let Ok(ref m) = mgr {
-            let _ = m.delete_session("x").await;
+            let sessions = m.list_sessions().await.unwrap();
+            for s in sessions {
+                let _ = m.delete_session(s.id).await;
+            }
         }
     }
 
@@ -1006,9 +1288,9 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         let sid2 = mgr.create_session("sys2").await.unwrap();
 
-        mgr.add_user_message(&sid1, "first").await.unwrap();
+        mgr.add_user_message(sid1, "first").await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        mgr.add_user_message(&sid2, "second").await.unwrap();
+        mgr.add_user_message(sid2, "second").await.unwrap();
 
         let list = mgr.list_sessions().await.unwrap();
         assert_eq!(list.len(), 2);
@@ -1020,9 +1302,9 @@ mod tests {
     async fn list_sessions_preview_is_latest_user_message() {
         let (mgr, _dir) = setup_manager().await;
         let sid = mgr.create_session("sys").await.unwrap();
-        mgr.add_user_message(&sid, "hello").await.unwrap();
-        mgr.add_assistant_message(&sid, "hi").await.unwrap();
-        mgr.add_user_message(&sid, "world").await.unwrap();
+        mgr.add_user_message(sid, "hello").await.unwrap();
+        mgr.add_assistant_message(sid, "hi").await.unwrap();
+        mgr.add_user_message(sid, "world").await.unwrap();
 
         let list = mgr.list_sessions().await.unwrap();
         assert_eq!(list.len(), 1);
@@ -1040,10 +1322,10 @@ mod tests {
     async fn get_messages_after_compaction_returns_all_when_null() {
         let (mgr, _dir) = setup_manager().await;
         let sid = mgr.create_session("sys").await.unwrap();
-        mgr.add_user_message(&sid, "u1").await.unwrap();
-        mgr.add_assistant_message(&sid, "a1").await.unwrap();
+        mgr.add_user_message(sid, "u1").await.unwrap();
+        mgr.add_assistant_message(sid, "a1").await.unwrap();
 
-        let msgs = mgr.get_messages_after_compaction(&sid).await.unwrap();
+        let msgs = mgr.get_messages_after_compaction(sid).await.unwrap();
         assert_eq!(msgs.len(), 3);
         assert_eq!(msgs[0].role, "system");
         assert_eq!(msgs[1].role, "user");
@@ -1054,21 +1336,21 @@ mod tests {
     async fn get_messages_after_compaction_returns_only_after_timestamp() {
         let (mgr, _dir) = setup_manager().await;
         let sid = mgr.create_session("sys").await.unwrap();
-        mgr.add_user_message(&sid, "old").await.unwrap();
+        mgr.add_user_message(sid, "old").await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         let mid = Utc::now();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        mgr.add_user_message(&sid, "new").await.unwrap();
-        mgr.add_assistant_message(&sid, "reply").await.unwrap();
+        mgr.add_user_message(sid, "new").await.unwrap();
+        mgr.add_assistant_message(sid, "reply").await.unwrap();
 
         sqlx::query("UPDATE sessions SET compacted_at = ?1 WHERE id = ?2")
             .bind(mid)
-            .bind(&sid)
+            .bind(sid)
             .execute(mgr.pool.as_ref())
             .await
             .unwrap();
 
-        let msgs = mgr.get_messages_after_compaction(&sid).await.unwrap();
+        let msgs = mgr.get_messages_after_compaction(sid).await.unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].role, "user");
         assert_eq!(msgs[0].content, "new");
@@ -1078,7 +1360,7 @@ mod tests {
     #[tokio::test]
     async fn get_messages_after_compaction_unknown_session_errors() {
         let (mgr, _dir) = setup_manager().await;
-        let result = mgr.get_messages_after_compaction("fake-id").await;
+        let result = mgr.get_messages_after_compaction(999_999).await;
         assert!(matches!(result, Err(ContextError::SessionNotFound(_))));
     }
 
@@ -1133,21 +1415,154 @@ mod tests {
         // ContextManager::new should migrate it.
         let mgr = ContextManager::new(&db).await.unwrap();
         let sid = mgr.create_session("sys").await.unwrap();
-        let conv = mgr.export_conversation(&sid).await.unwrap();
+        let conv = mgr.export_conversation(sid).await.unwrap();
         assert!(conv.session.compacted_at.is_none());
     }
+
+    #[tokio::test]
+    async fn schema_migration_text_to_integer() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("migrate_text.db");
+
+        // Create an old-style database with TEXT session IDs.
+        {
+            let pool = sqlx::SqlitePool::connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(&db)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+            sqlx::query(
+                r#"
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    system_prompt TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    cumulative_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    cumulative_completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    summary TEXT,
+                    compacted_at TEXT
+                )
+                "#,
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                r#"
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    token_count INTEGER
+                )
+                "#,
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            // Seed data with TEXT session IDs.
+            sqlx::query(
+                "INSERT INTO sessions (id, system_prompt, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)"
+            )
+            .bind("old-session-uuid")
+            .bind("old sys")
+            .bind(Utc::now())
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO messages (session_id, role, content, created_at) VALUES (?1, 'user', 'hello world', ?2)"
+            )
+            .bind("old-session-uuid")
+            .bind(Utc::now())
+            .execute(&pool)
+            .await
+            .unwrap();
+            pool.close().await;
+        }
+
+        let mgr = ContextManager::new(&db).await.unwrap();
+        let sid = mgr.create_session("sys").await.unwrap();
+        assert!(sid > 0);
+
+        // Verify old data was migrated.
+        let sessions = mgr.list_sessions().await.unwrap();
+        assert_eq!(sessions.len(), 2); // old + new
+        let old_session = sessions.iter().find(|s| s.id != sid).unwrap();
+        let msgs = mgr.export_messages(old_session.id).await.unwrap();
+        assert_eq!(msgs.len(), 1); // only user message (old session had no system message)
+        assert!(msgs.iter().any(|m| m.content == "hello world"));
+
+        // Verify search works on migrated data.
+        let results = mgr.search_messages("hello", 10, None).await.unwrap();
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|r| r.snippet.contains("hello")));
+    }
+
+    #[tokio::test]
+    async fn search_messages_basic() {
+        let (mgr, _dir) = setup_manager().await;
+        let sid = mgr.create_session("sys").await.unwrap();
+        mgr.add_user_message(sid, "the quick brown fox")
+            .await
+            .unwrap();
+        mgr.add_assistant_message(sid, "jumps over the lazy dog")
+            .await
+            .unwrap();
+
+        let results = mgr.search_messages("fox", 10, None).await.unwrap();
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|r| r.snippet.contains("<<<fox>>>")));
+    }
+
+    #[tokio::test]
+    async fn search_messages_session_filter() {
+        let (mgr, _dir) = setup_manager().await;
+        let sid1 = mgr.create_session("sys1").await.unwrap();
+        let sid2 = mgr.create_session("sys2").await.unwrap();
+
+        mgr.add_user_message(sid1, "unique keyword alpha")
+            .await
+            .unwrap();
+        mgr.add_user_message(sid2, "unique keyword beta")
+            .await
+            .unwrap();
+
+        let results = mgr.search_messages("alpha", 10, Some(sid1)).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].session_id, sid1);
+    }
+
+    #[tokio::test]
+    async fn search_messages_no_results() {
+        let (mgr, _dir) = setup_manager().await;
+        let sid = mgr.create_session("sys").await.unwrap();
+        mgr.add_user_message(sid, "hello world").await.unwrap();
+
+        let results = mgr
+            .search_messages("xyznonsense123", 10, None)
+            .await
+            .unwrap();
+        assert!(results.is_empty());
+    }
+
     #[tokio::test]
     async fn test_context_manager_close() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("close_test.db");
         let mgr = ContextManager::new(&db).await.unwrap();
         let sid = mgr.create_session("sys").await.unwrap();
-        mgr.add_user_message(&sid, "hello").await.unwrap();
+        mgr.add_user_message(sid, "hello").await.unwrap();
 
         mgr.close().await;
 
         // After close, any operation should fail because the pool is closed.
-        let result = mgr.add_user_message(&sid, "world").await;
+        let result = mgr.add_user_message(sid, "world").await;
         assert!(
             matches!(result, Err(ContextError::Database(_))),
             "expected database error after close, got: {:?}",

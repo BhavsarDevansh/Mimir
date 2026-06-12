@@ -35,11 +35,11 @@ pub async fn sessions_handler(
 /// Fetch messages for a single session from the last compaction point.
 pub async fn session_messages_handler(
     State(state): State<Arc<AppState>>,
-    Path(session_id): Path<String>,
+    Path(session_id): Path<i64>,
 ) -> Result<Json<SessionMessagesResponse>, axum::response::Response> {
     let messages = state
         .context_manager
-        .get_messages_after_compaction(&session_id)
+        .get_messages_after_compaction(session_id)
         .await
         .map_err(|e| match e {
             mimir_core::context::ContextError::SessionNotFound(_) => error::session_not_found(),

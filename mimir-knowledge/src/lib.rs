@@ -561,6 +561,31 @@ impl KnowledgeGraph {
         queries::entity::delete_entity(&self.pool, id).await
     }
 
+    /// Count facts that reference an entity (as subject or object).
+    ///
+    /// Count every fact that references the entity, regardless of
+    /// `fact_status_id`.  We intentionally include revoked or deleted facts
+    /// because any non-zero reference history indicates meaningful entity
+    /// usage; the auto-merge gate in `seed_identity_facts` therefore treats a
+    /// very low count (e.g. <= 2) as a signal of an accidental duplicate.
+    ///
+    /// Uses a `UNION` query so that separate indexes on `subject_id` and
+    /// `object_id` can both be exploited.
+    pub async fn count_entity_facts(&self, id: i32) -> Result<i64, KnowledgeError> {
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM (
+                SELECT id FROM facts WHERE subject_id = ?
+                UNION
+                SELECT id FROM facts WHERE object_id = ?
+            )",
+        )
+        .bind(id)
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count)
+    }
+
     /// Search entities by name/alias.
     pub async fn search_entities(
         &self,

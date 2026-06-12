@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.1] — 2026-06-12
+
+### Fixed
+
+- RetrievalAgent now emits a tool-result message for `finish_retrieval` even when the LLM erroneously calls it alongside other tools, preventing an unbalanced conversation that could be rejected by the backend.
+- `accumulate_kg_query` now parses `valid_from` and `valid_until` from `KgQueryTool` JSON output instead of discarding them as `None`.
+
 ## [0.43.0] — 2026-06-12
 
 ### Added

@@ -136,6 +136,10 @@ impl RetrievalAgent {
             let mut tool_result_msgs = Vec::new();
             for tc in &tool_calls {
                 if tc.function.name == "finish_retrieval" {
+                    tool_result_msgs.push(Message::tool(
+                        &tc.id,
+                        "Ignored: finish_retrieval must be called alone, not alongside other tools.",
+                    ));
                     continue;
                 }
 
@@ -221,8 +225,16 @@ impl RetrievalAgent {
                                 .map(String::from),
                             confidence: f.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0)
                                 as f32,
-                            valid_from: None, // not exposed in KgQueryOutput currently
-                            valid_until: None,
+                            valid_from: f.get("valid_from").and_then(|v| {
+                                chrono::DateTime::parse_from_rfc3339(v.as_str()?)
+                                    .ok()
+                                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                            }),
+                            valid_until: f.get("valid_until").and_then(|v| {
+                                chrono::DateTime::parse_from_rfc3339(v.as_str()?)
+                                    .ok()
+                                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                            }),
                             status: f
                                 .get("status")
                                 .and_then(|v| v.as_str())

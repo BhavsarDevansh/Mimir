@@ -504,7 +504,7 @@ mod tests {
             .await
             .unwrap();
         let chat: ChatResponse = serde_json::from_slice(&bytes).unwrap();
-        assert!(!chat.session_id.is_empty());
+        assert!(chat.session_id > 0);
         assert_eq!(chat.response, "Hello!");
     }
 
@@ -880,10 +880,9 @@ mod tests {
         let (state, _temp) = test_state(mock).await;
         let app = super::build_app(state);
 
-        let body = serde_json::to_string(
-            &serde_json::json!({"session_id": "not-a-real-id", "message": "hello"}),
-        )
-        .unwrap();
+        let body =
+            serde_json::to_string(&serde_json::json!({"session_id": 999999, "message": "hello"}))
+                .unwrap();
         let response = app
             .oneshot(
                 Request::builder()
@@ -1095,7 +1094,7 @@ mod tests {
             .unwrap();
         state
             .context_manager
-            .add_user_message(&sid, "hello")
+            .add_user_message(sid, "hello")
             .await
             .unwrap();
 
@@ -1139,7 +1138,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

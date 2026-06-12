@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
 use crate::models::entity::EntityType;
-use crate::queries::entity::escape_fts5;
+use mimir_core::fts5::escape_fts5;
 
 /// Summary of a matched entity.
 #[derive(Debug, Clone, Serialize)]

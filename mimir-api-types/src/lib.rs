@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 /// Lightweight summary of a conversation session.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct SessionSummary {
-    pub session_id: String,
+    pub session_id: i64,
     pub created_at: String,
     pub updated_at: String,
     pub preview: Option<String>,
@@ -20,7 +20,7 @@ pub struct ChatMessage {
 /// Response body for fetching session messages.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct SessionMessagesResponse {
-    pub session_id: String,
+    pub session_id: i64,
     pub messages: Vec<ChatMessage>,
 }
 
@@ -56,7 +56,7 @@ impl ToolCallInfo {
 pub struct ChatRequest {
     /// Existing session id; if omitted a new session is created.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
+    pub session_id: Option<i64>,
     /// User message content.
     pub message: String,
     /// Optional model override.
@@ -73,7 +73,7 @@ pub struct ChatRequest {
 /// Response body for the non-streaming chat endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatResponse {
-    pub session_id: String,
+    pub session_id: i64,
     pub response: String,
     pub usage: Usage,
     /// Tool calls executed during this completion (empty for responses without tool use).
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn test_chat_request_roundtrip() {
         let req = ChatRequest {
-            session_id: Some("sess-123".to_string()),
+            session_id: Some(123),
             message: "hello".to_string(),
             model: Some("gpt-4o".to_string()),
             personality_preset: Some("coder".to_string()),
@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn test_chat_response_roundtrip() {
         let resp = ChatResponse {
-            session_id: "sess-456".to_string(),
+            session_id: 456,
             response: "world".to_string(),
             usage: Usage {
                 prompt_tokens: 1,
@@ -553,7 +553,7 @@ line2",
     #[test]
     fn test_chat_response_with_tool_calls() {
         let resp = ChatResponse {
-            session_id: "sess-1".to_string(),
+            session_id: 1,
             response: "done".to_string(),
             usage: Usage::default(),
             tool_calls: vec![ToolCallInfo {

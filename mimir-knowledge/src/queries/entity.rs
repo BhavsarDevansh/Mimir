@@ -171,7 +171,7 @@ pub async fn get_by_name(
 
     // Step 3: FTS5 fuzzy search.
     // SQLite FTS5 bm25 rank is negative; more negative = better match.
-    let safe_query = escape_fts5(name);
+    let safe_query = mimir_core::fts5::escape_fts5(name);
     let fts_rows: Vec<(i32, f64)> = sqlx::query_as(
         "SELECT rowid, rank FROM entity_fts WHERE entity_fts MATCH ? AND rank <= -0.2 ORDER BY rank LIMIT 10",
     )
@@ -206,7 +206,7 @@ pub async fn search(
     query: &str,
     limit: i64,
 ) -> Result<Vec<AliasSearchResult>, KnowledgeError> {
-    let safe_query = escape_fts5(query);
+    let safe_query = mimir_core::fts5::escape_fts5(query);
     let fts_rows: Vec<(i32, f64)> = sqlx::query_as(
         "SELECT rowid, rank FROM entity_fts WHERE entity_fts MATCH ? ORDER BY rank LIMIT ?",
     )
@@ -792,39 +792,4 @@ pub async fn get_entity_names(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::escape_fts5;
-
-    #[test]
-    fn escape_fts5_empty() {
-        assert_eq!(escape_fts5(""), "");
-    }
-
-    #[test]
-    fn escape_fts5_plain_word() {
-        assert_eq!(escape_fts5("hello"), "\"hello\"");
-    }
-
-    #[test]
-    fn escape_fts5_doubles_quotes() {
-        assert_eq!(escape_fts5("foo\"bar"), "\"foo\"\"bar\"");
-    }
-
-    #[test]
-    fn escape_fts5_replaces_asterisk_with_space() {
-        assert_eq!(escape_fts5("foo*bar"), "\"foo bar\"");
-    }
-
-    #[test]
-    fn escape_fts5_boolean_operators_become_literal_phrase() {
-        // Without escaping, "foo OR bar" would be parsed as a boolean expression.
-        assert_eq!(escape_fts5("foo OR bar"), "\"foo OR bar\"");
-        assert_eq!(escape_fts5("foo AND bar"), "\"foo AND bar\"");
-        assert_eq!(escape_fts5("foo NOT bar"), "\"foo NOT bar\"");
-    }
-
-    #[test]
-    fn escape_fts5_parentheses_and_dash_literal() {
-        assert_eq!(escape_fts5("(foo-bar)"), "\"(foo-bar)\"");
-    }
-}
+mod tests {}

@@ -35,9 +35,8 @@ fn bench_add_messages(c: &mut Criterion) {
             },
             |(mgr, sid, _dir)| {
                 rt.block_on(async {
-                    std::hint::black_box(mgr.add_user_message(&sid, "hello world").await).unwrap();
-                    std::hint::black_box(mgr.add_assistant_message(&sid, "hi there").await)
-                        .unwrap();
+                    std::hint::black_box(mgr.add_user_message(sid, "hello world").await).unwrap();
+                    std::hint::black_box(mgr.add_assistant_message(sid, "hi there").await).unwrap();
                 });
             },
             BatchSize::SmallInput,
@@ -55,15 +54,15 @@ fn bench_export_messages(c: &mut Criterion) {
                 let mgr = rt.block_on(ContextManager::new(&db)).unwrap();
                 let sid = rt.block_on(mgr.create_session("sys")).unwrap();
                 for i in 0..20 {
-                    rt.block_on(mgr.add_user_message(&sid, &format!("msg {}", i)))
+                    rt.block_on(mgr.add_user_message(sid, &format!("msg {}", i)))
                         .unwrap();
-                    rt.block_on(mgr.add_assistant_message(&sid, &format!("resp {}", i)))
+                    rt.block_on(mgr.add_assistant_message(sid, &format!("resp {}", i)))
                         .unwrap();
                 }
                 (mgr, sid, dir)
             },
             |(mgr, sid, _dir)| {
-                let msgs = rt.block_on(mgr.export_messages(&sid)).unwrap();
+                let msgs = rt.block_on(mgr.export_messages(sid)).unwrap();
                 std::hint::black_box(msgs);
             },
             BatchSize::SmallInput,
@@ -81,13 +80,10 @@ fn bench_trim_to_budget(c: &mut Criterion) {
                 let mgr = rt.block_on(ContextManager::new(&db)).unwrap();
                 let sid = rt.block_on(mgr.create_session("sys")).unwrap();
                 for i in 0..50 {
-                    rt.block_on(mgr.add_user_message(&sid, &format!("user message number {}", i)))
+                    rt.block_on(mgr.add_user_message(sid, &format!("user message number {}", i)))
                         .unwrap();
                     rt.block_on(
-                        mgr.add_assistant_message(
-                            &sid,
-                            &format!("assistant response number {}", i),
-                        ),
+                        mgr.add_assistant_message(sid, &format!("assistant response number {}", i)),
                     )
                     .unwrap();
                 }
@@ -95,7 +91,7 @@ fn bench_trim_to_budget(c: &mut Criterion) {
             },
             |(mgr, sid, _dir)| {
                 rt.block_on(async {
-                    std::hint::black_box(mgr.trim_to_budget(&sid, Some(1000), 100).await).unwrap();
+                    std::hint::black_box(mgr.trim_to_budget(sid, Some(1000), 100).await).unwrap();
                 });
             },
             BatchSize::SmallInput,

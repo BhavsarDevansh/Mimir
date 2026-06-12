@@ -1,7 +1,7 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-06-10
-> **Version:** 0.41.0
+> **Last updated:** 2026-06-12
+> **Version:** 0.42.0
 > **Phase:** Phase 2 (Knowledge Graph) — Issue #108 (Fact Ranking & Selection Engine) and Issue #109 (LLM Condensation Pipeline & Regeneration Triggers) are implemented. The live memory system is now wired into the daemon. Forgetting system (bulk forget, restore, trash, full reset) implemented in `mimir-knowledge`.
 
 ---
@@ -125,6 +125,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Session persistence | ✅ Works | Each conversation gets a UUID; history is SQLite-backed |
 | Session resume | ✅ Works | `/history` in `mimir chat` lets you pick and resume past sessions |
 | Context trimming | ✅ Works | Automatically trims to `max_tokens` and `max_turns` config limits |
+| Conversation history search (FTS5) | ✅ Works | `search_conversation_history` built-in tool with snippet extraction |
 | Incognito mode | ✅ Works | `--incognito` skips all persistence (no session, no memory learning) |
 | Model override | ✅ Works | `-m gpt-4o-mini` creates a cached override client |
 | Personality override | ✅ Works | `-p concise` overrides the config preset for one query |

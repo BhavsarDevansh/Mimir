@@ -17,7 +17,7 @@ async fn personality_system_prompt_injected_into_session() {
     let sid = mgr.create_session(&system_prompt).await.unwrap();
 
     // 3. Export messages and assert system prompt is first.
-    let exported = mgr.export_messages(&sid).await.unwrap();
+    let exported = mgr.export_messages(sid).await.unwrap();
     assert_eq!(exported.len(), 1);
     assert_eq!(exported[0].role, "system");
     assert!(exported[0].content.contains("transparent"));
@@ -41,7 +41,7 @@ async fn personality_empty_memory_omits_section_in_session() {
     let mgr = ContextManager::new(&db).await.unwrap();
     let sid = mgr.create_session(&system_prompt).await.unwrap();
 
-    let exported = mgr.export_messages(&sid).await.unwrap();
+    let exported = mgr.export_messages(sid).await.unwrap();
     assert_eq!(exported.len(), 1);
     assert_eq!(exported[0].role, "system");
     assert!(!exported[0].content.contains("Key facts I know about you:"));

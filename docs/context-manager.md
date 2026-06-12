@@ -41,7 +41,7 @@ bottleneck.
 
 ```sql
 CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     system_prompt TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
     created_at TEXT NOT NULL,
@@ -61,6 +61,11 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
+
+-- FTS5 virtual table for full-text search over messages
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+    role, content, content='messages', content_rowid='id'
+);
 ```
 
 - **WAL mode** is enabled on every connection for better concurrency.
@@ -107,22 +112,25 @@ pub struct ContextManager { ... }
 impl ContextManager {
     pub async fn new(db_path: impl AsRef<Path>) -> Result<Self, ContextError>;
     pub async fn create_session(&self, system_prompt: impl Into<String>
-    ) -> Result<String, ContextError>;
-    pub async fn add_user_message(&self, session_id: &str, content: impl Into<String>
+    ) -> Result<i64, ContextError>;
+    pub async fn add_user_message(&self, session_id: i64, content: impl Into<String>
     ) -> Result<(), ContextError>;
-    pub async fn add_assistant_message(&self, session_id: &str, content: impl Into<String>
+    pub async fn add_assistant_message(&self, session_id: i64, content: impl Into<String>
     ) -> Result<(), ContextError>;
     pub async fn record_usage(
-        &self, session_id: &str, prompt_tokens: u32, completion_tokens: u32
+        &self, session_id: i64, prompt_tokens: u32, completion_tokens: u32
     ) -> Result<(), ContextError>;
     pub async fn trim_to_budget(
-        &self, session_id: &str, max_tokens: Option<u32>, max_turns: u16
+        &self, session_id: i64, max_tokens: Option<u32>, max_turns: u16
     ) -> Result<(), ContextError>;
-    pub async fn export_messages(&self, session_id: &str
+    pub async fn export_messages(&self, session_id: i64
     ) -> Result<Vec<Message>, ContextError>;
-    pub async fn export_conversation(&self, session_id: &str
+    pub async fn export_conversation(&self, session_id: i64
     ) -> Result<ConversationExport, ContextError>;
-    pub async fn delete_session(&self, session_id: &str) -> Result<(), ContextError>;
+    pub async fn delete_session(&self, session_id: i64) -> Result<(), ContextError>;
+    pub async fn search_messages(
+        &self, query: &str, limit: usize, session_id: Option<i64>
+    ) -> Result<Vec<MessageSearchResult>, ContextError>;
     pub async fn list_sessions(&self) -> Result<Vec<SessionSummary>, ContextError>;
     pub async fn get_messages_after_compaction(
         &self, session_id: &str

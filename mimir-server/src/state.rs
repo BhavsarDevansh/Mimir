@@ -27,7 +27,7 @@ pub struct AppState {
     /// Live reloadable configuration.
     pub config: Arc<ReloadableConfig>,
     /// Per-session semaphore to serialise concurrent requests for the same session.
-    pub session_locks: Arc<DashMap<String, Arc<tokio::sync::Semaphore>>>,
+    pub session_locks: Arc<DashMap<i64, Arc<tokio::sync::Semaphore>>>,
     pub start_time: Instant,
     /// LLM endpoint URL (for status reporting).
     pub endpoint: String,
@@ -83,7 +83,21 @@ impl AppState {
 
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
 
-        let tool_registry = Arc::new(ToolRegistry::with_builtins());
+        let tool_registry = Arc::new(ToolRegistry::new());
+        tool_registry
+            .register_native(Arc::new(mimir_core::tools::GetCurrentTimeTool))
+            .ok();
+        tool_registry
+            .register_native(Arc::new(mimir_core::tools::EchoTool))
+            .ok();
+        tool_registry
+            .register_native(Arc::new(mimir_core::tools::GetWeatherTool::new()))
+            .ok();
+        tool_registry
+            .register_native(Arc::new(
+                mimir_core::tools::SearchConversationHistoryTool::new(Arc::clone(&context_manager)),
+            ))
+            .ok();
         if let Some(path) = mimir_core::tools::ToolsConfig::default_path()
             && path.exists()
             && let Err(e) = tool_registry.load_tools_config(&path)
@@ -324,9 +338,9 @@ impl AppState {
     }
 
     /// Return (or create) the semaphore for a given session id.
-    pub fn session_semaphore(&self, session_id: &str) -> Arc<tokio::sync::Semaphore> {
+    pub fn session_semaphore(&self, session_id: i64) -> Arc<tokio::sync::Semaphore> {
         self.session_locks
-            .entry(session_id.to_string())
+            .entry(session_id)
             .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(1)))
             .clone()
     }

@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.42.0] — 2026-06-12
+
+### Added
+
+- Added `messages_fts` FTS5 virtual table for full-text search over conversation history (`mimir-core/src/context.rs`).
+- Added `ContextManager::search_messages()` for BM25-ranked search with snippet extraction.
+- Added `search_conversation_history` built-in tool (`mimir-core/src/tools/builtins/search_conversation_history.rs`).
+- Extracted `escape_fts5` to `mimir-core/src/fts5.rs` for shared use across crates.
+
+### Changed
+
+- **Breaking (internal):** Migrated `sessions.id` from `TEXT` (UUID) to `INTEGER PRIMARY KEY AUTOINCREMENT` for faster lookups and smaller storage. All session IDs are now `i64` across the workspace.
+- Removed `uuid` dependency from `mimir-core`.
+- Incognito session IDs now use negative atomic `i64` counters instead of UUIDs.
+- Axum routes now auto-reject non-numeric session IDs with `400 Bad Request` via `Path<i64>`.
+
+### Fixed
+
+- Updated all tests, benchmarks, and integration tests to use integer session IDs.
+- Updated API types (`mimir-api-types`), server routes (`mimir-server`), client library (`mimir-client`), CLI (`mimir`), and documentation to reflect integer session IDs.
+
 ## [0.41.3] — 2026-06-11
 
 ### Fixed

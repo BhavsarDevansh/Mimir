@@ -438,6 +438,46 @@ pub(crate) async fn seed_identity_facts(
         if let Err(e) = kg.add_alias(subject_id, preferred).await {
             tracing::warn!("Failed to add preferred-name alias '{}': {}", preferred, e);
         }
+
+        // If a bare-name duplicate entity exists (created before the alias was
+        // wired up), auto-merge it when it looks accidental (very few facts).
+        if let Ok(candidates) =
+            mimir_knowledge::queries::entity::get_by_name(kg.pool(), preferred).await
+        {
+            for cand in candidates {
+                if cand.entity.id == subject_id {
+                    continue;
+                }
+                if cand.entity.name.to_lowercase() == preferred.to_lowercase() {
+                    match kg.count_entity_facts(cand.entity.id).await {
+                        Ok(fact_count) if fact_count <= 2 => {
+                            if let Err(e) = mimir_knowledge::queries::entity::auto_merge_pair(
+                                kg.pool(),
+                                subject_id,
+                                cand.entity.id,
+                            )
+                            .await
+                            {
+                                tracing::warn!(
+                                    "Failed to auto-merge duplicate entity {} into {}: {}",
+                                    cand.entity.id,
+                                    subject_id,
+                                    e
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to count facts for candidate entity {} during auto-merge check: {}",
+                                cand.entity.id,
+                                e
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 
     // Collect facts to insert and perform the writes atomically.

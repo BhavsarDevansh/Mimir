@@ -561,6 +561,17 @@ impl KnowledgeGraph {
         queries::entity::delete_entity(&self.pool, id).await
     }
 
+    /// Count facts that reference an entity (as subject or object).
+    pub async fn count_entity_facts(&self, id: i32) -> Result<i64, KnowledgeError> {
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM facts WHERE subject_id = ? OR object_id = ?")
+                .bind(id)
+                .bind(id)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(count)
+    }
+
     /// Search entities by name/alias.
     pub async fn search_entities(
         &self,

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.42.1] — 2026-06-12
+
+### Fixed
+
+- `seed_identity_facts` now auto-merges bare-name duplicate entities when the preferred name matches an existing entity with ≤2 facts. This resolves the stale-duplicate scenario where a short-name entity was created before the alias was wired up to the canonical entity.
+- Added `KnowledgeGraph::count_entity_facts()` helper in `mimir-knowledge` for counting facts referencing an entity as subject or object.
+
 ## [0.42.0] — 2026-06-12
 
 ### Added

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.43.2] — 2026-06-14
+
+### Fixed
+
+- Added language tags to unlabelled fenced code blocks in `docs/kg-tools.md`, `docs/retrieval-agent.md`, and `docs/wiki/retrieval-agent.md` to satisfy markdownlint MD040.
+- Cleaned up the malformed release summary header in `docs/wiki/what-works-now.md` so the version and implemented features are accurate.
+- `RetrievalAgent` entity/fact deduplication now preserves full identity: entities are matched by `name` *and* `entity_type`, and facts are compared using all structural and lifecycle fields.
+- `RetrieveContextTool` no longer logs the raw retrieval task; it logs only the task length to avoid exposing potentially sensitive user context.
+- `retrieve_context` now uses the request-resolved LLM (including per-request model overrides) instead of the startup LLM in both blocking and streaming chat handlers.
+
 ## [0.43.1] — 2026-06-12
 
 ### Fixed

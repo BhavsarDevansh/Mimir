@@ -11,6 +11,7 @@ use futures::{Stream, StreamExt};
 use mimir_api_types::{ChatRequest, ChatResponse, Usage};
 use mimir_core::llm::types::StreamItem;
 use mimir_core::personality::Personality;
+use mimir_core::tools::{Tool, ToolPermission};
 
 use tracing::error;
 
@@ -67,6 +68,36 @@ fn spawn_fact_extraction(
             }
         }
     });
+}
+
+/// Execute a single tool call, ensuring `retrieve_context` uses the
+/// request-resolved LLM so per-request model overrides are respected.
+async fn execute_tool_call(
+    registry: &mimir_core::tools::ToolRegistry,
+    tool_name: &str,
+    tool_arguments: &str,
+    kg: Arc<mimir_knowledge::KnowledgeGraph>,
+    context_manager: Arc<mimir_core::context::ContextManager>,
+    llm: Arc<dyn mimir_core::llm::LlmBackend>,
+) -> Result<mimir_core::tools::ToolOutput, mimir_core::tools::ToolError> {
+    let args = serde_json::from_str(tool_arguments).unwrap_or(serde_json::Value::Null);
+    if tool_name == mimir_knowledge::RetrieveContextTool::NAME {
+        if let Some(metadata) = registry.metadata(tool_name) {
+            match metadata.permission {
+                ToolPermission::Disabled => {
+                    return Err(mimir_core::tools::ToolError::disabled(tool_name));
+                }
+                ToolPermission::Ask => {
+                    return Err(mimir_core::tools::ToolError::permission_denied(tool_name));
+                }
+                ToolPermission::Auto => {}
+            }
+        }
+        let tool = mimir_knowledge::RetrieveContextTool::new(kg, context_manager, llm);
+        tool.execute(args).await
+    } else {
+        registry.execute(tool_name, args).await
+    }
 }
 
 /// Resolve the common chat state shared by both the blocking and streaming handlers.
@@ -266,14 +297,15 @@ pub async fn chat_handler(
                             mimir_core::tools::snake_to_title_case(&tool_call.function.name)
                         });
 
-                    let output = match state
-                        .tool_registry
-                        .execute(
-                            &tool_call.function.name,
-                            serde_json::from_str(&tool_call.function.arguments)
-                                .unwrap_or(serde_json::Value::Null),
-                        )
-                        .await
+                    let output = match execute_tool_call(
+                        &state.tool_registry,
+                        &tool_call.function.name,
+                        &tool_call.function.arguments,
+                        Arc::clone(&state.knowledge_graph),
+                        Arc::clone(&state.context_manager),
+                        Arc::clone(&llm),
+                    )
+                    .await
                     {
                         Ok(output) => output,
                         Err(e) => {
@@ -366,6 +398,8 @@ pub async fn chat_stream_handler(
     let session_id_clone = session_id;
     let llm_clone = Arc::clone(&llm);
     let tool_registry_clone = Arc::clone(&state.tool_registry);
+    let kg_clone = Arc::clone(&state.knowledge_graph);
+    let context_manager_clone = Arc::clone(&state.context_manager);
     let user_message = req.message.clone();
 
     tokio::spawn(async move {
@@ -533,13 +567,15 @@ pub async fn chat_stream_handler(
                     break 'outer;
                 }
 
-                let (llm_text, display_text) = match tool_registry_clone
-                    .execute(
-                        &tool_call.function.name,
-                        serde_json::from_str(&tool_call.function.arguments)
-                            .unwrap_or(serde_json::Value::Null),
-                    )
-                    .await
+                let (llm_text, display_text) = match execute_tool_call(
+                    &tool_registry_clone,
+                    &tool_call.function.name,
+                    &tool_call.function.arguments,
+                    Arc::clone(&kg_clone),
+                    Arc::clone(&context_manager_clone),
+                    Arc::clone(&llm_clone),
+                )
+                .await
                 {
                     Ok(output) => (output.to_llm_text(), output.to_display_text()),
                     Err(e) => {

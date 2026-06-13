@@ -247,23 +247,36 @@ impl RetrievalAgent {
             })
             .unwrap_or_default();
 
-        // Deduplicate entity.
-        if !context.entities.iter().any(|e| e.name == entity_name) {
+        Self::merge_entity_facts(context, entity_name, entity_type, facts);
+    }
+
+    /// Merge a set of facts into an entity, creating the entity if needed.
+    ///
+    /// Deduplication uses the full identity of both the entity (`name` +
+    /// `entity_type`) and each fact (all structural and lifecycle fields) so
+    /// that homonymous entities and distinct fact revisions are preserved.
+    fn merge_entity_facts(
+        context: &mut RetrievedContext,
+        entity_name: &str,
+        entity_type: &str,
+        facts: Vec<RetrievedFact>,
+    ) {
+        if let Some(existing) = context
+            .entities
+            .iter_mut()
+            .find(|e| e.name == entity_name && e.entity_type == entity_type)
+        {
+            for fact in facts {
+                if !existing.facts.iter().any(|f| f.same_identity(&fact)) {
+                    existing.facts.push(fact);
+                }
+            }
+        } else {
             context.entities.push(RetrievedEntity {
                 name: entity_name.to_string(),
                 entity_type: entity_type.to_string(),
                 facts,
             });
-        } else if let Some(existing) = context.entities.iter_mut().find(|e| e.name == entity_name) {
-            for fact in facts {
-                if !existing.facts.iter().any(|f| {
-                    f.predicate == fact.predicate
-                        && f.object_name == fact.object_name
-                        && f.object_literal == fact.object_literal
-                }) {
-                    existing.facts.push(fact);
-                }
-            }
         }
     }
 
@@ -360,25 +373,7 @@ impl RetrievalAgent {
                 })
                 .unwrap_or_default();
 
-            if !context.entities.iter().any(|e| e.name == entity_name) {
-                context.entities.push(RetrievedEntity {
-                    name: entity_name.to_string(),
-                    entity_type: entity_type.to_string(),
-                    facts,
-                });
-            } else if let Some(existing) =
-                context.entities.iter_mut().find(|e| e.name == entity_name)
-            {
-                for fact in facts {
-                    if !existing.facts.iter().any(|f| {
-                        f.predicate == fact.predicate
-                            && f.object_name == fact.object_name
-                            && f.object_literal == fact.object_literal
-                    }) {
-                        existing.facts.push(fact);
-                    }
-                }
-            }
+            Self::merge_entity_facts(context, entity_name, entity_type, facts);
         }
     }
 

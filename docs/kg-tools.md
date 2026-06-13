@@ -198,7 +198,7 @@ The tool returns a `ToolOutput` whose `result` field contains a JSON-serialized 
 
 The `stdout` field contains a human-readable summary:
 
-```
+```text
 Retrieved 1 facts across 1 entities, 0 relations, and 1 conversation snippets
 ```
 

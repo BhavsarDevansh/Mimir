@@ -6,7 +6,7 @@ The **Retrieval Agent** is an internal, ephemeral LLM session that Mimir's main 
 
 ## Architecture
 
-```
+```text
 Main LLM
     ↓  calls retrieve_context tool
 RetrieveContextTool

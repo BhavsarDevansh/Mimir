@@ -56,6 +56,24 @@ pub struct RetrievedFact {
     pub inferred: bool,
 }
 
+impl RetrievedFact {
+    /// Identity key for deduplication inside a single entity.
+    ///
+    /// Two facts are considered the same record when every structural and
+    /// lifecycle field matches. This prevents distinct revisions, temporal
+    /// ranges, or lifecycle states from being collapsed during retrieval.
+    pub fn same_identity(&self, other: &Self) -> bool {
+        self.predicate == other.predicate
+            && self.object_name == other.object_name
+            && self.object_literal == other.object_literal
+            && self.confidence.to_bits() == other.confidence.to_bits()
+            && self.valid_from == other.valid_from
+            && self.valid_until == other.valid_until
+            && self.status == other.status
+            && self.inferred == other.inferred
+    }
+}
+
 /// A directed edge from graph traversal (`kg_related`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RetrievedRelation {

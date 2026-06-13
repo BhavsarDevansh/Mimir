@@ -28,6 +28,9 @@ pub struct RetrieveContextTool {
 }
 
 impl RetrieveContextTool {
+    /// Tool name used in the OpenAI-compatible function schema and registry.
+    pub const NAME: &str = "retrieve_context";
+
     pub fn new(
         kg: Arc<KnowledgeGraph>,
         context_manager: Arc<mimir_core::context::ContextManager>,
@@ -90,7 +93,7 @@ impl Tool for RetrieveContextTool {
             ));
         }
 
-        info!(task = %task, "spawning retrieval agent");
+        info!(task_len = task.len(), "spawning retrieval agent");
 
         let agent = RetrievalAgent::new(
             Arc::clone(&self.llm),

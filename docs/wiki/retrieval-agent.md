@@ -28,14 +28,14 @@ Each retrieval agent runs in its own ephemeral session, querying the knowledge g
 
 In the streaming chat interface, you'll see:
 
-```
+```text
 event: tool_call_start
 {"name": "retrieve_context", "display_name": "Retrieve Context"}
 ```
 
 ...followed by:
 
-```
+```text
 event: tool_call
 {"name": "retrieve_context", "display_name": "Retrieve Context", "result": "Retrieved 12 facts across 3 entities and 5 conversation snippets"}
 ```

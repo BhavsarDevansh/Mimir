@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.3] — 2026-06-14
+
+### Fixed
+
+- `RetrieveContextTool::name()` now returns `Self::NAME` instead of a hardcoded string, keeping the tool name and registry constant in sync.
+- `RetrievalAgent::merge_entity_facts` now upgrades an "Unknown" root-entity placeholder when a typed entity with the same name is merged, and skips adding an "Unknown" placeholder when a typed entity already exists. This eliminates duplicate entities across `kg_related` root-entity accumulation and typed results from `kg_query`/`kg_search`.
+
 ## [0.43.2] — 2026-06-14
 
 ### Fixed

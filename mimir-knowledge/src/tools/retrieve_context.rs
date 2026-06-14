@@ -47,7 +47,7 @@ impl RetrieveContextTool {
 #[async_trait]
 impl Tool for RetrieveContextTool {
     fn name(&self) -> &str {
-        "retrieve_context"
+        Self::NAME
     }
 
     fn display_name(&self) -> &str {
@@ -82,13 +82,13 @@ impl Tool for RetrieveContextTool {
 
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError> {
         let input: RetrieveContextInput = serde_json::from_value(args).map_err(|e| {
-            ToolError::invalid_arguments("retrieve_context", format!("invalid JSON args: {}", e))
+            ToolError::invalid_arguments(Self::NAME, format!("invalid JSON args: {}", e))
         })?;
 
         let task = input.task.trim();
         if task.is_empty() {
             return Err(ToolError::invalid_arguments(
-                "retrieve_context",
+                Self::NAME,
                 "task must be non-empty",
             ));
         }
@@ -104,10 +104,10 @@ impl Tool for RetrieveContextTool {
         let context = agent
             .retrieve(task)
             .await
-            .map_err(|e| ToolError::execution_failed("retrieve_context", e.to_string()))?;
+            .map_err(|e| ToolError::execution_failed(Self::NAME, e.to_string()))?;
 
         let result_json = serde_json::to_value(&context)
-            .map_err(|e| ToolError::execution_failed("retrieve_context", e.to_string()))?;
+            .map_err(|e| ToolError::execution_failed(Self::NAME, e.to_string()))?;
 
         Ok(ToolOutput {
             result: Some(result_json),

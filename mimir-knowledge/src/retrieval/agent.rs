@@ -252,32 +252,63 @@ impl RetrievalAgent {
 
     /// Merge a set of facts into an entity, creating the entity if needed.
     ///
+    /// Merge `facts` into `target`, deduplicating by full fact identity.
+    fn merge_facts(target: &mut Vec<RetrievedFact>, facts: Vec<RetrievedFact>) {
+        for fact in facts {
+            if !target.iter().any(|f| f.same_identity(&fact)) {
+                target.push(fact);
+            }
+        }
+    }
+
     /// Deduplication uses the full identity of both the entity (`name` +
     /// `entity_type`) and each fact (all structural and lifecycle fields) so
     /// that homonymous entities and distinct fact revisions are preserved.
+    ///
+    /// When a typed entity is merged and an "Unknown" placeholder with the same
+    /// name already exists (e.g. from `kg_related` root-entity accumulation), the
+    /// placeholder is upgraded in place rather than creating a duplicate entry.
+    /// Conversely, an "Unknown" placeholder is never added if a typed entity
+    /// with the same name is already present.
     fn merge_entity_facts(
         context: &mut RetrievedContext,
         entity_name: &str,
         entity_type: &str,
         facts: Vec<RetrievedFact>,
     ) {
+        // Exact (name, type) match: merge facts only.
         if let Some(existing) = context
             .entities
             .iter_mut()
             .find(|e| e.name == entity_name && e.entity_type == entity_type)
         {
-            for fact in facts {
-                if !existing.facts.iter().any(|f| f.same_identity(&fact)) {
-                    existing.facts.push(fact);
-                }
-            }
-        } else {
-            context.entities.push(RetrievedEntity {
-                name: entity_name.to_string(),
-                entity_type: entity_type.to_string(),
-                facts,
-            });
+            Self::merge_facts(&mut existing.facts, facts);
+            return;
         }
+
+        // Typed entity colliding with an Unknown placeholder: upgrade the placeholder.
+        if entity_type != "Unknown" {
+            if let Some(existing) = context
+                .entities
+                .iter_mut()
+                .find(|e| e.name == entity_name && e.entity_type == "Unknown")
+            {
+                existing.entity_type = entity_type.to_string();
+                Self::merge_facts(&mut existing.facts, facts);
+                return;
+            }
+        }
+
+        // Unknown placeholder colliding with a typed entity: skip to avoid a duplicate.
+        if entity_type == "Unknown" && context.entities.iter().any(|e| e.name == entity_name) {
+            return;
+        }
+
+        context.entities.push(RetrievedEntity {
+            name: entity_name.to_string(),
+            entity_type: entity_type.to_string(),
+            facts,
+        });
     }
 
     fn accumulate_kg_related(&self, result: &Value, context: &mut RetrievedContext) {
@@ -314,13 +345,7 @@ impl RetrievalAgent {
         }
 
         // Also accumulate root entity if not already present (empty facts list).
-        if !context.entities.iter().any(|e| e.name == root_entity) {
-            context.entities.push(RetrievedEntity {
-                name: root_entity.to_string(),
-                entity_type: "Unknown".to_string(),
-                facts: Vec::new(),
-            });
-        }
+        Self::merge_entity_facts(context, root_entity, "Unknown", Vec::new());
     }
 
     fn accumulate_kg_search(&self, result: &Value, context: &mut RetrievedContext) {
@@ -467,5 +492,63 @@ impl Tool for FinishRetrievalTool {
             result: Some(serde_json::json!({"status": "finished"})),
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_entity_facts_upgrades_unknown_placeholder() {
+        let mut context = RetrievedContext::default();
+
+        // Root-entity accumulation adds an Unknown placeholder first.
+        RetrievalAgent::merge_entity_facts(&mut context, "Mary", "Unknown", vec![]);
+        assert_eq!(context.entities.len(), 1);
+        assert_eq!(context.entities[0].entity_type, "Unknown");
+
+        // Later kg_query returns a typed entity with the same name.
+        let fact = RetrievedFact {
+            predicate: "allergic_to".to_string(),
+            object_name: None,
+            object_literal: Some("shellfish".to_string()),
+            confidence: 0.95,
+            valid_from: None,
+            valid_until: None,
+            status: "Active".to_string(),
+            inferred: false,
+        };
+        RetrievalAgent::merge_entity_facts(&mut context, "Mary", "Person", vec![fact.clone()]);
+
+        // The placeholder should be upgraded, not duplicated.
+        assert_eq!(context.entities.len(), 1);
+        assert_eq!(context.entities[0].entity_type, "Person");
+        assert_eq!(context.entities[0].facts, vec![fact]);
+    }
+
+    #[test]
+    fn merge_entity_facts_skips_unknown_when_typed_exists() {
+        let mut context = RetrievedContext::default();
+
+        // Typed entity arrives first.
+        let fact = RetrievedFact {
+            predicate: "allergic_to".to_string(),
+            object_name: None,
+            object_literal: Some("shellfish".to_string()),
+            confidence: 0.95,
+            valid_from: None,
+            valid_until: None,
+            status: "Active".to_string(),
+            inferred: false,
+        };
+        RetrievalAgent::merge_entity_facts(&mut context, "Mary", "Person", vec![fact.clone()]);
+
+        // Root-entity accumulation should not add an Unknown duplicate.
+        RetrievalAgent::merge_entity_facts(&mut context, "Mary", "Unknown", vec![]);
+
+        assert_eq!(context.entities.len(), 1);
+        assert_eq!(context.entities[0].entity_type, "Person");
+        assert_eq!(context.entities[0].facts, vec![fact]);
     }
 }

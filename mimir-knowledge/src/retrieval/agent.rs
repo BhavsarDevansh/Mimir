@@ -105,7 +105,7 @@ impl RetrievalAgent {
             let mut other_tools = Vec::new();
 
             for tc in &tool_calls {
-                if tc.function.name == "finish_retrieval" {
+                if tc.function.name == FinishRetrievalTool::NAME {
                     finished = true;
                 } else {
                     other_tools.push(tc);
@@ -118,7 +118,7 @@ impl RetrievalAgent {
                 // Extract optional reason from finish_retrieval arguments.
                 if let Some(finish_tc) = tool_calls
                     .iter()
-                    .find(|tc| tc.function.name == "finish_retrieval")
+                    .find(|tc| tc.function.name == FinishRetrievalTool::NAME)
                 {
                     if let Ok(args) =
                         serde_json::from_str::<serde_json::Value>(&finish_tc.function.arguments)
@@ -133,9 +133,33 @@ impl RetrievalAgent {
             }
 
             // Accumulate tool outputs into the context.
+            // Build ordered list of non-finish_retrieval calls for concurrent execution.
+            let mut call_infos: Vec<(String, String, Value)> = Vec::new();
+            for tc in &tool_calls {
+                if tc.function.name != FinishRetrievalTool::NAME {
+                    let args = serde_json::from_str::<Value>(&tc.function.arguments)
+                        .unwrap_or(Value::Null);
+                    call_infos.push((tc.id.clone(), tc.function.name.clone(), args));
+                }
+            }
+
+            // Execute all non-finish_retrieval tool calls concurrently.
+            let futures = call_infos.into_iter().map(|(id, name, args)| async move {
+                match self.private_registry.execute(&name, args).await {
+                    Ok(output) => (id, name, Ok(output)),
+                    Err(e) => {
+                        warn!(tool = %name, "retrieval tool failed: {}", e);
+                        (id, name, Err(format!("Tool error: {}", e)))
+                    }
+                }
+            });
+            let results: Vec<_> = futures::future::join_all(futures).await;
+            let mut result_iter = results.into_iter();
+
+            // Assemble tool result messages in original call order.
             let mut tool_result_msgs = Vec::new();
             for tc in &tool_calls {
-                if tc.function.name == "finish_retrieval" {
+                if tc.function.name == FinishRetrievalTool::NAME {
                     tool_result_msgs.push(Message::tool(
                         &tc.id,
                         "Ignored: finish_retrieval must be called alone, not alongside other tools.",
@@ -143,23 +167,19 @@ impl RetrievalAgent {
                     continue;
                 }
 
-                let args =
-                    serde_json::from_str::<Value>(&tc.function.arguments).unwrap_or(Value::Null);
-                let output = match self.private_registry.execute(&tc.function.name, args).await {
-                    Ok(out) => out,
-                    Err(e) => {
-                        warn!(tool = %tc.function.name, "retrieval tool failed: {}", e);
-                        tool_result_msgs.push(Message::tool(&tc.id, format!("Tool error: {}", e)));
-                        continue;
+                if let Some((_, name, result)) = result_iter.next() {
+                    match result {
+                        Ok(output) => {
+                            if let Some(ref res) = output.result {
+                                self.accumulate_result(&name, res, &mut context);
+                            }
+                            tool_result_msgs.push(Message::tool(&tc.id, output.to_llm_text()));
+                        }
+                        Err(err_msg) => {
+                            tool_result_msgs.push(Message::tool(&tc.id, err_msg));
+                        }
                     }
-                };
-
-                // Parse and accumulate.
-                if let Some(ref result) = output.result {
-                    self.accumulate_result(&tc.function.name, result, &mut context);
                 }
-
-                tool_result_msgs.push(Message::tool(&tc.id, output.to_llm_text()));
             }
 
             // Push assistant message + tool results back into conversation.
@@ -454,10 +474,14 @@ pub enum RetrievalAgentError {
 
 struct FinishRetrievalTool;
 
+impl FinishRetrievalTool {
+    const NAME: &str = "finish_retrieval";
+}
+
 #[async_trait]
 impl Tool for FinishRetrievalTool {
     fn name(&self) -> &str {
-        "finish_retrieval"
+        Self::NAME
     }
 
     fn display_name(&self) -> &str {

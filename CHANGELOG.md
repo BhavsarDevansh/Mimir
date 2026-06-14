@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.4] — 2026-06-14
+
+### Fixed
+
+- Replaced all hardcoded `"finish_retrieval"` strings in `RetrievalAgent` with the `FinishRetrievalTool::NAME` constant, removing a maintenance risk if the tool name changes.
+- `RetrievalAgent` now executes non-`finish_retrieval` retrieval tool calls concurrently via `futures::future::join_all`, while still assembling tool result messages in the original call order.
+
 ## [0.43.3] — 2026-06-14
 
 ### Fixed

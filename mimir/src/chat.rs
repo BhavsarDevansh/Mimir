@@ -13,17 +13,6 @@ pub async fn handle_chat(base_url: &str) {
     let client = MimirClient::new(base_url);
     let mut session_id: Option<i64> = None;
 
-    let history_path = paths::history_path().unwrap_or_else(|e| {
-        eprintln!("Warning: failed to resolve history path: {e}");
-        std::path::PathBuf::from("mimir/history.txt")
-    });
-
-    if let Some(parent) = history_path.parent()
-        && let Err(e) = std::fs::create_dir_all(parent)
-    {
-        eprintln!("Warning: failed to create history directory: {}", e);
-    }
-
     let mut editor = match DefaultEditor::new() {
         Ok(e) => e,
         Err(e) => {
@@ -32,11 +21,26 @@ pub async fn handle_chat(base_url: &str) {
         }
     };
 
-    if history_path.exists()
-        && let Err(e) = editor.load_history(&history_path)
-    {
-        eprintln!("Warning: failed to load history: {}", e);
-    }
+    let history_path = match paths::history_path() {
+        Ok(path) => {
+            if let Some(parent) = path.parent()
+                && let Err(e) = std::fs::create_dir_all(parent)
+            {
+                eprintln!("Warning: failed to create history directory: {}", e);
+            }
+
+            if path.exists()
+                && let Err(e) = editor.load_history(&path)
+            {
+                eprintln!("Warning: failed to load history: {}", e);
+            }
+            Some(path)
+        }
+        Err(e) => {
+            eprintln!("Warning: failed to resolve history path: {e}; history will not be persisted");
+            None
+        }
+    };
 
     println!("Mimir chat. Type /help for commands, /exit to quit.");
     println!("Press Ctrl+C during input to exit.");
@@ -204,8 +208,10 @@ Stream error: {}",
         }
     }
 
-    if let Err(e) = editor.save_history(&history_path) {
-        eprintln!("Warning: failed to save history: {}", e);
+    if let Some(history_path) = history_path {
+        if let Err(e) = editor.save_history(&history_path) {
+            eprintln!("Warning: failed to save history: {}", e);
+        }
     }
 }
 

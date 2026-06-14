@@ -1,8 +1,8 @@
 # Changelog
- 
- ## [0.44.0] — 2026-06-14
- 
- ### Changed
+
+## [0.44.0] — 2026-06-14
+
+### Changed
  
  - **Scheduler async mutex**: `BackgroundScheduler` now uses `tokio::sync::Mutex` for pending/running job state and `submit()` is `async`, eliminating clippy `await_holding_lock` warnings and preventing accidental blocking of the async runtime.
  - **Centralized path resolution**: All config/data path construction now routes through `mimir_core::paths`. New helpers added: `skills_dir()`, `history_path()`, `personalities_dir()`. `ToolsConfig::default_path()` and `SkillsPermissionsConfig::default_path()` no longer duplicate `dirs::config_dir()` logic.
@@ -26,8 +26,8 @@
  - **DRY environment overrides**: `Config::apply_env_overrides_with` now uses a local `set_from_env!` macro, collapsing dozens of repeated `if let Some(v) = getenv(...) { ... }` blocks into declarative one-liners.
  - **Shared server types**: `CategoryResponse` and `CategoryDetailResponse` are now re-exported through `mimir_server::types` alongside other shared API types.
  - **DRY init error handling**: `mimir init` uses a shared `exit_with_error` helper instead of a one-off `eprintln!`/`exit(1)` block.
- 
- ### Added
+
+### Added
  
  - Unit tests for `SkillsPermissionsConfig` load/save round-trip and invalid TOML handling.
  - Path helper tests for `skills_dir`, `history_path`, and `personalities_dir`.

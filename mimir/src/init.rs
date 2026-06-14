@@ -175,8 +175,13 @@ async fn install_systemd_service() {
     println!("Installed systemd service: {}", service_path.display());
 
     let runner = mimir_core::systemd::RealSystemdRunner;
-    if runner.daemon_reload().await.is_err() || runner.enable_now("mimir").await.is_err() {
-        eprintln!("Warning: systemd activation failed; see manual instructions below.");
+    if let Err(e) = runner.daemon_reload().await {
+        eprintln!("Warning: systemd daemon-reload failed: {e}");
+        print_systemd_manual();
+        return;
+    }
+    if let Err(e) = runner.enable_now("mimir").await {
+        eprintln!("Warning: systemd enable --now failed: {e}");
         print_systemd_manual();
         return;
     }

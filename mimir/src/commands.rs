@@ -203,6 +203,8 @@ pub async fn handle_skill_command(command: SkillCommands) {
             let skill = mimir_core::skills::markdown::MarkdownSkill::from_definition(def)
                 .unwrap_or_else(|e| exit_with_error(format!("failed to build skill: {e}")));
             let name = skill.name().to_string();
+            // Validate the skill name from the parsed content before using it to construct paths
+            validate_skill_name(&name);
             let metadata = mimir_core::skills::markdown::build_metadata(
                 &skill,
                 &skill.version,

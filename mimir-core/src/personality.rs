@@ -17,10 +17,25 @@ impl Personality {
     /// Create a `Personality` from the supplied config, scanning the default
     /// user personalities directory (`~/.config/mimir/personalities/`).
     pub fn new(config: &PersonalityConfig) -> Self {
-        let presets_dir = paths::personalities_dir().unwrap_or_else(|e| {
-            warn!(error = %e, "failed to resolve personalities directory; using fallback");
-            PathBuf::from(".config/mimir/personalities")
-        });
+        let presets_dir = match paths::personalities_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                warn!(error = %e, "failed to resolve personalities directory; custom personalities will not be loaded");
+                // Return early with only built-in presets when path resolution fails
+                return Self {
+                    active_name: if ["transparent", "concise", "warm", "formal"].contains(&config.preset.as_str()) {
+                        config.preset.clone()
+                    } else {
+                        warn!(
+                            preset = %config.preset,
+                            "unknown personality preset; falling back to 'transparent'"
+                        );
+                        "transparent".to_string()
+                    },
+                    registry: Self::built_in_presets(),
+                };
+            }
+        };
         Self::from_path(&presets_dir, &config.preset)
     }
 

@@ -294,6 +294,27 @@ pub struct BrowseResponse {
     pub edges: Vec<BrowseEdge>,
 }
 
+/// A category in the knowledge graph taxonomy.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CategoryResponse {
+    pub id: i32,
+    pub name: String,
+    pub description: Option<String>,
+    pub parent_id: Option<i32>,
+    pub memory_weight: Option<f32>,
+}
+
+/// A category with its child categories and fact count.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CategoryDetailResponse {
+    pub id: i32,
+    pub name: String,
+    pub description: Option<String>,
+    pub parent_id: Option<i32>,
+    pub memory_weight: Option<f32>,
+    pub fact_count: i64,
+    pub children: Vec<CategoryResponse>,
+}
 /// Request to generate a profile.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ProfileRequest {

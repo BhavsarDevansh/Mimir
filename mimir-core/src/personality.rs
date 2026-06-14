@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use tracing::warn;
 
 use crate::config::PersonalityConfig;
+use crate::paths;
 
 /// The personality engine: resolves the active preset and composes system prompts.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,13 +17,10 @@ impl Personality {
     /// Create a `Personality` from the supplied config, scanning the default
     /// user personalities directory (`~/.config/mimir/personalities/`).
     pub fn new(config: &PersonalityConfig) -> Self {
-        let presets_dir = dirs::config_dir()
-            .map(|p| p.join("mimir/personalities"))
-            .unwrap_or_else(|| {
-                dirs::home_dir()
-                    .map(|p| p.join(".config/mimir/personalities"))
-                    .unwrap_or_else(|| PathBuf::from(".config/mimir/personalities"))
-            });
+        let presets_dir = paths::personalities_dir().unwrap_or_else(|e| {
+            warn!(error = %e, "failed to resolve personalities directory; using fallback");
+            PathBuf::from(".config/mimir/personalities")
+        });
         Self::from_path(&presets_dir, &config.preset)
     }
 

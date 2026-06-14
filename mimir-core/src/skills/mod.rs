@@ -3,6 +3,7 @@ pub mod error;
 pub mod generated;
 pub mod markdown;
 pub mod metrics;
+pub mod permissions_config;
 pub mod registry;
 
 pub use builtins::{ResearchSynthesisSkill, TestDrivenDevelopmentSkill};
@@ -10,6 +11,7 @@ pub use error::SkillError;
 pub use generated::{GeneratedSkillCandidate, SessionSummary, should_generate_skill};
 pub use markdown::{MarkdownSkill, SkillDefinition, parse_skill_file};
 pub use metrics::SkillMetricsDb;
+pub use permissions_config::SkillsPermissionsConfig;
 pub use registry::{SkillEntry, SkillMetadata, SkillRegistry};
 
 use std::fmt;

@@ -1,14 +1,57 @@
 use crate::cli::{SkillCommands, ToolCommands};
-use crate::skills_permissions_config::SkillsPermissionsConfig;
-use mimir_core::skills::{Skill, SkillRegistry, SkillSource};
+use mimir_core::paths;
+use mimir_core::skills::{Skill, SkillRegistry, SkillSource, SkillsPermissionsConfig};
 use mimir_core::tools::{ToolPermission, ToolRegistry, ToolSource, ToolsConfig};
-use std::path::PathBuf;
 
-/// Return the user skills directory (`~/.config/mimir/skills/`).
-fn skills_dir() -> PathBuf {
-    dirs::config_dir()
-        .map(|p| p.join("mimir").join("skills"))
-        .unwrap_or_else(|| PathBuf::from("."))
+pub fn exit_with_error(msg: impl std::fmt::Display) -> ! {
+    eprintln!("Error: {}", msg);
+    std::process::exit(1);
+}
+
+fn skills_dir() -> std::path::PathBuf {
+    paths::skills_dir()
+        .unwrap_or_else(|e| exit_with_error(format!("failed to resolve skills directory: {e}")))
+}
+
+fn set_tool_permission_or_exit(registry: &ToolRegistry, name: &str, permission: ToolPermission) {
+    if let Err(e) = registry.set_permission(name, permission) {
+        exit_with_error(e);
+    }
+}
+
+fn persist_tools_or_exit(registry: &ToolRegistry) {
+    if let Err(e) = persist_tools(registry) {
+        exit_with_error(format!("Error saving tools config: {e}"));
+    }
+}
+
+fn set_skill_permission_or_exit(registry: &SkillRegistry, name: &str, permission: ToolPermission) {
+    if let Err(e) = registry.set_permission(name, permission) {
+        exit_with_error(e);
+    }
+}
+
+fn persist_skills_permissions_or_exit(registry: &SkillRegistry) {
+    if let Err(e) = persist_skills_permissions(registry) {
+        exit_with_error(format!("Error saving skills permissions: {e}"));
+    }
+}
+
+fn parse_skill_source(orig: &str) -> SkillSource {
+    match orig.to_lowercase().as_str() {
+        "builtin" => SkillSource::Builtin,
+        "user" => SkillSource::User,
+        "generated" => SkillSource::Generated,
+        _ => exit_with_error(format!(
+            "invalid origin '{orig}'. Use builtin, user, or generated."
+        )),
+    }
+}
+
+fn validate_skill_name(name: &str) {
+    if name.contains('/') || name.contains('\\') || name.contains("..") || name.is_empty() {
+        exit_with_error(format!("invalid skill name: '{name}'"));
+    }
 }
 
 pub async fn handle_tool_command(command: ToolCommands) {
@@ -16,10 +59,10 @@ pub async fn handle_tool_command(command: ToolCommands) {
 
     if let Some(path) = ToolsConfig::default_path()
         && path.exists()
-        && let Err(e) = registry.load_tools_config(&path)
     {
-        eprintln!("Error: failed to load tools config: {e}");
-        std::process::exit(1);
+        if let Err(e) = registry.load_tools_config(&path) {
+            exit_with_error(format!("failed to load tools config: {e}"));
+        }
     }
 
     match command {
@@ -45,43 +88,22 @@ pub async fn handle_tool_command(command: ToolCommands) {
             }
         }
         ToolCommands::Enable { name } => {
-            if let Err(e) = registry.set_permission(&name, ToolPermission::Auto) {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
-            if let Err(e) = persist_tools(&registry) {
-                eprintln!("Error saving tools config: {e}");
-                std::process::exit(1);
-            }
+            set_tool_permission_or_exit(&registry, &name, ToolPermission::Auto);
+            persist_tools_or_exit(&registry);
             println!("Tool '{name}' enabled (permission: auto).");
         }
         ToolCommands::Disable { name } => {
-            if let Err(e) = registry.set_permission(&name, ToolPermission::Disabled) {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
-            if let Err(e) = persist_tools(&registry) {
-                eprintln!("Error saving tools config: {e}");
-                std::process::exit(1);
-            }
+            set_tool_permission_or_exit(&registry, &name, ToolPermission::Disabled);
+            persist_tools_or_exit(&registry);
             println!("Tool '{name}' disabled.");
         }
         ToolCommands::Permission { name, level } => {
             let permission = match level.parse::<ToolPermission>() {
                 Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Error: invalid permission level: {e}");
-                    std::process::exit(1);
-                }
+                Err(e) => exit_with_error(format!("invalid permission level: {e}")),
             };
-            if let Err(e) = registry.set_permission(&name, permission) {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
-            if let Err(e) = persist_tools(&registry) {
-                eprintln!("Error saving tools config: {e}");
-                std::process::exit(1);
-            }
+            set_tool_permission_or_exit(&registry, &name, permission);
+            persist_tools_or_exit(&registry);
             println!("Tool '{name}' permission set to {}.", permission.as_str());
         }
     }
@@ -115,17 +137,7 @@ pub async fn handle_skill_command(command: SkillCommands) {
         SkillCommands::List { origin, tag } => {
             let skills = match (origin, tag) {
                 (Some(orig), Some(t)) => {
-                    let source = match orig.to_lowercase().as_str() {
-                        "builtin" => SkillSource::Builtin,
-                        "user" => SkillSource::User,
-                        "generated" => SkillSource::Generated,
-                        _ => {
-                            eprintln!(
-                                "Error: invalid origin '{orig}'. Use builtin, user, or generated."
-                            );
-                            std::process::exit(1);
-                        }
-                    };
+                    let source = parse_skill_source(&orig);
                     registry
                         .list_by_source(source)
                         .into_iter()
@@ -133,17 +145,7 @@ pub async fn handle_skill_command(command: SkillCommands) {
                         .collect()
                 }
                 (Some(orig), None) => {
-                    let source = match orig.to_lowercase().as_str() {
-                        "builtin" => SkillSource::Builtin,
-                        "user" => SkillSource::User,
-                        "generated" => SkillSource::Generated,
-                        _ => {
-                            eprintln!(
-                                "Error: invalid origin '{orig}'. Use builtin, user, or generated."
-                            );
-                            std::process::exit(1);
-                        }
-                    };
+                    let source = parse_skill_source(&orig);
                     registry.list_by_source(source)
                 }
                 (None, Some(t)) => registry.list_by_tag(&t),
@@ -177,8 +179,7 @@ pub async fn handle_skill_command(command: SkillCommands) {
         SkillCommands::Show { name } => {
             let meta = registry.metadata(&name);
             let Some(meta) = meta else {
-                eprintln!("Error: skill '{name}' not found.");
-                std::process::exit(1);
+                exit_with_error(format!("skill '{name}' not found."));
             };
             println!("Name:        {}", meta.name);
             println!("Description: {}", meta.description);
@@ -191,39 +192,16 @@ pub async fn handle_skill_command(command: SkillCommands) {
         }
         SkillCommands::Add { path } => {
             let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-            if file_name.contains('/')
-                || file_name.contains('\\')
-                || file_name.contains("..")
-                || file_name.is_empty()
-            {
-                eprintln!("Error: invalid skill file name: '{}'", file_name);
-                std::process::exit(1);
-            }
+            validate_skill_name(&file_name);
             if path.extension().and_then(|s| s.to_str()) != Some("md") {
-                eprintln!("Error: skill file must have a .md extension");
-                std::process::exit(1);
+                exit_with_error("skill file must have a .md extension");
             }
-            let contents = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Error: failed to read skill file: {e}");
-                    std::process::exit(1);
-                }
-            };
-            let def = match mimir_core::skills::markdown::parse_skill_file(&contents) {
-                Ok(d) => d,
-                Err(e) => {
-                    eprintln!("Error: failed to parse skill file: {e}");
-                    std::process::exit(1);
-                }
-            };
-            let skill = match mimir_core::skills::markdown::MarkdownSkill::from_definition(def) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Error: failed to build skill: {e}");
-                    std::process::exit(1);
-                }
-            };
+            let contents = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| exit_with_error(format!("failed to read skill file: {e}")));
+            let def = mimir_core::skills::markdown::parse_skill_file(&contents)
+                .unwrap_or_else(|e| exit_with_error(format!("failed to parse skill file: {e}")));
+            let skill = mimir_core::skills::markdown::MarkdownSkill::from_definition(def)
+                .unwrap_or_else(|e| exit_with_error(format!("failed to build skill: {e}")));
             let name = skill.name().to_string();
             let metadata = mimir_core::skills::markdown::build_metadata(
                 &skill,
@@ -231,34 +209,27 @@ pub async fn handle_skill_command(command: SkillCommands) {
                 &skill.tags,
                 Some(&path),
             );
-            if let Err(e) = registry.register_with_metadata(std::sync::Arc::new(skill), metadata) {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
+            registry
+                .register_with_metadata(std::sync::Arc::new(skill), metadata)
+                .unwrap_or_else(|e| exit_with_error(e));
 
             let sdir = skills_dir();
-            if let Err(e) = std::fs::create_dir_all(&sdir) {
-                eprintln!("Error: failed to create skills directory: {e}");
-                std::process::exit(1);
-            }
+            std::fs::create_dir_all(&sdir).unwrap_or_else(|e| {
+                exit_with_error(format!("failed to create skills directory: {e}"))
+            });
             let dest = sdir.join(format!("{name}.md"));
             // Defensive: ensure the computed destination does not escape the skills directory.
             if !dest.starts_with(&sdir) {
-                eprintln!("Error: skill name would escape the skills directory");
-                std::process::exit(1);
+                exit_with_error("skill name would escape the skills directory");
             }
-            if let Err(e) = std::fs::copy(&path, &dest) {
-                eprintln!("Error: failed to copy skill to config dir: {e}");
-                std::process::exit(1);
-            }
+            std::fs::copy(&path, &dest).unwrap_or_else(|e| {
+                exit_with_error(format!("failed to copy skill to config dir: {e}"))
+            });
 
             println!("Skill '{name}' added successfully.");
         }
         SkillCommands::Delete { name } => {
-            if name.contains('/') || name.contains('\\') || name.contains("..") || name.is_empty() {
-                eprintln!("Error: invalid skill name: '{}'", name);
-                std::process::exit(1);
-            }
+            validate_skill_name(&name);
             let meta = registry.metadata(&name);
             let path = meta
                 .as_ref()
@@ -266,46 +237,26 @@ pub async fn handle_skill_command(command: SkillCommands) {
                 .unwrap_or_else(|| skills_dir().join(format!("{name}.md")));
             // Remove the file first; if it fails, keep the registry entry
             // so the user can retry.
-            if path.exists()
-                && let Err(e) = std::fs::remove_file(&path)
-            {
-                eprintln!("Error: failed to remove skill file: {e}");
-                std::process::exit(1);
+            if path.exists() {
+                std::fs::remove_file(&path).unwrap_or_else(|e| {
+                    exit_with_error(format!("failed to remove skill file: {e}"))
+                });
             }
-            if let Err(e) = registry.delete(&name) {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
+            registry
+                .delete(&name)
+                .unwrap_or_else(|e| exit_with_error(e));
             println!("Skill '{name}' deleted.");
         }
         SkillCommands::Enable { name } => {
-            if name.contains('/') || name.contains('\\') || name.contains("..") || name.is_empty() {
-                eprintln!("Error: invalid skill name: '{}'", name);
-                std::process::exit(1);
-            }
-            if let Err(e) = registry.set_permission(&name, ToolPermission::Auto) {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
-            if let Err(e) = persist_skills_permissions(&registry) {
-                eprintln!("Error saving skills permissions: {e}");
-                std::process::exit(1);
-            }
+            validate_skill_name(&name);
+            set_skill_permission_or_exit(&registry, &name, ToolPermission::Auto);
+            persist_skills_permissions_or_exit(&registry);
             println!("Skill '{name}' enabled (permission: auto).");
         }
         SkillCommands::Disable { name } => {
-            if name.contains('/') || name.contains('\\') || name.contains("..") || name.is_empty() {
-                eprintln!("Error: invalid skill name: '{}'", name);
-                std::process::exit(1);
-            }
-            if let Err(e) = registry.set_permission(&name, ToolPermission::Disabled) {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
-            if let Err(e) = persist_skills_permissions(&registry) {
-                eprintln!("Error saving skills permissions: {e}");
-                std::process::exit(1);
-            }
+            validate_skill_name(&name);
+            set_skill_permission_or_exit(&registry, &name, ToolPermission::Disabled);
+            persist_skills_permissions_or_exit(&registry);
             println!("Skill '{name}' disabled.");
         }
     }

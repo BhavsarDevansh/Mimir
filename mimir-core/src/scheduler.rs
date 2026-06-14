@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tracing::{debug, info, warn};
 
@@ -112,8 +112,8 @@ impl BackgroundScheduler {
     ///   extended but the job is not duplicated.
     /// - The job will be dispatched after `debounce` + `cooldown` have
     ///   elapsed and the LLM pool is idle.
-    pub fn submit(&self, job: DaemonJob) -> SubmitStatus {
-        let running = self.running.lock().unwrap();
+    pub async fn submit(&self, job: DaemonJob) -> SubmitStatus {
+        let running = self.running.lock().await;
         if running.as_ref() == Some(&job) {
             drop(running);
             self.last_submit_time.store(
@@ -126,7 +126,7 @@ impl BackgroundScheduler {
         }
         drop(running);
 
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self.pending.lock().await;
         let is_new = pending.insert(job);
         drop(pending);
 
@@ -194,7 +194,7 @@ impl BackgroundScheduler {
 
             // Extract pending state without holding the lock across await.
             let (has_pending, next_job) = {
-                let pending = self.pending.lock().unwrap();
+                let pending = self.pending.lock().await;
                 let has = !pending.is_empty();
                 let job = pending.iter().copied().next();
                 (has, job)
@@ -209,11 +209,11 @@ impl BackgroundScheduler {
             if has_pending && debounce_elapsed && cooldown_elapsed && llm_idle {
                 if let Some(job) = next_job {
                     {
-                        let mut running = self.running.lock().unwrap();
+                        let mut running = self.running.lock().await;
                         *running = Some(job);
                     }
                     {
-                        let mut pending = self.pending.lock().unwrap();
+                        let mut pending = self.pending.lock().await;
                         pending.remove(&job);
                     }
 
@@ -228,7 +228,7 @@ impl BackgroundScheduler {
                         }
                     }
                     {
-                        let mut running = self.running.lock().unwrap();
+                        let mut running = self.running.lock().await;
                         *running = None;
                     }
 
@@ -309,7 +309,7 @@ impl BackgroundScheduler {
                             }
                             if let Some(job) = job {
                                 info!("scheduler: scheduled job {:?} is due ({})", job, next_run);
-                                let _ = self.submit(job);
+                                let _ = self.submit(job).await;
                             }
                         }
                     }
@@ -373,19 +373,19 @@ mod tests {
             BackgroundScheduler::new(jq, llm, Duration::from_secs(1), Duration::from_secs(1));
 
         assert_eq!(
-            sched.submit(DaemonJob::MemoryCondensation),
+            sched.submit(DaemonJob::MemoryCondensation).await,
             SubmitStatus::Queued
         );
         assert_eq!(
-            sched.submit(DaemonJob::MemoryCondensation),
+            sched.submit(DaemonJob::MemoryCondensation).await,
             SubmitStatus::AlreadyPending
         );
         assert_eq!(
-            sched.submit(DaemonJob::KnowledgeOptimization),
+            sched.submit(DaemonJob::KnowledgeOptimization).await,
             SubmitStatus::Queued
         );
 
-        let pending = sched.pending.lock().unwrap();
+        let pending = sched.pending.lock().await;
         assert_eq!(pending.len(), 2);
         assert!(pending.contains(&DaemonJob::MemoryCondensation));
         assert!(pending.contains(&DaemonJob::KnowledgeOptimization));
@@ -399,15 +399,15 @@ mod tests {
             BackgroundScheduler::new(jq, llm, Duration::from_secs(1), Duration::from_secs(1));
 
         // Simulate a job already running.
-        *sched.running.lock().unwrap() = Some(DaemonJob::MemoryCondensation);
+        *sched.running.lock().await = Some(DaemonJob::MemoryCondensation);
 
         assert_eq!(
-            sched.submit(DaemonJob::MemoryCondensation),
+            sched.submit(DaemonJob::MemoryCondensation).await,
             SubmitStatus::AlreadyPending
         );
 
         // Job should NOT be added to pending because it is already running.
-        let pending = sched.pending.lock().unwrap();
+        let pending = sched.pending.lock().await;
         assert!(!pending.contains(&DaemonJob::MemoryCondensation));
         assert!(pending.is_empty());
     }
@@ -423,7 +423,7 @@ mod tests {
             Duration::from_millis(100),
         );
 
-        sched.submit(DaemonJob::MemoryCondensation);
+        sched.submit(DaemonJob::MemoryCondensation).await;
 
         let sched_clone = Arc::clone(&sched);
         let handle = tokio::spawn(async move {
@@ -434,7 +434,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(400)).await;
 
         // Job should have been dispatched and removed from pending.
-        let pending = sched.pending.lock().unwrap();
+        let pending = sched.pending.lock().await;
         assert!(pending.is_empty());
 
         sched.shutdown_tx.send(true).unwrap();
@@ -456,7 +456,7 @@ mod tests {
         sched.notify_user_activity();
 
         // Submit and start scheduler.
-        sched.submit(DaemonJob::MemoryCondensation);
+        sched.submit(DaemonJob::MemoryCondensation).await;
         let sched_clone = Arc::clone(&sched);
         let handle = tokio::spawn(async move {
             sched_clone.start(shutdown_rx).await;
@@ -466,7 +466,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Job should still be pending because cooldown hasn't elapsed.
-        let pending = sched.pending.lock().unwrap();
+        let pending = sched.pending.lock().await;
         assert!(pending.contains(&DaemonJob::MemoryCondensation));
         drop(pending);
 
@@ -475,7 +475,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Still pending because cooldown reset.
-        let pending = sched.pending.lock().unwrap();
+        let pending = sched.pending.lock().await;
         assert!(pending.contains(&DaemonJob::MemoryCondensation));
 
         sched.shutdown_tx.send(true).unwrap();
@@ -493,7 +493,7 @@ mod tests {
             Duration::from_millis(50),
         );
 
-        sched.submit(DaemonJob::MemoryCondensation);
+        sched.submit(DaemonJob::MemoryCondensation).await;
         let sched_clone = Arc::clone(&sched);
         let handle = tokio::spawn(async move {
             sched_clone.start(shutdown_rx).await;
@@ -503,7 +503,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         // LLM is "busy" so job should still be pending.
-        let pending = sched.pending.lock().unwrap();
+        let pending = sched.pending.lock().await;
         assert!(pending.contains(&DaemonJob::MemoryCondensation));
 
         sched.shutdown_tx.send(true).unwrap();

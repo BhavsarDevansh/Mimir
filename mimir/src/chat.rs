@@ -5,6 +5,7 @@
 use colored::Colorize;
 use mimir_api_types::ChatRequest;
 use mimir_client::MimirClient;
+use mimir_core::paths;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 
@@ -12,10 +13,10 @@ pub async fn handle_chat(base_url: &str) {
     let client = MimirClient::new(base_url);
     let mut session_id: Option<i64> = None;
 
-    let history_path = dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("mimir")
-        .join("history.txt");
+    let history_path = paths::history_path().unwrap_or_else(|e| {
+        eprintln!("Warning: failed to resolve history path: {e}");
+        std::path::PathBuf::from("mimir/history.txt")
+    });
 
     if let Some(parent) = history_path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)

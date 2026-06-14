@@ -1,4 +1,5 @@
 use super::{CliToolConfig, ToolPermission};
+use crate::paths;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -59,6 +60,6 @@ impl ToolsConfig {
 
     /// Default path: `~/.config/mimir/tools.toml`.
     pub fn default_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|d| d.join("mimir").join("tools.toml"))
+        paths::config_dir().ok().map(|d| d.join("tools.toml"))
     }
 }

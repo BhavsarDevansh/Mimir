@@ -56,3 +56,4 @@ cooldown_seconds = 60
 ## Integration
 
 The daemon initialises the scheduler in `AppState::from_config_with_llm`, registers the `knowledge.optimization` job in the durable `JobQueue`, and starts the dispatch loop in `start_server_with_llm_and_listener`. The condensation dirty signal from `KnowledgeGraph` drives `scheduler.submit(MemoryCondensation)` via a `tokio::sync::Notify` listener.
+ - `scheduler.submit(job).await` — queue a job for deduped, debounced, cooldown-gated dispatch. Also deduplicates against the job currently running.

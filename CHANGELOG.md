@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.43.4] — 2026-06-14
+
+### Fixed
+
+- Replaced all hardcoded `"finish_retrieval"` strings in `RetrievalAgent` with the `FinishRetrievalTool::NAME` constant, removing a maintenance risk if the tool name changes.
+- `RetrievalAgent` now executes non-`finish_retrieval` retrieval tool calls concurrently via `futures::future::join_all`, while still assembling tool result messages in the original call order.
+
+## [0.43.3] — 2026-06-14
+
+### Fixed
+
+- `RetrieveContextTool::name()` now returns `Self::NAME` instead of a hardcoded string, keeping the tool name and registry constant in sync.
+- `RetrievalAgent::merge_entity_facts` now upgrades an "Unknown" root-entity placeholder when a typed entity with the same name is merged, and skips adding an "Unknown" placeholder when a typed entity already exists. This eliminates duplicate entities across `kg_related` root-entity accumulation and typed results from `kg_query`/`kg_search`.
+
+## [0.43.2] — 2026-06-14
+
+### Fixed
+
+- Added language tags to unlabelled fenced code blocks in `docs/kg-tools.md`, `docs/retrieval-agent.md`, and `docs/wiki/retrieval-agent.md` to satisfy markdownlint MD040.
+- Cleaned up the malformed release summary header in `docs/wiki/what-works-now.md` so the version and implemented features are accurate.
+- `RetrievalAgent` entity/fact deduplication now preserves full identity: entities are matched by `name` *and* `entity_type`, and facts are compared using all structural and lifecycle fields.
+- `RetrieveContextTool` no longer logs the raw retrieval task; it logs only the task length to avoid exposing potentially sensitive user context.
+- `retrieve_context` now uses the request-resolved LLM (including per-request model overrides) instead of the startup LLM in both blocking and streaming chat handlers.
+
+## [0.43.1] — 2026-06-12
+
+### Fixed
+
+- RetrievalAgent now emits a tool-result message for `finish_retrieval` even when the LLM erroneously calls it alongside other tools, preventing an unbalanced conversation that could be rejected by the backend.
+- `accumulate_kg_query` now parses `valid_from` and `valid_until` from `KgQueryTool` JSON output instead of discarding them as `None`.
+
+## [0.43.0] — 2026-06-12
+
+### Added
+
+- **Agentic context retrieval** (Issue #128). The main LLM can now call `retrieve_context` to launch a dedicated RetrievalAgent. The agent runs an ephemeral, internal LLM session with only retrieval tools (`kg_query`, `kg_related`, `kg_search`, `search_conversation_history`), investigating the knowledge graph and conversation history for up to 25 rounds before returning a structured `RetrievedContext`. This enables multi-step, parallel research for complex questions (e.g. "What should I make for dinner with Mary, Bob, and Tom?").
+- New `RetrievedContext`, `RetrievedEntity`, `RetrievedFact`, `RetrievedRelation`, and `ConversationSnippet` types in `mimir-knowledge/src/retrieval/types.rs`.
+- `FinishRetrievalTool` — internal termination signal used by the RetrievalAgent to signal completion.
+- SSE `event: tool_call_start` in the streaming chat handler, emitted before each tool execution to give users real-time visibility into Mimir's research phase.
+
+### Changed
+
+- Bumped workspace version to 0.43.0.
+
 ## [0.42.2] — 2026-06-12
 
 ### Fixed

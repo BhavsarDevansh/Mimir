@@ -207,6 +207,15 @@ impl AppState {
         ))) {
             tracing::warn!("Failed to register remember tool: {}", e);
         }
+        if let Err(e) =
+            tool_registry.register_native(Arc::new(mimir_knowledge::RetrieveContextTool::new(
+                Arc::clone(&knowledge_graph),
+                Arc::clone(&context_manager),
+                Arc::clone(&llm_client),
+            )))
+        {
+            tracing::warn!("Failed to register retrieve_context tool: {}", e);
+        }
 
         // Initialise job queue.
         let jobs_db_path = mimir_core::paths::jobs_db_path()?;

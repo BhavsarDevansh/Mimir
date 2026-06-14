@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-06-12
-> **Version:** 0.42.0
-> **Phase:** Phase 2 (Knowledge Graph) — Issue #108 (Fact Ranking & Selection Engine) and Issue #109 (LLM Condensation Pipeline & Regeneration Triggers) are implemented. The live memory system is now wired into the daemon. Forgetting system (bulk forget, restore, trash, full reset) implemented in `mimir-knowledge`.
+> **Last updated:** 2026-06-14
+> **Version:** 0.43.2
+> **Release summary:** Phase 2 knowledge-graph work is live — Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system (bulk forget, restore, trash, full reset), and Agentic Pre-Response Context Retrieval (#128).
 
 ---
 
@@ -256,4 +256,3 @@ See `VISION/09-Roadmap/` for full details.
 - Read the per-feature wiki docs in `docs/wiki/` for deep dives on individual subsystems.
 - Check the GitHub Issues board for bug reports and feature requests.
 - Run `mimir status` to verify daemon health and configuration.
-

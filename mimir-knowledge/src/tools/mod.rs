@@ -14,6 +14,9 @@ pub use kg_related::KgRelatedTool;
 pub use kg_search::KgSearchTool;
 pub use remember::RememberTool;
 
+mod retrieve_context;
+pub use retrieve_context::RetrieveContextTool;
+
 /// Map a fact_status_id to its human-readable name.
 pub(crate) fn fact_status_name(id: i16) -> String {
     match id {

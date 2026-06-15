@@ -142,7 +142,13 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 - [ ] Marked as "Key facts I know about you:" (not exhaustive — LLM knows to use tools)
 - [ ] Condensed text stored in `system_state` table, regenerated on KG changes
 
-### 2.13 `mimir memory` Command
+### 2.13 Librarian Agent (Layer 2 background extraction) — #130
+- [x] Generic `Agent` trait and `AgentRuntime` in `mimir-core`
+- [x] `LibrarianAgent` in `mimir-knowledge` receives full `ConversationTurn`, user identity, condensed memory, and recent related facts
+- [x] Chat route submits `LibrarianGoal` to the runtime after each non-incognito turn
+- [ ] Future: goal-directed research agent that constructs `LibrarianGoal`s for specific topics and synthesises findings (deferred to Phase 5 reasoning work)
+
+### 2.14 `mimir memory` Command
 - [ ] Renders condensed memory from KG on demand
 - [ ] Rust: fact selection + ranking (category weights × confidence × temporal boost)
 - [ ] LLM: condensation into ≤2500 chars natural language
@@ -150,13 +156,13 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 - [ ] `--json` flag for raw ranked facts
 - [ ] Recurring dates detected via month+day matching for temporal boost
 
-### 2.14 Migration from `memory.md`
+### 2.15 Migration from `memory.md`
 - [ ] `memory.md` removed entirely as persistent artifact
 - [ ] One-time seed: parse legacy `memory.md` → classify via LLM → seed KG → rename to `.bak`
 - [ ] `MemoryManager` refactored: `load_memory()` queries KG, `save_memory()` removed
 - [ ] `MemoryManager` becomes thin facade over KG for Phase 1 compatibility
 
-### 2.15 CLI Commands (`mimir kb ...`)
+### 2.16 CLI Commands (`mimir kb ...`)
 - [ ] Commands talk to daemon via Unix socket/TCP (same pattern as `mimir ask`)
 - [ ] Daemon exposes new Axum routes for KG operations
 - [ ] Phase 2 commands:
@@ -175,13 +181,13 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 - [ ] Confidence color coding: green >0.9, yellow 0.7–0.9, red <0.7
 - [ ] Phase 3+ deferred: `kb heatmap`, `kb reset`
 
-### 2.16 Obsidian Export & Import
+### 2.17 Obsidian Export & Import
 - [ ] Export: entities → `.md` files with YAML frontmatter + wiki-links → `~/AgentKnowledge/`
 - [ ] Import: parse `.md` files → resolve wiki-links → upsert facts (source_type=Import, confidence=0.80)
 - [ ] `entity_id` in YAML frontmatter links back to KG for re-import
 - [ ] File watcher (bidirectional sync) deferred to Phase 3
 
-### 2.17 Testing
+### 2.18 Testing
 - [ ] `sqlx::test` with file-backed DB per test (tempdir) — FTS5/WAL need real files
 - [ ] `Clock` trait with `MockClock` — no direct `chrono::Utc::now()` in models
 - [ ] `TestGraph` helper for seeding small DBs in inference rule tests
@@ -191,7 +197,7 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 - [ ] Criterion benchmarks (`mimir-knowledge/benches/`): 10k facts, measure entity resolution, FTS5, traversal, inference
 - [ ] Property-based testing deferred to Phase 3
 
-### 2.18 Documentation
+### 2.19 Documentation
 - [ ] Technical docs in `docs/`: schema, inference engine, confidence model, optimization pipeline
 - [ ] Wiki docs in `docs/wiki/`: how the knowledge graph works, CLI usage, best practices
 

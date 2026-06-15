@@ -1,0 +1,40 @@
+# Librarian Agent
+
+## What it does
+
+After you finish a chat turn with Mimir, the **Librarian Agent** reads the full
+conversation and saves anything new it learned about you into the knowledge
+graph — automatically, in the background.
+
+It doesn't just look at your last message. It sees:
+
+- What you said
+- What Mimir replied
+- Who you are (from `config.toml`)
+- The current condensed memory
+- Recent related facts already in the knowledge graph
+
+This helps it resolve pronouns like "I" or "my sister" and avoid storing facts
+that contradict what it already knows.
+
+## When it runs
+
+Every non-incognito chat turn triggers a Librarian job. The job runs in the
+background so your chat response is never delayed.
+
+## What you can see
+
+Facts created by the Librarian show up in the knowledge-graph audit log:
+
+```bash
+mimir kb audit --change-type Created
+```
+
+Sensitive facts (health, financial, relationships, etc.) are stored with
+`pending_confirmation = true` and must be confirmed before they become active.
+
+## What's next
+
+In the future, Mimir will have multiple specialised agents — a Research Agent
+for cross-KG investigation, a Calendar Agent, etc. — that can call the
+Librarian to learn about specific topics on demand.

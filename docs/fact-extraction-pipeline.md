@@ -10,7 +10,7 @@ The fact extraction pipeline transforms a raw user message into structured, vali
 
 ## Trigger
 
-The pipeline is triggered automatically by both chat endpoints (`/chat` and `/chat/stream`) after a successful, non-incognito turn. A background task calls `KnowledgeGraph::extract_facts` so the HTTP response is never delayed. Incognito sessions skip extraction to avoid polluting the knowledge graph.
+The pipeline is triggered automatically by both chat endpoints (`/chat` and `/chat/stream`) after a successful, non-incognito turn. The chat route submits a `LibrarianGoal` to the `AgentRuntime`, which dispatches the [`Librarian Agent`](../librarian-agent.md) in the background so the HTTP response is never delayed. The Librarian receives the full conversation turn, the configured user identity, the current condensed memory, and recent related facts from the knowledge graph. Incognito sessions skip extraction to avoid polluting the knowledge graph.
 
 Additionally, the LLM can proactively call the `remember` tool during conversation. This gives the LLM explicit write access to the knowledge graph, letting it persist facts immediately rather than waiting for the background pipeline.
 

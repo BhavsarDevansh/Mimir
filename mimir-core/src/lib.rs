@@ -10,6 +10,7 @@ pub mod scheduler;
 pub mod skills;
 pub mod systemd;
 pub mod tools;
+pub mod agents;
 pub mod conversation;
 pub mod identity;
 

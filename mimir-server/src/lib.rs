@@ -206,7 +206,7 @@ pub async fn start_server_with_llm_and_listener(
                     _ = shutdown_rx.changed() => break,
                     _ = notify.notified() => {
                         use mimir_core::scheduler::DaemonJob;
-                        sched.submit(DaemonJob::MemoryCondensation);
+                        sched.submit(DaemonJob::MemoryCondensation).await;
                     }
                 }
             }

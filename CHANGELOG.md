@@ -1,6 +1,41 @@
 # Changelog
 
-## [0.43.4] — 2026-06-14
+## [0.44.0] — 2026-06-14
+
+### Changed
+ 
+ - **Scheduler async mutex**: `BackgroundScheduler` now uses `tokio::sync::Mutex` for pending/running job state and `submit()` is `async`, eliminating clippy `await_holding_lock` warnings and preventing accidental blocking of the async runtime.
+ - **Centralized path resolution**: All config/data path construction now routes through `mimir_core::paths`. New helpers added: `skills_dir()`, `history_path()`, `personalities_dir()`. `ToolsConfig::default_path()` and `SkillsPermissionsConfig::default_path()` no longer duplicate `dirs::config_dir()` logic.
+ - **Skill permission config placement**: `SkillsPermissionsConfig` moved from the `mimir` binary crate into `mimir_core::skills::permissions_config`, consolidating skill-related persistence in the core library.
+ - **DRY HTTP client handling**: `mimir_client` response status handling is centralized in `MimirClient::check_response`, removing duplicated error blocks across every API method.
+ - **DRY tool registration**: `mimir-server` startup now registers native tools through a single `register_tool` helper instead of repeating `if let Err(e) = ...` warning blocks.
+ - **DRY daemon guard checks**: The `mimir` CLI dispatch loop uses a single `ensure_daemon` helper instead of repeating the same `ensure_daemon_running` error-handling block for every daemon-requiring subcommand.
+ - **Shared category API types**: `CategoryResponse` and `CategoryDetailResponse` moved from `mimir-server` into `mimir_api_types` so the server and HTTP client share the same wire types.
+ - **Category CLI uses MimirClient**: `mimir kb category` subcommands now use `MimirClient` instead of raw `reqwest` calls, and category methods (`kb_categories`, `kb_category_show`, `kb_category_create`, `kb_category_delete`) were added to the client.
+ - **DRY `mimir kb` client construction**: All `mimir kb` handlers now share a local `make_client(base_url)` helper instead of repeating `MimirClient::new(base_url)` at every call site.
+ - **DRY kb CLI error handling**: All `mimir kb` handlers use a shared `exit_with_error` helper instead of repeating the same `eprintln!`/`exit(1)` block.
+ - **DRY skill/tool command helpers**: `mimir tool/skill` enable/disable/permission handlers use shared `set_*_permission_or_exit` and `persist_*_or_exit` helpers; skill name validation and origin parsing are also shared.
+ - **DRY CLI error exits**: Remaining ad-hoc `eprintln!("Error: ...")`/`std::process::exit(1)` blocks in `mimir/src/commands.rs` were routed through the shared `exit_with_error` helper.
+ - **Shared CLI error helper exported**: `commands::exit_with_error` is now `pub` so `mimir/src/main.rs` can use it for the `ask` no-query guard, removing another standalone error-exit block.
+ - **DRY init/main warnings and errors**: `mimir/src/init.rs` and `mimir/src/main.rs` now use shared `exit_with_error` and a local `warn_on_err` helper, removing duplicated `eprintln!`/`std::process::exit(1)` blocks for daemon startup and systemd activation.
+ - **DRY config init**: `Config::init` and `Config::init_at` now share a single `Config::write_default_config` helper instead of duplicating the atomic default-config writing logic.
+ - **DRY identity seeding auto-merge**: The accidental-duplicate auto-merge loop in `seed_identity_facts` was extracted into `auto_merge_accidental_duplicates`, flattening nested matches and removing duplicated warning formatting.
+ - **DRY best-effort warning helper**: Added a shared `warn_err` helper in `mimir-server` and applied it to tool registration, tools-config loading, alias wiring, and auto-merge, removing repeated `if let Err(e) = ... { tracing::warn!(...) }` blocks.
+ - **Single-lock session cache**: `ContextManager::ensure_session_exists` now acquires the `sessions` cache lock once and holds it across the database existence check, removing a redundant second lock acquisition.
+ - **DRY HTTP client URL builder**: `MimirClient` now builds endpoint URLs through a private `url()` helper, removing repeated `format!("{}/...", self.base_url)` strings.
+ - **DRY environment overrides**: `Config::apply_env_overrides_with` now uses a local `set_from_env!` macro, collapsing dozens of repeated `if let Some(v) = getenv(...) { ... }` blocks into declarative one-liners.
+ - **Shared server types**: `CategoryResponse` and `CategoryDetailResponse` are now re-exported through `mimir_server::types` alongside other shared API types.
+ - **DRY init error handling**: `mimir init` uses a shared `exit_with_error` helper instead of a one-off `eprintln!`/`exit(1)` block.
+
+### Added
+ 
+ - Unit tests for `SkillsPermissionsConfig` load/save round-trip and invalid TOML handling.
+ - Path helper tests for `skills_dir`, `history_path`, and `personalities_dir`.
+ - Unit tests for the new `MimirClient` category methods.
+ - Unit tests for the `warn_err` best-effort warning helper.
+ - Unit test for the `MimirClient::url` helper.
+ 
+ ## [0.43.4] — 2026-06-14
 
 ### Fixed
 

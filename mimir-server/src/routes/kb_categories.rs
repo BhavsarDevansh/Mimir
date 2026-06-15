@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
+use crate::types::{CategoryDetailResponse, CategoryResponse};
 use axum::{
     Json,
     extract::{Path, Query, State},
     http::StatusCode,
     response::Response,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::error;
 use crate::state::AppState;
@@ -15,26 +16,6 @@ use crate::state::AppState;
 pub struct ListCategoriesQuery {
     #[serde(default)]
     parent: Option<i32>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CategoryResponse {
-    pub id: i32,
-    pub name: String,
-    pub description: Option<String>,
-    pub parent_id: Option<i32>,
-    pub memory_weight: Option<f32>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CategoryDetailResponse {
-    pub id: i32,
-    pub name: String,
-    pub description: Option<String>,
-    pub parent_id: Option<i32>,
-    pub memory_weight: Option<f32>,
-    pub fact_count: i64,
-    pub children: Vec<CategoryResponse>,
 }
 
 #[derive(Debug, Deserialize)]

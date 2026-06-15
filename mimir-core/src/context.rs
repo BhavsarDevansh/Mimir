@@ -703,7 +703,8 @@ impl ContextManager {
     }
 
     async fn ensure_session_exists(&self, session_id: i64) -> Result<(), ContextError> {
-        if self.sessions.lock().await.contains(&session_id) {
+        let mut sessions = self.sessions.lock().await;
+        if sessions.contains(&session_id) {
             return Ok(());
         }
 
@@ -716,7 +717,7 @@ impl ContextManager {
             return Err(ContextError::SessionNotFound(session_id.to_string()));
         }
 
-        self.sessions.lock().await.insert(session_id);
+        sessions.insert(session_id);
         Ok(())
     }
 
@@ -1077,6 +1078,24 @@ mod tests {
             .await
             .unwrap();
         assert!(id > 0, "expected positive i64 session id, got {id}");
+    }
+
+    #[tokio::test]
+    async fn ensure_session_exists_populates_cache_and_rejects_unknown() {
+        let (mgr, _dir) = setup_manager().await;
+        let id = mgr
+            .create_session("You are a test assistant")
+            .await
+            .unwrap();
+
+        // First call should hit the database and populate the cache.
+        mgr.ensure_session_exists(id).await.unwrap();
+        // Second call should use the cached value without error.
+        mgr.ensure_session_exists(id).await.unwrap();
+
+        let unknown_id = i64::MAX;
+        let err = mgr.ensure_session_exists(unknown_id).await.unwrap_err();
+        assert!(matches!(err, ContextError::SessionNotFound(_)));
     }
 
     #[tokio::test]

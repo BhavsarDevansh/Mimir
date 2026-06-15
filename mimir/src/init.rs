@@ -6,6 +6,17 @@
 use is_terminal::IsTerminal;
 use mimir_core::config::{Config, IdentityConfig, InitResult};
 
+fn exit_with_error(msg: impl std::fmt::Display) -> ! {
+    eprintln!("Error: {}", msg);
+    std::process::exit(1);
+}
+
+fn warn_on_err<T, E: std::fmt::Display>(result: Result<T, E>, message: &str) {
+    if let Err(error) = result {
+        eprintln!("Warning: {message}: {error}");
+    }
+}
+
 pub async fn handle_init() {
     match Config::init() {
         Ok(InitResult::Created {
@@ -48,20 +59,17 @@ pub async fn handle_init() {
                     name: resolved_name,
                     preferred_name: resolved_preferred,
                 };
-                if let Err(e) = cfg.save(&config_file) {
-                    eprintln!("Warning: failed to save identity to config: {}", e);
-                } else {
+                if cfg.save(&config_file).is_ok() {
                     println!("Saved identity to config.");
+                } else {
+                    eprintln!("Warning: failed to save identity to config");
                 }
             }
         }
         Ok(InitResult::AlreadyInitialized) => {
             println!("Mimir is already initialized.");
         }
-        Err(e) => {
-            eprintln!("Error: failed to initialise Mimir: {e}");
-            std::process::exit(1);
-        }
+        Err(e) => exit_with_error(format!("failed to initialise Mimir: {e}")),
     }
 
     #[cfg(target_os = "linux")]
@@ -69,9 +77,10 @@ pub async fn handle_init() {
         if std::io::stdin().is_terminal() {
             println!();
             print!("Install systemd user service for auto-start? [y/N]: ");
-            if let Err(e) = std::io::Write::flush(&mut std::io::stdout()) {
-                eprintln!("Warning: failed to flush stdout: {e}");
-            }
+            warn_on_err(
+                std::io::Write::flush(&mut std::io::stdout()),
+                "failed to flush stdout",
+            );
 
             let mut line = String::new();
             match std::io::stdin().read_line(&mut line) {
@@ -167,13 +176,12 @@ async fn install_systemd_service() {
 
     let runner = mimir_core::systemd::RealSystemdRunner;
     if let Err(e) = runner.daemon_reload().await {
-        eprintln!("Warning: systemctl daemon-reload failed: {e}");
+        eprintln!("Warning: systemd daemon-reload failed: {e}");
         print_systemd_manual();
         return;
     }
-
     if let Err(e) = runner.enable_now("mimir").await {
-        eprintln!("Warning: systemctl enable --now mimir failed: {e}");
+        eprintln!("Warning: systemd enable --now failed: {e}");
         print_systemd_manual();
         return;
     }

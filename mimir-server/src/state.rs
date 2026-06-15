@@ -59,6 +59,30 @@ const MODEL_OVERRIDE_CACHE_CAP: usize = 16;
 /// facts than this threshold are assumed to be intentional, distinct records.
 const ACCIDENTAL_DUPLICATE_FACT_THRESHOLD: i64 = 2;
 
+/// Log a warning for a failed operation and return `None`, or pass through the
+/// success value.
+///
+/// Used for optional best-effort operations (tool registration, alias wiring,
+/// auto-merge) where failure should not abort the caller.
+fn warn_err<T, E: std::fmt::Display>(result: Result<T, E>, message: &str) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::warn!("{message}: {error}");
+            None
+        }
+    }
+}
+
+/// Register a native tool, logging a warning on failure.
+fn register_tool(registry: &ToolRegistry, tool: Arc<dyn mimir_core::tools::Tool>) {
+    let name = tool.name().to_string();
+    warn_err(
+        registry.register_native(tool),
+        &format!("Failed to register {name} tool"),
+    );
+}
+
 impl AppState {
     /// Build `AppState` from the global [`ReloadableConfig`].
     pub async fn from_config(
@@ -88,29 +112,28 @@ impl AppState {
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
 
         let tool_registry = Arc::new(ToolRegistry::new());
-        if let Err(e) =
-            tool_registry.register_native(Arc::new(mimir_core::tools::GetCurrentTimeTool))
-        {
-            tracing::warn!("Failed to register get_current_time tool: {}", e);
-        }
-        if let Err(e) = tool_registry.register_native(Arc::new(mimir_core::tools::EchoTool)) {
-            tracing::warn!("Failed to register echo tool: {}", e);
-        }
-        if let Err(e) =
-            tool_registry.register_native(Arc::new(mimir_core::tools::GetWeatherTool::new()))
-        {
-            tracing::warn!("Failed to register get_weather tool: {}", e);
-        }
-        if let Err(e) = tool_registry.register_native(Arc::new(
-            mimir_core::tools::SearchConversationHistoryTool::new(Arc::clone(&context_manager)),
-        )) {
-            tracing::warn!("Failed to register search_conversation_history tool: {}", e);
-        }
+        register_tool(
+            &tool_registry,
+            Arc::new(mimir_core::tools::GetCurrentTimeTool),
+        );
+        register_tool(&tool_registry, Arc::new(mimir_core::tools::EchoTool));
+        register_tool(
+            &tool_registry,
+            Arc::new(mimir_core::tools::GetWeatherTool::new()),
+        );
+        register_tool(
+            &tool_registry,
+            Arc::new(mimir_core::tools::SearchConversationHistoryTool::new(
+                Arc::clone(&context_manager),
+            )),
+        );
         if let Some(path) = mimir_core::tools::ToolsConfig::default_path()
             && path.exists()
-            && let Err(e) = tool_registry.load_tools_config(&path)
         {
-            tracing::warn!("Failed to load tools config: {}", e);
+            warn_err(
+                tool_registry.load_tools_config(&path),
+                "Failed to load tools config",
+            );
         }
 
         // Initialise knowledge graph.
@@ -177,45 +200,50 @@ impl AppState {
         }
 
         // Register knowledge graph tools.
-        if let Err(e) = tool_registry.register_native(Arc::new(mimir_knowledge::KgQueryTool::new(
-            Arc::clone(&knowledge_graph),
-        ))) {
-            tracing::warn!("Failed to register kg_query tool: {}", e);
-        }
-        if let Err(e) = tool_registry.register_native(Arc::new(
-            mimir_knowledge::KgRelatedTool::new(Arc::clone(&knowledge_graph)),
-        )) {
-            tracing::warn!("Failed to register kg_related tool: {}", e);
-        }
-        if let Err(e) = tool_registry.register_native(Arc::new(mimir_knowledge::KgSearchTool::new(
-            Arc::clone(&knowledge_graph),
-        ))) {
-            tracing::warn!("Failed to register kg_search tool: {}", e);
-        }
-        if let Err(e) = tool_registry.register_native(Arc::new(
-            mimir_knowledge::KgExpandCatalogueTool::new(Arc::clone(&knowledge_graph)),
-        )) {
-            tracing::warn!("Failed to register expand_catalogue tool: {}", e);
-        }
-        if let Err(e) = tool_registry.register_native(Arc::new(
-            mimir_knowledge::KgFactsInCatalogueTool::new(Arc::clone(&knowledge_graph)),
-        )) {
-            tracing::warn!("Failed to register get_facts_in_catalogue tool: {}", e);
-        }
-        if let Err(e) = tool_registry.register_native(Arc::new(mimir_knowledge::RememberTool::new(
-            Arc::clone(&knowledge_graph),
-        ))) {
-            tracing::warn!("Failed to register remember tool: {}", e);
-        }
-        if let Err(e) =
-            tool_registry.register_native(Arc::new(mimir_knowledge::RetrieveContextTool::new(
+        register_tool(
+            &tool_registry,
+            Arc::new(mimir_knowledge::KgQueryTool::new(Arc::clone(
+                &knowledge_graph,
+            ))),
+        );
+        register_tool(
+            &tool_registry,
+            Arc::new(mimir_knowledge::KgRelatedTool::new(Arc::clone(
+                &knowledge_graph,
+            ))),
+        );
+        register_tool(
+            &tool_registry,
+            Arc::new(mimir_knowledge::KgSearchTool::new(Arc::clone(
+                &knowledge_graph,
+            ))),
+        );
+        register_tool(
+            &tool_registry,
+            Arc::new(mimir_knowledge::KgExpandCatalogueTool::new(Arc::clone(
+                &knowledge_graph,
+            ))),
+        );
+        register_tool(
+            &tool_registry,
+            Arc::new(mimir_knowledge::KgFactsInCatalogueTool::new(Arc::clone(
+                &knowledge_graph,
+            ))),
+        );
+        register_tool(
+            &tool_registry,
+            Arc::new(mimir_knowledge::RememberTool::new(Arc::clone(
+                &knowledge_graph,
+            ))),
+        );
+        register_tool(
+            &tool_registry,
+            Arc::new(mimir_knowledge::RetrieveContextTool::new(
                 Arc::clone(&knowledge_graph),
                 Arc::clone(&context_manager),
                 Arc::clone(&llm_client),
-            )))
-        {
-            tracing::warn!("Failed to register retrieve_context tool: {}", e);
-        }
+            )),
+        );
 
         // Initialise job queue.
         let jobs_db_path = mimir_core::paths::jobs_db_path()?;
@@ -278,7 +306,7 @@ impl AppState {
                                 Utc::now() - last < five_minutes
                             },
                             || async move {
-                                scheduler.submit(DaemonJob::MemoryCondensation);
+                                scheduler.submit(DaemonJob::MemoryCondensation).await;
                             },
                         )
                         .await
@@ -478,53 +506,88 @@ pub(crate) async fn seed_identity_facts(
 
     // Alias logic (idempotent; safe to run outside the insert tx).
     if !preferred.is_empty() && preferred.to_lowercase() != name.to_lowercase() {
-        if let Err(e) = kg.add_alias(subject_id, preferred).await {
-            tracing::warn!("Failed to add preferred-name alias '{}': {}", preferred, e);
-        }
+        warn_err(
+            kg.add_alias(subject_id, preferred).await,
+            &format!("Failed to add preferred-name alias '{preferred}'"),
+        );
 
-        // If a bare-name duplicate entity exists (created before the alias was
-        // wired up), auto-merge it when it looks accidental (very few facts).
-        // A threshold of 2 was chosen because a legitimate entity should have at
-        // least a name fact and a preferred-name fact; anything less suggests an
-        // accidental duplicate created before the alias was wired.
-        if let Ok(candidates) =
-            mimir_knowledge::queries::entity::get_by_name(kg.pool(), preferred).await
-        {
-            for cand in candidates {
-                if cand.entity.id == subject_id {
-                    continue;
-                }
-                if cand.entity.name.to_lowercase() == preferred.to_lowercase() {
-                    match kg.count_entity_facts(cand.entity.id).await {
-                        Ok(fact_count) if fact_count <= ACCIDENTAL_DUPLICATE_FACT_THRESHOLD => {
-                            if let Err(e) = mimir_knowledge::queries::entity::auto_merge_pair(
-                                kg.pool(),
-                                subject_id,
-                                cand.entity.id,
-                            )
-                            .await
-                            {
-                                tracing::warn!(
-                                    "Failed to auto-merge duplicate entity {} into {}: {}",
-                                    cand.entity.id,
-                                    subject_id,
-                                    e
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to count facts for candidate entity {} during auto-merge check: {}",
-                                cand.entity.id,
-                                e
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
+        auto_merge_accidental_duplicates(kg, subject_id, preferred).await;
     }
 
     Ok(())
+}
+
+/// Merge bare-name duplicate entities that look accidental (very few facts).
+///
+/// A threshold of 2 was chosen because a legitimate entity should have at least
+/// a name fact and a preferred-name fact; anything less suggests an accidental
+/// duplicate created before the alias was wired.
+async fn auto_merge_accidental_duplicates(
+    kg: &mimir_knowledge::KnowledgeGraph,
+    subject_id: i32,
+    preferred: &str,
+) {
+    let candidates = warn_err(
+        mimir_knowledge::queries::entity::get_by_name(kg.pool(), preferred).await,
+        &format!("Failed to look up duplicates of '{preferred}'"),
+    )
+    .unwrap_or_default();
+
+    for cand in candidates {
+        try_merge_accidental_duplicate(kg, subject_id, preferred, cand).await;
+    }
+}
+
+/// Evaluate a single candidate entity and merge it into `subject_id` if it looks
+/// like an accidental duplicate (very few facts and same name).
+async fn try_merge_accidental_duplicate(
+    kg: &mimir_knowledge::KnowledgeGraph,
+    subject_id: i32,
+    preferred: &str,
+    cand: mimir_knowledge::queries::entity::AliasSearchResult,
+) {
+    if cand.entity.id == subject_id || cand.entity.name.to_lowercase() != preferred.to_lowercase() {
+        return;
+    }
+
+    let fact_count = warn_err(
+        kg.count_entity_facts(cand.entity.id).await,
+        &format!(
+            "Failed to count facts for candidate entity {} during auto-merge check",
+            cand.entity.id
+        ),
+    )
+    .unwrap_or(i64::MAX);
+
+    if fact_count > ACCIDENTAL_DUPLICATE_FACT_THRESHOLD {
+        return;
+    }
+
+    warn_err(
+        mimir_knowledge::queries::entity::auto_merge_pair(kg.pool(), subject_id, cand.entity.id)
+            .await,
+        &format!(
+            "Failed to auto-merge duplicate entity {} into {}",
+            cand.entity.id, subject_id
+        ),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::warn_err;
+
+    #[test]
+    fn warn_err_returns_some_on_ok() {
+        assert_eq!(
+            warn_err::<i32, std::io::Error>(Ok(42), "expected success"),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn warn_err_returns_none_on_err() {
+        let err = std::io::Error::other("boom");
+        assert!(warn_err::<i32, std::io::Error>(Err(err), "expected failure").is_none());
+    }
 }

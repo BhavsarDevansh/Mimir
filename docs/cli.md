@@ -13,16 +13,16 @@ Currently, client-mode commands link `mimir-core` directly for LLM, memory, cont
 
 ```text
 mimir (single binary)
-├── main.rs         — Dispatch: daemon or client based on subcommand
-├── cli.rs          — Command definitions (clap)
-├── commands.rs     — Tool & Skill subcommand handlers
-├── start.rs        — Daemon launcher (in-process Axum server)
-├── ask.rs          — Single-shot query
-├── chat.rs         — Interactive REPL
-├── status.rs       — System status
-├── memory_cmd.rs   — Memory viewer
-├── init.rs         — First-run bootstrap
-└── skills_permissions_config.rs — Skill permission persistence
+ ├── main.rs         — Dispatch: daemon or client based on subcommand
+ ├── cli.rs          — Command definitions (clap)
+ ├── commands.rs     — Tool & Skill subcommand handlers
+ ├── start.rs        — Daemon launcher (in-process Axum server)
+ ├── ask.rs          — Single-shot query
+ ├── chat.rs         — Interactive REPL
+ ├── status.rs       — System status
+ ├── memory_cmd.rs   — Memory viewer
+ ├── init.rs         — First-run bootstrap
+ └── daemon_guard.rs — Shared helper to ensure the daemon is running
 ```
 
 ### Library Crates (code organisation, not separate binaries)

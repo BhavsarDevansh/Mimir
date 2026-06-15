@@ -475,101 +475,86 @@ schedule_time = "02:00"
     where
         F: Fn(&str) -> Option<String>,
     {
-        if let Some(v) = getenv("MIMIR_LLM_ENDPOINT") {
-            self.llm.endpoint = v;
+        macro_rules! set_from_env {
+            ($key:literal, $target:expr) => {
+                if let Some(v) = getenv($key) {
+                    $target = v;
+                }
+            };
+            ($key:literal, $target:expr, $parse:ty) => {
+                if let Some(v) = getenv($key) {
+                    if let Ok(n) = v.parse::<$parse>() {
+                        $target = n;
+                    }
+                }
+            };
+            ($key:literal, $target:expr, $parse:ty, Some) => {
+                if let Some(v) = getenv($key) {
+                    if let Ok(n) = v.parse::<$parse>() {
+                        $target = Some(n);
+                    }
+                }
+            };
         }
-        if let Some(v) = getenv("MIMIR_LLM_API_KEY") {
-            self.llm.api_key = v;
-        }
-        if let Some(v) = getenv("MIMIR_LLM_MODEL") {
-            self.llm.model = v;
-        }
-        if let Some(v) = getenv("MIMIR_LLM_MAX_TOKENS")
-            && let Ok(n) = v.parse::<u32>()
-        {
-            self.llm.max_tokens = Some(n);
-        }
-        if let Some(v) = getenv("MIMIR_LLM_TEMPERATURE")
-            && let Ok(n) = v.parse::<f32>()
-        {
-            self.llm.temperature = n;
-        }
-        if let Some(v) = getenv("MIMIR_AGENT_NAME") {
-            self.agent.name = v;
-        }
-        if let Some(v) = getenv("MIMIR_AGENT_PROACTIVITY")
-            && let Ok(p) = Proactivity::from_str(&v)
-        {
-            self.agent.proactivity = p;
-        }
-        if let Some(v) = getenv("MIMIR_AGENT_VERBOSE_REASONING")
-            && let Ok(b) = v.parse::<bool>()
-        {
-            self.agent.verbose_reasoning = b;
-        }
-        if let Some(v) = getenv("MIMIR_AGENT_MAX_TOOL_ROUNDS")
-            && let Ok(n) = v.parse::<u16>()
-        {
-            self.agent.max_tool_rounds = n;
-        }
-        if let Some(v) = getenv("MIMIR_MEMORY_ENABLED")
-            && let Ok(b) = v.parse::<bool>()
-        {
-            self.memory.enabled = b;
-        }
-        if let Some(v) = getenv("MIMIR_MEMORY_CHAR_LIMIT")
-            && let Ok(n) = v.parse::<u16>()
-        {
-            self.memory.char_limit = n;
-        }
-        if let Some(v) = getenv("MIMIR_MEMORY_AUTO_MANAGE")
-            && let Ok(b) = v.parse::<bool>()
-        {
-            self.memory.auto_manage = b;
-        }
-        if let Some(v) = getenv("MIMIR_MEMORY_TEMPORAL_HORIZON")
-            && let Ok(n) = v.parse::<u8>()
-        {
-            self.memory.temporal_horizon = n;
-        }
-        if let Some(v) = getenv("MIMIR_CONTEXT_MAX_TOKENS")
-            && let Ok(n) = v.parse::<u32>()
-        {
-            self.context.max_tokens = Some(n);
-        }
-        if let Some(v) = getenv("MIMIR_CONTEXT_MAX_TURNS")
-            && let Ok(n) = v.parse::<u16>()
-        {
-            self.context.max_turns = n;
-        }
+        set_from_env!("MIMIR_LLM_ENDPOINT", self.llm.endpoint);
+        set_from_env!("MIMIR_LLM_API_KEY", self.llm.api_key);
+        set_from_env!("MIMIR_LLM_MODEL", self.llm.model);
+        set_from_env!("MIMIR_LLM_MAX_TOKENS", self.llm.max_tokens, u32, Some);
+        set_from_env!("MIMIR_LLM_TEMPERATURE", self.llm.temperature, f32);
+        set_from_env!("MIMIR_AGENT_NAME", self.agent.name);
+        set_from_env!(
+            "MIMIR_AGENT_PROACTIVITY",
+            self.agent.proactivity,
+            Proactivity
+        );
+        set_from_env!(
+            "MIMIR_AGENT_VERBOSE_REASONING",
+            self.agent.verbose_reasoning,
+            bool
+        );
+        set_from_env!(
+            "MIMIR_AGENT_MAX_TOOL_ROUNDS",
+            self.agent.max_tool_rounds,
+            u16
+        );
+        set_from_env!("MIMIR_MEMORY_ENABLED", self.memory.enabled, bool);
+        set_from_env!("MIMIR_MEMORY_CHAR_LIMIT", self.memory.char_limit, u16);
+        set_from_env!("MIMIR_MEMORY_AUTO_MANAGE", self.memory.auto_manage, bool);
+        set_from_env!(
+            "MIMIR_MEMORY_TEMPORAL_HORIZON",
+            self.memory.temporal_horizon,
+            u8
+        );
+        set_from_env!(
+            "MIMIR_CONTEXT_MAX_TOKENS",
+            self.context.max_tokens,
+            u32,
+            Some
+        );
+        set_from_env!("MIMIR_CONTEXT_MAX_TURNS", self.context.max_turns, u16);
         if let Some(v) = getenv("MIMIR_CONTEXT_DB_PATH") {
             self.context.db_path = Some(PathBuf::from(v));
         }
-        if let Some(v) = getenv("MIMIR_PERSONALITY_PRESET") {
-            self.personality.preset = v;
-        }
-        if let Some(v) = getenv("MIMIR_SERVER_BIND_ADDR") {
-            self.server.bind_addr = v;
-        }
-        if let Some(v) = getenv("MIMIR_IDENTITY_NAME") {
-            self.identity.name = v;
-        }
-        if let Some(v) = getenv("MIMIR_IDENTITY_PREFERRED_NAME") {
-            self.identity.preferred_name = v;
-        }
+        set_from_env!("MIMIR_PERSONALITY_PRESET", self.personality.preset);
+        set_from_env!("MIMIR_SERVER_BIND_ADDR", self.server.bind_addr);
+        set_from_env!("MIMIR_IDENTITY_NAME", self.identity.name);
+        set_from_env!(
+            "MIMIR_IDENTITY_PREFERRED_NAME",
+            self.identity.preferred_name
+        );
         if let Some(v) = getenv("MIMIR_SERVER_SOCKET_PATH") {
             self.server.socket_path = if v.trim().is_empty() { None } else { Some(v) };
         }
-        if let Some(v) = getenv("MIMIR_SCHEDULER_DEBOUNCE_SECONDS")
-            && let Ok(n) = v.parse::<u8>()
-        {
-            self.scheduler.debounce_seconds = n;
-        }
-        if let Some(v) = getenv("MIMIR_SCHEDULER_COOLDOWN_SECONDS")
-            && let Ok(n) = v.parse::<u16>()
-        {
-            self.scheduler.cooldown_seconds = n;
-        }
+        set_from_env!(
+            "MIMIR_SCHEDULER_DEBOUNCE_SECONDS",
+            self.scheduler.debounce_seconds,
+            u8
+        );
+        set_from_env!(
+            "MIMIR_SCHEDULER_COOLDOWN_SECONDS",
+            self.scheduler.cooldown_seconds,
+            u16
+        );
     }
 
     /// Apply environment variable overrides from the real process environment.

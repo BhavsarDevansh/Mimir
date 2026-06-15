@@ -88,6 +88,21 @@ pub fn jobs_db_path() -> Result<PathBuf, PathsError> {
     data_dir().map(|p| p.join("jobs.db"))
 }
 
+/// Returns the path to the user skills directory inside the config directory.
+pub fn skills_dir() -> Result<PathBuf, PathsError> {
+    config_dir().map(|p| p.join("skills"))
+}
+
+/// Returns the path to the REPL history file inside the config directory.
+pub fn history_path() -> Result<PathBuf, PathsError> {
+    config_dir().map(|p| p.join("history.txt"))
+}
+
+/// Returns the path to the user personalities directory inside the config directory.
+pub fn personalities_dir() -> Result<PathBuf, PathsError> {
+    config_dir().map(|p| p.join("personalities"))
+}
+
 /// Ensures a directory exists, creating it and all parents if needed.
 ///
 /// Returns `Ok(())` if the directory already existed or was successfully created.
@@ -179,5 +194,23 @@ mod tests {
     fn test_jobs_db_path_is_data_dir_plus_db() {
         let path = jobs_db_path().unwrap();
         assert!(path.ends_with("mimir/jobs.db"));
+    }
+
+    #[test]
+    fn test_skills_dir_is_config_dir_plus_skills() {
+        let path = skills_dir().unwrap();
+        assert!(path.ends_with("mimir/skills"));
+    }
+
+    #[test]
+    fn test_history_path_is_config_dir_plus_history_txt() {
+        let path = history_path().unwrap();
+        assert!(path.ends_with("mimir/history.txt"));
+    }
+
+    #[test]
+    fn test_personalities_dir_is_config_dir_plus_personalities() {
+        let path = personalities_dir().unwrap();
+        assert!(path.ends_with("mimir/personalities"));
     }
 }

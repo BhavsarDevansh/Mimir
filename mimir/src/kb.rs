@@ -28,6 +28,19 @@ fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
 }
 
 // ------------------------------------------------------------------
+// Shared error helper
+// ------------------------------------------------------------------
+
+fn exit_with_error(msg: impl std::fmt::Display) -> ! {
+    eprintln!("Error: {}", msg);
+    std::process::exit(1);
+}
+
+fn make_client(base_url: &str) -> MimirClient {
+    MimirClient::new(base_url)
+}
+
+// ------------------------------------------------------------------
 // Confidence color helper
 // ------------------------------------------------------------------
 
@@ -52,7 +65,7 @@ pub async fn handle_kb_query(
     json: bool,
     base_url: &str,
 ) {
-    let client = MimirClient::new(base_url);
+    let client = make_client(base_url);
     let req = FactQueryParams {
         entity,
         predicate,
@@ -96,10 +109,7 @@ pub async fn handle_kb_query(
             println!("{}", table);
             println!("Total: {}", resp.total);
         }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => exit_with_error(e),
     }
 }
 
@@ -108,7 +118,7 @@ pub async fn handle_kb_query(
 // ------------------------------------------------------------------
 
 pub async fn handle_kb_show(fact_id: i32, json: bool, base_url: &str) {
-    let client = MimirClient::new(base_url);
+    let client = make_client(base_url);
     match client.kb_show(fact_id).await {
         Ok(resp) => {
             if json {
@@ -166,10 +176,7 @@ pub async fn handle_kb_show(fact_id: i32, json: bool, base_url: &str) {
                 }
             }
         }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => exit_with_error(e),
     }
 }
 
@@ -188,7 +195,7 @@ pub async fn handle_kb_edit(
     json: bool,
     base_url: &str,
 ) {
-    let client = MimirClient::new(base_url);
+    let client = make_client(base_url);
     let req = FactEditRequest {
         confidence,
         valid_from,
@@ -213,10 +220,7 @@ pub async fn handle_kb_edit(
                 f.status
             );
         }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => exit_with_error(e),
     }
 }
 
@@ -232,7 +236,7 @@ pub async fn handle_kb_browse(
     json: bool,
     base_url: &str,
 ) {
-    let client = MimirClient::new(base_url);
+    let client = make_client(base_url);
     let req = BrowseRequest {
         entity,
         depth: depth.unwrap_or(2).min(5),
@@ -267,10 +271,7 @@ pub async fn handle_kb_browse(
                 );
             }
         }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => exit_with_error(e),
     }
 }
 
@@ -279,7 +280,7 @@ pub async fn handle_kb_browse(
 // ------------------------------------------------------------------
 
 pub async fn handle_kb_profile(entity: Option<String>, json: bool, base_url: &str) {
-    let client = MimirClient::new(base_url);
+    let client = make_client(base_url);
     let req = ProfileRequest { entity };
     match client.kb_profile(req).await {
         Ok(resp) => {
@@ -304,10 +305,7 @@ pub async fn handle_kb_profile(entity: Option<String>, json: bool, base_url: &st
                 println!();
             }
         }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => exit_with_error(e),
     }
 }
 
@@ -324,7 +322,7 @@ pub async fn handle_kb_audit(
     json: bool,
     base_url: &str,
 ) {
-    let client = MimirClient::new(base_url);
+    let client = make_client(base_url);
     let req = AuditQueryRequest {
         entity,
         predicate,
@@ -371,10 +369,7 @@ pub async fn handle_kb_audit(
             println!("{}", table);
             println!("Total: {}", resp.total);
         }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => exit_with_error(e),
     }
 }
 
@@ -399,7 +394,7 @@ pub struct KbForgetInput {
 }
 
 pub async fn handle_kb_forget(input: KbForgetInput, base_url: &str) {
-    let client = MimirClient::new(base_url);
+    let client = make_client(base_url);
     let req = ForgetRequest {
         fact_id: input.fact_id,
         predicate: input.predicate,
@@ -425,10 +420,7 @@ pub async fn handle_kb_forget(input: KbForgetInput, base_url: &str) {
                 println!("{} fact(s) moved to trash.", resp.forgotten_count);
             }
         }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => exit_with_error(e),
     }
 }
 
@@ -437,16 +429,13 @@ pub async fn handle_kb_forget(input: KbForgetInput, base_url: &str) {
 // ------------------------------------------------------------------
 
 pub async fn handle_kb_restore(trash_id: Option<i32>, all: bool, base_url: &str) {
-    let client = MimirClient::new(base_url);
+    let client = make_client(base_url);
     let req = RestoreRequest { trash_id, all };
     match client.kb_restore(req).await {
         Ok(resp) => {
             println!("Restored {} fact(s) from trash.", resp.restored_count);
         }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => exit_with_error(e),
     }
 }
 
@@ -455,16 +444,13 @@ pub async fn handle_kb_restore(trash_id: Option<i32>, all: bool, base_url: &str)
 // ------------------------------------------------------------------
 
 pub async fn handle_kb_trash(empty: bool, limit: u32, offset: u32, json: bool, base_url: &str) {
-    let client = MimirClient::new(base_url);
+    let client = make_client(base_url);
     if empty {
         match client.kb_trash_empty().await {
             Ok(()) => {
                 println!("Trash emptied.");
             }
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
+            Err(e) => exit_with_error(e),
         }
         return;
     }
@@ -505,10 +491,7 @@ pub async fn handle_kb_trash(empty: bool, limit: u32, offset: u32, json: bool, b
             println!("{}", table);
             println!("Total: {}", resp.total);
         }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => exit_with_error(e),
     }
 }
 
@@ -517,7 +500,7 @@ pub async fn handle_kb_trash(empty: bool, limit: u32, offset: u32, json: bool, b
 // ------------------------------------------------------------------
 
 pub async fn handle_kb_optimization(status: bool, run_now: bool, json: bool, base_url: &str) {
-    let client = MimirClient::new(base_url);
+    let client = make_client(base_url);
     if status {
         match client.kb_optimization_status().await {
             Ok(resp) => {
@@ -542,10 +525,7 @@ pub async fn handle_kb_optimization(status: bool, run_now: bool, json: bool, bas
                     println!("Last run: never");
                 }
             }
-            Err(e) => {
-                eprintln!("Error: failed to fetch optimization status: {}", e);
-                std::process::exit(1);
-            }
+            Err(e) => exit_with_error(format!("failed to fetch optimization status: {e}")),
         }
     } else if run_now {
         match client.kb_optimization_run_now().await {
@@ -559,10 +539,7 @@ pub async fn handle_kb_optimization(status: bool, run_now: bool, json: bool, bas
                     resp.run_id, resp.status, resp.started_at, resp.finished_at, resp.error
                 );
             }
-            Err(e) => {
-                eprintln!("Error: failed to run optimization: {}", e);
-                std::process::exit(1);
-            }
+            Err(e) => exit_with_error(format!("failed to run optimization: {e}")),
         }
     }
 }
@@ -574,122 +551,59 @@ pub async fn handle_kb_optimization(status: bool, run_now: bool, json: bool, bas
 pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url: &str) {
     match command {
         crate::cli::CategoryCommands::List { parent } => {
-            let url = format!("{}/kb/categories", base_url);
-            let query = if let Some(p) = parent {
-                format!("?parent={}", p)
-            } else {
-                String::new()
-            };
-            let url = format!("{}{}", url, query);
-            match reqwest::get(&url).await {
-                Ok(resp) => {
-                    if resp.status().is_success() {
-                        let cats: serde_json::Value = match resp.json().await {
-                            Ok(v) => v,
-                            Err(e) => {
-                                eprintln!("Error: failed to parse response: {}", e);
-                                std::process::exit(1);
-                            }
-                        };
-                        if let Some(arr) = cats.as_array() {
-                            if arr.is_empty() {
-                                println!("No categories.");
-                                return;
-                            }
-                            use tabled::{Table, Tabled, settings::Style};
-                            #[derive(Tabled)]
-                            struct CatRow {
-                                id: i64,
-                                name: String,
-                                parent_id: String,
-                                description: String,
-                            }
-                            let rows: Vec<CatRow> = arr
-                                .iter()
-                                .map(|c| CatRow {
-                                    id: c.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
-                                    name: c
-                                        .get("name")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("?")
-                                        .to_string(),
-                                    parent_id: c
-                                        .get("parent_id")
-                                        .and_then(|v| v.as_i64())
-                                        .map(|i| i.to_string())
-                                        .unwrap_or_else(|| "-".to_string()),
-                                    description: c
-                                        .get("description")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("-")
-                                        .to_string(),
-                                })
-                                .collect();
-                            let mut table = Table::new(rows);
-                            table.with(Style::modern());
-                            println!("{}", table);
-                        }
-                    } else {
-                        eprintln!("Error: {}", resp.status());
-                        std::process::exit(1);
+            let client = make_client(base_url);
+            match client.kb_categories(parent).await {
+                Ok(cats) => {
+                    if cats.is_empty() {
+                        println!("No categories.");
+                        return;
                     }
+                    use tabled::{Table, Tabled, settings::Style};
+                    #[derive(Tabled)]
+                    struct CatRow {
+                        id: i32,
+                        name: String,
+                        parent_id: String,
+                        description: String,
+                    }
+                    let rows: Vec<CatRow> = cats
+                        .into_iter()
+                        .map(|c| CatRow {
+                            id: c.id,
+                            name: c.name,
+                            parent_id: c
+                                .parent_id
+                                .map(|i| i.to_string())
+                                .unwrap_or_else(|| "-".to_string()),
+                            description: c.description.unwrap_or_else(|| "-".to_string()),
+                        })
+                        .collect();
+                    let mut table = Table::new(rows);
+                    table.with(Style::modern());
+                    println!("{}", table);
                 }
-                Err(e) => {
-                    eprintln!("Error: failed to list categories: {}", e);
-                    std::process::exit(1);
-                }
+                Err(e) => exit_with_error(format!("failed to list categories: {e}")),
             }
         }
         crate::cli::CategoryCommands::Show { id } => {
-            let url = format!("{}/kb/categories/{}", base_url, id);
-            match reqwest::get(&url).await {
-                Ok(resp) => {
-                    if resp.status().is_success() {
-                        let cat: serde_json::Value = match resp.json().await {
-                            Ok(v) => v,
-                            Err(e) => {
-                                eprintln!("Error: failed to parse response: {}", e);
-                                std::process::exit(1);
-                            }
-                        };
-                        println!(
-                            "ID:          {}",
-                            cat.get("id").and_then(|v| v.as_i64()).unwrap_or(0)
-                        );
-                        println!(
-                            "Name:        {}",
-                            cat.get("name").and_then(|v| v.as_str()).unwrap_or("?")
-                        );
-                        println!(
-                            "Description: {}",
-                            cat.get("description")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("-")
-                        );
-                        println!(
-                            "Fact count:  {}",
-                            cat.get("fact_count").and_then(|v| v.as_i64()).unwrap_or(0)
-                        );
-                        if let Some(children) = cat.get("children").and_then(|v| v.as_array()) {
-                            if !children.is_empty() {
-                                println!("Children:");
-                                for child in children {
-                                    let cid = child.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-                                    let cname =
-                                        child.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-                                    println!("  {:>4} {}", cid, cname);
-                                }
-                            }
+            let client = make_client(base_url);
+            match client.kb_category_show(id).await {
+                Ok(cat) => {
+                    println!("ID:          {}", cat.id);
+                    println!("Name:        {}", cat.name);
+                    println!(
+                        "Description: {}",
+                        cat.description.unwrap_or_else(|| "-".to_string())
+                    );
+                    println!("Fact count:  {}", cat.fact_count);
+                    if !cat.children.is_empty() {
+                        println!("Children:");
+                        for child in cat.children {
+                            println!("  {:>4} {}", child.id, child.name);
                         }
-                    } else {
-                        eprintln!("Error: {}", resp.status());
-                        std::process::exit(1);
                     }
                 }
-                Err(e) => {
-                    eprintln!("Error: failed to show category: {}", e);
-                    std::process::exit(1);
-                }
+                Err(e) => exit_with_error(format!("failed to show category: {e}")),
             }
         }
         crate::cli::CategoryCommands::Add {
@@ -699,57 +613,22 @@ pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url:
             description,
             memory_weight,
         } => {
-            let body = serde_json::json!({
-                "id": id,
-                "name": name,
-                "parent_id": parent,
-                "description": description,
-                "memory_weight": memory_weight,
-            });
-            let url = format!("{}/kb/categories", base_url);
-            match reqwest::Client::new().post(&url).json(&body).send().await {
-                Ok(resp) => {
-                    if resp.status().is_success() {
-                        let cat: serde_json::Value = match resp.json().await {
-                            Ok(v) => v,
-                            Err(e) => {
-                                eprintln!("Error: failed to parse response: {}", e);
-                                std::process::exit(1);
-                            }
-                        };
-                        println!(
-                            "Created category {} {}",
-                            cat.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
-                            cat.get("name").and_then(|v| v.as_str()).unwrap_or("?")
-                        );
-                    } else {
-                        let text = resp.text().await.unwrap_or_default();
-                        eprintln!("Error: {}", text);
-                        std::process::exit(1);
-                    }
+            let client = make_client(base_url);
+            match client
+                .kb_category_create(id, name, parent, description, memory_weight)
+                .await
+            {
+                Ok(cat) => {
+                    println!("Created category {} {}", cat.id, cat.name);
                 }
-                Err(e) => {
-                    eprintln!("Error: failed to create category: {}", e);
-                    std::process::exit(1);
-                }
+                Err(e) => exit_with_error(format!("failed to create category: {e}")),
             }
         }
         crate::cli::CategoryCommands::Delete { id } => {
-            let url = format!("{}/kb/categories/{}", base_url, id);
-            match reqwest::Client::new().delete(&url).send().await {
-                Ok(resp) => {
-                    if resp.status().is_success() {
-                        println!("Deleted category {}", id);
-                    } else {
-                        let text = resp.text().await.unwrap_or_default();
-                        eprintln!("Error: {}", text);
-                        std::process::exit(1);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error: failed to delete category: {}", e);
-                    std::process::exit(1);
-                }
+            let client = make_client(base_url);
+            match client.kb_category_delete(id).await {
+                Ok(()) => println!("Deleted category {}", id),
+                Err(e) => exit_with_error(format!("failed to delete category: {e}")),
             }
         }
     }

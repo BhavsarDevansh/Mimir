@@ -1,1 +1,3 @@
-pub use mimir_api_types::{ChatRequest, ChatResponse, StatusResponse, Usage};
+pub use mimir_api_types::{
+    CategoryDetailResponse, CategoryResponse, ChatRequest, ChatResponse, StatusResponse, Usage,
+};

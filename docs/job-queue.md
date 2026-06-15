@@ -39,7 +39,7 @@ pub enum DaemonJob {
 ### BackgroundScheduler
 
 - `BackgroundScheduler::new(job_queue, llm, debounce, cooldown)` — create scheduler and shutdown receiver.
-- `scheduler.submit(job)` — queue a job for deduped, debounced, cooldown-gated dispatch. Also deduplicates against the job currently running.
+- `scheduler.submit(job).await` — queue a job for deduped, debounced, cooldown-gated dispatch. Also deduplicates against the job currently running.
 - `scheduler.force_submit(job)` — bypass all gates and run immediately through `JobQueue`.
 - `scheduler.notify_user_activity()` — reset the cooldown timer.
 - `scheduler.start(shutdown_rx)` — spawn the dispatch loop.
@@ -55,4 +55,4 @@ cooldown_seconds = 60
 
 ## Integration
 
-The daemon initialises the scheduler in `AppState::from_config_with_llm`, registers the `knowledge.optimization` job in the durable `JobQueue`, and starts the dispatch loop in `start_server_with_llm_and_listener`. The condensation dirty signal from `KnowledgeGraph` drives `scheduler.submit(MemoryCondensation)` via a `tokio::sync::Notify` listener.
+The daemon initialises the scheduler in `AppState::from_config_with_llm`, registers the `knowledge.optimization` job in the durable `JobQueue`, and starts the dispatch loop in `start_server_with_llm_and_listener`. The condensation dirty signal from `KnowledgeGraph` drives memory condensation via a `tokio::sync::Notify` listener that submits the job through the scheduler.

@@ -11,6 +11,7 @@ pub mod db;
 pub mod extract;
 pub mod forget;
 pub mod inference;
+pub mod librarian;
 pub mod models;
 pub mod optimization;
 pub mod queries;
@@ -1354,6 +1355,18 @@ impl KnowledgeGraph {
         user_message: &str,
     ) -> Result<extract::ExtractionOutcome, KnowledgeError> {
         extract::extract_facts(self, llm, user_message).await
+    }
+
+    /// Extract facts from a full conversation turn with condensed memory,
+    /// user identity, and recent related facts in the prompt.
+    pub async fn extract_facts_with_context(
+        &self,
+        llm: &Arc<dyn mimir_core::llm::backend::LlmBackend>,
+        turn: &mimir_core::conversation::ConversationTurn,
+        identity: mimir_core::identity::UserIdentity,
+        condensed_memory: Option<&str>,
+    ) -> Result<extract::ExtractionOutcome, KnowledgeError> {
+        extract::extract_facts_with_context(self, llm, turn, identity, condensed_memory).await
     }
 
     /// Confirm a pending sensitive fact: flip to Active with confidence 1.0.

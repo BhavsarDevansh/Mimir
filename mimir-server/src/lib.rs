@@ -432,6 +432,13 @@ mod tests {
             std::time::Duration::from_secs(1),
         );
 
+        let agent_runtime = Arc::new(mimir_core::agents::AgentRuntime::new());
+        agent_runtime
+            .register::<mimir_knowledge::librarian::LibrarianAgent>(
+                mimir_knowledge::librarian::LibrarianAgent::new(),
+            )
+            .await;
+
         let state = Arc::new(AppState {
             llm_client: llm,
             context_manager,
@@ -445,6 +452,7 @@ mod tests {
             tool_registry: Arc::new(tool_registry),
             knowledge_graph,
             job_queue,
+            agent_runtime,
             scheduler,
             user_entity_id: None,
             last_user_activity,

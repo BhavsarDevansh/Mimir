@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.45.1] — 2026-06-15
+
+### Fixed
+
+- `ConversationTurn` equality and hashing now ignore the `timestamp` field, restoring
+  `AgentRuntime` deduplication of identical `(agent kind, goal)` pairs.
+- `AgentRuntime::submit` always removes the pending goal key, even when the agent task
+  panics, preventing permanent leaks in the pending set.
+- Chat routes skip Librarian fact extraction when the user message is empty, avoiding
+  wasted LLM calls for empty chat turns.
+
 ## [0.45.0] — 2026-06-15
 
 ### Added

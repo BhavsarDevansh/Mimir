@@ -58,7 +58,8 @@ KG entities/facts + audit log
 - `mimir_core::agents::AgentRuntime` — lightweight in-memory runtime that
   registers agents and dedupes `(kind, goal)` submissions.
 - `mimir_core::conversation::ConversationTurn` — user message, assistant
-  response, session id, and timestamp.
+  response, session id, and timestamp. The timestamp is recorded but excluded
+  from equality and hashing so identical turns dedupe correctly.
 - `mimir_core::identity::UserIdentity` — configured user's name and KG entity id.
 - `mimir_knowledge::librarian::LibrarianAgent` — the concrete agent.
 - `mimir_knowledge::librarian::LibrarianGoal` — `{ target_subject_id, topic, turn }`.
@@ -70,8 +71,9 @@ KG entities/facts + audit log
 ### Deduping
 
 The runtime dedupes by `(agent kind, goal hash)`. Two Librarian jobs with the
-same `target_subject_id` and `topic` are considered identical; only one runs at
-a time. Different topics for the same subject run independently.
+same `target_subject_id`, `topic`, and `ConversationTurn` content are considered
+identical; only one runs at a time. Different topics or turn content run
+independently.
 
 ## Data Flow
 

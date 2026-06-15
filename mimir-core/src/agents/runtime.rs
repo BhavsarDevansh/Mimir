@@ -108,14 +108,18 @@ impl AgentRuntime {
 
         let pending = Arc::clone(&self.pending);
         tokio::spawn(async move {
-            let agent = agent
-                .downcast_ref::<A>()
-                .expect("agent kind mismatch in runtime");
-            let result = agent.run(goal, ctx).await;
+            let task = tokio::spawn(async move {
+                let agent = agent
+                    .downcast_ref::<A>()
+                    .expect("agent kind mismatch in runtime");
+                agent.run(goal, ctx).await
+            });
+            let outcome = task.await;
             pending.lock().await.remove(&key);
-            match result {
-                Ok(()) => info!("AgentRuntime: {} completed successfully", kind),
-                Err(e) => warn!("AgentRuntime: {} failed: {}", kind, e),
+            match outcome {
+                Ok(Ok(())) => info!("AgentRuntime: {} completed successfully", kind),
+                Ok(Err(e)) => warn!("AgentRuntime: {} failed: {}", kind, e),
+                Err(_) => warn!("AgentRuntime: {} panicked", kind),
             }
         });
 
@@ -157,6 +161,19 @@ mod tests {
         async fn run(&self, _goal: TestGoal, _ctx: Arc<dyn AgentContext>) -> anyhow::Result<()> {
             self.counter.fetch_add(1, Ordering::SeqCst);
             Ok(())
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct PanicAgent;
+
+    #[async_trait]
+    impl Agent for PanicAgent {
+        type Goal = TestGoal;
+        const KIND: &'static str = "panic.agent";
+
+        async fn run(&self, _goal: TestGoal, _ctx: Arc<dyn AgentContext>) -> anyhow::Result<()> {
+            panic!("simulated agent panic");
         }
     }
 
@@ -215,5 +232,20 @@ mod tests {
             .await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert_eq!(counter.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn panicked_goal_is_removed_from_pending() {
+        let runtime = AgentRuntime::new();
+        runtime.register(PanicAgent).await;
+        let queued1 = runtime
+            .submit::<PanicAgent>(TestGoal("a".into()), Arc::new(EmptyCtx))
+            .await;
+        assert!(queued1);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let queued2 = runtime
+            .submit::<PanicAgent>(TestGoal("a".into()), Arc::new(EmptyCtx))
+            .await;
+        assert!(queued2);
     }
 }

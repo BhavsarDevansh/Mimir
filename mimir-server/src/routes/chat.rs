@@ -44,6 +44,11 @@ async fn submit_librarian_goal(
     user_message: String,
     assistant_response: String,
 ) {
+    if user_message.trim().is_empty() {
+        tracing::debug!("skipping Librarian extraction: empty user message");
+        return;
+    }
+
     let Some(user_entity_id) = state.user_entity_id else {
         tracing::debug!("skipping Librarian extraction: no user entity resolved");
         return;

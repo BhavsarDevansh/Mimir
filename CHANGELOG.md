@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.45.0] — 2026-06-15
+
+### Added
+
+- **Librarian Agent (Issue #130)**: Replaced the fire-and-forget `spawn_fact_extraction` helper with a reusable background agent. The `Agent` trait and `AgentRuntime` live in `mimir-core`; `LibrarianAgent` lives in `mimir-knowledge`. After each non-incognito chat turn, the route submits a `LibrarianGoal` carrying the full `ConversationTurn`, and the agent extracts facts using the configured user identity, condensed memory, and recent related facts.
+- New shared types: `mimir_core::conversation::ConversationTurn` and `mimir_core::identity::UserIdentity`.
+- New extraction entrypoint: `mimir_knowledge::KnowledgeGraph::extract_facts_with_context` builds a rich contextual prompt for the `remember` tool.
+- New integration tests in `mimir-knowledge/tests/librarian_agent.rs` verify fact extraction from a conversation turn and prompt content.
+
+### Changed
+
+- Chat routes (`/chat` and `/chat/stream`) now submit a Librarian goal instead of spawning `spawn_fact_extraction` directly.
+- `test_state_with_config` in `mimir-server` now resolves or creates the configured user entity so background agents can run in server integration tests.
+
+### Documentation
+
+- Added `docs/librarian-agent.md` (technical design) and `docs/wiki/librarian-agent.md` (user-facing overview).
+- Updated `docs/fact-extraction-pipeline.md` and `docs/wiki/what-works-now.md` to describe the Librarian Agent.
+- Updated `README.md` and `VISION/09-Roadmap/Phase-2-Knowledge-Graph.md` to reflect the new agent framework and note future goal-directed research.
+
 ## [0.44.0] — 2026-06-14
 
 ### Changed

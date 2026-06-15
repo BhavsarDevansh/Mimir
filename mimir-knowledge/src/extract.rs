@@ -231,7 +231,8 @@ async fn build_contextual_extraction_prompt(
             fact.object_literal.clone().unwrap_or_default()
         };
         let predicate = kg
-            .relationship_type_name(fact.relationship_type_id).await
+            .relationship_type_name(fact.relationship_type_id)
+            .await
             .unwrap_or_else(|| "(unknown)".to_string());
         related_lines.push(format!(
             "- {} {} {} (confidence {:.2})",
@@ -343,7 +344,6 @@ async fn process_extracted_facts(
 
     Ok(outcome)
 }
-
 
 // ---------------------------------------------------------------------------
 // Classification → SourceType + confidence
@@ -558,14 +558,6 @@ async fn find_active_overlapping(
 // Pipeline entrypoint
 // ---------------------------------------------------------------------------
 
-/// Run the fact extraction pipeline on a single user message.
-///
-/// 1. Calls the LLM via the `remember` tool.
-/// 2. Validates schema, resolves entities, checks dedup.
-/// 3. Assigns confidence based on classification.
-/// 4. Handles corrections (temporal or retrospective).
-/// 5. Flags sensitive facts for confirmation.
-/// 6. Inserts facts, attaches sources, triggers inference.
 /// Run the fact extraction pipeline on a single user message.
 ///
 /// 1. Calls the LLM via the `remember` tool.

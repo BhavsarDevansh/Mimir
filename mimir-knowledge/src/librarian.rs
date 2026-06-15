@@ -85,11 +85,7 @@ impl Agent for LibrarianAgent {
     type Goal = LibrarianGoal;
     const KIND: &'static str = "librarian";
 
-    async fn run(
-        &self,
-        goal: LibrarianGoal,
-        ctx: Arc<dyn AgentContext>,
-    ) -> anyhow::Result<()> {
+    async fn run(&self, goal: LibrarianGoal, ctx: Arc<dyn AgentContext>) -> anyhow::Result<()> {
         let ctx = ctx
             .as_any()
             .downcast_ref::<LibrarianContext>()

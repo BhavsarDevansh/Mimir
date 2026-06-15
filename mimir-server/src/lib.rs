@@ -365,7 +365,8 @@ mod tests {
         let context_manager = Arc::new(ContextManager::new(&db_path).await.unwrap());
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
 
-        let reloadable = ReloadableConfig::new(config.clone(), temp.path().join("dummy_config.toml"));
+        let reloadable =
+            ReloadableConfig::new(config.clone(), temp.path().join("dummy_config.toml"));
 
         let tool_registry = mimir_core::tools::ToolRegistry::with_builtins();
 

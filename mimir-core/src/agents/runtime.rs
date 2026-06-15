@@ -154,11 +154,7 @@ mod tests {
         type Goal = TestGoal;
         const KIND: &'static str = "test.agent";
 
-        async fn run(
-            &self,
-            _goal: TestGoal,
-            _ctx: Arc<dyn AgentContext>,
-        ) -> anyhow::Result<()> {
+        async fn run(&self, _goal: TestGoal, _ctx: Arc<dyn AgentContext>) -> anyhow::Result<()> {
             self.counter.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -168,8 +164,14 @@ mod tests {
     async fn runtime_dispatches_registered_agent() {
         let runtime = AgentRuntime::new();
         let counter = Arc::new(AtomicUsize::new(0));
-        runtime.register(TestAgent { counter: Arc::clone(&counter) }).await;
-        let queued = runtime.submit::<TestAgent>(TestGoal("a".into()), Arc::new(EmptyCtx)).await;
+        runtime
+            .register(TestAgent {
+                counter: Arc::clone(&counter),
+            })
+            .await;
+        let queued = runtime
+            .submit::<TestAgent>(TestGoal("a".into()), Arc::new(EmptyCtx))
+            .await;
         assert!(queued);
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert_eq!(counter.load(Ordering::SeqCst), 1);
@@ -179,9 +181,17 @@ mod tests {
     async fn identical_goals_are_deduped() {
         let runtime = AgentRuntime::new();
         let counter = Arc::new(AtomicUsize::new(0));
-        runtime.register(TestAgent { counter: Arc::clone(&counter) }).await;
-        let queued1 = runtime.submit::<TestAgent>(TestGoal("a".into()), Arc::new(EmptyCtx)).await;
-        let queued2 = runtime.submit::<TestAgent>(TestGoal("a".into()), Arc::new(EmptyCtx)).await;
+        runtime
+            .register(TestAgent {
+                counter: Arc::clone(&counter),
+            })
+            .await;
+        let queued1 = runtime
+            .submit::<TestAgent>(TestGoal("a".into()), Arc::new(EmptyCtx))
+            .await;
+        let queued2 = runtime
+            .submit::<TestAgent>(TestGoal("a".into()), Arc::new(EmptyCtx))
+            .await;
         assert!(queued1);
         assert!(!queued2);
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -192,9 +202,17 @@ mod tests {
     async fn different_goals_are_not_deduped() {
         let runtime = AgentRuntime::new();
         let counter = Arc::new(AtomicUsize::new(0));
-        runtime.register(TestAgent { counter: Arc::clone(&counter) }).await;
-        runtime.submit::<TestAgent>(TestGoal("a".into()), Arc::new(EmptyCtx)).await;
-        runtime.submit::<TestAgent>(TestGoal("b".into()), Arc::new(EmptyCtx)).await;
+        runtime
+            .register(TestAgent {
+                counter: Arc::clone(&counter),
+            })
+            .await;
+        runtime
+            .submit::<TestAgent>(TestGoal("a".into()), Arc::new(EmptyCtx))
+            .await;
+        runtime
+            .submit::<TestAgent>(TestGoal("b".into()), Arc::new(EmptyCtx))
+            .await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert_eq!(counter.load(Ordering::SeqCst), 2);
     }

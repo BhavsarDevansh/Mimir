@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use tracing::warn;
 
@@ -23,7 +23,9 @@ impl Personality {
                 warn!(error = %e, "failed to resolve personalities directory; custom personalities will not be loaded");
                 // Return early with only built-in presets when path resolution fails
                 return Self {
-                    active_name: if ["transparent", "concise", "warm", "formal"].contains(&config.preset.as_str()) {
+                    active_name: if ["transparent", "concise", "warm", "formal"]
+                        .contains(&config.preset.as_str())
+                    {
                         config.preset.clone()
                     } else {
                         warn!(

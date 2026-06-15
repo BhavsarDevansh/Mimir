@@ -96,7 +96,7 @@ impl Agent for LibrarianAgent {
             .extract_facts_with_context(
                 &ctx.llm,
                 &goal.turn,
-                ctx.identity,
+                ctx.identity.clone(),
                 ctx.condensed_memory.as_deref(),
             )
             .await?;

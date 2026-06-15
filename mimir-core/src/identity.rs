@@ -3,16 +3,19 @@
 /// Resolved user identity from configuration.
 ///
 /// `entity_id` is the row id in the knowledge graph for the configured user.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UserIdentity {
-    pub name: &'static str,
+    pub name: String,
     pub entity_id: i32,
 }
 
 impl UserIdentity {
     /// Create a new identity.
-    pub fn new(name: &'static str, entity_id: i32) -> Self {
-        Self { name, entity_id }
+    pub fn new(name: impl Into<String>, entity_id: i32) -> Self {
+        Self {
+            name: name.into(),
+            entity_id,
+        }
     }
 }
 

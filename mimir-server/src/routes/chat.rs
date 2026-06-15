@@ -60,7 +60,15 @@ async fn submit_librarian_goal(
         turn,
     );
 
-    let identity = mimir_core::identity::UserIdentity::new("user", user_entity_id);
+    let user_name = state.config.snapshot().await.identity.name;
+    let identity = mimir_core::identity::UserIdentity::new(
+        if user_name.is_empty() {
+            "user"
+        } else {
+            &user_name
+        },
+        user_entity_id,
+    );
     let condensed_memory = state
         .knowledge_graph
         .get_condensed_memory()

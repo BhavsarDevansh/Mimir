@@ -10,6 +10,8 @@ pub mod scheduler;
 pub mod skills;
 pub mod systemd;
 pub mod tools;
+pub mod conversation;
+pub mod identity;
 
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")

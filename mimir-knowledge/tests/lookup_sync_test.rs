@@ -290,6 +290,18 @@ async fn relationship_types_sync() {
             (10, "created_on", "created_on"),
             (11, "has_preference", "has_preference"),
             (12, "rejected_action", "rejected_action"),
+            (13, "studied_at", "studied_at"),
+            (14, "hobby", "hobby"),
+            (15, "works_at", "works_at"),
+            (16, "based_in", "based_in"),
+            (17, "lived_in", "lived_in"),
+            (18, "has_pets", "has_pets"),
+            (19, "has_sibling", "has_sibling"),
+            (20, "has_child", "has_child"),
+            (21, "preferred_name", "preferred_name"),
+            (22, "favourite_food", "favourite_food"),
+            (23, "favourite_colour", "favourite_colour"),
+            (24, "health_condition", "health_condition"),
         ],
     )
     .await;

@@ -263,9 +263,6 @@ impl KnowledgeGraph {
     ///    canonical id on hit.
     /// 3. Fall back to creating a new canonical type and register the normalized
     ///    name as its own alias.
-    ///
-    /// Rejects names that shadow an existing alias so alias and canonical
-    /// resolution stay consistent.
     pub async fn ensure_relationship_type(&self, name: &str) -> Result<i16, KnowledgeError> {
         let mut tx = self.pool.begin().await?;
         let id = self.ensure_relationship_type_in_tx(&mut tx, name).await?;
@@ -309,13 +306,6 @@ impl KnowledgeGraph {
         }
 
         // 3. Alias miss: create new canonical type, then register self-alias.
-        if canonical_name_conflicts_with_alias(&mut **tx, &normalized).await? {
-            return Err(KnowledgeError::Validation(format!(
-                "relationship type name '{}' conflicts with an existing alias",
-                normalized
-            )));
-        }
-
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO relationship_types (name, description) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
         )

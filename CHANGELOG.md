@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.47.0] — 2026-06-16
+
+### Added
+
+- **Relationship type alias resolution (Issue #133)**: `ensure_relationship_type` now resolves
+  incoming names through the `relationship_type_aliases` table before creating a new canonical
+  type. New canonical types automatically register their normalized name as a self-alias, making
+  the alias table the single source of truth for relationship-type lookup.
+- Migration `036_seed_relationship_type_aliases.sql` backfills self-aliases for every existing
+  relationship type and seeds the legacy hardcoded synonyms from `extract.rs::normalize_predicate`
+  (e.g., `attended` → `studied_at`) as data-driven aliases.
+
+### Changed
+
+- `mimir-knowledge/src/extract.rs::normalize_predicate` is now deprecated. Fact extraction
+  normalizes predicates to snake_case and resolves aliases through the alias table before list
+  expansion; the hardcoded synonym map remains only as a deprecated fallback.
+- `get_relationship_type_id` now resolves aliases through `relationship_type_aliases`, matching
+  `ensure_relationship_type` behavior.
+
+### Tests
+
+- Added `ensure_relationship_type_resolves_alias_to_canonical` and
+  `ensure_relationship_type_creates_new_type_and_self_alias` to
+  `mimir-knowledge/tests/relationship_type_dag_test.rs`.
+- Updated existing tests and lookup-sync expectations to account for the seeded relationship
+  type ontology.
+
+### Documentation
+
+- Updated `docs/knowledge-graph-schema.md`, `docs/wiki/knowledge-graph.md`, and
+  `docs/fact-extraction-pipeline.md` to describe alias-aware resolution and the deprecated
+  hardcoded fallback.
+
 ## [0.46.1] — 2026-06-16
 
 ### Fixed

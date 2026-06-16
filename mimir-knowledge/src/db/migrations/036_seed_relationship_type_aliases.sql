@@ -21,7 +21,8 @@ INSERT OR IGNORE INTO relationship_types (name, description) VALUES
     ('preferred_name', 'Subject prefers to be called by a particular name'),
     ('favourite_food', 'Subject''s favourite food'),
     ('favourite_colour', 'Subject''s favourite colour'),
-    ('health_condition', 'Subject has a health condition, allergy, or medical condition');
+    ('health_condition', 'Subject has a health condition, allergy, or medical condition'),
+    ('has_name', 'Subject has a name');
 
 -- 2. Self-aliases for every canonical relationship type.
 --    This makes the alias table the single source of truth for resolution.
@@ -113,6 +114,9 @@ INSERT OR IGNORE INTO relationship_type_aliases (alias, relationship_type_id)
 SELECT 'called', id FROM relationship_types WHERE name = 'preferred_name';
 INSERT OR IGNORE INTO relationship_type_aliases (alias, relationship_type_id)
 SELECT 'goes_by', id FROM relationship_types WHERE name = 'preferred_name';
+
+INSERT OR IGNORE INTO relationship_type_aliases (alias, relationship_type_id)
+SELECT 'name', id FROM relationship_types WHERE name = 'has_name';
 
 INSERT OR IGNORE INTO relationship_type_aliases (alias, relationship_type_id)
 SELECT 'favorite_food', id FROM relationship_types WHERE name = 'favourite_food';

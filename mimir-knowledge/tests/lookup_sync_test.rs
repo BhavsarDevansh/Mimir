@@ -291,6 +291,7 @@ async fn relationship_types_sync() {
             (11, "has_preference", "has_preference"),
             (12, "rejected_action", "rejected_action"),
             (13, "studied_at", "studied_at"),
+            (25, "has_name", "has_name"),
             (14, "hobby", "hobby"),
             (15, "works_at", "works_at"),
             (16, "based_in", "based_in"),

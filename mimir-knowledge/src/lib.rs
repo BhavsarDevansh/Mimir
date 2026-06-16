@@ -315,8 +315,11 @@ impl KnowledgeGraph {
         .await?;
         let id = id as i16;
 
+        // Use INSERT OR IGNORE because concurrent transactions may race to create
+        // the same new canonical type; both can upsert `relationship_types`, but
+        // only one can insert the self-alias. The loser must commit cleanly.
         sqlx::query(
-            "INSERT INTO relationship_type_aliases (alias, relationship_type_id) VALUES (?, ?)",
+            "INSERT OR IGNORE INTO relationship_type_aliases (alias, relationship_type_id) VALUES (?, ?)",
         )
         .bind(&normalized)
         .bind(id)

@@ -364,3 +364,48 @@ async fn transactional_fact_insert_rejects_relationship_type_name_that_shadows_a
         err
     );
 }
+
+#[tokio::test]
+async fn ensure_relationship_type_resolves_alias_to_canonical() {
+    let (_dir, kg) = setup().await;
+    let canonical_id = kg.ensure_relationship_type("studied_at").await.unwrap();
+    kg.insert_relationship_type_alias("attended", canonical_id)
+        .await
+        .unwrap();
+
+    let resolved_id = kg.ensure_relationship_type("attended").await.unwrap();
+    assert_eq!(
+        resolved_id, canonical_id,
+        "ensure_relationship_type should resolve 'attended' alias to canonical 'studied_at'"
+    );
+    assert_eq!(
+        kg.get_relationship_type_id("attended").await.unwrap(),
+        Some(canonical_id),
+        "get_relationship_type_id should also resolve the alias"
+    );
+}
+
+#[tokio::test]
+async fn ensure_relationship_type_creates_new_type_and_self_alias() {
+    let (_dir, kg) = setup().await;
+    let id = kg.ensure_relationship_type("foo_bar").await.unwrap();
+
+    let name_id = kg.get_relationship_type_id("foo_bar").await.unwrap();
+    assert_eq!(
+        name_id,
+        Some(id),
+        "new canonical name should resolve to the created type"
+    );
+
+    let aliases: Vec<String> = sqlx::query_scalar(
+        "SELECT alias FROM relationship_type_aliases WHERE relationship_type_id = ?",
+    )
+    .bind(id)
+    .fetch_all(kg.pool())
+    .await
+    .unwrap();
+    assert!(
+        aliases.contains(&"foo_bar".to_string()),
+        "new canonical type should register its normalized name as a self-alias"
+    );
+}

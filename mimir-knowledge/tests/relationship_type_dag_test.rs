@@ -57,6 +57,35 @@ async fn insert_hierarchy_and_query_descendants() {
 }
 
 #[tokio::test]
+async fn dag_with_multiple_parents_deduplicates_reachable_ids() {
+    let (_dir, kg) = setup().await;
+
+    let root = kg.ensure_relationship_type("spatial").await.unwrap();
+    let mid = kg.ensure_relationship_type("located").await.unwrap();
+    let leaf = kg.ensure_relationship_type("is_in").await.unwrap();
+
+    // leaf has two parents: root and mid, and mid is also a child of root.
+    kg.insert_relationship_type_hierarchy(mid, root)
+        .await
+        .unwrap();
+    kg.insert_relationship_type_hierarchy(leaf, mid)
+        .await
+        .unwrap();
+    kg.insert_relationship_type_hierarchy(leaf, root)
+        .await
+        .unwrap();
+
+    let descendants = kg.get_descendant_relationship_type_ids(root).await.unwrap();
+    assert_eq!(
+        descendants.iter().filter(|&&id| id == leaf).count(),
+        1,
+        "leaf reachable via two paths must appear once"
+    );
+    assert!(descendants.contains(&mid));
+    assert!(descendants.contains(&leaf));
+}
+
+#[tokio::test]
 async fn insert_alias_and_resolve() {
     let (_dir, kg) = setup().await;
 
@@ -76,6 +105,28 @@ async fn insert_alias_and_resolve() {
         .await
         .unwrap();
     assert_eq!(resolved_whitespace, Some(id));
+}
+
+#[tokio::test]
+async fn canonical_name_cannot_shadow_alias() {
+    let (_dir, kg) = setup().await;
+
+    let existing_id = kg
+        .ensure_relationship_type("employer_entity")
+        .await
+        .unwrap();
+    kg.insert_relationship_type_alias("employer", existing_id)
+        .await
+        .unwrap();
+
+    // Creating a canonical relationship type called "employer" should now fail
+    // because the alias already occupies that name.
+    let err = kg.ensure_relationship_type("employer").await.unwrap_err();
+    assert!(
+        matches!(err, KnowledgeError::Validation(_)),
+        "expected validation error for canonical name shadowing alias, got {:?}",
+        err
+    );
 }
 
 #[tokio::test]
@@ -127,6 +178,35 @@ async fn cycle_detection_rejects_indirect_cycle() {
         .await
         .unwrap_err();
     assert!(matches!(err, KnowledgeError::RelationshipTypeCycle));
+}
+
+#[tokio::test]
+async fn get_relationship_type_includes_parents_and_aliases() {
+    let (_dir, kg) = setup().await;
+
+    let parent_id = kg.ensure_relationship_type("located").await.unwrap();
+    let rt = mimir_knowledge::models::relationship_type::NewRelationshipType {
+        name: "is_in".to_string(),
+        description: None,
+        sensitive: false,
+        default_memory_priority_id: None,
+        parent_ids: vec![parent_id],
+        aliases: vec!["inside".to_string(), "within".to_string()],
+    };
+    let inserted = kg.insert_relationship_type(rt).await.unwrap();
+    assert_eq!(inserted.name, "is_in");
+    assert_eq!(inserted.parent_ids, vec![parent_id]);
+    assert!(inserted.aliases.contains(&"inside".to_string()));
+    assert!(inserted.aliases.contains(&"within".to_string()));
+
+    let loaded = kg
+        .get_relationship_type(inserted.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.parent_ids, vec![parent_id]);
+    assert!(loaded.aliases.contains(&"inside".to_string()));
+    assert!(loaded.aliases.contains(&"within".to_string()));
 }
 
 #[tokio::test]

@@ -227,6 +227,9 @@ impl KnowledgeGraph {
 
     /// Ensure a relationship type exists in the database, returning its stable id.
     /// Creates the row silently if missing.
+    ///
+    /// Rejects names that shadow an existing alias so alias and canonical
+    /// resolution stay consistent.
     pub async fn ensure_relationship_type(&self, name: &str) -> Result<i16, KnowledgeError> {
         {
             let cache = self.relationship_type_cache.read().await;
@@ -244,6 +247,13 @@ impl KnowledgeGraph {
         let id = match row {
             Some((id,)) => id,
             None => {
+                if self.resolve_relationship_type_alias(name).await?.is_some() {
+                    return Err(KnowledgeError::Validation(format!(
+                        "relationship type name '{}' conflicts with an existing alias",
+                        name
+                    )));
+                }
+
                 let id: i64 = sqlx::query_scalar(
                     "INSERT INTO relationship_types (name, description) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
                 )
@@ -374,16 +384,19 @@ impl KnowledgeGraph {
             return Err(KnowledgeError::RelationshipTypeCycle);
         }
 
-        if self.relationship_type_reaches(parent_id, child_id).await? {
+        let mut tx = self.pool.begin().await?;
+
+        if Self::relationship_type_reaches(&mut tx, parent_id, child_id).await? {
             return Err(KnowledgeError::RelationshipTypeCycle);
         }
 
         sqlx::query("INSERT INTO relationship_type_hierarchy (child_id, parent_id) VALUES (?, ?)")
             .bind(child_id)
             .bind(parent_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
 
+        tx.commit().await?;
         Ok(())
     }
 
@@ -455,7 +468,7 @@ impl KnowledgeGraph {
         let rows: Vec<(i16,)> = sqlx::query_as(
             r#"WITH RECURSIVE descendants(id) AS (
              SELECT child_id FROM relationship_type_hierarchy WHERE parent_id = ?
-             UNION ALL
+             UNION
              SELECT h.child_id FROM relationship_type_hierarchy h
              JOIN descendants d ON h.parent_id = d.id
              )
@@ -476,7 +489,7 @@ impl KnowledgeGraph {
         let rows: Vec<(i16,)> = sqlx::query_as(
             r#"WITH RECURSIVE ancestors(id) AS (
              SELECT parent_id FROM relationship_type_hierarchy WHERE child_id = ?
-             UNION ALL
+             UNION
              SELECT h.parent_id FROM relationship_type_hierarchy h
              JOIN ancestors a ON h.child_id = a.id
              )
@@ -491,7 +504,7 @@ impl KnowledgeGraph {
 
     /// Return true if `source_id` can reach `target_id` through parent edges.
     async fn relationship_type_reaches(
-        &self,
+        tx: &mut sqlx::SqliteTransaction<'_>,
         source_id: i16,
         target_id: i16,
     ) -> Result<bool, KnowledgeError> {
@@ -506,10 +519,118 @@ impl KnowledgeGraph {
         )
         .bind(source_id)
         .bind(target_id)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut **tx)
         .await?;
 
         Ok(!rows.is_empty())
+    }
+
+    /// Load a relationship type with its parents and aliases.
+    pub async fn get_relationship_type(
+        &self,
+        id: i16,
+    ) -> Result<Option<crate::models::relationship_type::RelationshipType>, KnowledgeError> {
+        let row: Option<(i16, String, Option<String>, bool, i16)> = sqlx::query_as(
+            r#"SELECT id, name, description, sensitive, default_memory_priority_id
+             FROM relationship_types WHERE id = ?"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some((id, name, description, sensitive, default_memory_priority_id)) = row else {
+            return Ok(None);
+        };
+
+        let parent_ids: Vec<i16> = sqlx::query_scalar(
+            "SELECT parent_id FROM relationship_type_hierarchy WHERE child_id = ?",
+        )
+        .bind(id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let aliases: Vec<String> = sqlx::query_scalar(
+            "SELECT alias FROM relationship_type_aliases WHERE relationship_type_id = ?",
+        )
+        .bind(id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(Some(crate::models::relationship_type::RelationshipType {
+            id,
+            name,
+            description,
+            sensitive,
+            default_memory_priority_id,
+            parent_ids,
+            aliases,
+        }))
+    }
+
+    /// Insert a new relationship type with optional parents and aliases in a single call.
+    /// Any parent/alias edge that would create a cycle or conflict is rejected.
+    pub async fn insert_relationship_type(
+        &self,
+        new: crate::models::relationship_type::NewRelationshipType,
+    ) -> Result<crate::models::relationship_type::RelationshipType, KnowledgeError> {
+        let mut tx = self.pool.begin().await?;
+
+        let default_memory_priority_id = new.default_memory_priority_id.unwrap_or(3);
+        let id: i64 = sqlx::query_scalar(
+            r#"INSERT INTO relationship_types (name, description, sensitive, default_memory_priority_id)\
+             VALUES (?, ?, ?, ?)\
+             ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id"#,
+        )
+        .bind(&new.name)
+        .bind(new.description.as_deref())
+        .bind(new.sensitive)
+        .bind(default_memory_priority_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let id = id as i16;
+
+        for parent_id in &new.parent_ids {
+            if *parent_id == id {
+                return Err(KnowledgeError::RelationshipTypeCycle);
+            }
+            if Self::relationship_type_reaches(&mut tx, *parent_id, id).await? {
+                return Err(KnowledgeError::RelationshipTypeCycle);
+            }
+            sqlx::query(
+                "INSERT INTO relationship_type_hierarchy (child_id, parent_id) VALUES (?, ?)",
+            )
+            .bind(id)
+            .bind(parent_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        for alias in &new.aliases {
+            let normalized = normalize_relationship_alias(alias);
+            sqlx::query(
+                "INSERT INTO relationship_type_aliases (alias, relationship_type_id) VALUES (?, ?)",
+            )
+            .bind(&normalized)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+
+        Ok(crate::models::relationship_type::RelationshipType {
+            id,
+            name: new.name,
+            description: new.description,
+            sensitive: new.sensitive,
+            default_memory_priority_id,
+            parent_ids: new.parent_ids,
+            aliases: new
+                .aliases
+                .into_iter()
+                .map(|a| normalize_relationship_alias(&a))
+                .collect(),
+        })
     }
 
     /// Current timestamp according to the configured clock.

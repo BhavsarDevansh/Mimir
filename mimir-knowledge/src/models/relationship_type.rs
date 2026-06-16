@@ -19,3 +19,16 @@ pub struct RelationshipType {
     #[serde(default)]
     pub aliases: Vec<String>,
 }
+
+/// Input for inserting a new relationship type.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewRelationshipType {
+    pub name: String,
+    pub description: Option<String>,
+    pub sensitive: bool,
+    pub default_memory_priority_id: Option<i16>,
+    #[serde(default)]
+    pub parent_ids: Vec<i16>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+}

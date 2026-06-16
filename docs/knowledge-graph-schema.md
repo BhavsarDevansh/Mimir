@@ -209,7 +209,7 @@ These tables let the agent discover relationship types instead of memorizing pri
 ```sql
 WITH RECURSIVE descendants(id) AS (
   SELECT child_id FROM relationship_type_hierarchy WHERE parent_id = ?
-  UNION ALL
+  UNION
   SELECT h.child_id FROM relationship_type_hierarchy h
   JOIN descendants d ON h.parent_id = d.id
 )

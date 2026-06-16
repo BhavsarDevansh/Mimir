@@ -127,7 +127,7 @@ async fn insert_alias_and_resolve() {
 }
 
 #[tokio::test]
-async fn canonical_name_cannot_shadow_alias() {
+async fn ensure_relationship_type_resolves_alias_instead_of_conflicting() {
     let (_dir, kg) = setup().await;
 
     let existing_id = kg
@@ -138,14 +138,10 @@ async fn canonical_name_cannot_shadow_alias() {
         .await
         .unwrap();
 
-    // Creating a canonical relationship type called "employer" should now fail
-    // because the alias already occupies that name.
-    let err = kg.ensure_relationship_type("employer").await.unwrap_err();
-    assert!(
-        matches!(err, KnowledgeError::Validation(_)),
-        "expected validation error for canonical name shadowing alias, got {:?}",
-        err
-    );
+    // "employer" is an alias, so ensure_relationship_type resolves it to the
+    // canonical type rather than creating a new one or failing.
+    let resolved_id = kg.ensure_relationship_type("employer").await.unwrap();
+    assert_eq!(resolved_id, existing_id);
 }
 
 #[tokio::test]
@@ -205,7 +201,7 @@ async fn get_relationship_type_includes_parents_and_aliases() {
 
     let parent_id = kg.ensure_relationship_type("located").await.unwrap();
     let rt = mimir_knowledge::models::relationship_type::NewRelationshipType {
-        name: "is_in".to_string(),
+        name: "contained_in".to_string(),
         description: None,
         sensitive: false,
         default_memory_priority_id: None,
@@ -213,7 +209,7 @@ async fn get_relationship_type_includes_parents_and_aliases() {
         aliases: vec!["inside".to_string(), "within".to_string()],
     };
     let inserted = kg.insert_relationship_type(rt).await.unwrap();
-    assert_eq!(inserted.name, "is_in");
+    assert_eq!(inserted.name, "contained_in");
     assert_eq!(inserted.parent_ids, vec![parent_id]);
     assert!(inserted.aliases.contains(&"inside".to_string()));
     assert!(inserted.aliases.contains(&"within".to_string()));
@@ -318,7 +314,7 @@ async fn insert_relationship_type_rejects_alias_that_shadows_canonical_name() {
 }
 
 #[tokio::test]
-async fn transactional_fact_insert_rejects_relationship_type_name_that_shadows_alias() {
+async fn transactional_fact_insert_resolves_relationship_type_alias() {
     use mimir_knowledge::models::entity::EntityType;
     use mimir_knowledge::models::fact::NewFact;
     use mimir_knowledge::models::source::SourceType;
@@ -357,12 +353,9 @@ async fn transactional_fact_insert_rejects_relationship_type_name_that_shadows_a
         category_ids: vec![],
     };
 
-    let err = kg.insert_facts_batch(vec![fact]).await.unwrap_err();
-    assert!(
-        matches!(err, KnowledgeError::Validation(_)),
-        "expected validation error for transactional create shadowing alias, got {:?}",
-        err
-    );
+    let facts = kg.insert_facts_batch(vec![fact]).await.unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].relationship_type_id, existing_id);
 }
 
 #[tokio::test]

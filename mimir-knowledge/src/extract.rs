@@ -324,7 +324,8 @@ async fn process_extracted_facts(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<ExtractionOutcome, KnowledgeError> {
     let mut all_facts: Vec<ExtractedFact> = Vec::new();
-    for fact in extracted.facts {
+    for mut fact in extracted.facts {
+        fact.relationship_type = normalize_predicate(kg, &fact.relationship_type).await?;
         let expanded = split_list_objects(&fact);
         all_facts.extend(expanded);
     }
@@ -400,34 +401,47 @@ fn parse_entity_type(s: &str) -> Result<EntityType, KnowledgeError> {
 // ---------------------------------------------------------------------------
 
 /// Map common LLM predicate synonyms to canonical names.
-fn normalize_predicate(pred: &str) -> String {
+///
+/// First checks the `relationship_type_aliases` table, then falls back to a
+/// deprecated hardcoded map. The hardcoded map will be removed once the core
+/// relationship ontology is fully seeded.
+async fn normalize_predicate(kg: &KnowledgeGraph, pred: &str) -> Result<String, KnowledgeError> {
     let trimmed = pred.trim();
     let lowered = trimmed.to_lowercase().replace(' ', "_");
-    match lowered.as_str() {
-        "attended" | "went_to" | "graduated_from" | "alumni_of" => "studied_at".to_string(),
-        "hobbies" | "interests" => "hobby".to_string(),
-        "likes" => "likes".to_string(),
-        "dislikes" => "dislikes".to_string(),
-        "works_for" | "employer" => "works_at".to_string(),
-        "profession" | "occupation" => "works_as".to_string(),
-        "resides_in" | "current_city" => "based_in".to_string(),
-        "previously_lived_in" | "former_city" => "lived_in".to_string(),
-        "pet" | "pets" | "owns_pet" => "has_pets".to_string(),
-        "brother" | "sister" | "siblings" => "has_sibling".to_string(),
-        "spouse" | "boyfriend" | "girlfriend" | "partner" | "wife" | "husband" => {
-            "has_partner".to_string()
+
+    // Prefer the data-driven alias table.
+    if let Some(id) = kg.resolve_relationship_type_alias(&lowered).await? {
+        if let Some(name) = kg.relationship_type_name(id).await {
+            return Ok(name);
         }
-        "father" | "mother" | "parents" => "has_parent".to_string(),
-        "son" | "daughter" | "children" => "has_child".to_string(),
-        "name" => "has_name".to_string(),
-        "nickname" | "nick_name" | "called" | "goes_by" => "preferred_name".to_string(),
-        "favorite_food" | "fav_food" | "favourite_food" => "favourite_food".to_string(),
-        "favorite_colour" | "favorite_color" | "fav_color" | "fav_colour" | "color" | "colour" => {
-            "favourite_colour".to_string()
-        }
-        "food_allergy" | "medical_condition" | "condition" => "health_condition".to_string(),
-        _ => lowered,
     }
+
+    // TODO(#132-follow-up): remove deprecated hardcoded map once core ontology is seeded.
+    let canon = match lowered.as_str() {
+        "attended" | "went_to" | "graduated_from" | "alumni_of" => "studied_at",
+        "hobbies" | "interests" => "hobby",
+        "likes" => "likes",
+        "dislikes" => "dislikes",
+        "works_for" | "employer" => "works_at",
+        "profession" | "occupation" => "works_as",
+        "resides_in" | "current_city" => "based_in",
+        "previously_lived_in" | "former_city" => "lived_in",
+        "pet" | "pets" | "owns_pet" => "has_pets",
+        "brother" | "sister" | "siblings" => "has_sibling",
+        "spouse" | "boyfriend" | "girlfriend" | "partner" | "wife" | "husband" => "has_partner",
+        "father" | "mother" | "parents" => "has_parent",
+        "son" | "daughter" | "children" => "has_child",
+        "name" => "has_name",
+        "nickname" | "nick_name" | "called" | "goes_by" => "preferred_name",
+        "favorite_food" | "fav_food" | "favourite_food" => "favourite_food",
+        "favorite_colour" | "favorite_color" | "fav_color" | "fav_colour" | "color" | "colour" => {
+            "favourite_colour"
+        }
+        "food_allergy" | "medical_condition" | "condition" => "health_condition",
+        _ => &lowered,
+    };
+
+    Ok(canon.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -455,8 +469,8 @@ const LIST_PREDICATES: [&str; 11] = [
 /// We only split on simple commas to avoid breaking phrases like
 /// "Manchester, UK" — that predicate won't be in the allow-list anyway.
 fn split_list_objects(fact: &ExtractedFact) -> Vec<ExtractedFact> {
-    let canon = normalize_predicate(&fact.relationship_type);
-    if !LIST_PREDICATES.contains(&canon.as_str()) {
+    let canon = fact.relationship_type.as_str();
+    if !LIST_PREDICATES.contains(&canon) {
         return vec![fact.clone()];
     }
     let parts: Vec<&str> = fact.object.split(',').collect();
@@ -472,7 +486,7 @@ fn split_list_objects(fact: &ExtractedFact) -> Vec<ExtractedFact> {
         }
         let mut f = fact.clone();
         f.object = trimmed.to_string();
-        f.relationship_type = canon.clone();
+        f.relationship_type = canon.to_string();
         result.push(f);
     }
 
@@ -743,7 +757,8 @@ pub async fn process_remember_output(
 ) -> Result<ExtractionOutcome, KnowledgeError> {
     let now = kg.now();
     let mut all_facts: Vec<ExtractedFact> = Vec::new();
-    for fact in output.facts {
+    for mut fact in output.facts {
+        fact.relationship_type = normalize_predicate(kg, &fact.relationship_type).await?;
         let expanded = split_list_objects(&fact);
         all_facts.extend(expanded);
     }
@@ -766,11 +781,10 @@ pub async fn process_remember_output(
 
 pub(crate) async fn process_extracted_fact(
     kg: &KnowledgeGraph,
-    mut extracted: ExtractedFact,
+    extracted: ExtractedFact,
     now: DateTime<Utc>,
 ) -> Result<ProcessResult, KnowledgeError> {
-    // 3. Normalise predicate before any downstream logic.
-    extracted.relationship_type = normalize_predicate(&extracted.relationship_type);
+    // Relationship type was already normalised during list expansion.
 
     // Validate entity types.
     let subject_type = parse_entity_type(&extracted.subject_type)?;

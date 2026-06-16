@@ -80,12 +80,16 @@ pub enum KnowledgeError {
 
     #[error("Category {0} not found")]
     CategoryNotFound(i32),
+
+    #[error("Relationship type hierarchy cycle detected")]
+    RelationshipTypeCycle,
 }
 
 /// In-memory cache for relationship_type name ↔ id lookups.
 struct RelationshipTypeCache {
     name_to_id: HashMap<String, i16>,
     id_to_name: HashMap<i16, String>,
+    alias_to_id: HashMap<String, i16>,
 }
 
 impl RelationshipTypeCache {
@@ -93,8 +97,14 @@ impl RelationshipTypeCache {
         Self {
             name_to_id: HashMap::new(),
             id_to_name: HashMap::new(),
+            alias_to_id: HashMap::new(),
         }
     }
+}
+
+/// Normalise an English alias before storage or lookup.
+fn normalize_relationship_alias(alias: &str) -> String {
+    alias.trim().to_lowercase().replace(' ', "_")
 }
 
 /// The public API for the knowledge graph.
@@ -347,6 +357,159 @@ impl KnowledgeGraph {
         }
 
         row.map(|r| r.0)
+    }
+
+    // ------------------------------------------------------------------
+    // Relationship type DAG
+    // ------------------------------------------------------------------
+
+    /// Add a parent edge to the relationship type hierarchy.
+    /// Rejects self-loops and any cycle that would be created.
+    pub async fn insert_relationship_type_hierarchy(
+        &self,
+        child_id: i16,
+        parent_id: i16,
+    ) -> Result<(), KnowledgeError> {
+        if child_id == parent_id {
+            return Err(KnowledgeError::RelationshipTypeCycle);
+        }
+
+        if self.relationship_type_reaches(parent_id, child_id).await? {
+            return Err(KnowledgeError::RelationshipTypeCycle);
+        }
+
+        sqlx::query("INSERT INTO relationship_type_hierarchy (child_id, parent_id) VALUES (?, ?)")
+            .bind(child_id)
+            .bind(parent_id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Add an English alias for a relationship type.
+    ///
+    /// Aliases are globally unique and must not shadow an existing canonical
+    /// relationship type name.
+    pub async fn insert_relationship_type_alias(
+        &self,
+        alias: &str,
+        relationship_type_id: i16,
+    ) -> Result<(), KnowledgeError> {
+        let normalized = normalize_relationship_alias(alias);
+
+        if self.relationship_type_id(&normalized).await.is_some() {
+            return Err(KnowledgeError::Validation(format!(
+                "alias '{}' conflicts with an existing relationship type name",
+                normalized
+            )));
+        }
+
+        sqlx::query(
+            "INSERT INTO relationship_type_aliases (alias, relationship_type_id) VALUES (?, ?)",
+        )
+        .bind(&normalized)
+        .bind(relationship_type_id)
+        .execute(&self.pool)
+        .await?;
+
+        let mut cache = self.relationship_type_cache.write().await;
+        cache.alias_to_id.insert(normalized, relationship_type_id);
+        Ok(())
+    }
+
+    /// Resolve an alias to a relationship type id.
+    pub async fn resolve_relationship_type_alias(
+        &self,
+        alias: &str,
+    ) -> Result<Option<i16>, KnowledgeError> {
+        let normalized = normalize_relationship_alias(alias);
+        {
+            let cache = self.relationship_type_cache.read().await;
+            if let Some(&id) = cache.alias_to_id.get(&normalized) {
+                return Ok(Some(id));
+            }
+        }
+
+        let row: Option<(i16,)> = sqlx::query_as(
+            "SELECT relationship_type_id FROM relationship_type_aliases WHERE alias = ?",
+        )
+        .bind(&normalized)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some((id,)) = row {
+            let mut cache = self.relationship_type_cache.write().await;
+            cache.alias_to_id.insert(normalized, id);
+            Ok(Some(id))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Return all descendant ids of the given relationship type (recursive).
+    pub async fn get_descendant_relationship_type_ids(
+        &self,
+        ancestor_id: i16,
+    ) -> Result<Vec<i16>, KnowledgeError> {
+        let rows: Vec<(i16,)> = sqlx::query_as(
+            r#"WITH RECURSIVE descendants(id) AS (
+             SELECT child_id FROM relationship_type_hierarchy WHERE parent_id = ?
+             UNION ALL
+             SELECT h.child_id FROM relationship_type_hierarchy h
+             JOIN descendants d ON h.parent_id = d.id
+             )
+             SELECT id FROM descendants"#,
+        )
+        .bind(ancestor_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Return all ancestor ids of the given relationship type (recursive).
+    pub async fn get_ancestor_relationship_type_ids(
+        &self,
+        descendant_id: i16,
+    ) -> Result<Vec<i16>, KnowledgeError> {
+        let rows: Vec<(i16,)> = sqlx::query_as(
+            r#"WITH RECURSIVE ancestors(id) AS (
+             SELECT parent_id FROM relationship_type_hierarchy WHERE child_id = ?
+             UNION ALL
+             SELECT h.parent_id FROM relationship_type_hierarchy h
+             JOIN ancestors a ON h.child_id = a.id
+             )
+             SELECT id FROM ancestors"#,
+        )
+        .bind(descendant_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Return true if `source_id` can reach `target_id` through parent edges.
+    async fn relationship_type_reaches(
+        &self,
+        source_id: i16,
+        target_id: i16,
+    ) -> Result<bool, KnowledgeError> {
+        let rows: Vec<(i16,)> = sqlx::query_as(
+            r#"WITH RECURSIVE reachable(id) AS (
+             SELECT ?
+             UNION ALL
+             SELECT h.parent_id FROM relationship_type_hierarchy h
+             JOIN reachable r ON h.child_id = r.id
+             )
+             SELECT id FROM reachable WHERE id = ?"#,
+        )
+        .bind(source_id)
+        .bind(target_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(!rows.is_empty())
     }
 
     /// Current timestamp according to the configured clock.

@@ -47,6 +47,8 @@ async fn all_migrations_apply_cleanly() {
     assert!(names.contains(&"preference_source_types".to_string()));
     assert!(names.contains(&"relationship_types".to_string()));
     assert!(names.contains(&"relationship_constraints".to_string()));
+    assert!(names.contains(&"relationship_type_hierarchy".to_string()));
+    assert!(names.contains(&"relationship_type_aliases".to_string()));
     assert!(names.contains(&"categories".to_string()));
     assert!(names.contains(&"fact_categories".to_string()));
     assert!(names.contains(&"extraction_methods".to_string()));

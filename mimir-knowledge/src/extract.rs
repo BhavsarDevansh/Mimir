@@ -316,6 +316,19 @@ fn parse_remember_output(assistant_msg: Message) -> Result<RememberOutput, Knowl
 // Extraction processing
 // ---------------------------------------------------------------------------
 
+/// Normalize relationship types and expand list-valued facts.
+async fn normalize_and_expand_facts(
+    kg: &KnowledgeGraph,
+    facts: Vec<ExtractedFact>,
+) -> Result<Vec<ExtractedFact>, KnowledgeError> {
+    let mut result = Vec::new();
+    for mut fact in facts {
+        fact.relationship_type = normalize_predicate(kg, &fact.relationship_type).await?;
+        result.extend(split_list_objects(&fact));
+    }
+    Ok(result)
+}
+
 /// Process a `RememberOutput` by applying validation, dedup, confidence
 /// assignment, and insertion logic.
 async fn process_extracted_facts(
@@ -323,12 +336,7 @@ async fn process_extracted_facts(
     extracted: RememberOutput,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<ExtractionOutcome, KnowledgeError> {
-    let mut all_facts: Vec<ExtractedFact> = Vec::new();
-    for mut fact in extracted.facts {
-        fact.relationship_type = normalize_predicate(kg, &fact.relationship_type).await?;
-        let expanded = split_list_objects(&fact);
-        all_facts.extend(expanded);
-    }
+    let all_facts = normalize_and_expand_facts(kg, extracted.facts).await?;
 
     let mut outcome = ExtractionOutcome::default();
 
@@ -420,7 +428,6 @@ async fn normalize_predicate(kg: &KnowledgeGraph, pred: &str) -> Result<String, 
     let canon = match lowered.as_str() {
         "attended" | "went_to" | "graduated_from" | "alumni_of" => "studied_at",
         "hobbies" | "interests" => "hobby",
-        "likes" => "likes",
         "dislikes" => "dislikes",
         "works_for" | "employer" => "works_at",
         "profession" | "occupation" => "works_as",
@@ -756,12 +763,7 @@ pub async fn process_remember_output(
     output: RememberOutput,
 ) -> Result<ExtractionOutcome, KnowledgeError> {
     let now = kg.now();
-    let mut all_facts: Vec<ExtractedFact> = Vec::new();
-    for mut fact in output.facts {
-        fact.relationship_type = normalize_predicate(kg, &fact.relationship_type).await?;
-        let expanded = split_list_objects(&fact);
-        all_facts.extend(expanded);
-    }
+    let all_facts = normalize_and_expand_facts(kg, output.facts).await?;
 
     let mut outcome = ExtractionOutcome::default();
 

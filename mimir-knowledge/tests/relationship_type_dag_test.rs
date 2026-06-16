@@ -86,6 +86,25 @@ async fn dag_with_multiple_parents_deduplicates_reachable_ids() {
 }
 
 #[tokio::test]
+async fn empty_alias_is_rejected() {
+    let (_dir, kg) = setup().await;
+    let id = kg.ensure_relationship_type("has_quality").await.unwrap();
+
+    let err = kg
+        .insert_relationship_type_alias("   ", id)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, KnowledgeError::Validation(_)),
+        "expected validation error for empty alias, got {:?}",
+        err
+    );
+
+    let resolved = kg.resolve_relationship_type_alias("   ").await.unwrap();
+    assert_eq!(resolved, None);
+}
+
+#[tokio::test]
 async fn insert_alias_and_resolve() {
     let (_dir, kg) = setup().await;
 

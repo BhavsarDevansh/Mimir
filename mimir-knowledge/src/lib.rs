@@ -103,8 +103,15 @@ impl RelationshipTypeCache {
 }
 
 /// Normalise an English alias before storage or lookup.
-fn normalize_relationship_alias(alias: &str) -> String {
-    alias.trim().to_lowercase().replace(' ', "_")
+///
+/// Returns `None` if the alias is empty or whitespace-only after normalisation.
+fn normalize_relationship_alias(alias: &str) -> Option<String> {
+    let normalized = alias.trim().to_lowercase().replace(' ', "_");
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
 }
 
 /// The public API for the knowledge graph.
@@ -409,7 +416,11 @@ impl KnowledgeGraph {
         alias: &str,
         relationship_type_id: i16,
     ) -> Result<(), KnowledgeError> {
-        let normalized = normalize_relationship_alias(alias);
+        let Some(normalized) = normalize_relationship_alias(alias) else {
+            return Err(KnowledgeError::Validation(
+                "alias cannot be empty".to_string(),
+            ));
+        };
 
         if self.relationship_type_id(&normalized).await.is_some() {
             return Err(KnowledgeError::Validation(format!(
@@ -436,7 +447,9 @@ impl KnowledgeGraph {
         &self,
         alias: &str,
     ) -> Result<Option<i16>, KnowledgeError> {
-        let normalized = normalize_relationship_alias(alias);
+        let Some(normalized) = normalize_relationship_alias(alias) else {
+            return Ok(None);
+        };
         {
             let cache = self.relationship_type_cache.read().await;
             if let Some(&id) = cache.alias_to_id.get(&normalized) {
@@ -577,9 +590,7 @@ impl KnowledgeGraph {
 
         let default_memory_priority_id = new.default_memory_priority_id.unwrap_or(3);
         let id: i64 = sqlx::query_scalar(
-            r#"INSERT INTO relationship_types (name, description, sensitive, default_memory_priority_id)\
-             VALUES (?, ?, ?, ?)\
-             ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id"#,
+            "INSERT INTO relationship_types (name, description, sensitive, default_memory_priority_id)              VALUES (?, ?, ?, ?)              ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
         )
         .bind(&new.name)
         .bind(new.description.as_deref())
@@ -606,7 +617,11 @@ impl KnowledgeGraph {
         }
 
         for alias in &new.aliases {
-            let normalized = normalize_relationship_alias(alias);
+            let Some(normalized) = normalize_relationship_alias(alias) else {
+                return Err(KnowledgeError::Validation(
+                    "alias cannot be empty".to_string(),
+                ));
+            };
             sqlx::query(
                 "INSERT INTO relationship_type_aliases (alias, relationship_type_id) VALUES (?, ?)",
             )
@@ -628,7 +643,7 @@ impl KnowledgeGraph {
             aliases: new
                 .aliases
                 .into_iter()
-                .map(|a| normalize_relationship_alias(&a))
+                .filter_map(|a| normalize_relationship_alias(&a))
                 .collect(),
         })
     }

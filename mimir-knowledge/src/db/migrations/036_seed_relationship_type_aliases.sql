@@ -4,12 +4,31 @@
 -- ============================================================================
 PRAGMA foreign_keys = OFF;
 
--- 1. Self-aliases for every existing canonical relationship type.
+-- 1. Ensure the canonical targets referenced by legacy hardcoded synonyms exist.
+--    INSERT OR IGNORE keeps existing rows and only creates missing ones.
+INSERT OR IGNORE INTO relationship_types (name, description) VALUES
+    ('studied_at', 'Subject studied at or attended an institution'),
+    ('hobby', 'Subject has a hobby or interest'),
+    ('works_at', 'Subject works at or is employed by an organization'),
+    ('works_as', 'Subject works in a particular role or profession'),
+    ('based_in', 'Subject is currently based in or resides in a location'),
+    ('lived_in', 'Subject previously lived in a location'),
+    ('has_pets', 'Subject has pets'),
+    ('has_sibling', 'Subject has a sibling'),
+    ('has_partner', 'Subject has a partner or spouse'),
+    ('has_parent', 'Subject has a parent'),
+    ('has_child', 'Subject has a child'),
+    ('preferred_name', 'Subject prefers to be called by a particular name'),
+    ('favourite_food', 'Subject''s favourite food'),
+    ('favourite_colour', 'Subject''s favourite colour'),
+    ('health_condition', 'Subject has a health condition, allergy, or medical condition');
+
+-- 2. Self-aliases for every canonical relationship type.
 --    This makes the alias table the single source of truth for resolution.
 INSERT OR IGNORE INTO relationship_type_aliases (alias, relationship_type_id)
 SELECT name, id FROM relationship_types;
 
--- 2. Legacy hardcoded synonyms from extract.rs::normalize_predicate.
+-- 3. Legacy hardcoded synonyms from extract.rs::normalize_predicate.
 --    Each resolves to a canonical relationship type already in relationship_types.
 INSERT OR IGNORE INTO relationship_type_aliases (alias, relationship_type_id)
 SELECT 'attended', id FROM relationship_types WHERE name = 'studied_at';

@@ -323,10 +323,25 @@ async fn normalize_and_expand_facts(
 ) -> Result<Vec<ExtractedFact>, KnowledgeError> {
     let mut result = Vec::new();
     for mut fact in facts {
-        fact.relationship_type = normalize_predicate(kg, &fact.relationship_type).await?;
+        let normalized = normalize_relationship_type(&fact.relationship_type);
+        let canonical_name = if let Some(id) =
+            kg.get_relationship_type_id(&normalized).await?
+        {
+            kg.relationship_type_name(id)
+                .await
+                .unwrap_or(normalized)
+        } else {
+            normalized
+        };
+        fact.relationship_type = canonical_name;
         result.extend(split_list_objects(&fact));
     }
     Ok(result)
+}
+
+/// Normalize a relationship type string to snake_case.
+fn normalize_relationship_type(pred: &str) -> String {
+    pred.trim().to_lowercase().replace(' ', "_")
 }
 
 /// Process a `RememberOutput` by applying validation, dedup, confidence
@@ -408,21 +423,22 @@ fn parse_entity_type(s: &str) -> Result<EntityType, KnowledgeError> {
 // Predicate normalisation
 // ---------------------------------------------------------------------------
 
-/// Map common LLM predicate synonyms to canonical names.
+/// Deprecated fallback synonym map for relationship types.
 ///
-/// First checks the `relationship_type_aliases` table, then falls back to a
-/// deprecated hardcoded map. The hardcoded map will be removed once the core
-/// relationship ontology is fully seeded.
+/// Relationship type aliases are now the single source of truth via
+/// [`KnowledgeGraph::ensure_relationship_type`]. This hardcoded map is retained
+/// only as a deprecated fallback until the core ontology is fully seeded.
+///
+/// No active code path should call this function; it is kept for reference and
+/// potential future ontology bootstrapping.
+#[allow(dead_code)]
+#[deprecated(
+    note = "Relationship type aliases are now the single source of truth via ensure_relationship_type; this hardcoded map is kept only as a fallback until #132 fully seeds the ontology"
+)]
 async fn normalize_predicate(kg: &KnowledgeGraph, pred: &str) -> Result<String, KnowledgeError> {
+    let _ = kg;
     let trimmed = pred.trim();
     let lowered = trimmed.to_lowercase().replace(' ', "_");
-
-    // Prefer the data-driven alias table.
-    if let Some(id) = kg.resolve_relationship_type_alias(&lowered).await? {
-        if let Some(name) = kg.relationship_type_name(id).await {
-            return Ok(name);
-        }
-    }
 
     // TODO(#132-follow-up): remove deprecated hardcoded map once core ontology is seeded.
     let canon = match lowered.as_str() {

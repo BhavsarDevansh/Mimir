@@ -80,12 +80,16 @@ pub enum KnowledgeError {
 
     #[error("Category {0} not found")]
     CategoryNotFound(i32),
+
+    #[error("Relationship type hierarchy cycle detected")]
+    RelationshipTypeCycle,
 }
 
 /// In-memory cache for relationship_type name ↔ id lookups.
 struct RelationshipTypeCache {
     name_to_id: HashMap<String, i16>,
     id_to_name: HashMap<i16, String>,
+    alias_to_id: HashMap<String, i16>,
 }
 
 impl RelationshipTypeCache {
@@ -93,8 +97,64 @@ impl RelationshipTypeCache {
         Self {
             name_to_id: HashMap::new(),
             id_to_name: HashMap::new(),
+            alias_to_id: HashMap::new(),
         }
     }
+}
+
+/// Normalise an English alias before storage or lookup.
+///
+/// Returns `None` if the alias is empty or whitespace-only after normalisation.
+fn normalize_relationship_alias(alias: &str) -> Option<String> {
+    let normalized = alias.trim().to_lowercase().replace(' ', "_");
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+/// Returns `true` if `name` is already registered as a relationship-type alias.
+///
+/// Used to keep canonical names from shadowing aliases, which would break
+/// alias-to-canonical resolution.
+async fn canonical_name_conflicts_with_alias<'a, E>(
+    executor: E,
+    name: &str,
+) -> Result<bool, KnowledgeError>
+where
+    E: sqlx::Executor<'a, Database = sqlx::Sqlite>,
+{
+    let Some(normalized) = normalize_relationship_alias(name) else {
+        return Ok(false);
+    };
+    let row: Option<(i16,)> = sqlx::query_as(
+        "SELECT relationship_type_id FROM relationship_type_aliases WHERE alias = ?",
+    )
+    .bind(&normalized)
+    .fetch_optional(executor)
+    .await?;
+    Ok(row.is_some())
+}
+
+/// Returns `true` if `alias` normalises to an existing relationship-type name.
+///
+/// Used to keep aliases from shadowing canonical names.
+async fn alias_conflicts_with_canonical_name<'a, E>(
+    executor: E,
+    alias: &str,
+) -> Result<bool, KnowledgeError>
+where
+    E: sqlx::Executor<'a, Database = sqlx::Sqlite>,
+{
+    let Some(normalized) = normalize_relationship_alias(alias) else {
+        return Ok(false);
+    };
+    let row: Option<(i16,)> = sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
+        .bind(&normalized)
+        .fetch_optional(executor)
+        .await?;
+    Ok(row.is_some())
 }
 
 /// The public API for the knowledge graph.
@@ -217,6 +277,9 @@ impl KnowledgeGraph {
 
     /// Ensure a relationship type exists in the database, returning its stable id.
     /// Creates the row silently if missing.
+    ///
+    /// Rejects names that shadow an existing alias so alias and canonical
+    /// resolution stay consistent.
     pub async fn ensure_relationship_type(&self, name: &str) -> Result<i16, KnowledgeError> {
         {
             let cache = self.relationship_type_cache.read().await;
@@ -225,25 +288,36 @@ impl KnowledgeGraph {
             }
         }
 
+        let mut tx = self.pool.begin().await?;
+
         let row: Option<(i16,)> =
             sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
                 .bind(name)
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *tx)
                 .await?;
 
         let id = match row {
             Some((id,)) => id,
             None => {
+                if canonical_name_conflicts_with_alias(&mut *tx, name).await? {
+                    return Err(KnowledgeError::Validation(format!(
+                        "relationship type name '{}' conflicts with an existing alias",
+                        name
+                    )));
+                }
+
                 let id: i64 = sqlx::query_scalar(
                     "INSERT INTO relationship_types (name, description) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
                 )
                 .bind(name)
                 .bind(format!("Auto-created relationship_type: {}", name))
-                .fetch_one(&self.pool)
+                .fetch_one(&mut *tx)
                 .await?;
                 id as i16
             }
         };
+
+        tx.commit().await?;
 
         let mut cache = self.relationship_type_cache.write().await;
         cache.name_to_id.insert(name.to_string(), id);
@@ -273,6 +347,13 @@ impl KnowledgeGraph {
         let id = match row {
             Some((id,)) => id,
             None => {
+                if canonical_name_conflicts_with_alias(&mut **tx, name).await? {
+                    return Err(KnowledgeError::Validation(format!(
+                        "relationship type name '{}' conflicts with an existing alias",
+                        name
+                    )));
+                }
+
                 let id: i64 = sqlx::query_scalar(
                     "INSERT INTO relationship_types (name, description) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
                 )
@@ -347,6 +428,296 @@ impl KnowledgeGraph {
         }
 
         row.map(|r| r.0)
+    }
+
+    // ------------------------------------------------------------------
+    // Relationship type DAG
+    // ------------------------------------------------------------------
+
+    /// Add a parent edge to the relationship type hierarchy.
+    /// Rejects self-loops and any cycle that would be created.
+    pub async fn insert_relationship_type_hierarchy(
+        &self,
+        child_id: i16,
+        parent_id: i16,
+    ) -> Result<(), KnowledgeError> {
+        if child_id == parent_id {
+            return Err(KnowledgeError::RelationshipTypeCycle);
+        }
+
+        let mut tx = self.pool.begin().await?;
+
+        if Self::relationship_type_reaches(&mut tx, parent_id, child_id).await? {
+            return Err(KnowledgeError::RelationshipTypeCycle);
+        }
+
+        sqlx::query("INSERT INTO relationship_type_hierarchy (child_id, parent_id) VALUES (?, ?)")
+            .bind(child_id)
+            .bind(parent_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Add an English alias for a relationship type.
+    ///
+    /// Aliases are globally unique and must not shadow an existing canonical
+    /// relationship type name.
+    pub async fn insert_relationship_type_alias(
+        &self,
+        alias: &str,
+        relationship_type_id: i16,
+    ) -> Result<(), KnowledgeError> {
+        let Some(normalized) = normalize_relationship_alias(alias) else {
+            return Err(KnowledgeError::Validation(
+                "alias cannot be empty".to_string(),
+            ));
+        };
+
+        let mut tx = self.pool.begin().await?;
+
+        if alias_conflicts_with_canonical_name(&mut *tx, alias).await? {
+            return Err(KnowledgeError::Validation(format!(
+                "alias '{}' conflicts with an existing relationship type name",
+                normalized
+            )));
+        }
+
+        sqlx::query(
+            "INSERT INTO relationship_type_aliases (alias, relationship_type_id) VALUES (?, ?)",
+        )
+        .bind(&normalized)
+        .bind(relationship_type_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        let mut cache = self.relationship_type_cache.write().await;
+        cache.alias_to_id.insert(normalized, relationship_type_id);
+        Ok(())
+    }
+
+    /// Resolve an alias to a relationship type id.
+    pub async fn resolve_relationship_type_alias(
+        &self,
+        alias: &str,
+    ) -> Result<Option<i16>, KnowledgeError> {
+        let Some(normalized) = normalize_relationship_alias(alias) else {
+            return Ok(None);
+        };
+        {
+            let cache = self.relationship_type_cache.read().await;
+            if let Some(&id) = cache.alias_to_id.get(&normalized) {
+                return Ok(Some(id));
+            }
+        }
+
+        let row: Option<(i16,)> = sqlx::query_as(
+            "SELECT relationship_type_id FROM relationship_type_aliases WHERE alias = ?",
+        )
+        .bind(&normalized)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some((id,)) = row {
+            let mut cache = self.relationship_type_cache.write().await;
+            cache.alias_to_id.insert(normalized, id);
+            Ok(Some(id))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Return all descendant ids of the given relationship type (recursive).
+    pub async fn get_descendant_relationship_type_ids(
+        &self,
+        ancestor_id: i16,
+    ) -> Result<Vec<i16>, KnowledgeError> {
+        let rows: Vec<(i16,)> = sqlx::query_as(
+            r#"WITH RECURSIVE descendants(id) AS (
+             SELECT child_id FROM relationship_type_hierarchy WHERE parent_id = ?
+             UNION
+             SELECT h.child_id FROM relationship_type_hierarchy h
+             JOIN descendants d ON h.parent_id = d.id
+             )
+             SELECT id FROM descendants"#,
+        )
+        .bind(ancestor_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Return all ancestor ids of the given relationship type (recursive).
+    pub async fn get_ancestor_relationship_type_ids(
+        &self,
+        descendant_id: i16,
+    ) -> Result<Vec<i16>, KnowledgeError> {
+        let rows: Vec<(i16,)> = sqlx::query_as(
+            r#"WITH RECURSIVE ancestors(id) AS (
+             SELECT parent_id FROM relationship_type_hierarchy WHERE child_id = ?
+             UNION
+             SELECT h.parent_id FROM relationship_type_hierarchy h
+             JOIN ancestors a ON h.child_id = a.id
+             )
+             SELECT id FROM ancestors"#,
+        )
+        .bind(descendant_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Return true if `source_id` can reach `target_id` through parent edges.
+    async fn relationship_type_reaches(
+        tx: &mut sqlx::SqliteTransaction<'_>,
+        source_id: i16,
+        target_id: i16,
+    ) -> Result<bool, KnowledgeError> {
+        let rows: Vec<(i16,)> = sqlx::query_as(
+            r#"WITH RECURSIVE reachable(id) AS (
+             SELECT ?
+             UNION ALL
+             SELECT h.parent_id FROM relationship_type_hierarchy h
+             JOIN reachable r ON h.child_id = r.id
+             )
+             SELECT id FROM reachable WHERE id = ?"#,
+        )
+        .bind(source_id)
+        .bind(target_id)
+        .fetch_all(&mut **tx)
+        .await?;
+
+        Ok(!rows.is_empty())
+    }
+
+    /// Load a relationship type with its parents and aliases.
+    pub async fn get_relationship_type(
+        &self,
+        id: i16,
+    ) -> Result<Option<crate::models::relationship_type::RelationshipType>, KnowledgeError> {
+        let row: Option<(i16, String, Option<String>, bool, i16)> = sqlx::query_as(
+            r#"SELECT id, name, description, sensitive, default_memory_priority_id
+             FROM relationship_types WHERE id = ?"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some((id, name, description, sensitive, default_memory_priority_id)) = row else {
+            return Ok(None);
+        };
+
+        let parent_ids: Vec<i16> = sqlx::query_scalar(
+            "SELECT parent_id FROM relationship_type_hierarchy WHERE child_id = ?",
+        )
+        .bind(id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let aliases: Vec<String> = sqlx::query_scalar(
+            "SELECT alias FROM relationship_type_aliases WHERE relationship_type_id = ?",
+        )
+        .bind(id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(Some(crate::models::relationship_type::RelationshipType {
+            id,
+            name,
+            description,
+            sensitive,
+            default_memory_priority_id,
+            parent_ids,
+            aliases,
+        }))
+    }
+
+    /// Insert a new relationship type with optional parents and aliases in a single call.
+    /// Any parent/alias edge that would create a cycle or conflict is rejected.
+    pub async fn insert_relationship_type(
+        &self,
+        new: crate::models::relationship_type::NewRelationshipType,
+    ) -> Result<crate::models::relationship_type::RelationshipType, KnowledgeError> {
+        let mut tx = self.pool.begin().await?;
+
+        let default_memory_priority_id = new.default_memory_priority_id.unwrap_or(3);
+
+        if canonical_name_conflicts_with_alias(&mut *tx, &new.name).await? {
+            return Err(KnowledgeError::Validation(format!(
+                "relationship type name '{}' conflicts with an existing alias",
+                new.name
+            )));
+        }
+
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO relationship_types (name, description, sensitive, default_memory_priority_id)              VALUES (?, ?, ?, ?)              ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
+        )
+        .bind(&new.name)
+        .bind(new.description.as_deref())
+        .bind(new.sensitive)
+        .bind(default_memory_priority_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let id = id as i16;
+
+        for parent_id in &new.parent_ids {
+            if *parent_id == id {
+                return Err(KnowledgeError::RelationshipTypeCycle);
+            }
+            if Self::relationship_type_reaches(&mut tx, *parent_id, id).await? {
+                return Err(KnowledgeError::RelationshipTypeCycle);
+            }
+            sqlx::query(
+                "INSERT INTO relationship_type_hierarchy (child_id, parent_id) VALUES (?, ?)",
+            )
+            .bind(id)
+            .bind(parent_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        for alias in &new.aliases {
+            let Some(normalized) = normalize_relationship_alias(alias) else {
+                return Err(KnowledgeError::Validation(
+                    "alias cannot be empty".to_string(),
+                ));
+            };
+            if alias_conflicts_with_canonical_name(&mut *tx, alias).await? {
+                return Err(KnowledgeError::Validation(format!(
+                    "alias '{}' conflicts with an existing relationship type name",
+                    normalized
+                )));
+            }
+            sqlx::query(
+                "INSERT INTO relationship_type_aliases (alias, relationship_type_id) VALUES (?, ?)",
+            )
+            .bind(&normalized)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+
+        Ok(crate::models::relationship_type::RelationshipType {
+            id,
+            name: new.name,
+            description: new.description,
+            sensitive: new.sensitive,
+            default_memory_priority_id,
+            parent_ids: new.parent_ids,
+            aliases: new
+                .aliases
+                .into_iter()
+                .filter_map(|a| normalize_relationship_alias(&a))
+                .collect(),
+        })
     }
 
     /// Current timestamp according to the configured clock.

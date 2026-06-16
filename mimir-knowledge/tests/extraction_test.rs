@@ -566,6 +566,44 @@ async fn test_normalize_predicate_attended_to_studied_at() {
 }
 
 #[tokio::test]
+async fn test_normalize_predicate_uses_db_alias() {
+    let tg = TestGraph::new().await;
+
+    // Seed an alias so "matriculated_at" resolves to the canonical "studied_at".
+    // Deliberately use a synonym that is *not* in the deprecated hardcoded map.
+    let studied_at_id = tg.kg.ensure_relationship_type("studied_at").await.unwrap();
+    tg.kg
+        .insert_relationship_type_alias("matriculated_at", studied_at_id)
+        .await
+        .unwrap();
+
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "Devansh",
+        "subject_type": "Person",
+        "relationship_type": "matriculated_at",
+        "object": "University of Auckland",
+        "object_is_entity": false,
+        "categories": [],
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let result = tg
+        .kg
+        .extract_facts(&mock, "I am an alumni of University of Auckland.")
+        .await
+        .unwrap();
+
+    assert_eq!(result.inserted.len(), 1);
+    let fact = &result.inserted[0];
+    let pred = tg
+        .kg
+        .relationship_type_name(fact.relationship_type_id)
+        .await;
+    assert_eq!(pred.as_deref(), Some("studied_at"));
+}
+
+#[tokio::test]
 async fn test_split_hobbies_into_individual_facts() {
     let tg = TestGraph::new().await;
     let tool_args = make_remember_tool_output(vec![serde_json::json!({

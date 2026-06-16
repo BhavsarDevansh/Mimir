@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.46.1] — 2026-06-16
+
+### Fixed
+
+- **Relationship type alias/canonical collision checks (PR #149 review)**: centralised
+  alias↔canonical collision validation in `mimir-knowledge` and applied it inside the
+  same transaction for every relationship-type write path (`ensure_relationship_type`,
+  `ensure_relationship_type_in_tx`, `insert_relationship_type`, and
+  `insert_relationship_type_alias`). Previously these checks could be bypassed when
+  creating relationship types directly or through the transactional fact-insert path.
+
+### Tests
+
+- Added `relationship_type_dag_test.rs` cases covering:
+  - `insert_relationship_type` rejecting a canonical name that shadows an existing alias.
+  - `insert_relationship_type` rejecting an alias that shadows an existing canonical name.
+  - `insert_facts_batch` (transactional create path) rejecting a relationship type name
+    that shadows an existing alias.
+
+### Documentation
+
+- Updated `docs/knowledge-graph-schema.md` with the collision invariants section.
+- Updated `docs/wiki/knowledge-graph.md` with a relationship types overview.
+
+## [0.46.0] — 2026-06-16
+
+### Added
+
+- **Relationship type DAG schema (Issue #132)**: added `relationship_type_hierarchy`
+  and `relationship_type_aliases` tables to `mimir-knowledge`. Relationship types now
+  support a directed acyclic graph (multiple parents allowed) and globally unique English
+  aliases, enabling data-driven predicate discovery instead of hardcoded synonym tables.
+- `RelationshipType` and `NewRelationshipType` models in `mimir-knowledge/src/models/relationship_type.rs`.
+- New `KnowledgeGraph` API methods: `insert_relationship_type_hierarchy`,
+  `insert_relationship_type_alias`, `resolve_relationship_type_alias`,
+  `get_descendant_relationship_type_ids`, and `get_ancestor_relationship_type_ids`.
+- Cycle detection for hierarchy inserts, returning `KnowledgeError::RelationshipTypeCycle`.
+- Alias resolution integrated into fact extraction; the legacy hardcoded `normalize_predicate`
+  map remains as a deprecated fallback until the core ontology is seeded.
+
+### Tests
+
+- New `mimir-knowledge/tests/relationship_type_dag_test.rs` covering migrations,
+  DAG traversal, alias resolution, global alias uniqueness, self-loops, indirect
+  cycles, and alias-based predicate normalization.
+- Updated `mimir-knowledge/tests/migrations_test.rs` to assert the new tables exist.
+
+### Documentation
+
+- Updated `docs/knowledge-graph-schema.md` with the relationship type DAG design.
+- Updated `docs/wiki/what-works-now.md` to list the new DAG + aliases feature.
+- Updated `README.md` to mention the relationship ontology layer.
+
 ## [0.45.1] — 2026-06-15
 
 ### Fixed

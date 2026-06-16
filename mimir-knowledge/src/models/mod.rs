@@ -7,5 +7,6 @@ pub mod enums;
 pub mod fact;
 pub mod memory;
 pub mod preference;
+pub mod relationship_type;
 pub mod source;
 pub mod trash;

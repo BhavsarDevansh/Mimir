@@ -324,12 +324,8 @@ async fn normalize_and_expand_facts(
     let mut result = Vec::new();
     for mut fact in facts {
         let normalized = normalize_relationship_type(&fact.relationship_type);
-        let canonical_name = if let Some(id) =
-            kg.get_relationship_type_id(&normalized).await?
-        {
-            kg.relationship_type_name(id)
-                .await
-                .unwrap_or(normalized)
+        let canonical_name = if let Some(id) = kg.get_relationship_type_id(&normalized).await? {
+            kg.relationship_type_name(id).await.unwrap_or(normalized)
         } else {
             normalized
         };

@@ -140,7 +140,10 @@ async fn ensure_relationship_type_resolves_alias_instead_of_conflicting() {
 
     // "test_employer_alias" is an alias, so ensure_relationship_type resolves it to the
     // canonical type rather than creating a new one or failing.
-    let resolved_id = kg.ensure_relationship_type("test_employer_alias").await.unwrap();
+    let resolved_id = kg
+        .ensure_relationship_type("test_employer_alias")
+        .await
+        .unwrap();
     assert_eq!(resolved_id, existing_id);
 }
 
@@ -229,7 +232,10 @@ async fn alias_cannot_shadow_canonical_name() {
     let (_dir, kg) = setup().await;
 
     let _canonical_id = kg.ensure_relationship_type("works_at").await.unwrap();
-    let other_id = kg.ensure_relationship_type("test_employer_alias").await.unwrap();
+    let other_id = kg
+        .ensure_relationship_type("test_employer_alias")
+        .await
+        .unwrap();
 
     // "works_at" is already a canonical name, so it cannot be an alias.
     let err = kg
@@ -366,13 +372,18 @@ async fn ensure_relationship_type_resolves_alias_to_canonical() {
         .await
         .unwrap();
 
-    let resolved_id = kg.ensure_relationship_type("test_attended_alias").await.unwrap();
+    let resolved_id = kg
+        .ensure_relationship_type("test_attended_alias")
+        .await
+        .unwrap();
     assert_eq!(
         resolved_id, canonical_id,
         "ensure_relationship_type should resolve 'attended' alias to canonical 'studied_at'"
     );
     assert_eq!(
-        kg.get_relationship_type_id("test_attended_alias").await.unwrap(),
+        kg.get_relationship_type_id("test_attended_alias")
+            .await
+            .unwrap(),
         Some(canonical_id),
         "get_relationship_type_id should also resolve the alias"
     );

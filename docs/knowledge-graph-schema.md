@@ -218,4 +218,20 @@ SELECT id FROM descendants;
 
 Alias resolution is normalized (`trim`, lowercase, spaces → underscores) and cached in `RelationshipTypeCache`.
 
+### Collision Invariants
+
+Canonical relationship type names and aliases share the same normalized namespace, so the following collisions are rejected before any write path persists data:
+
+- A canonical name cannot be created if it normalizes to an existing alias.
+- An alias cannot be created if it normalizes to an existing canonical name.
+
+These checks are centralized in two helpers (`canonical_name_conflicts_with_alias` and `alias_conflicts_with_canonical_name`) that accept any `sqlx::Executor`, allowing the same invariant to run against both the connection pool and an open transaction. Every relationship-type write path now calls the relevant check inside the same transaction as the insert:
+
+- `ensure_relationship_type`
+- `ensure_relationship_type_in_tx`
+- `insert_relationship_type`
+- `insert_relationship_type_alias`
+
+This prevents alias↔canonical conflicts from being persisted regardless of whether a relationship type is created explicitly, auto-created during fact extraction, or inserted in a batch transaction.
+
 The legacy hardcoded `normalize_predicate` map in `mimir-knowledge/src/extract.rs` still exists as a fallback but is deprecated and will be removed once the core ontology is seeded.

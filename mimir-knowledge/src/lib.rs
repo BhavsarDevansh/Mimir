@@ -114,6 +114,49 @@ fn normalize_relationship_alias(alias: &str) -> Option<String> {
     }
 }
 
+/// Returns `true` if `name` is already registered as a relationship-type alias.
+///
+/// Used to keep canonical names from shadowing aliases, which would break
+/// alias-to-canonical resolution.
+async fn canonical_name_conflicts_with_alias<'a, E>(
+    executor: E,
+    name: &str,
+) -> Result<bool, KnowledgeError>
+where
+    E: sqlx::Executor<'a, Database = sqlx::Sqlite>,
+{
+    let Some(normalized) = normalize_relationship_alias(name) else {
+        return Ok(false);
+    };
+    let row: Option<(i16,)> = sqlx::query_as(
+        "SELECT relationship_type_id FROM relationship_type_aliases WHERE alias = ?",
+    )
+    .bind(&normalized)
+    .fetch_optional(executor)
+    .await?;
+    Ok(row.is_some())
+}
+
+/// Returns `true` if `alias` normalises to an existing relationship-type name.
+///
+/// Used to keep aliases from shadowing canonical names.
+async fn alias_conflicts_with_canonical_name<'a, E>(
+    executor: E,
+    alias: &str,
+) -> Result<bool, KnowledgeError>
+where
+    E: sqlx::Executor<'a, Database = sqlx::Sqlite>,
+{
+    let Some(normalized) = normalize_relationship_alias(alias) else {
+        return Ok(false);
+    };
+    let row: Option<(i16,)> = sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
+        .bind(&normalized)
+        .fetch_optional(executor)
+        .await?;
+    Ok(row.is_some())
+}
+
 /// The public API for the knowledge graph.
 ///
 /// Holds a SQLite connection pool and a clock for deterministic timestamps
@@ -245,16 +288,18 @@ impl KnowledgeGraph {
             }
         }
 
+        let mut tx = self.pool.begin().await?;
+
         let row: Option<(i16,)> =
             sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
                 .bind(name)
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *tx)
                 .await?;
 
         let id = match row {
             Some((id,)) => id,
             None => {
-                if self.resolve_relationship_type_alias(name).await?.is_some() {
+                if canonical_name_conflicts_with_alias(&mut *tx, name).await? {
                     return Err(KnowledgeError::Validation(format!(
                         "relationship type name '{}' conflicts with an existing alias",
                         name
@@ -266,11 +311,13 @@ impl KnowledgeGraph {
                 )
                 .bind(name)
                 .bind(format!("Auto-created relationship_type: {}", name))
-                .fetch_one(&self.pool)
+                .fetch_one(&mut *tx)
                 .await?;
                 id as i16
             }
         };
+
+        tx.commit().await?;
 
         let mut cache = self.relationship_type_cache.write().await;
         cache.name_to_id.insert(name.to_string(), id);
@@ -300,6 +347,13 @@ impl KnowledgeGraph {
         let id = match row {
             Some((id,)) => id,
             None => {
+                if canonical_name_conflicts_with_alias(&mut **tx, name).await? {
+                    return Err(KnowledgeError::Validation(format!(
+                        "relationship type name '{}' conflicts with an existing alias",
+                        name
+                    )));
+                }
+
                 let id: i64 = sqlx::query_scalar(
                     "INSERT INTO relationship_types (name, description) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
                 )
@@ -422,7 +476,9 @@ impl KnowledgeGraph {
             ));
         };
 
-        if self.relationship_type_id(&normalized).await.is_some() {
+        let mut tx = self.pool.begin().await?;
+
+        if alias_conflicts_with_canonical_name(&mut *tx, alias).await? {
             return Err(KnowledgeError::Validation(format!(
                 "alias '{}' conflicts with an existing relationship type name",
                 normalized
@@ -434,8 +490,10 @@ impl KnowledgeGraph {
         )
         .bind(&normalized)
         .bind(relationship_type_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         let mut cache = self.relationship_type_cache.write().await;
         cache.alias_to_id.insert(normalized, relationship_type_id);
@@ -589,6 +647,14 @@ impl KnowledgeGraph {
         let mut tx = self.pool.begin().await?;
 
         let default_memory_priority_id = new.default_memory_priority_id.unwrap_or(3);
+
+        if canonical_name_conflicts_with_alias(&mut *tx, &new.name).await? {
+            return Err(KnowledgeError::Validation(format!(
+                "relationship type name '{}' conflicts with an existing alias",
+                new.name
+            )));
+        }
+
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO relationship_types (name, description, sensitive, default_memory_priority_id)              VALUES (?, ?, ?, ?)              ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
         )
@@ -622,6 +688,12 @@ impl KnowledgeGraph {
                     "alias cannot be empty".to_string(),
                 ));
             };
+            if alias_conflicts_with_canonical_name(&mut *tx, alias).await? {
+                return Err(KnowledgeError::Validation(format!(
+                    "alias '{}' conflicts with an existing relationship type name",
+                    normalized
+                )));
+            }
             sqlx::query(
                 "INSERT INTO relationship_type_aliases (alias, relationship_type_id) VALUES (?, ?)",
             )

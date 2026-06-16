@@ -39,6 +39,15 @@ When you mention a name, Mimir tries to resolve it in three steps:
 
 You can add or remove aliases at any time via the API.
 
+### Relationship Types
+
+Facts connect entities with a **relationship type** (sometimes called a predicate), such as `works_at`, `lives_in`, or `has_sibling`. Relationship types form a controlled vocabulary:
+
+- The system keeps a canonical list of relationship type names.
+- Each canonical name can have **aliases** (synonyms). For example, `studied_at` might have aliases `attended` and `alumni_of`.
+- Aliases are normalized (lowercase, spaces become underscores) so `Works At`, `works_at`, and `works at` all resolve to the same relationship type.
+- To keep resolution unambiguous, a canonical name cannot be created if it would shadow an existing alias, and an alias cannot be created if it would shadow an existing canonical name.
+
 ### Deduplication
 
 Mimir automatically detects and resolves duplicate entities:

@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.46.1] — 2026-06-16
+
+### Fixed
+
+- **Relationship type alias/canonical collision checks (PR #149 review)**: centralised
+  alias↔canonical collision validation in `mimir-knowledge` and applied it inside the
+  same transaction for every relationship-type write path (`ensure_relationship_type`,
+  `ensure_relationship_type_in_tx`, `insert_relationship_type`, and
+  `insert_relationship_type_alias`). Previously these checks could be bypassed when
+  creating relationship types directly or through the transactional fact-insert path.
+
+### Tests
+
+- Added `relationship_type_dag_test.rs` cases covering:
+  - `insert_relationship_type` rejecting a canonical name that shadows an existing alias.
+  - `insert_relationship_type` rejecting an alias that shadows an existing canonical name.
+  - `insert_facts_batch` (transactional create path) rejecting a relationship type name
+    that shadows an existing alias.
+
+### Documentation
+
+- Updated `docs/knowledge-graph-schema.md` with the collision invariants section.
+- Updated `docs/wiki/knowledge-graph.md` with a relationship types overview.
+
 ## [0.46.0] — 2026-06-16
 
 ### Added

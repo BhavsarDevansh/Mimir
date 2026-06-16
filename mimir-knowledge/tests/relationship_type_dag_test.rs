@@ -266,3 +266,101 @@ async fn normalize_predicate_uses_alias() {
         .unwrap();
     assert_eq!(resolved, Some(id));
 }
+
+#[tokio::test]
+async fn insert_relationship_type_rejects_canonical_name_that_shadows_alias() {
+    let (_dir, kg) = setup().await;
+
+    let existing_id = kg
+        .ensure_relationship_type("employer_entity")
+        .await
+        .unwrap();
+    kg.insert_relationship_type_alias("employer", existing_id)
+        .await
+        .unwrap();
+
+    let rt = mimir_knowledge::models::relationship_type::NewRelationshipType {
+        name: "employer".to_string(),
+        description: None,
+        sensitive: false,
+        default_memory_priority_id: None,
+        parent_ids: vec![],
+        aliases: vec![],
+    };
+    let err = kg.insert_relationship_type(rt).await.unwrap_err();
+    assert!(
+        matches!(err, KnowledgeError::Validation(_)),
+        "expected validation error for canonical name shadowing alias, got {:?}",
+        err
+    );
+}
+
+#[tokio::test]
+async fn insert_relationship_type_rejects_alias_that_shadows_canonical_name() {
+    let (_dir, kg) = setup().await;
+
+    let _canonical_id = kg.ensure_relationship_type("works_at").await.unwrap();
+
+    let rt = mimir_knowledge::models::relationship_type::NewRelationshipType {
+        name: "new_type".to_string(),
+        description: None,
+        sensitive: false,
+        default_memory_priority_id: None,
+        parent_ids: vec![],
+        aliases: vec!["works_at".to_string()],
+    };
+    let err = kg.insert_relationship_type(rt).await.unwrap_err();
+    assert!(
+        matches!(err, KnowledgeError::Validation(_)),
+        "expected validation error for alias shadowing canonical name, got {:?}",
+        err
+    );
+}
+
+#[tokio::test]
+async fn transactional_fact_insert_rejects_relationship_type_name_that_shadows_alias() {
+    use mimir_knowledge::models::entity::EntityType;
+    use mimir_knowledge::models::fact::NewFact;
+    use mimir_knowledge::models::source::SourceType;
+
+    let (_dir, kg) = setup().await;
+
+    let existing_id = kg
+        .ensure_relationship_type("employer_entity")
+        .await
+        .unwrap();
+    kg.insert_relationship_type_alias("employer", existing_id)
+        .await
+        .unwrap();
+
+    let entity = kg
+        .create_entity("Alice", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let fact = NewFact {
+        subject_id: entity.id,
+        relationship_type: "employer".to_string(),
+        object_id: None,
+        object_literal: Some("Acme Corp".to_string()),
+        valid_from: None,
+        valid_until: None,
+        source_type: SourceType::UserEdit,
+        connector_id: None,
+        connector_type: None,
+        raw_reference: None,
+        extraction_method: None,
+        inferred: false,
+        inference_depth: 0,
+        confidence: None,
+        parent_fact_ids: vec![],
+        category_ids: vec![],
+    };
+
+    let err = kg.insert_facts_batch(vec![fact]).await.unwrap_err();
+    assert!(
+        matches!(err, KnowledgeError::Validation(_)),
+        "expected validation error for transactional create shadowing alias, got {:?}",
+        err
+    );
+}

@@ -6,6 +6,7 @@ use chrono::Utc;
 use dashmap::DashMap;
 
 use mimir_core::{
+    agents::AgentRuntime,
     config::ReloadableConfig,
     context::ContextManager,
     job_queue::{Job, JobContext, JobPriority, JobQueue},
@@ -44,6 +45,8 @@ pub struct AppState {
     pub knowledge_graph: Arc<mimir_knowledge::KnowledgeGraph>,
     /// Durable job queue for background tasks.
     pub job_queue: Arc<JobQueue>,
+    /// In-memory agent runtime for background autonomous agents.
+    pub agent_runtime: Arc<AgentRuntime>,
     /// Unified background scheduler (dedupe, debounce, idle-gate).
     pub scheduler: Arc<BackgroundScheduler>,
     /// Unix timestamp (seconds) of the last user interaction. Used to yield
@@ -248,6 +251,14 @@ impl AppState {
         // Initialise job queue.
         let jobs_db_path = mimir_core::paths::jobs_db_path()?;
         let job_queue = Arc::new(JobQueue::init(&jobs_db_path).await?);
+
+        // Initialise agent runtime and register the LibrarianAgent.
+        let agent_runtime = Arc::new(AgentRuntime::new());
+        agent_runtime
+            .register::<mimir_knowledge::librarian::LibrarianAgent>(
+                mimir_knowledge::librarian::LibrarianAgent::new(),
+            )
+            .await;
         let last_user_activity = Arc::new(AtomicU64::new(0));
 
         // Initialise background scheduler.
@@ -367,6 +378,7 @@ impl AppState {
                 tool_registry,
                 knowledge_graph,
                 job_queue,
+                agent_runtime,
                 scheduler,
                 last_user_activity,
                 user_entity_id,

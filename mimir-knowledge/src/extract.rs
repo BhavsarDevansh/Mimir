@@ -200,6 +200,152 @@ async fn build_extraction_prompt(kg: &KnowledgeGraph) -> Result<String, Knowledg
 }
 
 // ---------------------------------------------------------------------------
+// Rich contextual prompt
+// ---------------------------------------------------------------------------
+
+/// Build an extraction prompt that includes the full conversation turn,
+/// condensed memory, user identity, and recent related facts.
+async fn build_contextual_extraction_prompt(
+    kg: &KnowledgeGraph,
+    turn: &mimir_core::conversation::ConversationTurn,
+    identity: mimir_core::identity::UserIdentity,
+    condensed_memory: Option<&str>,
+) -> Result<String, KnowledgeError> {
+    let base = build_extraction_prompt(kg).await?;
+
+    let related = kg
+        .get_facts_by_subject(identity.entity_id, 20i64)
+        .await
+        .unwrap_or_default();
+
+    let mut related_lines = Vec::with_capacity(related.len());
+    for fact in related {
+        let object_display = if let Some(object_id) = fact.object_id {
+            kg.get_entity(object_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|e| e.name)
+                .unwrap_or_else(|| "(entity)".to_string())
+        } else {
+            fact.object_literal.clone().unwrap_or_default()
+        };
+        let predicate = kg
+            .relationship_type_name(fact.relationship_type_id)
+            .await
+            .unwrap_or_else(|| "(unknown)".to_string());
+        related_lines.push(format!(
+            "- {} {} {} (confidence {:.2})",
+            identity.name, predicate, object_display, fact.confidence
+        ));
+    }
+
+    let memory_block = condensed_memory
+        .filter(|s| !s.is_empty())
+        .unwrap_or("(no condensed memory yet)");
+
+    let prompt = format!(
+        "{}\n\n### Context for this extraction\nUser identity: {} (entity id {})\nConversation transcript:\nUser: {}\nAssistant: {}\n\nCondensed memory about the user:\n{}\n\nRecent related facts about the user:\n{}\n\nUse the context above to resolve pronouns, avoid contradictions, and assign categories. Only emit facts via the 'remember' tool.",
+        base,
+        identity.name,
+        identity.entity_id,
+        turn.user_message,
+        turn.assistant_response,
+        memory_block,
+        if related_lines.is_empty() {
+            "(none)".to_string()
+        } else {
+            related_lines.join("\n")
+        }
+    );
+
+    Ok(prompt)
+}
+
+// ---------------------------------------------------------------------------
+// LLM output parsing
+// ---------------------------------------------------------------------------
+
+/// Parse the assistant message into a `RememberOutput`.
+///
+/// Supports both tool-call output and fallback JSON parsing for backends that
+/// do not reliably emit structured tool calls.
+fn parse_remember_output(assistant_msg: Message) -> Result<RememberOutput, KnowledgeError> {
+    if let Some(tool_calls) = assistant_msg.tool_calls {
+        let first_call = tool_calls.into_iter().next().ok_or_else(|| {
+            KnowledgeError::Validation("LLM tool call list was empty.".to_string())
+        })?;
+
+        return serde_json::from_str(&first_call.function.arguments).map_err(|e| {
+            KnowledgeError::Validation(format!("Failed to parse tool arguments: {}", e))
+        });
+    }
+
+    let text = assistant_msg.content.trim();
+    if text.is_empty() {
+        return Err(KnowledgeError::Validation(
+            "LLM did not emit a tool call.".to_string(),
+        ));
+    }
+
+    let json_text = if text.starts_with("```") {
+        text.lines()
+            .skip_while(|l| l.starts_with("```"))
+            .take_while(|l| !l.starts_with("```"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        text.to_string()
+    };
+
+    let json_text = json_text.trim();
+
+    if let Ok(wrapper) = serde_json::from_str::<RememberOutput>(json_text) {
+        Ok(wrapper)
+    } else if let Ok(facts) = serde_json::from_str::<Vec<ExtractedFact>>(json_text) {
+        Ok(RememberOutput { facts })
+    } else {
+        Err(KnowledgeError::Validation(format!(
+            "LLM did not emit a tool call and response could not be parsed as JSON: {}",
+            json_text.chars().take(200).collect::<String>()
+        )))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Extraction processing
+// ---------------------------------------------------------------------------
+
+/// Process a `RememberOutput` by applying validation, dedup, confidence
+/// assignment, and insertion logic.
+async fn process_extracted_facts(
+    kg: &KnowledgeGraph,
+    extracted: RememberOutput,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<ExtractionOutcome, KnowledgeError> {
+    let mut all_facts: Vec<ExtractedFact> = Vec::new();
+    for fact in extracted.facts {
+        let expanded = split_list_objects(&fact);
+        all_facts.extend(expanded);
+    }
+
+    let mut outcome = ExtractionOutcome::default();
+
+    for fact in all_facts {
+        match process_extracted_fact(kg, fact, now).await {
+            Ok(result) => match result {
+                ProcessResult::Inserted(f) => outcome.inserted.push(f),
+                ProcessResult::Pending(p) => outcome.pending_confirmation.push(p),
+                ProcessResult::Corroborated(id) => outcome.corroborated.push(id),
+            },
+            Err(e) => outcome.errors.push(e),
+        }
+    }
+
+    Ok(outcome)
+}
+
+// ---------------------------------------------------------------------------
 // Classification → SourceType + confidence
 // ---------------------------------------------------------------------------
 
@@ -426,8 +572,6 @@ pub async fn extract_facts(
     user_message: &str,
 ) -> Result<ExtractionOutcome, KnowledgeError> {
     let now = kg.now();
-
-    // 1. Call LLM.
     let prompt = build_extraction_prompt(kg).await?;
     let messages = vec![Message::system(prompt), Message::user(user_message)];
     let tool = remember_tool_schema();
@@ -437,75 +581,36 @@ pub async fn extract_facts(
         .await
         .map_err(|e| KnowledgeError::Validation(format!("LLM call failed: {}", e)))?;
 
-    // 2. Parse tool calls.
-    // Some local LLM backends (e.g. Ollama + Gemma) do not reliably emit
-    // structured tool calls even when tools are provided. We therefore fall
-    // back to parsing the assistant text content as JSON.
-    let extracted: RememberOutput = if let Some(tool_calls) = assistant_msg.tool_calls {
-        let first_call = tool_calls.into_iter().next().ok_or_else(|| {
-            KnowledgeError::Validation("LLM tool call list was empty.".to_string())
-        })?;
+    let extracted = parse_remember_output(assistant_msg)?;
+    process_extracted_facts(kg, extracted, now).await
+}
 
-        serde_json::from_str(&first_call.function.arguments).map_err(|e| {
-            KnowledgeError::Validation(format!("Failed to parse tool arguments: {}", e))
-        })?
-    } else {
-        let text = assistant_msg.content.trim();
-        if text.is_empty() {
-            return Err(KnowledgeError::Validation(
-                "LLM did not emit a tool call.".to_string(),
-            ));
-        }
+/// Run the fact extraction pipeline over a full conversation turn with
+/// condensed memory, user identity, and recent related facts in the prompt.
+pub async fn extract_facts_with_context(
+    kg: &KnowledgeGraph,
+    llm: &Arc<dyn LlmBackend>,
+    turn: &mimir_core::conversation::ConversationTurn,
+    identity: mimir_core::identity::UserIdentity,
+    condensed_memory: Option<&str>,
+) -> Result<ExtractionOutcome, KnowledgeError> {
+    let now = kg.now();
+    let prompt = build_contextual_extraction_prompt(kg, turn, identity, condensed_memory).await?;
+    let transcript = format!(
+        "User: {}
+Assistant: {}",
+        turn.user_message, turn.assistant_response
+    );
+    let messages = vec![Message::system(prompt), Message::user(transcript)];
+    let tool = remember_tool_schema();
 
-        // Attempt to strip a Markdown code block if present.
-        let json_text = if text.starts_with("```") {
-            text.lines()
-                .skip_while(|l| l.starts_with("```"))
-                .take_while(|l| !l.starts_with("```"))
-                .collect::<Vec<_>>()
-                .join(
-                    "
-",
-                )
-        } else {
-            text.to_string()
-        };
+    let (assistant_msg, _usage) = llm
+        .chat_message(messages, Some(vec![tool]))
+        .await
+        .map_err(|e| KnowledgeError::Validation(format!("LLM call failed: {}", e)))?;
 
-        let json_text = json_text.trim();
-
-        // Try {"facts": [...]} first, then a bare array.
-        if let Ok(wrapper) = serde_json::from_str::<RememberOutput>(json_text) {
-            wrapper
-        } else if let Ok(facts) = serde_json::from_str::<Vec<ExtractedFact>>(json_text) {
-            RememberOutput { facts }
-        } else {
-            return Err(KnowledgeError::Validation(format!(
-                "LLM did not emit a tool call and response could not be parsed as JSON: {}",
-                json_text.chars().take(200).collect::<String>()
-            )));
-        }
-    };
-
-    let mut all_facts: Vec<ExtractedFact> = Vec::new();
-    for fact in extracted.facts {
-        let expanded = split_list_objects(&fact);
-        all_facts.extend(expanded);
-    }
-
-    let mut outcome = ExtractionOutcome::default();
-
-    for fact in all_facts {
-        match process_extracted_fact(kg, fact, now).await {
-            Ok(result) => match result {
-                ProcessResult::Inserted(f) => outcome.inserted.push(f),
-                ProcessResult::Pending(p) => outcome.pending_confirmation.push(p),
-                ProcessResult::Corroborated(id) => outcome.corroborated.push(id),
-            },
-            Err(e) => outcome.errors.push(e),
-        }
-    }
-
-    Ok(outcome)
+    let extracted = parse_remember_output(assistant_msg)?;
+    process_extracted_facts(kg, extracted, now).await
 }
 
 pub(crate) enum ProcessResult {

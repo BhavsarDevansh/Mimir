@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-06-14
-> **Version:** 0.43.2
-> **Release summary:** Phase 2 knowledge-graph work is live — Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system (bulk forget, restore, trash, full reset), and Agentic Pre-Response Context Retrieval (#128).
+> **Last updated:** 2026-06-15
+> **Version:** 0.45.1
+> **Release summary:** Phase 2 knowledge-graph work is live — Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system (bulk forget, restore, trash, full reset), Agentic Pre-Response Context Retrieval (#128), and the Librarian Agent (#130) for background, context-rich fact extraction.
 
 ---
 
@@ -35,6 +35,7 @@ Library crates provide code organisation:
 - `mimir-client` — HTTP client for talking to the daemon
 - `mimir-api-types` — Shared request/response types
 - `mimir-knowledge` — SQLite knowledge graph (Phase 2; wired into daemon via live memory block and condensation pipeline)
+- [`Librarian Agent`](../../docs/librarian-agent.md) — Background agent that extracts facts from completed chat turns using the full transcript, identity, memory, and KB context
 
 ---
 

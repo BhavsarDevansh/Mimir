@@ -37,7 +37,9 @@ pub async fn handle_chat(base_url: &str) {
             Some(path)
         }
         Err(e) => {
-            eprintln!("Warning: failed to resolve history path: {e}; history will not be persisted");
+            eprintln!(
+                "Warning: failed to resolve history path: {e}; history will not be persisted"
+            );
             None
         }
     };

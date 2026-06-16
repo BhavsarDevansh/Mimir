@@ -365,7 +365,8 @@ mod tests {
         let context_manager = Arc::new(ContextManager::new(&db_path).await.unwrap());
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
 
-        let reloadable = ReloadableConfig::new(config, temp.path().join("dummy_config.toml"));
+        let reloadable =
+            ReloadableConfig::new(config.clone(), temp.path().join("dummy_config.toml"));
 
         let tool_registry = mimir_core::tools::ToolRegistry::with_builtins();
 
@@ -432,6 +433,40 @@ mod tests {
             std::time::Duration::from_secs(1),
         );
 
+        let agent_runtime = Arc::new(mimir_core::agents::AgentRuntime::new());
+        agent_runtime
+            .register::<mimir_knowledge::librarian::LibrarianAgent>(
+                mimir_knowledge::librarian::LibrarianAgent::new(),
+            )
+            .await;
+
+        // Resolve or create the user entity from config identity, mirroring
+        // production setup, so background agents like the Librarian can run.
+        let user_entity_id = if config.identity.name.trim().is_empty() {
+            None
+        } else {
+            match knowledge_graph
+                .search_entities(&config.identity.name, 1)
+                .await
+            {
+                Ok(mut results) if !results.is_empty() => Some(results.remove(0).entity.id),
+                _ => match knowledge_graph
+                    .create_entity(
+                        &config.identity.name,
+                        mimir_knowledge::models::entity::EntityType::Person,
+                        &[],
+                    )
+                    .await
+                {
+                    Ok(entity) => Some(entity.id),
+                    Err(e) => {
+                        tracing::warn!("Failed to create test user entity: {}", e);
+                        None
+                    }
+                },
+            }
+        };
+
         let state = Arc::new(AppState {
             llm_client: llm,
             context_manager,
@@ -445,8 +480,9 @@ mod tests {
             tool_registry: Arc::new(tool_registry),
             knowledge_graph,
             job_queue,
+            agent_runtime,
             scheduler,
-            user_entity_id: None,
+            user_entity_id,
             last_user_activity,
         });
 
@@ -2172,7 +2208,9 @@ mod tests {
                 .build(),
         );
 
-        let (state, _temp) = test_state(mock).await;
+        let mut config = Config::default();
+        config.identity.name = "Devansh".to_string();
+        let (state, _temp) = test_state_with_config(mock, config).await;
         let app = super::build_app(state.clone());
 
         let body = serde_json::to_string(&serde_json::json!({

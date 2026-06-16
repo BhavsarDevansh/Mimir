@@ -34,40 +34,64 @@ async fn build_catalogue(knowledge_graph: &mimir_knowledge::KnowledgeGraph) -> S
     }
 }
 
-/// Spawn a background task to extract facts from a user message into the
-/// knowledge graph. Errors and outcomes are logged; callers are not blocked.
-fn spawn_fact_extraction(
-    kg: Arc<mimir_knowledge::KnowledgeGraph>,
-    llm: Arc<dyn mimir_core::llm::LlmBackend>,
-    message: String,
+/// Submit a Librarian goal to extract facts from the completed turn.
+///
+/// This is fire-and-forget from the HTTP handler's perspective; the agent
+/// runtime handles deduplication and background dispatch.
+async fn submit_librarian_goal(
+    state: &AppState,
+    session_id: i64,
+    user_message: String,
+    assistant_response: String,
 ) {
-    if message.trim().is_empty() {
+    if user_message.trim().is_empty() {
+        tracing::debug!("skipping Librarian extraction: empty user message");
         return;
     }
-    tokio::spawn(async move {
-        match kg.extract_facts(&llm, &message).await {
-            Ok(outcome) => {
-                if !outcome.inserted.is_empty() {
-                    tracing::info!(
-                        "Extracted {} facts from chat message",
-                        outcome.inserted.len()
-                    );
-                }
-                if !outcome.pending_confirmation.is_empty() {
-                    tracing::info!(
-                        "{} facts pending user confirmation",
-                        outcome.pending_confirmation.len()
-                    );
-                }
-                if !outcome.errors.is_empty() {
-                    tracing::warn!("Fact extraction errors: {:?}", outcome.errors);
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to extract facts from chat message: {}", e);
-            }
-        }
-    });
+
+    let Some(user_entity_id) = state.user_entity_id else {
+        tracing::debug!("skipping Librarian extraction: no user entity resolved");
+        return;
+    };
+
+    let turn = mimir_core::conversation::ConversationTurn::new(
+        session_id,
+        user_message,
+        assistant_response,
+    );
+    let goal = mimir_knowledge::librarian::LibrarianGoal::new(
+        user_entity_id,
+        "chat-turn-extraction",
+        turn,
+    );
+
+    let user_name = state.config.snapshot().await.identity.name;
+    let identity = mimir_core::identity::UserIdentity::new(
+        if user_name.is_empty() {
+            "user"
+        } else {
+            &user_name
+        },
+        user_entity_id,
+    );
+    let condensed_memory = state
+        .knowledge_graph
+        .get_condensed_memory()
+        .await
+        .ok()
+        .flatten();
+
+    let ctx = mimir_knowledge::librarian::LibrarianContext::new(
+        Arc::clone(&state.knowledge_graph),
+        Arc::clone(&state.llm_client),
+        identity,
+        condensed_memory,
+    );
+
+    state
+        .agent_runtime
+        .submit::<mimir_knowledge::librarian::LibrarianAgent>(goal, Arc::new(ctx))
+        .await;
 }
 
 /// Execute a single tool call, ensuring `retrieve_context` uses the
@@ -351,13 +375,14 @@ pub async fn chat_handler(
             .await
             .map_err(error::context_error)?;
 
-        // Extract facts from the user message asynchronously so the HTTP
-        // response is not delayed.
-        spawn_fact_extraction(
-            Arc::clone(&state.knowledge_graph),
-            Arc::clone(&llm),
+        // Submit the completed turn to the Librarian Agent for background fact extraction.
+        submit_librarian_goal(
+            &state,
+            session_id,
             req.message.clone(),
-        );
+            response_text.clone(),
+        )
+        .await;
     }
 
     Ok(Json(ChatResponse {
@@ -524,12 +549,14 @@ pub async fn chat_stream_handler(
                         error!("failed to persist assistant message: {e}");
                     }
 
-                    // Extract facts from the user message.
-                    spawn_fact_extraction(
-                        Arc::clone(&state_clone.knowledge_graph),
-                        Arc::clone(&llm_clone),
+                    // Submit the completed turn to the Librarian Agent.
+                    submit_librarian_goal(
+                        &state_clone,
+                        session_id_clone,
                         user_message.clone(),
-                    );
+                        full_response.clone(),
+                    )
+                    .await;
                 }
                 break 'outer;
             }

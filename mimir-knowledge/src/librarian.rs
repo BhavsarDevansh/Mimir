@@ -122,6 +122,13 @@ impl Agent for LibrarianAgent {
                 outcome.errors
             );
         }
+        if !outcome.corroborated.is_empty() {
+            tracing::debug!(
+                "Librarian corroborated {} facts for topic {}",
+                outcome.corroborated.len(),
+                goal.topic
+            );
+        }
         Ok(())
     }
 }

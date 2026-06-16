@@ -1,7 +1,7 @@
 # What Works in Mimir Today
 
 > **Last updated:** 2026-06-15
-> **Version:** 0.44.0
+> **Version:** 0.45.1
 > **Release summary:** Phase 2 knowledge-graph work is live — Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system (bulk forget, restore, trash, full reset), Agentic Pre-Response Context Retrieval (#128), and the Librarian Agent (#130) for background, context-rich fact extraction.
 
 ---

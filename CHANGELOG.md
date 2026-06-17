@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.48.0] — 2026-06-17
+
+### Added
+
+- **Relationship-type DAG subtree query (Issue #134)**: facts can now be retrieved
+  for a relationship type and all of its descendants in the
+  `relationship_type_hierarchy` DAG via a SQLite recursive CTE. Querying a broad
+  category (e.g. `education`) returns facts stored under more specific descendant
+  types (`studied_at`, `graduated_from`, …) without the caller needing to know every
+  predicate name.
+  - `queries::fact::get_facts_by_relationship_subtree(pool, subject_id, root_type_id,
+    min_confidence, limit)` and the matching `count_facts_by_relationship_subtree` walk
+    the DAG in a single statement, seeding the CTE with the root type so its own facts
+    are included. Filters and ordering match `get_facts_by_subject_filtered` (non-pending,
+    status `NOT IN (5, 6)`, confidence floor, sorted by confidence descending).
+  - `KnowledgeGraph::get_facts_by_relationship_subtree(entity_id, root_type_id, limit)`
+    is a convenience wrapper with `min_confidence = 0.0`.
+  - `kg_query` gains an `include_subtree` boolean parameter (default `false`). When set
+    with a `predicate`, the predicate (alias-aware) becomes the subtree root; an unknown
+    predicate returns an empty result set, and `include_subtree` without a `predicate`
+    is rejected with `ToolError::InvalidArguments`.
+
+### Changed
+
+- Extracted a shared `enrich_with_sources` helper in `queries/fact.rs` so the exact-match
+  and subtree fact queries share the source-batching logic (DRY).
+
+### Tests
+
+- Added `mimir-knowledge/tests/relationship_subtree_test.rs` covering subtree inclusion of
+  root + descendants, diamond-path deduplication, status/pending/confidence/limit filters,
+  temporal-bound preservation, multi-valued same-type facts, the `KnowledgeGraph` wrapper,
+  and the `kg_query` `include_subtree` parameter (including alias resolution and the
+  predicate-required contract).
+
+### Documentation
+
+- Updated `docs/kg-tools.md`, `docs/knowledge-graph-schema.md`, `docs/wiki/kg-tools.md`,
+  and `docs/wiki/knowledge-graph.md` with the subtree query and `include_subtree` parameter.
+
 ## [0.47.0] — 2026-06-16
 
 ### Added

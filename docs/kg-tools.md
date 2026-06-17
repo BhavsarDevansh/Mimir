@@ -22,7 +22,8 @@ All tools implement the `mimir_core::Tool` trait and are registered in the serve
     "predicate":    { "type": "string" },
     "min_confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
     "offset": { "type": "integer", "minimum": 0 },
-    "limit":  { "type": "integer", "minimum": 1, "maximum": 50 }
+    "limit":  { "type": "integer", "minimum": 1, "maximum": 50 },
+    "include_subtree": { "type": "boolean", "default": false }
   },
   "required": ["entity_name"]
 }
@@ -138,6 +139,31 @@ Stop conditions: `depth >= max_depth`, `visited.len() >= max_nodes`, or empty fr
 `KnowledgeGraph::relationship_type_id(&str)` performs a cached, non-mutating lookup of a relationship type by name, returning `None` if it does not exist (unlike `ensure_relationship_type`, which creates missing rows).
 
 `KnowledgeGraph::get_facts_by_subject_and_predicate(subject_id, relationship_type_id)` returns only facts matching a specific subject–predicate pair, avoiding full-table scans.
+
+## Relationship-Type Subtree Expansion
+
+When `kg_query` is called with `include_subtree: true` and a `predicate`, the predicate is resolved to a canonical `relationship_type_id` (alias-aware) and facts are fetched via `queries::fact::get_facts_by_relationship_subtree` instead of `get_facts_by_subject_filtered`. The query walks the `relationship_type_hierarchy` DAG with a single recursive CTE that seeds with the root type itself, so facts of the predicate **and all descendant types** are returned:
+
+```sql
+WITH RECURSIVE subtree(id) AS (
+    SELECT ?
+    UNION
+    SELECT h.child_id FROM relationship_type_hierarchy h
+    JOIN subtree s ON h.parent_id = s.id
+)
+SELECT f.*, e.name AS object_name
+FROM facts f
+JOIN subtree s ON f.relationship_type_id = s.id
+LEFT JOIN entities e ON e.id = f.object_id
+WHERE f.subject_id = ?
+  AND f.pending_confirmation = 0
+  AND f.fact_status_id NOT IN (5, 6)
+  AND f.confidence >= ?
+ORDER BY f.confidence DESC, f.valid_from DESC, f.id DESC
+LIMIT ?;
+```
+
+The `UNION` (not `UNION ALL`) deduplicates relationship-type ids, so a type reachable via multiple hierarchy paths contributes each fact only once. Filters and ordering match `get_facts_by_subject_filtered` (non-pending, status `NOT IN (5, 6)`, confidence floor). A matching `count_facts_by_relationship_subtree` produces the `total` field. `include_subtree` without a `predicate` is rejected with `ToolError::InvalidArguments`; the subtree path has no `offset` (results are bounded by `limit` only). The `KnowledgeGraph::get_facts_by_relationship_subtree(entity_id, root_type_id, limit)` wrapper is a convenience with `min_confidence = 0.0`.
 
 ## retrieve_context
 

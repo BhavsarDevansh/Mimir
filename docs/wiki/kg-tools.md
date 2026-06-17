@@ -30,6 +30,8 @@ Mimir exposes three LLM-callable tools that let the agent query your personal kn
 }
 ```
 
+`kg_query` accepts an optional **`include_subtree`** flag (default `false`). When set together with a `predicate`, it expands the predicate to its relationship-type subtree: facts whose type is the predicate **or any descendant** in the relationship-type DAG are returned. This lets the agent ask about a broad category (e.g. `education`) and discover facts stored under more specific types (`studied_at`, `graduated_from`, …) without enumerating every type name. `include_subtree` requires a `predicate`; an unknown predicate returns an empty result set. Results keep the same confidence ordering and exclusions (no pending, superseded, or forgotten facts).
+
 ### `kg_related`
 
 ```json
@@ -68,6 +70,7 @@ Mimir exposes three LLM-callable tools that let the agent query your personal kn
 - **Use `kg_related` for exploration.** It follows relationships breadth-first and respects depth and node caps so the result stays focused.
 - **Use `kg_search` when the name is uncertain.** FTS5 handles fuzzy matching and aliases automatically.
 - **Respect confidence scores.** Facts with low confidence may be speculative or inferred. The default `min_confidence` of 0.5 filters out noise.
+- **Use `include_subtree` for broad categories.** When a predicate is a parent type in the relationship-type hierarchy, `include_subtree: true` returns facts for it and all descendant types in a single call.
 
 ## What Is Excluded
 

@@ -8,7 +8,10 @@ use mimir_core::tools::{Tool, ToolError, ToolOutput, ToolPermission};
 
 use crate::KnowledgeGraph;
 use crate::queries::entity::get_by_name;
-use crate::queries::fact::{count_facts_by_subject_filtered, get_facts_by_subject_filtered};
+use crate::queries::fact::{
+    count_facts_by_relationship_subtree, count_facts_by_subject_filtered,
+    get_facts_by_relationship_subtree, get_facts_by_subject_filtered,
+};
 use crate::tools::{entity_type_name, fact_status_name, source_type_name};
 
 #[derive(Debug, Deserialize)]
@@ -21,6 +24,8 @@ struct KgQueryInput {
     offset: i64,
     #[serde(default = "default_limit")]
     limit: i64,
+    #[serde(default)]
+    include_subtree: bool,
 }
 
 fn default_min_confidence() -> f32 {
@@ -117,6 +122,11 @@ impl Tool for KgQueryTool {
                     "description": "Maximum facts to return. Default 20, max 50.",
                     "minimum": 1,
                     "maximum": 50
+                },
+                "include_subtree": {
+                    "type": "boolean",
+                    "description": "If true, expand `predicate` to its relationship-type subtree: return facts whose type is `predicate` or any descendant in the relationship-type DAG. Requires `predicate`. Default false.",
+                    "default": false
                 }
             },
             "required": ["entity_name"],
@@ -160,6 +170,13 @@ impl Tool for KgQueryTool {
         let min_confidence = input.min_confidence.clamp(0.0, 1.0);
         let offset = input.offset.max(0);
         let limit = input.limit.clamp(1, 50);
+        let include_subtree = input.include_subtree;
+        if include_subtree && input.predicate.is_none() {
+            return Err(ToolError::invalid_arguments(
+                "kg_query",
+                "include_subtree requires a predicate",
+            ));
+        }
 
         // Resolve entity
         let candidates = get_by_name(self.kg.pool(), entity_name)
@@ -224,17 +241,62 @@ impl Tool for KgQueryTool {
             None
         };
 
-        // Fetch facts
-        let facts = get_facts_by_subject_filtered(
-            self.kg.pool(),
-            subject_id,
-            relationship_type_id_opt,
-            min_confidence,
-            offset,
-            limit,
-        )
-        .await
-        .map_err(|e| ToolError::execution_failed("kg_query", format!("database error: {}", e)))?;
+        // Fetch facts: subtree expansion (predicate + descendants via a
+        // recursive CTE) or an exact predicate match.
+        let (facts, total) = if include_subtree {
+            let Some(root_type_id) = relationship_type_id_opt else {
+                return Err(ToolError::execution_failed(
+                    "kg_query",
+                    "include_subtree set but predicate was not resolved",
+                ));
+            };
+            let facts = get_facts_by_relationship_subtree(
+                self.kg.pool(),
+                subject_id,
+                root_type_id,
+                min_confidence,
+                limit,
+            )
+            .await
+            .map_err(|e| {
+                ToolError::execution_failed("kg_query", format!("database error: {}", e))
+            })?;
+            let total = count_facts_by_relationship_subtree(
+                self.kg.pool(),
+                subject_id,
+                root_type_id,
+                min_confidence,
+            )
+            .await
+            .map_err(|e| {
+                ToolError::execution_failed("kg_query", format!("database error: {}", e))
+            })? as usize;
+            (facts, total)
+        } else {
+            let facts = get_facts_by_subject_filtered(
+                self.kg.pool(),
+                subject_id,
+                relationship_type_id_opt,
+                min_confidence,
+                offset,
+                limit,
+            )
+            .await
+            .map_err(|e| {
+                ToolError::execution_failed("kg_query", format!("database error: {}", e))
+            })?;
+            let total = count_facts_by_subject_filtered(
+                self.kg.pool(),
+                subject_id,
+                relationship_type_id_opt,
+                min_confidence,
+            )
+            .await
+            .map_err(|e| {
+                ToolError::execution_failed("kg_query", format!("database error: {}", e))
+            })? as usize;
+            (facts, total)
+        };
 
         let mut fact_details = Vec::with_capacity(facts.len());
         for f in facts {
@@ -265,16 +327,6 @@ impl Tool for KgQueryTool {
             });
         }
 
-        let total = count_facts_by_subject_filtered(
-            self.kg.pool(),
-            subject_id,
-            relationship_type_id_opt,
-            min_confidence,
-        )
-        .await
-        .map_err(|e| ToolError::execution_failed("kg_query", format!("database error: {}", e)))?
-            as usize;
-
         let output = KgQueryOutput {
             entity: EntitySummary {
                 id: best.entity.id as u32,
@@ -282,7 +334,7 @@ impl Tool for KgQueryTool {
                 entity_type: entity_type_name(best.entity.entity_type_id),
             },
             total,
-            offset,
+            offset: if include_subtree { 0 } else { offset },
             limit,
             facts: fact_details,
         };

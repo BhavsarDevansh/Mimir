@@ -50,6 +50,8 @@ Facts connect entities with a **relationship type** (sometimes called a predicat
 - New canonical types automatically register their normalized name as a self-alias, so the alias table is the single lookup source for every relationship type.
 - To keep resolution unambiguous, a canonical name cannot be created if it would shadow an existing alias, and an alias cannot be created if it would shadow an existing canonical name.
 
+- Relationship types also form a **hierarchy** (a directed acyclic graph). A type can sit under parent types — for example `studied_at` and `graduated_from` can be children of an `education` type. When the agent queries a type it can expand to the whole **subtree**, so asking about "education" finds `studied_at`, `graduated_from`, and any other descendants without the agent needing to know every type name (see `kg_query` with `include_subtree`).
+
 ### Deduplication
 
 Mimir automatically detects and resolves duplicate entities:

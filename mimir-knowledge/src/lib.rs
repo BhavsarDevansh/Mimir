@@ -1377,6 +1377,27 @@ impl KnowledgeGraph {
         .await
     }
 
+    /// Retrieve facts for a subject whose relationship type is `root_type_id` or any
+    /// descendant in the relationship-type DAG (recursive CTE traversal).
+    ///
+    /// Convenience wrapper around [`queries::fact::get_facts_by_relationship_subtree`]
+    /// with `min_confidence = 0.0` (all matching facts, ranked by confidence).
+    pub async fn get_facts_by_relationship_subtree(
+        &self,
+        entity_id: i32,
+        root_type_id: i16,
+        limit: i64,
+    ) -> Result<Vec<queries::fact::FactWithSources>, KnowledgeError> {
+        queries::fact::get_facts_by_relationship_subtree(
+            &self.pool,
+            entity_id,
+            root_type_id,
+            0.0,
+            limit,
+        )
+        .await
+    }
+
     /// Get dependency edges for a fact.
     pub async fn get_fact_dependencies(
         &self,

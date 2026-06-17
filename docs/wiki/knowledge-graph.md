@@ -46,6 +46,8 @@ Facts connect entities with a **relationship type** (sometimes called a predicat
 - The system keeps a canonical list of relationship type names.
 - Each canonical name can have **aliases** (synonyms). For example, `studied_at` might have aliases `attended` and `alumni_of`.
 - Aliases are normalized (lowercase, spaces become underscores) so `Works At`, `works_at`, and `works at` all resolve to the same relationship type.
+- When a fact is extracted from a chat turn, the relationship type is resolved through the alias table before the fact is stored. If the LLM says "attended", Mimir stores it under the canonical `studied_at` type because `attended` is a registered alias.
+- New canonical types automatically register their normalized name as a self-alias, so the alias table is the single lookup source for every relationship type.
 - To keep resolution unambiguous, a canonical name cannot be created if it would shadow an existing alias, and an alias cannot be created if it would shadow an existing canonical name.
 
 ### Deduplication

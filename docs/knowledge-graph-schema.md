@@ -218,6 +218,16 @@ SELECT id FROM descendants;
 
 Alias resolution is normalized (`trim`, lowercase, spaces → underscores) and cached in `RelationshipTypeCache`.
 
+### Alias-Aware `ensure_relationship_type`
+
+`ensure_relationship_type` is the single source of truth for resolving a relationship-type name to a canonical id:
+
+1. Normalize the incoming name.
+2. Query `relationship_type_aliases` for the normalized name. On hit, return the canonical `relationship_type_id`.
+3. On miss, create a new canonical row in `relationship_types` and immediately register the normalized name as a self-alias.
+
+Because every canonical name has a self-alias, the alias table is the only lookup source needed by both `ensure_relationship_type` and `get_relationship_type_id`.
+
 ### Collision Invariants
 
 Canonical relationship type names and aliases share the same normalized namespace, so the following collisions are rejected before any write path persists data:
@@ -225,13 +235,11 @@ Canonical relationship type names and aliases share the same normalized namespac
 - A canonical name cannot be created if it normalizes to an existing alias.
 - An alias cannot be created if it normalizes to an existing canonical name.
 
-These checks are centralized in two helpers (`canonical_name_conflicts_with_alias` and `alias_conflicts_with_canonical_name`) that accept any `sqlx::Executor`, allowing the same invariant to run against both the connection pool and an open transaction. Every relationship-type write path now calls the relevant check inside the same transaction as the insert:
+These checks are centralized in two helpers (`canonical_name_conflicts_with_alias` and `alias_conflicts_with_canonical_name`) that accept any `sqlx::Executor`, allowing the same invariant to run against both the connection pool and an open transaction. The explicit creation paths call the relevant check inside the same transaction as the insert:
 
-- `ensure_relationship_type`
-- `ensure_relationship_type_in_tx`
 - `insert_relationship_type`
 - `insert_relationship_type_alias`
 
-This prevents alias↔canonical conflicts from being persisted regardless of whether a relationship type is created explicitly, auto-created during fact extraction, or inserted in a batch transaction.
+`ensure_relationship_type` resolves aliases first, so a name that matches an existing alias returns the canonical id rather than attempting to create a conflicting canonical type.
 
-The legacy hardcoded `normalize_predicate` map in `mimir-knowledge/src/extract.rs` still exists as a fallback but is deprecated and will be removed once the core ontology is seeded.
+The legacy hardcoded `normalize_predicate` map in `mimir-knowledge/src/extract.rs` still exists as a deprecated fallback but is no longer on the active extraction path.

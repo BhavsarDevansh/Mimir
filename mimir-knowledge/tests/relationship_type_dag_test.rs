@@ -109,12 +109,12 @@ async fn insert_alias_and_resolve() {
     let (_dir, kg) = setup().await;
 
     let id = kg.ensure_relationship_type("studied_at").await.unwrap();
-    kg.insert_relationship_type_alias("attended", id)
+    kg.insert_relationship_type_alias("test_attended_alias", id)
         .await
         .unwrap();
 
     let resolved = kg
-        .resolve_relationship_type_alias("attended")
+        .resolve_relationship_type_alias("test_attended_alias")
         .await
         .unwrap();
     assert_eq!(resolved, Some(id));
@@ -127,25 +127,24 @@ async fn insert_alias_and_resolve() {
 }
 
 #[tokio::test]
-async fn canonical_name_cannot_shadow_alias() {
+async fn ensure_relationship_type_resolves_alias_instead_of_conflicting() {
     let (_dir, kg) = setup().await;
 
     let existing_id = kg
         .ensure_relationship_type("employer_entity")
         .await
         .unwrap();
-    kg.insert_relationship_type_alias("employer", existing_id)
+    kg.insert_relationship_type_alias("test_employer_alias", existing_id)
         .await
         .unwrap();
 
-    // Creating a canonical relationship type called "employer" should now fail
-    // because the alias already occupies that name.
-    let err = kg.ensure_relationship_type("employer").await.unwrap_err();
-    assert!(
-        matches!(err, KnowledgeError::Validation(_)),
-        "expected validation error for canonical name shadowing alias, got {:?}",
-        err
-    );
+    // "test_employer_alias" is an alias, so ensure_relationship_type resolves it to the
+    // canonical type rather than creating a new one or failing.
+    let resolved_id = kg
+        .ensure_relationship_type("test_employer_alias")
+        .await
+        .unwrap();
+    assert_eq!(resolved_id, existing_id);
 }
 
 #[tokio::test]
@@ -205,7 +204,7 @@ async fn get_relationship_type_includes_parents_and_aliases() {
 
     let parent_id = kg.ensure_relationship_type("located").await.unwrap();
     let rt = mimir_knowledge::models::relationship_type::NewRelationshipType {
-        name: "is_in".to_string(),
+        name: "contained_in".to_string(),
         description: None,
         sensitive: false,
         default_memory_priority_id: None,
@@ -213,7 +212,7 @@ async fn get_relationship_type_includes_parents_and_aliases() {
         aliases: vec!["inside".to_string(), "within".to_string()],
     };
     let inserted = kg.insert_relationship_type(rt).await.unwrap();
-    assert_eq!(inserted.name, "is_in");
+    assert_eq!(inserted.name, "contained_in");
     assert_eq!(inserted.parent_ids, vec![parent_id]);
     assert!(inserted.aliases.contains(&"inside".to_string()));
     assert!(inserted.aliases.contains(&"within".to_string()));
@@ -233,7 +232,10 @@ async fn alias_cannot_shadow_canonical_name() {
     let (_dir, kg) = setup().await;
 
     let _canonical_id = kg.ensure_relationship_type("works_at").await.unwrap();
-    let other_id = kg.ensure_relationship_type("employer").await.unwrap();
+    let other_id = kg
+        .ensure_relationship_type("test_employer_alias")
+        .await
+        .unwrap();
 
     // "works_at" is already a canonical name, so it cannot be an alias.
     let err = kg
@@ -252,7 +254,7 @@ async fn normalize_predicate_uses_alias() {
     let (_dir, kg) = setup().await;
 
     let id = kg.ensure_relationship_type("studied_at").await.unwrap();
-    kg.insert_relationship_type_alias("alumni_of", id)
+    kg.insert_relationship_type_alias("test_alumni_alias", id)
         .await
         .unwrap();
 
@@ -261,7 +263,7 @@ async fn normalize_predicate_uses_alias() {
     // alias. Instead, verify alias resolution independently and rely on the
     // extraction integration tests for the full path.
     let resolved = kg
-        .resolve_relationship_type_alias("alumni_of")
+        .resolve_relationship_type_alias("test_alumni_alias")
         .await
         .unwrap();
     assert_eq!(resolved, Some(id));
@@ -275,12 +277,12 @@ async fn insert_relationship_type_rejects_canonical_name_that_shadows_alias() {
         .ensure_relationship_type("employer_entity")
         .await
         .unwrap();
-    kg.insert_relationship_type_alias("employer", existing_id)
+    kg.insert_relationship_type_alias("test_employer_alias", existing_id)
         .await
         .unwrap();
 
     let rt = mimir_knowledge::models::relationship_type::NewRelationshipType {
-        name: "employer".to_string(),
+        name: "test_employer_alias".to_string(),
         description: None,
         sensitive: false,
         default_memory_priority_id: None,
@@ -318,7 +320,7 @@ async fn insert_relationship_type_rejects_alias_that_shadows_canonical_name() {
 }
 
 #[tokio::test]
-async fn transactional_fact_insert_rejects_relationship_type_name_that_shadows_alias() {
+async fn transactional_fact_insert_resolves_relationship_type_alias() {
     use mimir_knowledge::models::entity::EntityType;
     use mimir_knowledge::models::fact::NewFact;
     use mimir_knowledge::models::source::SourceType;
@@ -329,7 +331,7 @@ async fn transactional_fact_insert_rejects_relationship_type_name_that_shadows_a
         .ensure_relationship_type("employer_entity")
         .await
         .unwrap();
-    kg.insert_relationship_type_alias("employer", existing_id)
+    kg.insert_relationship_type_alias("test_employer_alias", existing_id)
         .await
         .unwrap();
 
@@ -340,7 +342,7 @@ async fn transactional_fact_insert_rejects_relationship_type_name_that_shadows_a
 
     let fact = NewFact {
         subject_id: entity.id,
-        relationship_type: "employer".to_string(),
+        relationship_type: "test_employer_alias".to_string(),
         object_id: None,
         object_literal: Some("Acme Corp".to_string()),
         valid_from: None,
@@ -357,10 +359,57 @@ async fn transactional_fact_insert_rejects_relationship_type_name_that_shadows_a
         category_ids: vec![],
     };
 
-    let err = kg.insert_facts_batch(vec![fact]).await.unwrap_err();
+    let facts = kg.insert_facts_batch(vec![fact]).await.unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].relationship_type_id, existing_id);
+}
+
+#[tokio::test]
+async fn ensure_relationship_type_resolves_alias_to_canonical() {
+    let (_dir, kg) = setup().await;
+    let canonical_id = kg.ensure_relationship_type("studied_at").await.unwrap();
+    kg.insert_relationship_type_alias("test_attended_alias", canonical_id)
+        .await
+        .unwrap();
+
+    let resolved_id = kg
+        .ensure_relationship_type("test_attended_alias")
+        .await
+        .unwrap();
+    assert_eq!(
+        resolved_id, canonical_id,
+        "ensure_relationship_type should resolve 'attended' alias to canonical 'studied_at'"
+    );
+    assert_eq!(
+        kg.get_relationship_type_id("test_attended_alias")
+            .await
+            .unwrap(),
+        Some(canonical_id),
+        "get_relationship_type_id should also resolve the alias"
+    );
+}
+
+#[tokio::test]
+async fn ensure_relationship_type_creates_new_type_and_self_alias() {
+    let (_dir, kg) = setup().await;
+    let id = kg.ensure_relationship_type("foo_bar").await.unwrap();
+
+    let name_id = kg.get_relationship_type_id("foo_bar").await.unwrap();
+    assert_eq!(
+        name_id,
+        Some(id),
+        "new canonical name should resolve to the created type"
+    );
+
+    let aliases: Vec<String> = sqlx::query_scalar(
+        "SELECT alias FROM relationship_type_aliases WHERE relationship_type_id = ?",
+    )
+    .bind(id)
+    .fetch_all(kg.pool())
+    .await
+    .unwrap();
     assert!(
-        matches!(err, KnowledgeError::Validation(_)),
-        "expected validation error for transactional create shadowing alias, got {:?}",
-        err
+        aliases.contains(&"foo_bar".to_string()),
+        "new canonical type should register its normalized name as a self-alias"
     );
 }

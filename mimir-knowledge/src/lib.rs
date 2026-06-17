@@ -245,83 +245,28 @@ impl KnowledgeGraph {
     /// Look up a relationship type by name without creating it.
     /// Returns `None` if the type does not exist.
     pub async fn relationship_type_id(&self, name: &str) -> Option<i16> {
-        {
-            let cache = self.relationship_type_cache.read().await;
-            if let Some(&id) = cache.name_to_id.get(name) {
-                return Some(id);
+        match self.get_relationship_type_id(name).await {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!("relationship_type_id lookup failed for '{}': {}", name, e);
+                None
             }
-        }
-
-        let row: Option<(i16,)> =
-            match sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
-                .bind(name)
-                .fetch_optional(&self.pool)
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("relationship_type_id lookup failed for '{}': {}", name, e);
-                    return None;
-                }
-            };
-
-        if let Some((id,)) = row {
-            let mut cache = self.relationship_type_cache.write().await;
-            cache.name_to_id.insert(name.to_string(), id);
-            cache.id_to_name.insert(id, name.to_string());
-            Some(id)
-        } else {
-            None
         }
     }
 
     /// Ensure a relationship type exists in the database, returning its stable id.
     /// Creates the row silently if missing.
     ///
-    /// Rejects names that shadow an existing alias so alias and canonical
-    /// resolution stay consistent.
+    /// Resolution order:
+    /// 1. Normalize the incoming name.
+    /// 2. Query `relationship_type_aliases` for the normalized name; return the
+    ///    canonical id on hit.
+    /// 3. Fall back to creating a new canonical type and register the normalized
+    ///    name as its own alias.
     pub async fn ensure_relationship_type(&self, name: &str) -> Result<i16, KnowledgeError> {
-        {
-            let cache = self.relationship_type_cache.read().await;
-            if let Some(&id) = cache.name_to_id.get(name) {
-                return Ok(id);
-            }
-        }
-
         let mut tx = self.pool.begin().await?;
-
-        let row: Option<(i16,)> =
-            sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
-                .bind(name)
-                .fetch_optional(&mut *tx)
-                .await?;
-
-        let id = match row {
-            Some((id,)) => id,
-            None => {
-                if canonical_name_conflicts_with_alias(&mut *tx, name).await? {
-                    return Err(KnowledgeError::Validation(format!(
-                        "relationship type name '{}' conflicts with an existing alias",
-                        name
-                    )));
-                }
-
-                let id: i64 = sqlx::query_scalar(
-                    "INSERT INTO relationship_types (name, description) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
-                )
-                .bind(name)
-                .bind(format!("Auto-created relationship_type: {}", name))
-                .fetch_one(&mut *tx)
-                .await?;
-                id as i16
-            }
-        };
-
+        let id = self.ensure_relationship_type_in_tx(&mut tx, name).await?;
         tx.commit().await?;
-
-        let mut cache = self.relationship_type_cache.write().await;
-        cache.name_to_id.insert(name.to_string(), id);
-        cache.id_to_name.insert(id, name.to_string());
         Ok(id)
     }
 
@@ -331,68 +276,92 @@ impl KnowledgeGraph {
         tx: &mut sqlx::SqliteTransaction<'_>,
         name: &str,
     ) -> Result<i16, KnowledgeError> {
+        let Some(normalized) = normalize_relationship_alias(name) else {
+            return Err(KnowledgeError::Validation(
+                "relationship type name cannot be empty".to_string(),
+            ));
+        };
+
+        // 1. In-memory cache.
         {
             let cache = self.relationship_type_cache.read().await;
-            if let Some(&id) = cache.name_to_id.get(name) {
+            if let Some(&id) = cache.alias_to_id.get(&normalized) {
                 return Ok(id);
             }
         }
 
-        let row: Option<(i16,)> =
-            sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
-                .bind(name)
-                .fetch_optional(&mut **tx)
-                .await?;
+        // 2. Alias table is the single source of truth.
+        let row: Option<(i16,)> = sqlx::query_as(
+            "SELECT relationship_type_id FROM relationship_type_aliases WHERE alias = ?",
+        )
+        .bind(&normalized)
+        .fetch_optional(&mut **tx)
+        .await?;
 
-        let id = match row {
-            Some((id,)) => id,
-            None => {
-                if canonical_name_conflicts_with_alias(&mut **tx, name).await? {
-                    return Err(KnowledgeError::Validation(format!(
-                        "relationship type name '{}' conflicts with an existing alias",
-                        name
-                    )));
-                }
+        if let Some((id,)) = row {
+            let mut cache = self.relationship_type_cache.write().await;
+            cache.alias_to_id.insert(normalized.clone(), id);
+            cache.name_to_id.insert(normalized, id);
+            return Ok(id);
+        }
 
-                let id: i64 = sqlx::query_scalar(
-                    "INSERT INTO relationship_types (name, description) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
-                )
-                .bind(name)
-                .bind(format!("Auto-created relationship_type: {}", name))
-                .fetch_one(&mut **tx)
-                .await?;
-                id as i16
-            }
-        };
+        // 3. Alias miss: create new canonical type, then register self-alias.
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO relationship_types (name, description) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
+        )
+        .bind(&normalized)
+        .bind(format!("Auto-created relationship_type: {}", normalized))
+        .fetch_one(&mut **tx)
+        .await?;
+        let id = id as i16;
+
+        // Use INSERT OR IGNORE because concurrent transactions may race to create
+        // the same new canonical type; both can upsert `relationship_types`, but
+        // only one can insert the self-alias. The loser must commit cleanly.
+        sqlx::query(
+            "INSERT OR IGNORE INTO relationship_type_aliases (alias, relationship_type_id) VALUES (?, ?)",
+        )
+        .bind(&normalized)
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
 
         let mut cache = self.relationship_type_cache.write().await;
-        cache.name_to_id.insert(name.to_string(), id);
-        cache.id_to_name.insert(id, name.to_string());
+        cache.name_to_id.insert(normalized.clone(), id);
+        cache.alias_to_id.insert(normalized, id);
         Ok(id)
     }
 
     /// Look up a relationship type id by name without creating it.
+    ///
+    /// The alias table is the single source of truth: aliases resolve to their
+    /// canonical relationship type id, and every canonical name is also a
+    /// self-alias.
     pub async fn get_relationship_type_id(
         &self,
         name: &str,
     ) -> Result<Option<i16>, KnowledgeError> {
+        let Some(normalized) = normalize_relationship_alias(name) else {
+            return Ok(None);
+        };
+
         {
             let cache = self.relationship_type_cache.read().await;
-            if let Some(&id) = cache.name_to_id.get(name) {
+            if let Some(&id) = cache.alias_to_id.get(&normalized) {
                 return Ok(Some(id));
             }
         }
 
-        let row: Option<(i16,)> =
-            sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
-                .bind(name)
-                .fetch_optional(&self.pool)
-                .await?;
+        let row: Option<(i16,)> = sqlx::query_as(
+            "SELECT relationship_type_id FROM relationship_type_aliases WHERE alias = ?",
+        )
+        .bind(&normalized)
+        .fetch_optional(&self.pool)
+        .await?;
 
         if let Some((id,)) = row {
             let mut cache = self.relationship_type_cache.write().await;
-            cache.name_to_id.insert(name.to_string(), id);
-            cache.id_to_name.insert(id, name.to_string());
+            cache.alias_to_id.insert(normalized, id);
             Ok(Some(id))
         } else {
             Ok(None)

@@ -152,15 +152,10 @@ pub async fn reject_fact(&self, fact_id: i32) -> Result<(), KnowledgeError>
 
 All tests use `MockLlmClient` with `mimir-core`'s `mock-llm` feature for deterministic, fast validation.
 
-## Predicate Normalisation (v0.40.3)
+## Predicate Normalisation (v0.47.0)
 
-`normalize_predicate` trims whitespace and maps additional common LLM variants:
+During extraction, each relationship type is trimmed, lowercased, and spaces are converted to underscores. The normalized name is then resolved through the `relationship_type_aliases` table before list-valued facts are split. This means LLM synonyms such as `attended`, `hobbies`, or `works_for` automatically map to their canonical types (`studied_at`, `hobby`, `works_at`) if those aliases are registered.
 
-| Variant(s) | Canonical |
-|---|---|
-| `name` | `has_name` |
-| `nickname`, `nick_name`, `called`, `goes_by` | `preferred_name` |
-| `favorite_food`, `fav_food`, `favourite_food` | `favourite_food` |
-| `favorite_colour`, `favorite_color`, `fav_color`, `fav_colour`, `color`, `colour` | `favourite_colour` |
+Migration `036_seed_relationship_type_aliases.sql` seeds the legacy hardcoded synonyms from the now-deprecated `normalize_predicate` map as data-driven aliases. The deprecated hardcoded map remains in `mimir-knowledge/src/extract.rs` only as a fallback and is no longer on the active extraction path.
 
 The `LIST_PREDICATES` allow-list was expanded to include `has_pets`, `has_child`, `has_parent`, `has_sibling`, and `has_partner` so comma-separated values for these predicates are correctly split into individual facts.

@@ -324,13 +324,24 @@ pub async fn insert_category_alias(
     }
 
     let mut tx = pool.begin().await?;
-    let existing: Option<(i32,)> =
+    // Atomic insert-then-resolve avoids the SELECT-then-INSERT race under
+    // DEFERRED isolation: whichever concurrent writer inserts first wins, and
+    // the subsequent read deterministically returns the canonical mapping so we
+    // surface a `Validation` error (not a raw UNIQUE-constraint failure) on
+    // rebind attempts.
+    sqlx::query("INSERT OR IGNORE INTO category_aliases (alias, category_id) VALUES (?, ?)")
+        .bind(&normalized)
+        .bind(category_id)
+        .execute(&mut *tx)
+        .await?;
+
+    let mapped: Option<(i32,)> =
         sqlx::query_as("SELECT category_id FROM category_aliases WHERE alias = ?")
             .bind(&normalized)
             .fetch_optional(&mut *tx)
             .await?;
-    match existing {
-        // Idempotent: the same alias already maps to this category.
+    match mapped {
+        // Idempotent: the alias now maps to the requested category.
         Some((existing_id,)) if existing_id == category_id => {}
         // Rebinding an existing alias to a different category is rejected so
         // callers do not silently keep the original mapping.
@@ -341,11 +352,10 @@ pub async fn insert_category_alias(
             )));
         }
         None => {
-            sqlx::query("INSERT INTO category_aliases (alias, category_id) VALUES (?, ?)")
-                .bind(&normalized)
-                .bind(category_id)
-                .execute(&mut *tx)
-                .await?;
+            return Err(KnowledgeError::Validation(format!(
+                "category alias '{}' could not be inserted",
+                normalized
+            )));
         }
     }
     tx.commit().await?;

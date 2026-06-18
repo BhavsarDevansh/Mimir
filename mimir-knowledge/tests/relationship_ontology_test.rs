@@ -53,9 +53,16 @@ async fn new_predicates_have_self_aliases() {
         "likes",
         "dislikes",
     ] {
-        let resolved = kg.ensure_relationship_type(name).await.unwrap();
+        // Read-only canonical id lookup — do not mutate the DB in a seed
+        // verification test, otherwise missing seeds would be silently created.
+        let (canonical_id,): (i16,) =
+            sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
+                .bind(name)
+                .fetch_one(kg.pool())
+                .await
+                .unwrap();
         let alias_id = kg.resolve_relationship_type_alias(name).await.unwrap();
-        assert_eq!(alias_id, Some(resolved), "{name} self-alias missing");
+        assert_eq!(alias_id, Some(canonical_id), "{name} self-alias missing");
     }
 }
 

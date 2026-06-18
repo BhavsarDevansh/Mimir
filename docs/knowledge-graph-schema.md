@@ -150,8 +150,8 @@ Migrations are strictly ordered by foreign-key dependencies:
 16. `031` — Category taxonomy (`categories`, `fact_categories`) + rename `predicates` → `relationship_types`
 17. `035` — Relationship type DAG schema (`relationship_type_hierarchy`, `relationship_type_aliases`)
 18. `036` — Seed relationship type aliases (self-aliases + legacy synonyms)
-19. `037` — Seed remaining core predicates + self-aliases (#135)
-20. `038` — `category_aliases` table + domain alias seed (#135)
+19. `037` — Seed remaining core predicates + self-aliases (#135); `ON CONFLICT` UPSERTs enforce the canonical `(id, name)` contract
+20. `038` — `category_aliases` table + domain alias seed (#135); transactional with FK enforcement on, `IF NOT EXISTS` for idempotency
 
 ---
 
@@ -288,8 +288,8 @@ The legacy hardcoded `normalize_predicate` map in `mimir-knowledge/src/extract.r
 
 Mimir separates two concerns that previously risked overlapping:
 
-- **Predicate canonicalization** lives on `relationship_type_aliases`. A predicate is a thin verb (`studied_at`, `works_at`, `has_partner`); English synonyms (`attended`, `employer`, `wife`) resolve to a single canonical id so the same verb is never stored under multiple rows. Migration `037` seeds the remaining core verbs (`studied`, `completed_degree`, `educational_status`, `job_title`, `likes`, `dislikes`) and their self-aliases.
-- **Grouping / hierarchy / multi-tag precision** lives on the Dewey `categories` tree. A fact carries 1–3 category tags via `fact_categories`, and `categories.memory_weight` drives memory ranking (`confidence × memory_weight × temporal_boost × …`). Migration `038` adds `category_aliases`, which map natural-language domain words (`education`, `hobbies`, `residence`, `family`, `identity`, …) to a category id so callers can resolve a spoken word to a taxonomy node.
+- **Predicate canonicalization** lives on `relationship_type_aliases`. A predicate is a thin verb (`studied_at`, `works_at`, `has_partner`); English synonyms (`attended`, `employer`, `wife`) resolve to a single canonical id so the same verb is never stored under multiple rows. Migration `037` seeds the remaining core verbs (`studied`, `completed_degree`, `educational_status`, `job_title`, `likes`, `dislikes`) and their self-aliases via `ON CONFLICT` UPSERTs, so an upgrade corrects any stale row at a reserved id to the canonical mapping instead of silently preserving it.
+- **Grouping / hierarchy / multi-tag precision** lives on the Dewey `categories` tree. A fact carries 1–3 category tags via `fact_categories`, and `categories.memory_weight` drives memory ranking (`confidence × memory_weight × temporal_boost × …`). Migration `038` adds `category_aliases`, which map natural-language domain words (`education`, `hobbies`, `residence`, `family`, `identity`, …) to a category id so callers can resolve a spoken word to a taxonomy node. It runs inside a transaction with foreign-key enforcement on and uses `CREATE … IF NOT EXISTS`, so a mid-run failure leaves no partial schema.
 
 ### Why categories, not a predicate hierarchy, for grouping
 
@@ -298,7 +298,7 @@ A predicate tree can only follow one axis (a predicate has a single canonical na
 ### Retrieval API (`queries::category`)
 
 - `resolve_category_alias(pool, alias) -> Option<i32>` — normalize (trim, lowercase, spaces→`_`) and look up `category_aliases`. Returns `None` for empty/unknown.
-- `insert_category_alias(pool, alias, category_id)` — idempotent for the same alias→category mapping; rejects empty aliases (`Validation`), unknown category ids (`CategoryNotFound`), and rebinding an existing alias to a different category (`Validation`).
+- `insert_category_alias(pool, alias, category_id)` — idempotent for the same alias→category mapping; rejects empty aliases (`Validation`), unknown category ids (`CategoryNotFound`), and rebinding an existing alias to a different category (`Validation`). Uses an atomic `INSERT OR IGNORE` + post-insert resolution so concurrent writers cannot surface a raw `UNIQUE`-constraint error; rebinds still return `Validation`.
 - `get_descendant_category_ids(pool, root_id) -> Vec<i32>` — recursive CTE over `categories.parent_id` (root excluded).
 - `get_facts_in_category_subtree(pool, root_id, limit)` — facts tagged anywhere in the subtree (root + descendants), reusing `get_facts_matching_any_categories`.
 - `list_category_aliases(pool, category_id: Option<i32>)` — enumerate aliases (optionally filtered by category), returning `CategoryAlias` rows.

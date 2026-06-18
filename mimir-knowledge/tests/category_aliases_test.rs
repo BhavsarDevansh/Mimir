@@ -208,10 +208,13 @@ async fn facts_in_category_subtree_gather_descendants() {
         "leaf-category fact found via subtree"
     );
 
-    // A fact in an unrelated category must not leak in.
+    // A fact in an unrelated category must not leak in. Re-query after
+    // inserting `other` so the exclusion assertion is meaningful.
     let other = make_fact_with_category(&kg, "based_in", 610).await;
+    let facts_after = kg.get_facts_in_category_subtree(700, 100).await.unwrap();
+    let ids_after: Vec<i32> = facts_after.iter().map(|f| f.fact_id).collect();
     assert!(
-        !ids.contains(&other),
+        !ids_after.contains(&other),
         "fact outside the subtree must be excluded"
     );
 }

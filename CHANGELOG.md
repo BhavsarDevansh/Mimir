@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.49.1] — 2026-06-18
+
+### Fixed
+
+- **Address PR #152 review feedback (Issue #135 ontology seed):**
+  - Migration `037` now uses `ON CONFLICT` UPSERTs (not `INSERT OR IGNORE`) for the
+    canonical predicates and their self-aliases, enforcing the canonical `(id, name)`
+    contract on upgrade instead of silently preserving stale mappings.
+  - Migration `038` runs inside a transaction with foreign-key enforcement on
+    (`PRAGMA foreign_keys = OFF` removed) and uses `CREATE TABLE/INDEX IF NOT EXISTS`
+    for defensive idempotency.
+  - `insert_category_alias` now uses an atomic `INSERT OR IGNORE` + post-insert
+    resolution, eliminating the `SELECT`-then-`INSERT` race that could surface raw
+    `UNIQUE`-constraint errors instead of the documented `Validation` error.
+  - `category_aliases_test` re-queries the subtree after inserting the unrelated
+    fact so the exclusion assertion is meaningful.
+  - `relationship_ontology_test` self-alias check is now read-only (direct canonical
+    id lookup) instead of mutating the DB via `ensure_relationship_type`.
+
 ## [0.49.0] — 2026-06-18
 
 ### Added

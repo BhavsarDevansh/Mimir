@@ -18,7 +18,7 @@ Mimir's knowledge graph organises facts with two complementary layers:
 2. **Expand the subtree** — `KnowledgeGraph::get_descendant_category_ids(700)` walks the `categories.parent_id` tree recursively, returning all descendant ids (710, 740, 770, 780, …).
 3. **Gather facts** — `KnowledgeGraph::get_facts_in_category_subtree(700, limit)` returns every fact tagged anywhere in the subtree (root + descendants), ordered by confidence.
 
-Aliases are stored in the `category_aliases` table (globally unique `alias` → `category_id`). Insertion is idempotent (`INSERT OR IGNORE`); empty aliases and unknown category ids are rejected.
+Aliases are stored in the `category_aliases` table (globally unique `alias` → `category_id`). Insertion is idempotent and race-safe: `insert_category_alias` performs an atomic `INSERT OR IGNORE` then resolves the resulting mapping, so concurrent writers never leak a raw `UNIQUE`-constraint error — rebinds to a different category return a `Validation` error, and empty aliases / unknown category ids are rejected. The seed migration (`038`) runs inside a transaction with foreign-key enforcement on and uses `CREATE … IF NOT EXISTS` for defensive idempotency.
 
 ## Why categories, not a predicate hierarchy
 

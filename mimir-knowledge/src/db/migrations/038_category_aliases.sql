@@ -1,19 +1,17 @@
--- no-transaction
 -- ============================================================================
 -- 038: Category aliases — natural-language lookup into the Dewey taxonomy
 -- ============================================================================
 -- Categories own grouping/hierarchy and multi-tag precision. This table lets
 -- callers resolve a domain word ("hobbies", "education") to a category id,
 -- enabling category-subtree retrieval without a predicate hierarchy.
--- Aliases are globally unique (one alias -> one category). Idempotent.
-PRAGMA foreign_keys = OFF;
+-- Aliases are globally unique (one alias -> one category). Idempotent via IF NOT EXISTS and INSERT OR IGNORE; runs inside a transaction with FK enforcement on.
 
-CREATE TABLE category_aliases (
+CREATE TABLE IF NOT EXISTS category_aliases (
     alias TEXT NOT NULL PRIMARY KEY,
     category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_category_aliases_category ON category_aliases(category_id);
+CREATE INDEX IF NOT EXISTS idx_category_aliases_category ON category_aliases(category_id);
 
 -- Seed domain/synonym aliases mapping to existing Dewey category nodes.
 -- Six core domains from issue #135 (education, employment, residence,
@@ -46,4 +44,3 @@ INSERT OR IGNORE INTO category_aliases (alias, category_id) VALUES
     ('biography', 100),
     ('profile', 100);
 
-PRAGMA foreign_keys = ON;

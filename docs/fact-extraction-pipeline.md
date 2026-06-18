@@ -152,10 +152,12 @@ pub async fn reject_fact(&self, fact_id: i32) -> Result<(), KnowledgeError>
 
 All tests use `MockLlmClient` with `mimir-core`'s `mock-llm` feature for deterministic, fast validation.
 
-## Predicate Normalisation (v0.47.0)
+## Predicate Resolution (v0.50.0)
 
-During extraction, each relationship type is trimmed, lowercased, and spaces are converted to underscores. The normalized name is then resolved through the `relationship_type_aliases` table before list-valued facts are split. This means LLM synonyms such as `attended`, `hobbies`, or `works_for` automatically map to their canonical types (`studied_at`, `hobby`, `works_at`) if those aliases are registered.
+During extraction, each fact's `relationship_type` is resolved through `KnowledgeGraph::ensure_relationship_type`, which trims/lowercases the name (via `normalize_alias`), looks it up in the `relationship_type_aliases` table — the single source of truth — and, on a miss, auto-creates a canonical `relationship_types` row plus a self-alias. The resolved canonical name then drives `split_list_objects`. LLM synonyms such as `attended`, `hobbies`, or `works_for` therefore map to their canonical types (`studied_at`, `hobby`, `works_at`) purely from seeded data — there is no hardcoded synonym map in code.
 
-Migration `036_seed_relationship_type_aliases.sql` seeds the legacy hardcoded synonyms from the now-deprecated `normalize_predicate` map as data-driven aliases. The deprecated hardcoded map remains in `mimir-knowledge/src/extract.rs` only as a fallback and is no longer on the active extraction path.
+The batch processor (`process_fact_batch`, shared by `extract_facts`/`extract_facts_with_context` and the `remember` tool entrypoint `process_remember_output`) tolerates predicate-resolution errors per-fact: one invalid predicate is recorded in `ExtractionOutcome::errors` without aborting the rest of the batch.
+
+> **Issue #136:** the deprecated hardcoded `normalize_predicate` map and the duplicate `normalize_relationship_type` snake_case helper were removed from `mimir-knowledge/src/extract.rs`. Migrations `036_seed_relationship_type_aliases.sql` and `037_seed_core_predicates_and_aliases.sql` seed every legacy synonym as data, so behaviour is unchanged for `attended`→`studied_at`, `hobbies`→`hobby`, etc. A side effect of routing through `ensure_relationship_type` is that an unknown predicate on a fact that is later rejected (e.g. invalid `subject_type`) still registers its canonical type; this is intentional and idempotent.
 
 The `LIST_PREDICATES` allow-list was expanded to include `has_pets`, `has_child`, `has_parent`, `has_sibling`, and `has_partner` so comma-separated values for these predicates are correctly split into individual facts.

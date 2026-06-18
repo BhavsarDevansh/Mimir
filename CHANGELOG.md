@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.50.0] — 2026-06-18
+
+### Changed
+
+- **Predicate resolution is fully data-driven (Issue #136):** the deprecated
+  hardcoded `normalize_predicate` synonym map and the duplicate
+  `normalize_relationship_type` snake_case helper have been removed from
+  `mimir-knowledge/src/extract.rs`. The extraction pipeline now resolves every
+  fact's `relationship_type` through `KnowledgeGraph::ensure_relationship_type`,
+  which consults the `relationship_type_aliases` table (seeded by migrations
+  `036`/`037`) and auto-registers unknown predicates as new canonical types.
+- **DRY batch processing:** `process_extracted_facts` and
+  `process_remember_output` now share a single `process_fact_batch` helper, and
+  predicate normalization reuses `normalize_alias` from `mimir-knowledge/src/lib.rs`
+  instead of a local copy. Predicate-resolution errors are tolerated per-fact, so
+  one malformed predicate no longer aborts the whole extraction batch.
+
+### Notes
+
+- End-user behaviour is unchanged: `attended`→`studied_at`, `hobbies`→`hobby`,
+  `works_for`→`works_at`, etc. all resolve via seeded aliases.
+- Side effect of routing through `ensure_relationship_type`: an unknown predicate
+  on a fact that is later rejected (e.g. invalid `subject_type`) still registers its
+  canonical type. This is intentional and idempotent.
+
 ## [0.49.1] — 2026-06-18
 
 ### Fixed

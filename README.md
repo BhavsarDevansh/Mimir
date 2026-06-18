@@ -29,7 +29,7 @@ Mimir is built in **Rust** with a modular, local-first architecture:
 - **Core Agent** — CLI, chat interface, LLM orchestration, tool calling, skills, personality system, and working memory
 - **HTTP Server** — Axum-based daemon with SSE streaming, session management, and graceful shutdown
 - **Storage Layer** — SQLite for conversation history, skill metrics, configuration, and the knowledge graph
-- **Knowledge Graph** — Live memory condensation, entity/fact storage, temporal reasoning, relationship type DAG + aliases, and event-driven regeneration via the unified background scheduler
+- **Knowledge Graph** — Live memory condensation, entity/fact storage, temporal reasoning, a category-first ontology (predicate aliases for verb canonicalization + Dewey categories with aliases and subtree retrieval for grouping), and event-driven regeneration via the unified background scheduler
 - **Librarian Agent** — Background autonomous agent that extracts facts from completed chat turns using the full transcript, condensed memory, user identity, and KB context
 - **Retrieval Agent** — Dedicated ephemeral research agents that investigate the knowledge graph and conversation history on behalf of the main agent before answering complex questions
 

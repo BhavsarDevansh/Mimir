@@ -261,3 +261,79 @@ pub async fn get_facts_matching_any_categories(
     let rows = query.fetch_all(pool).await?;
     Ok(rows)
 }
+
+/// Resolve a natural-language alias to a category id.
+pub async fn resolve_category_alias(
+    pool: &SqlitePool,
+    alias: &str,
+) -> Result<Option<i32>, KnowledgeError> {
+    let Some(normalized) = crate::normalize_alias(alias) else {
+        return Ok(None);
+    };
+    let row: Option<(i32,)> =
+        sqlx::query_as("SELECT category_id FROM category_aliases WHERE alias = ?")
+            .bind(&normalized)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|r| r.0))
+}
+
+/// Insert a category alias, rejecting empty aliases and unknown category ids.
+pub async fn insert_category_alias(
+    pool: &SqlitePool,
+    alias: &str,
+    category_id: i32,
+) -> Result<(), KnowledgeError> {
+    let Some(normalized) = crate::normalize_alias(alias) else {
+        return Err(KnowledgeError::Validation(
+            "category alias cannot be empty".to_string(),
+        ));
+    };
+
+    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM categories WHERE id = ?")
+        .bind(category_id)
+        .fetch_one(pool)
+        .await?;
+    if exists == 0 {
+        return Err(KnowledgeError::CategoryNotFound(category_id));
+    }
+
+    sqlx::query("INSERT OR IGNORE INTO category_aliases (alias, category_id) VALUES (?, ?)")
+        .bind(&normalized)
+        .bind(category_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Return all descendant category ids of `root_id` (exclusive of the root)
+/// via a recursive CTE over the `categories.parent_id` tree.
+pub async fn get_descendant_category_ids(
+    pool: &SqlitePool,
+    root_id: i32,
+) -> Result<Vec<i32>, KnowledgeError> {
+    let rows: Vec<(i32,)> = sqlx::query_as(
+        r#"WITH RECURSIVE descendants(id) AS (
+             SELECT id FROM categories WHERE parent_id = ?
+             UNION
+             SELECT c.id FROM categories c
+             JOIN descendants d ON c.parent_id = d.id
+             )
+             SELECT id FROM descendants ORDER BY id"#,
+    )
+    .bind(root_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
+/// Get facts anywhere in a category subtree (root + all descendants).
+pub async fn get_facts_in_category_subtree(
+    pool: &SqlitePool,
+    root_id: i32,
+    limit: i64,
+) -> Result<Vec<FactWithCategories>, KnowledgeError> {
+    let mut ids = get_descendant_category_ids(pool, root_id).await?;
+    ids.push(root_id);
+    get_facts_matching_any_categories(pool, &ids, limit).await
+}

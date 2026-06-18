@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.49.0] — 2026-06-18
+
+### Added
+
+- **Core relationship ontology (category-first, Issue #135)**: the knowledge graph is
+  now seeded with a category-first ontology. Predicate aliases own verb canonicalization
+  (thin canonical verbs + English synonyms); the Dewey `categories` tree owns grouping,
+  hierarchy, and multi-tag precision.
+  - Migration `037` seeds the remaining core predicates (`studied`, `completed_degree`,
+    `educational_status`, `job_title`, `likes`, `dislikes`) with explicit ids 26–31 and
+    self-aliases, so the alias table remains the single source of truth for resolution.
+  - Migration `038` adds the `category_aliases` table (`alias` → `category_id`,
+    globally unique) and seeds domain words (`education`, `hobbies`, `residence`,
+    `family`, `identity`, `employment`, `pets`, …) mapping to existing Dewey category
+    nodes. Both migrations are idempotent (`INSERT OR IGNORE`).
+  - New `queries::category` helpers: `resolve_category_alias`, `insert_category_alias`,
+    `get_descendant_category_ids` (recursive CTE over `categories.parent_id`), and
+    `get_facts_in_category_subtree` (facts tagged anywhere in a root + descendants).
+    `KnowledgeGraph` exposes thin wrappers for each.
+  - Unit tests verify predicate/alias counts, alias resolution, category-alias counts,
+    subtree retrieval, and idempotency across re-init.
+
+### Changed
+
+- **Design shift documented**: grouping/hierarchy is intentionally served by categories,
+  not abstract parent predicates. `relationship_type_hierarchy` is kept but no longer
+  seeded with abstract parents; reworking `kg_query --include_subtree` to expand by
+  category subtree (rather than the predicate DAG) is a tracked follow-up (#134, #136).
+- Updated `docs/knowledge-graph-schema.md`, `docs/wiki/what-works-now.md`, new
+  `docs/wiki/categories-and-aliases.md`, and `README.md` to reflect the category-first
+  layering.
+
 ## [0.48.1] — 2026-06-18
 
 ### Fixed

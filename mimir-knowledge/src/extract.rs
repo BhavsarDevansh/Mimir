@@ -339,7 +339,8 @@ async fn process_fact_batch(
         // consults the alias table (single source of truth), and auto-creates a
         // canonical type + self-alias on a miss. The id threads through to the
         // per-fact processor so the resolution is not repeated downstream.
-        let relationship_type_id = match kg.ensure_relationship_type(&fact.relationship_type).await {
+        let relationship_type_id = match kg.ensure_relationship_type(&fact.relationship_type).await
+        {
             Ok(id) => id,
             Err(error) => {
                 outcome.errors.push(error);

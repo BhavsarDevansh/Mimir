@@ -2,13 +2,19 @@
 
 ## Overview
 
-The **Librarian Agent** is Mimir's background fact-extraction agent. After each
-completed chat turn, it receives the full conversation transcript together with
-the current knowledge-graph snapshot (condensed memory, user identity, and
-recent related facts) and extracts structured facts into the knowledge graph.
+The **Librarian Agent** is Mimir's on-demand fact-extraction agent. When invoked,
+it receives the full conversation transcript together with the current
+knowledge-graph snapshot (condensed memory, user identity, and recent related
+facts) and extracts structured facts into the knowledge graph.
 
-It replaces the earlier fire-and-forget `spawn_fact_extraction` helper and is
-the first implementation of the generic `Agent` / `AgentRuntime` framework.
+It is the first implementation of the generic `Agent` / `AgentRuntime` framework.
+
+> **Note (Issue #137):** The Librarian is **no longer auto-invoked after every
+> chat turn.** Learning is now LLM-orchestrated: the conversational LLM calls the
+> `remember` tool inline to persist facts. The Librarian and
+> `KnowledgeGraph::extract_facts_with_context` remain as a library API for future
+> on-demand and bulk-extraction callers (e.g. a specialist research agent). The
+> chat route no longer constructs or submits a `LibrarianGoal`.
 
 ## Responsibilities
 
@@ -29,13 +35,14 @@ the first implementation of the generic `Agent` / `AgentRuntime` framework.
 
 ## Architecture
 
+The Librarian is invoked on demand by a caller that constructs and submits a
+`LibrarianGoal` (a future specialist agent or bulk-import path). The chat route
+no longer drives it.
+
 ```text
-Chat Route
+On-demand caller (future agent / bulk import)
     |
-    | after assistant response persisted
-    v
-LibrarianGoal { target_subject_id, topic, turn }
-    |
+    | constructs LibrarianGoal { target_subject_id, topic, turn }
     v
 AgentRuntime.submit::<LibrarianAgent>(goal, LibrarianContext)
     |
@@ -77,19 +84,23 @@ independently.
 
 ## Data Flow
 
-1. The chat route persists the assistant response in the conversation manager.
-2. It builds a `ConversationTurn` and `LibrarianGoal` with topic
-   `"chat-turn-extraction"`.
-3. It builds a `LibrarianContext` with:
+1. An on-demand caller builds a `ConversationTurn` and a `LibrarianGoal`
+   (the topic is caller-defined; the historical `"chat-turn-extraction"` topic is
+   no longer produced by the chat route).
+2. It builds a `LibrarianContext` with:
    - `Arc<KnowledgeGraph>`
    - `Arc<dyn LlmBackend>` (the core agent's LLM)
    - `UserIdentity`
    - optional condensed memory string
-4. `AgentRuntime.submit::<LibrarianAgent>` queues the goal.
-5. The runtime spawns a task that calls `LibrarianAgent::run`.
-6. The agent calls `extract_facts_with_context`, which builds a prompt containing
+3. `AgentRuntime.submit::<LibrarianAgent>` queues the goal.
+4. The runtime spawns a task that calls `LibrarianAgent::run`.
+5. The agent calls `extract_facts_with_context`, which builds a prompt containing
    the transcript, identity, memory, and recent related facts.
-7. The LLM emits facts via the `remember` tool; Rust validates and inserts them.
+6. The LLM emits facts via the `remember` tool; Rust validates and inserts them.
+
+For ordinary chat, learning bypasses this agent entirely: the LLM calls
+`remember` inline and Rust's `process_remember_output` applies the same policy
+(confidence, overwrite, sensitive gating) without a second LLM call.
 
 ## Configuration
 
@@ -99,10 +110,13 @@ the core agent (`[llm]` in `config.toml`).
 ## Testing
 
 - Unit tests for `AgentRuntime` live in `mimir-core/src/agents/runtime.rs`.
-- Integration tests for `LibrarianAgent` live in
+- Integration tests for `LibrarianAgent` (invoked explicitly) live in
   `mimir-knowledge/tests/librarian_agent.rs`.
-- Server integration tests should assert that the chat route submits a goal and
-  that the agent extracts facts in the background.
+- Server integration tests in `mimir-server/src/lib.rs` assert the new model:
+  `test_chitchat_does_not_trigger_background_learning` verifies that a chitchat
+  turn makes no background extraction LLM call, and
+  `test_chat_extracts_facts_after_response` verifies that an inline `remember`
+  tool call persists facts.
 
 ## Future Work
 

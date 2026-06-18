@@ -2,7 +2,7 @@
 
 The fact-extraction pipeline processes chat input to extract and store facts as structured subject-predicate-object triples in the knowledge graph. This page explains how the process works, what gets stored, and how you stay in control.
 
-**Note:** The extraction pipeline is automatically triggered after every non-incognito chat interaction. Facts are extracted in the background without delaying your response. Additionally, the LLM has a `remember` tool it can call proactively during conversation to write facts directly.
+**Note:** Learning is LLM-orchestrated. The conversational LLM calls the `remember` tool during the chat turn to persist facts it judges worth keeping, so extraction happens inline without delaying your response and without learning from chitchat (Issue #137). The Librarian Agent and its background extraction pipeline remain available as an on-demand library API but are no longer auto-triggered every turn.
 
 ## Fact Quality
 

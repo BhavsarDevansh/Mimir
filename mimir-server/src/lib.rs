@@ -433,6 +433,9 @@ mod tests {
             std::time::Duration::from_secs(1),
         );
 
+        // Librarian registered to mirror production, though tests no longer
+        // auto-invoke it (issue #137): learning is LLM-orchestrated via
+        // `remember`. Kept so the on-demand library API stays exercised.
         let agent_runtime = Arc::new(mimir_core::agents::AgentRuntime::new());
         agent_runtime
             .register::<mimir_knowledge::librarian::LibrarianAgent>(
@@ -542,6 +545,48 @@ mod tests {
         let chat: ChatResponse = serde_json::from_slice(&bytes).unwrap();
         assert!(chat.session_id > 0);
         assert_eq!(chat.response, "Hello!");
+    }
+
+    // Issue #137: learning is LLM-orchestrated via the `remember` tool. A
+    // chitchat turn where the LLM does not call `remember` must not trigger a
+    // background extraction LLM call. The unconditional Librarian has been
+    // retired, so the mock should record exactly one LLM call (the main chat
+    // completion) and no second extraction call.
+    #[tokio::test]
+    async fn test_chitchat_does_not_trigger_background_learning() {
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_chat("Hi there! How can I help?", Usage::default())
+                .build(),
+        );
+        let mut config = Config::default();
+        config.identity.name = "devansh".to_string();
+        let (state, _temp) = test_state_with_config(mock.clone(), config).await;
+        let app = super::build_app(state);
+
+        let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = axum::body::to_bytes(response.into_body(), usize::MAX).await;
+
+        // Allow any background agent task to flush.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        assert_eq!(
+            mock.chat_calls().len(),
+            1,
+            "chitchat must not trigger a background extraction LLM call"
+        );
     }
 
     #[tokio::test]
@@ -2170,7 +2215,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_chat_extracts_facts_after_response() {
-        // Build the extraction response (assistant message with remember tool call).
+        // Inline learning (issue #137): the conversational LLM calls the
+        // `remember` tool while composing its reply, so facts are persisted
+        // during the chat turn itself — no background Librarian required.
         let remember_output = mimir_knowledge::extract::RememberOutput {
             facts: vec![mimir_knowledge::extract::ExtractedFact {
                 classification: mimir_knowledge::extract::Classification::Explicit,
@@ -2201,10 +2248,13 @@ mod tests {
             tool_call_id: None,
         };
 
+        // The LLM orchestrates learning inline: its first response calls the
+        // `remember` tool to persist the fact, then it produces a final
+        // acknowledgement. There is no separate background extraction pass.
         let mock = Arc::new(
             MockLlmClient::builder()
-                .push_chat("Got it!", Usage::default())
                 .push_chat_message(extraction_msg, Usage::default())
+                .push_chat("Got it!", Usage::default())
                 .build(),
         );
 

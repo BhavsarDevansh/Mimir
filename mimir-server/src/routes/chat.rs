@@ -34,66 +34,6 @@ async fn build_catalogue(knowledge_graph: &mimir_knowledge::KnowledgeGraph) -> S
     }
 }
 
-/// Submit a Librarian goal to extract facts from the completed turn.
-///
-/// This is fire-and-forget from the HTTP handler's perspective; the agent
-/// runtime handles deduplication and background dispatch.
-async fn submit_librarian_goal(
-    state: &AppState,
-    session_id: i64,
-    user_message: String,
-    assistant_response: String,
-) {
-    if user_message.trim().is_empty() {
-        tracing::debug!("skipping Librarian extraction: empty user message");
-        return;
-    }
-
-    let Some(user_entity_id) = state.user_entity_id else {
-        tracing::debug!("skipping Librarian extraction: no user entity resolved");
-        return;
-    };
-
-    let turn = mimir_core::conversation::ConversationTurn::new(
-        session_id,
-        user_message,
-        assistant_response,
-    );
-    let goal = mimir_knowledge::librarian::LibrarianGoal::new(
-        user_entity_id,
-        "chat-turn-extraction",
-        turn,
-    );
-
-    let user_name = state.config.snapshot().await.identity.name;
-    let identity = mimir_core::identity::UserIdentity::new(
-        if user_name.is_empty() {
-            "user"
-        } else {
-            &user_name
-        },
-        user_entity_id,
-    );
-    let condensed_memory = state
-        .knowledge_graph
-        .get_condensed_memory()
-        .await
-        .ok()
-        .flatten();
-
-    let ctx = mimir_knowledge::librarian::LibrarianContext::new(
-        Arc::clone(&state.knowledge_graph),
-        Arc::clone(&state.llm_client),
-        identity,
-        condensed_memory,
-    );
-
-    state
-        .agent_runtime
-        .submit::<mimir_knowledge::librarian::LibrarianAgent>(goal, Arc::new(ctx))
-        .await;
-}
-
 /// Execute a single tool call, ensuring `retrieve_context` uses the
 /// request-resolved LLM so per-request model overrides are respected.
 async fn execute_tool_call(
@@ -374,15 +314,6 @@ pub async fn chat_handler(
             .add_assistant_message(session_id, &response_text)
             .await
             .map_err(error::context_error)?;
-
-        // Submit the completed turn to the Librarian Agent for background fact extraction.
-        submit_librarian_goal(
-            &state,
-            session_id,
-            req.message.clone(),
-            response_text.clone(),
-        )
-        .await;
     }
 
     Ok(Json(ChatResponse {
@@ -425,7 +356,6 @@ pub async fn chat_stream_handler(
     let tool_registry_clone = Arc::clone(&state.tool_registry);
     let kg_clone = Arc::clone(&state.knowledge_graph);
     let context_manager_clone = Arc::clone(&state.context_manager);
-    let user_message = req.message.clone();
 
     tokio::spawn(async move {
         let _permit = permit;
@@ -548,15 +478,6 @@ pub async fn chat_stream_handler(
                     {
                         error!("failed to persist assistant message: {e}");
                     }
-
-                    // Submit the completed turn to the Librarian Agent.
-                    submit_librarian_goal(
-                        &state_clone,
-                        session_id_clone,
-                        user_message.clone(),
-                        full_response.clone(),
-                    )
-                    .await;
                 }
                 break 'outer;
             }

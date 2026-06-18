@@ -252,7 +252,10 @@ impl AppState {
         let jobs_db_path = mimir_core::paths::jobs_db_path()?;
         let job_queue = Arc::new(JobQueue::init(&jobs_db_path).await?);
 
-        // Initialise agent runtime and register the LibrarianAgent.
+        // Initialise agent runtime. The LibrarianAgent is registered so it
+        // remains available for future on-demand/bulk extraction, but it is no
+        // longer auto-invoked from the chat route (issue #137; learning is now
+        // LLM-orchestrated via the `remember` tool).
         let agent_runtime = Arc::new(AgentRuntime::new());
         agent_runtime
             .register::<mimir_knowledge::librarian::LibrarianAgent>(

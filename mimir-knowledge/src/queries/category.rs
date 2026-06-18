@@ -278,7 +278,32 @@ pub async fn resolve_category_alias(
     Ok(row.map(|r| r.0))
 }
 
-/// Insert a category alias, rejecting empty aliases and unknown category ids.
+/// List category aliases, optionally filtered by category id.
+pub async fn list_category_aliases(
+    pool: &SqlitePool,
+    category_id: Option<i32>,
+) -> Result<Vec<crate::models::category::CategoryAlias>, KnowledgeError> {
+    let rows = match category_id {
+        Some(cid) => sqlx::query_as::<_, crate::models::category::CategoryAlias>(
+            "SELECT alias, category_id FROM category_aliases WHERE category_id = ? ORDER BY alias",
+        )
+        .bind(cid)
+        .fetch_all(pool)
+        .await?,
+        None => {
+            sqlx::query_as::<_, crate::models::category::CategoryAlias>(
+                "SELECT alias, category_id FROM category_aliases ORDER BY alias",
+            )
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    Ok(rows)
+}
+
+/// Insert a category alias. Idempotent for the same alias→category mapping;
+/// rejects empty aliases, unknown category ids, and rebinding an existing alias
+/// to a different category (returns `Validation`).
 pub async fn insert_category_alias(
     pool: &SqlitePool,
     alias: &str,
@@ -298,11 +323,32 @@ pub async fn insert_category_alias(
         return Err(KnowledgeError::CategoryNotFound(category_id));
     }
 
-    sqlx::query("INSERT OR IGNORE INTO category_aliases (alias, category_id) VALUES (?, ?)")
-        .bind(&normalized)
-        .bind(category_id)
-        .execute(pool)
-        .await?;
+    let mut tx = pool.begin().await?;
+    let existing: Option<(i32,)> =
+        sqlx::query_as("SELECT category_id FROM category_aliases WHERE alias = ?")
+            .bind(&normalized)
+            .fetch_optional(&mut *tx)
+            .await?;
+    match existing {
+        // Idempotent: the same alias already maps to this category.
+        Some((existing_id,)) if existing_id == category_id => {}
+        // Rebinding an existing alias to a different category is rejected so
+        // callers do not silently keep the original mapping.
+        Some((existing_id,)) => {
+            return Err(KnowledgeError::Validation(format!(
+                "category alias '{}' is already mapped to category {}",
+                normalized, existing_id
+            )));
+        }
+        None => {
+            sqlx::query("INSERT INTO category_aliases (alias, category_id) VALUES (?, ?)")
+                .bind(&normalized)
+                .bind(category_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    tx.commit().await?;
     Ok(())
 }
 

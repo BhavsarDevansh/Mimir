@@ -1818,7 +1818,17 @@ impl KnowledgeGraph {
         queries::category::resolve_category_alias(&self.pool, alias).await
     }
 
-    /// Insert a category alias (idempotent; rejects empty aliases/unknown ids).
+    /// List category aliases, optionally filtered by category id.
+    pub async fn list_category_aliases(
+        &self,
+        category_id: Option<i32>,
+    ) -> Result<Vec<models::category::CategoryAlias>, KnowledgeError> {
+        queries::category::list_category_aliases(&self.pool, category_id).await
+    }
+
+    /// Insert a category alias. Idempotent for the same alias→category mapping;
+    /// rejects empty aliases, unknown category ids, and rebinding an existing
+    /// alias to a different category.
     pub async fn insert_category_alias(
         &self,
         alias: &str,

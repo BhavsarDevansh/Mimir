@@ -298,9 +298,10 @@ A predicate tree can only follow one axis (a predicate has a single canonical na
 ### Retrieval API (`queries::category`)
 
 - `resolve_category_alias(pool, alias) -> Option<i32>` — normalize (trim, lowercase, spaces→`_`) and look up `category_aliases`. Returns `None` for empty/unknown.
-- `insert_category_alias(pool, alias, category_id)` — idempotent (`INSERT OR IGNORE`); rejects empty aliases (`Validation`) and unknown category ids (`CategoryNotFound`).
+- `insert_category_alias(pool, alias, category_id)` — idempotent for the same alias→category mapping; rejects empty aliases (`Validation`), unknown category ids (`CategoryNotFound`), and rebinding an existing alias to a different category (`Validation`).
 - `get_descendant_category_ids(pool, root_id) -> Vec<i32>` — recursive CTE over `categories.parent_id` (root excluded).
 - `get_facts_in_category_subtree(pool, root_id, limit)` — facts tagged anywhere in the subtree (root + descendants), reusing `get_facts_matching_any_categories`.
+- `list_category_aliases(pool, category_id: Option<i32>)` — enumerate aliases (optionally filtered by category), returning `CategoryAlias` rows.
 
 `KnowledgeGraph` exposes thin wrappers: `resolve_category_alias`, `insert_category_alias`, `get_descendant_category_ids`, `get_facts_in_category_subtree`.
 

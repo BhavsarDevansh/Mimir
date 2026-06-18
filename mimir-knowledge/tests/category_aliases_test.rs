@@ -102,6 +102,54 @@ async fn insert_alias_is_idempotent() {
 }
 
 #[tokio::test]
+async fn insert_alias_rejects_rebind_to_different_category() {
+    let (_dir, kg) = setup().await;
+    kg.insert_category_alias("shared_word", 770).await.unwrap();
+
+    // Rebinding an existing alias to a different category must error, not
+    // silently keep the original mapping.
+    let err = kg
+        .insert_category_alias("shared_word", 410)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, KnowledgeError::Validation(_)),
+        "expected validation error for rebind, got {err:?}"
+    );
+
+    // The original mapping is preserved.
+    assert_eq!(
+        kg.resolve_category_alias("shared_word").await.unwrap(),
+        Some(770)
+    );
+
+    let (mapped,): (i64,) =
+        sqlx::query_as("SELECT category_id FROM category_aliases WHERE alias = 'shared_word'")
+            .fetch_one(kg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        mapped, 770,
+        "rebind must not overwrite the existing mapping"
+    );
+}
+
+#[tokio::test]
+async fn list_category_aliases_returns_seeded_rows() {
+    let (_dir, kg) = setup().await;
+    let all = kg.list_category_aliases(None).await.unwrap();
+    assert!(!all.is_empty(), "seeded aliases are present");
+    assert!(
+        all.iter()
+            .any(|a| a.alias == "education" && a.category_id == 550)
+    );
+
+    let hobbies = kg.list_category_aliases(Some(770)).await.unwrap();
+    assert!(hobbies.iter().all(|a| a.category_id == 770));
+    assert!(hobbies.iter().any(|a| a.alias == "hobbies"));
+}
+
+#[tokio::test]
 async fn descendant_category_ids_walks_the_tree() {
     let (_dir, kg) = setup().await;
     // 700 Entertainment & Leisure has 770 Collecting & Hobbies as a descendant.

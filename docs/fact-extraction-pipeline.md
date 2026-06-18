@@ -10,9 +10,17 @@ The fact extraction pipeline transforms a raw user message into structured, vali
 
 ## Trigger
 
-The pipeline is triggered automatically by both chat endpoints (`/chat` and `/chat/stream`) after a successful, non-incognito turn. The chat route submits a `LibrarianGoal` to the `AgentRuntime`, which dispatches the [`Librarian Agent`](../librarian-agent.md) in the background so the HTTP response is never delayed. The Librarian receives the full conversation turn, the configured user identity, the current condensed memory, and recent related facts from the knowledge graph. Incognito sessions skip extraction to avoid polluting the knowledge graph.
+Learning is **LLM-orchestrated** (Issue #137). The conversational LLM calls the
+`remember` tool during the chat turn to persist facts it judges worth keeping, so
+extraction happens inline as part of the response and does not learn from chitchat.
+The deterministic Rust pipeline (validation, confidence, entity resolution,
+sensitive gating, insertion) runs when the tool executes — the LLM only supplies
+structured facts; it cannot set confidence or override policy.
 
-Additionally, the LLM can proactively call the `remember` tool during conversation. This gives the LLM explicit write access to the knowledge graph, letting it persist facts immediately rather than waiting for the background pipeline.
+The [`Librarian Agent`](../librarian-agent.md) and
+`KnowledgeGraph::extract_facts_with_context` remain as an on-demand library API
+(for future bulk import or specialist agents) but are no longer auto-invoked after
+every turn. Incognito sessions never learn.
 
 ## Architecture
 

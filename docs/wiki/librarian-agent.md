@@ -19,8 +19,11 @@ that contradict what it already knows.
 
 ## When it runs
 
-Every non-incognito chat turn triggers a Librarian job. The job runs in the
-background so your chat response is never delayed.
+The Librarian is **available on demand**. It is no longer auto-triggered after
+every chat turn (Issue #137) — learning is now driven by the LLM calling the
+`remember` tool inline during the conversation. The Librarian and its background
+extraction pipeline remain as a library API for future on-demand and bulk-import
+use cases.
 
 ## What you can see
 

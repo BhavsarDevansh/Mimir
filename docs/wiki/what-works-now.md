@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-06-16
-> **Version:** 0.49.0
-> **Release summary:** Phase 2 knowledge-graph work is live — core relationship ontology seeded category-first (Issue #135): predicate aliases for verb canonicalization plus `category_aliases` and category-subtree retrieval for grouping/multi-tag precision; relationship type aliases are the single source of truth for predicate resolution (Issue #133), Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system, Agentic Pre-Response Context Retrieval (#128), and the Librarian Agent (#130).
+> **Last updated:** 2026-06-18
+> **Version:** 0.51.0
+> **Release summary:** Phase 2 knowledge-graph work is live — core relationship ontology seeded category-first (Issue #135): predicate aliases for verb canonicalization plus `category_aliases` and category-subtree retrieval for grouping/multi-tag precision; relationship type aliases are the single source of truth for predicate resolution (Issue #133), Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system, Agentic Pre-Response Context Retrieval (#128), the Librarian Agent (#130), and LLM-orchestrated learning via the `remember` tool (#137).
 
 ---
 
@@ -35,7 +35,7 @@ Library crates provide code organisation:
 - `mimir-client` — HTTP client for talking to the daemon
 - `mimir-api-types` — Shared request/response types
 - `mimir-knowledge` — SQLite knowledge graph (Phase 2; wired into daemon via live memory block and condensation pipeline)
-- [`Librarian Agent`](../../docs/librarian-agent.md) — Background agent that extracts facts from completed chat turns using the full transcript, identity, memory, and KB context
+- [`Librarian Agent`](../../docs/librarian-agent.md) — On-demand fact-extraction agent; no longer auto-triggered every turn (see #137)
 
 ---
 
@@ -152,7 +152,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Knowledge graph memory | ✅ Works | Live condensed memory (~2,500 chars) ranked from the knowledge graph and injected into every system prompt |
-| Agent-managed updates | ✅ Works | Facts are extracted automatically from conversations and inserted into the knowledge graph |
+| LLM-orchestrated learning | ✅ Works | The LLM calls the `remember` tool during conversation to persist facts; learning no longer fires automatically on every turn (#137) |
 | Frozen snapshots | ✅ Works | Condensed memory is read from `system_state` once per session; changes don't affect the current chat |
 | Knowledge-graph managed | ✅ Works | Manage memory via the knowledge-graph UI/CLI or import/export tools; no memory.md file |
 | Size limit enforcement | ✅ Works | Configurable `char_limit` (default 2,500) |

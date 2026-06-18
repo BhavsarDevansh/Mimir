@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.51.0] — 2026-06-18
+
+### Changed
+
+- **Learning is now LLM-orchestrated (Issue #137):** the unconditional
+  background Librarian that re-extracted facts after every non-incognito chat
+  turn has been retired. Fact learning now happens when the conversational LLM
+  calls the `remember` tool inline while composing its reply, and pre-response
+  retrieval stays LLM-driven via the `retrieve_context` tool. The LLM decides
+  *whether* to learn/retrieve; Rust still owns the policy (confidence
+  assignment, overwrite rules, sensitive-fact confirmation) via
+  `process_remember_output`, so the model cannot self-assign confidence or
+  override policy. This reframes issue #137 away from a Rust rule-based intent
+  classifier — NLU is the LLM's job, and orchestration emerges from structured
+  tool selection.
+- **`remember` tool description** now summarises the classification semantics
+  (Explicit overwrites, Casual coexists, Correction supersedes) and nudges
+  canonical relationship types, preserving extraction quality without a second
+  LLM call.
+
+### Removed
+
+- `submit_librarian_goal` and its two call sites in the chat route. The
+  `LibrarianAgent`, `LibrarianGoal`/`LibrarianContext`, and
+  `KnowledgeGraph::extract_facts_with_context` remain as a library API for
+  future on-demand/bulk extraction; they are simply no longer auto-invoked.
+
+### Notes
+
+- End-user-visible behaviour: Mimir no longer silently learns from chitchat. It
+  learns when it judges a turn contains worth-remembering information.
+- Sensitive facts still require confirmation; the overwrite/coexistence matrix
+  in `VISION/02-Knowledge-Graph/Learning-Modes.md` is unchanged and enforced in
+  Rust.
+
 ## [0.50.0] — 2026-06-18
 
 ### Changed

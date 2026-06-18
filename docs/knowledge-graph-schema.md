@@ -216,6 +216,31 @@ WITH RECURSIVE descendants(id) AS (
 SELECT id FROM descendants;
 ```
 
+### Subtree Fact Query
+
+`queries::fact::get_facts_by_relationship_subtree(pool, subject_id, root_type_id, min_confidence, limit)` returns facts whose relationship type is `root_type_id` or any descendant. It walks the DAG in a single recursive CTE that **seeds with the root type itself** (so the root's own facts are included, unlike the descendants-only query above) and joins to `facts`:
+
+```sql
+WITH RECURSIVE subtree(id) AS (
+    SELECT ?                       -- root_type_id
+    UNION
+    SELECT h.child_id FROM relationship_type_hierarchy h
+    JOIN subtree s ON h.parent_id = s.id
+)
+SELECT f.*, e.name AS object_name
+FROM facts f
+JOIN subtree s ON f.relationship_type_id = s.id
+LEFT JOIN entities e ON e.id = f.object_id
+WHERE f.subject_id = ?
+  AND f.pending_confirmation = 0
+  AND f.fact_status_id NOT IN (5, 6)
+  AND f.confidence >= ?
+ORDER BY f.confidence DESC, f.valid_from DESC, f.id DESC
+LIMIT ?;
+```
+
+The `UNION` (not `UNION ALL`) deduplicates relationship-type ids, so a type reachable via multiple hierarchy paths contributes each of its facts only once. Filters and ordering match `get_facts_by_subject_filtered` (non-pending, status `NOT IN (5, 6)` excluding Superseded and Forgotten, confidence floor, sorted by confidence). A matching `count_facts_by_relationship_subtree` counts the same set for pagination totals. The `KgQueryTool` exposes this via its `include_subtree` parameter (see `docs/kg-tools.md`).
+
 Alias resolution is normalized (`trim`, lowercase, spaces → underscores) and cached in `RelationshipTypeCache`.
 
 ### Alias-Aware `ensure_relationship_type`

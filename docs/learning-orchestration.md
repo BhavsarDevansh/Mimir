@@ -60,12 +60,15 @@ application code"):
   so swapping models changes quality, not correctness.
 
 The overwrite/coexistence matrix from
-`VISION/02-Knowledge-Graph/Learning-Modes.md` is unchanged and enforced in Rust:
+`VISION/02-Knowledge-Graph/Learning-Modes.md` is unchanged and enforced in Rust.
+The shipped policy pins Casual confidence at exactly `0.30`
+(`mimir-knowledge/src/confidence.rs`), superseding the `0.2–0.4` design range
+in the VISION doc:
 
-| New ↓ / Existing → | Explicit (1.0) | Casual (0.2–0.4) | Inferred |
-|--------------------|----------------|------------------|----------|
-| **Explicit (1.0)** | Overwrite      | Overwrite        | Overwrite |
-| **Casual (0.2–0.4)**| Coexist        | Coexist          | Coexist  |
+| New ↓ / Existing → | Explicit (1.0) | Casual (0.30) | Inferred |
+|--------------------|----------------|---------------|----------|
+| **Explicit (1.0)** | Overwrite      | Overwrite     | Overwrite |
+| **Casual (0.30)**   | Coexist        | Coexist       | Coexist  |
 
 ## What changed in code
 

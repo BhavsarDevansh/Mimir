@@ -579,9 +579,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let _ = axum::body::to_bytes(response.into_body(), usize::MAX).await;
 
-        // Allow any background agent task to flush.
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-
         assert_eq!(
             mock.chat_calls().len(),
             1,

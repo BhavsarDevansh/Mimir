@@ -54,3 +54,10 @@ pub struct FactWithCategories {
     pub confidence: f32,
     pub categories: String, // comma-separated category IDs
 }
+
+/// A natural-language alias mapping to a category id.
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow, Serialize, Deserialize)]
+pub struct CategoryAlias {
+    pub alias: String,
+    pub category_id: i32,
+}

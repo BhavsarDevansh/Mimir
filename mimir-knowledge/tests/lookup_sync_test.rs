@@ -303,6 +303,12 @@ async fn relationship_types_sync() {
             (22, "favourite_food", "favourite_food"),
             (23, "favourite_colour", "favourite_colour"),
             (24, "health_condition", "health_condition"),
+            (26, "studied", "studied"),
+            (27, "completed_degree", "completed_degree"),
+            (28, "educational_status", "educational_status"),
+            (29, "job_title", "job_title"),
+            (30, "likes", "likes"),
+            (31, "dislikes", "dislikes"),
         ],
     )
     .await;

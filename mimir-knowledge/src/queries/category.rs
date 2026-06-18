@@ -261,3 +261,135 @@ pub async fn get_facts_matching_any_categories(
     let rows = query.fetch_all(pool).await?;
     Ok(rows)
 }
+
+/// Resolve a natural-language alias to a category id.
+pub async fn resolve_category_alias(
+    pool: &SqlitePool,
+    alias: &str,
+) -> Result<Option<i32>, KnowledgeError> {
+    let Some(normalized) = crate::normalize_alias(alias) else {
+        return Ok(None);
+    };
+    let row: Option<(i32,)> =
+        sqlx::query_as("SELECT category_id FROM category_aliases WHERE alias = ?")
+            .bind(&normalized)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|r| r.0))
+}
+
+/// List category aliases, optionally filtered by category id.
+pub async fn list_category_aliases(
+    pool: &SqlitePool,
+    category_id: Option<i32>,
+) -> Result<Vec<crate::models::category::CategoryAlias>, KnowledgeError> {
+    let rows = match category_id {
+        Some(cid) => sqlx::query_as::<_, crate::models::category::CategoryAlias>(
+            "SELECT alias, category_id FROM category_aliases WHERE category_id = ? ORDER BY alias",
+        )
+        .bind(cid)
+        .fetch_all(pool)
+        .await?,
+        None => {
+            sqlx::query_as::<_, crate::models::category::CategoryAlias>(
+                "SELECT alias, category_id FROM category_aliases ORDER BY alias",
+            )
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    Ok(rows)
+}
+
+/// Insert a category alias. Idempotent for the same alias→category mapping;
+/// rejects empty aliases, unknown category ids, and rebinding an existing alias
+/// to a different category (returns `Validation`).
+pub async fn insert_category_alias(
+    pool: &SqlitePool,
+    alias: &str,
+    category_id: i32,
+) -> Result<(), KnowledgeError> {
+    let Some(normalized) = crate::normalize_alias(alias) else {
+        return Err(KnowledgeError::Validation(
+            "category alias cannot be empty".to_string(),
+        ));
+    };
+
+    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM categories WHERE id = ?")
+        .bind(category_id)
+        .fetch_one(pool)
+        .await?;
+    if exists == 0 {
+        return Err(KnowledgeError::CategoryNotFound(category_id));
+    }
+
+    let mut tx = pool.begin().await?;
+    // Atomic insert-then-resolve avoids the SELECT-then-INSERT race under
+    // DEFERRED isolation: whichever concurrent writer inserts first wins, and
+    // the subsequent read deterministically returns the canonical mapping so we
+    // surface a `Validation` error (not a raw UNIQUE-constraint failure) on
+    // rebind attempts.
+    sqlx::query("INSERT OR IGNORE INTO category_aliases (alias, category_id) VALUES (?, ?)")
+        .bind(&normalized)
+        .bind(category_id)
+        .execute(&mut *tx)
+        .await?;
+
+    let mapped: Option<(i32,)> =
+        sqlx::query_as("SELECT category_id FROM category_aliases WHERE alias = ?")
+            .bind(&normalized)
+            .fetch_optional(&mut *tx)
+            .await?;
+    match mapped {
+        // Idempotent: the alias now maps to the requested category.
+        Some((existing_id,)) if existing_id == category_id => {}
+        // Rebinding an existing alias to a different category is rejected so
+        // callers do not silently keep the original mapping.
+        Some((existing_id,)) => {
+            return Err(KnowledgeError::Validation(format!(
+                "category alias '{}' is already mapped to category {}",
+                normalized, existing_id
+            )));
+        }
+        None => {
+            return Err(KnowledgeError::Validation(format!(
+                "category alias '{}' could not be inserted",
+                normalized
+            )));
+        }
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Return all descendant category ids of `root_id` (exclusive of the root)
+/// via a recursive CTE over the `categories.parent_id` tree.
+pub async fn get_descendant_category_ids(
+    pool: &SqlitePool,
+    root_id: i32,
+) -> Result<Vec<i32>, KnowledgeError> {
+    let rows: Vec<(i32,)> = sqlx::query_as(
+        r#"WITH RECURSIVE descendants(id) AS (
+             SELECT id FROM categories WHERE parent_id = ?
+             UNION
+             SELECT c.id FROM categories c
+             JOIN descendants d ON c.parent_id = d.id
+             )
+             SELECT id FROM descendants ORDER BY id"#,
+    )
+    .bind(root_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
+/// Get facts anywhere in a category subtree (root + all descendants).
+pub async fn get_facts_in_category_subtree(
+    pool: &SqlitePool,
+    root_id: i32,
+    limit: i64,
+) -> Result<Vec<FactWithCategories>, KnowledgeError> {
+    let mut ids = get_descendant_category_ids(pool, root_id).await?;
+    ids.push(root_id);
+    get_facts_matching_any_categories(pool, &ids, limit).await
+}

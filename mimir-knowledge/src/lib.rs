@@ -105,7 +105,7 @@ impl RelationshipTypeCache {
 /// Normalise an English alias before storage or lookup.
 ///
 /// Returns `None` if the alias is empty or whitespace-only after normalisation.
-fn normalize_relationship_alias(alias: &str) -> Option<String> {
+pub(crate) fn normalize_alias(alias: &str) -> Option<String> {
     let normalized = alias.trim().to_lowercase().replace(' ', "_");
     if normalized.is_empty() {
         None
@@ -125,7 +125,7 @@ async fn canonical_name_conflicts_with_alias<'a, E>(
 where
     E: sqlx::Executor<'a, Database = sqlx::Sqlite>,
 {
-    let Some(normalized) = normalize_relationship_alias(name) else {
+    let Some(normalized) = normalize_alias(name) else {
         return Ok(false);
     };
     let row: Option<(i16,)> = sqlx::query_as(
@@ -147,7 +147,7 @@ async fn alias_conflicts_with_canonical_name<'a, E>(
 where
     E: sqlx::Executor<'a, Database = sqlx::Sqlite>,
 {
-    let Some(normalized) = normalize_relationship_alias(alias) else {
+    let Some(normalized) = normalize_alias(alias) else {
         return Ok(false);
     };
     let row: Option<(i16,)> = sqlx::query_as("SELECT id FROM relationship_types WHERE name = ?")
@@ -276,7 +276,7 @@ impl KnowledgeGraph {
         tx: &mut sqlx::SqliteTransaction<'_>,
         name: &str,
     ) -> Result<i16, KnowledgeError> {
-        let Some(normalized) = normalize_relationship_alias(name) else {
+        let Some(normalized) = normalize_alias(name) else {
             return Err(KnowledgeError::Validation(
                 "relationship type name cannot be empty".to_string(),
             ));
@@ -341,7 +341,7 @@ impl KnowledgeGraph {
         &self,
         name: &str,
     ) -> Result<Option<i16>, KnowledgeError> {
-        let Some(normalized) = normalize_relationship_alias(name) else {
+        let Some(normalized) = normalize_alias(name) else {
             return Ok(None);
         };
 
@@ -439,7 +439,7 @@ impl KnowledgeGraph {
         alias: &str,
         relationship_type_id: i16,
     ) -> Result<(), KnowledgeError> {
-        let Some(normalized) = normalize_relationship_alias(alias) else {
+        let Some(normalized) = normalize_alias(alias) else {
             return Err(KnowledgeError::Validation(
                 "alias cannot be empty".to_string(),
             ));
@@ -474,7 +474,7 @@ impl KnowledgeGraph {
         &self,
         alias: &str,
     ) -> Result<Option<i16>, KnowledgeError> {
-        let Some(normalized) = normalize_relationship_alias(alias) else {
+        let Some(normalized) = normalize_alias(alias) else {
             return Ok(None);
         };
         {
@@ -652,7 +652,7 @@ impl KnowledgeGraph {
         }
 
         for alias in &new.aliases {
-            let Some(normalized) = normalize_relationship_alias(alias) else {
+            let Some(normalized) = normalize_alias(alias) else {
                 return Err(KnowledgeError::Validation(
                     "alias cannot be empty".to_string(),
                 ));
@@ -684,7 +684,7 @@ impl KnowledgeGraph {
             aliases: new
                 .aliases
                 .into_iter()
-                .filter_map(|a| normalize_relationship_alias(&a))
+                .filter_map(|a| normalize_alias(&a))
                 .collect(),
         })
     }
@@ -1811,6 +1811,47 @@ impl KnowledgeGraph {
         &self,
     ) -> Result<Vec<models::category::Category>, KnowledgeError> {
         queries::category::list_categories(&self.pool, None).await
+    }
+
+    /// Resolve a natural-language category alias to a category id.
+    pub async fn resolve_category_alias(&self, alias: &str) -> Result<Option<i32>, KnowledgeError> {
+        queries::category::resolve_category_alias(&self.pool, alias).await
+    }
+
+    /// List category aliases, optionally filtered by category id.
+    pub async fn list_category_aliases(
+        &self,
+        category_id: Option<i32>,
+    ) -> Result<Vec<models::category::CategoryAlias>, KnowledgeError> {
+        queries::category::list_category_aliases(&self.pool, category_id).await
+    }
+
+    /// Insert a category alias. Idempotent for the same alias→category mapping;
+    /// rejects empty aliases, unknown category ids, and rebinding an existing
+    /// alias to a different category.
+    pub async fn insert_category_alias(
+        &self,
+        alias: &str,
+        category_id: i32,
+    ) -> Result<(), KnowledgeError> {
+        queries::category::insert_category_alias(&self.pool, alias, category_id).await
+    }
+
+    /// Return all descendant category ids of `root_id` (exclusive of root).
+    pub async fn get_descendant_category_ids(
+        &self,
+        root_id: i32,
+    ) -> Result<Vec<i32>, KnowledgeError> {
+        queries::category::get_descendant_category_ids(&self.pool, root_id).await
+    }
+
+    /// Get facts anywhere in a category subtree (root + all descendants).
+    pub async fn get_facts_in_category_subtree(
+        &self,
+        root_id: i32,
+        limit: i64,
+    ) -> Result<Vec<models::category::FactWithCategories>, KnowledgeError> {
+        queries::category::get_facts_in_category_subtree(&self.pool, root_id, limit).await
     }
 }
 

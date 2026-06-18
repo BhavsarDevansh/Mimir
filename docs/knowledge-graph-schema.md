@@ -48,6 +48,12 @@ Lookup tables are seeded across migrations `001`, `012`, and `013` with stable i
 | `preference_contexts` | Normalized context conditions for preferences (no JSON) |
 | `preference_sources` | Provenance for preference values |
 | `preference_audit_log` | Immutable history of preference changes |
+| `relationship_types` | Canonical relationship predicates (thin verbs); see Relationship Type DAG |
+| `relationship_type_aliases` | Globally-unique English synonyms → canonical relationship type id |
+| `relationship_type_hierarchy` | Parent/child edges between relationship types (vestigial — grouping lives in `categories`; see Category Aliases) |
+| `categories` | Dewey-Decimal-style fact taxonomy with `memory_weight` |
+| `fact_categories` | Many-to-many junction: facts ↔ categories (multi-tag precision + ranking) |
+| `category_aliases` | Natural-language domain words → category id (see Category Aliases) |
 
 ### System Tables
 
@@ -141,6 +147,11 @@ Migrations are strictly ordered by foreign-key dependencies:
 13. `013` — Predicate taxonomy tables + constraints
 14. `021` — Additional source types (`CasualMention`, `Import`, `System`)
 15. `022` — Provenance audit refactor: remap `source_types` to 6 variants, add `extraction_methods` / `change_types` / `changed_by_types`, recreate `sources` and `fact_audit_log` with typed FKs
+16. `031` — Category taxonomy (`categories`, `fact_categories`) + rename `predicates` → `relationship_types`
+17. `035` — Relationship type DAG schema (`relationship_type_hierarchy`, `relationship_type_aliases`)
+18. `036` — Seed relationship type aliases (self-aliases + legacy synonyms)
+19. `037` — Seed remaining core predicates + self-aliases (#135); `ON CONFLICT` UPSERTs enforce the canonical `(id, name)` contract
+20. `038` — `category_aliases` table + domain alias seed (#135); transactional with FK enforcement on, `IF NOT EXISTS` for idempotency
 
 ---
 
@@ -268,3 +279,42 @@ These checks are centralized in two helpers (`canonical_name_conflicts_with_alia
 `ensure_relationship_type` resolves aliases first, so a name that matches an existing alias returns the canonical id rather than attempting to create a conflicting canonical type.
 
 The legacy hardcoded `normalize_predicate` map in `mimir-knowledge/src/extract.rs` still exists as a deprecated fallback but is no longer on the active extraction path.
+
+---
+
+## Category Aliases & Subtree Retrieval
+
+> Added in migrations `037`/`038` (Issue #135). This is the **category-first** ontology layer.
+
+Mimir separates two concerns that previously risked overlapping:
+
+- **Predicate canonicalization** lives on `relationship_type_aliases`. A predicate is a thin verb (`studied_at`, `works_at`, `has_partner`); English synonyms (`attended`, `employer`, `wife`) resolve to a single canonical id so the same verb is never stored under multiple rows. Migration `037` seeds the remaining core verbs (`studied`, `completed_degree`, `educational_status`, `job_title`, `likes`, `dislikes`) and their self-aliases via `ON CONFLICT` UPSERTs, so an upgrade corrects any stale row at a reserved id to the canonical mapping instead of silently preserving it.
+- **Grouping / hierarchy / multi-tag precision** lives on the Dewey `categories` tree. A fact carries 1–3 category tags via `fact_categories`, and `categories.memory_weight` drives memory ranking (`confidence × memory_weight × temporal_boost × …`). Migration `038` adds `category_aliases`, which map natural-language domain words (`education`, `hobbies`, `residence`, `family`, `identity`, …) to a category id so callers can resolve a spoken word to a taxonomy node. It runs inside a transaction with foreign-key enforcement on and uses `CREATE … IF NOT EXISTS`, so a mid-run failure leaves no partial schema.
+
+### Why categories, not a predicate hierarchy, for grouping
+
+A predicate tree can only follow one axis (a predicate has a single canonical name and a parent path). Categories are many-to-many: "Alice works_at Foo as an engineer" can be both `510 Current Role` and `540 Skills & Expertise`, and "hobbies" spans `710 Music`, `740 Gaming`, `780 Outdoor Activities` — the granularity a reasoning agent needs (indoor vs outdoor for weather-aware suggestions, budget-relevant tags, shared-ground detection across two people). `relationship_type_hierarchy` therefore remains available but is **not seeded with abstract parent predicates**; grouping is done by category membership. Reworking `kg_query --include-subtree` (Issue #134) to expand by category subtree is a tracked follow-up; today it still expands by the (now intentionally sparse) predicate DAG.
+
+### Retrieval API (`queries::category`)
+
+- `resolve_category_alias(pool, alias) -> Option<i32>` — normalize (trim, lowercase, spaces→`_`) and look up `category_aliases`. Returns `None` for empty/unknown.
+- `insert_category_alias(pool, alias, category_id)` — idempotent for the same alias→category mapping; rejects empty aliases (`Validation`), unknown category ids (`CategoryNotFound`), and rebinding an existing alias to a different category (`Validation`). Uses an atomic `INSERT OR IGNORE` + post-insert resolution so concurrent writers cannot surface a raw `UNIQUE`-constraint error; rebinds still return `Validation`.
+- `get_descendant_category_ids(pool, root_id) -> Vec<i32>` — recursive CTE over `categories.parent_id` (root excluded).
+- `get_facts_in_category_subtree(pool, root_id, limit)` — facts tagged anywhere in the subtree (root + descendants), reusing `get_facts_matching_any_categories`.
+- `list_category_aliases(pool, category_id: Option<i32>)` — enumerate aliases (optionally filtered by category), returning `CategoryAlias` rows.
+
+`KnowledgeGraph` exposes thin wrappers: `resolve_category_alias`, `insert_category_alias`, `get_descendant_category_ids`, `get_facts_in_category_subtree`.
+
+### Seeded domain aliases (migration `038`)
+
+| Alias | → Category | Dewey node |
+|-------|-----------|------------|
+| `education`, `schooling`, `academics`, `studies` | 550 | Education |
+| `employment`, `career`, `job`, `work` | 510 | Current Role |
+| `residence`, `housing`, `hometown`, `location` | 610 | Current Residence |
+| `hobbies`, `interests`, `pastimes` / `leisure` | 770 / 700 | Collecting & Hobbies / Entertainment & Leisure |
+| `pets`, `animals` | 440 | Pets & Animals |
+| `family`, `relatives`, `kin` | 410 | Family |
+| `identity`, `biography`, `profile` | 100 | Identity & Biography |
+
+The six issue-#135 domains map to existing Dewey nodes rather than synthetic top-level parents; "personal" is intentionally spread across hobbies/leisure and pets, matching the Dewey design.

@@ -250,7 +250,7 @@ async fn alias_cannot_shadow_canonical_name() {
 }
 
 #[tokio::test]
-async fn normalize_predicate_uses_alias() {
+async fn alias_resolution_returns_canonical_id() {
     let (_dir, kg) = setup().await;
 
     let id = kg.ensure_relationship_type("studied_at").await.unwrap();
@@ -258,10 +258,11 @@ async fn normalize_predicate_uses_alias() {
         .await
         .unwrap();
 
-    // We cannot call normalize_predicate directly (it's private), so drive it
-    // through the public extraction pipeline with a mock LLM that returns the
-    // alias. Instead, verify alias resolution independently and rely on the
-    // extraction integration tests for the full path.
+    // The alias table is the single source of truth for predicate resolution
+    // (issue #136). The extraction pipeline routes through
+    // `ensure_relationship_type`, which resolves aliases like this one; here we
+    // verify the resolution primitive directly, and the extraction integration
+    // tests cover the full path.
     let resolved = kg
         .resolve_relationship_type_alias("test_alumni_alias")
         .await

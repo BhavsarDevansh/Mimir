@@ -278,7 +278,7 @@ These checks are centralized in two helpers (`canonical_name_conflicts_with_alia
 
 `ensure_relationship_type` resolves aliases first, so a name that matches an existing alias returns the canonical id rather than attempting to create a conflicting canonical type.
 
-The legacy hardcoded `normalize_predicate` map in `mimir-knowledge/src/extract.rs` still exists as a deprecated fallback but is no longer on the active extraction path.
+The extraction pipeline routes every fact's predicate through `ensure_relationship_type` (issue #136), so the `relationship_type_aliases` table is the sole source of truth for predicate canonicalization. The hardcoded `normalize_predicate` synonym map and the duplicate snake_case helper that previously lived in `mimir-knowledge/src/extract.rs` have been removed; all legacy synonyms are seeded as data by migrations `036`/`037`.
 
 ---
 

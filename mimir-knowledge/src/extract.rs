@@ -316,53 +316,68 @@ fn parse_remember_output(assistant_msg: Message) -> Result<RememberOutput, Knowl
 // Extraction processing
 // ---------------------------------------------------------------------------
 
-/// Normalize relationship types and expand list-valued facts.
-async fn normalize_and_expand_facts(
+/// Shared batch processor used by both the LLM extraction pipeline
+/// ([`extract_facts`] / [`extract_facts_with_context`]) and the `remember` tool
+/// entrypoint ([`process_remember_output`]).
+///
+/// Predicate canonicalization is the single step that touches the alias system:
+/// each fact's `relationship_type` is resolved through
+/// [`KnowledgeGraph::ensure_relationship_type`], which normalizes the name,
+/// resolves it via the `relationship_type_aliases` table (the single source of
+/// truth), and auto-creates a canonical type plus self-alias on a miss. The
+/// resulting canonical name drives [`split_list_objects`]. Resolution errors are
+/// tolerated per-fact so one bad predicate never aborts the whole batch.
+async fn process_fact_batch(
     kg: &KnowledgeGraph,
     facts: Vec<ExtractedFact>,
-) -> Result<Vec<ExtractedFact>, KnowledgeError> {
-    let mut result = Vec::new();
-    for mut fact in facts {
-        let normalized = normalize_relationship_type(&fact.relationship_type);
-        let canonical_name = if let Some(id) = kg.get_relationship_type_id(&normalized).await? {
-            kg.relationship_type_name(id).await.unwrap_or(normalized)
-        } else {
-            normalized
-        };
-        fact.relationship_type = canonical_name;
-        result.extend(split_list_objects(&fact));
-    }
-    Ok(result)
-}
-
-/// Normalize a relationship type string to snake_case.
-fn normalize_relationship_type(pred: &str) -> String {
-    pred.trim().to_lowercase().replace(' ', "_")
-}
-
-/// Process a `RememberOutput` by applying validation, dedup, confidence
-/// assignment, and insertion logic.
-async fn process_extracted_facts(
-    kg: &KnowledgeGraph,
-    extracted: RememberOutput,
-    now: chrono::DateTime<chrono::Utc>,
+    now: DateTime<Utc>,
 ) -> Result<ExtractionOutcome, KnowledgeError> {
-    let all_facts = normalize_and_expand_facts(kg, extracted.facts).await?;
-
     let mut outcome = ExtractionOutcome::default();
 
-    for fact in all_facts {
-        match process_extracted_fact(kg, fact, now).await {
-            Ok(result) => match result {
-                ProcessResult::Inserted(f) => outcome.inserted.push(f),
-                ProcessResult::Pending(p) => outcome.pending_confirmation.push(p),
-                ProcessResult::Corroborated(id) => outcome.corroborated.push(id),
-            },
-            Err(e) => outcome.errors.push(e),
+    for mut fact in facts {
+        // Resolve the predicate once: `ensure_relationship_type` normalizes,
+        // consults the alias table (single source of truth), and auto-creates a
+        // canonical type + self-alias on a miss. The id threads through to the
+        // per-fact processor so the resolution is not repeated downstream.
+        let relationship_type_id = match kg.ensure_relationship_type(&fact.relationship_type).await {
+            Ok(id) => id,
+            Err(error) => {
+                outcome.errors.push(error);
+                continue;
+            }
+        };
+
+        // `ensure_relationship_type` always creates/resolves the type, so the
+        // name lookup succeeds in practice; fall back to the normalized input
+        // purely as a defensive measure.
+        let canonical_name = kg.relationship_type_name(relationship_type_id).await;
+        fact.relationship_type = canonical_name
+            .unwrap_or_else(|| crate::normalize_alias(&fact.relationship_type).unwrap_or_default());
+
+        for fact in split_list_objects(&fact) {
+            match process_extracted_fact(kg, fact, now, relationship_type_id).await {
+                Ok(ProcessResult::Inserted(f)) => outcome.inserted.push(f),
+                Ok(ProcessResult::Pending(p)) => outcome.pending_confirmation.push(p),
+                Ok(ProcessResult::Corroborated(id)) => outcome.corroborated.push(id),
+                Err(error) => outcome.errors.push(error),
+            }
         }
     }
 
     Ok(outcome)
+}
+
+/// Process a `RememberOutput` by applying validation, dedup, confidence
+/// assignment, and insertion logic.
+///
+/// Thin wrapper over [`process_fact_batch`]; the LLM call has already happened
+/// in [`extract_facts`] / [`extract_facts_with_context`].
+async fn process_extracted_facts(
+    kg: &KnowledgeGraph,
+    extracted: RememberOutput,
+    now: DateTime<Utc>,
+) -> Result<ExtractionOutcome, KnowledgeError> {
+    process_fact_batch(kg, extracted.facts, now).await
 }
 
 // ---------------------------------------------------------------------------
@@ -413,54 +428,6 @@ fn parse_entity_type(s: &str) -> Result<EntityType, KnowledgeError> {
             s
         ))),
     }
-}
-
-// ---------------------------------------------------------------------------
-// Predicate normalisation
-// ---------------------------------------------------------------------------
-
-/// Deprecated fallback synonym map for relationship types.
-///
-/// Relationship type aliases are now the single source of truth via
-/// [`KnowledgeGraph::ensure_relationship_type`]. This hardcoded map is retained
-/// only as a deprecated fallback until the core ontology is fully seeded.
-///
-/// No active code path should call this function; it is kept for reference and
-/// potential future ontology bootstrapping.
-#[allow(dead_code)]
-#[deprecated(
-    note = "Relationship type aliases are now the single source of truth via ensure_relationship_type; this hardcoded map is kept only as a fallback until #132 fully seeds the ontology"
-)]
-async fn normalize_predicate(kg: &KnowledgeGraph, pred: &str) -> Result<String, KnowledgeError> {
-    let _ = kg;
-    let trimmed = pred.trim();
-    let lowered = trimmed.to_lowercase().replace(' ', "_");
-
-    // TODO(#132-follow-up): remove deprecated hardcoded map once core ontology is seeded.
-    let canon = match lowered.as_str() {
-        "attended" | "went_to" | "graduated_from" | "alumni_of" => "studied_at",
-        "hobbies" | "interests" => "hobby",
-        "dislikes" => "dislikes",
-        "works_for" | "employer" => "works_at",
-        "profession" | "occupation" => "works_as",
-        "resides_in" | "current_city" => "based_in",
-        "previously_lived_in" | "former_city" => "lived_in",
-        "pet" | "pets" | "owns_pet" => "has_pets",
-        "brother" | "sister" | "siblings" => "has_sibling",
-        "spouse" | "boyfriend" | "girlfriend" | "partner" | "wife" | "husband" => "has_partner",
-        "father" | "mother" | "parents" => "has_parent",
-        "son" | "daughter" | "children" => "has_child",
-        "name" => "has_name",
-        "nickname" | "nick_name" | "called" | "goes_by" => "preferred_name",
-        "favorite_food" | "fav_food" | "favourite_food" => "favourite_food",
-        "favorite_colour" | "favorite_color" | "fav_color" | "fav_colour" | "color" | "colour" => {
-            "favourite_colour"
-        }
-        "food_allergy" | "medical_condition" | "condition" => "health_condition",
-        _ => &lowered,
-    };
-
-    Ok(canon.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -657,11 +624,8 @@ async fn insert_sensitive_fact(
     kg: &KnowledgeGraph,
     new_fact: NewFact,
     now: DateTime<Utc>,
+    relationship_type_id: i16,
 ) -> Result<Fact, KnowledgeError> {
-    let relationship_type_id = kg
-        .ensure_relationship_type(&new_fact.relationship_type)
-        .await?;
-
     // Calculate confidence
     let confidence = new_fact.confidence.unwrap_or_else(|| {
         let source_type = source_type_for(Classification::Explicit);
@@ -775,30 +739,17 @@ pub async fn process_remember_output(
     output: RememberOutput,
 ) -> Result<ExtractionOutcome, KnowledgeError> {
     let now = kg.now();
-    let all_facts = normalize_and_expand_facts(kg, output.facts).await?;
-
-    let mut outcome = ExtractionOutcome::default();
-
-    for fact in all_facts {
-        match process_extracted_fact(kg, fact, now).await {
-            Ok(result) => match result {
-                ProcessResult::Inserted(f) => outcome.inserted.push(f),
-                ProcessResult::Pending(p) => outcome.pending_confirmation.push(p),
-                ProcessResult::Corroborated(id) => outcome.corroborated.push(id),
-            },
-            Err(e) => outcome.errors.push(e),
-        }
-    }
-
-    Ok(outcome)
+    process_fact_batch(kg, output.facts, now).await
 }
 
 pub(crate) async fn process_extracted_fact(
     kg: &KnowledgeGraph,
     extracted: ExtractedFact,
     now: DateTime<Utc>,
+    relationship_type_id: i16,
 ) -> Result<ProcessResult, KnowledgeError> {
-    // Relationship type was already normalised during list expansion.
+    // Relationship type was already resolved (and the canonical type ensured)
+    // by `process_fact_batch` before list expansion; reuse the resolved id.
 
     // Validate entity types.
     let subject_type = parse_entity_type(&extracted.subject_type)?;
@@ -858,11 +809,6 @@ pub(crate) async fn process_extracted_fact(
     } else {
         (None, Some(extracted.object.clone()))
     };
-
-    // Ensure relationship_type.
-    let relationship_type_id = kg
-        .ensure_relationship_type(&extracted.relationship_type)
-        .await?;
 
     // Dedup / corroboration check (stub for #79).
     if let Some(existing_id) = find_existing_fact(
@@ -1007,7 +953,7 @@ pub(crate) async fn process_extracted_fact(
     // Insert fact, handling sensitive facts atomically.
     if extracted.is_sensitive {
         // For sensitive facts, insert directly with Disputed status and pending_confirmation in one transaction.
-        let fact = insert_sensitive_fact(kg, new_fact, now).await?;
+        let fact = insert_sensitive_fact(kg, new_fact, now, relationship_type_id).await?;
 
         // Only add to in-memory cache after successful commit.
         kg.pending_confirmations().write().await.insert(fact.id);

@@ -8,7 +8,7 @@ The fact-extraction pipeline processes chat input to extract and store facts as 
 
 The extraction pipeline applies Rust-side normalisation and splitting to improve the quality of extracted facts:
 
-- **Predicate normalisation**: Common LLM synonyms are mapped to canonical names. For example, `attended` → `studied_at`, `hobbies` → `hobby`.
+- **Predicate resolution**: The LLM's relationship type is resolved through the alias table (the single source of truth). Common synonyms map to canonical names — for example, `attended` → `studied_at`, `hobbies` → `hobby` — purely from seeded aliases, with no hardcoded synonym list in code. An unknown predicate is auto-registered as a new canonical type.
 - **List splitting**: When the LLM outputs a single fact with a comma-separated list (e.g., `hobby → "Geopolitics, Software Development, Tech"`), the pipeline automatically splits it into three independent facts.
 - **Deduplication**: Before inserting a new fact, the pipeline checks if an identical active fact already exists. If so, it increments the confidence instead of creating a duplicate.
 
@@ -76,3 +76,7 @@ You can always:
 - **Expanded list splitting**: Multi-value predicates like `has_pets`, `has_child`, `has_parent`, `has_sibling`, and `has_partner` are now eligible for comma-separated list splitting, improving fact granularity.
 - **Better error reporting**: The `remember` tool now surfaces full error messages in its output, making it easier to diagnose extraction failures.
 - **Empty-message guard**: The background extraction task no longer spawns for empty or whitespace-only chat messages.
+
+### Predicate Resolution Is Data-Driven (v0.50.0)
+
+As of issue #136, Mimir no longer ships a hardcoded synonym map for relationship types. Every fact's predicate is resolved through `ensure_relationship_type`, which consults the `relationship_type_aliases` table (seeded by migrations `036`/`037`) and auto-registers unknown predicates as new canonical types. Resolution errors are tolerated per-fact, so one malformed predicate won't block the rest of a batch. End-user behaviour is unchanged: `attended` still resolves to `studied_at`, `hobbies` to `hobby`, and so on. To teach Mimir a new synonym, register an alias against the canonical relationship type instead of waiting for a code change.

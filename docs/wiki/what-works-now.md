@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
 > **Last updated:** 2026-06-18
-> **Version:** 0.51.0
-> **Release summary:** Phase 2 knowledge-graph work is live — core relationship ontology seeded category-first (Issue #135): predicate aliases for verb canonicalization plus `category_aliases` and category-subtree retrieval for grouping/multi-tag precision; relationship type aliases are the single source of truth for predicate resolution (Issue #133), Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system, Agentic Pre-Response Context Retrieval (#128), the Librarian Agent (#130), and LLM-orchestrated learning via the `remember` tool (#137).
+> **Version:** 0.52.0
+> **Release summary:** Phase 2 knowledge-graph work is live — core relationship ontology seeded category-first (Issue #135): predicate aliases for verb canonicalization plus `category_aliases` and category-subtree retrieval for grouping/multi-tag precision; relationship type aliases are the single source of truth for predicate resolution (Issue #133), Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system, Agentic Pre-Response Context Retrieval (#128), the Librarian Agent (#130), LLM-orchestrated learning via the `remember` tool (#137), and a hardened system prompt that enforces the agentic contract — `retrieve_context` dispatch, no fact invention, and `remember` encouragement (#138).
 
 ---
 

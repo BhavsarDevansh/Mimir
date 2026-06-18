@@ -27,15 +27,36 @@ Structured, full sentences, no contractions, precise terminology. Good for profe
 When Mimir has learned facts about you from the knowledge graph, it injects a short memory section into the system prompt before each chat turn:
 
 ```
-Key facts I know about you:
-[condensed memory text]
+{preset tone text}
 
-Note: This is not an exhaustive list. Use kg_query, kg_related, or kg_search tools if you need more information.
+Operating principles:
+- Do not invent facts about the user. If you do not know the answer, say so.
+- If you need more information, use the `retrieve_context` tool to dispatch a
+  retrieval agent that investigates the knowledge graph and conversation
+  history. If its findings are still not enough, refine the task and dispatch
+  again. Continue until you have a confident answer or have confirmed the
+  information is not in your knowledge base.
+- Call the `remember` tool whenever the user states or reveals something worth
+  saving — explicit assertions, corrections, and meaningful casual mentions.
+  Do not call it for pure chitchat or greetings.
+
+Core facts about the user (condensed subset — not a complete picture; treat
+as starting context, not exhaustive):
+[condensed memory text]
 ```
 
-This note is intentional — it signals the LLM that the injected memory is a curated subset, not a complete record. If the LLM needs deeper or more specific information, it should use the knowledge-graph tools rather than relying solely on the condensed summary.
+The **operating principles** are appended to every preset — built-in or
+custom — so the behavioural contract (honesty, retrieval, learning) holds
+regardless of personality tone. They tell the LLM that the injected facts are a
+curated subset, not a complete record: when the core facts are insufficient it
+should dispatch a retrieval agent via the `retrieve_context` tool rather than
+inventing answers, and it should persist anything worth saving by calling
+`remember`. The lower-level `kg_query`/`kg_search`/`kg_related` tools are the
+retrieval agent's internal tools and are not surfaced to the core LLM.
 
-If no memory facts exist yet, the section is omitted entirely.
+If no memory facts exist yet, the core-facts block is omitted — but the
+operating principles are still appended so the "do not invent facts" and
+"call `remember`" rules always apply.
 
 ## How to Select a Preset
 

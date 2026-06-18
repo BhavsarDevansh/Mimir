@@ -171,6 +171,7 @@ impl Tool for KgQueryTool {
         let offset = input.offset.max(0);
         let limit = input.limit.clamp(1, 50);
         let include_subtree = input.include_subtree;
+        let response_offset = if include_subtree { 0 } else { offset };
         if include_subtree && input.predicate.is_none() {
             return Err(ToolError::invalid_arguments(
                 "kg_query",
@@ -221,7 +222,7 @@ impl Tool for KgQueryTool {
                             entity_type: entity_type_name(best.entity.entity_type_id),
                         },
                         total: 0,
-                        offset,
+                        offset: response_offset,
                         limit,
                         facts: Vec::new(),
                     };
@@ -334,7 +335,7 @@ impl Tool for KgQueryTool {
                 entity_type: entity_type_name(best.entity.entity_type_id),
             },
             total,
-            offset: if include_subtree { 0 } else { offset },
+            offset: response_offset,
             limit,
             facts: fact_details,
         };

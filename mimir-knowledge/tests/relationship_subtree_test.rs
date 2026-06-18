@@ -436,6 +436,7 @@ async fn kg_query_include_subtree_returns_descendant_facts() {
             "entity_name": "Alice",
             "predicate": "kb134_education",
             "include_subtree": true,
+            "offset": 25,
         }))
         .await
         .unwrap();
@@ -443,6 +444,11 @@ async fn kg_query_include_subtree_returns_descendant_facts() {
     let facts = result["facts"].as_array().unwrap();
     assert_eq!(facts.len(), 3, "education + studied_at + graduated_from");
     assert_eq!(result["total"].as_i64().unwrap(), 3);
+    assert_eq!(
+        result["offset"].as_i64().unwrap(),
+        0,
+        "subtree mode forces offset=0 and ignores input offset"
+    );
     let preds = fact_predicates(&result);
     assert!(preds.contains(&"kb134_education".to_string()));
     assert!(preds.contains(&"kb134_studied_at".to_string()));
@@ -528,12 +534,18 @@ async fn kg_query_include_subtree_unknown_predicate_returns_empty() {
             "entity_name": "Alice",
             "predicate": "nonexistent_root",
             "include_subtree": true,
+            "offset": 25,
         }))
         .await
         .unwrap();
     let result = out.result.unwrap();
     assert!(result["facts"].as_array().unwrap().is_empty());
     assert_eq!(result["total"].as_i64().unwrap(), 0);
+    assert_eq!(
+        result["offset"].as_i64().unwrap(),
+        0,
+        "subtree mode forces offset=0 even when no facts match"
+    );
 }
 
 #[tokio::test]

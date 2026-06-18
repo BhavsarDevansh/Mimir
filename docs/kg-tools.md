@@ -163,7 +163,7 @@ ORDER BY f.confidence DESC, f.valid_from DESC, f.id DESC
 LIMIT ?;
 ```
 
-The `UNION` (not `UNION ALL`) deduplicates relationship-type ids, so a type reachable via multiple hierarchy paths contributes each fact only once. Filters and ordering match `get_facts_by_subject_filtered` (non-pending, status `NOT IN (5, 6)`, confidence floor). A matching `count_facts_by_relationship_subtree` produces the `total` field. `include_subtree` without a `predicate` is rejected with `ToolError::InvalidArguments`; the subtree path has no `offset` (results are bounded by `limit` only). The `KnowledgeGraph::get_facts_by_relationship_subtree(entity_id, root_type_id, limit)` wrapper is a convenience with `min_confidence = 0.0`.
+The `UNION` (not `UNION ALL`) deduplicates relationship-type ids, so a type reachable via multiple hierarchy paths contributes each fact only once. Filters and ordering match `get_facts_by_subject_filtered` (non-pending, status `NOT IN (5, 6)`, confidence floor). A matching `count_facts_by_relationship_subtree` produces the `total` field. `include_subtree` without a `predicate` is rejected with `ToolError::InvalidArguments`; the subtree path has no `offset` (results are bounded by `limit` only); a caller-supplied `offset` is ignored and the response `offset` is always `0`, including the empty-result early-return when the predicate does not exist. The `KnowledgeGraph::get_facts_by_relationship_subtree(entity_id, root_type_id, limit)` wrapper is a convenience with `min_confidence = 0.0`.
 
 ## retrieve_context
 

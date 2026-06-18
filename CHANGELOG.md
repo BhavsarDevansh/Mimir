@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.48.1] — 2026-06-18
+
+### Fixed
+
+- **`kg_query` subtree offset contract**: when `include_subtree` is `true` and the
+  requested predicate does not exist (empty result set), the response `offset` is now
+  forced to `0` instead of echoing the caller-supplied `offset`. This closes a gap where
+  the documented "subtree mode disables offset pagination" contract was only honoured on
+  the populated-result path.
+
 ## [0.48.0] — 2026-06-17
 
 ### Added

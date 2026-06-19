@@ -17,7 +17,10 @@
   tells the Librarian to extract facts ONLY from `[User]` messages and never
   from `[Assistant]` messages (its own prior output), and a "Novelty check"
   instruction tells it to extract only facts not already present in the
-  core-facts block, marking corroboration as `Casual` to strengthen confidence.
+  core-facts block. The instruction tells the LLM to skip emitting facts that
+  merely restate what is already known (exact duplicates are discarded by Rust
+  regardless of classification), and to use the Correction classification for
+  corrections — avoiding contradictory "strengthen confidence" guidance.
   The transcript now lives in the system prompt once; the user turn handed to
   the LLM is a short action instruction, removing the previous duplication.
 

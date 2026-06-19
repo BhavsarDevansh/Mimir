@@ -99,8 +99,9 @@ KG entities/facts + audit log
 4. **Source discipline** — extract facts ONLY from `[User]` messages; never from
    `[Assistant]` messages (the LLM's own prior output to the user).
 5. **Novelty check** — before emitting a fact, check it against the core-facts
-   block; extract only facts not already present, marking corroboration as
-   `Casual` to strengthen confidence.
+   block; do not emit a fact that merely restates what is already known (exact
+   duplicates are discarded by Rust regardless of classification), and use the
+   `Correction` classification for corrections.
 
 The transcript lives in the system prompt once; the user turn handed to the LLM
 is a short action instruction (no duplication).

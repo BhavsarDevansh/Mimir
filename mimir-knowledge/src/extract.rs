@@ -252,8 +252,11 @@ async fn build_extraction_prompt(
         output to the user, not new information from the user.\n\
         \n### Novelty check\n\
         Before emitting a fact, check it against the Core facts block above. \
-        Extract ONLY facts not already present there. If a fact merely corroborates an \
-        existing one, emit it as Casual to strengthen confidence rather than duplicating it.";
+        Do NOT emit a fact that merely restates something already present there — \
+        exact duplicates are discarded by Rust regardless of classification, so \
+        reclassifying a duplicate does not strengthen anything. Emit a fact only when \
+        it is genuinely new, or when it corrects/updates an existing one (use the \
+        Correction classification for corrections).";
 
     Ok(format!(
         "{}{}{}{}",
@@ -1302,8 +1305,11 @@ mod tests {
                 .unwrap();
 
         assert!(prompt.contains("Novelty check"));
-        assert!(prompt.contains("Extract ONLY facts not already present there"));
-        assert!(prompt.contains("Casual"));
+        assert!(prompt.contains("Do NOT emit a fact that merely restates"));
+        assert!(prompt.contains("discarded by Rust regardless of classification"));
+        // The novelty check must not contradict the base Deduplication rule by
+        // claiming a classification strengthens confidence.
+        assert!(!prompt.contains("emit it as Casual to strengthen confidence"));
     }
 
     #[tokio::test]

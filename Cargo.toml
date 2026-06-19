@@ -7,7 +7,7 @@ default-members = ["mimir"]
 sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "chrono", "uuid", "migrate"] }
 
 [workspace.package]
-version = "0.53.0"
+version = "0.53.1"
 authors = ["BhavsarDevansh"]
 license = "GPL-3.0"
 description = "A persistent personal intelligence that learns from your life"

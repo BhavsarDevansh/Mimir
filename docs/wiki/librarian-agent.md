@@ -13,8 +13,8 @@ It doesn't just look at your last message. It is given:
 
 Both are clearly labelled so the Librarian learns **only from your messages** —
 never from Mimir's own replies. It also sees the **core facts block** (what
-Mimir already knows about you), so it avoids storing things you've already
-shared and can instead just strengthen confidence in what's already there.
+Mimir already knows about you), so it skips facts that merely restate what is
+already known and focuses on genuinely new or corrective information.
 
 ## When it runs
 

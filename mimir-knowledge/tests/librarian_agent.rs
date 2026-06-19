@@ -129,9 +129,9 @@ async fn librarian_prompt_includes_transcript_and_memory() {
 
     let calls = mock.chat_calls();
     assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].len(), 2);
     let system_prompt = &calls[0][0].content;
     let user_turn = &calls[0][1].content;
-    assert_eq!(calls[0].len(), 2);
     // Identity is read from the core-facts block (same header as the core
     // agent), not from a separate identity line.
     assert!(system_prompt.contains(Personality::CORE_FACTS_HEADER));

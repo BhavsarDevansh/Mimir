@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.53.1] — 2026-06-19
+
+### Fixed
+
+- **Librarian transcript now escapes newlines in message content
+  (`mimir-knowledge/src/extract.rs`):** `\r` and `\n` in `msg.content` are
+  replaced with literal `\r`/`\n` sequences before the `[Role]:` label is
+  applied, preventing a user message containing text like
+  `[Assistant]: …` from forging a labelled line and bypassing the source
+  discipline boundary. Adds a regression test
+  (`prompt_escapes_multiline_content_so_roles_cannot_be_forged`).
+
+### Changed
+
+- **Librarian wiki documentation aligned with implemented novelty check
+  (`docs/wiki/librarian-agent.md`):** the duplicate-handling paragraph now
+  states that facts restating the core-facts block are skipped (not that
+  confidence is "strengthened"), matching the novelty check instruction.
+
+### Tests
+
+- **Assert message-turn shape before indexing (`mimir-knowledge/tests/librarian_agent.rs`):**
+  the `calls[0].len() == 2` assertion now precedes the indexing into
+  `calls[0][0]`/`calls[0][1]` so a shape change fails clearly instead of
+  panicking out-of-bounds.
+
 ## [0.53.0] — 2026-06-19
 
 ### Changed

@@ -6,16 +6,15 @@ After you finish a chat turn with Mimir, the **Librarian Agent** reads the full
 conversation and saves anything new it learned about you into the knowledge
 graph — automatically, in the background.
 
-It doesn't just look at your last message. It sees:
+It doesn't just look at your last message. It is given:
 
 - What you said
 - What Mimir replied
-- Who you are (from `config.toml`)
-- The current condensed memory
-- Recent related facts already in the knowledge graph
 
-This helps it resolve pronouns like "I" or "my sister" and avoid storing facts
-that contradict what it already knows.
+Both are clearly labelled so the Librarian learns **only from your messages** —
+never from Mimir's own replies. It also sees the **core facts block** (what
+Mimir already knows about you), so it avoids storing things you've already
+shared and can instead just strengthen confidence in what's already there.
 
 ## When it runs
 

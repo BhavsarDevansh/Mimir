@@ -1718,16 +1718,15 @@ impl KnowledgeGraph {
         extract::extract_facts(self, llm, user_message).await
     }
 
-    /// Extract facts from a full conversation turn with condensed memory,
-    /// user identity, and recent related facts in the prompt.
+    /// Extract facts from a labelled conversation transcript with the
+    /// condensed core-facts block injected into the prompt.
     pub async fn extract_facts_with_context(
         &self,
         llm: &Arc<dyn mimir_core::llm::backend::LlmBackend>,
-        turn: &mimir_core::conversation::ConversationTurn,
-        identity: mimir_core::identity::UserIdentity,
+        messages: &[mimir_core::conversation::ConversationMessage],
         condensed_memory: Option<&str>,
     ) -> Result<extract::ExtractionOutcome, KnowledgeError> {
-        extract::extract_facts_with_context(self, llm, turn, identity, condensed_memory).await
+        extract::extract_facts_with_context(self, llm, messages, condensed_memory).await
     }
 
     /// Confirm a pending sensitive fact: flip to Active with confidence 1.0.

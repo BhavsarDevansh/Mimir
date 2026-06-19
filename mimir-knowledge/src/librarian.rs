@@ -1,8 +1,11 @@
 //! Librarian Agent — system-driven background fact extraction.
 //!
 //! The Librarian receives a completed [`ConversationTurn`] together with the
-//! full KB snapshot (condensed memory, user identity, recent related facts)
-//! and extracts/validates/stores structured facts.
+//! core-facts block (the same condensed memory the core agent injects) and
+//! extracts/validates/stores structured facts. The user's identity is read
+//! from that block by the LLM; the transcript is handed over as labelled
+//! `[User]` / `[Assistant]` messages so the agent learns only from what the
+//! user said.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -10,8 +13,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use mimir_core::agents::{Agent, AgentContext};
-use mimir_core::conversation::ConversationTurn;
-use mimir_core::identity::UserIdentity;
+use mimir_core::conversation::{ConversationMessage, ConversationTurn};
 use mimir_core::llm::backend::LlmBackend;
 
 use crate::KnowledgeGraph;
@@ -38,21 +40,22 @@ impl LibrarianGoal {
 pub struct LibrarianContext {
     pub knowledge_graph: Arc<KnowledgeGraph>,
     pub llm: Arc<dyn LlmBackend>,
-    pub identity: UserIdentity,
     pub condensed_memory: Option<String>,
 }
 
 impl LibrarianContext {
+    /// Create a new LibrarianContext.
+    ///
+    /// `condensed_memory` is the same core-facts block the core agent injects;
+    /// the user's identity is read from it by the LLM, not passed separately.
     pub fn new(
         knowledge_graph: Arc<KnowledgeGraph>,
         llm: Arc<dyn LlmBackend>,
-        identity: UserIdentity,
         condensed_memory: Option<String>,
     ) -> Self {
         Self {
             knowledge_graph,
             llm,
-            identity,
             condensed_memory,
         }
     }
@@ -62,6 +65,19 @@ impl AgentContext for LibrarianContext {
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+/// Build the labelled transcript the Librarian analyses from a conversation
+/// turn: the last user message followed by the last assistant message.
+///
+/// Today this is a single user/assistant pair. Returning a `Vec` keeps the
+/// door open to sending more context (e.g. the last *N* turns) in future
+/// without changing the prompt-builder signature (#139).
+fn librarian_messages(turn: &ConversationTurn) -> Vec<ConversationMessage> {
+    vec![
+        ConversationMessage::user(&turn.user_message),
+        ConversationMessage::assistant(&turn.assistant_response),
+    ]
 }
 
 /// Background agent that extracts structured facts from a completed conversation turn.
@@ -95,8 +111,7 @@ impl Agent for LibrarianAgent {
             .knowledge_graph
             .extract_facts_with_context(
                 &ctx.llm,
-                &goal.turn,
-                ctx.identity.clone(),
+                &librarian_messages(&goal.turn),
                 ctx.condensed_memory.as_deref(),
             )
             .await?;

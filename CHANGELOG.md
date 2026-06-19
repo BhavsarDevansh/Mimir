@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.53.0] — 2026-06-19
+
+### Changed
+
+- **Librarian extraction prompt redesigned (Issue #139):** the Librarian's
+  `build_extraction_prompt` now composes a KG-focused base (rules, category
+  taxonomy, predicate standards, list splitting, deduplication, output contract
+  — extracted into a shared `build_base_prompt`) with the *same* core-facts
+  block the core agent injects (`Personality::CORE_FACTS_HEADER` + condensed
+  memory, emitted only when non-empty) and the recent conversation rendered as
+  labelled `[User]` / `[Assistant]` messages under `## Recent conversation`.
+  The user's identity is read from the core-facts block by the LLM, exactly as
+  the core agent resolves identity — `UserIdentity` is no longer threaded
+  through the contextual extraction path. A "Source discipline" instruction
+  tells the Librarian to extract facts ONLY from `[User]` messages and never
+  from `[Assistant]` messages (its own prior output), and a "Novelty check"
+  instruction tells it to extract only facts not already present in the
+  core-facts block, marking corroboration as `Casual` to strengthen confidence.
+  The transcript now lives in the system prompt once; the user turn handed to
+  the LLM is a short action instruction, removing the previous duplication.
+
+### Added
+
+- `mimir_core::conversation::{ConversationMessage, MessageRole}` — a labelled
+  transcript message type. `extract_facts_with_context` and
+  `KnowledgeGraph::extract_facts_with_context` now take `&[ConversationMessage]`
+  instead of a `ConversationTurn` + `UserIdentity`, so the amount of
+  conversation context handed to the Librarian can be increased in future
+  without changing the prompt-builder signature. `LibrarianAgent::run`
+  converts the turn into `[User, Assistant]` messages today.
+- `Personality::CORE_FACTS_HEADER` is now `pub` so the Librarian reuses the
+  core agent's core-facts label (DRY).
+
+### Removed
+
+- `build_contextual_extraction_prompt` (folded into `build_extraction_prompt`).
+- The "Recent related facts about the user" DB snapshot
+  (`get_facts_by_subject`) from the Librarian prompt — novelty checking now
+  relies on the core-facts block.
+- `identity: UserIdentity` field from `LibrarianContext` and the
+  `identity` parameter from `extract_facts_with_context`.
+
+### Notes
+
+- This deviates from the original #139 spec (which was outdated): identity is
+  not rendered as a separate prompt line, there is no dedicated recent-facts
+  snapshot section, and the exact `## What I already know about you` /
+  `## Recently learned` / `## Conversation to analyze` headers from the issue
+  are not used. Pronoun-resolution prompting is deferred to the follow-up
+  "Phase 2: Pronoun resolution in fact extraction" issue.
+
 ## [0.52.0] — 2026-06-18
 
 ### Changed

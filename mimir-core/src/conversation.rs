@@ -49,6 +49,58 @@ impl Hash for ConversationTurn {
     }
 }
 
+/// Role of a single message within a transcript handed to a background agent.
+///
+/// Used by the Librarian to label conversation messages so it extracts facts
+/// only from what the user said, never from the assistant's own output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MessageRole {
+    /// A message authored by the user. Facts may be extracted from these.
+    User,
+    /// A message authored by the assistant (the LLM's own prior output to the
+    /// user). The Librarian must NOT learn facts from these.
+    Assistant,
+}
+
+/// A single labelled conversation message passed to a background agent.
+///
+/// `extract_facts_with_context` accepts a slice of these so the amount of
+/// conversation context handed to the Librarian can be increased in future
+/// without changing the prompt-builder signature.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConversationMessage {
+    pub role: MessageRole,
+    pub content: String,
+}
+
+impl ConversationMessage {
+    /// Create a message with the given role and content.
+    pub fn new(role: MessageRole, content: impl Into<String>) -> Self {
+        Self {
+            role,
+            content: content.into(),
+        }
+    }
+
+    /// Create a user-authored message.
+    pub fn user(content: impl Into<String>) -> Self {
+        Self::new(MessageRole::User, content)
+    }
+
+    /// Create an assistant-authored message.
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self::new(MessageRole::Assistant, content)
+    }
+
+    /// Human-readable label used when rendering the transcript into a prompt.
+    pub fn label(&self) -> &'static str {
+        match self.role {
+            MessageRole::User => "User",
+            MessageRole::Assistant => "Assistant",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,5 +127,18 @@ mod tests {
         let mut hasher_b = std::collections::hash_map::DefaultHasher::new();
         b.hash(&mut hasher_b);
         assert_eq!(hasher_a.finish(), hasher_b.finish());
+    }
+
+    #[test]
+    fn conversation_message_constructors_set_role_and_label() {
+        let u = ConversationMessage::user("I like Mondays.");
+        assert_eq!(u.role, MessageRole::User);
+        assert_eq!(u.label(), "User");
+        assert_eq!(u.content, "I like Mondays.");
+
+        let a = ConversationMessage::assistant("Noted! Saved.");
+        assert_eq!(a.role, MessageRole::Assistant);
+        assert_eq!(a.label(), "Assistant");
+        assert_eq!(a.content, "Noted! Saved.");
     }
 }

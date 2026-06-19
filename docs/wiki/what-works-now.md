@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-06-18
-> **Version:** 0.52.0
-> **Release summary:** Phase 2 knowledge-graph work is live — core relationship ontology seeded category-first (Issue #135): predicate aliases for verb canonicalization plus `category_aliases` and category-subtree retrieval for grouping/multi-tag precision; relationship type aliases are the single source of truth for predicate resolution (Issue #133), Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system, Agentic Pre-Response Context Retrieval (#128), the Librarian Agent (#130), LLM-orchestrated learning via the `remember` tool (#137), and a hardened system prompt that enforces the agentic contract — `retrieve_context` dispatch, no fact invention, and `remember` encouragement (#138).
+> **Last updated:** 2026-06-19
+> **Version:** 0.53.0
+> **Release summary:** Phase 2 knowledge-graph work is live — core relationship ontology seeded category-first (Issue #135): predicate aliases for verb canonicalization plus `category_aliases` and category-subtree retrieval for grouping/multi-tag precision; relationship type aliases are the single source of truth for predicate resolution (Issue #133), Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system, Agentic Pre-Response Context Retrieval (#128), the Librarian Agent (#130), LLM-orchestrated learning via the `remember` tool (#137), a hardened system prompt that enforces the agentic contract — `retrieve_context` dispatch, no fact invention, and `remember` encouragement (#138), and a redesigned Librarian extraction prompt that injects the same core-facts block as the core agent and learns only from user-labelled messages (#139).
 
 ---
 
@@ -35,7 +35,7 @@ Library crates provide code organisation:
 - `mimir-client` — HTTP client for talking to the daemon
 - `mimir-api-types` — Shared request/response types
 - `mimir-knowledge` — SQLite knowledge graph (Phase 2; wired into daemon via live memory block and condensation pipeline)
-- [`Librarian Agent`](../../docs/librarian-agent.md) — On-demand fact-extraction agent; no longer auto-triggered every turn (see #137)
+- [`Librarian Agent`](../../docs/librarian-agent.md) — On-demand fact-extraction agent; no longer auto-triggered every turn (see #137). Its extraction prompt now reuses the core agent's core-facts block and learns only from `[User]`-labelled messages (#139)
 
 ---
 

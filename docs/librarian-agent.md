@@ -3,9 +3,9 @@
 ## Overview
 
 The **Librarian Agent** is Mimir's on-demand fact-extraction agent. When invoked,
-it receives the full conversation transcript together with the current
-knowledge-graph snapshot (condensed memory, user identity, and recent related
-facts) and extracts structured facts into the knowledge graph.
+it receives the recent conversation as labelled messages together with the
+current core-facts block (the same condensed memory the core agent injects) and
+extracts structured facts into the knowledge graph.
 
 It is the first implementation of the generic `Agent` / `AgentRuntime` framework.
 
@@ -19,8 +19,10 @@ It is the first implementation of the generic `Agent` / `AgentRuntime` framework
 ## Responsibilities
 
 - Receive a completed [`ConversationTurn`](../../mimir-core/src/conversation.rs).
-- Resolve pronouns and disambiguate entities using the configured user identity.
-- Detect contradictions against existing facts using the KB snapshot.
+- Extract only from user-authored messages, never from the assistant's own
+  output (enforced by prompt labelling and source-discipline instructions).
+- Check new facts against the core-facts block to avoid duplicating what is
+  already known.
 - Extract facts through the existing `remember` tool schema.
 - Store facts with correct provenance, confidence, and status.
 - Log results at `info` and errors at `warn`.
@@ -49,8 +51,9 @@ AgentRuntime.submit::<LibrarianAgent>(goal, LibrarianContext)
     v
 tokio::spawn -> LibrarianAgent::run(goal, ctx)
     |
+    | turn -> [User, Assistant] labelled messages
     v
-KnowledgeGraph::extract_facts_with_context(llm, turn, identity, memory)
+KnowledgeGraph::extract_facts_with_context(llm, messages, memory)
     |
     v
 KG entities/facts + audit log
@@ -67,13 +70,41 @@ KG entities/facts + audit log
 - `mimir_core::conversation::ConversationTurn` — user message, assistant
   response, session id, and timestamp. The timestamp is recorded but excluded
   from equality and hashing so identical turns dedupe correctly.
-- `mimir_core::identity::UserIdentity` — configured user's name and KG entity id.
+- `mimir_core::conversation::ConversationMessage` / `MessageRole` — a labelled
+  transcript message (`User` or `Assistant`). The prompt builder accepts a
+  slice of these so the amount of context sent to the Librarian can grow in
+  future without changing its signature.
 - `mimir_knowledge::librarian::LibrarianAgent` — the concrete agent.
 - `mimir_knowledge::librarian::LibrarianGoal` — `{ target_subject_id, topic, turn }`.
 - `mimir_knowledge::librarian::LibrarianContext` — runtime context holding KG,
-  LLM, identity, and optional condensed memory.
+  LLM, and optional condensed memory (the core-facts block).
 - `mimir_knowledge::KnowledgeGraph::extract_facts_with_context(...)` — rich-prompt
   extraction entrypoint.
+
+### Prompt composition
+
+`build_extraction_prompt` composes the Librarian's system prompt from:
+
+1. **KG-focused base** (`build_base_prompt`) — extraction rules, category
+   taxonomy (Categorisation Guide), predicate standards, list splitting,
+   within-output deduplication, and the output contract. Shared with the simple
+   `extract_facts` path.
+2. **Core-facts block** — the same `Personality::CORE_FACTS_HEADER` plus
+   condensed memory the core agent injects, emitted only when non-empty. The
+   user's identity (canonical name, entity details) is read from this block by
+   the LLM, exactly as the core agent resolves identity — no separate identity
+   parameter is passed (#139).
+3. **Recent conversation** — the supplied messages rendered as labelled lines
+   (`[User]: ...` / `[Assistant]: ...`) under `## Recent conversation`.
+4. **Source discipline** — extract facts ONLY from `[User]` messages; never from
+   `[Assistant]` messages (the LLM's own prior output to the user).
+5. **Novelty check** — before emitting a fact, check it against the core-facts
+   block; do not emit a fact that merely restates what is already known (exact
+   duplicates are discarded by Rust regardless of classification), and use the
+   `Correction` classification for corrections.
+
+The transcript lives in the system prompt once; the user turn handed to the LLM
+is a short action instruction (no duplication).
 
 ### Deduping
 
@@ -90,12 +121,12 @@ independently.
 2. It builds a `LibrarianContext` with:
    - `Arc<KnowledgeGraph>`
    - `Arc<dyn LlmBackend>` (the core agent's LLM)
-   - `UserIdentity`
    - optional condensed memory string
 3. `AgentRuntime.submit::<LibrarianAgent>` queues the goal.
 4. The runtime spawns a task that calls `LibrarianAgent::run`.
-5. The agent calls `extract_facts_with_context`, which builds a prompt containing
-   the transcript, identity, memory, and recent related facts.
+5. The agent converts the turn into `[User, Assistant]` messages and calls
+   `extract_facts_with_context`, which builds a prompt containing the core-facts
+   block and the labelled recent conversation.
 6. The LLM emits facts via the `remember` tool; Rust validates and inserts them.
 
 For ordinary chat, learning bypasses this agent entirely: the LLM calls

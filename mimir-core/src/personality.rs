@@ -26,7 +26,10 @@ Operating principles:
 
     /// Header for the injected core-facts block (issue #138). The label and
     /// the condensed-subset framing are merged into one line, third person.
-    const CORE_FACTS_HEADER: &str = "\
+    ///
+    /// Shared with the Librarian Agent so the background extraction prompt
+    /// injects the same core-facts block the core agent uses (DRY, #139).
+    pub const CORE_FACTS_HEADER: &str = "\
 Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive):";
 
     /// Create a `Personality` from the supplied config, scanning the default

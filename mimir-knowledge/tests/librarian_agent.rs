@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use mimir_core::agents::Agent;
 use mimir_core::conversation::ConversationTurn;
-use mimir_core::identity::UserIdentity;
 use mimir_core::llm::MockLlmClient;
 use mimir_core::llm::types::{FunctionCall, Message, ToolCall, Usage};
+use mimir_core::personality::Personality;
 
 use mimir_knowledge::librarian::{LibrarianAgent, LibrarianContext, LibrarianGoal};
 use mimir_knowledge::models::entity::EntityType;
@@ -81,11 +81,9 @@ async fn librarian_extracts_fact_from_conversation_turn() {
         "Noted! I will remember that.",
     );
     let goal = LibrarianGoal::new(user_id, "chat-turn-extraction", turn);
-    let identity = UserIdentity::new("devansh", user_id);
     let ctx = LibrarianContext::new(
         Arc::clone(&kg),
         Arc::clone(&backend),
-        identity,
         Some("User likes colours.".to_string()),
     );
 
@@ -120,11 +118,9 @@ async fn librarian_prompt_includes_transcript_and_memory() {
 
     let turn = ConversationTurn::new(1, "I just moved to Berlin.", "Berlin is a great city.");
     let goal = LibrarianGoal::new(user_id, "chat-turn-extraction", turn.clone());
-    let identity = UserIdentity::new("devansh", user_id);
     let ctx = LibrarianContext::new(
         Arc::clone(&kg),
         Arc::clone(&backend),
-        identity,
         Some("Previously lived in London.".to_string()),
     );
 
@@ -133,12 +129,22 @@ async fn librarian_prompt_includes_transcript_and_memory() {
 
     let calls = mock.chat_calls();
     assert_eq!(calls.len(), 1);
-    let transcript = format!(
-        "User: {}\nAssistant: {}",
-        turn.user_message, turn.assistant_response
-    );
     assert_eq!(calls[0].len(), 2);
-    assert!(calls[0][0].content.contains("User identity:"));
-    assert!(calls[0][1].content.contains(&transcript));
-    assert!(calls[0][0].content.contains("Previously lived in London."));
+    let system_prompt = &calls[0][0].content;
+    let user_turn = &calls[0][1].content;
+    // Identity is read from the core-facts block (same header as the core
+    // agent), not from a separate identity line.
+    assert!(system_prompt.contains(Personality::CORE_FACTS_HEADER));
+    assert!(system_prompt.contains("Previously lived in London."));
+    // The transcript is embedded in the system prompt as labelled messages.
+    assert!(system_prompt.contains("## Recent conversation"));
+    assert!(system_prompt.contains("[User]: I just moved to Berlin."));
+    assert!(system_prompt.contains("[Assistant]: Berlin is a great city."));
+    // The Librarian is told to learn only from user messages.
+    assert!(system_prompt.contains("Source discipline"));
+    assert!(system_prompt.contains("[Assistant]"));
+    // The user turn handed to the LLM is the action instruction, not the
+    // raw transcript (no duplication).
+    assert!(user_turn.contains("remember"));
+    assert!(!user_turn.contains("I just moved to Berlin."));
 }

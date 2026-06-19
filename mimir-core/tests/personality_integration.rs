@@ -21,13 +21,13 @@ async fn personality_system_prompt_injected_into_session() {
     assert_eq!(exported.len(), 1);
     assert_eq!(exported[0].role, "system");
     assert!(exported[0].content.contains("transparent"));
-    assert!(exported[0].content.contains("Key facts I know about you:"));
-    assert!(
-        exported[0]
-            .content
-            .contains("Note: This is not an exhaustive list.")
-    );
+    // Issue #138: core-facts framing is third person, with operating
+    // directives appended; legacy wording is gone.
+    assert!(exported[0].content.contains("Core facts about the user"));
     assert!(exported[0].content.contains("User likes Rust and coffee."));
+    assert!(exported[0].content.contains("retrieve_context"));
+    assert!(!exported[0].content.contains("Key facts I know about you:"));
+    assert!(!exported[0].content.contains("kg_query"));
 }
 
 #[tokio::test]
@@ -44,11 +44,9 @@ async fn personality_empty_memory_omits_section_in_session() {
     let exported = mgr.export_messages(sid).await.unwrap();
     assert_eq!(exported.len(), 1);
     assert_eq!(exported[0].role, "system");
-    assert!(!exported[0].content.contains("Key facts I know about you:"));
-    assert!(
-        !exported[0]
-            .content
-            .contains("Note: This is not an exhaustive list.")
-    );
+    // Empty memory: directives still present, no core-facts block.
     assert!(exported[0].content.contains("bullet points"));
+    assert!(exported[0].content.contains("retrieve_context"));
+    assert!(!exported[0].content.contains("Core facts about the user"));
+    assert!(!exported[0].content.contains("Key facts I know about you:"));
 }

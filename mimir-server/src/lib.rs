@@ -1456,17 +1456,27 @@ mod tests {
         assert!(!messages.is_empty(), "expected at least one message");
         assert_eq!(messages[0].role, "system");
         let content = &messages[0].content;
+        // Issue #138: core-facts framing is third person with operating
+        // directives appended; legacy wording is gone.
         assert!(
-            content.contains("Key facts I know about you:"),
-            "system prompt should contain 'Key facts I know about you:'"
+            content.contains("Core facts about the user"),
+            "system prompt should contain the core-facts header"
         );
         assert!(
             content.contains("User enjoys hiking and sourdough bread."),
             "system prompt should contain the seeded KG memory"
         );
         assert!(
-            content.contains("Note: This is not an exhaustive list."),
-            "system prompt should contain the non-exhaustive note"
+            content.contains("retrieve_context"),
+            "system prompt should contain the retrieve_context directive"
+        );
+        assert!(
+            !content.contains("Key facts I know about you:"),
+            "system prompt must not contain legacy 'Key facts I know about you:'"
+        );
+        assert!(
+            !content.contains("kg_query"),
+            "system prompt must not surface internal kg_query tool"
         );
     }
 
@@ -1517,17 +1527,27 @@ mod tests {
         assert!(!messages.is_empty(), "expected at least one message");
         assert_eq!(messages[0].role, "system");
         let content = &messages[0].content;
+        // Issue #138: core-facts framing is third person with operating
+        // directives appended; legacy wording is gone.
         assert!(
-            content.contains("Key facts I know about you:"),
-            "system prompt should contain 'Key facts I know about you:'"
+            content.contains("Core facts about the user"),
+            "system prompt should contain the core-facts header"
         );
         assert!(
             content.contains("User enjoys hiking and sourdough bread."),
             "system prompt should contain the seeded KG memory"
         );
         assert!(
-            content.contains("Note: This is not an exhaustive list."),
-            "system prompt should contain the non-exhaustive note"
+            content.contains("retrieve_context"),
+            "system prompt should contain the retrieve_context directive"
+        );
+        assert!(
+            !content.contains("Key facts I know about you:"),
+            "system prompt must not contain legacy 'Key facts I know about you:'"
+        );
+        assert!(
+            !content.contains("kg_query"),
+            "system prompt must not surface internal kg_query tool"
         );
     }
 

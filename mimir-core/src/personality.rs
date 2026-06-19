@@ -14,6 +14,21 @@ pub struct Personality {
 }
 
 impl Personality {
+    /// Operating directives appended to every preset (issue #138). These are
+    /// behavioural invariants of Mimir — retrieval, honesty, and learning —
+    /// and apply uniformly to built-in and custom personalities. They are kept
+    /// out of the per-preset tone text (DRY) and composed in [`system_prompt`].
+    const OPERATING_DIRECTIVES: &str = "\
+Operating principles:
+- Do not invent facts about the user. If you do not know the answer, say so.
+- If you need more information, use the `retrieve_context` tool to dispatch a retrieval agent that investigates the knowledge graph and conversation history. If its findings are still not enough, refine the task and dispatch again. Continue until you have a confident answer or have confirmed the information is not in your knowledge base.
+- Call the `remember` tool whenever the user states or reveals something worth saving — explicit assertions, corrections, and meaningful casual mentions. Do not call it for pure chitchat or greetings.";
+
+    /// Header for the injected core-facts block (issue #138). The label and
+    /// the condensed-subset framing are merged into one line, third person.
+    const CORE_FACTS_HEADER: &str = "\
+Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive):";
+
     /// Create a `Personality` from the supplied config, scanning the default
     /// user personalities directory (`~/.config/mimir/personalities/`).
     pub fn new(config: &PersonalityConfig) -> Self {
@@ -68,8 +83,13 @@ impl Personality {
         }
     }
 
-    /// Return the system prompt for the active preset, optionally composed
-    /// with persistent memory context.
+    /// Return the system prompt for the active preset, composed with the
+    /// shared operating directives and (when present) the core-facts block.
+    ///
+    /// Composition order is: preset tone text → operating directives →
+    /// core-facts block (only when `memory_content` is non-empty). The
+    /// directives are always appended so the behavioural contract holds
+    /// even when no facts are injected (issue #138).
     pub fn system_prompt(&self, memory_content: &str) -> String {
         let preset_prompt = self
             .registry
@@ -77,14 +97,13 @@ impl Personality {
             .cloned()
             .unwrap_or_else(Self::built_in_transparent);
 
-        if memory_content.trim().is_empty() {
-            preset_prompt
+        let base = format!("{}\n\n{}", preset_prompt, Self::OPERATING_DIRECTIVES);
+        let memory = memory_content.trim();
+
+        if memory.is_empty() {
+            base
         } else {
-            format!(
-                "{}\n\nKey facts I know about you:\n{}\n\nNote: This is not an exhaustive list. Use kg_query, kg_related, or kg_search tools if you need more information. Use the remember tool whenever the user shares something worth saving.",
-                preset_prompt,
-                memory_content.trim()
-            )
+            format!("{}\n\n{}\n{}", base, Self::CORE_FACTS_HEADER, memory)
         }
     }
 
@@ -247,7 +266,11 @@ mod tests {
 
         let p = Personality::from_path(dir.path(), "cheerful");
         assert_eq!(p.active_name(), "cheerful");
-        assert_eq!(p.system_prompt(""), "You are cheerful and upbeat!");
+        // Custom presets still lead the prompt, but the shared operating
+        // directives are appended to every preset (issue #138).
+        let prompt = p.system_prompt("");
+        assert!(prompt.starts_with("You are cheerful and upbeat!"));
+        assert!(prompt.contains(Personality::OPERATING_DIRECTIVES));
     }
 
     #[test]
@@ -257,7 +280,9 @@ mod tests {
         fs::write(&file_path, "Custom transparent override.").unwrap();
 
         let p = Personality::from_path(dir.path(), "transparent");
-        assert_eq!(p.system_prompt(""), "Custom transparent override.");
+        let prompt = p.system_prompt("");
+        assert!(prompt.starts_with("Custom transparent override."));
+        assert!(prompt.contains(Personality::OPERATING_DIRECTIVES));
     }
 
     #[test]
@@ -265,18 +290,92 @@ mod tests {
         let p = Personality::from_path(Path::new("/nonexistent"), "transparent");
         let prompt = p.system_prompt("User likes cats.");
         assert!(prompt.starts_with(&Personality::built_in_transparent()));
-        assert!(prompt.contains("Key facts I know about you:"));
-        assert!(prompt.contains("Note: This is not an exhaustive list."));
+        // New core-facts framing (issue #138), third person.
+        assert!(prompt.contains(Personality::CORE_FACTS_HEADER));
         assert!(prompt.contains("User likes cats."));
+        // Operating directives are always present.
+        assert!(prompt.contains(Personality::OPERATING_DIRECTIVES));
+        // Legacy wording must be gone.
+        assert!(!prompt.contains("Key facts I know about you:"));
+        assert!(!prompt.contains("Note: This is not an exhaustive list."));
+        assert!(!prompt.contains("kg_query"));
     }
 
     #[test]
-    fn test_system_prompt_empty_memory_omits_section() {
+    fn test_system_prompt_empty_memory_omits_core_facts_block() {
         let p = Personality::from_path(Path::new("/nonexistent"), "transparent");
         let prompt = p.system_prompt("");
+        // Directives are always appended; the core-facts block is not.
+        let expected = format!(
+            "{}\n\n{}",
+            Personality::built_in_transparent(),
+            Personality::OPERATING_DIRECTIVES
+        );
+        assert_eq!(prompt, expected);
+        assert!(!prompt.contains(Personality::CORE_FACTS_HEADER));
         assert!(!prompt.contains("Key facts I know about you:"));
-        assert_eq!(prompt, Personality::built_in_transparent());
-        assert!(!prompt.contains("Note: This is not an exhaustive list."));
+    }
+
+    #[test]
+    fn test_operating_directives_present_for_all_built_ins() {
+        for preset in ["transparent", "concise", "warm", "formal"] {
+            let p = Personality::from_path(Path::new("/nonexistent"), preset);
+            let prompt = p.system_prompt("");
+            assert!(
+                prompt.contains("Do not invent facts about the user."),
+                "preset `{preset}` missing no-invention directive"
+            );
+            assert!(
+                prompt.contains("retrieve_context"),
+                "preset `{preset}` missing retrieve_context directive"
+            );
+            assert!(
+                prompt.contains("remember"),
+                "preset `{preset}` missing remember encouragement"
+            );
+            // Internal retrieval tools must not be surfaced to the core LLM.
+            assert!(
+                !prompt.contains("kg_query"),
+                "preset `{preset}` mentions kg_query"
+            );
+            assert!(
+                !prompt.contains("kg_search"),
+                "preset `{preset}` mentions kg_search"
+            );
+            assert!(
+                !prompt.contains("kg_related"),
+                "preset `{preset}` mentions kg_related"
+            );
+        }
+    }
+
+    #[test]
+    fn test_operating_directives_present_for_custom_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("cheerful.personality.md"),
+            "You are cheerful and upbeat!",
+        )
+        .unwrap();
+
+        let p = Personality::from_path(dir.path(), "cheerful");
+        let prompt = p.system_prompt("");
+        assert!(prompt.contains(Personality::OPERATING_DIRECTIVES));
+        assert!(prompt.contains("retrieve_context"));
+        assert!(prompt.contains("remember"));
+        assert!(!prompt.contains("kg_query"));
+    }
+
+    #[test]
+    fn test_core_facts_block_only_when_memory_present() {
+        let p = Personality::from_path(Path::new("/nonexistent"), "transparent");
+
+        let empty = p.system_prompt("");
+        assert!(!empty.contains(Personality::CORE_FACTS_HEADER));
+
+        let with_mem = p.system_prompt("User likes cats.");
+        assert!(with_mem.contains(Personality::CORE_FACTS_HEADER));
+        assert!(with_mem.contains("User likes cats."));
     }
 
     #[test]

@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.52.0] — 2026-06-18
+
+### Changed
+
+- **System prompt hardened for the agentic architecture (Issue #138):** the
+  system prompt composed by `Personality::system_prompt` now appends shared
+  operating directives to every preset (built-in and custom). The directives
+  tell the LLM not to invent facts about the user (say so if the answer is not
+  known), to dispatch a retrieval agent via the `retrieve_context` tool when
+  the core facts are insufficient (refining and re-dispatching until answered
+  or confirmed absent), and to call the `remember` tool for explicit
+  assertions, corrections, and meaningful casual mentions — never for chitchat.
+  The injected memory section is relabelled `Core facts about the user` (third
+  person, framed as a condensed subset, not exhaustive). The legacy `Key facts
+  I know about you:` block and its note mentioning `kg_query`/`kg_search`/
+  `kg_related` are removed; those tools are the retrieval agent's internal
+  tools and are no longer surfaced to the core LLM. The four `built_in_*`
+  presets keep their tone text unchanged — directives are composed once in
+  `system_prompt` for DRY.
+
+### Notes
+
+- **#138 acceptance criteria revised by design:** the "you will receive a
+  synthesized context block" criterion is dropped — Mimir uses LLM-condensed
+  core facts, not a Rust distillation layer (#129 will not ship as written).
+  The "remove the `remember` instruction" criterion is reversed to *encourage*
+  `remember`, matching the #137 inline-LLM-orchestrated learning design and the
+  `test_chat_extracts_facts_after_response` contract. An automatic Librarian
+  fallback (#156) was filed to queue background extraction when `remember` is
+  not called for a configurable number of turns.
+
 ## [0.51.0] — 2026-06-18
 
 ### Changed

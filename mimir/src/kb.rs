@@ -633,3 +633,86 @@ pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url:
         }
     }
 }
+
+// ------------------------------------------------------------------
+// kb pending / confirm / reject (issue #141)
+// ------------------------------------------------------------------
+
+/// List sensitive facts awaiting confirmation.
+pub async fn handle_kb_pending(json: bool, base_url: &str) {
+    let client = make_client(base_url);
+    match client.kb_pending().await {
+        Ok(resp) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&resp).unwrap());
+                return;
+            }
+            if resp.facts.is_empty() {
+                println!("No pending sensitive facts.");
+                return;
+            }
+            println!("Pending sensitive facts ({}):", resp.total);
+            println!(
+                "{:<8} {:<20} {:<20} {:<24} Created",
+                "ID", "Subject", "Predicate", "Object"
+            );
+            for f in &resp.facts {
+                println!(
+                    "{:<8} {:<20} {:<20} {:<24} {}",
+                    f.fact_id,
+                    truncate(&f.subject, 20),
+                    truncate(&f.predicate, 20),
+                    truncate(f.object.as_deref().unwrap_or("-"), 24),
+                    f.created_at
+                );
+            }
+        }
+        Err(e) => exit_with_error(e),
+    }
+}
+
+/// Confirm a pending sensitive fact.
+pub async fn handle_kb_confirm(fact_id: i32, json: bool, base_url: &str) {
+    let client = make_client(base_url);
+    match client.kb_confirm(fact_id).await {
+        Ok(resp) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&resp).unwrap());
+                return;
+            }
+            let f = &resp.fact;
+            println!("Confirmed fact {}:", f.id);
+            println!(
+                "  {} {} {}",
+                f.subject,
+                f.predicate,
+                f.object.clone().unwrap_or_default()
+            );
+            let conf_str = format!("{:.2}", f.confidence);
+            println!(
+                "  Confidence: {}",
+                conf_str.color(confidence_color(f.confidence))
+            );
+            println!("  Status:     {}", f.status);
+        }
+        Err(e) => exit_with_error(e),
+    }
+}
+
+/// Reject a pending sensitive fact.
+pub async fn handle_kb_reject(fact_id: i32, reason: Option<String>, base_url: &str) {
+    let client = make_client(base_url);
+    match client.kb_reject(fact_id, reason.as_deref()).await {
+        Ok(()) => println!("Rejected and deleted fact {}.", fact_id),
+        Err(e) => exit_with_error(e),
+    }
+}
+
+/// Truncate a string to `max` chars, appending an ellipsis if truncated.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let truncated: String = s.chars().take(max.saturating_sub(1)).collect();
+    format!("{truncated}…")
+}

@@ -140,6 +140,7 @@ pub struct IdentityConfig {
 #[serde(default)]
 pub struct KnowledgeConfig {
     pub optimization: KnowledgeOptimizationConfig,
+    pub pending_cleanup: PendingCleanupConfig,
 }
 
 /// Knowledge graph nightly optimization settings.
@@ -260,6 +261,28 @@ impl Default for KnowledgeOptimizationConfig {
             nice_level: 10,
             timeout_minutes: 120,
             schedule_time: "03:00".to_string(),
+        }
+    }
+}
+
+/// Settings for the pending sensitive-fact auto-cleanup job.
+///
+/// Facts awaiting confirmation longer than `retention_days` are hard-deleted
+/// by a daily background job (see issue #141).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PendingCleanupConfig {
+    /// Number of days a pending fact survives before automatic deletion.
+    pub retention_days: u16,
+    /// Daily local time (HH:MM, 24h) at which the cleanup runs.
+    pub schedule_time: String,
+}
+
+impl Default for PendingCleanupConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: 7,
+            schedule_time: "03:30".to_string(),
         }
     }
 }
@@ -466,6 +489,10 @@ cpu_cores = 1
 nice_level = 10
 timeout_minutes = 120
 schedule_time = "02:00"
+
+[knowledge.pending_cleanup]
+retention_days = 7
+schedule_time = "03:30"
 "#
         .to_string()
     }

@@ -61,6 +61,13 @@ mimir memory --refresh
 # Query the knowledge graph audit log
 mimir kb audit --entity "Alice" --change-type status_change
 
+# List sensitive facts awaiting confirmation
+mimir kb pending
+
+# Confirm or reject a pending sensitive fact
+mimir kb confirm 42
+mimir kb reject 42 --reason "entered in error"
+
 # Stop the daemon gracefully
 mimir stop
 ```

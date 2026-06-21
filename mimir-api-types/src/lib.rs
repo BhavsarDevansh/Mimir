@@ -436,6 +436,46 @@ pub struct TrashListResponse {
     pub items: Vec<TrashRow>,
 }
 
+// ---------------------------------------------------------------------------
+// Knowledge Graph — pending sensitive-fact confirmation (issue #141)
+// ---------------------------------------------------------------------------
+
+/// A single pending sensitive fact awaiting user confirmation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PendingFactRow {
+    pub fact_id: i32,
+    pub subject: String,
+    pub predicate: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object: Option<String>,
+    pub created_at: String,
+}
+
+/// Response body for `GET /kb/pending`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PendingListResponse {
+    pub total: usize,
+    pub facts: Vec<PendingFactRow>,
+}
+
+/// Response body for `POST /kb/facts/{id}/confirm`.
+///
+/// Wraps the updated fact as a [`FactRow`], consistent with the edit endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConfirmFactResponse {
+    pub fact: FactRow,
+}
+
+/// Request body for `POST /kb/facts/{id}/reject`.
+///
+/// All fields optional: an empty POST body is valid and yields a `204 No
+/// Content`. A `reason`, if supplied, is written to the audit log.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct RejectFactRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

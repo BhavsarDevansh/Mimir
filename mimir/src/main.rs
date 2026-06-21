@@ -152,6 +152,18 @@ async fn main() {
                 ensure_daemon(&base_url, &mut daemon_started).await;
                 kb::handle_kb_trash(empty, limit, offset, json, &base_url).await;
             }
+            cli::KbCommands::Pending { json } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                kb::handle_kb_pending(json, &base_url).await;
+            }
+            cli::KbCommands::Confirm { fact_id, json } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                kb::handle_kb_confirm(fact_id, json, &base_url).await;
+            }
+            cli::KbCommands::Reject { fact_id, reason } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                kb::handle_kb_reject(fact_id, reason, &base_url).await;
+            }
         },
         cli::Commands::Init => init::handle_init().await,
         cli::Commands::Start => start::handle_start().await,

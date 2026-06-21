@@ -10,10 +10,11 @@ use chrono::Utc;
 use serde::Deserialize;
 
 use mimir_api_types::{
-    AuditQueryResponse, AuditRow, BrowseEdge, BrowseResponse, DependencyRow, FactDetailResponse,
-    FactEditRequest, FactEditResponse, FactQueryResponse, FactRow, ForgetRequest, ForgetResponse,
-    ProfileGroup, ProfileResponse, RestoreRequest, RestoreResponse, SourceRow, TrashListResponse,
-    TrashRow,
+    AuditQueryResponse, AuditRow, BrowseEdge, BrowseResponse, ConfirmFactResponse, DependencyRow,
+    FactDetailResponse, FactEditRequest, FactEditResponse, FactQueryResponse, FactRow,
+    ForgetRequest, ForgetResponse, PendingFactRow, PendingListResponse, ProfileGroup,
+    ProfileResponse, RejectFactRequest, RestoreRequest, RestoreResponse, SourceRow,
+    TrashListResponse, TrashRow,
 };
 
 use mimir_knowledge::models::audit_log::{ChangeType, ChangedBy};
@@ -475,44 +476,9 @@ pub async fn kb_edit_handler(
         .await
         .map_err(error::knowledge_error)?;
 
-    let subject = state
-        .knowledge_graph
-        .get_entity(updated.subject_id)
-        .await
-        .map_err(error::knowledge_error)?
-        .map(|e| e.name)
-        .unwrap_or_else(|| "(deleted)".to_string());
+    let fact_row = fact_row_from(&state, &updated).await?;
 
-    let predicate = state
-        .knowledge_graph
-        .relationship_type_name(updated.relationship_type_id)
-        .await
-        .unwrap_or_else(|| "unknown".to_string());
-
-    let object = if let Some(oid) = updated.object_id {
-        state
-            .knowledge_graph
-            .get_entity(oid)
-            .await
-            .map_err(error::knowledge_error)?
-            .map(|e| e.name)
-    } else {
-        updated.object_literal.clone()
-    };
-
-    Ok(Json(FactEditResponse {
-        fact: FactRow {
-            id: updated.id,
-            subject,
-            predicate,
-            object,
-            confidence: updated.confidence,
-            status: status_name(updated.fact_status_id),
-            valid_from: updated.valid_from.map(|dt| dt.to_rfc3339()),
-            valid_until: updated.valid_until.map(|dt| dt.to_rfc3339()),
-            inferred: updated.inferred,
-        },
-    }))
+    Ok(Json(FactEditResponse { fact: fact_row }))
 }
 
 // ------------------------------------------------------------------
@@ -823,4 +789,111 @@ pub async fn kb_trash_empty_handler(
         .await
         .map_err(error::knowledge_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ------------------------------------------------------------------
+// kb pending / confirm / reject (issue #141)
+// ------------------------------------------------------------------
+
+/// GET /kb/pending — list facts awaiting user confirmation.
+pub async fn kb_pending_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<PendingListResponse>, Response> {
+    let rows = state
+        .knowledge_graph
+        .list_pending_facts()
+        .await
+        .map_err(error::knowledge_error)?;
+
+    let facts: Vec<PendingFactRow> = rows
+        .into_iter()
+        .map(|r| PendingFactRow {
+            fact_id: r.fact_id,
+            subject: r.subject,
+            predicate: r.predicate,
+            object: r.object,
+            created_at: r.created_at.to_rfc3339(),
+        })
+        .collect();
+
+    Ok(Json(PendingListResponse {
+        total: facts.len(),
+        facts,
+    }))
+}
+
+/// POST /kb/facts/{id}/confirm — confirm a pending sensitive fact.
+pub async fn kb_confirm_fact_handler(
+    State(state): State<Arc<AppState>>,
+    Path(fact_id): Path<i32>,
+) -> Result<Json<ConfirmFactResponse>, Response> {
+    let updated = state
+        .knowledge_graph
+        .confirm_fact(fact_id)
+        .await
+        .map_err(error::knowledge_error)?;
+
+    let fact_row = fact_row_from(&state, &updated).await?;
+    Ok(Json(ConfirmFactResponse { fact: fact_row }))
+}
+
+/// POST /kb/facts/{id}/reject — reject a pending sensitive fact (hard-delete).
+pub async fn kb_reject_fact_handler(
+    State(state): State<Arc<AppState>>,
+    Path(fact_id): Path<i32>,
+    body: Option<Json<RejectFactRequest>>,
+) -> Result<StatusCode, Response> {
+    // An empty body is valid; a reason, if provided, is written to the audit log.
+    let reason = body.and_then(|Json(r)| r.reason);
+
+    state
+        .knowledge_graph
+        .reject_fact(fact_id, reason.as_deref())
+        .await
+        .map_err(error::knowledge_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Build a [`FactRow`] from a [`mimir_knowledge::models::fact::Fact`], resolving
+/// human-readable subject, predicate, and object names.
+async fn fact_row_from(
+    state: &AppState,
+    fact: &mimir_knowledge::models::fact::Fact,
+) -> Result<FactRow, Response> {
+    let subject = state
+        .knowledge_graph
+        .get_entity(fact.subject_id)
+        .await
+        .map_err(error::knowledge_error)?
+        .map(|e| e.name)
+        .unwrap_or_else(|| "(deleted)".to_string());
+
+    let predicate = state
+        .knowledge_graph
+        .relationship_type_name(fact.relationship_type_id)
+        .await
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let object = if let Some(oid) = fact.object_id {
+        state
+            .knowledge_graph
+            .get_entity(oid)
+            .await
+            .map_err(error::knowledge_error)?
+            .map(|e| e.name)
+    } else {
+        fact.object_literal.clone()
+    };
+
+    Ok(FactRow {
+        id: fact.id,
+        subject,
+        predicate,
+        object,
+        confidence: fact.confidence,
+        status: status_name(fact.fact_status_id),
+        valid_from: fact.valid_from.map(|dt| dt.to_rfc3339()),
+        valid_until: fact.valid_until.map(|dt| dt.to_rfc3339()),
+        inferred: fact.inferred,
+    })
 }

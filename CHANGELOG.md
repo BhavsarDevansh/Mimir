@@ -1,5 +1,86 @@
 # Changelog
 
+## [0.54.3] — 2026-06-21
+
+### Security
+
+- **`mimir-server`:** the sensitive-fact confirmation lifecycle routes
+  (`GET /kb/pending`, `POST /kb/facts/{id}/confirm`, `POST /kb/facts/{id}/reject`)
+  are now wrapped in the `require_loopback` middleware, matching the guard
+  already applied to `/kb/optimization/run-now`, `/memory/refresh`, and `/stop`.
+  Only loopback peers can list or mutate pending sensitive facts. No CSRF /
+  `Origin` validation is applied because there is no browser frontend for these
+  routes (the CLI / `mimir-client` is the only client); that hardening belongs
+  to a workspace-wide pass over all mutation routes.
+
+## [0.54.2] — 2026-06-21
+
+### Fixed
+
+- **`mimir-knowledge`:** `extract::reject_fact` now clears `fact_dependencies`
+  rows before the hard-delete. The `fact_dependencies` FK is `ON DELETE
+  RESTRICT` (migration 017), so rejecting a pending sensitive fact that
+  participates in a dependency edge previously hit a foreign-key violation.
+  Mirrors the dependency cleanup already performed by
+  `KnowledgeGraph::delete_stale_pending` and `forget_fact_tx`.
+- **`mimir-knowledge`:** `KnowledgeGraph::delete_stale_pending` now re-checks
+  the stale predicate inside each per-fact transaction and only counts
+  committed deletes. A fact confirmed or rejected between the id scan and the
+  delete is skipped rather than incorrectly hard-deleted and given a spurious
+  `Rejected` audit entry.
+- **`mimir-knowledge`:** the optimization runner's `pending_confirmation_cleanup`
+  pass now uses the configured `knowledge.pending_cleanup.retention_days`
+  (via a new `OptimizationConfig.pending_cleanup_retention_days` field) instead
+  of a hardcoded 7 days, so the pass and the scheduled `knowledge.pending_cleanup`
+  job share one configured expiry window.
+- **docs:** `docs/wiki/facts.md` confirm/reject examples now use the positional
+  `<fact-id>` syntax, matching `cli-commands.md` and `README.md`.
+
+## [0.54.1] — 2026-06-21
+
+### Fixed
+
+- **`mimir-knowledge`:** removed the orphaned, never-called
+  `queries::fact::delete_stale_pending` helper. It duplicated
+  `KnowledgeGraph::delete_stale_pending` with divergent, FK-violating semantics
+  (skipped `fact_dependencies` cleanup and the `Rejected` audit entry).
+  `KnowledgeGraph::delete_stale_pending` is now the single source of truth for
+  stale pending-fact auto-expiry.
+
+## [0.54.0] — 2026-06-21
+
+### Added
+
+- **Pending sensitive-fact confirmation lifecycle (`mimir-server`, `mimir-client`,
+  `mimir`, `mimir-api-types`, `mimir-knowledge`):** the existing internal
+  `confirm_fact`/`reject_fact` APIs are now exposed end-to-end. Sensitive facts
+  (allergies, health, etc.) stored with `pending_confirmation = TRUE` no longer
+  sit in limbo.
+  - HTTP routes: `GET /kb/pending`, `POST /kb/facts/{id}/confirm`,
+    `POST /kb/facts/{id}/reject` (returns `204 No Content`; optional `reason`
+    body field written to the audit log).
+  - CLI commands: `mimir kb pending`, `mimir kb confirm --fact-id N`,
+    `mimir kb reject --fact-id N [--reason "..."]`.
+  - API types: `PendingListResponse`, `ConfirmFactResponse`, `RejectFactRequest`,
+    and a public `PendingFactRow`.
+  - New `KnowledgeGraph::list_pending_facts()` and `delete_stale_pending()` query
+    methods.
+
+- **Daily pending-fact auto-cleanup job (`mimir-server`):** a new
+  `knowledge.pending_cleanup` background job hard-deletes facts still awaiting
+  confirmation past a configurable retention window. Configurable under
+  `[knowledge.pending_cleanup]` with `retention_days` (default `7`) and
+  `schedule_time` (default `"03:30"`). Implements the 7-day auto-deletion rule
+  described in `VISION/02-Knowledge-Graph/Learning-Modes.md`.
+
+### Changed
+
+- **`reject_fact` now accepts an optional reason (`mimir-knowledge`):** the
+  free function and `KnowledgeGraph` method take `reason: Option<&str>`,
+  threaded through to the audit log. Internal API change (acceptable per the
+  breaking-changes policy).
+
+
 ## [0.53.1] — 2026-06-19
 
 ### Fixed

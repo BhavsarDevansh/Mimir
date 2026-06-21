@@ -280,6 +280,7 @@ impl AppState {
         let backup_dir = mimir_core::paths::data_dir()?.join("backups");
         let timeout_minutes = cfg.knowledge.optimization.timeout_minutes;
         let schedule_time = cfg.knowledge.optimization.schedule_time.clone();
+        let pending_cleanup_retention_days = cfg.knowledge.pending_cleanup.retention_days;
         let schedule =
             mimir_core::job_queue::DailySchedule::parse(&cfg.knowledge.optimization.schedule_time)?;
 
@@ -297,11 +298,13 @@ impl AppState {
                 let backup_dir = backup_dir.clone();
                 let timeout = timeout_minutes;
                 let schedule_time = schedule_time.clone();
+                let pending_cleanup_retention = pending_cleanup_retention_days;
                 Box::pin(async move {
                     let opt_config = mimir_knowledge::optimization::OptimizationConfig {
                         backup_dir,
                         timeout_minutes: timeout,
                         schedule_time,
+                        pending_cleanup_retention_days: pending_cleanup_retention,
                     };
                     let runner = mimir_knowledge::optimization::OptimizationRunner::new(
                         &kg,
@@ -366,6 +369,40 @@ impl AppState {
             },
         );
         job_queue.register(cond_job).await?;
+
+        // Register the pending sensitive-fact auto-cleanup job (issue #141).
+        // Hard-deletes facts still awaiting confirmation past the configured
+        // retention window, writing a `Rejected` audit entry per fact. Daily,
+        // idle-gated; shares its deletion logic with the optimization runner's
+        // `pending_confirmation_cleanup` pass via `delete_stale_pending`.
+        let kg_for_cleanup = Arc::clone(&knowledge_graph);
+        let cleanup_retention_days = cfg.knowledge.pending_cleanup.retention_days;
+        let cleanup_schedule = mimir_core::job_queue::DailySchedule::parse(
+            &cfg.knowledge.pending_cleanup.schedule_time,
+        )?;
+        let cleanup_job = Job::new(
+            "knowledge.pending_cleanup",
+            JobPriority::System,
+            Some(cleanup_schedule),
+            true,
+            move |_ctx: JobContext| {
+                let kg = Arc::clone(&kg_for_cleanup);
+                let retention = cleanup_retention_days;
+                Box::pin(async move {
+                    let deleted = kg
+                        .delete_stale_pending(retention)
+                        .await
+                        .map_err(|e| mimir_core::job_queue::JobError::Handler(e.to_string()))?;
+                    if deleted > 0 {
+                        tracing::info!(
+                            "knowledge.pending_cleanup: deleted {deleted} stale pending fact(s)"
+                        );
+                    }
+                    Ok(())
+                })
+            },
+        );
+        job_queue.register(cleanup_job).await?;
 
         Ok((
             Self {

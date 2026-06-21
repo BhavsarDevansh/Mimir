@@ -452,7 +452,7 @@ async fn test_reject_sensitive_fact() {
     let pending = &outcome.pending_confirmation[0];
 
     // Reject the fact.
-    tg.kg.reject_fact(pending.fact_id).await.unwrap();
+    tg.kg.reject_fact(pending.fact_id, None).await.unwrap();
 
     // Verify deletion.
     assert!(tg.kg.get_fact(pending.fact_id).await.unwrap().is_none());
@@ -505,9 +505,11 @@ async fn test_pending_confirmation_ttl_cleanup() {
             .contains(&fact_id)
     );
 
-    // Backdate the updated_at timestamp to 8 days ago.
+    // Backdate the fact to 8 days ago (both created_at and updated_at) so it
+    // exceeds the 7-day pending retention window.
     let eight_days_ago = chrono::Utc::now() - chrono::Duration::days(8);
-    sqlx::query("UPDATE facts SET updated_at = ? WHERE id = ?")
+    sqlx::query("UPDATE facts SET created_at = ?, updated_at = ? WHERE id = ?")
+        .bind(eight_days_ago)
         .bind(eight_days_ago)
         .bind(fact_id)
         .execute(tg.kg.pool())

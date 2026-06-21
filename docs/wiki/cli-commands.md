@@ -313,3 +313,39 @@ mimir kb trash
 # Empty trash immediately
 mimir kb trash --empty
 ```
+
+### `mimir kb pending`
+
+List sensitive facts awaiting user confirmation (e.g. allergies, health
+details extracted from conversation). Pending facts are stored with
+`pending_confirmation = TRUE` and a `Disputed` status until confirmed or
+rejected. Facts ignored for longer than the configured retention window
+(default 7 days) are automatically hard-deleted by the `knowledge.pending_cleanup`
+background job.
+
+```bash
+mimir kb pending
+mimir kb pending --json
+```
+
+### `mimir kb confirm`
+
+Confirm a pending sensitive fact. Flips its status to `Active` and sets
+confidence to `1.0`, then triggers the inference cascade as if it were a
+freshly-inserted explicit fact.
+
+```bash
+mimir kb confirm 42
+mimir kb confirm 42 --json
+```
+
+### `mimir kb reject`
+
+Reject a pending sensitive fact. The fact is hard-deleted and a `rejected`
+audit entry is recorded. An optional `--reason` is written into the audit log
+(`User rejected sensitive fact: <reason>`).
+
+```bash
+mimir kb reject 42
+mimir kb reject 42 --reason "entered in error"
+```

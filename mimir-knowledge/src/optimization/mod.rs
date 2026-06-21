@@ -56,6 +56,11 @@ pub struct OptimizationConfig {
     pub backup_dir: PathBuf,
     pub timeout_minutes: u16,
     pub schedule_time: String,
+    /// Retention window (days) for the `pending_confirmation_cleanup` pass,
+    /// mirrored from `knowledge.pending_cleanup.retention_days` so the
+    /// optimization pass and the scheduled `knowledge.pending_cleanup` job
+    /// share one configured expiry window.
+    pub pending_cleanup_retention_days: u16,
 }
 
 impl OptimizationConfig {
@@ -64,6 +69,7 @@ impl OptimizationConfig {
             backup_dir,
             timeout_minutes: 120,
             schedule_time: "02:00".to_string(),
+            pending_cleanup_retention_days: 7,
         }
     }
 }
@@ -664,50 +670,14 @@ impl<'a> OptimizationRunner<'a> {
     }
 
     async fn pending_confirmation_cleanup(&self) -> Result<PassSummary, crate::KnowledgeError> {
-        let now = self.kg.now();
-        let cutoff = now - chrono::Duration::days(7);
-        let stale_ids: Vec<i32> = sqlx::query_scalar(
-            "SELECT id FROM facts WHERE pending_confirmation = TRUE AND updated_at < ?",
-        )
-        .bind(cutoff)
-        .fetch_all(self.kg.pool())
-        .await?;
-
-        for fact_id in &stale_ids {
-            let mut tx = self.kg.pool().begin().await?;
-            sqlx::query(
-                "DELETE FROM fact_dependencies WHERE parent_fact_id = ? OR child_fact_id = ?",
-            )
-            .bind(fact_id)
-            .bind(fact_id)
-            .execute(&mut *tx)
+        // Delegates to the shared auto-expiry implementation (single source of
+        // truth; also used by the `knowledge.pending_cleanup` daily job).
+        let deleted = self
+            .kg
+            .delete_stale_pending(self.config.pending_cleanup_retention_days)
             .await?;
-            sqlx::query(
-                "INSERT INTO fact_audit_log                  (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason)                  VALUES (?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(fact_id)
-            .bind(ChangeType::Rejected as i16)
-            .bind(None::<&str>)
-            .bind(None::<&str>)
-            .bind(now)
-            .bind(ChangedBy::NightlyOptimization as i16)
-            .bind(Some("Auto-expired after 7 days without confirmation"))
-            .execute(&mut *tx)
-            .await?;
-            sqlx::query("DELETE FROM facts WHERE id = ?")
-                .bind(fact_id)
-                .execute(&mut *tx)
-                .await?;
-            tx.commit().await?;
-            self.kg
-                .pending_confirmations()
-                .write()
-                .await
-                .remove(fact_id);
-        }
-
         Ok(PassSummary {
-            facts_forgotten: stale_ids.len() as u32,
+            facts_forgotten: deleted,
             ..PassSummary::default()
         })
     }

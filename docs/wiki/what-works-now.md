@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-06-19
-> **Version:** 0.53.0
-> **Release summary:** Phase 2 knowledge-graph work is live — core relationship ontology seeded category-first (Issue #135): predicate aliases for verb canonicalization plus `category_aliases` and category-subtree retrieval for grouping/multi-tag precision; relationship type aliases are the single source of truth for predicate resolution (Issue #133), Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system, Agentic Pre-Response Context Retrieval (#128), the Librarian Agent (#130), LLM-orchestrated learning via the `remember` tool (#137), a hardened system prompt that enforces the agentic contract — `retrieve_context` dispatch, no fact invention, and `remember` encouragement (#138), and a redesigned Librarian extraction prompt that injects the same core-facts block as the core agent and learns only from user-labelled messages (#139).
+> **Last updated:** 2026-06-21
+> **Version:** 0.54.0
+> **Release summary:** Phase 2 knowledge-graph work is live — core relationship ontology seeded category-first (Issue #135): predicate aliases for verb canonicalization plus `category_aliases` and category-subtree retrieval for grouping/multi-tag precision; relationship type aliases are the single source of truth for predicate resolution (Issue #133), Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system, Agentic Pre-Response Context Retrieval (#128), the Librarian Agent (#130), LLM-orchestrated learning via the `remember` tool (#137), a hardened system prompt that enforces the agentic contract — `retrieve_context` dispatch, no fact invention, and `remember` encouragement (#138), and a redesigned Librarian extraction prompt that injects the same core-facts block as the core agent and learns only from user-labelled messages (#139), and the full pending sensitive-fact confirmation lifecycle — HTTP routes, CLI commands, and a daily auto-cleanup job (#141).
 
 ---
 
@@ -199,6 +199,8 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | FTS5 search | ✅ Works | Full-text search over entities and aliases |
 | **Fact extraction pipeline** | ✅ Works | LLM → Rust validation → entity resolution → confidence → sensitive confirmation → insert (issue #55) |
 | **`mimir kb` CLI (daemon-routed)** | ✅ Works | All `mimir kb` commands route through daemon HTTP (no direct DB access); audit and CRUD supported via daemon |
+| **Pending sensitive-fact confirmation** | ✅ Works | `GET /kb/pending`, `POST /kb/facts/{id}/confirm`, `POST /kb/facts/{id}/reject`; CLI `mimir kb pending|confirm|reject`; optional reject `--reason` written to the audit log (#141) |
+| **Pending-fact auto-cleanup** | ✅ Works | Daily `knowledge.pending_cleanup` job hard-deletes facts awaiting confirmation past `retention_days` (default 7); configurable under `[knowledge.pending_cleanup]` (#141) |
 | **Relationship type DAG + aliases** | ✅ Works | `relationship_type_hierarchy` and `relationship_type_aliases` tables enable ontology-driven predicate discovery; aliases resolve automatically through `ensure_relationship_type` |
 | **Category aliases + subtree retrieval** | ✅ Works | `category_aliases` map domain words (`education`, `hobbies`, `family`…) to Dewey categories; `get_facts_in_category_subtree` gathers facts across a category subtree (#135) |
 
@@ -227,6 +229,9 @@ The daemon exposes an OpenAI-compatible chat endpoint plus Mimir-specific manage
 | `GET` | `/kb/trash` | List trash contents |
 | `POST` | `/kb/trash/restore` | Restore facts from trash |
 | `DELETE` | `/kb/trash` | Empty trash permanently |
+| `GET` | `/kb/pending` | List sensitive facts awaiting confirmation |
+| `POST` | `/kb/facts/{id}/confirm` | Confirm a pending fact (→ Active, confidence 1.0) |
+| `POST` | `/kb/facts/{id}/reject` | Reject a pending fact (hard-delete + audit; 204) |
 
 ---
 

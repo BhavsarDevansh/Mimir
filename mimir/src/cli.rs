@@ -245,6 +245,28 @@ pub enum KbCommands {
         #[arg(long)]
         json: bool,
     },
+    /// List sensitive facts awaiting confirmation.
+    Pending {
+        /// Output raw JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Confirm a pending sensitive fact.
+    Confirm {
+        /// Fact ID to confirm.
+        fact_id: i32,
+        /// Output raw JSON instead of a summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reject a pending sensitive fact.
+    Reject {
+        /// Fact ID to reject.
+        fact_id: i32,
+        /// Optional reason recorded in the audit log.
+        #[arg(long)]
+        reason: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

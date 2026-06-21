@@ -3,11 +3,12 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use mimir_api_types::{
     AuditQueryRequest, AuditQueryResponse, BrowseRequest, BrowseResponse, CategoryDetailResponse,
-    CategoryResponse, ChatRequest, ChatResponse, FactDetailResponse, FactEditRequest,
-    FactEditResponse, FactQueryParams, FactQueryResponse, ForgetRequest, ForgetResponse,
-    OptimizationRunNowResponse, OptimizationStatusResponse, ProfileRequest, ProfileResponse,
-    RestoreRequest, RestoreResponse, SessionMessagesResponse, SessionSummary, StatusResponse,
-    StreamItem, ToolCallInfo, TrashListResponse, Usage,
+    CategoryResponse, ChatRequest, ChatResponse, ConfirmFactResponse, FactDetailResponse,
+    FactEditRequest, FactEditResponse, FactQueryParams, FactQueryResponse, ForgetRequest,
+    ForgetResponse, OptimizationRunNowResponse, OptimizationStatusResponse, PendingListResponse,
+    ProfileRequest, ProfileResponse, RejectFactRequest, RestoreRequest, RestoreResponse,
+    SessionMessagesResponse, SessionSummary, StatusResponse, StreamItem, ToolCallInfo,
+    TrashListResponse, Usage,
 };
 use reqwest::StatusCode;
 use thiserror::Error;
@@ -287,6 +288,43 @@ impl MimirClient {
     pub async fn kb_trash_empty(&self) -> Result<(), ClientError> {
         let url = self.url("kb/trash");
         let resp = self.client.delete(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(ClientError::Server {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+    }
+    /// List pending sensitive facts awaiting confirmation.
+    pub async fn kb_pending(&self) -> Result<PendingListResponse, ClientError> {
+        let url = self.url("kb/pending");
+        let resp = self.client.get(&url).send().await?;
+        let resp = Self::check_response(resp).await?;
+        let body = resp.json::<PendingListResponse>().await?;
+        Ok(body)
+    }
+
+    /// Confirm a pending sensitive fact.
+    pub async fn kb_confirm(&self, fact_id: i32) -> Result<ConfirmFactResponse, ClientError> {
+        let url = self.url(&format!("kb/facts/{fact_id}/confirm"));
+        let resp = self.client.post(&url).send().await?;
+        let resp = Self::check_response(resp).await?;
+        let body = resp.json::<ConfirmFactResponse>().await?;
+        Ok(body)
+    }
+
+    /// Reject a pending sensitive fact. An optional reason is written to the
+    /// audit log. Returns `Ok(())` on a 204 No Content.
+    pub async fn kb_reject(&self, fact_id: i32, reason: Option<&str>) -> Result<(), ClientError> {
+        let url = self.url(&format!("kb/facts/{fact_id}/reject"));
+        let req = RejectFactRequest {
+            reason: reason.map(|s| s.to_string()),
+        };
+        let resp = self.client.post(&url).json(&req).send().await?;
         let status = resp.status();
         if status.is_success() {
             Ok(())

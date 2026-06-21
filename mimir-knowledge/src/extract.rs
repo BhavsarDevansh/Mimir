@@ -1169,7 +1169,18 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
 }
 
 /// Reject a pending sensitive fact: hard-delete with audit trail.
-pub async fn reject_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<(), KnowledgeError> {
+///
+/// `reason`, if supplied, overrides the default audit message
+/// ("User rejected sensitive fact").
+pub async fn reject_fact(
+    kg: &KnowledgeGraph,
+    fact_id: i32,
+    reason: Option<&str>,
+) -> Result<(), KnowledgeError> {
+    let audit_reason = match reason {
+        Some(r) => format!("User rejected sensitive fact: {r}"),
+        None => "User rejected sensitive fact".to_string(),
+    };
     let now = kg.now();
 
     let mut tx = kg.pool().begin().await?;
@@ -1207,7 +1218,7 @@ pub async fn reject_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<(), Knowle
     .bind(None::<&str>)
     .bind(now)
     .bind(ChangedBy::User as i16)
-    .bind(Some("User rejected sensitive fact"))
+    .bind(Some(audit_reason))
     .execute(&mut *tx)
     .await?;
 
@@ -1358,5 +1369,189 @@ mod tests {
         assert_eq!(ConversationMessage::user("x").label(), "User");
         assert_eq!(ConversationMessage::assistant("y").label(), "Assistant");
         assert_eq!(MessageRole::User, MessageRole::User);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Confirmation lifecycle tests (issue #141)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod confirmation_tests {
+    use super::*;
+    use crate::clock::MockClock;
+    use chrono::Duration;
+
+    /// Fresh KnowledgeGraph with a controllable clock for time-sensitive tests.
+    async fn fresh_kg_with_clock(
+        start: DateTime<Utc>,
+    ) -> (KnowledgeGraph, std::sync::Arc<MockClock>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = std::sync::Arc::new(MockClock::new(start));
+        let kg =
+            KnowledgeGraph::init_with_clock(&dir.path().join("confirm_test.db"), clock.clone())
+                .await
+                .unwrap();
+        (kg, clock, dir)
+    }
+
+    fn sensitive_allergy_fact(object: &str) -> ExtractedFact {
+        ExtractedFact {
+            classification: Classification::Explicit,
+            subject: "Devansh".to_string(),
+            subject_type: "Person".to_string(),
+            relationship_type: "allergy".to_string(),
+            object: object.to_string(),
+            object_is_entity: false,
+            object_type: None,
+            temporal: None,
+            is_sensitive: true,
+            correction_scope: None,
+            categories: Vec::new(),
+        }
+    }
+
+    async fn create_pending_fact(kg: &KnowledgeGraph, object: &str) -> i32 {
+        let outcome = process_remember_output(
+            kg,
+            RememberOutput {
+                facts: vec![sensitive_allergy_fact(object)],
+            },
+        )
+        .await
+        .expect("extraction should succeed");
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected extraction errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.pending_confirmation.len(), 1);
+        outcome.pending_confirmation[0].fact_id
+    }
+
+    #[tokio::test]
+    async fn confirm_flips_status_to_active_and_confidence_to_one() {
+        let (kg, _clock, _dir) = fresh_kg_with_clock(
+            DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+                .unwrap()
+                .into(),
+        )
+        .await;
+        let fact_id = create_pending_fact(&kg, "peanuts").await;
+
+        let fact = kg.get_fact(fact_id).await.unwrap().expect("fact exists");
+        assert_eq!(fact.status(), Some(FactStatus::Disputed));
+        assert!(fact.pending_confirmation);
+
+        let confirmed = kg
+            .confirm_fact(fact_id)
+            .await
+            .expect("confirm should succeed");
+
+        assert_eq!(confirmed.status(), Some(FactStatus::Active));
+        assert!((confirmed.confidence - 1.0).abs() < f32::EPSILON);
+        assert!(!confirmed.pending_confirmation);
+
+        // In-memory cache updated.
+        assert!(!kg.pending_confirmations().read().await.contains(&fact_id));
+    }
+
+    #[tokio::test]
+    async fn confirm_rejects_non_pending_fact() {
+        let (kg, _clock, _dir) = fresh_kg_with_clock(
+            DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+                .unwrap()
+                .into(),
+        )
+        .await;
+        let fact_id = create_pending_fact(&kg, "peanuts").await;
+        kg.confirm_fact(fact_id).await.unwrap();
+
+        // Second confirm must fail: the fact is no longer pending.
+        let err = kg.confirm_fact(fact_id).await.unwrap_err();
+        assert!(matches!(err, KnowledgeError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn reject_hard_deletes_fact_and_writes_audit() {
+        let (kg, _clock, _dir) = fresh_kg_with_clock(
+            DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+                .unwrap()
+                .into(),
+        )
+        .await;
+        let fact_id = create_pending_fact(&kg, "peanuts").await;
+
+        kg.reject_fact(fact_id, None)
+            .await
+            .expect("reject should succeed");
+
+        // Fact is gone.
+        assert!(kg.get_fact(fact_id).await.unwrap().is_none());
+
+        // Audit trail persists (foreign keys do not cascade on hard delete).
+        let audit = kg.get_audit_log(fact_id).await.unwrap();
+        assert!(
+            audit
+                .iter()
+                .any(|a| a.change_type_id == ChangeType::Rejected as i16),
+            "expected a Rejected audit entry, got: {:?}",
+            audit
+        );
+
+        // In-memory cache updated.
+        assert!(!kg.pending_confirmations().read().await.contains(&fact_id));
+    }
+
+    #[tokio::test]
+    async fn list_pending_returns_only_pending_facts() {
+        let (kg, _clock, _dir) = fresh_kg_with_clock(
+            DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+                .unwrap()
+                .into(),
+        )
+        .await;
+        let pending_id = create_pending_fact(&kg, "peanuts").await;
+
+        let rows = kg.list_pending_facts().await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].fact_id, pending_id);
+        assert_eq!(rows[0].subject, "Devansh");
+        assert_eq!(rows[0].predicate, "allergy");
+        assert_eq!(rows[0].object.as_deref(), Some("peanuts"));
+
+        // Confirming removes it from the pending list.
+        kg.confirm_fact(pending_id).await.unwrap();
+        let rows = kg.list_pending_facts().await.unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cleanup_deletes_only_stale_pending_facts() {
+        let start = DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+            .unwrap()
+            .into();
+        let (kg, clock, _dir) = fresh_kg_with_clock(start).await;
+
+        // Insert a pending fact at the start time.
+        let stale_id = create_pending_fact(&kg, "peanuts").await;
+
+        // Advance the clock past the 7-day retention window and insert a fresh
+        // pending fact (distinct object) that should survive cleanup.
+        // pending fact that should survive cleanup.
+        clock.advance(Duration::days(8));
+        let fresh_id = create_pending_fact(&kg, "shellfish").await;
+
+        let deleted = kg.delete_stale_pending(7).await.unwrap();
+        assert_eq!(deleted, 1);
+
+        assert!(kg.get_fact(stale_id).await.unwrap().is_none());
+        assert!(kg.get_fact(fresh_id).await.unwrap().is_some());
+
+        // Remaining pending list contains only the fresh fact.
+        let rows = kg.list_pending_facts().await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].fact_id, fresh_id);
     }
 }

@@ -24,8 +24,9 @@ use mimir_core::llm::{LlmBackend, LlmClient};
 
 use crate::routes::{
     chat_handler, chat_stream_handler, create_category, delete_category, kb_audit_handler,
-    kb_browse_handler, kb_edit_handler, kb_forget_handler, kb_optimization_run_now_handler,
-    kb_optimization_status_handler, kb_profile_handler, kb_query_handler, kb_show_handler,
+    kb_browse_handler, kb_confirm_fact_handler, kb_edit_handler, kb_forget_handler,
+    kb_optimization_run_now_handler, kb_optimization_status_handler, kb_pending_handler,
+    kb_profile_handler, kb_query_handler, kb_reject_fact_handler, kb_show_handler,
     kb_trash_empty_handler, kb_trash_list_handler, kb_trash_restore_handler, list_categories,
     memory_handler, memory_refresh_handler, session_messages_handler, sessions_handler,
     show_category, status_handler, stop_handler,
@@ -105,6 +106,9 @@ pub fn build_app(state: Arc<AppState>) -> Router {
             get(kb_show_handler).patch(kb_edit_handler),
         )
         .route("/kb/facts/forget", post(kb_forget_handler))
+        .route("/kb/facts/{id}/confirm", post(kb_confirm_fact_handler))
+        .route("/kb/facts/{id}/reject", post(kb_reject_fact_handler))
+        .route("/kb/pending", get(kb_pending_handler))
         .route("/kb/browse", get(kb_browse_handler))
         .route("/kb/profile", get(kb_profile_handler))
         .route("/kb/audit", get(kb_audit_handler))
@@ -2410,5 +2414,185 @@ mod tests {
             found,
             "expected favourite_colour=red fact to be written via remember tool"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Pending sensitive-fact confirmation lifecycle (issue #141)
+    // ------------------------------------------------------------------
+
+    /// Insert a pending sensitive fact directly through the extraction
+    /// pipeline and return its id.
+    async fn insert_pending_fact(state: &Arc<AppState>, object: &str) -> i32 {
+        use mimir_knowledge::extract::{
+            Classification, ExtractedFact, RememberOutput, process_remember_output,
+        };
+        let outcome = process_remember_output(
+            &state.knowledge_graph,
+            RememberOutput {
+                facts: vec![ExtractedFact {
+                    classification: Classification::Explicit,
+                    subject: "Devansh".to_string(),
+                    subject_type: "Person".to_string(),
+                    relationship_type: "allergy".to_string(),
+                    object: object.to_string(),
+                    object_is_entity: false,
+                    object_type: None,
+                    temporal: None,
+                    is_sensitive: true,
+                    correction_scope: None,
+                    categories: Vec::new(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+        outcome.pending_confirmation[0].fact_id
+    }
+
+    #[tokio::test]
+    async fn test_kb_pending_lists_pending_facts() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let fact_id = insert_pending_fact(&state, "peanuts").await;
+
+        let app = super::build_app(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/kb/pending")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: mimir_api_types::PendingListResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(resp.total, 1);
+        assert_eq!(resp.facts[0].fact_id, fact_id);
+        assert_eq!(resp.facts[0].subject, "Devansh");
+        assert_eq!(resp.facts[0].predicate, "allergy");
+        assert_eq!(resp.facts[0].object.as_deref(), Some("peanuts"));
+    }
+
+    #[tokio::test]
+    async fn test_kb_confirm_returns_active_fact() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let fact_id = insert_pending_fact(&state, "shellfish").await;
+
+        let app = super::build_app(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/kb/facts/{fact_id}/confirm"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: mimir_api_types::ConfirmFactResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(resp.fact.id, fact_id);
+        assert_eq!(resp.fact.status, "Active");
+        assert!((resp.fact.confidence - 1.0).abs() < f32::EPSILON);
+
+        // No longer pending.
+        let pending = state.knowledge_graph.list_pending_facts().await.unwrap();
+        assert!(pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_kb_confirm_non_pending_returns_bad_request() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let fact_id = insert_pending_fact(&state, "pollen").await;
+        state.knowledge_graph.confirm_fact(fact_id).await.unwrap();
+
+        let app = super::build_app(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/kb/facts/{fact_id}/confirm"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_kb_reject_deletes_fact_and_returns_204() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let fact_id = insert_pending_fact(&state, "latex").await;
+
+        let app = super::build_app(state.clone());
+        let body = serde_json::to_string(&serde_json::json!({
+            "reason": "entered in error"
+        }))
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/kb/facts/{fact_id}/reject"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // Fact hard-deleted.
+        assert!(
+            state
+                .knowledge_graph
+                .get_fact(fact_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // Audit log carries the user reason.
+        let audit = state.knowledge_graph.get_audit_log(fact_id).await.unwrap();
+        assert!(
+            audit
+                .iter()
+                .any(|a| a.reason.as_deref()
+                    == Some("User rejected sensitive fact: entered in error"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_kb_reject_empty_body_returns_204() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let fact_id = insert_pending_fact(&state, "dust").await;
+
+        let app = super::build_app(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/kb/facts/{fact_id}/reject"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
 }

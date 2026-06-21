@@ -1735,8 +1735,82 @@ impl KnowledgeGraph {
     }
 
     /// Reject a pending sensitive fact: hard-delete with audit trail.
-    pub async fn reject_fact(&self, fact_id: i32) -> Result<(), KnowledgeError> {
-        extract::reject_fact(self, fact_id).await
+    ///
+    /// `reason`, if `Some`, overrides the default audit message. Convenience
+    /// wrapper for the common no-reason case; see [`extract::reject_fact`].
+    pub async fn reject_fact(
+        &self,
+        fact_id: i32,
+        reason: Option<&str>,
+    ) -> Result<(), KnowledgeError> {
+        extract::reject_fact(self, fact_id, reason).await
+    }
+
+    /// List all facts awaiting user confirmation, with resolved subject,
+    /// predicate, and object names. Backs `GET /kb/pending`.
+    pub async fn list_pending_facts(
+        &self,
+    ) -> Result<Vec<queries::fact::PendingFactRow>, KnowledgeError> {
+        queries::fact::list_pending(&self.pool).await
+    }
+
+    /// Hard-delete facts still awaiting confirmation older than `retention_days`
+    /// relative to the configured clock, returning the number deleted.
+    ///
+    /// For each stale fact: removes `fact_dependencies` rows (RESTRICT FK),
+    /// writes a `Rejected` audit entry attributed to `NightlyOptimization`,
+    /// hard-deletes the fact, and syncs the in-memory `pending_confirmations`
+    /// cache. Uses `self.now()` so tests can fast-forward via a
+    /// [`clock::MockClock`].
+    ///
+    /// Backs the `knowledge.pending_cleanup` background job and the
+    /// optimization runner's `pending_confirmation_cleanup` pass (single source
+    /// of truth for the auto-expiry rule described in
+    /// `VISION/02-Knowledge-Graph/Learning-Modes.md`).
+    pub async fn delete_stale_pending(&self, retention_days: u16) -> Result<u32, KnowledgeError> {
+        use crate::models::audit_log::{ChangeType, ChangedBy};
+
+        let now = self.now();
+        let cutoff = now - chrono::Duration::days(i64::from(retention_days));
+        let reason = format!("Auto-expired after {retention_days} days without confirmation");
+
+        let stale_ids: Vec<i32> = sqlx::query_scalar(
+            "SELECT id FROM facts WHERE pending_confirmation = TRUE AND created_at < ?",
+        )
+        .bind(cutoff)
+        .fetch_all(&self.pool)
+        .await?;
+
+        for fact_id in &stale_ids {
+            let mut tx = self.pool().begin().await?;
+            sqlx::query(
+                "DELETE FROM fact_dependencies WHERE parent_fact_id = ? OR child_fact_id = ?",
+            )
+            .bind(fact_id)
+            .bind(fact_id)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO fact_audit_log                  (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason)                  VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(fact_id)
+            .bind(ChangeType::Rejected as i16)
+            .bind(None::<&str>)
+            .bind(None::<&str>)
+            .bind(now)
+            .bind(ChangedBy::NightlyOptimization as i16)
+            .bind(&reason)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM facts WHERE id = ?")
+                .bind(fact_id)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            self.pending_confirmations().write().await.remove(fact_id);
+        }
+
+        Ok(stale_ids.len() as u32)
     }
 
     // ------------------------------------------------------------------

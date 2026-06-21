@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.54.0] — 2026-06-21
+
+### Added
+
+- **Pending sensitive-fact confirmation lifecycle (`mimir-server`, `mimir-client`,
+  `mimir`, `mimir-api-types`, `mimir-knowledge`):** the existing internal
+  `confirm_fact`/`reject_fact` APIs are now exposed end-to-end. Sensitive facts
+  (allergies, health, etc.) stored with `pending_confirmation = TRUE` no longer
+  sit in limbo.
+  - HTTP routes: `GET /kb/pending`, `POST /kb/facts/{id}/confirm`,
+    `POST /kb/facts/{id}/reject` (returns `204 No Content`; optional `reason`
+    body field written to the audit log).
+  - CLI commands: `mimir kb pending`, `mimir kb confirm --fact-id N`,
+    `mimir kb reject --fact-id N [--reason "..."]`.
+  - API types: `PendingListResponse`, `ConfirmFactResponse`, `RejectFactRequest`,
+    and a public `PendingFactRow`.
+  - New `KnowledgeGraph::list_pending_facts()` and `delete_stale_pending()` query
+    methods.
+
+- **Daily pending-fact auto-cleanup job (`mimir-server`):** a new
+  `knowledge.pending_cleanup` background job hard-deletes facts still awaiting
+  confirmation past a configurable retention window. Configurable under
+  `[knowledge.pending_cleanup]` with `retention_days` (default `7`) and
+  `schedule_time` (default `"03:30"`). Implements the 7-day auto-deletion rule
+  described in `VISION/02-Knowledge-Graph/Learning-Modes.md`.
+
+### Changed
+
+- **`reject_fact` now accepts an optional reason (`mimir-knowledge`):** the
+  free function and `KnowledgeGraph` method take `reason: Option<&str>`,
+  threaded through to the audit log. Internal API change (acceptable per the
+  breaking-changes policy).
+
+
 ## [0.53.1] — 2026-06-19
 
 ### Fixed

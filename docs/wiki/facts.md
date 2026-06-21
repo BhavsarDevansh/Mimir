@@ -81,3 +81,51 @@ audit log directly from the CLI:
 ```bash
 mimir kb audit --entity "Alice" --change-type status_change
 ```
+
+---
+
+## Pending Sensitive-Fact Confirmation
+
+When Mimir detects a sensitive fact (e.g. an allergy or health detail), it
+doesn't trust it immediately. The fact is stored with a **Disputed** status and
+flagged `pending_confirmation = TRUE` until you confirm or reject it.
+
+### Why this matters
+
+Sensitive facts carry real-world consequences (a wrong allergy record could be
+dangerous). Mimir holds them in limbo and asks you to confirm before they become
+active, high-confidence knowledge.
+
+### How to use it
+
+```bash
+# See what's waiting
+mimir kb pending
+
+# Confirm a fact — it becomes Active with confidence 1.0
+mimir kb confirm --fact-id 42
+
+# Reject a fact — it's permanently deleted (with an audit trail)
+mimir kb reject --fact-id 42 --reason "entered in error"
+```
+
+### What happens to ignored facts
+
+Facts you neither confirm nor reject are **automatically deleted after 7 days**
+by the `knowledge.pending_cleanup` background job. This prevents stale,
+unverified claims from lingering forever. The retention period and run time are
+configurable:
+
+```toml
+[knowledge.pending_cleanup]
+retention_days = 7
+schedule_time = "03:30"
+```
+
+### Best practices
+
+- Run `mimir kb pending` periodically after conversations that mention health,
+  finances, or other sensitive topics.
+- Use `--reason` when rejecting so the audit log explains *why*.
+- Don't raise `retention_days` too high — pending facts are excluded from
+  memory, search, and inference, so leaving them pending keeps them invisible.

@@ -367,6 +367,40 @@ impl AppState {
         );
         job_queue.register(cond_job).await?;
 
+        // Register the pending sensitive-fact auto-cleanup job (issue #141).
+        // Hard-deletes facts still awaiting confirmation past the configured
+        // retention window, writing a `Rejected` audit entry per fact. Daily,
+        // idle-gated; shares its deletion logic with the optimization runner's
+        // `pending_confirmation_cleanup` pass via `delete_stale_pending`.
+        let kg_for_cleanup = Arc::clone(&knowledge_graph);
+        let cleanup_retention_days = cfg.knowledge.pending_cleanup.retention_days;
+        let cleanup_schedule = mimir_core::job_queue::DailySchedule::parse(
+            &cfg.knowledge.pending_cleanup.schedule_time,
+        )?;
+        let cleanup_job = Job::new(
+            "knowledge.pending_cleanup",
+            JobPriority::System,
+            Some(cleanup_schedule),
+            true,
+            move |_ctx: JobContext| {
+                let kg = Arc::clone(&kg_for_cleanup);
+                let retention = cleanup_retention_days;
+                Box::pin(async move {
+                    let deleted = kg
+                        .delete_stale_pending(retention)
+                        .await
+                        .map_err(|e| mimir_core::job_queue::JobError::Handler(e.to_string()))?;
+                    if deleted > 0 {
+                        tracing::info!(
+                            "knowledge.pending_cleanup: deleted {deleted} stale pending fact(s)"
+                        );
+                    }
+                    Ok(())
+                })
+            },
+        );
+        job_queue.register(cleanup_job).await?;
+
         Ok((
             Self {
                 llm_client,

@@ -1184,20 +1184,3 @@ pub async fn list_pending(pool: &SqlitePool) -> Result<Vec<PendingFactRow>, Know
     .await?;
     Ok(rows)
 }
-
-/// Hard-delete facts still awaiting confirmation whose `created_at` is older
-/// than the given cutoff timestamp. Audit rows persist (no FK cascade on
-/// delete). Returns the number of facts deleted.
-pub async fn delete_stale_pending(
-    pool: &SqlitePool,
-    cutoff: DateTime<Utc>,
-) -> Result<u64, KnowledgeError> {
-    let result = sqlx::query(
-        "DELETE FROM facts \
-         WHERE pending_confirmation = TRUE AND created_at < ?",
-    )
-    .bind(cutoff)
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected())
-}

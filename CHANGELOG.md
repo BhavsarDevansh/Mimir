@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.54.1] — 2026-06-21
+
+### Fixed
+
+- **`mimir-knowledge`:** removed the orphaned, never-called
+  `queries::fact::delete_stale_pending` helper. It duplicated
+  `KnowledgeGraph::delete_stale_pending` with divergent, FK-violating semantics
+  (skipped `fact_dependencies` cleanup and the `Rejected` audit entry).
+  `KnowledgeGraph::delete_stale_pending` is now the single source of truth for
+  stale pending-fact auto-expiry.
+
 ## [0.54.0] — 2026-06-21
 
 ### Added

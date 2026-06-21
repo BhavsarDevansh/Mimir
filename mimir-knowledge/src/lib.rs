@@ -1760,8 +1760,11 @@ impl KnowledgeGraph {
     /// For each stale fact: removes `fact_dependencies` rows (RESTRICT FK),
     /// writes a `Rejected` audit entry attributed to `NightlyOptimization`,
     /// hard-deletes the fact, and syncs the in-memory `pending_confirmations`
-    /// cache. Uses `self.now()` so tests can fast-forward via a
-    /// [`clock::MockClock`].
+    /// cache. The stale predicate is re-checked inside each per-fact
+    /// transaction so a fact confirmed/rejected between the id scan and the
+    /// delete is skipped (no spurious audit entry, no overwriting of a
+    /// concurrent state change); only committed deletes are counted. Uses
+    /// `self.now()` so tests can fast-forward via a [`clock::MockClock`].
     ///
     /// Backs the `knowledge.pending_cleanup` background job and the
     /// optimization runner's `pending_confirmation_cleanup` pass (single source
@@ -1781,8 +1784,25 @@ impl KnowledgeGraph {
         .fetch_all(&self.pool)
         .await?;
 
+        let mut deleted = 0_u32;
         for fact_id in &stale_ids {
             let mut tx = self.pool().begin().await?;
+            // Re-check the stale predicate inside the transaction. A fact
+            // confirmed or rejected between the id scan above and this delete
+            // must be skipped rather than incorrectly hard-deleted and audited.
+            let still_stale: Option<i32> = sqlx::query_scalar(
+                "SELECT id FROM facts \
+                 WHERE id = ? AND pending_confirmation = TRUE AND created_at < ?",
+            )
+            .bind(fact_id)
+            .bind(cutoff)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if still_stale.is_none() {
+                tx.rollback().await?;
+                continue;
+            }
+
             sqlx::query(
                 "DELETE FROM fact_dependencies WHERE parent_fact_id = ? OR child_fact_id = ?",
             )
@@ -1802,15 +1822,26 @@ impl KnowledgeGraph {
             .bind(&reason)
             .execute(&mut *tx)
             .await?;
-            sqlx::query("DELETE FROM facts WHERE id = ?")
-                .bind(fact_id)
-                .execute(&mut *tx)
-                .await?;
+            // Guard the delete with the stale predicate so a concurrent
+            // confirm/reject is never overwritten; only committed deletes
+            // are counted.
+            let result = sqlx::query(
+                "DELETE FROM facts WHERE id = ? AND pending_confirmation = TRUE AND created_at < ?",
+            )
+            .bind(fact_id)
+            .bind(cutoff)
+            .execute(&mut *tx)
+            .await?;
+            if result.rows_affected() == 0 {
+                tx.rollback().await?;
+                continue;
+            }
             tx.commit().await?;
             self.pending_confirmations().write().await.remove(fact_id);
+            deleted += 1;
         }
 
-        Ok(stale_ids.len() as u32)
+        Ok(deleted)
     }
 
     // ------------------------------------------------------------------

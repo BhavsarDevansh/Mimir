@@ -56,6 +56,11 @@ pub struct OptimizationConfig {
     pub backup_dir: PathBuf,
     pub timeout_minutes: u16,
     pub schedule_time: String,
+    /// Retention window (days) for the `pending_confirmation_cleanup` pass,
+    /// mirrored from `knowledge.pending_cleanup.retention_days` so the
+    /// optimization pass and the scheduled `knowledge.pending_cleanup` job
+    /// share one configured expiry window.
+    pub pending_cleanup_retention_days: u16,
 }
 
 impl OptimizationConfig {
@@ -64,6 +69,7 @@ impl OptimizationConfig {
             backup_dir,
             timeout_minutes: 120,
             schedule_time: "02:00".to_string(),
+            pending_cleanup_retention_days: 7,
         }
     }
 }
@@ -666,7 +672,10 @@ impl<'a> OptimizationRunner<'a> {
     async fn pending_confirmation_cleanup(&self) -> Result<PassSummary, crate::KnowledgeError> {
         // Delegates to the shared auto-expiry implementation (single source of
         // truth; also used by the `knowledge.pending_cleanup` daily job).
-        let deleted = self.kg.delete_stale_pending(7).await?;
+        let deleted = self
+            .kg
+            .delete_stale_pending(self.config.pending_cleanup_retention_days)
+            .await?;
         Ok(PassSummary {
             facts_forgotten: deleted,
             ..PassSummary::default()

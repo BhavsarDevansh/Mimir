@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.54.2] — 2026-06-21
+
+### Fixed
+
+- **`mimir-knowledge`:** `extract::reject_fact` now clears `fact_dependencies`
+  rows before the hard-delete. The `fact_dependencies` FK is `ON DELETE
+  RESTRICT` (migration 017), so rejecting a pending sensitive fact that
+  participates in a dependency edge previously hit a foreign-key violation.
+  Mirrors the dependency cleanup already performed by
+  `KnowledgeGraph::delete_stale_pending` and `forget_fact_tx`.
+- **`mimir-knowledge`:** `KnowledgeGraph::delete_stale_pending` now re-checks
+  the stale predicate inside each per-fact transaction and only counts
+  committed deletes. A fact confirmed or rejected between the id scan and the
+  delete is skipped rather than incorrectly hard-deleted and given a spurious
+  `Rejected` audit entry.
+- **`mimir-knowledge`:** the optimization runner's `pending_confirmation_cleanup`
+  pass now uses the configured `knowledge.pending_cleanup.retention_days`
+  (via a new `OptimizationConfig.pending_cleanup_retention_days` field) instead
+  of a hardcoded 7 days, so the pass and the scheduled `knowledge.pending_cleanup`
+  job share one configured expiry window.
+- **docs:** `docs/wiki/facts.md` confirm/reject examples now use the positional
+  `<fact-id>` syntax, matching `cli-commands.md` and `README.md`.
+
 ## [0.54.1] — 2026-06-21
 
 ### Fixed

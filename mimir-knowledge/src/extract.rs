@@ -1222,6 +1222,15 @@ pub async fn reject_fact(
     .execute(&mut *tx)
     .await?;
 
+    // Clear dependency edges first: `fact_dependencies` uses ON DELETE
+    // RESTRICT (migration 017), so a pending fact with edges can only be
+    // hard-deleted once those rows are removed.
+    sqlx::query("DELETE FROM fact_dependencies WHERE parent_fact_id = ? OR child_fact_id = ?")
+        .bind(fact_id)
+        .bind(fact_id)
+        .execute(&mut *tx)
+        .await?;
+
     // Hard-delete the fact. Sources cascade; audit rows persist.
     sqlx::query("DELETE FROM facts WHERE id = ?")
         .bind(fact_id)
@@ -1502,6 +1511,60 @@ mod confirmation_tests {
 
         // In-memory cache updated.
         assert!(!kg.pending_confirmations().read().await.contains(&fact_id));
+    }
+
+    #[tokio::test]
+    async fn reject_clears_dependency_edges_before_hard_delete() {
+        // `fact_dependencies` uses ON DELETE RESTRICT (migration 017), so a
+        // pending fact participating in a dependency edge can only be
+        // hard-deleted once those rows are removed. Reject must clear them.
+        let (kg, _clock, _dir) = fresh_kg_with_clock(
+            DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+                .unwrap()
+                .into(),
+        )
+        .await;
+        let parent_id = create_pending_fact(&kg, "peanuts").await;
+        let child_id = create_pending_fact(&kg, "shellfish").await;
+
+        sqlx::query(
+            "INSERT INTO fact_dependencies \
+             (parent_fact_id, child_fact_id, relation_type_id, is_positive) \
+             VALUES (?, ?, ?, TRUE)",
+        )
+        .bind(parent_id)
+        .bind(child_id)
+        .bind(crate::models::enums::RelationType::InferredFrom as i16)
+        .execute(kg.pool())
+        .await
+        .expect("seed dependency edge");
+
+        // Rejecting the parent must not trip the RESTRICT FK.
+        kg.reject_fact(parent_id, None)
+            .await
+            .expect("reject should clear dependencies and delete the fact");
+
+        assert!(kg.get_fact(parent_id).await.unwrap().is_none());
+        let audit = kg.get_audit_log(parent_id).await.unwrap();
+        assert!(
+            audit
+                .iter()
+                .any(|a| a.change_type_id == ChangeType::Rejected as i16),
+            "expected a Rejected audit entry, got: {:?}",
+            audit
+        );
+
+        // The dependency edge referencing the rejected fact is gone.
+        let remaining: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM fact_dependencies \
+             WHERE parent_fact_id = ? OR child_fact_id = ?",
+        )
+        .bind(parent_id)
+        .bind(parent_id)
+        .fetch_one(kg.pool())
+        .await
+        .unwrap();
+        assert_eq!(remaining, 0);
     }
 
     #[tokio::test]

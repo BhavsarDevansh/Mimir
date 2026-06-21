@@ -280,6 +280,7 @@ impl AppState {
         let backup_dir = mimir_core::paths::data_dir()?.join("backups");
         let timeout_minutes = cfg.knowledge.optimization.timeout_minutes;
         let schedule_time = cfg.knowledge.optimization.schedule_time.clone();
+        let pending_cleanup_retention_days = cfg.knowledge.pending_cleanup.retention_days;
         let schedule =
             mimir_core::job_queue::DailySchedule::parse(&cfg.knowledge.optimization.schedule_time)?;
 
@@ -297,11 +298,13 @@ impl AppState {
                 let backup_dir = backup_dir.clone();
                 let timeout = timeout_minutes;
                 let schedule_time = schedule_time.clone();
+                let pending_cleanup_retention = pending_cleanup_retention_days;
                 Box::pin(async move {
                     let opt_config = mimir_knowledge::optimization::OptimizationConfig {
                         backup_dir,
                         timeout_minutes: timeout,
                         schedule_time,
+                        pending_cleanup_retention_days: pending_cleanup_retention,
                     };
                     let runner = mimir_knowledge::optimization::OptimizationRunner::new(
                         &kg,

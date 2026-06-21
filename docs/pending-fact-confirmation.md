@@ -28,10 +28,14 @@ automated cleanup job.
    sets confidence to `1.0`, clears `pending_confirmation`, writes a
    `StatusChange` audit entry, and runs the inference cascade.
 3. **Reject** — `KnowledgeGraph::reject_fact(id, reason)` writes a `Rejected`
-   audit entry (with optional reason), hard-deletes the fact, and removes it
-   from the cache. Sources cascade; audit rows persist.
+   audit entry (with optional reason), clears any `fact_dependencies` rows
+   referencing the fact (required by the `ON DELETE RESTRICT` FK from migration
+   017), hard-deletes the fact, and removes it from the cache. Sources cascade;
+   audit rows persist.
 4. **Auto-cleanup** — the `knowledge.pending_cleanup` daily job hard-deletes
-   any fact still awaiting confirmation past `retention_days`.
+   any fact still awaiting confirmation past `retention_days`. The nightly
+   optimization runner's `pending_confirmation_cleanup` pass performs the same
+   expiry using the same configured `retention_days` (see Configuration).
 
 ## Data access (`mimir-knowledge`)
 
@@ -44,7 +48,10 @@ automated cleanup job.
 
 `delete_stale_pending` uses the configured `Clock` (`self.now()`) so tests can
 fast-forward time via `clock::MockClock` rather than mutating process
-environment (banned by the safety policy).
+environment (banned by the safety policy). It re-checks the stale predicate
+inside each per-fact transaction and only counts committed deletes, so a fact
+confirmed or rejected between the id scan and the delete is skipped rather than
+incorrectly hard-deleted or audited.
 
 ## HTTP API (`mimir-server`)
 
@@ -94,7 +101,11 @@ retention_days = 7      # u16; facts pending longer than this are deleted
 schedule_time = "03:30" # local HH:MM, 24h, daily
 ```
 
-Defaults: 7 days, 03:30. Mirrors the `[knowledge.optimization]` block.
+Defaults: 7 days, 03:30. Mirrors the `[knowledge.optimization]` block. The
+nightly optimization runner reads `retention_days` into
+`OptimizationConfig.pending_cleanup_retention_days` so its
+`pending_confirmation_cleanup` pass and the scheduled
+`knowledge.pending_cleanup` job share one configured expiry window.
 
 ## Rationale
 

@@ -2,9 +2,14 @@ mod common;
 
 use std::sync::Arc;
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use mimir_core::llm::types::{FunctionCall, Message, ToolCall, Usage};
 use mimir_core::llm::{LlmBackend, MockLlmClient};
+use mimir_knowledge::KnowledgeGraph;
+use mimir_knowledge::clock::MockClock;
+use mimir_knowledge::extract::{
+    Classification, ExtractedFact, RememberOutput, process_remember_output,
+};
 use mimir_knowledge::models::fact::FactStatus;
 use mimir_knowledge::models::source::SourceType;
 use mimir_knowledge::optimization::{OptimizationConfig, OptimizationRunner, PassName};
@@ -221,4 +226,105 @@ async fn semantic_dedup_sends_strict_json_prompt_to_llm() {
     let tool = tools[0].as_ref().unwrap().first().unwrap();
     assert_eq!(tool["type"], "function");
     assert_eq!(tool["function"]["name"], "evaluate_dedup_candidates");
+}
+
+/// Build a fresh `KnowledgeGraph` driven by a [`MockClock`] so the pending
+/// cleanup pass can fast-forward past a retention window.
+async fn pending_kg_with_clock(
+    start: DateTime<Utc>,
+) -> (KnowledgeGraph, Arc<MockClock>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(MockClock::new(start));
+    let kg = KnowledgeGraph::init_with_clock(&dir.path().join("pending_opt.db"), clock.clone())
+        .await
+        .unwrap();
+    (kg, clock, dir)
+}
+
+/// Insert a pending sensitive fact at the clock's current time and return its id.
+async fn insert_pending_fact(kg: &KnowledgeGraph, object: &str) -> i32 {
+    let outcome = process_remember_output(
+        kg,
+        RememberOutput {
+            facts: vec![ExtractedFact {
+                classification: Classification::Explicit,
+                subject: "Devansh".to_string(),
+                subject_type: "Person".to_string(),
+                relationship_type: "allergy".to_string(),
+                object: object.to_string(),
+                object_is_entity: false,
+                object_type: None,
+                temporal: None,
+                is_sensitive: true,
+                correction_scope: None,
+                categories: Vec::new(),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+    outcome.pending_confirmation[0].fact_id
+}
+
+#[tokio::test]
+async fn pending_confirmation_cleanup_uses_configured_retention() {
+    // A fact 5 days old is stale under a 3-day retention but would survive the
+    // old hardcoded 7-day window, so this proves the pass reads the config.
+    let start = DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+        .unwrap()
+        .into();
+    let (kg, clock, _dir) = pending_kg_with_clock(start).await;
+    let stale_id = insert_pending_fact(&kg, "peanuts").await;
+
+    // Advance 5 days: older than 3-day retention, younger than the old 7-day default.
+    clock.advance(Duration::days(5));
+
+    let runner = OptimizationRunner::new(
+        &kg,
+        OptimizationConfig {
+            backup_dir: std::path::PathBuf::from("/tmp/mimir-test-backups"),
+            timeout_minutes: 120,
+            schedule_time: "02:00".to_string(),
+            pending_cleanup_retention_days: 3,
+        },
+        None,
+    );
+
+    let summary = runner
+        .run_pass(PassName::PendingConfirmationCleanup)
+        .await
+        .unwrap();
+    assert_eq!(summary.facts_forgotten, 1);
+    assert!(kg.get_fact(stale_id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn pending_confirmation_cleanup_skips_facts_within_retention_window() {
+    let start = DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+        .unwrap()
+        .into();
+    let (kg, clock, _dir) = pending_kg_with_clock(start).await;
+    let fresh_id = insert_pending_fact(&kg, "shellfish").await;
+
+    // Only 2 days old under a 3-day retention: must survive.
+    clock.advance(Duration::days(2));
+
+    let runner = OptimizationRunner::new(
+        &kg,
+        OptimizationConfig {
+            backup_dir: std::path::PathBuf::from("/tmp/mimir-test-backups"),
+            timeout_minutes: 120,
+            schedule_time: "02:00".to_string(),
+            pending_cleanup_retention_days: 3,
+        },
+        None,
+    );
+
+    let summary = runner
+        .run_pass(PassName::PendingConfirmationCleanup)
+        .await
+        .unwrap();
+    assert_eq!(summary.facts_forgotten, 0);
+    assert!(kg.get_fact(fresh_id).await.unwrap().is_some());
 }

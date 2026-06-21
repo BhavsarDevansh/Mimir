@@ -103,10 +103,10 @@ active, high-confidence knowledge.
 mimir kb pending
 
 # Confirm a fact — it becomes Active with confidence 1.0
-mimir kb confirm --fact-id 42
+mimir kb confirm 42
 
 # Reject a fact — it's permanently deleted (with an audit trail)
-mimir kb reject --fact-id 42 --reason "entered in error"
+mimir kb reject 42 --reason "entered in error"
 ```
 
 ### What happens to ignored facts

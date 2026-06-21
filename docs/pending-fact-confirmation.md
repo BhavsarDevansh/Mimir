@@ -66,6 +66,14 @@ Reject accepts an optional JSON body `{"reason": "..."}`; an empty body is
 valid. The shared `fact_row_from` helper resolves names for both confirm and
 the existing edit endpoint (DRY).
 
+All three routes are wrapped in the `require_loopback` middleware (the same guard
+used for `/kb/optimization/run-now`, `/memory/refresh`, and `/stop`), so only
+loopback peers can list or mutate pending sensitive facts. There is no browser
+frontend for these routes (the CLI / `mimir-client` is the only client and
+issues non-browser requests), so no CSRF/`Origin` validation is applied; that
+hardening belongs to a workspace-wide pass over all mutation routes, not a
+one-off on the sensitive-fact surface.
+
 ## API types (`mimir-api-types`)
 
 - `PendingFactRow` — `fact_id`, `subject`, `predicate`, `object`, `created_at`

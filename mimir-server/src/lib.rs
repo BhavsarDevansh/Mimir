@@ -106,9 +106,18 @@ pub fn build_app(state: Arc<AppState>) -> Router {
             get(kb_show_handler).patch(kb_edit_handler),
         )
         .route("/kb/facts/forget", post(kb_forget_handler))
-        .route("/kb/facts/{id}/confirm", post(kb_confirm_fact_handler))
-        .route("/kb/facts/{id}/reject", post(kb_reject_fact_handler))
-        .route("/kb/pending", get(kb_pending_handler))
+        .route(
+            "/kb/facts/{id}/confirm",
+            post(kb_confirm_fact_handler).layer(from_fn(require_loopback)),
+        )
+        .route(
+            "/kb/facts/{id}/reject",
+            post(kb_reject_fact_handler).layer(from_fn(require_loopback)),
+        )
+        .route(
+            "/kb/pending",
+            get(kb_pending_handler).layer(from_fn(require_loopback)),
+        )
         .route("/kb/browse", get(kb_browse_handler))
         .route("/kb/profile", get(kb_profile_handler))
         .route("/kb/audit", get(kb_audit_handler))
@@ -2461,6 +2470,10 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/kb/pending")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2491,6 +2504,10 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri(format!("/kb/facts/{fact_id}/confirm"))
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2524,6 +2541,10 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri(format!("/kb/facts/{fact_id}/confirm"))
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2548,6 +2569,10 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri(format!("/kb/facts/{fact_id}/reject"))
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
                     .header("Content-Type", "application/json")
                     .body(Body::from(body))
                     .unwrap(),
@@ -2588,11 +2613,83 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri(format!("/kb/facts/{fact_id}/reject"))
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn test_kb_pending_rejects_non_loopback() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/kb/pending")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [192, 168, 1, 1],
+                        0,
+                    ))))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_kb_confirm_rejects_non_loopback() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/kb/facts/1/confirm")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [192, 168, 1, 1],
+                        0,
+                    ))))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_kb_reject_rejects_non_loopback() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/kb/facts/1/reject")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [192, 168, 1, 1],
+                        0,
+                    ))))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }

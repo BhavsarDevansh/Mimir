@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.54.3] — 2026-06-21
+
+### Security
+
+- **`mimir-server`:** the sensitive-fact confirmation lifecycle routes
+  (`GET /kb/pending`, `POST /kb/facts/{id}/confirm`, `POST /kb/facts/{id}/reject`)
+  are now wrapped in the `require_loopback` middleware, matching the guard
+  already applied to `/kb/optimization/run-now`, `/memory/refresh`, and `/stop`.
+  Only loopback peers can list or mutate pending sensitive facts. No CSRF /
+  `Origin` validation is applied because there is no browser frontend for these
+  routes (the CLI / `mimir-client` is the only client); that hardening belongs
+  to a workspace-wide pass over all mutation routes.
+
 ## [0.54.2] — 2026-06-21
 
 ### Fixed

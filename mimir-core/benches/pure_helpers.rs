@@ -5,13 +5,13 @@
 //! output rendering, and config TOML parsing.
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use std::hint::black_box;
 use mimir_core::{
     config::Config,
     fts5::escape_fts5,
     job_queue::{DailySchedule, JobPriority, JobRunStatus},
     tools::{ToolOutput, output_to_llm_text},
 };
+use std::hint::black_box;
 
 fn bench_escape_fts5(c: &mut Criterion) {
     let inputs = [

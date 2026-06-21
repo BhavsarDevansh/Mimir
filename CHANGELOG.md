@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.54.4] — 2026-06-21
+
+### Testing & Benchmarks
+
+Workspace-wide expansion of inline unit tests and pure-helper benchmarks on
+the `tests-and-benchmarks` branch.
+
+- **`mimir-api-types`:** 12 → 46 unit tests. New `roundtrip_tests!` macro
+  asserts populated + sparse (all-`None`) serde roundtrips and
+  `skip_serializing_if` omission for every KG wire type.
+- **`mimir-client`:** ~24 → 64 tests. Adds pure unit tests for the SSE parser
+  primitives (`find_double_newline`, `parse_sse_event`) and wiremock-backed
+  tests for all previously-uncovered `MimirClient` methods.
+- **`mimir-core`:** 179 → 211 lib tests. New inline tests for `job_queue`,
+  `tools::{output,permission,error}` pure helpers.
+- **`mimir-knowledge`:** ~74 → 110 lib tests. New inline tests for
+  `models::enums`, `retrieval::types`, `inference::rules::transitivity`,
+  `models::{entity_date,memory}` helpers.
+- **`mimir-server`:** 50 → 65 lib tests. New `error.rs` tests covering every
+  `ApiError` response helper, including verification that internal error
+  details are masked from clients.
+- **`mimir` (binary):** 15 → 29 bin tests. New `kb.rs` tests for
+  `parse_datetime`, `confidence_color`, and `truncate`.
+- **Benchmarks:** three new pure-helper suites — `mimir-api-types/wire_types`,
+  `mimir-core/pure_helpers`, `mimir-knowledge/pure_helpers` — covering
+  non-hotpath pathways (FTS5 escaping, confidence scoring, serde roundtrips,
+  schedule arithmetic, tool-output rendering).
+
+### Documentation
+
+- New `docs/unit-tests.md` and `docs/wiki/Testing-and-Benchmarks.md`;
+  `docs/benchmarks.md` updated with the new pure-helper suites.
+
+### Issues
+
+Triaged nine prescriptive follow-ups as GitHub issues #160–#168
+(api-types `skip_serializing_if` consistency, doc-comment completion,
+`DailySchedule::parse` strictness, `escape_fts5` whitespace, SSE buffer DoS,
+client/LLM construction robustness, client DRY, `parse_datetime` timezone).
+
 ## [0.54.3] — 2026-06-21
 
 ### Security

@@ -70,3 +70,52 @@ cargo bench -p mimir-knowledge
 # Run a single benchmark
 cargo bench -p mimir-knowledge --bench kg_benchmarks -- entity_resolution_exact
 ```
+
+## Pure-helper suites (non-hotpath coverage)
+
+Three suites were added on the `tests-and-benchmarks` branch to benchmark
+deterministic pure helpers that are easy to skip when focusing only on the
+hotpath. All use `std::hint::black_box` to defeat optimisation.
+
+### `mimir-api-types` — `wire_types`
+
+| Benchmark | What it measures |
+|-----------|------------------|
+| `tool_call_info_truncate_{short,long,multiline,emoji}` | `ToolCallInfo::truncate_result` across input shapes (incl. multibyte) |
+| `serde_{chat_request,chat_response,status_response,fact_detail,forget_request,audit_query,browse_request,fact_query_params,pending_list}_roundtrip` | Full serde JSON roundtrip for representative wire payloads |
+
+```bash
+cargo bench -p mimir-api-types --bench wire_types
+```
+
+### `mimir-core` — `pure_helpers`
+
+| Benchmark | What it measures |
+|-----------|------------------|
+| `fts5_escape_mixed_inputs` | `escape_fts5` over boolean-operator/quote/unicode inputs |
+| `daily_schedule_next_after` | `DailySchedule::next_after` UTC arithmetic |
+| `daily_schedule_parse` | `DailySchedule::parse("HH:MM")` × 5 |
+| `job_run_status_serde_roundtrip` / `job_priority_serde_roundtrip` | Enum serde roundtrips |
+| `tool_output_to_llm_text` / `tool_output_to_display_text` / `output_to_llm_text_helper` | `ToolOutput` rendering pathways |
+| `config_toml_parse` | `Config` TOML deserialisation |
+
+```bash
+cargo bench -p mimir-core --bench pure_helpers
+```
+
+### `mimir-knowledge` — `pure_helpers`
+
+| Benchmark | What it measures |
+|-----------|------------------|
+| `confidence_initial` | `confidence::initial` across source/connector combos |
+| `confidence_inference_{20,3}_parents` | `confidence::inference_confidence` scaling |
+| `confidence_default_connector_score` | Per-connector default scores |
+| `memory_priority_boost` | `MemoryPriority::boost` across tiers |
+| `retrieval_context_summary` | `RetrievedContext::summary` over 10 entities × 5 facts |
+| `retrieval_fact_same_identity` | `RetrievedFact::same_identity` bit-pattern compare |
+| `next_occurrence_mixed` | `next_occurrence` across daily/weekly/monthly/yearly |
+| `memory_schema_all_facts` | `MemorySchema::all_facts` gather across 30 facts |
+
+```bash
+cargo bench -p mimir-knowledge --bench pure_helpers
+```

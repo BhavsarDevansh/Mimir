@@ -5,7 +5,6 @@
 
 use chrono::{TimeZone, Utc};
 use criterion::{Criterion, criterion_group, criterion_main};
-use std::hint::black_box;
 use mimir_knowledge::{
     confidence,
     models::{
@@ -16,6 +15,7 @@ use mimir_knowledge::{
     },
     retrieval::{RetrievedContext, RetrievedEntity, RetrievedFact, RetrievedRelation},
 };
+use std::hint::black_box;
 
 fn bench_confidence_initial(c: &mut Criterion) {
     let combos = [

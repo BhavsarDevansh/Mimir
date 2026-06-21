@@ -3,10 +3,12 @@
 //! Exercises the full serde roundtrip pathway for representative request and
 //! response payloads, plus the ToolCallInfo result-truncation helper.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use mimir_api_types::{
-    AuditQueryRequest, BrowseRequest, ChatRequest, ChatResponse, FactDetailResponse, FactRow,
-    FactQueryParams, ForgetRequest, PendingFactRow, PendingListResponse, StatusResponse, ToolCallInfo, Usage,
+    AuditQueryRequest, BrowseRequest, ChatRequest, ChatResponse, FactDetailResponse,
+    FactQueryParams, FactRow, ForgetRequest, PendingFactRow, PendingListResponse, StatusResponse,
+    ToolCallInfo, Usage,
 };
 
 fn sample_fact_row() -> FactRow {

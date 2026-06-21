@@ -200,7 +200,7 @@ fn intersect_windows(
         (Some(a), None) | (None, Some(a)) => Some(a),
         (None, None) => None,
     };
-   (from, until)
+    (from, until)
 }
 
 #[cfg(test)]
@@ -209,9 +209,7 @@ mod tests {
     use chrono::{DateTime, TimeZone, Utc};
 
     fn ts(minute: i64) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
-            .unwrap()
-            + chrono::Duration::minutes(minute)
+        Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap() + chrono::Duration::minutes(minute)
     }
 
     #[test]

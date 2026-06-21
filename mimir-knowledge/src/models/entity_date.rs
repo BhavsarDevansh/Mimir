@@ -268,8 +268,8 @@ mod tests {
         let from = Utc.with_ymd_and_hms(2024, 3, 20, 12, 0, 0).unwrap();
         let result = next_occurrence("2020-03-18", RecurrenceType::Daily, from);
         let expected = Utc.with_ymd_and_hms(2024, 3, 21, 0, 0, 0).unwrap();
-       assert_eq!(result, Some(expected));
-   }
+        assert_eq!(result, Some(expected));
+    }
 }
 
 #[cfg(test)]

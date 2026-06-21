@@ -64,9 +64,9 @@ impl ToolError {
         Self::SchemaError(name.into(), message.into())
     }
 
-   pub fn already_registered(name: impl Into<String>) -> Self {
-       Self::AlreadyRegistered(name.into())
-   }
+    pub fn already_registered(name: impl Into<String>) -> Self {
+        Self::AlreadyRegistered(name.into())
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -116,7 +116,10 @@ mod tests {
     fn constructors_accept_into_string() {
         let s: String = "echo".to_string();
         assert_eq!(ToolError::not_found(s.clone()), ToolError::NotFound(s));
-        assert_eq!(ToolError::not_found("echo"), ToolError::NotFound("echo".to_string()));
+        assert_eq!(
+            ToolError::not_found("echo"),
+            ToolError::NotFound("echo".to_string())
+        );
     }
 
     #[test]

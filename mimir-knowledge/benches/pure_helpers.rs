@@ -4,7 +4,8 @@
 //! generation, fact identity comparison, and recurrence-date arithmetic.
 
 use chrono::{TimeZone, Utc};
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use mimir_knowledge::{
     confidence,
     models::{
@@ -174,9 +175,7 @@ fn bench_memory_schema_all_facts(c: &mut Criterion) {
         relationships: (5..15)
             .map(|i| mk(i, MemoryBucket::Relationships))
             .collect(),
-        preferences: (15..20)
-            .map(|i| mk(i, MemoryBucket::Preferences))
-            .collect(),
+        preferences: (15..20).map(|i| mk(i, MemoryBucket::Preferences)).collect(),
         upcoming: vec![],
         general: (20..30).map(|i| mk(i, MemoryBucket::General)).collect(),
         total_score: 30.0,

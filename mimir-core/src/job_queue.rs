@@ -474,8 +474,8 @@ impl JobQueue {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_job_runs_job ON job_runs(job_id, started_at)")
             .execute(pool)
             .await?;
-       Ok(())
-   }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -603,12 +603,19 @@ mod tests {
     fn job_priority_serializes_as_variant_name() {
         // serde serializes C-like enums as their variant name string by default;
         // the DB layer casts to i16 separately.
-        for p in [JobPriority::System, JobPriority::Maintenance, JobPriority::User] {
+        for p in [
+            JobPriority::System,
+            JobPriority::Maintenance,
+            JobPriority::User,
+        ] {
             let json = serde_json::to_string(&p).unwrap();
             let back: JobPriority = serde_json::from_str(&json).unwrap();
             assert_eq!(back, p);
         }
-        assert_eq!(serde_json::to_string(&JobPriority::User).unwrap(), "\"User\"");
+        assert_eq!(
+            serde_json::to_string(&JobPriority::User).unwrap(),
+            "\"User\""
+        );
     }
 
     #[test]

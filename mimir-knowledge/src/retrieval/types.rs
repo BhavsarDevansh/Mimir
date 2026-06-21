@@ -89,7 +89,7 @@ pub struct ConversationSnippet {
     pub session_id: i64,
     pub role: String,
     pub snippet: String,
-   pub created_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[cfg(test)]

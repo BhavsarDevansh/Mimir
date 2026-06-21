@@ -91,9 +91,9 @@ pub fn output_to_llm_text(
 
     if parts.is_empty() {
         String::from("(no output)")
-   } else {
-       parts.join("\n")
-   }
+    } else {
+        parts.join("\n")
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -197,13 +197,7 @@ mod tests {
 
     #[test]
     fn output_to_llm_text_helper_directly() {
-        let text = output_to_llm_text(
-            Some(&serde_json::json!("hi")),
-            None,
-            None,
-            None,
-            None,
-        );
+        let text = output_to_llm_text(Some(&serde_json::json!("hi")), None, None, None, None);
         assert_eq!(text, "result: \"hi\"");
     }
 }

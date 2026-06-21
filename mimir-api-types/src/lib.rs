@@ -654,6 +654,9 @@ line2",
                         $skip,
                     );
                 )*
+                // Keep `json` consumed even when `sparse_skips` is empty so the
+                // macro never emits an unused-variable warning.
+                let _ = &json;
             }
         };
     }

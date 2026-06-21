@@ -1001,10 +1001,10 @@ mod tests {
         let cat = client
             .kb_category_create(42, "Places".to_string(), None, None, None)
             .await
-           .unwrap();
-       assert_eq!(cat.id, 42);
-       client.kb_category_delete(42).await.unwrap();
-   }
+            .unwrap();
+        assert_eq!(cat.id, 42);
+        client.kb_category_delete(42).await.unwrap();
+    }
 
     // ---- pure SSE-parser unit tests ---------------------------------------
 
@@ -1043,7 +1043,9 @@ mod tests {
     #[test]
     fn parse_sse_event_text_multiline_data_concatenated() {
         // Multiple `data:` lines are joined with `\n` per the SSE spec.
-        let item = parse_sse_event("data: line1\ndata: line2\n").unwrap().unwrap();
+        let item = parse_sse_event("data: line1\ndata: line2\n")
+            .unwrap()
+            .unwrap();
         assert_eq!(item, StreamItem::Text("line1\nline2".to_string()));
     }
 
@@ -1095,10 +1097,9 @@ mod tests {
 
     #[test]
     fn parse_sse_event_session_id() {
-        let item =
-            parse_sse_event("event: session_id\ndata: {\"session_id\":12345}\n")
-                .unwrap()
-                .unwrap();
+        let item = parse_sse_event("event: session_id\ndata: {\"session_id\":12345}\n")
+            .unwrap()
+            .unwrap();
         assert_eq!(item, StreamItem::SessionId("12345".to_string()));
     }
 
@@ -1443,7 +1444,7 @@ mod tests {
     }
 
     #[tokio::test]
-async fn test_kb_trash_empty_success() {
+    async fn test_kb_trash_empty_success() {
         let server = MockServer::start().await;
         Mock::given(method("DELETE"))
             .and(path("/kb/trash"))
@@ -1456,7 +1457,7 @@ async fn test_kb_trash_empty_success() {
     }
 
     #[tokio::test]
-async fn test_kb_trash_empty_error() {
+    async fn test_kb_trash_empty_error() {
         let server = MockServer::start().await;
         Mock::given(method("DELETE"))
             .and(path("/kb/trash"))
@@ -1466,9 +1467,7 @@ async fn test_kb_trash_empty_error() {
 
         let client = MimirClient::new(server.uri());
         let err = client.kb_trash_empty().await.unwrap_err();
-        assert!(
-            matches!(err, ClientError::Server { status: 500, message } if message == "oops")
-        );
+        assert!(matches!(err, ClientError::Server { status: 500, message } if message == "oops"));
     }
 
     #[tokio::test]
@@ -1579,9 +1578,7 @@ async fn test_kb_trash_empty_error() {
 
         let client = MimirClient::new(server.uri());
         let err = client.stop().await.unwrap_err();
-        assert!(
-            matches!(err, ClientError::Server { status: 500, message } if message == "bad")
-        );
+        assert!(matches!(err, ClientError::Server { status: 500, message } if message == "bad"));
     }
 
     #[tokio::test]
@@ -1616,9 +1613,7 @@ async fn test_kb_trash_empty_error() {
 
         let client = MimirClient::new(server.uri());
         let err = client.sessions().await.unwrap_err();
-        assert!(
-            matches!(err, ClientError::Server { status: 500, message } if message == "down")
-        );
+        assert!(matches!(err, ClientError::Server { status: 500, message } if message == "down"));
     }
 
     #[tokio::test]
@@ -1705,10 +1700,7 @@ async fn test_kb_trash_empty_error() {
         let body = [body, vec![0xFF, 0xFE], b"\n\n".to_vec()].concat();
         Mock::given(method("POST"))
             .and(path("/chat/stream"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_raw(body, "text/event-stream"),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
             .mount(&server)
             .await;
 

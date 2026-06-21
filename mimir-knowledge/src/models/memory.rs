@@ -95,8 +95,8 @@ impl MemorySchema {
 
 impl Default for MemorySchema {
     fn default() -> Self {
-       Self::new()
-   }
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -163,7 +163,10 @@ mod tests {
         };
         let schema = MemorySchema {
             identity: vec![mk(1, MemoryBucket::Identity)],
-            relationships: vec![mk(2, MemoryBucket::Relationships), mk(3, MemoryBucket::Relationships)],
+            relationships: vec![
+                mk(2, MemoryBucket::Relationships),
+                mk(3, MemoryBucket::Relationships),
+            ],
             preferences: vec![mk(4, MemoryBucket::Preferences)],
             upcoming: vec![],
             general: vec![mk(5, MemoryBucket::General)],
@@ -171,7 +174,10 @@ mod tests {
             char_count: 50,
         };
         let all = schema.all_facts();
-        assert_eq!(all.iter().map(|f| f.fact_id).collect::<Vec<_>>(), vec![1, 2, 3, 4, 5]);
+        assert_eq!(
+            all.iter().map(|f| f.fact_id).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5]
+        );
     }
 
     #[test]

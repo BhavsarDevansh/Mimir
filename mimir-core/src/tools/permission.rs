@@ -31,9 +31,9 @@ impl std::str::FromStr for ToolPermission {
             "auto" => Ok(ToolPermission::Auto),
             "ask" => Ok(ToolPermission::Ask),
             "disabled" => Ok(ToolPermission::Disabled),
-           _ => Err(format!("invalid permission: {s}")),
-       }
-   }
+            _ => Err(format!("invalid permission: {s}")),
+        }
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -47,16 +47,29 @@ mod tests {
 
     #[test]
     fn as_str_roundtrips_with_from_str() {
-        for p in [ToolPermission::Auto, ToolPermission::Ask, ToolPermission::Disabled] {
+        for p in [
+            ToolPermission::Auto,
+            ToolPermission::Ask,
+            ToolPermission::Disabled,
+        ] {
             assert_eq!(ToolPermission::from_str(p.as_str()).unwrap(), p);
         }
     }
 
     #[test]
     fn from_str_is_case_insensitive() {
-        assert_eq!(ToolPermission::from_str("AUTO").unwrap(), ToolPermission::Auto);
-        assert_eq!(ToolPermission::from_str("Ask").unwrap(), ToolPermission::Ask);
-        assert_eq!(ToolPermission::from_str("Disabled").unwrap(), ToolPermission::Disabled);
+        assert_eq!(
+            ToolPermission::from_str("AUTO").unwrap(),
+            ToolPermission::Auto
+        );
+        assert_eq!(
+            ToolPermission::from_str("Ask").unwrap(),
+            ToolPermission::Ask
+        );
+        assert_eq!(
+            ToolPermission::from_str("Disabled").unwrap(),
+            ToolPermission::Disabled
+        );
     }
 
     #[test]

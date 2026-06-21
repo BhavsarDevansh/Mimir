@@ -4,7 +4,8 @@
 //! focusing on the hotpath: FTS5 escaping, daily-schedule arithmetic, tool
 //! output rendering, and config TOML parsing.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use mimir_core::{
     config::Config,
     fts5::escape_fts5,
@@ -42,7 +43,8 @@ fn bench_daily_schedule_parse(c: &mut Criterion) {
     c.bench_function("daily_schedule_parse", |b| {
         b.iter(|| {
             for input in inputs {
-                black_box(DailySchedule::parse(input));
+                let parsed = DailySchedule::parse(input).unwrap();
+                black_box(parsed);
             }
         })
     });
@@ -66,7 +68,11 @@ fn bench_job_queue_serde(c: &mut Criterion) {
             }
         })
     });
-    let priorities = [JobPriority::System, JobPriority::Maintenance, JobPriority::User];
+    let priorities = [
+        JobPriority::System,
+        JobPriority::Maintenance,
+        JobPriority::User,
+    ];
     c.bench_function("job_priority_serde_roundtrip", |b| {
         b.iter(|| {
             for p in priorities {

@@ -108,7 +108,7 @@ pub enum ConnectorType {
     Gmail = 1,
     Calendar = 2,
     Photos = 3,
-   LinkedIn = 4,
+    LinkedIn = 4,
 }
 
 #[cfg(test)]

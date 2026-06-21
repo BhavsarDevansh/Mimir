@@ -104,8 +104,8 @@ pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
         | KnowledgeError::CategoryNotFound(_) => e.to_string(),
         _ => "internal knowledge graph error".to_string(),
     };
-   let body = Json(ApiError::new(message, code));
-   (status, body).into_response()
+    let body = Json(ApiError::new(message, code));
+    (status, body).into_response()
 }
 
 #[cfg(test)]
@@ -155,10 +155,7 @@ mod tests {
     async fn llm_error_queue_full_returns_503_with_retry_after() {
         let resp = llm_error(mimir_core::llm::types::LlmError::QueueFull);
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            resp.headers().get("retry-after").unwrap(),
-            "5"
-        );
+        assert_eq!(resp.headers().get("retry-after").unwrap(), "5");
         let body = body_json(resp).await;
         assert_eq!(body["code"], "QUEUE_FULL");
     }

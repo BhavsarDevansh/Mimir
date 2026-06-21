@@ -2,13 +2,13 @@
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use mimir_api_types::{
-    AuditQueryRequest, AuditQueryResponse, AuditRow, BrowseEdge, BrowseRequest, BrowseResponse,
-    CategoryDetailResponse, CategoryResponse, ChatMessage, ChatRequest, ChatResponse,
-    ConfirmFactResponse, FactDetailResponse, FactEditRequest, FactEditResponse, FactQueryParams,
-    FactQueryResponse, FactRow, ForgetRequest, ForgetResponse, OptimizationRunNowResponse,
-    OptimizationStatusResponse, PendingFactRow, PendingListResponse, ProfileGroup, ProfileRequest,
-    ProfileResponse, RejectFactRequest, RestoreRequest, RestoreResponse, SessionMessagesResponse,
-    SessionSummary, StatusResponse, StreamItem, ToolCallInfo, TrashListResponse, TrashRow, Usage,
+    AuditQueryRequest, AuditQueryResponse, BrowseRequest, BrowseResponse, CategoryDetailResponse,
+    CategoryResponse, ChatRequest, ChatResponse, ConfirmFactResponse, FactDetailResponse,
+    FactEditRequest, FactEditResponse, FactQueryParams, FactQueryResponse, ForgetRequest,
+    ForgetResponse, OptimizationRunNowResponse, OptimizationStatusResponse, PendingListResponse,
+    ProfileRequest, ProfileResponse, RejectFactRequest, RestoreRequest, RestoreResponse,
+    SessionMessagesResponse, SessionSummary, StatusResponse, StreamItem, ToolCallInfo,
+    TrashListResponse, Usage,
 };
 use reqwest::StatusCode;
 use thiserror::Error;
@@ -540,6 +540,9 @@ fn parse_sse_event(event: &str) -> Option<Result<StreamItem, ClientError>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mimir_api_types::{
+        AuditRow, BrowseEdge, ChatMessage, FactRow, PendingFactRow, ProfileGroup, TrashRow,
+    };
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},

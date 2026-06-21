@@ -268,6 +268,60 @@ mod tests {
         let from = Utc.with_ymd_and_hms(2024, 3, 20, 12, 0, 0).unwrap();
         let result = next_occurrence("2020-03-18", RecurrenceType::Daily, from);
         let expected = Utc.with_ymd_and_hms(2024, 3, 21, 0, 0, 0).unwrap();
-        assert_eq!(result, Some(expected));
+       assert_eq!(result, Some(expected));
+   }
+}
+
+#[cfg(test)]
+mod helper_tests {
+    use super::*;
+
+    #[test]
+    fn is_leap_year_standard_rules() {
+        assert!(is_leap_year(2000)); // divisible by 400
+        assert!(is_leap_year(2024)); // divisible by 4, not 100
+        assert!(!is_leap_year(1900)); // divisible by 100, not 400
+        assert!(!is_leap_year(2023));
+    }
+
+    #[test]
+    fn days_in_month_known_values() {
+        assert_eq!(days_in_month(2024, 2), 29); // leap
+        assert_eq!(days_in_month(2023, 2), 28);
+        assert_eq!(days_in_month(2024, 1), 31);
+        assert_eq!(days_in_month(2024, 4), 30);
+        assert_eq!(days_in_month(2024, 12), 31);
+    }
+
+    #[test]
+    fn days_in_month_invalid_returns_zero() {
+        assert_eq!(days_in_month(2024, 0), 0);
+        assert_eq!(days_in_month(2024, 13), 0);
+    }
+
+    #[test]
+    fn parse_base_datetime_rfc3339() {
+        let dt = parse_base_datetime("2020-06-15T10:30:00Z").unwrap();
+        assert_eq!(dt.format("%Y-%m-%d %H:%M").to_string(), "2020-06-15 10:30");
+    }
+
+    #[test]
+    fn parse_base_datetime_date_only_is_midnight_utc() {
+        let dt = parse_base_datetime("2020-06-15").unwrap();
+        assert_eq!(dt.format("%H:%M:%S").to_string(), "00:00:00");
+    }
+
+    #[test]
+    fn parse_base_datetime_invalid_returns_none() {
+        assert!(parse_base_datetime("not a date").is_none());
+        assert!(parse_base_datetime("").is_none());
+        assert!(parse_base_datetime("2020/06/15").is_none());
+    }
+
+    #[test]
+    fn parse_base_datetime_with_offset_normalises_to_utc() {
+        // +02:00 offset → 08:00 local becomes 06:00 UTC.
+        let dt = parse_base_datetime("2020-06-15T08:00:00+02:00").unwrap();
+        assert_eq!(dt.format("%H:%M").to_string(), "06:00");
     }
 }

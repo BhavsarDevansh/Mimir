@@ -49,3 +49,7 @@ harness = false
 [[bench]]
 name = "personality"
 harness = false
+
+[[bench]]
+name = "pure_helpers"
+harness = false

@@ -544,6 +544,15 @@ mod tests {
     }
 
     #[test]
+    fn daily_schedule_parse_accepts_non_zero_padded_input() {
+        // Chrono's `%H:%M` parser is padding-agnostic: it accepts both
+        // zero-padded and bare digits. Document the accepted forms so any
+        // future tightening of the parser is caught here.
+        assert_eq!(DailySchedule::parse("2:30").unwrap().as_hhmm(), "02:30");
+        assert_eq!(DailySchedule::parse("9:5").unwrap().as_hhmm(), "09:05");
+    }
+
+    #[test]
     fn daily_schedule_as_hhmm_zero_pads() {
         let s = DailySchedule::new(NaiveTime::from_hms_opt(9, 5, 0).unwrap());
         assert_eq!(s.as_hhmm(), "09:05");

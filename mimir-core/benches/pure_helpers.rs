@@ -32,7 +32,11 @@ fn bench_escape_fts5(c: &mut Criterion) {
 
 fn bench_daily_schedule_next_after(c: &mut Criterion) {
     let schedule = DailySchedule::parse("03:30").unwrap();
-    let now = chrono::Utc::now();
+    // Fixed reference time keeps the baseline deterministic across runs, so
+    // `next_after` results do not shift with the wall clock.
+    let now = chrono::DateTime::parse_from_rfc3339("2024-06-15T14:30:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
     c.bench_function("daily_schedule_next_after", |b| {
         b.iter(|| black_box(schedule.next_after(now)))
     });

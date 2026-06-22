@@ -119,3 +119,4 @@ cargo bench -p mimir-core --bench pure_helpers
 ```bash
 cargo bench -p mimir-knowledge --bench pure_helpers
 ```
+  Uses a fixed `2024-06-15T14:30:00Z` reference time for reproducible baselines. |

@@ -807,7 +807,7 @@ mod tests {
 
     #[test]
     fn truncate_zero_max_yields_just_ellipsis_or_empty() {
-        // max=0: take(0.saturating_sub(1) = 0) chars + ellipsis.
+        // max=0: take(0.saturating_sub(1) = 0) chars + ellipsis = just ellipsis.
         let out = truncate("abc", 0);
         assert_eq!(out, "…");
     }

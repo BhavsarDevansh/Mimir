@@ -61,3 +61,18 @@ cargo fmt --all -- --check
 
 See GitHub issues #160–#168 for prescriptive refactoring, performance, and
 security improvements identified during the pass.
+
+## Review-fix refinements (v0.54.5)
+
+Following review of the test/benchmark pass, a few test-quality refinements
+landed (no user-facing behaviour changed):
+
+- Sparse-field serde tests now check actual JSON keys rather than doing a
+  substring search, so they cannot be fooled by field names appearing inside
+  values.
+- KB client tests now assert the query parameters each method sends, not just
+  the route path, so query-encoding regressions are caught.
+- The daily-schedule benchmark uses a fixed reference time so its baseline is
+  reproducible across runs.
+- A new test documents that `DailySchedule::parse` accepts non-zero-padded
+  times like `"2:30"` (chrono's `%H:%M` parser is padding-agnostic).

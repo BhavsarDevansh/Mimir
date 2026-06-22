@@ -15,7 +15,10 @@ none mutate process-global state (no `set_var`/`remove_var`).
 
 46 tests (up from 12). Added a `roundtrip_tests!` macro that asserts both the
 populated and sparse (all-`None`) forms round-trip, and that `skip_serializing_if`
-fields are omitted from the sparse JSON. Covers every KG wire type:
+fields are omitted from the sparse JSON. The sparse-field check parses the
+serialised JSON into a `serde_json::Map` and asserts key absence with
+`contains_key` (not a substring search, which could match value text).
+Covers every KG wire type:
 `FactQueryParams`, `FactRow`, `FactQueryResponse`, `SourceRow`, `DependencyRow`,
 `AuditRow`, `FactDetailResponse`, `FactEditRequest`, `FactEditResponse`,
 `BrowseRequest`, `BrowseEdge`/`BrowseResponse`, `CategoryResponse`/
@@ -40,8 +43,10 @@ restore/trash/trash_empty/pending/confirm/reject`, `stop` (success/503/error),
 ## `mimir-core`
 
 - `job_queue.rs`: 14 tests for `JobPriority::from_i16`, `JobRunStatus` str
+- `job_queue.rs`: 15 tests for `JobPriority::from_i16`, `JobRunStatus` str
   roundtrip + fallback, `DailySchedule` parse/`as_hhmm`/`next_after`
-  (TZ-robust), `JobError` predicates, enum serde roundtrips, `JobContext`.
+  (TZ-robust, including non-zero-padded `%H:%M` acceptance), `JobError`
+  predicates, enum serde roundtrips, `JobContext`.
 - `tools/output.rs`: 10 tests for `to_display_text` (error precedence, string
   unquoting, non-string JSON, stdout fallback, empty/placeholder) and
   `to_llm_text`/`output_to_llm_text` (all-parts join, empty stdout/stderr

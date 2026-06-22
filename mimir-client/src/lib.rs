@@ -545,7 +545,7 @@ mod tests {
     };
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{method, path},
+        matchers::{method, path, query_param},
     };
 
     #[test]
@@ -1197,6 +1197,11 @@ mod tests {
         };
         Mock::given(method("GET"))
             .and(path("/kb/query"))
+            .and(query_param("entity", "Alice"))
+            .and(query_param("predicate", "lives_in"))
+            .and(query_param("min_confidence", "0.5"))
+            .and(query_param("offset", "0"))
+            .and(query_param("limit", "10"))
             .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
             .mount(&server)
             .await;
@@ -1277,6 +1282,10 @@ mod tests {
         };
         Mock::given(method("GET"))
             .and(path("/kb/browse"))
+            .and(query_param("entity", "Alice"))
+            .and(query_param("depth", "2"))
+            .and(query_param("offset", "0"))
+            .and(query_param("limit", "10"))
             .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
             .mount(&server)
             .await;
@@ -1305,6 +1314,7 @@ mod tests {
         };
         Mock::given(method("GET"))
             .and(path("/kb/profile"))
+            .and(query_param("entity", "Alice"))
             .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
             .mount(&server)
             .await;
@@ -1342,6 +1352,10 @@ mod tests {
         };
         Mock::given(method("GET"))
             .and(path("/kb/audit"))
+            .and(query_param("entity", "Alice"))
+            .and(query_param("change_type", "status_change"))
+            .and(query_param("offset", "0"))
+            .and(query_param("limit", "10"))
             .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
             .mount(&server)
             .await;
@@ -1433,6 +1447,8 @@ mod tests {
         };
         Mock::given(method("GET"))
             .and(path("/kb/trash"))
+            .and(query_param("offset", "0"))
+            .and(query_param("limit", "10"))
             .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
             .mount(&server)
             .await;

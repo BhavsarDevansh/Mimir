@@ -647,16 +647,18 @@ line2",
                 assert_eq!(roundtrip(&$full), $full);
                 assert_eq!(roundtrip(&$sparse), $sparse);
                 let json = serde_json::to_string(&$sparse).expect("serialise sparse");
+                let obj = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&json)
+                    .expect("parse sparse json object");
                 $(
                     assert!(
-                        !json.contains($skip),
+                        !obj.contains_key($skip),
                         "sparse form should not serialise `{}` (got: {json})",
                         $skip,
                     );
                 )*
-                // Keep `json` consumed even when `sparse_skips` is empty so the
-                // macro never emits an unused-variable warning.
-                let _ = &json;
+                // Keep `json` and `obj` consumed even when `sparse_skips` is empty
+                // so the macro never emits unused-variable warnings.
+                let _ = (&json, &obj);
             }
         };
     }

@@ -61,3 +61,19 @@ than fixed in this change set (out of scope for a tests/benchmarks pass):
 - `cargo build --workspace` — clean.
 
 Zero unactioned findings in the new code; review returns zero findings.
+
+## Review-Fix Pass (PR #169, v0.54.5)
+
+CodeRabbit posted five inline review comments on the change set; all were
+verified against current code and actioned in v0.54.5.
+
+| # | File | Finding | Action |
+|---|------|---------|--------|
+| 1 | `mimir-api-types/src/lib.rs` | `json.contains($skip)` is substring-based and can match value text | Parse JSON into `serde_json::Map` and assert `!obj.contains_key($skip)` |
+| 2 | `mimir-client/src/lib.rs` | KB endpoint tests only matched the path, not query params | Added `query_param` matchers for `kb_query`, `kb_browse`, `kb_profile`, `kb_audit`, `kb_trash` |
+| 3 | `mimir-core/benches/pure_helpers.rs` | `Utc::now()` baseline made the schedule benchmark non-deterministic | Replaced with fixed `2024-06-15T14:30:00Z` `DateTime<Utc>` |
+| 4 | `mimir-core/src/job_queue.rs` | No test documented chrono's padding-agnostic `%H:%M` parsing | Added `daily_schedule_parse_accepts_non_zero_padded_input` |
+| 5 | `mimir/src/kb.rs` | Comment implied conditional "ellipsis or empty" behaviour | Corrected to deterministic "just ellipsis" |
+
+All five findings fixed; `cargo fmt`, `clippy --all-targets`, and the
+workspace test suite remain green. Review returns zero findings.

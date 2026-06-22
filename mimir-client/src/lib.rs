@@ -540,9 +540,12 @@ fn parse_sse_event(event: &str) -> Option<Result<StreamItem, ClientError>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mimir_api_types::{
+        AuditRow, BrowseEdge, ChatMessage, FactRow, PendingFactRow, ProfileGroup, TrashRow,
+    };
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{method, path},
+        matchers::{method, path, query_param},
     };
 
     #[test]
@@ -1001,5 +1004,734 @@ mod tests {
             .unwrap();
         assert_eq!(cat.id, 42);
         client.kb_category_delete(42).await.unwrap();
+    }
+
+    // ---- pure SSE-parser unit tests ---------------------------------------
+
+    #[test]
+    fn find_double_newline_lf() {
+        assert_eq!(find_double_newline(b"a\n\nb"), Some((1, 2)));
+    }
+
+    #[test]
+    fn find_double_newline_crlf() {
+        assert_eq!(find_double_newline(b"a\r\n\r\nb"), Some((1, 4)));
+    }
+
+    #[test]
+    fn find_double_newline_none() {
+        assert_eq!(find_double_newline(b"no delimiter here"), None);
+    }
+
+    #[test]
+    fn find_double_newline_first_occurrence_wins() {
+        // The first \n\n must be reported, not a later one.
+        assert_eq!(find_double_newline(b"x\n\ny\n\nz"), Some((1, 2)));
+    }
+
+    #[test]
+    fn find_double_newline_empty_buffer() {
+        assert_eq!(find_double_newline(b""), None);
+    }
+
+    #[test]
+    fn parse_sse_event_text_default() {
+        let item = parse_sse_event("data: hello world\n").unwrap().unwrap();
+        assert_eq!(item, StreamItem::Text("hello world".to_string()));
+    }
+
+    #[test]
+    fn parse_sse_event_text_multiline_data_concatenated() {
+        // Multiple `data:` lines are joined with `\n` per the SSE spec.
+        let item = parse_sse_event("data: line1\ndata: line2\n")
+            .unwrap()
+            .unwrap();
+        assert_eq!(item, StreamItem::Text("line1\nline2".to_string()));
+    }
+
+    #[test]
+    fn parse_sse_event_text_no_leading_space() {
+        // Per SSE spec exactly one leading space is stripped; no space is kept.
+        let item = parse_sse_event("data:nospace\n").unwrap().unwrap();
+        assert_eq!(item, StreamItem::Text("nospace".to_string()));
+    }
+
+    #[test]
+    fn parse_sse_event_usage() {
+        let item =
+            parse_sse_event("event: usage\ndata: {\"prompt_tokens\":4,\"completion_tokens\":5,\"total_tokens\":9}\n")
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            item,
+            StreamItem::Usage(Usage {
+                prompt_tokens: 4,
+                completion_tokens: 5,
+                total_tokens: 9,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_sse_event_usage_invalid_json_returns_error() {
+        let item = parse_sse_event("event: usage\ndata: {bad json\n").unwrap();
+        assert!(matches!(item, Err(ClientError::Serialization(_))));
+    }
+
+    #[test]
+    fn parse_sse_event_tool_call() {
+        let item = parse_sse_event(
+            "event: tool_call\ndata: {\"name\":\"echo\",\"display_name\":\"Echo\",\"result\":\"hi\"}\n",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            item,
+            StreamItem::ToolCall(ToolCallInfo {
+                name: "echo".to_string(),
+                display_name: "Echo".to_string(),
+                result: "hi".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_sse_event_session_id() {
+        let item = parse_sse_event("event: session_id\ndata: {\"session_id\":12345}\n")
+            .unwrap()
+            .unwrap();
+        assert_eq!(item, StreamItem::SessionId("12345".to_string()));
+    }
+
+    #[test]
+    fn parse_sse_event_session_id_missing_field_is_none() {
+        // No `session_id` key → no item emitted.
+        let item = parse_sse_event("event: session_id\ndata: {}\n");
+        assert!(item.is_none());
+    }
+
+    #[test]
+    fn parse_sse_event_error() {
+        let item = parse_sse_event("event: error\ndata: boom\n").unwrap();
+        assert!(
+            matches!(item, Err(ClientError::Server { status: 500, message }) if message == "boom")
+        );
+    }
+
+    #[test]
+    fn parse_sse_event_empty_data_returns_none() {
+        // Default event with no data yields no item.
+        assert!(parse_sse_event("event: message\n").is_none());
+        assert!(parse_sse_event("").is_none());
+    }
+
+    // ---- integration tests for previously-uncovered client methods ---------
+
+    async fn sample_fact_row() -> FactRow {
+        FactRow {
+            id: 7,
+            subject: "Alice".to_string(),
+            predicate: "lives_in".to_string(),
+            object: Some("London".to_string()),
+            confidence: 0.9,
+            status: "active".to_string(),
+            valid_from: Some("2020-01-01T00:00:00Z".to_string()),
+            valid_until: None,
+            inferred: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_kb_optimization_status() {
+        let server = MockServer::start().await;
+        let payload = OptimizationStatusResponse {
+            job_id: "kg-optimization".to_string(),
+            priority: "low".to_string(),
+            schedule: Some("daily".to_string()),
+            next_run_at: Some("2020-01-02T00:00:00Z".to_string()),
+            last_run: None,
+        };
+        Mock::given(method("GET"))
+            .and(path("/kb/optimization/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let result = client.kb_optimization_status().await.unwrap();
+        assert_eq!(result.job_id, "kg-optimization");
+        assert_eq!(result.priority, "low");
+        assert!(result.last_run.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_kb_optimization_run_now() {
+        let server = MockServer::start().await;
+        let payload = OptimizationRunNowResponse {
+            run_id: 9,
+            status: "running".to_string(),
+            started_at: "2020-01-01T00:00:00Z".to_string(),
+            finished_at: None,
+            error: None,
+        };
+        Mock::given(method("POST"))
+            .and(path("/kb/optimization/run-now"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let result = client.kb_optimization_run_now().await.unwrap();
+        assert_eq!(result.run_id, 9);
+        assert_eq!(result.status, "running");
+    }
+
+    #[tokio::test]
+    async fn test_kb_query_with_filters() {
+        let server = MockServer::start().await;
+        let payload = FactQueryResponse {
+            total: 1,
+            offset: 0,
+            limit: 10,
+            facts: vec![sample_fact_row().await],
+        };
+        Mock::given(method("GET"))
+            .and(path("/kb/query"))
+            .and(query_param("entity", "Alice"))
+            .and(query_param("predicate", "lives_in"))
+            .and(query_param("min_confidence", "0.5"))
+            .and(query_param("offset", "0"))
+            .and(query_param("limit", "10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let req = FactQueryParams {
+            entity: "Alice".to_string(),
+            predicate: Some("lives_in".to_string()),
+            min_confidence: Some(0.5),
+            offset: Some(0),
+            limit: Some(10),
+        };
+        let result = client.kb_query(req).await.unwrap();
+        assert_eq!(result.total, 1);
+        assert_eq!(result.facts.len(), 1);
+        assert_eq!(result.facts[0].subject, "Alice");
+    }
+
+    #[tokio::test]
+    async fn test_kb_show() {
+        let server = MockServer::start().await;
+        let payload = FactDetailResponse {
+            fact: sample_fact_row().await,
+            sources: vec![],
+            dependencies: vec![],
+            audit_log: vec![],
+        };
+        Mock::given(method("GET"))
+            .and(path("/kb/facts/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let result = client.kb_show(7).await.unwrap();
+        assert_eq!(result.fact.id, 7);
+        assert!(result.sources.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_kb_edit() {
+        let server = MockServer::start().await;
+        let payload = FactEditResponse {
+            fact: sample_fact_row().await,
+        };
+        Mock::given(method("PATCH"))
+            .and(path("/kb/facts/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let req = FactEditRequest {
+            confidence: Some(0.8),
+            valid_from: None,
+            valid_until: None,
+            object_literal: Some("London".to_string()),
+            status: None,
+        };
+        let result = client.kb_edit(7, req).await.unwrap();
+        assert_eq!(result.fact.id, 7);
+    }
+
+    #[tokio::test]
+    async fn test_kb_browse() {
+        let server = MockServer::start().await;
+        let payload = BrowseResponse {
+            total_edges: 1,
+            offset: 0,
+            limit: 10,
+            edges: vec![BrowseEdge {
+                depth: 1,
+                subject: "Alice".to_string(),
+                predicate: "lives_in".to_string(),
+                object: "London".to_string(),
+                confidence: 0.9,
+            }],
+        };
+        Mock::given(method("GET"))
+            .and(path("/kb/browse"))
+            .and(query_param("entity", "Alice"))
+            .and(query_param("depth", "2"))
+            .and(query_param("offset", "0"))
+            .and(query_param("limit", "10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let req = BrowseRequest {
+            entity: "Alice".to_string(),
+            depth: 2,
+            offset: Some(0),
+            limit: Some(10),
+        };
+        let result = client.kb_browse(req).await.unwrap();
+        assert_eq!(result.total_edges, 1);
+        assert_eq!(result.edges[0].object, "London");
+    }
+
+    #[tokio::test]
+    async fn test_kb_profile() {
+        let server = MockServer::start().await;
+        let payload = ProfileResponse {
+            entity_name: "Alice".to_string(),
+            groups: vec![ProfileGroup {
+                category: "personal".to_string(),
+                facts: vec![sample_fact_row().await],
+            }],
+        };
+        Mock::given(method("GET"))
+            .and(path("/kb/profile"))
+            .and(query_param("entity", "Alice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let result = client
+            .kb_profile(ProfileRequest {
+                entity: Some("Alice".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.entity_name, "Alice");
+        assert_eq!(result.groups.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_kb_audit() {
+        let server = MockServer::start().await;
+        let payload = AuditQueryResponse {
+            total: 1,
+            offset: 0,
+            limit: 10,
+            entries: vec![AuditRow {
+                audit_id: 1,
+                fact_id: 7,
+                change_type: "status_change".to_string(),
+                entity_name: Some("Alice".to_string()),
+                predicate_name: Some("lives_in".to_string()),
+                old_value: None,
+                new_value: Some("London".to_string()),
+                changed_at: "2020-01-01T00:00:00Z".to_string(),
+                changed_by: None,
+                reason: None,
+            }],
+        };
+        Mock::given(method("GET"))
+            .and(path("/kb/audit"))
+            .and(query_param("entity", "Alice"))
+            .and(query_param("change_type", "status_change"))
+            .and(query_param("offset", "0"))
+            .and(query_param("limit", "10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let req = AuditQueryRequest {
+            entity: Some("Alice".to_string()),
+            predicate: None,
+            from: None,
+            to: None,
+            change_type: Some("status_change".to_string()),
+            offset: Some(0),
+            limit: Some(10),
+        };
+        let result = client.kb_audit(req).await.unwrap();
+        assert_eq!(result.total, 1);
+        assert_eq!(result.entries[0].fact_id, 7);
+    }
+
+    #[tokio::test]
+    async fn test_kb_forget() {
+        let server = MockServer::start().await;
+        let payload = ForgetResponse {
+            forgotten_count: 3,
+            backup_path: Some("/tmp/backup.json".to_string()),
+        };
+        Mock::given(method("POST"))
+            .and(path("/kb/facts/forget"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let req = ForgetRequest {
+            fact_id: Some(7),
+            predicate: None,
+            subject: None,
+            entity: None,
+            source: None,
+            from: None,
+            to: None,
+            all: false,
+            yes: false,
+            confirm_sensitive: false,
+            confirmation_phrase: None,
+            archive: false,
+        };
+        let result = client.kb_forget(req).await.unwrap();
+        assert_eq!(result.forgotten_count, 3);
+        assert!(result.backup_path.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_kb_restore() {
+        let server = MockServer::start().await;
+        let payload = RestoreResponse { restored_count: 2 };
+        Mock::given(method("POST"))
+            .and(path("/kb/trash/restore"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let result = client
+            .kb_restore(RestoreRequest {
+                trash_id: Some(1),
+                all: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.restored_count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_kb_trash_list() {
+        let server = MockServer::start().await;
+        let payload = TrashListResponse {
+            total: 1,
+            offset: 0,
+            limit: 10,
+            items: vec![TrashRow {
+                trash_id: 1,
+                subject: Some("Alice".to_string()),
+                predicate: None,
+                object: None,
+                deleted_at: "2020-01-01T00:00:00Z".to_string(),
+                expires_at: "2021-01-01T00:00:00Z".to_string(),
+            }],
+        };
+        Mock::given(method("GET"))
+            .and(path("/kb/trash"))
+            .and(query_param("offset", "0"))
+            .and(query_param("limit", "10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let result = client.kb_trash(0, 10).await.unwrap();
+        assert_eq!(result.total, 1);
+        assert_eq!(result.items.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_kb_trash_empty_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/kb/trash"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        client.kb_trash_empty().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_kb_trash_empty_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/kb/trash"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("oops"))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let err = client.kb_trash_empty().await.unwrap_err();
+        assert!(matches!(err, ClientError::Server { status: 500, message } if message == "oops"));
+    }
+
+    #[tokio::test]
+    async fn test_kb_pending() {
+        let server = MockServer::start().await;
+        let payload = PendingListResponse {
+            total: 1,
+            facts: vec![PendingFactRow {
+                fact_id: 7,
+                subject: "Alice".to_string(),
+                predicate: "ssn".to_string(),
+                object: None,
+                created_at: "2020-01-01T00:00:00Z".to_string(),
+            }],
+        };
+        Mock::given(method("GET"))
+            .and(path("/kb/pending"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let result = client.kb_pending().await.unwrap();
+        assert_eq!(result.total, 1);
+        assert_eq!(result.facts[0].fact_id, 7);
+    }
+
+    #[tokio::test]
+    async fn test_kb_confirm() {
+        let server = MockServer::start().await;
+        let payload = ConfirmFactResponse {
+            fact: sample_fact_row().await,
+        };
+        Mock::given(method("POST"))
+            .and(path("/kb/facts/7/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let result = client.kb_confirm(7).await.unwrap();
+        assert_eq!(result.fact.id, 7);
+    }
+
+    #[tokio::test]
+    async fn test_kb_reject_with_reason() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/kb/facts/7/reject"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        client.kb_reject(7, Some("entered in error")).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_kb_reject_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/kb/facts/7/reject"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("no such fact"))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let err = client.kb_reject(7, None).await.unwrap_err();
+        assert!(
+            matches!(err, ClientError::Server { status: 404, message } if message == "no such fact")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stop_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/stop"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        client.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_stop_accepts_503() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/stop"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        client.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_stop_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/stop"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("bad"))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let err = client.stop().await.unwrap_err();
+        assert!(matches!(err, ClientError::Server { status: 500, message } if message == "bad"));
+    }
+
+    #[tokio::test]
+    async fn test_sessions_list() {
+        let server = MockServer::start().await;
+        let payload = vec![SessionSummary {
+            session_id: 1,
+            created_at: "2020-01-01T00:00:00Z".to_string(),
+            updated_at: "2020-01-01T00:00:00Z".to_string(),
+            preview: Some("hello".to_string()),
+        }];
+        Mock::given(method("GET"))
+            .and(path("/sessions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let result = client.sessions().await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].session_id, 1);
+    }
+
+    #[tokio::test]
+    async fn test_sessions_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/sessions"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("down"))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let err = client.sessions().await.unwrap_err();
+        assert!(matches!(err, ClientError::Server { status: 500, message } if message == "down"));
+    }
+
+    #[tokio::test]
+    async fn test_session_messages_success() {
+        let server = MockServer::start().await;
+        let payload = SessionMessagesResponse {
+            session_id: 5,
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: "hi".to_string(),
+                created_at: "2020-01-01T00:00:00Z".to_string(),
+            }],
+        };
+        Mock::given(method("GET"))
+            .and(path("/sessions/5/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let result = client.session_messages(5).await.unwrap();
+        assert_eq!(result.session_id, 5);
+        assert_eq!(result.messages.len(), 1);
+        assert_eq!(result.messages[0].role, "user");
+    }
+
+    #[tokio::test]
+    async fn test_chat_server_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("overloaded"))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let err = client
+            .chat(ChatRequest {
+                session_id: None,
+                message: "hi".to_string(),
+                model: None,
+                personality_preset: None,
+                incognito: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ClientError::Server { status: 503, message } if message == "overloaded")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_chat_stream_session_id_and_tool_call() {
+        let server = MockServer::start().await;
+        let body = "event: session_id\ndata: {\"session_id\":99}\n\nevent: tool_call\ndata: {\"name\":\"echo\",\"display_name\":\"Echo\",\"result\":\"hi\"}\n\n";
+        Mock::given(method("POST"))
+            .and(path("/chat/stream"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let mut stream = client
+            .chat_stream(ChatRequest {
+                session_id: None,
+                message: "hi".to_string(),
+                model: None,
+                personality_preset: None,
+                incognito: None,
+            })
+            .await
+            .unwrap();
+        let first = stream.next().await.unwrap().unwrap();
+        assert_eq!(first, StreamItem::SessionId("99".to_string()));
+        let second = stream.next().await.unwrap().unwrap();
+        assert!(matches!(second, StreamItem::ToolCall(_)));
+    }
+
+    #[tokio::test]
+    async fn test_chat_stream_invalid_utf8_returns_connection_error() {
+        let server = MockServer::start().await;
+        // A raw invalid-UTF-8 byte sequence (0xFF is never a valid leading byte).
+        let body: Vec<u8> = b"data: ".to_vec();
+        let body = [body, vec![0xFF, 0xFE], b"\n\n".to_vec()].concat();
+        Mock::given(method("POST"))
+            .and(path("/chat/stream"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::new(server.uri());
+        let mut stream = client
+            .chat_stream(ChatRequest {
+                session_id: None,
+                message: "hi".to_string(),
+                model: None,
+                personality_preset: None,
+                incognito: None,
+            })
+            .await
+            .unwrap();
+        let item = stream.next().await.unwrap();
+        assert!(matches!(item, Err(ClientError::Connection(_))));
     }
 }

@@ -95,3 +95,109 @@ pub fn output_to_llm_text(
         parts.join("\n")
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_text_prefers_error_over_result() {
+        let out = ToolOutput {
+            result: Some(serde_json::json!("ok")),
+            error: Some("boom".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(out.to_display_text(), "error: boom");
+    }
+
+    #[test]
+    fn display_text_string_result_unquotes() {
+        let out = ToolOutput {
+            result: Some(serde_json::json!("hello")),
+            ..Default::default()
+        };
+        assert_eq!(out.to_display_text(), "hello");
+    }
+
+    #[test]
+    fn display_text_non_string_result_jsonified() {
+        let out = ToolOutput {
+            result: Some(serde_json::json!({"a": 1})),
+            ..Default::default()
+        };
+        assert_eq!(out.to_display_text(), r#"{"a":1}"#);
+    }
+
+    #[test]
+    fn display_text_falls_back_to_trimmed_stdout() {
+        let out = ToolOutput {
+            stdout: Some("  line\n".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(out.to_display_text(), "line");
+    }
+
+    #[test]
+    fn display_text_empty_stdout_falls_through_to_no_output() {
+        let out = ToolOutput {
+            stdout: Some("   ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(out.to_display_text(), "(no output)");
+    }
+
+    #[test]
+    fn display_text_no_fields_returns_placeholder() {
+        let out = ToolOutput::default();
+        assert_eq!(out.to_display_text(), "(no output)");
+    }
+
+    #[test]
+    fn llm_text_joins_all_present_parts() {
+        let out = ToolOutput {
+            result: Some(serde_json::json!(42)),
+            error: Some("e".to_string()),
+            stdout: Some("out\n".to_string()),
+            stderr: Some("err\n".to_string()),
+            exit_code: Some(0),
+        };
+        let text = out.to_llm_text();
+        assert!(text.contains("result: 42"));
+        assert!(text.contains("error: e"));
+        assert!(text.contains("stdout: out"));
+        assert!(text.contains("stderr: err"));
+        assert!(text.contains("exit_code: 0"));
+        assert_eq!(text.lines().count(), 5);
+    }
+
+    #[test]
+    fn llm_text_omits_empty_stdout_and_stderr() {
+        let out = ToolOutput {
+            stdout: Some("   ".to_string()),
+            stderr: Some("\n".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(out.to_llm_text(), "(no output)");
+    }
+
+    #[test]
+    fn llm_text_skips_serializing_none_fields_roundtrip() {
+        let out = ToolOutput {
+            result: Some(serde_json::json!("x")),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(json.contains("result"));
+        assert!(!json.contains("error"));
+        assert!(!json.contains("stdout"));
+        assert!(!json.contains("stderr"));
+        assert!(!json.contains("exit_code"));
+        let back: ToolOutput = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, out);
+    }
+
+    #[test]
+    fn output_to_llm_text_helper_directly() {
+        let text = output_to_llm_text(Some(&serde_json::json!("hi")), None, None, None, None);
+        assert_eq!(text, "result: \"hi\"");
+    }
+}

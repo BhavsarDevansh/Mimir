@@ -202,3 +202,69 @@ fn intersect_windows(
     };
     (from, until)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{DateTime, TimeZone, Utc};
+
+    fn ts(minute: i64) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap() + chrono::Duration::minutes(minute)
+    }
+
+    #[test]
+    fn intersect_both_unbounded_is_unbounded() {
+        let (f, u) = intersect_windows(None, None, None, None);
+        assert_eq!(f, None);
+        assert_eq!(u, None);
+    }
+
+    #[test]
+    fn intersect_from_takes_max_of_bounded() {
+        let (f, _) = intersect_windows(Some(ts(10)), None, Some(ts(20)), None);
+        assert_eq!(f, Some(ts(20)));
+        let (f, _) = intersect_windows(Some(ts(20)), None, Some(ts(10)), None);
+        assert_eq!(f, Some(ts(20)));
+    }
+
+    #[test]
+    fn intersect_from_takes_the_only_bounded_side() {
+        let (f, _) = intersect_windows(None, None, Some(ts(5)), None);
+        assert_eq!(f, Some(ts(5)));
+        let (f, _) = intersect_windows(Some(ts(7)), None, None, None);
+        assert_eq!(f, Some(ts(7)));
+    }
+
+    #[test]
+    fn intersect_until_takes_min_of_bounded() {
+        let (_, u) = intersect_windows(None, Some(ts(10)), None, Some(ts(20)));
+        assert_eq!(u, Some(ts(10)));
+        let (_, u) = intersect_windows(None, Some(ts(20)), None, Some(ts(10)));
+        assert_eq!(u, Some(ts(10)));
+    }
+
+    #[test]
+    fn intersect_until_takes_the_only_bounded_side() {
+        let (_, u) = intersect_windows(None, None, None, Some(ts(9)));
+        assert_eq!(u, Some(ts(9)));
+        let (_, u) = intersect_windows(None, Some(ts(3)), None, None);
+        assert_eq!(u, Some(ts(3)));
+    }
+
+    #[test]
+    fn intersect_overlapping_windows_yields_intersection() {
+        // a: [10, 40], b: [20, 30] => [20, 30]
+        let (f, u) = intersect_windows(Some(ts(10)), Some(ts(40)), Some(ts(20)), Some(ts(30)));
+        assert_eq!(f, Some(ts(20)));
+        assert_eq!(u, Some(ts(30)));
+    }
+
+    #[test]
+    fn intersect_disjoint_windows_still_computes_inverted_bounds() {
+        // a: [10, 20], b: [30, 40] => from=30, until=20 (empty interval).
+        // The function performs no emptiness check; callers must validate.
+        let (f, u) = intersect_windows(Some(ts(10)), Some(ts(20)), Some(ts(30)), Some(ts(40)));
+        assert_eq!(f, Some(ts(30)));
+        assert_eq!(u, Some(ts(20)));
+    }
+}

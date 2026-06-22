@@ -91,3 +91,135 @@ pub struct ConversationSnippet {
     pub snippet: String,
     pub created_at: DateTime<Utc>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn fact(predicate: &str, confidence: f32) -> RetrievedFact {
+        RetrievedFact {
+            predicate: predicate.to_string(),
+            object_name: None,
+            object_literal: None,
+            confidence,
+            valid_from: None,
+            valid_until: None,
+            status: "active".to_string(),
+            inferred: false,
+        }
+    }
+
+    #[test]
+    fn summary_counts_facts_entities_relations_and_snippets() {
+        let ctx = RetrievedContext {
+            entities: vec![
+                RetrievedEntity {
+                    name: "Alice".to_string(),
+                    entity_type: "person".to_string(),
+                    facts: vec![fact("lives_in", 0.9), fact("works_as", 0.8)],
+                },
+                RetrievedEntity {
+                    name: "Bob".to_string(),
+                    entity_type: "person".to_string(),
+                    facts: vec![fact("knows", 0.5)],
+                },
+            ],
+            relations: vec![RetrievedRelation {
+                subject_name: "Alice".to_string(),
+                predicate: "knows".to_string(),
+                object_name: "Bob".to_string(),
+                depth: 1,
+            }],
+            conversation_snippets: vec![ConversationSnippet {
+                session_id: 1,
+                role: "user".to_string(),
+                snippet: "hi".to_string(),
+                created_at: Utc::now(),
+            }],
+            finish_reason: None,
+            rounds_used: 3,
+        };
+        assert_eq!(
+            ctx.summary(),
+            "Retrieved 3 facts across 2 entities, 1 relations, and 1 conversation snippets"
+        );
+    }
+
+    #[test]
+    fn summary_empty_context_reports_zeros() {
+        let ctx = RetrievedContext::default();
+        assert_eq!(
+            ctx.summary(),
+            "Retrieved 0 facts across 0 entities, 0 relations, and 0 conversation snippets"
+        );
+    }
+
+    #[test]
+    fn same_identity_true_for_equal_facts() {
+        let a = fact("lives_in", 0.9);
+        assert!(a.same_identity(&a));
+    }
+
+    #[test]
+    fn same_identity_false_when_predicate_differs() {
+        let a = fact("lives_in", 0.9);
+        let mut b = a.clone();
+        b.predicate = "works_at".to_string();
+        assert!(!a.same_identity(&b));
+    }
+
+    #[test]
+    fn same_identity_false_when_confidence_differs() {
+        let a = fact("lives_in", 0.9);
+        let b = fact("lives_in", 0.8);
+        assert!(!a.same_identity(&b));
+    }
+
+    #[test]
+    fn same_identity_uses_bit_pattern_for_confidence() {
+        // +0.0 and -0.0 are == as f32 but differ in bit pattern; same_identity
+        // compares bits, so they must be treated as distinct.
+        let a = fact("x", 0.0_f32);
+        let mut b = a.clone();
+        b.confidence = -0.0_f32;
+        assert!(!a.same_identity(&b));
+    }
+
+    #[test]
+    fn same_identity_false_when_status_or_inferred_differs() {
+        let a = fact("x", 0.5);
+        let mut b = a.clone();
+        b.status = "dormant".to_string();
+        assert!(!a.same_identity(&b));
+        let mut c = a.clone();
+        c.inferred = true;
+        assert!(!a.same_identity(&c));
+    }
+
+    #[test]
+    fn same_identity_false_when_temporal_windows_differ() {
+        let a = fact("x", 0.5);
+        let mut b = a.clone();
+        b.valid_from = Some(Utc::now());
+        assert!(!a.same_identity(&b));
+    }
+
+    #[test]
+    fn retrieved_context_serde_roundtrip() {
+        let ctx = RetrievedContext {
+            entities: vec![RetrievedEntity {
+                name: "Alice".to_string(),
+                entity_type: "person".to_string(),
+                facts: vec![fact("lives_in", 0.9)],
+            }],
+            relations: vec![],
+            conversation_snippets: vec![],
+            finish_reason: Some("done".to_string()),
+            rounds_used: 2,
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        let back: RetrievedContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ctx);
+    }
+}

@@ -107,3 +107,158 @@ pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
     let body = Json(ApiError::new(message, code));
     (status, body).into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use serde_json::Value;
+
+    async fn body_json(resp: Response) -> Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice::<Value>(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn json_rejection_returns_400_with_code() {
+        let resp = json_rejection();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "JSON_REJECTION");
+        assert_eq!(body["error"], "invalid JSON body");
+    }
+
+    #[tokio::test]
+    async fn session_not_found_returns_404() {
+        let resp = session_not_found();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "SESSION_NOT_FOUND");
+    }
+
+    #[tokio::test]
+    async fn context_error_returns_500_and_masks_detail() {
+        let resp = context_error(mimir_core::context::ContextError::SessionNotFound(
+            "internal-id".to_string(),
+        ));
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "CONTEXT_ERROR");
+        // Internal detail must not leak to the client.
+        assert_eq!(body["error"], "internal server error");
+        assert!(!body["error"].as_str().unwrap().contains("internal-id"));
+    }
+
+    #[tokio::test]
+    async fn llm_error_queue_full_returns_503_with_retry_after() {
+        let resp = llm_error(mimir_core::llm::types::LlmError::QueueFull);
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(resp.headers().get("retry-after").unwrap(), "5");
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "QUEUE_FULL");
+    }
+
+    #[tokio::test]
+    async fn llm_error_generic_returns_500_without_detail() {
+        let resp = llm_error(mimir_core::llm::types::LlmError::StreamError(
+            "upstream detail".to_string(),
+        ));
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "LLM_ERROR");
+        assert!(!body["error"].as_str().unwrap().contains("upstream detail"));
+    }
+
+    #[tokio::test]
+    async fn memory_error_returns_500_and_masks_detail() {
+        let resp = memory_error(anyhow::anyhow!("disk on fire"));
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "MEMORY_ERROR");
+        assert!(!body["error"].as_str().unwrap().contains("disk on fire"));
+    }
+
+    #[tokio::test]
+    async fn internal_returns_500_with_message_and_code() {
+        let resp = internal("something broke");
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "INTERNAL_ERROR");
+        assert_eq!(body["error"], "something broke");
+    }
+
+    #[tokio::test]
+    async fn not_found_returns_404_with_message() {
+        let resp = not_found("widget missing");
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "NOT_FOUND");
+        assert_eq!(body["error"], "widget missing");
+    }
+
+    #[tokio::test]
+    async fn knowledge_error_validation_returns_400_with_detail() {
+        let resp = knowledge_error(mimir_knowledge::KnowledgeError::Validation(
+            "bad input".to_string(),
+        ));
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "VALIDATION_ERROR");
+        assert_eq!(body["error"], "Validation error: bad input");
+    }
+
+    #[tokio::test]
+    async fn knowledge_error_duplicate_entity_returns_400() {
+        let resp = knowledge_error(mimir_knowledge::KnowledgeError::DuplicateEntity);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "VALIDATION_ERROR");
+    }
+
+    #[tokio::test]
+    async fn knowledge_error_entity_not_found_returns_404_with_detail() {
+        let resp = knowledge_error(mimir_knowledge::KnowledgeError::EntityNotFound(42));
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "NOT_FOUND");
+        assert!(body["error"].as_str().unwrap().contains("42"));
+    }
+
+    #[tokio::test]
+    async fn knowledge_error_fact_not_found_returns_404() {
+        let resp = knowledge_error(mimir_knowledge::KnowledgeError::FactNotFound(7));
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "NOT_FOUND");
+        assert!(body["error"].as_str().unwrap().contains("7"));
+    }
+
+    #[tokio::test]
+    async fn knowledge_error_category_not_found_returns_404() {
+        let resp = knowledge_error(mimir_knowledge::KnowledgeError::CategoryNotFound(3));
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "NOT_FOUND");
+    }
+
+    #[tokio::test]
+    async fn knowledge_error_internal_variant_masks_detail() {
+        // Internal variants (e.g. NotYetImplemented) must NOT leak their detail.
+        let err = mimir_knowledge::KnowledgeError::NotYetImplemented;
+        let resp = knowledge_error(err);
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "KG_ERROR");
+        assert_eq!(body["error"], "internal knowledge graph error");
+    }
+
+    #[tokio::test]
+    async fn api_error_serializes_error_and_code_fields() {
+        let err = ApiError::new("msg", "CODE");
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["error"], "msg");
+        assert_eq!(json["code"], "CODE");
+    }
+}

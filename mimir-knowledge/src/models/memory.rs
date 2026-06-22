@@ -98,3 +98,93 @@ impl Default for MemorySchema {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boost_values_are_ordered() {
+        assert!(MemoryPriority::Critical.boost() > MemoryPriority::High.boost());
+        assert!(MemoryPriority::High.boost() > MemoryPriority::Normal.boost());
+        assert!(MemoryPriority::Normal.boost() > MemoryPriority::Low.boost());
+    }
+
+    #[test]
+    fn boost_exact_values() {
+        assert_eq!(MemoryPriority::Critical.boost(), 2.0);
+        assert_eq!(MemoryPriority::High.boost(), 1.5);
+        assert_eq!(MemoryPriority::Normal.boost(), 1.0);
+        assert_eq!(MemoryPriority::Low.boost(), 0.5);
+    }
+
+    #[test]
+    fn memory_priority_discriminant_nonzero_and_stable() {
+        assert_eq!(MemoryPriority::Critical as i16, 1);
+        assert_eq!(MemoryPriority::High as i16, 2);
+        assert_eq!(MemoryPriority::Normal as i16, 3);
+        assert_eq!(MemoryPriority::Low as i16, 4);
+    }
+
+    #[test]
+    fn new_schema_is_empty_with_zero_scores() {
+        let schema = MemorySchema::new();
+        assert!(schema.identity.is_empty());
+        assert!(schema.relationships.is_empty());
+        assert!(schema.preferences.is_empty());
+        assert!(schema.upcoming.is_empty());
+        assert!(schema.general.is_empty());
+        assert_eq!(schema.total_score, 0.0);
+        assert_eq!(schema.char_count, 0);
+        assert!(schema.all_facts().is_empty());
+    }
+
+    #[test]
+    fn default_equals_new() {
+        assert_eq!(MemorySchema::default(), MemorySchema::new());
+    }
+
+    #[test]
+    fn all_facts_preserves_display_order() {
+        let mk = |id: i32, bucket: MemoryBucket| RankedFact {
+            fact_id: id,
+            subject_name: format!("s{id}"),
+            relationship_type: "r".to_string(),
+            object_display: "o".to_string(),
+            confidence: 1.0,
+            score: 1.0,
+            temporal_boost: 0.0,
+            memory_weight: 1.0,
+            priority_boost: 1.0,
+            centrality_boost: 0.0,
+            category_ids: vec![],
+            bucket,
+            char_estimate: 10,
+        };
+        let schema = MemorySchema {
+            identity: vec![mk(1, MemoryBucket::Identity)],
+            relationships: vec![
+                mk(2, MemoryBucket::Relationships),
+                mk(3, MemoryBucket::Relationships),
+            ],
+            preferences: vec![mk(4, MemoryBucket::Preferences)],
+            upcoming: vec![],
+            general: vec![mk(5, MemoryBucket::General)],
+            total_score: 5.0,
+            char_count: 50,
+        };
+        let all = schema.all_facts();
+        assert_eq!(
+            all.iter().map(|f| f.fact_id).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5]
+        );
+    }
+
+    #[test]
+    fn memory_schema_serde_roundtrip() {
+        let schema = MemorySchema::new();
+        let json = serde_json::to_string(&schema).unwrap();
+        let back: MemorySchema = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, schema);
+    }
+}

@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.54.5] — 2026-06-22
+
+### Review Fixes (PR #169)
+
+Address CodeRabbit review feedback on the tests-and-benchmarks change set.
+
+- **`mimir-api-types`:** `roundtrip_tests!` sparse-field check now parses the
+  serialised JSON into a `serde_json::Map` and asserts key absence via
+  `contains_key`, instead of the previous substring-based `json.contains`
+  that could match field names inside values.
+- **`mimir-client`:** wiremock-backed KB endpoint tests
+  (`kb_query`, `kb_browse`, `kb_profile`, `kb_audit`, `kb_trash`) now assert
+  the expected query-string parameters via `query_param` matchers, catching
+  regressions in query encoding rather than just the route path.
+- **`mimir-core`:** `bench_daily_schedule_next_after` uses a fixed
+  `DateTime<Utc>` reference instead of `Utc::now()`, so the benchmark baseline
+  is deterministic and reproducible across runs. Added
+  `daily_schedule_parse_accepts_non_zero_padded_input` to document chrono's
+  padding-agnostic `%H:%M` parsing.
+- **`mimir` (binary):** Corrected the misleading comment in
+  `truncate_zero_max_yields_just_ellipsis_or_empty` to state the deterministic
+  "just ellipsis" outcome.
+
+## [0.54.4] — 2026-06-21
+
+### Testing & Benchmarks
+
+Workspace-wide expansion of inline unit tests and pure-helper benchmarks on
+the `tests-and-benchmarks` branch.
+
+- **`mimir-api-types`:** 12 → 46 unit tests. New `roundtrip_tests!` macro
+  asserts populated + sparse (all-`None`) serde roundtrips and
+  `skip_serializing_if` omission for every KG wire type.
+- **`mimir-client`:** ~24 → 64 tests. Adds pure unit tests for the SSE parser
+  primitives (`find_double_newline`, `parse_sse_event`) and wiremock-backed
+  tests for all previously-uncovered `MimirClient` methods.
+- **`mimir-core`:** 179 → 211 lib tests. New inline tests for `job_queue`,
+  `tools::{output,permission,error}` pure helpers.
+- **`mimir-knowledge`:** ~74 → 110 lib tests. New inline tests for
+  `models::enums`, `retrieval::types`, `inference::rules::transitivity`,
+  `models::{entity_date,memory}` helpers.
+- **`mimir-server`:** 50 → 65 lib tests. New `error.rs` tests covering every
+  `ApiError` response helper, including verification that internal error
+  details are masked from clients.
+- **`mimir` (binary):** 15 → 29 bin tests. New `kb.rs` tests for
+  `parse_datetime`, `confidence_color`, and `truncate`.
+- **Benchmarks:** three new pure-helper suites — `mimir-api-types/wire_types`,
+  `mimir-core/pure_helpers`, `mimir-knowledge/pure_helpers` — covering
+  non-hotpath pathways (FTS5 escaping, confidence scoring, serde roundtrips,
+  schedule arithmetic, tool-output rendering).
+
+### Documentation
+
+- New `docs/unit-tests.md` and `docs/wiki/Testing-and-Benchmarks.md`;
+  `docs/benchmarks.md` updated with the new pure-helper suites.
+
+### Issues
+
+Triaged nine prescriptive follow-ups as GitHub issues #160–#168
+(api-types `skip_serializing_if` consistency, doc-comment completion,
+`DailySchedule::parse` strictness, `escape_fts5` whitespace, SSE buffer DoS,
+client/LLM construction robustness, client DRY, `parse_datetime` timezone).
+
 ## [0.54.3] — 2026-06-21
 
 ### Security

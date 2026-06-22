@@ -45,7 +45,14 @@ Some facts are too important to store without asking:
 - Relationship status
 - Religious or political beliefs
 
-When Mimir detects a sensitive fact, it stores it as **pending confirmation** and asks you:
+Mimir uses a two-stage check. The AI flags potential sensitive facts, but a
+deterministic Rust validation layer has the final say — it checks the fact's
+catalogue category and object text against a known sensitive set. This prevents
+benign preferences like "I don't like chihuahuas" or "I live in a small flat"
+from being flagged as sensitive just because the AI was overly cautious.
+
+When Mimir confirms a fact is sensitive, it stores it as **pending confirmation**
+and asks you:
 
 > ⚠️ I learned: You have a **PEANUT ALLERGY**. This is a sensitive health fact. Please confirm it is correct.  
 > [Confirm] [Reject]

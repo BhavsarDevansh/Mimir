@@ -293,7 +293,8 @@ async fn test_sensitive_fact_confirmation() {
         "relationship_type": "allergy",
         "object": "peanuts",
         "object_is_entity": false,
-        "is_sensitive": true
+        "is_sensitive": true,
+        "categories": ["230"]
     })]);
 
     let mock = build_mock_with_tool_output(tool_args);
@@ -439,7 +440,8 @@ async fn test_reject_sensitive_fact() {
         "relationship_type": "allergy",
         "object": "shellfish",
         "object_is_entity": false,
-        "is_sensitive": true
+        "is_sensitive": true,
+        "categories": ["230"]
     })]);
 
     let mock = build_mock_with_tool_output(tool_args);
@@ -884,4 +886,201 @@ async fn test_unknown_predicate_registered_even_when_fact_rejected() {
         id.is_some(),
         "predicate should be registered even when its fact is rejected"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #142: Rust sensitivity gate overrides LLM false positives
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_rust_overrides_llm_false_positive_small_flat() {
+    // LLM says sensitive, but category 610 (Current Residence) and "small flat"
+    // are not sensitive — Rust overrides to non-sensitive.
+    let tg = TestGraph::new().await;
+
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "devansh",
+        "subject_type": "Person",
+        "relationship_type": "based_in",
+        "object": "small flat",
+        "object_is_entity": false,
+        "is_sensitive": true,
+        "categories": ["610"]
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let outcome = tg
+        .kg
+        .extract_facts(&mock, "I live in a small flat.")
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.inserted.len(), 1);
+    assert!(outcome.pending_confirmation.is_empty());
+}
+
+#[tokio::test]
+async fn test_rust_overrides_llm_false_positive_chihuahuas() {
+    // "I don't like chihuahuas" — LLM might flag as sensitive (relationship?),
+    // but category 220 (Aversions & Dislikes) and "chihuahuas" are not sensitive.
+    let tg = TestGraph::new().await;
+
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "devansh",
+        "subject_type": "Person",
+        "relationship_type": "dislikes",
+        "object": "chihuahuas",
+        "object_is_entity": false,
+        "is_sensitive": true,
+        "categories": ["220"]
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let outcome = tg
+        .kg
+        .extract_facts(&mock, "I don't like chihuahuas.")
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.inserted.len(), 1);
+    assert!(outcome.pending_confirmation.is_empty());
+}
+
+#[tokio::test]
+async fn test_rust_confirms_llm_true_positive_allergy() {
+    // LLM says sensitive + category 230 (Allergies) → Rust confirms → pending.
+    let tg = TestGraph::new().await;
+
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "devansh",
+        "subject_type": "Person",
+        "relationship_type": "allergy",
+        "object": "peanuts",
+        "object_is_entity": false,
+        "is_sensitive": true,
+        "categories": ["230"]
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let outcome = tg
+        .kg
+        .extract_facts(&mock, "I am allergic to peanuts.")
+        .await
+        .unwrap();
+
+    assert!(outcome.inserted.is_empty());
+    assert_eq!(outcome.pending_confirmation.len(), 1);
+}
+
+#[tokio::test]
+async fn test_rust_confirms_llm_true_positive_salary() {
+    // LLM says sensitive + category 670 (Financial) → pending.
+    let tg = TestGraph::new().await;
+
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "devansh",
+        "subject_type": "Person",
+        "relationship_type": "salary",
+        "object": "$100k",
+        "object_is_entity": false,
+        "is_sensitive": true,
+        "categories": ["670"]
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let outcome = tg
+        .kg
+        .extract_facts(&mock, "My salary is $100k.")
+        .await
+        .unwrap();
+
+    assert!(outcome.inserted.is_empty());
+    assert_eq!(outcome.pending_confirmation.len(), 1);
+}
+
+#[tokio::test]
+async fn test_rust_confirms_llm_true_positive_diabetes() {
+    // LLM says sensitive + category 320 (Current Conditions) → pending.
+    let tg = TestGraph::new().await;
+
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "devansh",
+        "subject_type": "Person",
+        "relationship_type": "health_condition",
+        "object": "diabetes",
+        "object_is_entity": false,
+        "is_sensitive": true,
+        "categories": ["320"]
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let outcome = tg
+        .kg
+        .extract_facts(&mock, "I have diabetes.")
+        .await
+        .unwrap();
+
+    assert!(outcome.inserted.is_empty());
+    assert_eq!(outcome.pending_confirmation.len(), 1);
+}
+
+#[tokio::test]
+async fn test_llm_non_sensitive_never_becomes_sensitive() {
+    // LLM says non-sensitive, even though category 320 is sensitive — Rust
+    // cannot widen.
+    let tg = TestGraph::new().await;
+
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "devansh",
+        "subject_type": "Person",
+        "relationship_type": "health_condition",
+        "object": "diabetes",
+        "object_is_entity": false,
+        "is_sensitive": false,
+        "categories": ["320"]
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let outcome = tg
+        .kg
+        .extract_facts(&mock, "I have diabetes.")
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.inserted.len(), 1);
+    assert!(outcome.pending_confirmation.is_empty());
+}
+
+#[tokio::test]
+async fn test_content_keyword_catches_miscategorised_sensitive_fact() {
+    // LLM says sensitive but assigns a non-sensitive category — the content
+    // keyword "allergic" catches it as a fallback.
+    let tg = TestGraph::new().await;
+
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "devansh",
+        "subject_type": "Person",
+        "relationship_type": "dislikes",
+        "object": "allergic to peanuts",
+        "object_is_entity": false,
+        "is_sensitive": true,
+        "categories": ["220"]
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let outcome = tg
+        .kg
+        .extract_facts(&mock, "I am allergic to peanuts.")
+        .await
+        .unwrap();
+
+    assert!(outcome.inserted.is_empty());
+    assert_eq!(outcome.pending_confirmation.len(), 1);
 }

@@ -40,6 +40,7 @@ User message
 ## Files
 
 - `mimir-knowledge/src/extract.rs` — pipeline implementation
+- `mimir-knowledge/src/sensitivity.rs` — deterministic sensitivity gate (category + content checks)
 - `mimir-knowledge/src/lib.rs` — `KnowledgeGraph` facade methods
 - `mimir-knowledge/tests/extraction_test.rs` — 11 integration tests
 - `mimir-knowledge/src/db/migrations/026_add_pending_confirmation.sql`
@@ -62,7 +63,7 @@ The `remember` tool schema is a JSON object with a `facts` array. Each fact cont
 | `is_sensitive` | Boolean |
 | `correction_scope` | ISO-8601 datetime or `"always"` |
 
-The extraction prompt defines role, schema, classification criteria, and sensitive categories. It contains **no conditional logic, no workflow instructions, and no "if X then Y"** — all of that lives in Rust.
+The extraction prompt defines role, schema, classification criteria, and a softened sensitivity instruction ("Flag health, financial, relationship, religious, political, or legal facts. Mimir will validate your assessment."). It contains **no conditional logic, no workflow instructions, and no "if X then Y"** — all of that lives in Rust.
 
 ## Rust Validation
 
@@ -101,7 +102,36 @@ Confidence is **never** taken from the LLM. It is derived from classification:
 
 ## Sensitive Fact Confirmation
 
-Facts flagged as `is_sensitive = true` by the LLM are gated:
+### Rust Sensitivity Gate (#142)
+
+Sensitivity is validated in Rust, not delegated to the LLM. The LLM provides an
+initial `is_sensitive` flag, but Rust applies a deterministic **AND gate** using
+two independent signals in `mimir-knowledge/src/sensitivity.rs`:
+
+1. **Category check** (`is_sensitive_by_category`) — does the fact belong to a
+   known sensitive catalogue category? The `SENSITIVE_CATEGORIES` constant
+   lists the Dewey-Decimal category IDs that require confirmation (health,
+   allergies, financial, romantic, cultural/religious, values/philosophy).
+2. **Content check** (`is_sensitive_by_content`) — does the fact's object text
+   contain a sensitive keyword (e.g. "allergic", "diabetes", "salary", "debt",
+   "divorce", "citizenship")? This is the fallback for miscategorised facts.
+
+The combined `is_sensitive(llm_flag, category_ids, object)` function implements:
+
+| LLM says | Rust says | Result |
+|----------|-----------|--------|
+| sensitive | sensitive | **sensitive** |
+| sensitive | non-sensitive | **non-sensitive** (Rust overrides) |
+| non-sensitive | anything | **non-sensitive** |
+
+Rust can only **narrow** the LLM's assessment — it never flags a fact as
+sensitive when the LLM did not. This eliminates the false-positive problem where
+benign preferences ("I don't like chihuahuas", "I live in a small flat") were
+routed into pending confirmation.
+
+### Pending Flow
+
+Facts that pass the sensitivity gate are:
 
 1. Inserted as `Disputed` with `pending_confirmation = TRUE`.
 2. Added to an in-memory `HashSet<i32>` cache (rebuilt from DB on startup).

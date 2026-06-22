@@ -16,6 +16,7 @@ pub mod models;
 pub mod optimization;
 pub mod queries;
 pub mod retrieval;
+pub mod sensitivity;
 pub mod tools;
 
 use clock::{Clock, RealClock};

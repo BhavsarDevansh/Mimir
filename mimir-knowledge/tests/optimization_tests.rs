@@ -257,7 +257,7 @@ async fn insert_pending_fact(kg: &KnowledgeGraph, object: &str) -> i32 {
                 temporal: None,
                 is_sensitive: true,
                 correction_scope: None,
-                categories: Vec::new(),
+                categories: vec!["230".to_string()],
             }],
         },
     )

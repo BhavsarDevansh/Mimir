@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.54.5] — 2026-06-22
+
+### Review Fixes (PR #169)
+
+Address CodeRabbit review feedback on the tests-and-benchmarks change set.
+
+- **`mimir-api-types`:** `roundtrip_tests!` sparse-field check now parses the
+  serialised JSON into a `serde_json::Map` and asserts key absence via
+  `contains_key`, instead of the previous substring-based `json.contains`
+  that could match field names inside values.
+- **`mimir-client`:** wiremock-backed KB endpoint tests
+  (`kb_query`, `kb_browse`, `kb_profile`, `kb_audit`, `kb_trash`) now assert
+  the expected query-string parameters via `query_param` matchers, catching
+  regressions in query encoding rather than just the route path.
+- **`mimir-core`:** `bench_daily_schedule_next_after` uses a fixed
+  `DateTime<Utc>` reference instead of `Utc::now()`, so the benchmark baseline
+  is deterministic and reproducible across runs. Added
+  `daily_schedule_parse_accepts_non_zero_padded_input` to document chrono's
+  padding-agnostic `%H:%M` parsing.
+- **`mimir` (binary):** Corrected the misleading comment in
+  `truncate_zero_max_yields_just_ellipsis_or_empty` to state the deterministic
+  "just ellipsis" outcome.
+
 ## [0.54.4] — 2026-06-21
 
 ### Testing & Benchmarks
@@ -1326,26 +1349,3 @@ client/LLM construction robustness, client DRY, `parse_datetime` timezone).
   - Updated `Personality::system_prompt()` in `mimir-core/src/personality.rs`.
   - Updated unit tests, integration tests, and server integration tests to assert the note is present.
   - Updated documentation in `docs/personality-system.md`, `docs/wiki/personality.md`, and `docs/wiki/what-works-now.md`.
-
-## [0.54.5] — 2026-06-22
-
-### Review Fixes (PR #169)
-
-Address CodeRabbit review feedback on the tests-and-benchmarks change set.
-
-- **`mimir-api-types`:** `roundtrip_tests!` sparse-field check now parses the
-  serialised JSON into a `serde_json::Map` and asserts key absence via
-  `contains_key`, instead of the previous substring-based `json.contains`
-  that could match field names inside values.
-- **`mimir-client`:** wiremock-backed KB endpoint tests
-  (`kb_query`, `kb_browse`, `kb_profile`, `kb_audit`, `kb_trash`) now assert
-  the expected query-string parameters via `query_param` matchers, catching
-  regressions in query encoding rather than just the route path.
-- **`mimir-core`:** `bench_daily_schedule_next_after` uses a fixed
-  `DateTime<Utc>` reference instead of `Utc::now()`, so the benchmark baseline
-  is deterministic and reproducible across runs. Added
-  `daily_schedule_parse_accepts_non_zero_padded_input` to document chrono's
-  padding-agnostic `%H:%M` parsing.
-- **`mimir` (binary):** Corrected the misleading comment in
-  `truncate_zero_max_yields_just_ellipsis_or_empty` to state the deterministic
-  "just ellipsis" outcome.

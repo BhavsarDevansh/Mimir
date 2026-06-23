@@ -12,7 +12,7 @@ When Mimir starts executing a tool, you'll first see a "working" indicator:
 🔧 Get Current Time…
 ```
 
-Once the tool finishes, the result replaces it:
+Once the tool finishes, the result is displayed as a separate line:
 
 ```text
 🔧 Get Current Time → 2025-05-30T12:00:00Z

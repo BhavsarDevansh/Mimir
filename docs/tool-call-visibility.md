@@ -45,7 +45,7 @@ Each tool has a `display_name` derived from its `name()` via `snake_to_title_cas
 
 ### Terminal Rendering
 
-Tool calls are rendered in the CLI using `colored` crate with `.dimmed().italic()` styling. When a tool starts executing, a "working" indicator is shown; once the result arrives, it is replaced by the full summary:
+Tool calls are rendered in the CLI using `colored` crate with `.dimmed().italic()` styling. When a tool starts executing, a "working" indicator is shown; once the result arrives, the full summary is displayed as a separate line:
 
 ```text
 🔧 Get Current Time…

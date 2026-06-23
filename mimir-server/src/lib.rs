@@ -2881,6 +2881,11 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
+        // Drain the SSE response body to ensure stream processing completes.
+        let _bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
         // No entity/fact should have been created during the incognito turn.
         let found = kg.search_entities("Incognito Test User", 10).await.unwrap();
         assert!(

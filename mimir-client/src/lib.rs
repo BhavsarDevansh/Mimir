@@ -8,7 +8,7 @@ use mimir_api_types::{
     ForgetResponse, OptimizationRunNowResponse, OptimizationStatusResponse, PendingListResponse,
     ProfileRequest, ProfileResponse, RejectFactRequest, RestoreRequest, RestoreResponse,
     SessionMessagesResponse, SessionSummary, StatusResponse, StreamItem, ToolCallInfo,
-    TrashListResponse, Usage,
+    ToolCallStartInfo, TrashListResponse, Usage,
 };
 use reqwest::StatusCode;
 use thiserror::Error;
@@ -562,6 +562,10 @@ fn parse_sse_event(event: &str) -> Option<Result<StreamItem, ClientError>> {
         },
         "tool_call" => match serde_json::from_str::<ToolCallInfo>(&data) {
             Ok(info) => Some(Ok(StreamItem::ToolCall(info))),
+            Err(e) => Some(Err(ClientError::Serialization(e))),
+        },
+        "tool_call_start" => match serde_json::from_str::<ToolCallStartInfo>(&data) {
+            Ok(info) => Some(Ok(StreamItem::ToolCallStart(info))),
             Err(e) => Some(Err(ClientError::Serialization(e))),
         },
         "session_id" => match serde_json::from_str::<serde_json::Value>(&data) {
@@ -1146,6 +1150,22 @@ mod tests {
                 name: "echo".to_string(),
                 display_name: "Echo".to_string(),
                 result: "hi".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_sse_event_tool_call_start() {
+        let item = parse_sse_event(
+            "event: tool_call_start\ndata: {\"name\":\"echo\",\"display_name\":\"Echo\"}\n",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            item,
+            StreamItem::ToolCallStart(ToolCallStartInfo {
+                name: "echo".to_string(),
+                display_name: "Echo".to_string(),
             })
         );
     }

@@ -6,7 +6,13 @@ When Mimir uses a tool during a conversation, you'll now see it in the chat outp
 
 ## How It Looks
 
-When Mimir calls a tool, you'll see something like:
+When Mimir starts executing a tool, you'll first see a "working" indicator:
+
+```text
+🔧 Get Current Time…
+```
+
+Once the tool finishes, the result replaces it:
 
 ```text
 🔧 Get Current Time → 2025-05-30T12:00:00Z
@@ -41,7 +47,8 @@ max_tool_rounds = 100  # Default: 100
 
 1. You send a message
 2. Mimir's LLM decides which tools to call (if any)
-3. Each tool executes and its result is shown in the chat
-4. Mimir's LLM sees the results and decides if it needs more information
-5. Steps 2-4 repeat until Mimir has enough context to answer
-6. Mimir sends its final response
+3. A "working" indicator is shown as each tool starts
+4. Each tool executes and its result is shown in the chat
+5. Mimir's LLM sees the results and decides if it needs more information
+6. Steps 2-5 repeat until Mimir has enough context to answer
+7. Mimir sends its final response

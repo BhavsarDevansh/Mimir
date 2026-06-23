@@ -51,6 +51,18 @@ impl ToolCallInfo {
     }
 }
 
+/// Metadata emitted at the start of a tool call, before the result is known.
+///
+/// Sent via the `tool_call_start` SSE event so the client can show a
+/// "working" indicator while the tool executes.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ToolCallStartInfo {
+    /// Snake_case tool identifier.
+    pub name: String,
+    /// Human-readable display name (e.g. "Get Current Time").
+    pub display_name: String,
+}
+
 /// Request body for chat endpoints.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ChatRequest {
@@ -154,6 +166,8 @@ pub enum StreamItem {
     ToolCall(ToolCallInfo),
     /// Server-assigned session ID (emitted once at stream start).
     SessionId(String),
+    /// Tool call has started executing (result not yet available).
+    ToolCallStart(ToolCallStartInfo),
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +598,24 @@ mod tests {
         assert_eq!(item, StreamItem::Text("hello".to_string()));
         assert_ne!(item, StreamItem::Usage(Usage::default()));
         assert_ne!(item, StreamItem::SessionId("sess-1".to_string()));
+        assert_ne!(
+            item,
+            StreamItem::ToolCallStart(ToolCallStartInfo {
+                name: "echo".to_string(),
+                display_name: "Echo".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_tool_call_start_info_roundtrip() {
+        let info = ToolCallStartInfo {
+            name: "get_current_time".to_string(),
+            display_name: "Get Current Time".to_string(),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let back: ToolCallStartInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(info, back);
     }
 
     #[test]

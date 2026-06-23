@@ -277,6 +277,9 @@ pub async fn handle_chat(base_url: &str, opts: ChatOptions) {
                                     .italic()
                             );
                         }
+                        Ok(mimir_api_types::StreamItem::ToolCallStart(info)) => {
+                            eprintln!("{}", format!("🔧 {}…", info.display_name).dimmed().italic());
+                        }
                         Err(e) => {
                             eprintln!(
                                 "

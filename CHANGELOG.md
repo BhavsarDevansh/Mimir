@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.56.1] — 2026-06-23
+
+### Bugfix
+
+- **Tool-call-start JSON printed to console.** The server emits a
+  `tool_call_start` SSE event (containing `name` and `display_name`) before a
+  tool executes, but the client SSE parser had no arm for that event type, so
+  the raw JSON payload fell through to the default text path and was printed
+  verbatim alongside the formatted result line. Added a `ToolCallStartInfo`
+  type and `StreamItem::ToolCallStart` variant, a matching parser arm, and CLI
+  handling so the event renders as a dim "🔧 DisplayName…" indicator instead
+  of leaking JSON.
+
 ## [0.56.0] — 2026-06-23
 
 ### Bug & Performance Sweep

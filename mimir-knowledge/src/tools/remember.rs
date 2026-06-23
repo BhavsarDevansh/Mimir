@@ -39,6 +39,10 @@ impl Tool for RememberTool {
         ToolPermission::Auto
     }
 
+    fn is_write_tool(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError> {
         let output: RememberOutput = serde_json::from_value(args).map_err(|e| {
             ToolError::invalid_arguments("remember", format!("invalid JSON args: {}", e))

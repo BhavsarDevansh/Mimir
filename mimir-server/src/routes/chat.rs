@@ -43,7 +43,13 @@ async fn execute_tool_call(
     kg: Arc<mimir_knowledge::KnowledgeGraph>,
     context_manager: Arc<mimir_core::context::ContextManager>,
     llm: Arc<dyn mimir_core::llm::LlmBackend>,
+    incognito: bool,
 ) -> Result<mimir_core::tools::ToolOutput, mimir_core::tools::ToolError> {
+    // Honour the incognito contract: never execute write-capable tools during
+    // an incognito turn so no facts are persisted (issue #155).
+    if incognito && registry.is_write_tool(tool_name) {
+        return Err(mimir_core::tools::ToolError::blocked_incognito(tool_name));
+    }
     let args = serde_json::from_str(tool_arguments).unwrap_or(serde_json::Value::Null);
     if tool_name == mimir_knowledge::RetrieveContextTool::NAME {
         if let Some(metadata) = registry.metadata(tool_name) {
@@ -129,6 +135,11 @@ async fn resolve_chat_state(
     };
 
     let llm = state.resolve_llm(req.model.clone());
+    // Apply the live configuration temperature so hot-reloaded changes take
+    // effect without restarting the daemon (issue #80).
+    let llm = llm
+        .with_temperature_override(cfg.llm.temperature)
+        .unwrap_or(llm);
 
     let session_id = if incognito {
         INCOGNITO_COUNTER.fetch_sub(1, Ordering::SeqCst)
@@ -228,7 +239,9 @@ pub async fn chat_handler(
     state.record_user_activity();
 
     let max_rounds = state.config.snapshot().await.agent.max_tool_rounds;
-    let tools_opt = state.tool_registry.export_openai_tools_for_llm();
+    let tools_opt = state
+        .tool_registry
+        .export_openai_tools_for_llm_with_writes(!incognito);
 
     let mut conversation = messages;
     let mut tool_call_info: Vec<mimir_api_types::ToolCallInfo> = Vec::new();
@@ -268,6 +281,7 @@ pub async fn chat_handler(
                         Arc::clone(&state.knowledge_graph),
                         Arc::clone(&state.context_manager),
                         Arc::clone(&llm),
+                        incognito,
                     )
                     .await
                     {
@@ -346,7 +360,9 @@ pub async fn chat_stream_handler(
     state.record_user_activity();
 
     let max_rounds = state.config.snapshot().await.agent.max_tool_rounds;
-    let tools_opt = state.tool_registry.export_openai_tools_for_llm();
+    let tools_opt = state
+        .tool_registry
+        .export_openai_tools_for_llm_with_writes(!incognito);
 
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<Event>(16);
 
@@ -522,6 +538,7 @@ pub async fn chat_stream_handler(
                     Arc::clone(&kg_clone),
                     Arc::clone(&context_manager_clone),
                     Arc::clone(&llm_clone),
+                    incognito,
                 )
                 .await
                 {

@@ -28,6 +28,11 @@ pub trait LlmBackend: Send + Sync + Debug {
 - Introspection methods (`user_queue_depth`, `system_queue_depth`,
   `worker_threads`, `user_queue_has_capacity`) have **sensible defaults** (zero / true)
   so simple backends do not need to implement them.
+- `with_model_override(model)` and `with_temperature_override(temperature)` return
+  `Option<Arc<dyn LlmBackend>>` (default `None`). The chat route applies the live
+  config snapshot temperature per request via `with_temperature_override` so
+  hot-reloaded `llm.temperature` changes take effect without restarting the
+  daemon (issue #80).
 
 ## Type Aliases
 

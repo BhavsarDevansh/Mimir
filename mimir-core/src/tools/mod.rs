@@ -61,6 +61,14 @@ pub trait Tool: Send + Sync {
 
     /// Execute the tool with the given JSON arguments.
     async fn execute(&self, args: Value) -> Result<ToolOutput, ToolError>;
+
+    /// Whether this tool mutates persistent state (e.g. writes facts to the
+    /// knowledge graph). Incognito turns suppress write-capable tools so that
+    /// no persistence occurs, honouring the incognito contract (issue #155).
+    /// Defaults to `false` (read-only).
+    fn is_write_tool(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

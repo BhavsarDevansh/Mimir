@@ -115,7 +115,9 @@ pub struct OptimizationRunSummary {
     pub run_id: i64,
     pub status: String,
     pub started_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -124,8 +126,11 @@ pub struct OptimizationRunSummary {
 pub struct OptimizationStatusResponse {
     pub job_id: String,
     pub priority: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_run_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_run: Option<OptimizationRunSummary>,
 }
 
@@ -135,7 +140,9 @@ pub struct OptimizationRunNowResponse {
     pub run_id: i64,
     pub status: String,
     pub started_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -217,13 +224,16 @@ pub struct AuditRow {
     pub audit_id: i32,
     pub fact_id: i32,
     pub change_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub entity_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub predicate_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub old_value: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_value: Option<String>,
     pub changed_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub changed_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -299,8 +309,11 @@ pub struct BrowseResponse {
 pub struct CategoryResponse {
     pub id: i32,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_weight: Option<f32>,
 }
 
@@ -309,8 +322,11 @@ pub struct CategoryResponse {
 pub struct CategoryDetailResponse {
     pub id: i32,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_weight: Option<f32>,
     pub fact_count: i64,
     pub children: Vec<CategoryResponse>,
@@ -420,8 +436,11 @@ pub struct RestoreResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TrashRow {
     pub trash_id: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub predicate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub object: Option<String>,
     pub deleted_at: String,
     pub expires_at: String,
@@ -769,7 +788,10 @@ line2",
         sparse_skips: [
             "old_value",
             "new_value",
-            "reason"
+            "reason",
+            "entity_name",
+            "predicate_name",
+            "changed_by"
         ]
     );
 
@@ -883,9 +905,9 @@ line2",
             name: "people".to_string(),
             description: None,
             parent_id: None,
-            memory_weight: None,
-        },
-        sparse_skips: []
+           memory_weight: None,
+       },
+       sparse_skips: ["description", "parent_id", "memory_weight"]
     );
 
     #[test]
@@ -1085,7 +1107,7 @@ line2",
             deleted_at: "2020-01-01T00:00:00Z".to_string(),
             expires_at: "2021-01-01T00:00:00Z".to_string(),
         },
-        sparse_skips: []
+        sparse_skips: ["subject", "predicate", "object"]
     );
 
     #[test]
@@ -1119,6 +1141,25 @@ line2",
     }
 
     roundtrip_tests!(
+        optimization_run_summary_sparse,
+        full: OptimizationRunSummary {
+            run_id: 1,
+            status: "completed".to_string(),
+            started_at: "2020-01-01T00:00:00Z".to_string(),
+            finished_at: Some("2020-01-01T00:05:00Z".to_string()),
+            error: Some("boom".to_string()),
+        },
+        sparse: OptimizationRunSummary {
+            run_id: 2,
+            status: "running".to_string(),
+            started_at: "2020-01-01T00:00:00Z".to_string(),
+            finished_at: None,
+            error: None,
+        },
+        sparse_skips: ["finished_at", "error"]
+    );
+
+    roundtrip_tests!(
         optimization_status_response,
         full: OptimizationStatusResponse {
             job_id: "kg-optimization".to_string(),
@@ -1140,7 +1181,7 @@ line2",
             next_run_at: None,
             last_run: None,
         },
-        sparse_skips: []
+        sparse_skips: ["schedule", "next_run_at", "last_run"]
     );
 
     roundtrip_tests!(
@@ -1159,7 +1200,7 @@ line2",
             finished_at: None,
             error: None,
         },
-        sparse_skips: []
+        sparse_skips: ["finished_at", "error"]
     );
 
     roundtrip_tests!(

@@ -67,7 +67,9 @@ Sends a single query to the configured LLM. Supports:
 Interactive REPL with:
 - Persistent history at `~/.config/mimir/history.txt`
 - Multi-line input (trailing `\` to continue)
-- Built-in commands: `/exit`, `/clear`, `/memory`, `/status`, `/help`
+- Built-in commands: `/exit`, `/clear`, `/memory`, `/status`, `/history`, `/help`
+- Session options (issue #81): `--model`, `--verbose`/`-v`, `--incognito`, `--personality`/`-p`
+- Runtime slash-commands: `/model [m]`, `/personality [p]`, `/incognito [on|off]`, `/verbose [on|off]` to show or toggle per-session state
 - Ctrl+C during input exits, Ctrl+C during streaming aborts
 - Conversation context managed via `ContextManager`
 

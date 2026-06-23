@@ -57,7 +57,23 @@ pub enum Commands {
         personality: Option<String>,
     },
     /// Start an interactive chat REPL.
-    Chat,
+    Chat {
+        /// Override the configured LLM model for this session.
+        #[arg(short = 'm', long)]
+        model: Option<String>,
+
+        /// Print token usage after each response.
+        #[arg(short = 'v', long)]
+        verbose: bool,
+
+        /// Skip context persistence and memory learning.
+        #[arg(long)]
+        incognito: bool,
+
+        /// Override the personality preset.
+        #[arg(short = 'p', long)]
+        personality: Option<String>,
+    },
     /// Display system status and connectivity.
     Status,
     /// Print the live condensed memory block.

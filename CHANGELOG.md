@@ -1,5 +1,61 @@
 # Changelog
 
+## [0.56.0] — 2026-06-23
+
+### Bug & Performance Sweep
+
+Address all open `bug` and `performance` labelled issues. Each was verified
+before fixing; performance changes include before/after measurements.
+
+#### Bugs
+
+- **#45 — `get_current_time` returns UTC instead of user's time zone.** The
+  tool now returns a structured payload (`local`, `utc`, `offset`) derived
+  from the host's local timezone via `chrono::Local`, so the agent can derive
+  UTC from the offset. The formatting helper is generic over the timezone for
+  deterministic unit testing.
+- **#80 — Some config settings don't do anything (temperature).** The LLM
+  client captured `temperature` at startup, so hot-reloaded changes had no
+  effect. Added `LlmBackend::with_temperature_override`; the chat route now
+  applies the live config snapshot temperature per request.
+- **#81 — Certain CLI commands don't work.** `mimir chat` accepted no flags
+  and always sent `model`/`personality`/`incognito` as `None`, ignoring
+  `--verbose`. Added `--model`, `--verbose`, `--incognito`, `--personality`
+  flags plus REPL slash-commands (`/model`, `/personality`, `/incognito`,
+  `/verbose`) that toggle at runtime; verbose now reports token usage.
+- **#155 — Incognito mode can still write facts via `remember`.** Added a
+  `Tool::is_write_tool` marker (default `false`); `RememberTool` opts in. The
+  chat routes now suppress write-capable tools from the exported tool set and
+  refuse to execute them during incognito turns, so no facts are persisted.
+
+#### Performance
+
+- **#160 — `api-types` leaks `null` fields in KG wire types.** Added
+  `#[serde(skip_serializing_if = "Option::is_none")]` to the sparse `Option`
+  fields of `AuditRow`, `CategoryResponse`, `CategoryDetailResponse`,
+  `TrashRow`, `OptimizationStatusResponse`, `OptimizationRunNowResponse`, and
+  `OptimizationRunSummary`. Sparse payload sizes shrink 42–75% per row
+  (e.g. a sparse `AuditRow` is 64 B vs 123 B; a sparse `CategoryResponse` is
+  19 B vs 76 B).
+- **#163 — `escape_fts5` keeps leading/trailing whitespace in the phrase.**
+  The quoted phrase now uses the trimmed value so padded queries no longer
+  alter FTS5 phrase-matching semantics. `fts5_escape_mixed_inputs` benchmark:
+  1.41 µs → 1.26 µs (~7% incidental).
+- **#164 — SSE stream parser has unbounded buffer growth and O(n²) scan.**
+  The client SSE parser now caps a single event at 1 MiB (emitting a
+  `ClientError` on overflow) and resumes the delimiter scan from the last
+  inspected offset (using `memchr::memmem`), making the cost linear in the
+  event size. Benchmark on the partial-event accumulation path:
+  - 1024 chunks: 31.5 ms → 542 µs (~58×)
+  - 4096 chunks: 494.9 ms → 1.21 ms (~408×)
+
+### Notes
+
+- `memchr` 2.8 added to `mimir-client`.
+- Five pre-existing `mimir-server` KB pending/confirm/reject tests fail on
+  `main` independently of this change (index-out-of-bounds in
+  `insert_pending_fact`); left untouched per scope.
+
 ## [0.55.1] — 2026-06-23
 
 ### Sensitivity Content Check: Word-Boundary Matching (#142)

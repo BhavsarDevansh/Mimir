@@ -39,12 +39,14 @@ Object-safe async trait (via `async-trait`) that every tool implements:
 | `description()` | LLM-facing explanation |
 | `parameters_schema()` | JSON Schema object for arguments |
 | `permission()` | Default `ToolPermission` |
+| `is_write_tool()` | Whether the tool mutates persistent state (default `false`). Used to suppress write-capable tools during incognito turns (issue #155). |
 | `execute(args)` | Async invocation with `serde_json::Value` |
 
 ### `ToolRegistry`
 
 - Thread-safe via `RwLock<HashMap<String, ToolEntry>>`
 - Methods: `register`, `get`, `metadata`, `set_permission`, `list`, `export_openai_tools`, `execute`
+- Export helpers (issue #155): `export_openai_tools_filtered(allow_write_tools)`, `export_openai_tools_for_llm_with_writes(allow_write_tools)`, and `is_write_tool(name)` suppress write-capable tools (e.g. `remember`) from the LLM tool set and execution path during incognito turns
 - `with_builtins()` creates a pre-populated registry with `GetCurrentTimeTool` and `EchoTool`
 
 ### `ToolPermission`
@@ -61,7 +63,7 @@ Structured result carrying `result`, `error`, `stdout`, `stderr`, and `exit_code
 
 ### `ToolError`
 
-Centralised error enum covering permission, timeout, invalid arguments, missing tools, CLI process failures, and schema errors.
+Centralised error enum covering permission, timeout, invalid arguments, missing tools, CLI process failures, and schema errors, plus `BlockedIncognito` for write-capable tools refused during incognito turns (issue #155).
 
 ## Built-in Tools
 

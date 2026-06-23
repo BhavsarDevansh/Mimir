@@ -2692,4 +2692,135 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
+
+    #[tokio::test]
+    async fn test_incognito_blocks_remember_tool_and_writes_no_facts() {
+        let tool_call = ToolCall {
+            index: 0,
+            id: "call_remember".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "remember".to_string(),
+                arguments: serde_json::json!({
+                    "facts": [{
+                        "classification": "Explicit",
+                        "subject": "Incognito Test User",
+                        "subject_type": "Person",
+                        "relationship_type": "based_in",
+                        "object": "London",
+                        "object_is_entity": false,
+                        "is_sensitive": false,
+                        "categories": []
+                    }]
+                })
+                .to_string(),
+            },
+        };
+        let first = Message {
+            role: "assistant".to_string(),
+            content: String::new(),
+            tool_calls: Some(vec![tool_call]),
+            tool_call_id: None,
+        };
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_chat_message(first, Usage::default())
+                .push_chat("Noted.", Usage::default())
+                .build(),
+        );
+        let (state, _temp) = test_state(mock).await;
+        let kg = Arc::clone(&state.knowledge_graph);
+        let app = super::build_app(state);
+
+        let body = serde_json::to_string(&serde_json::json!({
+            "message": "remember that I am based in London",
+            "incognito": true,
+        }))
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // No entity/fact should have been created during the incognito turn.
+        let found = kg.search_entities("Incognito Test User", 10).await.unwrap();
+        assert!(
+            found.is_empty(),
+            "incognito turn must not persist entities, got: {found:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_non_incognito_allows_remember_tool_and_persists_fact() {
+        // Control: the same tool call persists a fact when not incognito,
+        // proving the incognito guard is what prevents writes (issue #155).
+        let tool_call = ToolCall {
+            index: 0,
+            id: "call_remember".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "remember".to_string(),
+                arguments: serde_json::json!({
+                    "facts": [{
+                        "classification": "Explicit",
+                        "subject": "Incognito Test User",
+                        "subject_type": "Person",
+                        "relationship_type": "based_in",
+                        "object": "London",
+                        "object_is_entity": false,
+                        "is_sensitive": false,
+                        "categories": []
+                    }]
+                })
+                .to_string(),
+            },
+        };
+        let first = Message {
+            role: "assistant".to_string(),
+            content: String::new(),
+            tool_calls: Some(vec![tool_call]),
+            tool_call_id: None,
+        };
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_chat_message(first, Usage::default())
+                .push_chat("Noted.", Usage::default())
+                .build(),
+        );
+        let (state, _temp) = test_state(mock).await;
+        let kg = Arc::clone(&state.knowledge_graph);
+        let app = super::build_app(state);
+
+        let body = serde_json::to_string(&serde_json::json!({
+            "message": "remember that I am based in London",
+            "incognito": false,
+        }))
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let found = kg.search_entities("Incognito Test User", 10).await.unwrap();
+        assert!(
+            !found.is_empty(),
+            "non-incognito turn should persist the entity/fact"
+        );
+    }
 }

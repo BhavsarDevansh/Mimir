@@ -88,6 +88,25 @@ hotpath. All use `std::hint::black_box` to defeat optimisation.
 cargo bench -p mimir-api-types --bench wire_types
 ```
 
+## `mimir-client` — `sse_parser`
+
+Added in v0.56.0 (issue #164) to cover the client-side SSE stream parser on
+the partial-event accumulation path (many chunks with no delimiter followed by
+a terminator). It compares the legacy O(n²) full-buffer rescan against the
+fixed cursor-based scan with a 1 MiB event cap.
+
+| Benchmark | What it measures |
+|-----------|------------------|
+| `sse_accumulate/legacy_chunks_{256,1024,4096}` | Legacy O(n²) parser accumulating N chunks |
+| `sse_accumulate/fixed_chunks_{256,1024,4096}` | Fixed O(n) capped parser accumulating N chunks |
+
+```bash
+cargo bench -p mimir-client --bench sse_parser
+```
+
+Indicative results: 1024 chunks 31.5 ms → 542 µs (~58×); 4096 chunks 494.9 ms →
+1.21 ms (~408×).
+
 ### `mimir-core` — `pure_helpers`
 
 | Benchmark | What it measures |

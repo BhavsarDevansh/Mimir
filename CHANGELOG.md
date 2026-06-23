@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.55.1] — 2026-06-23
+
+### Sensitivity Content Check: Word-Boundary Matching (#142)
+
+Fix a false-positive vector flagged in PR review. The keyword-based content
+fallback (`is_sensitive_by_content`) previously matched keywords as raw
+substrings, so benign words containing a sensitive keyword (e.g. "hospitality"
+contains "hospital", "indebted" contains "debt", "visage" contains "visa")
+could be confirmed sensitive whenever the LLM also set `is_sensitive=true`.
+
+- **`mimir-knowledge/src/sensitivity.rs`:** `is_sensitive_by_content` now
+  matches each keyword as a whole word using ASCII alphanumeric boundaries via
+  the new private `contains_keyword_word` helper, eliminating embedded-word
+  false positives while still catching genuine single-word uses like "diabetes"
+  or "allergic".
+- **Tests:** Added word-boundary regression tests for "hospitality", "indebted",
+  and "visage", plus a trailing-punctuation case and a genuine "hospital" word
+  case.
+
+## [0.55.0] — 2026-06-22
+
+### Rework Sensitivity Detection (#142)
+
+Move sensitivity detection from LLM-only to deterministic Rust validation,
+eliminating false positives where benign preferences were routed into the
+pending-confirmation dead end.
+
+- **New module `mimir-knowledge/src/sensitivity.rs`:** Pure, synchronous
+  sensitivity gate with two signals:
+  - `is_sensitive_by_category(category_ids)` — checks the fact's catalogue
+    category IDs against the `SENSITIVE_CATEGORIES` constant (health, allergies,
+    financial, romantic, cultural/religious, values/philosophy).
+  - `is_sensitive_by_content(object)` — keyword-based fallback for
+    miscategorised facts (e.g. "allergic", "diabetes", "salary", "debt",
+    "divorce", "citizenship").
+  - `is_sensitive(llm_flag, category_ids, object)` — combined AND gate: a fact
+    is sensitive only if the LLM flags it **and** Rust agrees. Rust can narrow
+    but never widen.
+- **Extraction prompt softened:** "Flag ... Mimir will validate your assessment
+  in Rust."
+- **Sensitivity check wired into `process_extracted_fact`** — the single funnel
+  point covering `extract_facts`, `extract_facts_with_context`, and
+  `process_remember_output`.
+- **35 unit tests + 7 integration tests** covering all issue acceptance
+  criteria.
+
 ## [0.54.5] — 2026-06-22
 
 ### Review Fixes (PR #169)

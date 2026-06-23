@@ -20,10 +20,13 @@ automated cleanup job.
 ## Lifecycle
 
 1. **Detection** — the `remember` tool flags `is_sensitive: true`; the
-   extractor inserts the fact with `Disputed` status and
-   `pending_confirmation = TRUE` (`mimir-knowledge/src/extract.rs`,
-   `insert_sensitive_fact`). The fact id is added to the in-memory
-   `pending_confirmations` set.
+   Rust sensitivity gate (`mimir-knowledge/src/sensitivity.rs`, #142) validates
+   this flag against the fact's catalogue categories (`SENSITIVE_CATEGORIES`
+   constant) and object-text keywords (`SENSITIVE_KEYWORDS` constant). Only
+   facts that pass both the LLM flag and the Rust check are inserted with
+   `Disputed` status and `pending_confirmation = TRUE`
+   (`mimir-knowledge/src/extract.rs`, `insert_sensitive_fact`). The fact id is
+   added to the in-memory `pending_confirmations` set.
 2. **Confirm** — `KnowledgeGraph::confirm_fact(id)` flips status to `Active`,
    sets confidence to `1.0`, clears `pending_confirmation`, writes a
    `StatusChange` audit entry, and runs the inference cascade.

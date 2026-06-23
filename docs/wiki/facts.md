@@ -87,8 +87,12 @@ mimir kb audit --entity "Alice" --change-type status_change
 ## Pending Sensitive-Fact Confirmation
 
 When Mimir detects a sensitive fact (e.g. an allergy or health detail), it
-doesn't trust it immediately. The fact is stored with a **Disputed** status and
-flagged `pending_confirmation = TRUE` until you confirm or reject it.
+doesn't trust it immediately. The AI flags potential sensitive facts during
+extraction, but a deterministic Rust validation layer has the final say — it
+checks the fact's catalogue category and object text against a known sensitive
+set, overriding the AI if it was overly cautious. Only facts that pass both
+checks are stored with a **Disputed** status and flagged
+`pending_confirmation = TRUE` until you confirm or reject it.
 
 ### Why this matters
 

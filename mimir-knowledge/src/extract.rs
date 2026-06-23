@@ -202,7 +202,7 @@ async fn build_base_prompt(kg: &KnowledgeGraph) -> Result<String, KnowledgeError
     }
 
     Ok(format!(
-        "You are a fact extractor. Read the user message and emit structured facts via the 'remember' tool.\n\n### Rules\n- Classify each fact as Explicit, Casual, or Correction.\n- For Corrections, set correction_scope to 'always' or an ISO-8601 datetime.\n- Mark health, financial, relationship, religious, political, or legal facts as is_sensitive=true.\n- Subject and object types must be one of: Person, Place, Event, Object, Concept, Organization, Activity, DateTime.\n- Assign 1-3 category IDs from the guide below to each fact. Use the MOST specific sub-category available.\n{}\n### Predicate standards (critical)\nUse the EXACT predicate name below for the matching scenario. Do NOT invent synonyms.\n- Education\n  * Where someone studied   → studied_at (NOT 'attended')\n  * What someone studied    → studied\n  * Degree completed        → completed_degree\n  * Degree status           → educational_status\n- Employment\n  * Employer                → works_at\n  * Job title               → job_title\n  * Profession              → works_as\n- Residence\n  * Current city/country    → based_in\n  * Previous city           → lived_in\n- Personal\n  * Hobby (one per fact)    → hobby (NOT 'hobbies')\n  * Favourite thing         → favourite_{{thing}}\n  * Name                    → has_name\n  * Preferred name          → preferred_name\n  * Pet ownership           → has_pets\n- Family\n  * Sibling                 → has_sibling\n  * Partner                 → has_partner\n  * Parent                  → has_parent\n  * Child                   → has_child\n### Splitting lists\nWhen a user lists multiple items for the same predicate, emit ONE fact PER item.\nBAD (one fact):  hobby → 'Geopolitics, Software Development, Tech'\nGOOD (three facts):\n  hobby → 'Geopolitics'\n  hobby → 'Software Development'\n  hobby → 'Tech'\n### Deduplication\nBefore emitting a fact, ask yourself: 'Have I already emitted a fact with the same subject and the same meaning?' If yes, do not emit the duplicate — instead strengthen the confidence by marking it Explicit.\nExample: If you already emitted studied_at='University of Auckland', do NOT also emit attended='University of Auckland'.\n### Output\nEmit ONLY via the 'remember' tool. Do not output free text.",
+        "You are a fact extractor. Read the user message and emit structured facts via the 'remember' tool.\n\n### Rules\n- Classify each fact as Explicit, Casual, or Correction.\n- For Corrections, set correction_scope to 'always' or an ISO-8601 datetime.\n- Flag health, financial, relationship, religious, political, or legal facts as is_sensitive=true. Mimir will validate your assessment in Rust.\n- Subject and object types must be one of: Person, Place, Event, Object, Concept, Organization, Activity, DateTime.\n- Assign 1-3 category IDs from the guide below to each fact. Use the MOST specific sub-category available.\n{}\n### Predicate standards (critical)\nUse the EXACT predicate name below for the matching scenario. Do NOT invent synonyms.\n- Education\n  * Where someone studied   → studied_at (NOT 'attended')\n  * What someone studied    → studied\n  * Degree completed        → completed_degree\n  * Degree status           → educational_status\n- Employment\n  * Employer                → works_at\n  * Job title               → job_title\n  * Profession              → works_as\n- Residence\n  * Current city/country    → based_in\n  * Previous city           → lived_in\n- Personal\n  * Hobby (one per fact)    → hobby (NOT 'hobbies')\n  * Favourite thing         → favourite_{{thing}}\n  * Name                    → has_name\n  * Preferred name          → preferred_name\n  * Pet ownership           → has_pets\n- Family\n  * Sibling                 → has_sibling\n  * Partner                 → has_partner\n  * Parent                  → has_parent\n  * Child                   → has_child\n### Splitting lists\nWhen a user lists multiple items for the same predicate, emit ONE fact PER item.\nBAD (one fact):  hobby → 'Geopolitics, Software Development, Tech'\nGOOD (three facts):\n  hobby → 'Geopolitics'\n  hobby → 'Software Development'\n  hobby → 'Tech'\n### Deduplication\nBefore emitting a fact, ask yourself: 'Have I already emitted a fact with the same subject and the same meaning?' If yes, do not emit the duplicate — instead strengthen the confidence by marking it Explicit.\nExample: If you already emitted studied_at='University of Auckland', do NOT also emit attended='University of Auckland'.\n### Output\nEmit ONLY via the 'remember' tool. Do not output free text.",
         guide
     ))
 }
@@ -965,9 +965,15 @@ pub(crate) async fn process_extracted_fact(
         .await?;
     }
 
-    // Insert fact, handling sensitive facts atomically.
-    if extracted.is_sensitive {
-        // For sensitive facts, insert directly with Disputed status and pending_confirmation in one transaction.
+    // Sensitivity gate (#142): the LLM provides an initial is_sensitive flag,
+    // but Rust validates it against the fact's catalogue categories and object
+    // text. Rust can only narrow (AND gate) — it never flags a fact as
+    // sensitive when the LLM did not.
+    if crate::sensitivity::is_sensitive(
+        extracted.is_sensitive,
+        &new_fact.category_ids,
+        &extracted.object,
+    ) {
         let fact = insert_sensitive_fact(kg, new_fact, now, relationship_type_id).await?;
 
         // Only add to in-memory cache after successful commit.
@@ -1416,7 +1422,7 @@ mod confirmation_tests {
             temporal: None,
             is_sensitive: true,
             correction_scope: None,
-            categories: Vec::new(),
+            categories: vec!["230".to_string()],
         }
     }
 

@@ -25,6 +25,17 @@ struct SessionState {
     verbose: bool,
 }
 
+/// Strip a prefix from a string only if followed by a space or end-of-string.
+/// This prevents unintended matches like "/modelx" when looking for "/model".
+fn strip_command_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    let rest = s.strip_prefix(prefix)?;
+    if rest.is_empty() || rest.starts_with(' ') {
+        Some(rest)
+    } else {
+        None
+    }
+}
+
 pub async fn handle_chat(base_url: &str, opts: ChatOptions) {
     let client = MimirClient::new(base_url);
     let mut session_id: Option<i64> = None;
@@ -83,13 +94,17 @@ pub async fn handle_chat(base_url: &str, opts: ChatOptions) {
                 }
                 if trimmed == "/help" {
                     print_help();
-                    editor.add_history_entry(&line).ok();
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
                     continue;
                 }
                 if trimmed == "/clear" {
                     session_id = None;
                     println!("Session reset.");
-                    editor.add_history_entry(&line).ok();
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
                     continue;
                 }
                 if trimmed == "/memory" {
@@ -97,7 +112,9 @@ pub async fn handle_chat(base_url: &str, opts: ChatOptions) {
                         Ok(content) => println!("{}", content),
                         Err(e) => eprintln!("Failed to load memory: {}", e),
                     }
-                    editor.add_history_entry(&line).ok();
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
                     continue;
                 }
                 if trimmed == "/status" {
@@ -143,7 +160,9 @@ pub async fn handle_chat(base_url: &str, opts: ChatOptions) {
                         }
                         Err(e) => eprintln!("Status request failed: {}", e),
                     }
-                    editor.add_history_entry(&line).ok();
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
                     continue;
                 }
                 if trimmed == "/history" {
@@ -151,10 +170,12 @@ pub async fn handle_chat(base_url: &str, opts: ChatOptions) {
                         Ok(()) => {}
                         Err(e) => eprintln!("History error: {}", e),
                     }
-                    editor.add_history_entry(&line).ok();
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
                     continue;
                 }
-                if let Some(rest) = trimmed.strip_prefix("/model") {
+                if let Some(rest) = strip_command_prefix(trimmed, "/model") {
                     let value = rest.trim();
                     if value.is_empty() {
                         let current = session.model.as_deref().unwrap_or("(server default)");
@@ -163,10 +184,12 @@ pub async fn handle_chat(base_url: &str, opts: ChatOptions) {
                         session.model = Some(value.to_string());
                         println!("Model set to {value}.");
                     }
-                    editor.add_history_entry(&line).ok();
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
                     continue;
                 }
-                if let Some(rest) = trimmed.strip_prefix("/personality") {
+                if let Some(rest) = strip_command_prefix(trimmed, "/personality") {
                     let value = rest.trim();
                     if value.is_empty() {
                         let current = session.personality.as_deref().unwrap_or("(server default)");
@@ -175,10 +198,12 @@ pub async fn handle_chat(base_url: &str, opts: ChatOptions) {
                         session.personality = Some(value.to_string());
                         println!("Personality set to {value}.");
                     }
-                    editor.add_history_entry(&line).ok();
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
                     continue;
                 }
-                if let Some(rest) = trimmed.strip_prefix("/incognito") {
+                if let Some(rest) = strip_command_prefix(trimmed, "/incognito") {
                     let value = rest.trim();
                     session.incognito = match value {
                         "" => !session.incognito,
@@ -186,7 +211,9 @@ pub async fn handle_chat(base_url: &str, opts: ChatOptions) {
                         "off" | "false" | "0" => false,
                         other => {
                             eprintln!("Unknown value '{other}'. Use on/off.");
-                            editor.add_history_entry(&line).ok();
+                            if !session.incognito {
+                                editor.add_history_entry(&line).ok();
+                            }
                             continue;
                         }
                     };
@@ -194,10 +221,12 @@ pub async fn handle_chat(base_url: &str, opts: ChatOptions) {
                         "Incognito {}.",
                         if session.incognito { "on" } else { "off" }
                     );
-                    editor.add_history_entry(&line).ok();
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
                     continue;
                 }
-                if let Some(rest) = trimmed.strip_prefix("/verbose") {
+                if let Some(rest) = strip_command_prefix(trimmed, "/verbose") {
                     let value = rest.trim();
                     session.verbose = match value {
                         "" => !session.verbose,
@@ -205,12 +234,16 @@ pub async fn handle_chat(base_url: &str, opts: ChatOptions) {
                         "off" | "false" | "0" => false,
                         other => {
                             eprintln!("Unknown value '{other}'. Use on/off.");
-                            editor.add_history_entry(&line).ok();
+                            if !session.incognito {
+                                editor.add_history_entry(&line).ok();
+                            }
                             continue;
                         }
                     };
                     println!("Verbose {}.", if session.verbose { "on" } else { "off" });
-                    editor.add_history_entry(&line).ok();
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
                     continue;
                 }
 
@@ -226,7 +259,9 @@ pub async fn handle_chat(base_url: &str, opts: ChatOptions) {
                     }
                 }
 
-                editor.add_history_entry(&line).ok();
+                if !session.incognito {
+                    editor.add_history_entry(&line).ok();
+                }
                 input
             }
             Err(ReadlineError::Interrupted) => {

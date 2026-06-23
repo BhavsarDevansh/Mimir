@@ -441,7 +441,6 @@ impl MimirClient {
     }
 }
 
-/// Parse a byte stream into SSE events.
 /// Maximum number of buffered bytes for a single SSE event before the parser
 /// emits an error. Caps unbounded memory growth when a malformed stream never
 /// emits a double-newline delimiter (issue #164).

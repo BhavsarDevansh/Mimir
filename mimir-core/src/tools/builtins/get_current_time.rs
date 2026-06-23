@@ -32,7 +32,7 @@ impl Tool for GetCurrentTimeTool {
     }
 
     fn description(&self) -> &str {
-        "Returns the current date and time in the user's localised time zone (RFC 3339), with the UTC offset and the equivalent UTC time so UTC can be derived."
+        "Returns the current date and time in the host system's local time zone (RFC 3339), with the UTC offset and the equivalent UTC time so UTC can be derived."
     }
 
     fn parameters_schema(&self) -> Value {

@@ -87,9 +87,9 @@ fn bench_accumulate_partial_event(c: &mut Criterion) {
     for n in [256usize, 1024, 4096] {
         group.throughput(criterion::Throughput::Elements((n + 1) as u64));
         let bytes = chunk_bytes(n);
+        let rt = tokio::runtime::Runtime::new().unwrap();
         group.bench_function(format!("legacy_chunks_{n}"), |b| {
             b.iter(|| {
-                let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async {
                     let chunks = make_result_stream(&bytes);
                     drain(parse_sse_stream_legacy(futures::stream::iter(chunks))).await;
@@ -98,7 +98,6 @@ fn bench_accumulate_partial_event(c: &mut Criterion) {
         });
         group.bench_function(format!("fixed_chunks_{n}"), |b| {
             b.iter(|| {
-                let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async {
                     let chunks = make_result_stream(&bytes);
                     drain(mimir_client::parse_sse_stream(futures::stream::iter(

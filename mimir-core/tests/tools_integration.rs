@@ -93,6 +93,7 @@ async fn test_get_current_time_execution() {
     // The tool returns a structured payload with local/utc/offset (issue #45).
     let local = payload["local"].as_str().expect("local field present");
     let utc = payload["utc"].as_str().expect("utc field present");
+    let offset = payload["offset"].as_str().expect("offset field present");
     let parsed_local = chrono::DateTime::parse_from_rfc3339(local);
     let parsed_utc = chrono::DateTime::parse_from_rfc3339(utc);
     assert!(
@@ -102,6 +103,10 @@ async fn test_get_current_time_execution() {
     assert!(
         parsed_utc.is_ok(),
         "expected valid RFC 3339 UTC timestamp, got: {utc}"
+    );
+    assert!(
+        offset.starts_with('+') || offset.starts_with('-'),
+        "expected offset to start with + or -, got: {offset}"
     );
 }
 

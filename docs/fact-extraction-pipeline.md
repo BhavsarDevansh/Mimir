@@ -113,8 +113,11 @@ two independent signals in `mimir-knowledge/src/sensitivity.rs`:
    lists the Dewey-Decimal category IDs that require confirmation (health,
    allergies, financial, romantic, cultural/religious, values/philosophy).
 2. **Content check** (`is_sensitive_by_content`) — does the fact's object text
-   contain a sensitive keyword (e.g. "allergic", "diabetes", "salary", "debt",
-   "divorce", "citizenship")? This is the fallback for miscategorised facts.
+   contain a sensitive keyword as a **whole word** (e.g. "allergic", "diabetes",
+   "salary", "debt", "divorce", "citizenship")? Word-boundary matching prevents
+   benign words that merely contain a keyword (e.g. "hospitality" contains
+   "hospital", "indebted" contains "debt", "visage" contains "visa") from being
+   confirmed sensitive. This is the fallback for miscategorised facts.
 
 The combined `is_sensitive(llm_flag, category_ids, object)` function implements:
 

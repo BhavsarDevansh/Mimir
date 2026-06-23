@@ -52,7 +52,7 @@ pub const SENSITIVE_CATEGORIES: &[i32] = &[
 ];
 
 /// Keywords that indicate a sensitive fact when found (case-insensitively) as
-/// a substring in the fact's object text.
+/// a whole word in the fact's object text.
 ///
 /// This is the fallback for cases where the LLM uses a non-standard category or
 /// assigns no category at all. The list is intentionally focused on terms that
@@ -103,13 +103,55 @@ pub fn is_sensitive_by_category(category_ids: &[i32]) -> bool {
 }
 
 /// Returns `true` if the object text contains any [`SENSITIVE_KEYWORDS`] entry
-/// as a case-insensitive substring.
+/// as a case-insensitive whole word (using word boundaries).
 ///
 /// Pure and synchronous. This is the fallback when category-based detection
 /// misses (e.g. the LLM assigned a non-sensitive or no category).
+///
+/// Matching uses word boundaries rather than raw substrings so that a keyword
+/// embedded in a benign word does not trigger a false positive (e.g.
+/// `"hospital"` inside `"hospitality"`, `"debt"` inside `"indebted"`, or
+/// `"visa"` inside `"visage"`).
 pub fn is_sensitive_by_content(object: &str) -> bool {
     let lower = object.to_lowercase();
-    SENSITIVE_KEYWORDS.iter().any(|kw| lower.contains(kw))
+    SENSITIVE_KEYWORDS
+        .iter()
+        .any(|kw| contains_keyword_word(&lower, kw))
+}
+
+/// Checks whether `keyword` appears in `text` as a whole word (using ASCII
+/// alphanumeric boundaries), not as a substring inside a larger word.
+///
+/// This avoids false positives where a sensitive keyword is embedded in a
+/// benign word (e.g. `"hospital"` inside `"hospitality"`, `"debt"` inside
+/// `"indebted"`, `"visa"` inside `"visage"`). Keyword entries are all-ASCII, so
+/// a byte-level boundary check on ASCII alphanumeric characters is sufficient;
+/// any non-ASCII character is treated as a word boundary.
+fn contains_keyword_word(text: &str, keyword: &str) -> bool {
+    let text_bytes = text.as_bytes();
+    let kw_bytes = keyword.as_bytes();
+    let kw_len = kw_bytes.len();
+    if kw_len == 0 || kw_len > text.len() {
+        return false;
+    }
+
+    let is_word_byte = |b: u8| b.is_ascii_alphanumeric();
+    let mut search_from = 0;
+    while let Some(offset) = text[search_from..].find(keyword) {
+        let start = search_from + offset;
+        let end = start + kw_len;
+
+        let before_is_boundary = start == 0 || !is_word_byte(text_bytes[start - 1]);
+        let after_is_boundary = end == text.len() || !is_word_byte(text_bytes[end]);
+
+        if before_is_boundary && after_is_boundary {
+            return true;
+        }
+
+        search_from = start + 1;
+    }
+
+    false
 }
 
 /// Combined sensitivity gate implementing the AND logic from issue #142.
@@ -283,6 +325,34 @@ mod tests {
     #[test]
     fn content_empty() {
         assert!(!is_sensitive_by_content(""));
+    }
+
+    // Word-boundary false positives from PR review (issue #142).
+
+    #[test]
+    fn content_hospitality_not_hospital() {
+        assert!(!is_sensitive_by_content("I work in hospitality"));
+    }
+
+    #[test]
+    fn content_indebted_not_debt() {
+        assert!(!is_sensitive_by_content("I feel indebted to my teacher"));
+    }
+
+    #[test]
+    fn content_visage_not_visa() {
+        assert!(!is_sensitive_by_content("her visage"));
+    }
+
+    #[test]
+    fn content_keyword_with_trailing_punctuation() {
+        assert!(is_sensitive_by_content("diabetes."));
+        assert!(is_sensitive_by_content("allergic, peanuts"));
+    }
+
+    #[test]
+    fn content_genuine_hospital_word() {
+        assert!(is_sensitive_by_content("admitted to hospital"));
     }
 
     // -----------------------------------------------------------------------

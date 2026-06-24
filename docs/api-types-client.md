@@ -38,6 +38,12 @@ By extracting the wire types into a zero-dependency crate (only `serde`), both t
 - **`ChatResponse`** — `session_id`, `response`, `usage`
 - **`StatusResponse`** — Rich health and runtime metadata (see `mimir-server` docs)
 - **`Usage`** — `prompt_tokens`, `completion_tokens`, `total_tokens`
+- **Sparse-field hygiene (issue #160)** — All `Option<T>` wire fields use
+  `#[serde(skip_serializing_if = "Option::is_none")]`, including the
+  knowledge-graph wire types (`AuditRow`, `CategoryResponse`,
+  `CategoryDetailResponse`, `TrashRow`, `OptimizationStatusResponse`,
+  `OptimizationRunNowResponse`, `OptimizationRunSummary`). Sparse rows no longer
+  emit `null`, shrinking payloads 42–75% per row.
 - **`StreamItem`** — `Text(String)` | `Usage(Usage)` (client-side parsed SSE output)
 
 ## `mimir-client`

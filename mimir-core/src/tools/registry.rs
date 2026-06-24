@@ -19,6 +19,8 @@ pub struct ToolMetadata {
     pub description: String,
     pub source: ToolSource,
     pub permission: ToolPermission,
+    /// Whether the tool mutates persistent state (issue #155).
+    pub is_write_tool: bool,
 }
 
 /// Entry in the registry combining the tool implementation with metadata.
@@ -120,6 +122,7 @@ impl ToolRegistry {
             description: tool.description().to_string(),
             source,
             permission,
+            is_write_tool: tool.is_write_tool(),
         };
         entries.insert(
             name,
@@ -165,10 +168,20 @@ impl ToolRegistry {
     /// Export all tools in OpenAI-compatible function-calling format.
     /// Disabled tools are skipped so the model does not see them.
     pub fn export_openai_tools(&self) -> Vec<Value> {
+        self.export_openai_tools_filtered(true)
+    }
+
+    /// Export tools, optionally excluding write-capable tools.
+    ///
+    /// When `allow_write_tools` is `false` (incognito turns), write-capable
+    /// tools such as `remember` are omitted so the LLM cannot persist facts
+    /// (issue #155). Disabled tools are always skipped.
+    pub fn export_openai_tools_filtered(&self, allow_write_tools: bool) -> Vec<Value> {
         let entries = self.entries.read().unwrap();
         entries
             .values()
             .filter(|entry| entry.metadata.permission != ToolPermission::Disabled)
+            .filter(|entry| allow_write_tools || !entry.metadata.is_write_tool)
             .map(|entry| {
                 serde_json::json!({
                     "type": "function",
@@ -186,8 +199,25 @@ impl ToolRegistry {
     /// Export tools ready for the LLM backend.
     /// Returns `None` when there are no enabled tools so the request omits the field.
     pub fn export_openai_tools_for_llm(&self) -> Option<Vec<Value>> {
-        let tools = self.export_openai_tools();
+        self.export_openai_tools_for_llm_with_writes(true)
+    }
+
+    /// Like [`Self::export_openai_tools_for_llm`] but honours the incognito
+    /// contract: write-capable tools are suppressed when `allow_write_tools`
+    /// is `false` (issue #155).
+    pub fn export_openai_tools_for_llm_with_writes(
+        &self,
+        allow_write_tools: bool,
+    ) -> Option<Vec<Value>> {
+        let tools = self.export_openai_tools_filtered(allow_write_tools);
         if tools.is_empty() { None } else { Some(tools) }
+    }
+
+    /// Return whether the named tool mutates persistent state (issue #155).
+    /// Unknown tools are treated as non-write so reads are never accidentally
+    /// blocked.
+    pub fn is_write_tool(&self, name: &str) -> bool {
+        self.metadata(name).is_some_and(|m| m.is_write_tool)
     }
 
     /// Look up the display name for a tool by name.

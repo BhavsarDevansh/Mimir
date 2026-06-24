@@ -21,6 +21,9 @@ pub enum ToolError {
     #[error("tool '{0}' is disabled")]
     Disabled(String),
 
+    #[error("tool '{0}' is write-capable and blocked in incognito mode")]
+    BlockedIncognito(String),
+
     #[error("CLI tool '{0}' process error: {1}")]
     CliProcessError(String, String),
 
@@ -54,6 +57,10 @@ impl ToolError {
 
     pub fn disabled(name: impl Into<String>) -> Self {
         Self::Disabled(name.into())
+    }
+
+    pub fn blocked_incognito(name: impl Into<String>) -> Self {
+        Self::BlockedIncognito(name.into())
     }
 
     pub fn cli_process_error(name: impl Into<String>, message: impl Into<String>) -> Self {

@@ -89,6 +89,9 @@ pub async fn handle_ask(base_url: &str, opts: AskOptions) {
                                     .italic()
                             );
                         }
+                        Ok(StreamItem::ToolCallStart(info)) => {
+                            eprintln!("{}", format!("🔧 {}…", info.display_name).dimmed().italic());
+                        }
                         Err(e) => {
                             eprintln!("\nStream error: {}", e);
                             std::process::exit(1);

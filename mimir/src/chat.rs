@@ -9,9 +9,42 @@ use mimir_core::paths;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 
-pub async fn handle_chat(base_url: &str) {
+/// Initial chat session options sourced from CLI flags (issue #81).
+pub struct ChatOptions {
+    pub model: Option<String>,
+    pub verbose: bool,
+    pub incognito: bool,
+    pub personality: Option<String>,
+}
+
+/// Mutable per-session state for the REPL (issue #81).
+struct SessionState {
+    model: Option<String>,
+    personality: Option<String>,
+    incognito: bool,
+    verbose: bool,
+}
+
+/// Strip a prefix from a string only if followed by a space or end-of-string.
+/// This prevents unintended matches like "/modelx" when looking for "/model".
+fn strip_command_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    let rest = s.strip_prefix(prefix)?;
+    if rest.is_empty() || rest.starts_with(' ') {
+        Some(rest)
+    } else {
+        None
+    }
+}
+
+pub async fn handle_chat(base_url: &str, opts: ChatOptions) {
     let client = MimirClient::new(base_url);
     let mut session_id: Option<i64> = None;
+    let mut session = SessionState {
+        model: opts.model,
+        personality: opts.personality,
+        incognito: opts.incognito,
+        verbose: opts.verbose,
+    };
 
     let mut editor = match DefaultEditor::new() {
         Ok(e) => e,
@@ -61,13 +94,17 @@ pub async fn handle_chat(base_url: &str) {
                 }
                 if trimmed == "/help" {
                     print_help();
-                    editor.add_history_entry(&line).ok();
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
                     continue;
                 }
                 if trimmed == "/clear" {
                     session_id = None;
                     println!("Session reset.");
-                    editor.add_history_entry(&line).ok();
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
                     continue;
                 }
                 if trimmed == "/memory" {
@@ -75,7 +112,9 @@ pub async fn handle_chat(base_url: &str) {
                         Ok(content) => println!("{}", content),
                         Err(e) => eprintln!("Failed to load memory: {}", e),
                     }
-                    editor.add_history_entry(&line).ok();
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
                     continue;
                 }
                 if trimmed == "/status" {
@@ -121,7 +160,9 @@ pub async fn handle_chat(base_url: &str) {
                         }
                         Err(e) => eprintln!("Status request failed: {}", e),
                     }
-                    editor.add_history_entry(&line).ok();
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
                     continue;
                 }
                 if trimmed == "/history" {
@@ -129,7 +170,80 @@ pub async fn handle_chat(base_url: &str) {
                         Ok(()) => {}
                         Err(e) => eprintln!("History error: {}", e),
                     }
-                    editor.add_history_entry(&line).ok();
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
+                    continue;
+                }
+                if let Some(rest) = strip_command_prefix(trimmed, "/model") {
+                    let value = rest.trim();
+                    if value.is_empty() {
+                        let current = session.model.as_deref().unwrap_or("(server default)");
+                        println!("Model: {current}");
+                    } else {
+                        session.model = Some(value.to_string());
+                        println!("Model set to {value}.");
+                    }
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
+                    continue;
+                }
+                if let Some(rest) = strip_command_prefix(trimmed, "/personality") {
+                    let value = rest.trim();
+                    if value.is_empty() {
+                        let current = session.personality.as_deref().unwrap_or("(server default)");
+                        println!("Personality: {current}");
+                    } else {
+                        session.personality = Some(value.to_string());
+                        println!("Personality set to {value}.");
+                    }
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
+                    continue;
+                }
+                if let Some(rest) = strip_command_prefix(trimmed, "/incognito") {
+                    let value = rest.trim();
+                    session.incognito = match value {
+                        "" => !session.incognito,
+                        "on" | "true" | "1" => true,
+                        "off" | "false" | "0" => false,
+                        other => {
+                            eprintln!("Unknown value '{other}'. Use on/off.");
+                            if !session.incognito {
+                                editor.add_history_entry(&line).ok();
+                            }
+                            continue;
+                        }
+                    };
+                    println!(
+                        "Incognito {}.",
+                        if session.incognito { "on" } else { "off" }
+                    );
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
+                    continue;
+                }
+                if let Some(rest) = strip_command_prefix(trimmed, "/verbose") {
+                    let value = rest.trim();
+                    session.verbose = match value {
+                        "" => !session.verbose,
+                        "on" | "true" | "1" => true,
+                        "off" | "false" | "0" => false,
+                        other => {
+                            eprintln!("Unknown value '{other}'. Use on/off.");
+                            if !session.incognito {
+                                editor.add_history_entry(&line).ok();
+                            }
+                            continue;
+                        }
+                    };
+                    println!("Verbose {}.", if session.verbose { "on" } else { "off" });
+                    if !session.incognito {
+                        editor.add_history_entry(&line).ok();
+                    }
                     continue;
                 }
 
@@ -145,7 +259,9 @@ pub async fn handle_chat(base_url: &str) {
                     }
                 }
 
-                editor.add_history_entry(&line).ok();
+                if !session.incognito {
+                    editor.add_history_entry(&line).ok();
+                }
                 input
             }
             Err(ReadlineError::Interrupted) => {
@@ -165,14 +281,16 @@ pub async fn handle_chat(base_url: &str) {
         let req = ChatRequest {
             session_id,
             message: line,
-            model: None,
-            personality_preset: None,
-            incognito: None,
+            model: session.model.clone(),
+            personality_preset: session.personality.clone(),
+            incognito: Some(session.incognito),
         };
+        let verbose = session.verbose;
 
         match client.chat_stream(req).await {
             Ok(mut stream) => {
                 use futures::StreamExt;
+                let mut last_usage: Option<mimir_api_types::Usage> = None;
                 while let Some(item) = stream.next().await {
                     match item {
                         Ok(mimir_api_types::StreamItem::Text(text)) => {
@@ -180,7 +298,9 @@ pub async fn handle_chat(base_url: &str) {
                             use std::io::Write;
                             let _ = std::io::stdout().flush();
                         }
-                        Ok(mimir_api_types::StreamItem::Usage(_)) => {}
+                        Ok(mimir_api_types::StreamItem::Usage(u)) => {
+                            last_usage = Some(u);
+                        }
                         Ok(mimir_api_types::StreamItem::SessionId(id)) => {
                             session_id = id.parse().ok();
                         }
@@ -191,6 +311,9 @@ pub async fn handle_chat(base_url: &str) {
                                     .dimmed()
                                     .italic()
                             );
+                        }
+                        Ok(mimir_api_types::StreamItem::ToolCallStart(info)) => {
+                            eprintln!("{}", format!("🔧 {}…", info.display_name).dimmed().italic());
                         }
                         Err(e) => {
                             eprintln!(
@@ -203,6 +326,12 @@ Stream error: {}",
                     }
                 }
                 println!();
+                if verbose && let Some(u) = last_usage {
+                    eprintln!(
+                        "Tokens: {} prompt + {} completion = {} total",
+                        u.prompt_tokens, u.completion_tokens, u.total_tokens
+                    );
+                }
             }
             Err(e) => {
                 eprintln!("LLM stream error: {}", e);
@@ -219,11 +348,15 @@ Stream error: {}",
 
 fn print_help() {
     println!("Commands:");
-    println!("  /exit    - Exit the REPL");
-    println!("  /clear   - Reset the conversation session");
-    println!("  /memory  - Show the live condensed memory block");
-    println!("  /status  - Quick health check");
-    println!("  /history - Resume a previous conversation");
+    println!("  /exit       - Exit the REPL");
+    println!("  /clear      - Reset the conversation session");
+    println!("  /memory     - Show the live condensed memory block");
+    println!("  /status     - Quick health check");
+    println!("  /history    - Resume a previous conversation");
+    println!("  /model [m]  - Show or set the LLM model override");
+    println!("  /personality [p] - Show or set the personality preset");
+    println!("  /incognito [on|off] - Toggle incognito (skip persistence)");
+    println!("  /verbose [on|off]   - Toggle token usage reporting");
     println!();
     println!("Multi-line input: end a line with \\ to continue.");
 }

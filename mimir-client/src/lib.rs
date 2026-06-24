@@ -8,7 +8,7 @@ use mimir_api_types::{
     ForgetResponse, OptimizationRunNowResponse, OptimizationStatusResponse, PendingListResponse,
     ProfileRequest, ProfileResponse, RejectFactRequest, RestoreRequest, RestoreResponse,
     SessionMessagesResponse, SessionSummary, StatusResponse, StreamItem, ToolCallInfo,
-    TrashListResponse, Usage,
+    ToolCallStartInfo, TrashListResponse, Usage,
 };
 use reqwest::StatusCode;
 use thiserror::Error;
@@ -441,53 +441,101 @@ impl MimirClient {
     }
 }
 
+/// Maximum number of buffered bytes for a single SSE event before the parser
+/// emits an error. Caps unbounded memory growth when a malformed stream never
+/// emits a double-newline delimiter (issue #164).
+const MAX_SSE_EVENT_SIZE: usize = 1024 * 1024; // 1 MiB
+
 /// Parse a byte stream into SSE events.
 ///
 /// Buffers raw bytes and only decodes complete events (delimited by `\n\n`)
 /// so that multi-byte UTF-8 sequences split across TCP/HTTP chunk boundaries
 /// are preserved.
-fn parse_sse_stream(
+///
+/// The buffer is capped at [`MAX_SSE_EVENT_SIZE`] to prevent unbounded memory
+/// growth, and the delimiter scan resumes from the last inspected offset so
+/// the cost is linear rather than quadratic in the accumulated event size
+/// (issue #164). Exposed publicly (`#[doc(hidden)]`) so benchmarks can drive
+/// the parser directly.
+#[doc(hidden)]
+pub fn parse_sse_stream(
     stream: impl Stream<Item = Result<Bytes, reqwest::Error>>,
 ) -> impl Stream<Item = Result<StreamItem, ClientError>> {
-    let mut buf = Vec::new();
+    let mut buf: Vec<u8> = Vec::new();
+    // Index up to which `buf` has been confirmed to contain no delimiter.
+    // Scanning resumes just before this point so delimiters straddling a chunk
+    // boundary are still found.
+    let mut scan_from: usize = 0;
     stream
-        .filter_map(move |result| match result {
-            Ok(bytes) => {
-                buf.extend_from_slice(&bytes);
-                let mut items = Vec::new();
-                while let Some((pos, delim_len)) = find_double_newline(&buf) {
-                    let event_bytes: Vec<u8> = buf.drain(..pos + delim_len).collect();
-                    match String::from_utf8(event_bytes) {
-                        Ok(event) => {
-                            if let Some(item) = parse_sse_event(&event) {
-                                items.push(item);
+        .filter_map(move |result| {
+            let mut items = Vec::new();
+            match result {
+                Ok(bytes) => {
+                    buf.extend_from_slice(&bytes);
+                    loop {
+                        match find_double_newline_from(&buf, scan_from) {
+                            Some((pos, delim_len)) => {
+                                let event_bytes: Vec<u8> = buf.drain(..pos + delim_len).collect();
+                                // The remaining buffer is the tail after the event;
+                                // rescan it from the start.
+                                scan_from = 0;
+                                match String::from_utf8(event_bytes) {
+                                    Ok(event) => {
+                                        if let Some(item) = parse_sse_event(&event) {
+                                            items.push(item);
+                                        }
+                                    }
+                                    Err(_) => {
+                                        items.push(Err(ClientError::Connection(
+                                            "invalid UTF-8 in SSE event".to_string(),
+                                        )));
+                                    }
+                                }
+                            }
+                            None => {
+                                if buf.len() > MAX_SSE_EVENT_SIZE {
+                                    items.push(Err(ClientError::Connection(
+                                        "SSE event exceeded max size".to_string(),
+                                    )));
+                                    buf.clear();
+                                    scan_from = 0;
+                                } else {
+                                    // Remember how far we've scanned so the next chunk
+                                    // only inspects the newly appended tail plus a small
+                                    // overlap for boundary-spanning delimiters. The
+                                    // longest delimiter is 4 bytes, so overlap by 3.
+                                    scan_from = buf.len().saturating_sub(3);
+                                }
+                                break;
                             }
                         }
-                        Err(_) => {
-                            items.push(Err(ClientError::Connection(
-                                "invalid UTF-8 in SSE event".to_string(),
-                            )));
-                        }
                     }
+                    futures::future::ready(Some(items))
                 }
-                futures::future::ready(Some(items))
+                Err(e) => futures::future::ready(Some(vec![Err(ClientError::Http(e))])),
             }
-            Err(e) => futures::future::ready(Some(vec![Err(ClientError::Http(e))])),
         })
         .flat_map(futures::stream::iter)
 }
 
-/// Return the index and delimiter length of the first `\n\n` or `\r\n\r\n` in `buf`.
-fn find_double_newline(buf: &[u8]) -> Option<(usize, usize)> {
-    for i in 0..buf.len() {
-        if buf[i..].starts_with(b"\r\n\r\n") {
-            return Some((i, 4));
-        }
-        if buf[i..].starts_with(b"\n\n") {
-            return Some((i, 2));
-        }
+/// Return the index and delimiter length of the first `\n\n` or `\r\n\r\n`
+/// in `buf`, starting the search at `start`.
+fn find_double_newline_from(buf: &[u8], start: usize) -> Option<(usize, usize)> {
+    let haystack = buf.get(start..)?;
+    let lf = memchr::memmem::find(haystack, b"\n\n").map(|p| (start + p, 2));
+    let crlf = memchr::memmem::find(haystack, b"\r\n\r\n").map(|p| (start + p, 4));
+    match (lf, crlf) {
+        (Some(a), Some(b)) => Some(if a.0 <= b.0 { a } else { b }),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
     }
-    None
+}
+
+/// Return the index and delimiter length of the first `\n\n` or `\r\n\r\n` in `buf`.
+#[cfg(test)]
+fn find_double_newline(buf: &[u8]) -> Option<(usize, usize)> {
+    find_double_newline_from(buf, 0)
 }
 
 /// Parse a single SSE event block into a [`StreamItem`] or an error.
@@ -515,6 +563,10 @@ fn parse_sse_event(event: &str) -> Option<Result<StreamItem, ClientError>> {
             Ok(info) => Some(Ok(StreamItem::ToolCall(info))),
             Err(e) => Some(Err(ClientError::Serialization(e))),
         },
+        "tool_call_start" => match serde_json::from_str::<ToolCallStartInfo>(&data) {
+            Ok(info) => Some(Ok(StreamItem::ToolCallStart(info))),
+            Err(e) => Some(Err(ClientError::Serialization(e))),
+        },
         "session_id" => match serde_json::from_str::<serde_json::Value>(&data) {
             Ok(v) => v
                 .get("session_id")
@@ -535,6 +587,12 @@ fn parse_sse_event(event: &str) -> Option<Result<StreamItem, ClientError>> {
             }
         }
     }
+}
+
+/// Re-export of the internal SSE event parser for benchmarks.
+#[doc(hidden)]
+pub fn parse_sse_event_pub(event: &str) -> Option<Result<StreamItem, ClientError>> {
+    parse_sse_event(event)
 }
 
 #[cfg(test)]
@@ -1096,6 +1154,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_sse_event_tool_call_start() {
+        let item = parse_sse_event(
+            "event: tool_call_start\ndata: {\"name\":\"echo\",\"display_name\":\"Echo\"}\n",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            item,
+            StreamItem::ToolCallStart(ToolCallStartInfo {
+                name: "echo".to_string(),
+                display_name: "Echo".to_string(),
+            })
+        );
+    }
+
+    #[test]
     fn parse_sse_event_session_id() {
         let item = parse_sse_event("event: session_id\ndata: {\"session_id\":12345}\n")
             .unwrap()
@@ -1123,6 +1197,51 @@ mod tests {
         // Default event with no data yields no item.
         assert!(parse_sse_event("event: message\n").is_none());
         assert!(parse_sse_event("").is_none());
+    }
+
+    #[test]
+    fn find_double_newline_from_resumes_after_cursor() {
+        // The cursor scan must still find a delimiter that appears after the
+        // already-scanned prefix.
+        assert_eq!(
+            find_double_newline_from(b"prefix no delim\n\n", 5),
+            Some((15, 2))
+        );
+        assert_eq!(find_double_newline_from(b"prefix\r\n\r\n", 3), Some((6, 4)));
+        // Start beyond buffer length → None.
+        assert_eq!(find_double_newline_from(b"abc\n\n", 99), None);
+    }
+
+    #[tokio::test]
+    async fn parse_sse_stream_caps_unbounded_buffer() {
+        // Issue #164: a stream that never emits a double-newline delimiter
+        // must not grow the buffer without bound — it should produce an error.
+        let big = bytes::Bytes::from(vec![b'a'; MAX_SSE_EVENT_SIZE + 1]);
+        let chunks: Vec<Result<bytes::Bytes, reqwest::Error>> = vec![Ok(big)];
+        let mut stream = parse_sse_stream(futures::stream::iter(chunks));
+        use futures::StreamExt;
+        let item = stream.next().await.unwrap();
+        assert!(
+            matches!(item, Err(ClientError::Connection(ref m)) if m.contains("exceeded max size")),
+            "unexpected item: {item:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn parse_sse_stream_handles_boundary_spanning_delimiter() {
+        // Split a `\r\n\r\n` delimiter across two chunks so the first byte of
+        // the delimiter is the last byte of chunk 1. The overlap scan must
+        // still find it.
+        let chunk1 = bytes::Bytes::from_static(b"data: hello\r");
+        let chunk2 = bytes::Bytes::from_static(b"\n\r\ndata: world\n\n");
+        let chunks: Vec<Result<bytes::Bytes, reqwest::Error>> = vec![Ok(chunk1), Ok(chunk2)];
+        let mut stream = parse_sse_stream(futures::stream::iter(chunks));
+        use futures::StreamExt;
+        let mut texts = Vec::new();
+        while let Some(Ok(StreamItem::Text(t))) = stream.next().await {
+            texts.push(t);
+        }
+        assert_eq!(texts, vec!["hello".to_string(), "world".to_string()]);
     }
 
     // ---- integration tests for previously-uncovered client methods ---------

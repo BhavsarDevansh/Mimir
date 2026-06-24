@@ -203,9 +203,23 @@ async fn main() {
             )
             .await;
         }
-        cli::Commands::Chat => {
+        cli::Commands::Chat {
+            model,
+            verbose,
+            incognito,
+            personality,
+        } => {
             ensure_daemon(&base_url, &mut daemon_started).await;
-            chat::handle_chat(&base_url).await;
+            chat::handle_chat(
+                &base_url,
+                chat::ChatOptions {
+                    model,
+                    verbose,
+                    incognito,
+                    personality,
+                },
+            )
+            .await;
         }
         cli::Commands::Status => {
             ensure_daemon(&base_url, &mut daemon_started).await;

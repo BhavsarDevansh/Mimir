@@ -544,6 +544,13 @@ impl LlmBackend for LlmClient {
         clone.pool = None;
         Some(Arc::new(clone))
     }
+
+    fn with_temperature_override(&self, temperature: f32) -> Option<Arc<dyn LlmBackend>> {
+        let mut clone = self.clone();
+        clone.config.temperature = temperature;
+        clone.pool = None;
+        Some(Arc::new(clone))
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -565,6 +572,45 @@ mod tests {
             "Debug output must not contain the API key"
         );
         assert!(debug.contains("***REDACTED***"));
+    }
+
+    #[test]
+    fn with_temperature_override_updates_temperature() {
+        // Issue #80: a hot-reloaded temperature must reach the request.
+        let config = LlmConfig {
+            endpoint: "https://api.openai.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-4o".to_string(),
+            max_tokens: Some(10),
+            temperature: 0.2,
+        };
+        let client = LlmClient::new_direct(config);
+        let overridden = client
+            .with_temperature_override(0.7)
+            .expect("temperature override supported");
+        let debug = format!("{:?}", overridden);
+        assert!(debug.contains("temperature: 0.7"), "debug: {debug}");
+    }
+
+    #[tokio::test]
+    async fn with_temperature_override_disables_pooling() {
+        // Temperature overrides must disable pooling so the override is applied
+        // immediately rather than using cached workers.
+        let config = LlmConfig {
+            endpoint: "https://api.openai.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-4o".to_string(),
+            max_tokens: Some(10),
+            temperature: 0.2,
+        };
+        let client = LlmClient::new(config).await;
+        assert!(client.pool.is_some(), "pooled client should have a pool");
+
+        let overridden = client
+            .with_temperature_override(0.7)
+            .expect("temperature override supported");
+        let debug = format!("{:?}", overridden);
+        assert!(debug.contains("has_pool: false"), "temperature override must disable pooling: {debug}");
     }
 
     #[test]

@@ -19,7 +19,13 @@ futures = "0.3"
 thiserror = "2.0"
 bytes = "1.9"
 tracing = "0.1"
+memchr = "2.8"
 
 [dev-dependencies]
 wiremock = "0.6.5"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+criterion = { version = "0.8.2" }
+
+[[bench]]
+name = "sse_parser"
+harness = false

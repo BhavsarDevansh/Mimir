@@ -106,6 +106,17 @@ pub trait LlmBackend: Send + Sync + Debug {
     fn with_model_override(&self, _model: String) -> Option<Arc<dyn LlmBackend>> {
         None
     }
+
+    /// Return a clone of this backend with the sampling temperature
+    /// overridden.
+    ///
+    /// This lets callers apply the live configuration temperature per request
+    /// so that hot-reloaded temperature changes take effect without restarting
+    /// the daemon (issue #80). The default returns `None` (backend ignores the
+    /// override and uses its configured temperature).
+    fn with_temperature_override(&self, _temperature: f32) -> Option<Arc<dyn LlmBackend>> {
+        None
+    }
 }
 
 #[cfg(test)]

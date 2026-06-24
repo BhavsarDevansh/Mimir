@@ -19,7 +19,7 @@ pub fn escape_fts5(query: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    format!("\"{}\"", escaped)
+    format!("\"{}\"", trimmed)
 }
 
 #[cfg(test)]
@@ -64,5 +64,14 @@ mod tests {
         assert_eq!(escape_fts5("   "), "");
         assert_eq!(escape_fts5("*"), "");
         assert_eq!(escape_fts5("  *  "), "");
+    }
+
+    #[test]
+    fn escape_fts5_trims_surrounding_whitespace() {
+        // Issue #163: surrounding whitespace must not leak into the quoted
+        // phrase, otherwise FTS5 phrase matching includes the padding.
+        assert_eq!(escape_fts5("  hello  "), "\"hello\"");
+        assert_eq!(escape_fts5("\thello\n"), "\"hello\"");
+        assert_eq!(escape_fts5("  foo OR bar  "), "\"foo OR bar\"");
     }
 }

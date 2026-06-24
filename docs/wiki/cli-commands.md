@@ -90,7 +90,18 @@ Start a conversation session with the LLM. Each message builds on the previous o
 
 ```bash
 mimir chat
+# With session overrides (issue #81):
+mimir chat --model gpt-4o --verbose --incognito --personality concise
 ```
+
+### Session Flags
+
+| Flag | Description |
+|------|-------------|
+| `-m, --model <model>` | Override the configured LLM model for this session |
+| `-v, --verbose` | Print token usage after each response |
+| `--incognito` | Skip context persistence and memory learning |
+| `-p, --personality <name>` | Override the personality preset |
 
 ### Built-in Commands
 
@@ -101,6 +112,10 @@ mimir chat
 | `/memory` | Show live condensed memory from the knowledge graph |
 | `/status` | Quick health check |
 | `/history` | Resume a previous conversation |
+| `/model [m]` | Show or set the LLM model override |
+| `/personality [p]` | Show or set the personality preset |
+| `/incognito [on\|off]` | Toggle incognito (skip persistence) |
+| `/verbose [on\|off]` | Toggle token usage reporting |
 | `/help` | Show available commands |
 
 ### Multi-line Input

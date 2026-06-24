@@ -89,12 +89,24 @@ async fn test_get_current_time_execution() {
         .await
         .unwrap();
     assert!(output.result.is_some());
-    let result = output.result.unwrap().as_str().unwrap().to_string();
-    // Verify valid RFC 3339 by parsing with chrono.
-    let parsed = chrono::DateTime::parse_from_rfc3339(&result);
+    let payload = output.result.unwrap();
+    // The tool returns a structured payload with local/utc/offset (issue #45).
+    let local = payload["local"].as_str().expect("local field present");
+    let utc = payload["utc"].as_str().expect("utc field present");
+    let offset = payload["offset"].as_str().expect("offset field present");
+    let parsed_local = chrono::DateTime::parse_from_rfc3339(local);
+    let parsed_utc = chrono::DateTime::parse_from_rfc3339(utc);
     assert!(
-        parsed.is_ok(),
-        "expected valid RFC 3339 timestamp, got: {result}"
+        parsed_local.is_ok(),
+        "expected valid RFC 3339 local timestamp, got: {local}"
+    );
+    assert!(
+        parsed_utc.is_ok(),
+        "expected valid RFC 3339 UTC timestamp, got: {utc}"
+    );
+    assert!(
+        offset.starts_with('+') || offset.starts_with('-'),
+        "expected offset to start with + or -, got: {offset}"
     );
 }
 
@@ -586,5 +598,80 @@ async fn test_get_weather_empty_location() {
     match result {
         Err(ToolError::InvalidArguments(name, _)) => assert_eq!(name, "get_weather"),
         other => panic!("expected InvalidArguments error, got {:?}", other),
+    }
+}
+
+// ---- incognito write-tool filtering (issue #155) ----
+
+mod incognito_export {
+    use super::*;
+    use async_trait::async_trait;
+    use serde_json::Value;
+
+    struct WriteDummyTool;
+    #[async_trait]
+    impl Tool for WriteDummyTool {
+        fn name(&self) -> &str {
+            "write_dummy"
+        }
+        fn description(&self) -> &str {
+            "a write-capable dummy tool"
+        }
+        fn parameters_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+        fn permission(&self) -> ToolPermission {
+            ToolPermission::Auto
+        }
+        async fn execute(&self, _args: Value) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput::default())
+        }
+        fn is_write_tool(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn incognito_export_excludes_write_tools() {
+        let registry = ToolRegistry::new();
+        registry
+            .register(
+                Arc::new(GetCurrentTimeTool),
+                ToolSource::Native,
+                ToolPermission::Auto,
+            )
+            .unwrap();
+        registry
+            .register(
+                Arc::new(WriteDummyTool),
+                ToolSource::Native,
+                ToolPermission::Auto,
+            )
+            .unwrap();
+
+        assert!(registry.is_write_tool("write_dummy"));
+        assert!(!registry.is_write_tool("get_current_time"));
+
+        // Non-incognito: both tools offered.
+        let with_writes = registry
+            .export_openai_tools_for_llm_with_writes(true)
+            .unwrap();
+        let names: Vec<&str> = with_writes
+            .iter()
+            .filter_map(|t| t["function"]["name"].as_str())
+            .collect();
+        assert!(names.contains(&"write_dummy"));
+        assert!(names.contains(&"get_current_time"));
+
+        // Incognito: write-capable tools are suppressed.
+        let incognito = registry
+            .export_openai_tools_for_llm_with_writes(false)
+            .unwrap();
+        let names: Vec<&str> = incognito
+            .iter()
+            .filter_map(|t| t["function"]["name"].as_str())
+            .collect();
+        assert!(!names.contains(&"write_dummy"));
+        assert!(names.contains(&"get_current_time"));
     }
 }

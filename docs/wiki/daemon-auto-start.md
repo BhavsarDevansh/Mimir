@@ -4,7 +4,7 @@ When you run a Mimir client command (`ask`, `chat`, `status`, `memory`, or `stop
 
 ## What Happens When the Daemon Is Down
 
-If the daemon is not responding on its configured address (default `http://127.0.0.1:8080`), you will see:
+The CLI probes the daemon's `/health` endpoint (a cheap liveness check that never touches the LLM or database). The address is resolved from `MIMIR_BASE_URL`, then `server.bind_addr` in your config (with `0.0.0.0` normalised to loopback), then the default `http://127.0.0.1:8080`. If the daemon is not responding there, you will see:
 
 ```
 Error: Mimir is not running.
@@ -20,7 +20,7 @@ If you approve, Mimir:
 
 1. Spawns `mimir start` using the same binary you are currently running.
 2. Daemon stdout and stderr are redirected to null so it runs silently in the background.
-3. Polls the daemon every 200–1 000 ms with exponential backoff.
+3. Polls the daemon's `/health` endpoint every 200–1 000 ms with exponential backoff.
 4. Proceeds with your original command as soon as the daemon is ready.
 
 The total wait time is capped at **10 seconds**. If the daemon has not started by then, the command exits with a timeout error.

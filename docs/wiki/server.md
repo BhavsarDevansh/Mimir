@@ -18,10 +18,14 @@ bind_addr = "127.0.0.1:8080"
 # socket_path = "~/.local/share/mimir/mimir.sock"  # Optional: Unix domain socket
 ```
 
+> **CLI target follows `bind_addr`.** Client commands (`ask`, `chat`, `status`, …) automatically target the daemon's configured `bind_addr` (with wildcard hosts like `0.0.0.0` normalised to loopback), overridden by the `MIMIR_BASE_URL` environment variable. So changing `bind_addr` no longer requires also setting `MIMIR_BASE_URL` to keep the CLI working.
+
+
 ## Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/health` | `GET` | Cheap liveness probe used by the daemon guard (no LLM/DB work) |
 | `/status` | `GET` | Health check and runtime statistics |
 | `/memory` | `GET` | Live condensed memory block from the knowledge graph |
 | `/chat` | `POST` | Blocking chat completion |

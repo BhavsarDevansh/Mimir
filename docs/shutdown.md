@@ -33,6 +33,16 @@ When any of these signals fire, the server enters graceful shutdown:
    - `shutdown()` awaits each worker handle with a 5-second timeout.
 
 
+## Background Task Teardown
+
+After the server future resolves (or the 30 s timeout fires), `start_server_with_llm_and_listener` broadcasts `true` on `AppState::shutdown_tx` **before** calling `AppState::shutdown()`. This watch channel is subscribed to by every background task spawned from `start_server`:
+
+- the config file-watcher's async relay task (which sets the `spawn_blocking` watcher's `AtomicBool` stop flag, causing it to drop the `notify` debouncer and exit within 250 ms),
+- the SIGHUP reload handler,
+- the condensation-notify listener.
+
+The broadcast is sent while the runtime is still fully alive, so the tasks are guaranteed to be polled and tear down deterministically. Previously the SIGTERM/Ctrl-C path never sent on `shutdown_tx` (only `POST /stop` did), so background shutdown relied on `AppState` being dropped during runtime teardown to resolve the watchers' `shutdown_rx.changed()` via sender-drop — a race that, when lost, left the file-watcher `spawn_blocking` thread alive and deadlocked tokio's `BlockingPool::shutdown` until systemd aborted the unit with `SIGABRT`. The explicit broadcast removes that race.
+
 ## Timeout Behavior
 
 The server future is wrapped in `tokio::time::timeout(Duration::from_secs(30), server_fut)`.

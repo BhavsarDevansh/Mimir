@@ -32,6 +32,10 @@ When shutdown is triggered:
 - The SQLite database pool is closed, flushing any pending writes.
 - LLM worker threads are stopped and their HTTP connections closed.
 
+## SIGTERM and systemd
+
+`systemctl --user stop mimir` sends `SIGTERM`. The daemon catches it, drains in-flight requests (up to 30 s), tears down all background tasks (config file-watcher, SIGHUP handler, condensation listener), and exits promptly — well within systemd's `TimeoutStopSec`. Previously the `SIGTERM` path could hang during runtime teardown (deadlocking the tokio blocking pool until systemd aborted the unit with `SIGABRT`); that is fixed by an explicit shutdown broadcast before the runtime drops.
+
 ## Best Practices
 
 - **Prefer `mimir stop` over `kill -9`**: The CLI verifies the daemon actually exits.

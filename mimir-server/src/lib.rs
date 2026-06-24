@@ -6,6 +6,7 @@ pub mod types;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     Router,
@@ -17,7 +18,7 @@ use axum::{
 };
 use tower::ServiceBuilder;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
-use tracing::info;
+use tracing::{info, warn};
 
 use mimir_core::config::ReloadableConfig;
 use mimir_core::llm::{LlmBackend, LlmClient};
@@ -77,6 +78,7 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .allow_headers([http::header::CONTENT_TYPE]);
 
     Router::new()
+        .route("/health", get(|| async { StatusCode::OK }))
         .route("/status", get(status_handler))
         .route("/memory", get(memory_handler))
         .route(
@@ -236,6 +238,7 @@ pub async fn start_server_with_llm_and_listener(
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
         let config_filename = config_path.file_name().map(|n| n.to_os_string());
+        let meta_path = config_path.clone();
 
         tokio::task::spawn_blocking(move || {
             let (debounce_tx, debounce_rx) = std::sync::mpsc::channel();
@@ -249,10 +252,21 @@ pub async fn start_server_with_llm_and_listener(
                 tracing::warn!("Failed to watch config directory: {}", e);
                 return;
             }
+            // Signature (mtime, size) of the last file content we asked the
+            // async task to reload. Reading the config file generates
+            // `Access`/close events; without dedupe these feed a self-reload
+            // loop (~1 event per second) and flood the journal.
+            let mut last_sig: Option<(std::time::SystemTime, u64)> = None;
             loop {
                 match debounce_rx.recv_timeout(std::time::Duration::from_millis(250)) {
                     Ok(Ok(events)) => {
-                        if events.iter().any(|e| {
+                        // Only react to real content changes on the config
+                        // file; ignore pure `Access` events (open/read/close),
+                        // which the OS emits when *we* read the file to reload.
+                        let relevant = events.iter().any(|e| {
+                            if e.event.kind.is_access() {
+                                return false;
+                            }
                             e.event.paths.iter().any(|p| {
                                 config_filename
                                     .as_ref()
@@ -261,13 +275,26 @@ pub async fn start_server_with_llm_and_listener(
                                     })
                                     .unwrap_or(false)
                             })
-                        }) {
-                            match tx.try_send(()) {
-                                Ok(()) => {}
-                                Err(e) => {
-                                    tracing::warn!("Config reload event dropped: {}", e);
-                                }
-                            }
+                        });
+                        if !relevant {
+                            continue;
+                        }
+                        // Dedupe by metadata signature so identical content
+                        // (repeated byte-identical saves, or repeated
+                        // "sensitive field" rejections) is acted on at most once.
+                        let Some(meta) = std::fs::metadata(&meta_path).ok() else {
+                            continue;
+                        };
+                        let sig = (
+                            meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                            meta.len(),
+                        );
+                        if last_sig == Some(sig) {
+                            continue;
+                        }
+                        last_sig = Some(sig);
+                        if let Err(e) = tx.try_send(()) {
+                            tracing::warn!("Config reload event dropped: {}", e);
                         }
                     }
                     Ok(Err(errors)) => {
@@ -338,8 +365,29 @@ pub async fn start_server_with_llm_and_listener(
     )
     .with_graceful_shutdown(shutdown_signal(shutdown_rx));
 
-    server_fut.await?;
-    info!("Server shut down gracefully.");
+    // Bound graceful shutdown so a wedged connection (e.g. a long-lived SSE
+    // stream) can never keep the process alive past systemd's `TimeoutStopSec`.
+    match tokio::time::timeout(Duration::from_secs(30), server_fut).await {
+        Ok(result) => {
+            result?;
+            info!("Server shut down gracefully.");
+        }
+        Err(_) => {
+            warn!("Graceful shutdown timed out after 30s; forcing exit.");
+        }
+    }
+
+    // Broadcast the shutdown watch so every background task spawned from
+    // `start_server_with_llm_and_listener` (file watcher, SIGHUP handler,
+    // condensation listener) tears down before the runtime drops. Without an
+    // explicit broadcast the SIGTERM/Ctrl-C path relied on `AppState` being
+    // dropped during runtime teardown to resolve the file-watcher's
+    // `shutdown_rx.changed()` (via sender-drop). That is a race: if tokio's
+    // `BlockingPool::shutdown` runs before the watcher task is polled, the
+    // `spawn_blocking` thread never exits and the process hangs until systemd
+    // aborts it with SIGABRT after `TimeoutStopSec`. Sending here, while the
+    // runtime is still fully alive, makes teardown deterministic.
+    let _ = state.shutdown_tx.send(true);
 
     state.shutdown().await;
     Ok(())
@@ -526,6 +574,32 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_health_returns_ok_without_llm() {
+        // `/health` is the cheap liveness probe used by the daemon guard, so it
+        // must never touch the LLM backend (which would make the 500ms probe
+        // time out on a healthy-but-slow provider).
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(bytes.is_empty(), "health endpoint should return no body");
     }
 
     #[tokio::test]

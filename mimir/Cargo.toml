@@ -43,3 +43,4 @@ tabled = "0.21"
 tempfile = "3"
 mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
 reqwest = { version = "0.13", features = ["blocking"] }
+nix = { version = "0.31", features = ["signal"] }

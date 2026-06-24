@@ -47,7 +47,16 @@ Uses `notify` 8.2.0 with `notify-debouncer-full` 0.7.0:
 - 1-second debounce timeout prevents rapid successive reloads.
 - Events are bridged from `spawn_blocking` to a tokio channel.
 - Config file changes are filtered by filename (`ends_with("config.toml")`).
-- On shutdown, an `AtomicBool` stop flag signals the blocking task to exit within 250ms.
+- **`Access` events are ignored.** `notify` reports `Access` (open/read/close)
+  events, and `reload()` itself reads the file — without filtering, those reads
+  fed a self-reload loop that reloaded the config ~once per second even when it
+  never changed, flooding the journal.
+- **Metadata dedupe.** Before signalling a reload, the watcher compares the
+  file's `(mtime, size)` signature against the last reload it requested. An
+  unchanged signature is skipped silently, so byte-identical rewrites (and
+  repeated `SensitiveFieldChanged` rejections of the same content) are acted on
+  at most once instead of once per debounce window.
+- On shutdown, an `AtomicBool` stop flag signals the blocking task to exit within 250ms. The flag is set deterministically by the server's shutdown broadcast (see `docs/shutdown.md`), not left to an `AppState`-drop race.
 
 ### SIGHUP Handler (Unix only)
 

@@ -610,7 +610,10 @@ mod tests {
             .with_temperature_override(0.7)
             .expect("temperature override supported");
         let debug = format!("{:?}", overridden);
-        assert!(debug.contains("has_pool: false"), "temperature override must disable pooling: {debug}");
+        assert!(
+            debug.contains("has_pool: false"),
+            "temperature override must disable pooling: {debug}"
+        );
     }
 
     #[test]

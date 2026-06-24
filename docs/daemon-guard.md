@@ -17,7 +17,8 @@ pub async fn ensure_daemon_running(
 
 ### Parameters
 
-- `base_url` — The daemon HTTP API base URL, e.g. `http://127.0.0.1:8080`. The helper probes `{base_url}/status`.
+- `base_url` — The daemon HTTP API base URL, e.g. `http://127.0.0.1:8080`. The helper probes `{base_url}/health`.
+  Resolved from `MIMIR_BASE_URL` → `server.bind_addr` (config) → compiled default; see [CLI base URL](#cli-base-url) below.
 - `already_tried` — A shared mutable flag passed from `main.rs`. It guarantees that **at most one** auto-start attempt is made per CLI invocation, even if multiple client commands were (hypothetically) triggered.
 
 ### Error Variants (`DaemonGuardError`)
@@ -26,12 +27,12 @@ pub async fn ensure_daemon_running(
 |---------|-------|
 | `Prompt` | User declined the prompt, or stdin returned EOF / an IO error. |
 | `Spawn` | `std::env::current_exe()` failed, or the OS refused to spawn the child process. |
-| `StartTimeout` | The daemon did not respond to `GET /status` within the 10 s post-spawn polling window. |
+| `StartTimeout` | The daemon did not respond to `GET /health` within the 10 s post-spawn polling window. |
 | `Connection` | Reserved for unexpected probe-level failures (currently unused). |
 
 ## Detection Flow
 
-1. **Fast probe** — A dedicated `reqwest` client with a 500 ms total-request timeout sends `GET {base_url}/status`. If the response is HTTP 2xx, the helper returns `Ok(())` immediately.
+1. **Fast probe** — A dedicated `reqwest` client with a 500 ms total-request timeout sends `GET {base_url}/health`. `health` is a cheap liveness endpoint that never touches the LLM backend or database, so a healthy-but-slow provider cannot make the probe time out. If the response is HTTP 2xx, the helper returns `Ok(())` immediately.
 2. **Prompt** — If the probe fails (connection refused, timeout, or non-2xx), the helper prints:
    ```text
    Error: Mimir is not running.
@@ -44,7 +45,7 @@ pub async fn ensure_daemon_running(
    - Initial delay: **200 ms**
    - After each failed probe, delay doubles: 200 → 400 → 800 → **capped at 1 000 ms**
    - Total wall-clock budget: **≤ 10 s**
-   - On the first successful `GET /status`, return `Ok(())`.
+   - On the first successful `GET /health`, return `Ok(())`.
    - If the 10 s budget expires, return `Err(DaemonGuardError::StartTimeout)`.
 
 ## Design Decisions
@@ -53,6 +54,10 @@ pub async fn ensure_daemon_running(
 - **Why `std::process::Command` instead of `tokio::process::Command`?** The spawn is fire-and-forget; we do not await the child. The synchronous `std` API is simpler and avoids adding the `process` feature to `tokio` in production.
 - **Why pass `already_tried` explicitly?** A `static AtomicBool` would be global, which complicates parallel test execution. An explicit `bool` parameter makes the dependency visible and trivially testable.
 - **Why trait-based internals?** `Probe`, `PromptReader`, and `ProcessSpawner` are internal traits that let unit tests inject mock behaviour without relying on real HTTP servers or interactive stdin. The public API remains a plain async function.
+
+## CLI base URL
+
+The daemon guard's `base_url` is resolved in `mimir/src/constants.rs` (precedence: `MIMIR_BASE_URL` env var → `server.bind_addr` from the config file, with wildcard hosts like `0.0.0.0` normalised to loopback → compiled default `http://127.0.0.1:8080`). This means the CLI automatically targets whichever port the daemon is configured to listen on, so a non-default `server.bind_addr` no longer causes the guard to probe the wrong port and spuriously prompt to start an already-running daemon.
 
 ## Test Coverage
 

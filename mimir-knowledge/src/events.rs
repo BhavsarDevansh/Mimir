@@ -57,8 +57,11 @@ pub async fn run_upcoming_scan(
             auto_complete_policy: AutoCompletePolicy::AutoCompleteOnDate,
             requires_user_action: false,
         };
-        event::insert_event(pool, &new).await?;
-        derived += 1;
+        // Idempotent: a concurrent writer (e.g. extraction) may create the
+        // same overlay between the select and insert. Only count actual inserts.
+        if event::insert_event_if_absent(pool, &new).await?.is_some() {
+            derived += 1;
+        }
     }
 
     // 2. Auto-complete one-time events past their trigger date.

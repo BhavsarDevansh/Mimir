@@ -553,7 +553,10 @@ fn format_upcoming_line(
         .unwrap_or_else(|| object_literal.unwrap_or(""))
         .to_string();
     let rel = relationship_type.replace('_', " ");
-    let days = (when - now).num_days();
+    let days = when
+        .date_naive()
+        .signed_duration_since(now.date_naive())
+        .num_days();
     let when_str = if days == 0 {
         "today".to_string()
     } else if days == 1 {
@@ -577,6 +580,29 @@ fn format_upcoming_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upcoming_suffix_uses_calendar_days() {
+        use chrono::TimeZone;
+
+        // 23:00 today -> 01:00 tomorrow is only 2 hours, but it crosses a
+        // calendar boundary so the suffix must say "in 1 day", not "today".
+        let now = Utc.with_ymd_and_hms(2026, 6, 25, 23, 0, 0).unwrap();
+        let when = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
+        let line = format_upcoming_line("Ada", "is_in", Some("Paris"), None, when, now);
+        assert!(line.contains("in 1 day"), "line was: {line}");
+    }
+
+    #[test]
+    fn upcoming_suffix_today_same_calendar_day() {
+        use chrono::TimeZone;
+
+        // Same calendar day, ~1h apart -> "today" regardless of hour delta.
+        let now = Utc.with_ymd_and_hms(2026, 6, 25, 10, 0, 0).unwrap();
+        let when = Utc.with_ymd_and_hms(2026, 6, 25, 23, 0, 0).unwrap();
+        let line = format_upcoming_line("Ada", "is_in", Some("Paris"), None, when, now);
+        assert!(line.contains("today"), "line was: {line}");
+    }
 
     #[test]
     fn temporal_boost_zero_days() {

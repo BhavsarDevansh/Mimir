@@ -1013,10 +1013,12 @@ pub(crate) async fn process_extracted_fact(
     let fact = kg.insert_fact(new_fact).await?;
 
     // Events subsystem (#74): create a lifecycle overlay when the fact is
-    // time-bound (future date), recurring, or requires user action.
+    // time-bound (future date), recurring, or requires user action. The insert
+    // is idempotent (ON CONFLICT DO NOTHING) so a concurrent derive scan cannot
+    // trip the `fact_id` unique constraint.
     if let Some(new_event) = event_from_extraction(&extracted, subject.id, fact.id, valid_from, now)
     {
-        if let Err(e) = kg.insert_event(new_event).await {
+        if let Err(e) = kg.insert_event_if_absent(new_event).await {
             tracing::warn!("failed to create event overlay for fact {}: {}", fact.id, e);
         }
     }
@@ -1036,6 +1038,12 @@ pub(crate) async fn process_extracted_fact(
 /// `requires_user_action` -> `RequiresUserAction`, otherwise
 /// `AutoCompleteOnDate`. No natural-language date parsing happens in Rust; the
 /// LLM supplies the ISO-8601 `valid_from` used as the trigger date.
+///
+/// `event_type` is intentionally limited to `Task`/`Reminder` in Phase A: the
+/// LLM does not emit an explicit event kind, and inferring `Birthday`/
+/// `Appointment`/`Deadline` from recurrence alone would be unreliable. The
+/// remaining `EventType` variants are seeded for later phases that derive
+/// richer typing (e.g. from catalogue categories or an explicit LLM field).
 fn event_from_extraction(
     extracted: &ExtractedFact,
     entity_id: i32,
@@ -1249,6 +1257,37 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
     tx.commit().await?;
 
     kg.pending_confirmations().write().await.remove(&fact_id);
+
+    // Events subsystem (#74): sensitive facts skip overlay creation at
+    // extraction time (they return `Pending` before reaching the event block).
+    // Now that the fact is confirmed and Active, derive a one-time overlay for
+    // future-dated facts so they surface in Upcoming and auto-complete on their
+    // trigger date. The insert is idempotent, so re-confirmation is safe.
+    //
+    // Phase A limitation: recurrence and `requires_user_action` are not carried
+    // across the sensitivity gate (they are not persisted on the fact), so the
+    // overlay is always a one-time `Reminder`. Sensitive facts are expected to
+    // be one-time appointments; richer typing is deferred to a later phase.
+    if let Some(valid_from) = updated.valid_from {
+        if valid_from > now {
+            let new_event = NewEvent {
+                fact_id: updated.id,
+                entity_id: updated.subject_id,
+                trigger_date: valid_from,
+                recurrence: RecurrenceType::None,
+                event_type: EventType::Reminder,
+                auto_complete_policy: AutoCompletePolicy::AutoCompleteOnDate,
+                requires_user_action: false,
+            };
+            if let Err(e) = kg.insert_event_if_absent(new_event).await {
+                tracing::warn!(
+                    "failed to create event overlay for confirmed fact {}: {}",
+                    updated.id,
+                    e
+                );
+            }
+        }
+    }
 
     // Trigger inference now that the fact is Active and cascade inferred facts.
     let mut ctx = CascadeContext::new();

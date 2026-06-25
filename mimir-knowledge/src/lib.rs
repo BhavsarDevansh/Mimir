@@ -995,6 +995,18 @@ impl KnowledgeGraph {
         queries::event::insert_event(&self.pool, &new).await
     }
 
+    /// Insert an event overlay on a fact only if none exists yet.
+    ///
+    /// Returns `Some` when a new overlay was created, `None` when one already
+    /// existed for the fact (idempotent). Used by the derive scan and the
+    /// sensitive-fact confirmation path to avoid duplicate-overlay races.
+    pub async fn insert_event_if_absent(
+        &self,
+        new: models::event::NewEvent,
+    ) -> Result<Option<models::event::Event>, KnowledgeError> {
+        queries::event::insert_event_if_absent(&self.pool, &new).await
+    }
+
     /// Fetch an event overlay by its underlying fact id.
     pub async fn get_event_by_fact(
         &self,

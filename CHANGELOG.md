@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.58.0] — 2026-06-25
+
+### Fixed — PR #173 review feedback on the events & reminders subsystem
+
+- **Idempotent overlay derivation.** The derive scan now inserts overlays with
+  `INSERT ... ON CONFLICT(fact_id) DO NOTHING` and only counts actual inserts,
+  so a concurrent extraction can no longer trip the `fact_id` unique constraint
+  (#3).
+- **Recurring user-action events are no longer auto-advanced.** The advance pass
+  now filters to `Recurring`-policy events with `requires_user_action = false`;
+  recurring deadlines/tasks stay past their trigger date and surface as overdue,
+  matching the documented contract (#4).
+- **Sensitive time-bound facts get an overlay on confirmation.** Sensitive facts
+  return `Pending` before the event block; `confirm_fact` now derives a one-time
+  `AutoCompleteOnDate` overlay for future-dated sensitive facts when they are
+  confirmed. Recurrence / `requires_user_action` are not carried across the
+  sensitivity gate in Phase A (documented limitation) (#5).
+- **Scan / Upcoming confidence alignment.** The derive query now applies the
+  same `confidence >= 0.5` gate as the Upcoming render, so overlays are only
+  created for facts that will surface (no hidden overlays for low-confidence
+  interaction facts) (#7). Note: `facts.confidence` is `NOT NULL`, so the
+  original "NULL confidence" framing was revised.
+- **Calendar-day relative suffix.** `format_upcoming_line` computes the
+  `today` / `in N days` suffix from `date_naive()` differences, so an event
+  early the next calendar day is no longer mislabelled `today` (#8).
+- **Docs.** `RecurringYearly` references in `docs/events-reminders.md` updated
+  to `Recurring` to match the renamed policy (#1).
+
+### Added
+
+- **Env overrides for events.** `MIMIR_KNOWLEDGE_EVENTS_SCHEDULE_TIMES`
+  (comma-separated `HH:MM`) and `MIMIR_KNOWLEDGE_EVENTS_HORIZON_DAYS` now flow
+  through `apply_env_overrides_with`, matching the rest of the config (#2).
+- **Public API:** `KnowledgeGraph::insert_event_if_absent` and
+  `queries::event::insert_event_if_absent` for idempotent overlay creation.
+
+### Notes
+
+- `event_type` from extraction is intentionally limited to `Task`/`Reminder` in
+  Phase A; the remaining `EventType` variants are seeded for later phases (#6).
+- The `event_type_roundtrips` test already carries `#[tokio::test]`; finding #9
+  was not valid against the current code and was skipped.
 ## [0.57.0] — 2026-06-25
 
 ### Feature — events & reminders subsystem (issue #74)

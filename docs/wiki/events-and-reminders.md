@@ -47,6 +47,20 @@ schedule_times = ["06:00", "18:00"]  # when the scan runs daily
 horizon_days = 30                     # how far ahead to surface upcoming items
 ```
 
+You can also set these via environment variables, which override the file:
+
+- `MIMIR_KNOWLEDGE_EVENTS_SCHEDULE_TIMES` — comma-separated daily run times,
+  e.g. `07:30,19:45`.
+- `MIMIR_KNOWLEDGE_EVENTS_HORIZON_DAYS` — how many days ahead to look, e.g.
+  `30`.
+
+## Sensitive facts
+
+When a fact is sensitive (e.g. a medical appointment) Mimir asks you to confirm
+it before storing it permanently. The reminder is created once you **confirm**
+the fact, so confirmed sensitive appointments appear in Upcoming and drop off
+after their date passes just like any other reminder.
+
 ## Best practices
 
 - Include a concrete date when you want something tracked ("by tomorrow 5pm",

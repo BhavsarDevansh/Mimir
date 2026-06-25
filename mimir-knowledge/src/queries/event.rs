@@ -38,6 +38,33 @@ pub async fn insert_event(pool: &SqlitePool, new: &NewEvent) -> Result<Event, Kn
     Ok(record)
 }
 
+/// Insert an event overlay only when no overlay yet exists for `fact_id`.
+///
+/// Returns `Some(Event)` when a new row was inserted, or `None` when an overlay
+/// for this `fact_id` already existed. The `events.fact_id` UNIQUE constraint
+/// plus `ON CONFLICT DO NOTHING` makes this safe against concurrent writers
+/// (e.g. a derive scan and an extraction running at once), so derivation is
+/// idempotent.
+pub async fn insert_event_if_absent(
+    pool: &SqlitePool,
+    new: &NewEvent,
+) -> Result<Option<Event>, KnowledgeError> {
+    let row = sqlx::query_as::<_, Event>(
+        "INSERT INTO events          (fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, status_id,           auto_complete_policy_id, requires_user_action)          VALUES (?, ?, ?, ?, ?, ?, ?, ?)          ON CONFLICT(fact_id) DO NOTHING          RETURNING id, fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id,                    status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at",
+    )
+    .bind(new.fact_id)
+    .bind(new.entity_id)
+    .bind(new.trigger_date)
+    .bind(new.recurrence as i16)
+    .bind(new.event_type as i16)
+    .bind(EventStatus::Active as i16)
+    .bind(new.auto_complete_policy as i16)
+    .bind(new.requires_user_action)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 /// Fetch an event overlay by its underlying fact id.
 pub async fn get_by_fact(pool: &SqlitePool, fact_id: i32) -> Result<Option<Event>, KnowledgeError> {
     let row = sqlx::query_as::<_, Event>(
@@ -148,17 +175,25 @@ pub async fn get_overdue_events(
     Ok(rows)
 }
 
-/// All active recurring events (any recurrence other than `None`).
+/// Active recurring events eligible for trigger advancement.
+///
+/// Only `Recurring`-policy events that do not require user action are returned;
+/// `RequiresUserAction` recurring deadlines/tasks stay past their trigger date
+/// and surface as overdue instead of being silently advanced.
 pub async fn get_active_recurring(pool: &SqlitePool) -> Result<Vec<Event>, KnowledgeError> {
     let rows = sqlx::query_as::<_, Event>(
         "SELECT id, fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, \
                 status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at \
          FROM events \
-         WHERE status_id = ? AND recurrence_type_id != ? \
+         WHERE status_id = ? \
+           AND recurrence_type_id != ? \
+           AND auto_complete_policy_id = ? \
+           AND requires_user_action = 0 \
          ORDER BY trigger_date",
     )
     .bind(EventStatus::Active as i16)
     .bind(RecurrenceType::None as i16)
+    .bind(AutoCompletePolicy::Recurring as i16)
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -191,6 +226,9 @@ pub async fn get_past_due_auto_complete(
 ///
 /// These are candidates for the scan job's derive pass. Only non-superseded,
 /// non-forgotten, confirmed facts with a future `valid_from` are considered.
+/// The `confidence >= 0.5` gate mirrors the Upcoming-section query so the scan
+/// only derives overlays for facts that will actually surface (no hidden
+/// overlays for low-confidence interaction facts).
 pub async fn get_future_facts_without_overlay(
     pool: &SqlitePool,
     now: DateTime<Utc>,
@@ -205,7 +243,8 @@ pub async fn get_future_facts_without_overlay(
            AND f.valid_from > ? \
            AND f.valid_from <= ? \
            AND f.fact_status_id NOT IN (?, ?) \
-           AND f.pending_confirmation = 0",
+           AND f.pending_confirmation = 0 \
+           AND f.confidence >= 0.5",
     )
     .bind(now)
     .bind(horizon)

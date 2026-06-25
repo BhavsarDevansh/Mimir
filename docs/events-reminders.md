@@ -29,7 +29,7 @@ and surfaces in `render_upcoming_section`. The `events` overlay only manages
 | `recurrence_type_id` | INTEGER FK → `recurrence_types` | reuses the existing recurrence lookup |
 | `event_type_id` | INTEGER FK → `event_types` | birthday, appointment, deadline, task, reminder, custom |
 | `status_id` | INTEGER FK → `event_statuses` | Pending, Active, Completed, Dismissed, Snoozed |
-| `auto_complete_policy_id` | INTEGER FK → `auto_complete_policies` | AutoCompleteOnDate, RequiresUserAction, RecurringYearly |
+| `auto_complete_policy_id` | INTEGER FK → `auto_complete_policies` | AutoCompleteOnDate, RequiresUserAction, Recurring |
 | `requires_user_action` | BOOLEAN | task/deadline flag |
 | `addressed_at` | TIMESTAMP | set when Completed/Dismissed |
 | `created_at` | TIMESTAMP | |
@@ -51,7 +51,7 @@ Detection is pure Rust, no LLM classification:
 
 - **Future-dated fact** (`valid_from > now`) → one-time event,
   `AutoCompleteOnDate`, `Reminder`.
-- **Recurring** (LLM-emitted `recurrence` ≠ `none`) → `RecurringYearly`.
+- **Recurring** (LLM-emitted `recurrence` ≠ `none`) → `Recurring`.
 - **`requires_user_action`** → `RequiresUserAction`, `Task`.
 
 The LLM only supplies structured data — the ISO-8601 `valid_from` (used as
@@ -63,9 +63,18 @@ The LLM only supplies structured data — the ISO-8601 `valid_from` (used as
 
 `extract.rs::event_from_extraction` builds an overlay for any inserted fact that
 has a `valid_from` and is either future-dated, recurring, or action-required.
-The overlay is created inside the extraction pipeline (DRY: one place), so the
+The overlay is created inside the extraction pipeline (idempotent insert), so the
 Librarian Agent needs no event-specific logic — it calls
-`extract_facts_with_context` as before.
+`extract_facts_with_context` as before. `event_type` is limited to `Task`/
+`Reminder` in Phase A; the remaining `EventType` variants are seeded for later
+phases that derive richer typing.
+
+Sensitive facts return `Pending` before reaching the event block, so
+`extract.rs::confirm_fact` derives a one-time `AutoCompleteOnDate` overlay for
+future-dated sensitive facts at confirmation time (idempotent). Recurrence and
+`requires_user_action` are not carried across the sensitivity gate in Phase A,
+so confirmed sensitive facts are always one-time reminders; richer typing is
+deferred.
 
 ## Scan Job — `events.upcoming_scan`
 
@@ -75,11 +84,17 @@ deterministic passes:
 
 1. **Derive** — facts with a future `valid_from` and no overlay get a one-time
    `AutoCompleteOnDate` overlay. Catches facts inserted by non-extraction paths
-   (connectors, `remember` tool, manual edits).
+   (connectors, `remember` tool, manual edits). The insert is idempotent
+   (`INSERT ... ON CONFLICT(fact_id) DO NOTHING`), so a concurrent extraction
+   cannot trip the `fact_id` unique constraint; `derived` counts only actual
+   inserts. The derive query applies the same `confidence >= 0.5` gate as the
+   Upcoming render, so overlays are only created for facts that will surface.
 2. **Auto-complete** — one-time `AutoCompleteOnDate` events whose
    `trigger_date` has passed transition to `Completed`.
 3. **Advance** — recurring events whose `trigger_date` has passed advance to
-   their next occurrence via `next_occurrence`.
+   their next occurrence via `next_occurrence`. Only `Recurring`-policy events
+   with `requires_user_action = false` are advanced; a recurring deadline/task
+   that requires user action stays put and surfaces as overdue instead.
 
 `RequiresUserAction` events are intentionally left untouched; past their
 `trigger_date` they surface as **overdue** via `get_overdue_events`.
@@ -110,6 +125,17 @@ relationship-aware upcoming view.
 schedule_times = ["06:00", "18:00"]  # daily run times (HH:MM)
 horizon_days = 30                     # how far ahead the derive pass looks
 ```
+
+Both settings honour the standard env-override precedence:
+
+| Env var | Format | Default |
+|---------|--------|---------|
+| `MIMIR_KNOWLEDGE_EVENTS_SCHEDULE_TIMES` | comma-separated `HH:MM` list | `06:00,18:00` |
+| `MIMIR_KNOWLEDGE_EVENTS_HORIZON_DAYS` | integer days | `30` |
+
+The render path labels each item with a calendar-day-relative suffix (`today`,
+`in 1 day`, `in N days`) computed from `date_naive()` so an event early the next
+calendar day is never mislabelled `today`.
 
 ## Key Files
 

@@ -20,7 +20,7 @@ async fn all_migrations_apply_cleanly() {
     // Core tables
     assert!(names.contains(&"entities".to_string()));
     assert!(names.contains(&"entity_aliases".to_string()));
-    assert!(names.contains(&"entity_dates".to_string()));
+    assert!(names.contains(&"events".to_string()));
     assert!(names.contains(&"entity_locations".to_string()));
     assert!(names.contains(&"facts".to_string()));
     assert!(names.contains(&"fact_dependencies".to_string()));
@@ -37,7 +37,9 @@ async fn all_migrations_apply_cleanly() {
 
     // Lookup tables
     assert!(names.contains(&"entity_types".to_string()));
-    assert!(names.contains(&"entity_date_types".to_string()));
+    assert!(names.contains(&"event_types".to_string()));
+    assert!(names.contains(&"event_statuses".to_string()));
+    assert!(names.contains(&"auto_complete_policies".to_string()));
     assert!(names.contains(&"recurrence_types".to_string()));
     assert!(names.contains(&"location_types".to_string()));
     assert!(names.contains(&"fact_statuses".to_string()));
@@ -66,7 +68,9 @@ async fn lookup_tables_seeded_correctly() {
 
     let queries: Vec<(&'static str, i64)> = vec![
         ("SELECT COUNT(*) FROM entity_types", 8),
-        ("SELECT COUNT(*) FROM entity_date_types", 6),
+        ("SELECT COUNT(*) FROM event_types", 6),
+        ("SELECT COUNT(*) FROM event_statuses", 5),
+        ("SELECT COUNT(*) FROM auto_complete_policies", 3),
         ("SELECT COUNT(*) FROM recurrence_types", 5),
         ("SELECT COUNT(*) FROM location_types", 5),
         ("SELECT COUNT(*) FROM fact_statuses", 6),

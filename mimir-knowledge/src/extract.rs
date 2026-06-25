@@ -14,6 +14,8 @@ use mimir_core::personality::Personality;
 use crate::inference::CascadeContext;
 use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::entity::{Entity, EntityType};
+use crate::models::enums::{AutoCompletePolicy, EventType, RecurrenceType};
+use crate::models::event::NewEvent;
 use crate::models::fact::{Fact, FactStatus, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
 use crate::queries;
@@ -60,6 +62,17 @@ pub struct ExtractedFact {
     pub correction_scope: Option<String>,
     #[serde(default)]
     pub categories: Vec<String>,
+    /// How the fact's date recurs, if at all (events subsystem, #74).
+    ///
+    /// Emitted by the LLM for recurring facts such as birthdays. One of
+    /// `none`, `daily`, `weekly`, `monthly`, `yearly`. Rust validates and maps
+    /// it to [`RecurrenceType`]; no natural-language parsing is done in Rust.
+    #[serde(default)]
+    pub recurrence: Option<String>,
+    /// Whether this fact describes a task/deadline that requires the user to
+    /// act (stays `Active` past the trigger date instead of auto-completing).
+    #[serde(default)]
+    pub requires_user_action: Option<bool>,
 }
 
 /// Wrapper returned by the `remember` tool.
@@ -166,6 +179,15 @@ pub fn remember_tool_schema() -> serde_json::Value {
                                     "type": "array",
                                     "items": { "type": "string" },
                                     "description": "Dewey Decimal category IDs (e.g., ['200', '210']) that best describe the topic of this fact. Use the Categorisation Guide in the system prompt."
+                                },
+                                "recurrence": {
+                                    "type": "string",
+                                    "enum": ["none", "daily", "weekly", "monthly", "yearly"],
+                                    "description": "For recurring facts (birthdays, anniversaries, routines): how the date recurs. Omit or set 'none' for one-time facts."
+                                },
+                                "requires_user_action": {
+                                    "type": "boolean",
+                                    "description": "True for tasks/deadlines the user must complete (the event stays Active past its trigger date). False or omit for reminders that auto-complete when the date passes."
                                 }
                             },
                             "required": ["classification", "subject", "subject_type", "relationship_type", "object", "object_is_entity"]
@@ -989,7 +1011,86 @@ pub(crate) async fn process_extracted_fact(
 
     // Non-sensitive facts go through the normal path.
     let fact = kg.insert_fact(new_fact).await?;
+
+    // Events subsystem (#74): create a lifecycle overlay when the fact is
+    // time-bound (future date), recurring, or requires user action.
+    if let Some(new_event) = event_from_extraction(&extracted, subject.id, fact.id, valid_from, now)
+    {
+        if let Err(e) = kg.insert_event(new_event).await {
+            tracing::warn!("failed to create event overlay for fact {}: {}", fact.id, e);
+        }
+    }
+
     Ok(ProcessResult::Inserted(fact))
+}
+
+/// Build an event overlay from an extracted fact, if it qualifies.
+///
+/// Qualification (deterministic, issue #74): the fact has a `valid_from`
+/// (trigger date) AND at least one of:
+/// - `valid_from` is in the future (one-time upcoming event),
+/// - the LLM emitted a non-`none` recurrence (recurring event),
+/// - the LLM flagged `requires_user_action` (task/deadline).
+///
+/// Policy is derived deterministically: recurring -> `RecurringYearly`,
+/// `requires_user_action` -> `RequiresUserAction`, otherwise
+/// `AutoCompleteOnDate`. No natural-language date parsing happens in Rust; the
+/// LLM supplies the ISO-8601 `valid_from` used as the trigger date.
+fn event_from_extraction(
+    extracted: &ExtractedFact,
+    entity_id: i32,
+    fact_id: i32,
+    valid_from: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Option<NewEvent> {
+    let trigger_date = valid_from?;
+
+    let recurrence = extracted
+        .recurrence
+        .as_deref()
+        .and_then(parse_recurrence)
+        .unwrap_or(RecurrenceType::None);
+    let requires_user_action = extracted.requires_user_action.unwrap_or(false);
+
+    let is_future = trigger_date > now;
+    if !is_future && recurrence == RecurrenceType::None && !requires_user_action {
+        return None;
+    }
+
+    let auto_complete_policy = if recurrence != RecurrenceType::None {
+        AutoCompletePolicy::RecurringYearly
+    } else if requires_user_action {
+        AutoCompletePolicy::RequiresUserAction
+    } else {
+        AutoCompletePolicy::AutoCompleteOnDate
+    };
+    let event_type = if requires_user_action {
+        EventType::Task
+    } else {
+        EventType::Reminder
+    };
+
+    Some(NewEvent {
+        fact_id,
+        entity_id,
+        trigger_date,
+        recurrence,
+        event_type,
+        auto_complete_policy,
+        requires_user_action,
+    })
+}
+
+/// Map an LLM-emitted recurrence string to a `RecurrenceType`.
+fn parse_recurrence(value: &str) -> Option<RecurrenceType> {
+    match value.to_ascii_lowercase().as_str() {
+        "none" => Some(RecurrenceType::None),
+        "daily" => Some(RecurrenceType::Daily),
+        "weekly" => Some(RecurrenceType::Weekly),
+        "monthly" => Some(RecurrenceType::Monthly),
+        "yearly" => Some(RecurrenceType::Yearly),
+        _ => None,
+    }
 }
 
 async fn handle_correction(
@@ -1423,6 +1524,8 @@ mod confirmation_tests {
             is_sensitive: true,
             correction_scope: None,
             categories: vec!["230".to_string()],
+            recurrence: None,
+            requires_user_action: None,
         }
     }
 

@@ -8,6 +8,7 @@ pub mod clock;
 pub mod condensation;
 pub mod confidence;
 pub mod db;
+pub mod events;
 pub mod extract;
 pub mod forget;
 pub mod inference;
@@ -949,49 +950,6 @@ impl KnowledgeGraph {
     }
 
     // ------------------------------------------------------------------
-    // Entity dates delegates
-    // ------------------------------------------------------------------
-
-    /// Insert a date for an entity.
-    pub async fn insert_entity_date(
-        &self,
-        entity_id: i32,
-        date_type: models::enums::EntityDateType,
-        date_value: &str,
-        recurrence: models::enums::RecurrenceType,
-        label: Option<&str>,
-        confidence: f32,
-    ) -> Result<models::entity_date::EntityDate, KnowledgeError> {
-        queries::entity::insert_entity_date(
-            &self.pool,
-            entity_id,
-            date_type as i16,
-            date_value,
-            recurrence as i16,
-            label,
-            confidence,
-        )
-        .await
-    }
-
-    /// List all dates for an entity.
-    pub async fn get_entity_dates(
-        &self,
-        entity_id: i32,
-    ) -> Result<Vec<models::entity_date::EntityDate>, KnowledgeError> {
-        queries::entity::get_dates_for_entity(&self.pool, entity_id).await
-    }
-
-    /// Return dates that recur within the next `days_ahead` days.
-    pub async fn get_upcoming_dates(
-        &self,
-        entity_id: i32,
-        days_ahead: i64,
-    ) -> Result<Vec<models::entity_date::EntityDate>, KnowledgeError> {
-        queries::entity::get_upcoming_dates(&self.pool, entity_id, days_ahead, self.now()).await
-    }
-
-    // ------------------------------------------------------------------
     // Entity locations delegates (stubs)
     // ------------------------------------------------------------------
 
@@ -1023,6 +981,69 @@ impl KnowledgeGraph {
         entity_id: i32,
     ) -> Result<Vec<models::entity_location::EntityLocation>, KnowledgeError> {
         queries::entity::get_locations(&self.pool, entity_id).await
+    }
+
+    // ------------------------------------------------------------------
+    // Events & reminders delegates (issue #74)
+    // ------------------------------------------------------------------
+
+    /// Insert an event overlay on a fact.
+    pub async fn insert_event(
+        &self,
+        new: models::event::NewEvent,
+    ) -> Result<models::event::Event, KnowledgeError> {
+        queries::event::insert_event(&self.pool, &new).await
+    }
+
+    /// Fetch an event overlay by its underlying fact id.
+    pub async fn get_event_by_fact(
+        &self,
+        fact_id: i32,
+    ) -> Result<Option<models::event::Event>, KnowledgeError> {
+        queries::event::get_by_fact(&self.pool, fact_id).await
+    }
+
+    /// Transition an event overlay to a new lifecycle status.
+    pub async fn update_event_status(
+        &self,
+        event_id: i32,
+        status: models::enums::EventStatus,
+    ) -> Result<models::event::Event, KnowledgeError> {
+        queries::event::update_status(&self.pool, event_id, status, self.now()).await
+    }
+
+    /// Soft-delete an event overlay (mark `Dismissed`).
+    pub async fn dismiss_event(
+        &self,
+        event_id: i32,
+    ) -> Result<models::event::Event, KnowledgeError> {
+        queries::event::soft_delete(&self.pool, event_id, self.now()).await
+    }
+
+    /// Active events for an entity within a `[from, to]` trigger-date window.
+    pub async fn get_active_events(
+        &self,
+        entity_id: i32,
+        from: chrono::DateTime<chrono::Utc>,
+        to: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<models::event::Event>, KnowledgeError> {
+        queries::event::get_active_events(&self.pool, entity_id, from, to).await
+    }
+
+    /// Active events for an entity that are past their trigger date.
+    pub async fn get_overdue_events(
+        &self,
+        entity_id: i32,
+    ) -> Result<Vec<models::event::Event>, KnowledgeError> {
+        queries::event::get_overdue_events(&self.pool, entity_id, self.now()).await
+    }
+
+    /// Run the `events.upcoming_scan` job (derive + auto-complete + advance).
+    pub async fn run_events_scan(
+        &self,
+        horizon_days: i64,
+    ) -> Result<events::ScanSummary, KnowledgeError> {
+        events::run_upcoming_scan(self, horizon_days).await
     }
 
     // ------------------------------------------------------------------

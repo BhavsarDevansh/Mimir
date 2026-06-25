@@ -404,6 +404,45 @@ impl AppState {
         );
         job_queue.register(cleanup_job).await?;
 
+        // Register the events & reminders upcoming-scan job (issue #74).
+        // One scheduled job per configured run time; each shares the same
+        // deterministic scan handler (derive overlays + auto-complete +
+        // recurring advancement).
+        let kg_for_events = Arc::clone(&knowledge_graph);
+        let events_horizon = cfg.knowledge.events.horizon_days as i64;
+        for (idx, time_str) in cfg.knowledge.events.schedule_times.iter().enumerate() {
+            let events_schedule = mimir_core::job_queue::DailySchedule::parse(time_str)?;
+            let job_id = format!("events.upcoming_scan_{idx}");
+            let kg_clone = Arc::clone(&kg_for_events);
+            let horizon = events_horizon;
+            let events_job = Job::new(
+                job_id,
+                JobPriority::System,
+                Some(events_schedule),
+                true,
+                move |_ctx: JobContext| {
+                    let kg = Arc::clone(&kg_clone);
+                    let horizon = horizon;
+                    Box::pin(async move {
+                        let summary = kg
+                            .run_events_scan(horizon)
+                            .await
+                            .map_err(|e| mimir_core::job_queue::JobError::Handler(e.to_string()))?;
+                        if summary.derived + summary.completed + summary.advanced > 0 {
+                            tracing::info!(
+                                "events.upcoming_scan: derived {} completed {} advanced {}",
+                                summary.derived,
+                                summary.completed,
+                                summary.advanced
+                            );
+                        }
+                        Ok(())
+                    })
+                },
+            );
+            job_queue.register(events_job).await?;
+        }
+
         Ok((
             Self {
                 llm_client,

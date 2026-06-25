@@ -217,9 +217,6 @@ async fn hard_delete_all_facts(pool: &SqlitePool) -> Result<u64, KnowledgeError>
     sqlx::query("DELETE FROM preferences")
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM entity_dates")
-        .execute(&mut *tx)
-        .await?;
     sqlx::query("DELETE FROM entity_locations")
         .execute(&mut *tx)
         .await?;

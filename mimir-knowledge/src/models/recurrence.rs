@@ -1,22 +1,8 @@
-//! Entity date model and recurrence resolution.
+//! Recurrence resolution helpers shared by the events subsystem.
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
-use serde::{Deserialize, Serialize};
 
 use crate::models::enums::RecurrenceType;
-
-/// A date (or recurring date) associated with an entity.
-#[derive(Debug, Clone, PartialEq, sqlx::FromRow, Serialize, Deserialize)]
-pub struct EntityDate {
-    pub id: i32,
-    pub entity_id: i32,
-    pub date_type_id: i16,
-    pub date_value: String,
-    pub recurrence_type_id: i16,
-    pub custom_label: Option<String>,
-    pub confidence: f32,
-    pub created_at: DateTime<Utc>,
-}
 
 /// Compute the next occurrence of a recurring date on or after `from`.
 ///

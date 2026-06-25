@@ -258,6 +258,8 @@ async fn insert_pending_fact(kg: &KnowledgeGraph, object: &str) -> i32 {
                 is_sensitive: true,
                 correction_scope: None,
                 categories: vec!["230".to_string()],
+                recurrence: None,
+                requires_user_action: None,
             }],
         },
     )

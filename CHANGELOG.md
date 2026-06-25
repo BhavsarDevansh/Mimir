@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.57.0] — 2026-06-25
+
+### Feature — events & reminders subsystem (issue #74)
+
+A smart events/reminders layer for the knowledge graph. Events are modelled as
+a lifecycle + recurrence overlay on facts: a fact with a future `valid_from` is
+a one-time event; a fact tagged with recurrence (e.g. a birthday) is a
+recurring event; a fact flagged `requires_user_action` is a task/deadline.
+Upcoming events surface automatically in the "Upcoming" memory section.
+
+- **New `events` table** (migration 039) with `event_types`, `event_statuses`,
+  and `auto_complete_policies` lookup tables, keyed on `facts(id)`.
+- **`entity_dates` deprecated and removed.** Its recurrence logic
+  (`next_occurrence`) moved to `models::recurrence`; the unused
+  `entity_dates` / `entity_date_types` tables are dropped (migration 040, no
+  data migration required).
+- **Deterministic scan job** `events.upcoming_scan` (default 06:00 & 18:00)
+  derives overlays for future-dated facts, auto-completes one-time events past
+  their trigger date, and advances recurring events to their next occurrence.
+  `RequiresUserAction` events stay active and surface as overdue.
+- **Extraction bridge.** The `remember` tool schema gains optional `recurrence`
+  and `requires_user_action` fields; the extraction pipeline creates event
+  overlays for qualifying facts (no natural-language date parsing in Rust —
+  the LLM supplies the ISO-8601 `valid_from`).
+- **`render_upcoming_section` refactored** to an event-based query, replacing
+  the `entity_dates` and category 900–999 branches.
+- **Config:** new `[knowledge.events]` section (`schedule_times`,
+  `horizon_days`).
+
 ## [0.56.2] — 2026-06-24
 
 ### Bugfix — daemon service reliability

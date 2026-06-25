@@ -115,21 +115,59 @@ async fn relation_type_roundtrips() {
 }
 
 #[tokio::test]
-async fn entity_date_type_roundtrips() {
+async fn event_type_roundtrips() {
     let dir = tempfile::tempdir().unwrap();
     let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
         .await
         .unwrap();
     roundtrip_enum(
         &kg,
-        "SELECT id FROM entity_date_types WHERE id = ? LIMIT 1",
+        "SELECT id FROM event_types WHERE id = ? LIMIT 1",
         &[
-            EntityDateType::Birth,
-            EntityDateType::Death,
-            EntityDateType::Anniversary,
-            EntityDateType::Created,
-            EntityDateType::Dissolved,
-            EntityDateType::Custom,
+            EventType::Birthday,
+            EventType::Appointment,
+            EventType::Deadline,
+            EventType::Task,
+            EventType::Reminder,
+            EventType::Custom,
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn event_status_roundtrips() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+    roundtrip_enum(
+        &kg,
+        "SELECT id FROM event_statuses WHERE id = ? LIMIT 1",
+        &[
+            EventStatus::Pending,
+            EventStatus::Active,
+            EventStatus::Completed,
+            EventStatus::Dismissed,
+            EventStatus::Snoozed,
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn auto_complete_policy_roundtrips() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+    roundtrip_enum(
+        &kg,
+        "SELECT id FROM auto_complete_policies WHERE id = ? LIMIT 1",
+        &[
+            AutoCompletePolicy::AutoCompleteOnDate,
+            AutoCompletePolicy::RequiresUserAction,
+            AutoCompletePolicy::RecurringYearly,
         ],
     )
     .await;

@@ -3,7 +3,7 @@
 use chrono::{TimeZone, Utc};
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::entity::EntityType;
-use mimir_knowledge::models::enums::{EntityDateType, LocationType, RecurrenceType};
+use mimir_knowledge::models::enums::{AutoCompletePolicy, EventType, LocationType, RecurrenceType};
 use mimir_knowledge::models::fact::NewFact;
 use mimir_knowledge::models::source::SourceType;
 use mimir_knowledge::queries::entity::MatchKind;
@@ -224,11 +224,13 @@ async fn test_predicate_validation() {
 }
 
 // ---------------------------------------------------------------------------
-// Entity dates & recurrence
+// Events & reminders (issue #74)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_entity_date_recurrence_yearly() {
+async fn test_event_overlay_surfaces_in_upcoming() {
+    use mimir_knowledge::models::enums::{EventStatus, EventType};
+
     let dir = tempfile::tempdir().unwrap();
     let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
         .await
@@ -239,38 +241,298 @@ async fn test_entity_date_recurrence_yearly() {
         .await
         .unwrap();
 
-    let date = kg
-        .insert_entity_date(
-            entity.id,
-            EntityDateType::Birth,
-            "1990-05-15",
-            RecurrenceType::Yearly,
-            None,
-            1.0,
-        )
+    let now = Utc::now();
+    let fact = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("Tokyo".to_string()),
+            valid_from: Some(now + chrono::Duration::days(5)),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
         .await
         .unwrap();
-    assert_eq!(date.entity_id, entity.id);
-    assert_eq!(date.date_value, "1990-05-15");
 
-    let dates = kg.get_entity_dates(entity.id).await.unwrap();
-    assert_eq!(dates.len(), 1);
+    // Scan derives a one-time overlay for the future-dated fact.
+    let summary = kg.run_events_scan(30).await.unwrap();
+    assert_eq!(summary.derived, 1);
 
-    // Upcoming dates within 365 days from 2024-01-01 should include 2024-05-15
-    let upcoming = mimir_knowledge::queries::entity::get_upcoming_dates(
+    let event = kg.get_event_by_fact(fact.id).await.unwrap().unwrap();
+    assert_eq!(event.status(), Some(EventStatus::Active));
+    assert_eq!(event.event_type(), Some(EventType::Reminder));
+    assert!(!event.is_recurring());
+
+    // The fact surfaces in the upcoming section.
+    let section = mimir_knowledge::queries::memory::render_upcoming_section(
         kg.pool(),
         entity.id,
-        365,
-        Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
+        now,
+        30,
+        10,
     )
     .await
     .unwrap();
-    assert_eq!(upcoming.len(), 1);
+    assert!(section.contains("Tokyo"), "section was: {section}");
 }
 
 #[tokio::test]
-async fn test_entity_date_recurrence_leap_year() {
-    use mimir_knowledge::models::entity_date::next_occurrence;
+async fn test_event_auto_complete_on_date() {
+    use mimir_knowledge::models::enums::{AutoCompletePolicy, EventStatus, EventType};
+    use mimir_knowledge::models::event::NewEvent;
+
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let entity = kg
+        .create_entity("Eve", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    let fact = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("Rome".to_string()),
+            valid_from: Some(now - chrono::Duration::days(3)),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    kg.insert_event(NewEvent {
+        fact_id: fact.id,
+        entity_id: entity.id,
+        trigger_date: now - chrono::Duration::days(3),
+        recurrence: RecurrenceType::None,
+        event_type: EventType::Reminder,
+        auto_complete_policy: AutoCompletePolicy::AutoCompleteOnDate,
+        requires_user_action: false,
+    })
+    .await
+    .unwrap();
+
+    let summary = kg.run_events_scan(30).await.unwrap();
+    assert_eq!(summary.completed, 1);
+
+    let event = kg.get_event_by_fact(fact.id).await.unwrap().unwrap();
+    assert_eq!(event.status(), Some(EventStatus::Completed));
+}
+
+#[tokio::test]
+async fn test_event_recurring_yearly_advances() {
+    use mimir_knowledge::models::enums::{AutoCompletePolicy, EventStatus, EventType};
+    use mimir_knowledge::models::event::NewEvent;
+
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let entity = kg
+        .create_entity("Frank", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    // A birthday fact whose event trigger date is in the past.
+    let fact = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("birthday".to_string()),
+            valid_from: Some(Utc.with_ymd_and_hms(1990, 5, 15, 0, 0, 0).unwrap()),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let past_trigger = now - chrono::Duration::days(1);
+    kg.insert_event(NewEvent {
+        fact_id: fact.id,
+        entity_id: entity.id,
+        trigger_date: past_trigger,
+        recurrence: RecurrenceType::Yearly,
+        event_type: EventType::Birthday,
+        auto_complete_policy: AutoCompletePolicy::RecurringYearly,
+        requires_user_action: false,
+    })
+    .await
+    .unwrap();
+
+    let summary = kg.run_events_scan(365).await.unwrap();
+    assert_eq!(summary.advanced, 1);
+
+    let event = kg.get_event_by_fact(fact.id).await.unwrap().unwrap();
+    assert_eq!(event.status(), Some(EventStatus::Active));
+    // Advanced trigger date is now in the future (next anniversary).
+    assert!(event.trigger_date > now);
+}
+
+#[tokio::test]
+async fn test_event_requires_user_action_becomes_overdue() {
+    use mimir_knowledge::models::enums::{AutoCompletePolicy, EventStatus, EventType};
+    use mimir_knowledge::models::event::NewEvent;
+
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let entity = kg
+        .create_entity("Grace", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    let fact = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("post letter".to_string()),
+            valid_from: Some(now - chrono::Duration::days(2)),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    kg.insert_event(NewEvent {
+        fact_id: fact.id,
+        entity_id: entity.id,
+        trigger_date: now - chrono::Duration::days(2),
+        recurrence: RecurrenceType::None,
+        event_type: EventType::Task,
+        auto_complete_policy: AutoCompletePolicy::RequiresUserAction,
+        requires_user_action: true,
+    })
+    .await
+    .unwrap();
+
+    // Scan must NOT auto-complete a RequiresUserAction event.
+    let summary = kg.run_events_scan(30).await.unwrap();
+    assert_eq!(summary.completed, 0);
+
+    let overdue = kg.get_overdue_events(entity.id).await.unwrap();
+    assert_eq!(overdue.len(), 1);
+    assert_eq!(overdue[0].status(), Some(EventStatus::Active));
+}
+
+#[tokio::test]
+async fn test_event_dismiss_excludes_from_upcoming() {
+    use mimir_knowledge::models::enums::{AutoCompletePolicy, EventStatus, EventType};
+    use mimir_knowledge::models::event::NewEvent;
+
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let entity = kg
+        .create_entity("Hank", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    let fact = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("Berlin".to_string()),
+            valid_from: Some(now + chrono::Duration::days(4)),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    let event = kg
+        .insert_event(NewEvent {
+            fact_id: fact.id,
+            entity_id: entity.id,
+            trigger_date: now + chrono::Duration::days(4),
+            recurrence: RecurrenceType::None,
+            event_type: EventType::Reminder,
+            auto_complete_policy: AutoCompletePolicy::AutoCompleteOnDate,
+            requires_user_action: false,
+        })
+        .await
+        .unwrap();
+
+    kg.dismiss_event(event.id).await.unwrap();
+    let after = kg.get_event_by_fact(fact.id).await.unwrap().unwrap();
+    assert_eq!(after.status(), Some(EventStatus::Dismissed));
+
+    let section = mimir_knowledge::queries::memory::render_upcoming_section(
+        kg.pool(),
+        entity.id,
+        now,
+        30,
+        10,
+    )
+    .await
+    .unwrap();
+    assert!(!section.contains("Berlin"), "section was: {section}");
+}
+
+#[tokio::test]
+async fn test_recurrence_next_occurrence_leap_year() {
+    use mimir_knowledge::models::recurrence::next_occurrence;
 
     let from = Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap();
     let result = next_occurrence("2000-02-29", RecurrenceType::Yearly, from);
@@ -408,18 +670,6 @@ async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue()
     .await
     .unwrap();
 
-    // Insert a date for y
-    kg.insert_entity_date(
-        y.id,
-        EntityDateType::Birth,
-        "2024-06-01",
-        RecurrenceType::None,
-        Some("birthday"),
-        1.0,
-    )
-    .await
-    .unwrap();
-
     // Insert a location for y
     kg.insert_location(
         y.id,
@@ -455,6 +705,19 @@ async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue()
         .await
         .unwrap();
 
+    // Insert an event overlay on fact_y to verify overlays migrate on merge.
+    kg.insert_event(mimir_knowledge::models::event::NewEvent {
+        fact_id: fact_y.id,
+        entity_id: y.id,
+        trigger_date: chrono::Utc::now() + chrono::Duration::days(7),
+        recurrence: RecurrenceType::Yearly,
+        event_type: EventType::Birthday,
+        auto_complete_policy: AutoCompletePolicy::RecurringYearly,
+        requires_user_action: false,
+    })
+    .await
+    .unwrap();
+
     // Insert a preference for y (direct SQL since no helper yet)
     sqlx::query("INSERT INTO preferences (entity_id, category_id, key, value, confidence, source_fact_id) VALUES (?, ?, ?, ?, ?, ?)")
         .bind(y.id)
@@ -487,12 +750,9 @@ async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue()
     let gone = kg.get_entity(y.id).await.unwrap();
     assert!(gone.is_none());
 
-    // Date should now belong to x
-    let dates = mimir_knowledge::queries::entity::get_dates_for_entity(kg.pool(), x.id)
-        .await
-        .unwrap();
-    assert_eq!(dates.len(), 1);
-    assert_eq!(dates[0].entity_id, x.id);
+    // Event overlay should now belong to x (entity_id repointed to survivor).
+    let event = kg.get_event_by_fact(fact_y.id).await.unwrap().unwrap();
+    assert_eq!(event.entity_id, x.id);
 
     // Location should now belong to x
     let locs = kg.get_locations(x.id).await.unwrap();

@@ -214,6 +214,7 @@ pub struct IdentityConfig {
 pub struct KnowledgeConfig {
     pub optimization: KnowledgeOptimizationConfig,
     pub pending_cleanup: PendingCleanupConfig,
+    pub events: EventsConfig,
 }
 
 /// Knowledge graph nightly optimization settings.
@@ -356,6 +357,25 @@ impl Default for PendingCleanupConfig {
         Self {
             retention_days: 7,
             schedule_time: "03:30".to_string(),
+        }
+    }
+}
+
+/// Settings for the events & reminders upcoming-scan job (issue #74).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EventsConfig {
+    /// Daily local times (HH:MM, 24h) at which the scan runs.
+    pub schedule_times: Vec<String>,
+    /// How many days into the future the derive pass looks for upcoming facts.
+    pub horizon_days: u16,
+}
+
+impl Default for EventsConfig {
+    fn default() -> Self {
+        Self {
+            schedule_times: vec!["06:00".to_string(), "18:00".to_string()],
+            horizon_days: 30,
         }
     }
 }
@@ -566,6 +586,10 @@ schedule_time = "02:00"
 [knowledge.pending_cleanup]
 retention_days = 7
 schedule_time = "03:30"
+
+[knowledge.events]
+schedule_times = ["06:00", "18:00"]
+horizon_days = 30
 "#
         .to_string()
     }

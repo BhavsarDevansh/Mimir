@@ -391,7 +391,8 @@ pub async fn start_server_with_llm_and_listener(
     let _ = state.shutdown_tx.send(true);
 
     state.shutdown().await;
-    server_result
+    server_result?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2336,6 +2337,8 @@ mod tests {
                 is_sensitive: false,
                 correction_scope: None,
                 categories: vec![],
+                recurrence: None,
+                requires_user_action: None,
             }],
         };
         let extraction_msg = Message {
@@ -2525,6 +2528,8 @@ mod tests {
                     is_sensitive: true,
                     correction_scope: None,
                     categories: Vec::new(),
+                    recurrence: None,
+                    requires_user_action: None,
                 }],
             },
         )

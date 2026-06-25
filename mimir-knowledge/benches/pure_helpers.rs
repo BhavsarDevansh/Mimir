@@ -8,9 +8,9 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use mimir_knowledge::{
     confidence,
     models::{
-        entity_date::next_occurrence,
         enums::{ConnectorType, RecurrenceType},
         memory::{MemoryBucket, MemoryPriority, MemorySchema, RankedFact},
+        recurrence::next_occurrence,
         source::SourceType,
     },
     retrieval::{RetrievedContext, RetrievedEntity, RetrievedFact, RetrievedRelation},

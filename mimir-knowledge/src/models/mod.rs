@@ -1,12 +1,13 @@
 pub mod audit_log;
 pub mod category;
 pub mod entity;
-pub mod entity_date;
 pub mod entity_location;
 pub mod enums;
+pub mod event;
 pub mod fact;
 pub mod memory;
 pub mod preference;
+pub mod recurrence;
 pub mod relationship_type;
 pub mod source;
 pub mod trash;

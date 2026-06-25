@@ -3,6 +3,7 @@
 pub mod audit;
 pub mod category;
 pub mod entity;
+pub mod event;
 pub mod fact;
 pub mod memory;
 pub mod preference;

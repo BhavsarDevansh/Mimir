@@ -367,15 +367,16 @@ pub async fn start_server_with_llm_and_listener(
 
     // Bound graceful shutdown so a wedged connection (e.g. a long-lived SSE
     // stream) can never keep the process alive past systemd's `TimeoutStopSec`.
-    match tokio::time::timeout(Duration::from_secs(30), server_fut).await {
+    let server_result = match tokio::time::timeout(Duration::from_secs(30), server_fut).await {
         Ok(result) => {
-            result?;
             info!("Server shut down gracefully.");
+            result
         }
         Err(_) => {
             warn!("Graceful shutdown timed out after 30s; forcing exit.");
+            Ok(())
         }
-    }
+    };
 
     // Broadcast the shutdown watch so every background task spawned from
     // `start_server_with_llm_and_listener` (file watcher, SIGHUP handler,
@@ -390,7 +391,7 @@ pub async fn start_server_with_llm_and_listener(
     let _ = state.shutdown_tx.send(true);
 
     state.shutdown().await;
-    Ok(())
+    server_result
 }
 
 #[cfg(test)]

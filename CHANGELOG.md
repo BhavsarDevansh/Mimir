@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.59.1] — 2026-06-25
+
+### Fixed — third pass on PR #173 review feedback
+
+- **`confirm_fact` no longer errors after the confirmation commit.** The
+  overlay-rebuild read of `pending_event_meta` ran after `tx.commit()`, so a
+  `?`-propagated failure would make confirmation look failed to the caller even
+  though the fact was already Active and no longer pending. The read now logs and
+  falls back to the legacy one-time overlay path instead of returning an error
+  (#3).
+- **Legacy-fallback test now exercises the future-dated branch.** The
+  `confirm_legacy_pending_fact_falls_back_to_one_time_reminder` test uses a
+  future-dated fixture and asserts the one-time `Reminder` overlay is created;
+  a second test covers the no-`valid_from` (no-overlay) case (#4).
+
+### Notes
+
+- CodeRabbit findings #1 (NULL confidence) and #2 (`event_type_roundtrips`
+  `#[tokio::test]`) are stale re-posts: `facts.confidence` is `NOT NULL` and the
+  test attribute is present at line 117. No code change required.
+
 ## [0.59.0] — 2026-06-25
 
 ### Fixed — second pass on PR #173 review feedback

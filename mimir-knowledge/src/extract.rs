@@ -1286,7 +1286,22 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
     // `pending_event_meta` table fall back to a one-time `Reminder` overlay for
     // future-dated facts. The insert is idempotent, so re-confirmation is safe.
     if let Some(valid_from) = updated.valid_from {
-        match queries::event::get_pending_event_meta(kg.pool(), updated.id).await? {
+        // The fact is already committed as confirmed at this point, so overlay
+        // rebuild must never propagate errors to the caller — a failure here
+        // would make `confirm_fact` appear to fail after the fact is no longer
+        // pending. Log and fall back to the legacy one-time overlay path.
+        let meta = match queries::event::get_pending_event_meta(kg.pool(), updated.id).await {
+            Ok(meta) => meta,
+            Err(e) => {
+                tracing::warn!(
+                    "failed to read pending event meta for confirmed fact {}: {};                      falling back to one-time overlay",
+                    updated.id,
+                    e
+                );
+                None
+            }
+        };
+        match meta {
             Some(meta) => {
                 let new_event = NewEvent {
                     fact_id: updated.id,
@@ -1821,16 +1836,25 @@ mod confirmation_tests {
 
     #[tokio::test]
     async fn confirm_legacy_pending_fact_falls_back_to_one_time_reminder() {
-        // A pending fact with no persisted event metadata (e.g. created before
-        // the pending_event_meta table) still gets a one-time Reminder overlay
-        // for future-dated facts, preserving the Phase A fallback.
+        // A future-dated pending fact with no persisted event metadata (e.g.
+        // created before the pending_event_meta table) still gets a one-time
+        // Reminder overlay via the legacy `valid_from > now` fallback path.
         let start = DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
             .unwrap()
             .into();
         let (kg, _clock, _dir) = fresh_kg_with_clock(start).await;
-        let fact_id = create_pending_fact(&kg, "peanuts").await;
+        let fact_id = create_pending_event_fact(
+            &kg,
+            "penicillin",
+            Some("2024-06-01T09:00:00Z"),
+            Some("yearly"),
+            Some(true),
+        )
+        .await;
 
-        // Simulate a legacy pending fact by removing any persisted metadata.
+        // Simulate a legacy pending fact by removing the persisted metadata,
+        // so the extracted recurrence/user-action metadata is lost and confirm
+        // must fall back to a one-time Reminder.
         sqlx::query("DELETE FROM pending_event_meta WHERE fact_id = ?")
             .bind(fact_id)
             .execute(kg.pool())
@@ -1839,14 +1863,47 @@ mod confirmation_tests {
 
         kg.confirm_fact(fact_id).await.expect("confirm succeeds");
 
-        // No temporal bound -> no overlay (the legacy path only creates an
-        // overlay for future-dated facts, and this fact has none).
+        let event = queries::event::get_by_fact(kg.pool(), fact_id)
+            .await
+            .unwrap()
+            .expect("legacy fallback creates a one-time overlay");
+        assert_eq!(event.recurrence(), Some(RecurrenceType::None));
+        assert_eq!(event.event_type(), Some(EventType::Reminder));
+        assert_eq!(event.policy(), Some(AutoCompletePolicy::AutoCompleteOnDate));
+        assert!(!event.requires_user_action);
+        assert_eq!(
+            event.trigger_date,
+            DateTime::parse_from_rfc3339("2024-06-01T09:00:00Z")
+                .unwrap()
+                .with_timezone::<Utc>(&Utc)
+        );
+    }
+
+    #[tokio::test]
+    async fn confirm_legacy_pending_fact_without_future_date_creates_no_overlay() {
+        // A legacy pending fact with no future `valid_from` and no persisted
+        // metadata creates no overlay (the fallback only fires for future
+        // dates).
+        let start = DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+            .unwrap()
+            .into();
+        let (kg, _clock, _dir) = fresh_kg_with_clock(start).await;
+        let fact_id = create_pending_fact(&kg, "peanuts").await;
+
+        sqlx::query("DELETE FROM pending_event_meta WHERE fact_id = ?")
+            .bind(fact_id)
+            .execute(kg.pool())
+            .await
+            .unwrap();
+
+        kg.confirm_fact(fact_id).await.expect("confirm succeeds");
+
         assert!(
             queries::event::get_by_fact(kg.pool(), fact_id)
                 .await
                 .unwrap()
                 .is_none(),
-            "non-future sensitive fact without meta should not get an overlay"
+            "non-future legacy fact should not get an overlay"
         );
     }
 

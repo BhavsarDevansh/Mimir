@@ -443,7 +443,7 @@ pub async fn render_upcoming_section(
            AND f.valid_from IS NOT NULL \
            AND f.valid_from >= ? \
            AND f.valid_from <= ? \
-           AND (e.id IS NULL OR e.status_id IN (?, ?, ?)) \
+           AND (e.id IS NULL OR (e.status_id IN (?, ?, ?) AND e.recurrence_type_id = ?)) \
          ORDER BY f.valid_from \
          LIMIT ?",
     )
@@ -455,6 +455,7 @@ pub async fn render_upcoming_section(
     .bind(EventStatus::Pending as i16)
     .bind(EventStatus::Active as i16)
     .bind(EventStatus::Snoozed as i16)
+    .bind(RecurrenceType::None as i16)
     .bind(limit as i64)
     .fetch_all(pool)
     .await?;

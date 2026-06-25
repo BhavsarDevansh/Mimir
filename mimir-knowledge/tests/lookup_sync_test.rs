@@ -147,7 +147,7 @@ async fn auto_complete_policies_sync() {
                 "RequiresUserAction",
                 AutoCompletePolicy::RequiresUserAction,
             ),
-            (3, "RecurringYearly", AutoCompletePolicy::RecurringYearly),
+            (3, "Recurring", AutoCompletePolicy::Recurring),
         ],
     )
     .await;

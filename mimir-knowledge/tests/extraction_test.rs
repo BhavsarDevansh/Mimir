@@ -1152,7 +1152,7 @@ async fn test_extraction_creates_recurring_event_for_birthday() {
     assert_eq!(event.recurrence_type_id, RecurrenceType::Yearly as i16);
     assert_eq!(
         event.auto_complete_policy_id,
-        AutoCompletePolicy::RecurringYearly as i16
+        AutoCompletePolicy::Recurring as i16
     );
     assert!(event.is_recurring());
 }

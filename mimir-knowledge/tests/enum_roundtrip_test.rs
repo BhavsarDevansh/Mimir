@@ -167,7 +167,7 @@ async fn auto_complete_policy_roundtrips() {
         &[
             AutoCompletePolicy::AutoCompleteOnDate,
             AutoCompletePolicy::RequiresUserAction,
-            AutoCompletePolicy::RecurringYearly,
+            AutoCompletePolicy::Recurring,
         ],
     )
     .await;

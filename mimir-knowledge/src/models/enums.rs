@@ -76,7 +76,7 @@ pub enum AutoCompletePolicy {
     /// Stay `Active` until the user explicitly completes or dismisses.
     RequiresUserAction = 2,
     /// Never complete; advance `trigger_date` to the next recurrence.
-    RecurringYearly = 3,
+    Recurring = 3,
 }
 
 impl TryFrom<i16> for AutoCompletePolicy {
@@ -86,7 +86,7 @@ impl TryFrom<i16> for AutoCompletePolicy {
         match value {
             x if x == Self::AutoCompleteOnDate as i16 => Ok(Self::AutoCompleteOnDate),
             x if x == Self::RequiresUserAction as i16 => Ok(Self::RequiresUserAction),
-            x if x == Self::RecurringYearly as i16 => Ok(Self::RecurringYearly),
+            x if x == Self::Recurring as i16 => Ok(Self::Recurring),
             _ => Err(()),
         }
     }
@@ -242,7 +242,7 @@ mod tests {
     fn auto_complete_policy_discriminants_are_stable() {
         assert_eq!(AutoCompletePolicy::AutoCompleteOnDate as i16, 1);
         assert_eq!(AutoCompletePolicy::RequiresUserAction as i16, 2);
-        assert_eq!(AutoCompletePolicy::RecurringYearly as i16, 3);
+        assert_eq!(AutoCompletePolicy::Recurring as i16, 3);
     }
 
     #[test]
@@ -285,7 +285,7 @@ mod tests {
         rt(RelationType::Contradicts);
         rt(EventType::Deadline);
         rt(EventStatus::Snoozed);
-        rt(AutoCompletePolicy::RecurringYearly);
+        rt(AutoCompletePolicy::Recurring);
         rt(ConnectorType::Calendar);
         rt(MergeResolution::KeptSeparate);
     }

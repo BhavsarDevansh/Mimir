@@ -40,7 +40,7 @@ CREATE TABLE auto_complete_policies (
 INSERT INTO auto_complete_policies (id, name) VALUES
     (1, 'AutoCompleteOnDate'),
     (2, 'RequiresUserAction'),
-    (3, 'RecurringYearly');
+    (3, 'Recurring');
 
 CREATE TABLE events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

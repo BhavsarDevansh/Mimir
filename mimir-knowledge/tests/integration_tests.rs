@@ -389,7 +389,7 @@ async fn test_event_recurring_yearly_advances() {
         trigger_date: past_trigger,
         recurrence: RecurrenceType::Yearly,
         event_type: EventType::Birthday,
-        auto_complete_policy: AutoCompletePolicy::RecurringYearly,
+        auto_complete_policy: AutoCompletePolicy::Recurring,
         requires_user_action: false,
     })
     .await
@@ -712,7 +712,7 @@ async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue()
         trigger_date: chrono::Utc::now() + chrono::Duration::days(7),
         recurrence: RecurrenceType::Yearly,
         event_type: EventType::Birthday,
-        auto_complete_policy: AutoCompletePolicy::RecurringYearly,
+        auto_complete_policy: AutoCompletePolicy::Recurring,
         requires_user_action: false,
     })
     .await
@@ -1043,4 +1043,74 @@ async fn test_semantic_dedup_stub_returns_not_yet_implemented() {
             .to_string()
             .contains("Not yet implemented")
     );
+}
+
+#[tokio::test]
+async fn test_recurring_event_not_duplicated_in_upcoming() {
+    use mimir_knowledge::models::enums::EventStatus;
+    use mimir_knowledge::models::event::NewEvent;
+
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let entity = kg
+        .create_entity("Iris", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    let trigger = now + chrono::Duration::days(5);
+    let fact = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("Kyoto".to_string()),
+            valid_from: Some(trigger),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    // A recurring overlay on the same future-dated fact (trigger == valid_from).
+    kg.insert_event(NewEvent {
+        fact_id: fact.id,
+        entity_id: entity.id,
+        trigger_date: trigger,
+        recurrence: RecurrenceType::Yearly,
+        event_type: EventType::Birthday,
+        auto_complete_policy: AutoCompletePolicy::Recurring,
+        requires_user_action: false,
+    })
+    .await
+    .unwrap();
+
+    let section = mimir_knowledge::queries::memory::render_upcoming_section(
+        kg.pool(),
+        entity.id,
+        now,
+        30,
+        10,
+    )
+    .await
+    .unwrap();
+    let hits = section.matches("Kyoto").count();
+    assert_eq!(hits, 1, "recurring event duplicated in section:\n{section}");
+
+    // Overlay is active recurring (surfaced via the recurring query, not one-time).
+    let event = kg.get_event_by_fact(fact.id).await.unwrap().unwrap();
+    assert_eq!(event.status(), Some(EventStatus::Active));
+    assert!(event.is_recurring());
 }

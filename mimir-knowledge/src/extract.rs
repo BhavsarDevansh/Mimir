@@ -1032,7 +1032,7 @@ pub(crate) async fn process_extracted_fact(
 /// - the LLM emitted a non-`none` recurrence (recurring event),
 /// - the LLM flagged `requires_user_action` (task/deadline).
 ///
-/// Policy is derived deterministically: recurring -> `RecurringYearly`,
+/// Policy is derived deterministically: recurring -> `Recurring`,
 /// `requires_user_action` -> `RequiresUserAction`, otherwise
 /// `AutoCompleteOnDate`. No natural-language date parsing happens in Rust; the
 /// LLM supplies the ISO-8601 `valid_from` used as the trigger date.
@@ -1058,7 +1058,7 @@ fn event_from_extraction(
     }
 
     let auto_complete_policy = if recurrence != RecurrenceType::None {
-        AutoCompletePolicy::RecurringYearly
+        AutoCompletePolicy::Recurring
     } else if requires_user_action {
         AutoCompletePolicy::RequiresUserAction
     } else {

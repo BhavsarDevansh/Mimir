@@ -177,10 +177,15 @@ pub async fn get_overdue_events(
 
 /// Active recurring events eligible for trigger advancement.
 ///
-/// Only `Recurring`-policy events that do not require user action are returned;
+/// Only `Recurring`-policy events that do not require user action and whose
+/// `trigger_date` has already passed (`trigger_date < now`) are returned, so
+/// the scan only loads and sorts rows that can actually advance.
 /// `RequiresUserAction` recurring deadlines/tasks stay past their trigger date
 /// and surface as overdue instead of being silently advanced.
-pub async fn get_active_recurring(pool: &SqlitePool) -> Result<Vec<Event>, KnowledgeError> {
+pub async fn get_active_recurring(
+    pool: &SqlitePool,
+    now: DateTime<Utc>,
+) -> Result<Vec<Event>, KnowledgeError> {
     let rows = sqlx::query_as::<_, Event>(
         "SELECT id, fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, \
                 status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at \
@@ -189,11 +194,13 @@ pub async fn get_active_recurring(pool: &SqlitePool) -> Result<Vec<Event>, Knowl
            AND recurrence_type_id != ? \
            AND auto_complete_policy_id = ? \
            AND requires_user_action = 0 \
+           AND trigger_date < ? \
          ORDER BY trigger_date",
     )
     .bind(EventStatus::Active as i16)
     .bind(RecurrenceType::None as i16)
     .bind(AutoCompletePolicy::Recurring as i16)
+    .bind(now)
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -253,4 +260,79 @@ pub async fn get_future_facts_without_overlay(
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Persisted event shape for a pending sensitive fact, used to rebuild the
+/// overlay on confirmation instead of synthesising one-time defaults.
+///
+/// Only the shape fields are stored: `trigger_date` comes from the confirmed
+/// fact's `valid_from`, and `fact_id`/`entity_id` from the confirmed fact. The
+/// row is consumed by [`delete_pending_event_meta`] once the overlay is rebuilt.
+#[derive(Debug, Clone, Copy, FromRow)]
+pub struct PendingEventMeta {
+    pub recurrence_type_id: i16,
+    pub event_type_id: i16,
+    pub auto_complete_policy_id: i16,
+    pub requires_user_action: bool,
+}
+
+/// Persist the derived event shape for a pending sensitive fact.
+///
+/// Idempotent (`ON CONFLICT DO UPDATE`) so re-extraction of the same pending
+/// fact refreshes the shape rather than failing.
+pub async fn insert_pending_event_meta(
+    pool: &SqlitePool,
+    fact_id: i32,
+    new: &NewEvent,
+) -> Result<(), KnowledgeError> {
+    sqlx::query(
+        "INSERT INTO pending_event_meta \
+         (fact_id, recurrence_type_id, event_type_id, auto_complete_policy_id, requires_user_action) \
+         VALUES (?, ?, ?, ?, ?) \
+         ON CONFLICT(fact_id) DO UPDATE SET \
+          recurrence_type_id = excluded.recurrence_type_id, \
+          event_type_id = excluded.event_type_id, \
+          auto_complete_policy_id = excluded.auto_complete_policy_id, \
+          requires_user_action = excluded.requires_user_action",
+    )
+    .bind(fact_id)
+    .bind(new.recurrence as i16)
+    .bind(new.event_type as i16)
+    .bind(new.auto_complete_policy as i16)
+    .bind(new.requires_user_action)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Read the persisted event shape for a pending sensitive fact, if any.
+///
+/// Returns `None` for legacy pending facts that predate the
+/// `pending_event_meta` table; callers fall back to a one-time `Reminder`.
+pub async fn get_pending_event_meta(
+    pool: &SqlitePool,
+    fact_id: i32,
+) -> Result<Option<PendingEventMeta>, KnowledgeError> {
+    let row = sqlx::query_as::<_, PendingEventMeta>(
+        "SELECT recurrence_type_id, event_type_id, auto_complete_policy_id, requires_user_action \
+         FROM pending_event_meta WHERE fact_id = ?",
+    )
+    .bind(fact_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Remove the persisted event shape once the overlay has been rebuilt on
+/// confirmation. Rejecting a fact hard-deletes the row via `ON DELETE CASCADE`,
+/// so this is only needed for the confirm path.
+pub async fn delete_pending_event_meta(
+    pool: &SqlitePool,
+    fact_id: i32,
+) -> Result<(), KnowledgeError> {
+    sqlx::query("DELETE FROM pending_event_meta WHERE fact_id = ?")
+        .bind(fact_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }

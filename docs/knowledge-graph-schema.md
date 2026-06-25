@@ -42,6 +42,7 @@ Lookup tables are seeded across migrations `001`, `012`, and `013` with stable i
 | `entity_dates` | Temporal annotations (birth, anniversary, custom) with recurrence |
 | `entity_locations` | Geographic / address data with validity windows |
 | `facts` | Directed temporal edges between entities |
+| `events` | Lifecycle + recurrence overlay on facts (trigger date, recurrence, status, auto-complete policy); see Events & Reminders |
 | `fact_dependencies` | Junction table linking inferred facts to parents |
 | `sources` | Provenance for every fact (with `connector_id`, `connector_type_id`, `raw_reference`, `extraction_method_id`) |
 | `preferences` | Learned user preferences with confidence, source_fact_id, and contextual lookup |
@@ -64,6 +65,7 @@ Lookup tables are seeded across migrations `001`, `012`, and `013` with stable i
 | `dedup_queue` | Pending duplicate-fact resolutions |
 | `entity_merge_queue` | Pending entity deduplication tasks |
 | `trash` | Soft-deleted rows with full payload JSON |
+| `pending_event_meta` | Fact-keyed cache of the extracted event shape for pending sensitive facts; consumed on confirm, cascade-deleted on reject (migration 041) |
 | `entity_fts` | FTS5 virtual table for entity name / alias search |
 
 ### Predicate Taxonomy (New in 0.23.0)

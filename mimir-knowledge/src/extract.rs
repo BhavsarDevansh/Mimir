@@ -1001,6 +1001,25 @@ pub(crate) async fn process_extracted_fact(
         // Only add to in-memory cache after successful commit.
         kg.pending_confirmations().write().await.insert(fact.id);
 
+        // Persist the derived event shape so `confirm_fact` can rebuild the
+        // overlay from the extracted recurrence/event_type/policy/
+        // requires_user_action instead of synthesising one-time defaults.
+        // Sensitive facts skip the event block below, so without this the
+        // metadata would be lost across the confirmation boundary (#74, #173).
+        if let Some(new_event) =
+            event_from_extraction(&extracted, subject.id, fact.id, valid_from, now)
+        {
+            if let Err(e) =
+                queries::event::insert_pending_event_meta(kg.pool(), fact.id, &new_event).await
+            {
+                tracing::warn!(
+                    "failed to persist pending event meta for fact {}: {}",
+                    fact.id,
+                    e
+                );
+            }
+        }
+
         return Ok(ProcessResult::Pending(PendingFact {
             fact_id: fact.id,
             subject_name: extracted.subject,
@@ -1260,31 +1279,68 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
 
     // Events subsystem (#74): sensitive facts skip overlay creation at
     // extraction time (they return `Pending` before reaching the event block).
-    // Now that the fact is confirmed and Active, derive a one-time overlay for
-    // future-dated facts so they surface in Upcoming and auto-complete on their
-    // trigger date. The insert is idempotent, so re-confirmation is safe.
-    //
-    // Phase A limitation: recurrence and `requires_user_action` are not carried
-    // across the sensitivity gate (they are not persisted on the fact), so the
-    // overlay is always a one-time `Reminder`. Sensitive facts are expected to
-    // be one-time appointments; richer typing is deferred to a later phase.
+    // Now that the fact is confirmed and Active, rebuild the overlay from the
+    // event shape persisted at extraction time (`pending_event_meta`) so the
+    // extracted recurrence/event_type/auto_complete_policy/requires_user_action
+    // survive the sensitivity gate. Legacy pending facts that predate the
+    // `pending_event_meta` table fall back to a one-time `Reminder` overlay for
+    // future-dated facts. The insert is idempotent, so re-confirmation is safe.
     if let Some(valid_from) = updated.valid_from {
-        if valid_from > now {
-            let new_event = NewEvent {
-                fact_id: updated.id,
-                entity_id: updated.subject_id,
-                trigger_date: valid_from,
-                recurrence: RecurrenceType::None,
-                event_type: EventType::Reminder,
-                auto_complete_policy: AutoCompletePolicy::AutoCompleteOnDate,
-                requires_user_action: false,
-            };
-            if let Err(e) = kg.insert_event_if_absent(new_event).await {
-                tracing::warn!(
-                    "failed to create event overlay for confirmed fact {}: {}",
-                    updated.id,
-                    e
-                );
+        match queries::event::get_pending_event_meta(kg.pool(), updated.id).await? {
+            Some(meta) => {
+                let new_event = NewEvent {
+                    fact_id: updated.id,
+                    entity_id: updated.subject_id,
+                    trigger_date: valid_from,
+                    recurrence: RecurrenceType::try_from(meta.recurrence_type_id)
+                        .unwrap_or(RecurrenceType::None),
+                    event_type: EventType::try_from(meta.event_type_id)
+                        .unwrap_or(EventType::Reminder),
+                    auto_complete_policy: AutoCompletePolicy::try_from(
+                        meta.auto_complete_policy_id,
+                    )
+                    .unwrap_or(AutoCompletePolicy::AutoCompleteOnDate),
+                    requires_user_action: meta.requires_user_action,
+                };
+                if let Err(e) = kg.insert_event_if_absent(new_event).await {
+                    tracing::warn!(
+                        "failed to create event overlay for confirmed fact {}: {}",
+                        updated.id,
+                        e
+                    );
+                }
+                // Meta is consumed; drop it so it cannot drift from the overlay.
+                if let Err(e) =
+                    queries::event::delete_pending_event_meta(kg.pool(), updated.id).await
+                {
+                    tracing::warn!(
+                        "failed to clear pending event meta for fact {}: {}",
+                        updated.id,
+                        e
+                    );
+                }
+            }
+            None => {
+                // Legacy pending fact (predates pending_event_meta): derive a
+                // one-time Reminder overlay for future-dated facts only.
+                if valid_from > now {
+                    let new_event = NewEvent {
+                        fact_id: updated.id,
+                        entity_id: updated.subject_id,
+                        trigger_date: valid_from,
+                        recurrence: RecurrenceType::None,
+                        event_type: EventType::Reminder,
+                        auto_complete_policy: AutoCompletePolicy::AutoCompleteOnDate,
+                        requires_user_action: false,
+                    };
+                    if let Err(e) = kg.insert_event_if_absent(new_event).await {
+                        tracing::warn!(
+                            "failed to create event overlay for confirmed fact {}: {}",
+                            updated.id,
+                            e
+                        );
+                    }
+                }
             }
         }
     }
@@ -1628,6 +1684,170 @@ mod confirmation_tests {
         // Second confirm must fail: the fact is no longer pending.
         let err = kg.confirm_fact(fact_id).await.unwrap_err();
         assert!(matches!(err, KnowledgeError::Validation(_)));
+    }
+
+    /// Build a sensitive ExtractedFact with explicit event metadata so the
+    /// pending-confirmation overlay-rebuild path can be exercised.
+    fn sensitive_event_fact(
+        object: &str,
+        valid_from: Option<&str>,
+        recurrence: Option<&str>,
+        requires_user_action: Option<bool>,
+    ) -> ExtractedFact {
+        ExtractedFact {
+            classification: Classification::Explicit,
+            subject: "Devansh".to_string(),
+            subject_type: "Person".to_string(),
+            relationship_type: "allergy".to_string(),
+            object: object.to_string(),
+            object_is_entity: false,
+            object_type: None,
+            temporal: valid_from.map(|vf| Temporal {
+                valid_from: Some(vf.to_string()),
+                valid_until: None,
+            }),
+            is_sensitive: true,
+            correction_scope: None,
+            categories: vec!["230".to_string()],
+            recurrence: recurrence.map(|r| r.to_string()),
+            requires_user_action,
+        }
+    }
+
+    /// Insert a sensitive fact with event metadata and return its pending id.
+    async fn create_pending_event_fact(
+        kg: &KnowledgeGraph,
+        object: &str,
+        valid_from: Option<&str>,
+        recurrence: Option<&str>,
+        requires_user_action: Option<bool>,
+    ) -> i32 {
+        let outcome = process_remember_output(
+            kg,
+            RememberOutput {
+                facts: vec![sensitive_event_fact(
+                    object,
+                    valid_from,
+                    recurrence,
+                    requires_user_action,
+                )],
+            },
+        )
+        .await
+        .expect("extraction should succeed");
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.pending_confirmation.len(), 1);
+        outcome.pending_confirmation[0].fact_id
+    }
+
+    #[tokio::test]
+    async fn confirm_preserves_recurring_event_metadata() {
+        // A sensitive yearly-recurring reminder must keep its recurrence and
+        // `Recurring` policy across the confirmation boundary, instead of being
+        // flattened to a one-time `Reminder` (PR #173).
+        let start = DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+            .unwrap()
+            .into();
+        let (kg, _clock, _dir) = fresh_kg_with_clock(start).await;
+        let fact_id = create_pending_event_fact(
+            &kg,
+            "penicillin",
+            Some("2024-06-01T09:00:00Z"),
+            Some("yearly"),
+            None,
+        )
+        .await;
+
+        kg.confirm_fact(fact_id).await.expect("confirm succeeds");
+
+        let event = queries::event::get_by_fact(kg.pool(), fact_id)
+            .await
+            .unwrap()
+            .expect("overlay created on confirm");
+        assert_eq!(event.recurrence(), Some(RecurrenceType::Yearly));
+        assert_eq!(event.event_type(), Some(EventType::Reminder));
+        assert_eq!(event.policy(), Some(AutoCompletePolicy::Recurring));
+        assert!(!event.requires_user_action);
+        assert_eq!(
+            event.trigger_date,
+            DateTime::parse_from_rfc3339("2024-06-01T09:00:00Z")
+                .unwrap()
+                .with_timezone::<Utc>(&Utc)
+        );
+
+        // The consumed metadata must be cleaned up.
+        assert!(
+            queries::event::get_pending_event_meta(kg.pool(), fact_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "pending_event_meta should be removed after confirm"
+        );
+    }
+
+    #[tokio::test]
+    async fn confirm_preserves_user_action_event_metadata() {
+        // A sensitive task/deadline must keep `requires_user_action` and the
+        // `RequiresUserAction` policy across confirmation, surfacing as overdue
+        // rather than auto-completing (PR #173).
+        let start = DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+            .unwrap()
+            .into();
+        let (kg, _clock, _dir) = fresh_kg_with_clock(start).await;
+        let fact_id = create_pending_event_fact(
+            &kg,
+            "file tax return",
+            Some("2024-04-30T17:00:00Z"),
+            None,
+            Some(true),
+        )
+        .await;
+
+        kg.confirm_fact(fact_id).await.expect("confirm succeeds");
+
+        let event = queries::event::get_by_fact(kg.pool(), fact_id)
+            .await
+            .unwrap()
+            .expect("overlay created on confirm");
+        assert_eq!(event.recurrence(), Some(RecurrenceType::None));
+        assert_eq!(event.event_type(), Some(EventType::Task));
+        assert_eq!(event.policy(), Some(AutoCompletePolicy::RequiresUserAction));
+        assert!(event.requires_user_action);
+    }
+
+    #[tokio::test]
+    async fn confirm_legacy_pending_fact_falls_back_to_one_time_reminder() {
+        // A pending fact with no persisted event metadata (e.g. created before
+        // the pending_event_meta table) still gets a one-time Reminder overlay
+        // for future-dated facts, preserving the Phase A fallback.
+        let start = DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+            .unwrap()
+            .into();
+        let (kg, _clock, _dir) = fresh_kg_with_clock(start).await;
+        let fact_id = create_pending_fact(&kg, "peanuts").await;
+
+        // Simulate a legacy pending fact by removing any persisted metadata.
+        sqlx::query("DELETE FROM pending_event_meta WHERE fact_id = ?")
+            .bind(fact_id)
+            .execute(kg.pool())
+            .await
+            .unwrap();
+
+        kg.confirm_fact(fact_id).await.expect("confirm succeeds");
+
+        // No temporal bound -> no overlay (the legacy path only creates an
+        // overlay for future-dated facts, and this fact has none).
+        assert!(
+            queries::event::get_by_fact(kg.pool(), fact_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "non-future sensitive fact without meta should not get an overlay"
+        );
     }
 
     #[tokio::test]

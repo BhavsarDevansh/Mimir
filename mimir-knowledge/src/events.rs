@@ -72,13 +72,12 @@ pub async fn run_upcoming_scan(
         completed += 1;
     }
 
-    // 3. Advance recurring events whose trigger date has passed.
-    let recurring = event::get_active_recurring(pool).await?;
+    // 3. Advance recurring events whose trigger date has passed. The SQL filter
+    // (`trigger_date < now`) is pushed into `get_active_recurring` so only rows
+    // that can actually advance are loaded and sorted.
+    let recurring = event::get_active_recurring(pool, now).await?;
     let mut advanced = 0usize;
     for ev in recurring {
-        if ev.trigger_date >= now {
-            continue;
-        }
         let recurrence = ev.recurrence().unwrap_or(RecurrenceType::None);
         if let Some(next) = next_occurrence(&ev.trigger_date.to_rfc3339(), recurrence, now) {
             if next != ev.trigger_date {

@@ -69,12 +69,17 @@ Librarian Agent needs no event-specific logic — it calls
 `Reminder` in Phase A; the remaining `EventType` variants are seeded for later
 phases that derive richer typing.
 
-Sensitive facts return `Pending` before reaching the event block, so
-`extract.rs::confirm_fact` derives a one-time `AutoCompleteOnDate` overlay for
-future-dated sensitive facts at confirmation time (idempotent). Recurrence and
-`requires_user_action` are not carried across the sensitivity gate in Phase A,
-so confirmed sensitive facts are always one-time reminders; richer typing is
-deferred.
+Sensitive facts return `Pending` before reaching the event block, so the
+event shape computed by `event_from_extraction` is persisted in the
+`pending_event_meta` table (migration 041) at extraction time. On confirmation,
+`extract.rs::confirm_fact` rebuilds the overlay from that persisted shape
+(recurrence / `event_type` / `auto_complete_policy` / `requires_user_action`),
+so a confirmed sensitive recurring reminder keeps recurring and a confirmed
+sensitive task/deadline keeps requiring user action. The rebuilt overlay is
+idempotent (`ON CONFLICT(fact_id) DO NOTHING`); the consumed `pending_event_meta`
+row is deleted on confirm and cascade-deleted on reject. Legacy pending facts
+that predate the table fall back to a one-time `Reminder` overlay for
+future-dated facts.
 
 ## Scan Job — `events.upcoming_scan`
 
@@ -92,9 +97,11 @@ deterministic passes:
 2. **Auto-complete** — one-time `AutoCompleteOnDate` events whose
    `trigger_date` has passed transition to `Completed`.
 3. **Advance** — recurring events whose `trigger_date` has passed advance to
-   their next occurrence via `next_occurrence`. Only `Recurring`-policy events
-   with `requires_user_action = false` are advanced; a recurring deadline/task
-   that requires user action stays put and surfaces as overdue instead.
+   their next occurrence via `next_occurrence`. `get_active_recurring(pool, now)`
+   filters in SQL to `Recurring`-policy events with `requires_user_action = 0`
+   **and** `trigger_date < now`, so only rows that can actually advance are
+   loaded and sorted. A recurring deadline/task that requires user action stays
+   put and surfaces as overdue instead.
 
 `RequiresUserAction` events are intentionally left untouched; past their
 `trigger_date` they surface as **overdue** via `get_overdue_events`.

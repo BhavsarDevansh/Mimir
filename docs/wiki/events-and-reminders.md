@@ -57,9 +57,19 @@ You can also set these via environment variables, which override the file:
 ## Sensitive facts
 
 When a fact is sensitive (e.g. a medical appointment) Mimir asks you to confirm
-it before storing it permanently. The reminder is created once you **confirm**
-the fact, so confirmed sensitive appointments appear in Upcoming and drop off
-after their date passes just like any other reminder.
+it before storing it permanently. The reminder/task overlay is created once you
+**confirm** the fact: Mimir remembers the recurrence and action metadata from
+the original extraction and rebuilds the overlay from it on confirmation, so:
+
+- a confirmed **recurring** sensitive reminder (e.g. a yearly checkup) keeps
+  recurring and advances to its next occurrence after the date passes;
+- a confirmed sensitive **task/deadline** keeps requiring you to act and stays
+  overdue until you dismiss or complete it;
+- a confirmed **one-time** sensitive reminder appears in Upcoming and drops off
+  after its date passes, just like any other reminder.
+
+Until you confirm a sensitive fact it is not stored permanently and never
+surfaces in Upcoming.
 
 ## Best practices
 

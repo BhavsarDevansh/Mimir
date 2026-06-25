@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.59.0] — 2026-06-25
+
+### Fixed — second pass on PR #173 review feedback
+
+- **Sensitive facts preserve event metadata across confirmation.** The
+  extracted recurrence / `event_type` / `auto_complete_policy` /
+  `requires_user_action` are now persisted in a new `pending_event_meta` table at
+  extraction time and used by `confirm_fact` to rebuild the overlay faithfully,
+  instead of synthesising one-time `Reminder` defaults. A confirmed sensitive
+  recurring reminder keeps recurring; a confirmed sensitive task/deadline keeps
+  requiring user action and surfaces as overdue. Legacy pending facts that
+  predate the table fall back to the one-time `Reminder` overlay. This removes
+  the Phase A limitation noted in 0.58.0 (#6).
+- **`get_active_recurring` filters past-due rows in SQL.** The advance-pass
+  query now takes the scan `now` and adds `trigger_date < now`, so the
+  twice-daily scan only loads and sorts rows that can actually advance instead
+  of fetching every future recurring event (#7).
+
+### Added
+
+- **Migration 041** — `pending_event_meta` table (fact-keyed event-shape cache
+  for pending sensitive facts, removed on confirm / cascade-deleted on reject).
+- **Public API:** `queries::event::{PendingEventMeta, insert_pending_event_meta,
+  get_pending_event_meta, delete_pending_event_meta}`.
+
+### Notes
+
+- CodeRabbit findings #1 (advance filter) and #3 (`event_type_roundtrips`
+  `#[tokio::test]`) were already satisfied by the current code and required no
+  change; finding #2 (NULL confidence) is invalid because `facts.confidence` is
+  `NOT NULL` and the derive and Upcoming queries already share the
+  `confidence >= 0.5` gate.
+
 ## [0.58.0] — 2026-06-25
 
 ### Fixed — PR #173 review feedback on the events & reminders subsystem
@@ -40,8 +73,6 @@
 
 - `event_type` from extraction is intentionally limited to `Task`/`Reminder` in
   Phase A; the remaining `EventType` variants are seeded for later phases (#6).
-- The `event_type_roundtrips` test already carries `#[tokio::test]`; finding #9
-  was not valid against the current code and was skipped.
 ## [0.57.0] — 2026-06-25
 
 ### Feature — events & reminders subsystem (issue #74)

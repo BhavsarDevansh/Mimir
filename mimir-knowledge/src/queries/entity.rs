@@ -1,14 +1,12 @@
 //! Entity CRUD, alias resolution, deduplication, dates, locations, and predicate validation.
 
-use chrono::{DateTime, Duration, Utc};
 use serde_json;
 use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
 use crate::models::entity::{Entity, EntityType};
-use crate::models::entity_date::{EntityDate, next_occurrence};
 use crate::models::entity_location::EntityLocation;
-use crate::models::enums::{MergeWorkflowStatus, RecurrenceType};
+use crate::models::enums::MergeWorkflowStatus;
 
 // ---------------------------------------------------------------------------
 // Alias search
@@ -362,106 +360,6 @@ pub async fn validate_predicate(
 }
 
 // ---------------------------------------------------------------------------
-// Entity Dates
-// ---------------------------------------------------------------------------
-
-/// Insert a new date record for an entity.
-pub async fn insert_entity_date(
-    pool: &SqlitePool,
-    entity_id: i32,
-    date_type_id: i16,
-    date_value: &str,
-    recurrence_type_id: i16,
-    custom_label: Option<&str>,
-    confidence: f32,
-) -> Result<EntityDate, KnowledgeError> {
-    let record = sqlx::query_as::<_, EntityDate>(
-        "INSERT INTO entity_dates (entity_id, date_type_id, date_value, recurrence_type_id, custom_label, confidence) \
-         VALUES (?, ?, ?, ?, ?, ?) \
-         RETURNING id, entity_id, date_type_id, date_value, recurrence_type_id, custom_label, confidence, created_at",
-    )
-    .bind(entity_id)
-    .bind(date_type_id)
-    .bind(date_value)
-    .bind(recurrence_type_id)
-    .bind(custom_label)
-    .bind(confidence)
-    .fetch_one(pool)
-    .await?;
-    Ok(record)
-}
-
-/// Get all dates for a given entity.
-pub async fn get_dates_for_entity(
-    pool: &SqlitePool,
-    entity_id: i32,
-) -> Result<Vec<EntityDate>, KnowledgeError> {
-    let rows: Vec<EntityDate> = sqlx::query_as::<_, EntityDate>(
-        "SELECT id, entity_id, date_type_id, date_value, recurrence_type_id, custom_label, confidence, created_at \
-         FROM entity_dates WHERE entity_id = ? ORDER BY date_value",
-    )
-    .bind(entity_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
-}
-
-/// Get dates within a date range (inclusive on both ends, comparing base date_value).
-pub async fn get_dates_in_range(
-    pool: &SqlitePool,
-    from: &str,
-    until: &str,
-) -> Result<Vec<EntityDate>, KnowledgeError> {
-    let rows: Vec<EntityDate> = sqlx::query_as::<_, EntityDate>(
-        "SELECT id, entity_id, date_type_id, date_value, recurrence_type_id, custom_label, confidence, created_at \
-         FROM entity_dates WHERE date_value >= ? AND date_value <= ? ORDER BY date_value",
-    )
-    .bind(from)
-    .bind(until)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
-}
-
-/// Delete a date record by ID.
-pub async fn delete_entity_date(pool: &SqlitePool, id: i32) -> Result<(), KnowledgeError> {
-    sqlx::query("DELETE FROM entity_dates WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-/// Get upcoming dates for an entity within `days_ahead` from now.
-pub async fn get_upcoming_dates(
-    pool: &SqlitePool,
-    entity_id: i32,
-    days_ahead: i64,
-    now: DateTime<Utc>,
-) -> Result<Vec<EntityDate>, KnowledgeError> {
-    let all = get_dates_for_entity(pool, entity_id).await?;
-    let horizon = now + Duration::days(days_ahead);
-
-    let mut upcoming = Vec::new();
-    for date in all {
-        let recurrence = match date.recurrence_type_id {
-            1 => RecurrenceType::None,
-            2 => RecurrenceType::Daily,
-            3 => RecurrenceType::Weekly,
-            4 => RecurrenceType::Monthly,
-            5 => RecurrenceType::Yearly,
-            _ => RecurrenceType::None,
-        };
-        if let Some(next) = next_occurrence(&date.date_value, recurrence, now) {
-            if next <= horizon {
-                upcoming.push(date);
-            }
-        }
-    }
-    Ok(upcoming)
-}
-
-// ---------------------------------------------------------------------------
 // Entity Locations (stubs)
 // ---------------------------------------------------------------------------
 
@@ -653,8 +551,9 @@ pub async fn auto_merge_pair(
         .execute(&mut *tx)
         .await?;
 
-    // 4. Migrate entity_dates to survivor.
-    sqlx::query("UPDATE entity_dates SET entity_id = ? WHERE entity_id = ?")
+    // 4. Migrate event overlays to survivor (denormalized entity_id; the
+    //    underlying facts were already repointed in step 1).
+    sqlx::query("UPDATE events SET entity_id = ? WHERE entity_id = ?")
         .bind(actual_survivor)
         .bind(actual_merged)
         .execute(&mut *tx)

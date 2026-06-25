@@ -214,6 +214,7 @@ pub struct IdentityConfig {
 pub struct KnowledgeConfig {
     pub optimization: KnowledgeOptimizationConfig,
     pub pending_cleanup: PendingCleanupConfig,
+    pub events: EventsConfig,
 }
 
 /// Knowledge graph nightly optimization settings.
@@ -356,6 +357,25 @@ impl Default for PendingCleanupConfig {
         Self {
             retention_days: 7,
             schedule_time: "03:30".to_string(),
+        }
+    }
+}
+
+/// Settings for the events & reminders upcoming-scan job (issue #74).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EventsConfig {
+    /// Daily local times (HH:MM, 24h) at which the scan runs.
+    pub schedule_times: Vec<String>,
+    /// How many days into the future the derive pass looks for upcoming facts.
+    pub horizon_days: u16,
+}
+
+impl Default for EventsConfig {
+    fn default() -> Self {
+        Self {
+            schedule_times: vec!["06:00".to_string(), "18:00".to_string()],
+            horizon_days: 30,
         }
     }
 }
@@ -566,6 +586,10 @@ schedule_time = "02:00"
 [knowledge.pending_cleanup]
 retention_days = 7
 schedule_time = "03:30"
+
+[knowledge.events]
+schedule_times = ["06:00", "18:00"]
+horizon_days = 30
 "#
         .to_string()
     }
@@ -653,6 +677,21 @@ schedule_time = "03:30"
         set_from_env!(
             "MIMIR_SCHEDULER_COOLDOWN_SECONDS",
             self.scheduler.cooldown_seconds,
+            u16
+        );
+        if let Some(v) = getenv("MIMIR_KNOWLEDGE_EVENTS_SCHEDULE_TIMES") {
+            let times: Vec<String> = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !times.is_empty() {
+                self.knowledge.events.schedule_times = times;
+            }
+        }
+        set_from_env!(
+            "MIMIR_KNOWLEDGE_EVENTS_HORIZON_DAYS",
+            self.knowledge.events.horizon_days,
             u16
         );
     }
@@ -1108,6 +1147,65 @@ preset = "formal"
         });
         // Should remain at default value
         assert_eq!(config.scheduler.cooldown_seconds, 60);
+    }
+
+    #[test]
+    fn test_env_override_events_schedule_times() {
+        let mut config = Config::default();
+        config.apply_env_overrides_with(|key| {
+            if key == "MIMIR_KNOWLEDGE_EVENTS_SCHEDULE_TIMES" {
+                Some("07:30, 19:45".to_string())
+            } else {
+                None
+            }
+        });
+        assert_eq!(
+            config.knowledge.events.schedule_times,
+            vec!["07:30".to_string(), "19:45".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_env_override_events_schedule_times_empty_ignored() {
+        let mut config = Config::default();
+        config.apply_env_overrides_with(|key| {
+            if key == "MIMIR_KNOWLEDGE_EVENTS_SCHEDULE_TIMES" {
+                Some("   ,  ".to_string())
+            } else {
+                None
+            }
+        });
+        // All tokens blank -> keep defaults.
+        assert_eq!(
+            config.knowledge.events.schedule_times,
+            vec!["06:00".to_string(), "18:00".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_env_override_events_horizon_days() {
+        let mut config = Config::default();
+        config.apply_env_overrides_with(|key| {
+            if key == "MIMIR_KNOWLEDGE_EVENTS_HORIZON_DAYS" {
+                Some("90".to_string())
+            } else {
+                None
+            }
+        });
+        assert_eq!(config.knowledge.events.horizon_days, 90);
+    }
+
+    #[test]
+    fn test_env_override_events_horizon_days_invalid_ignored() {
+        let mut config = Config::default();
+        config.apply_env_overrides_with(|key| {
+            if key == "MIMIR_KNOWLEDGE_EVENTS_HORIZON_DAYS" {
+                Some("nope".to_string())
+            } else {
+                None
+            }
+        });
+        assert_eq!(config.knowledge.events.horizon_days, 30);
     }
 
     #[test]

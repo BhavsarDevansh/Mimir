@@ -1084,3 +1084,203 @@ async fn test_content_keyword_catches_miscategorised_sensitive_fact() {
     assert!(outcome.inserted.is_empty());
     assert_eq!(outcome.pending_confirmation.len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Events subsystem (#74): extraction creates event overlays
+// ---------------------------------------------------------------------------
+
+use mimir_knowledge::models::enums::{AutoCompletePolicy, EventType, RecurrenceType};
+
+#[tokio::test]
+async fn test_extraction_creates_event_for_future_dated_fact() {
+    let tg = TestGraph::new().await;
+    let future = chrono::Utc::now() + chrono::Duration::days(7);
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "devansh",
+        "subject_type": "Person",
+        "relationship_type": "is_in",
+        "object": "Tokyo",
+        "object_is_entity": false,
+        "temporal": { "valid_from": future.to_rfc3339() },
+        "is_sensitive": false
+    })]);
+
+    let mock = build_mock_with_tool_output(tool_args);
+    let outcome = tg
+        .kg
+        .extract_facts(&mock, "I am travelling to Tokyo next week.")
+        .await
+        .unwrap();
+    assert_eq!(outcome.inserted.len(), 1);
+
+    let fact = &outcome.inserted[0];
+    let event = tg.kg.get_event_by_fact(fact.id).await.unwrap().unwrap();
+    assert_eq!(
+        event.auto_complete_policy_id,
+        AutoCompletePolicy::AutoCompleteOnDate as i16
+    );
+    assert_eq!(event.event_type_id, EventType::Reminder as i16);
+    assert!(!event.is_recurring());
+}
+
+#[tokio::test]
+async fn test_extraction_creates_recurring_event_for_birthday() {
+    let tg = TestGraph::new().await;
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "priya",
+        "subject_type": "Person",
+        "relationship_type": "is_in",
+        "object": "birthday",
+        "object_is_entity": false,
+        "temporal": { "valid_from": "1995-06-15T00:00:00Z" },
+        "recurrence": "yearly",
+        "is_sensitive": false
+    })]);
+
+    let mock = build_mock_with_tool_output(tool_args);
+    let outcome = tg
+        .kg
+        .extract_facts(&mock, "Priya's birthday is 15 June.")
+        .await
+        .unwrap();
+    assert_eq!(outcome.inserted.len(), 1);
+
+    let fact = &outcome.inserted[0];
+    let event = tg.kg.get_event_by_fact(fact.id).await.unwrap().unwrap();
+    assert_eq!(event.recurrence_type_id, RecurrenceType::Yearly as i16);
+    assert_eq!(
+        event.auto_complete_policy_id,
+        AutoCompletePolicy::Recurring as i16
+    );
+    assert!(event.is_recurring());
+}
+
+#[tokio::test]
+async fn test_extraction_creates_task_event_for_deadline() {
+    let tg = TestGraph::new().await;
+    let future = chrono::Utc::now() + chrono::Duration::days(2);
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "devansh",
+        "subject_type": "Person",
+        "relationship_type": "is_in",
+        "object": "post letter",
+        "object_is_entity": false,
+        "temporal": { "valid_from": future.to_rfc3339() },
+        "requires_user_action": true,
+        "is_sensitive": false
+    })]);
+
+    let mock = build_mock_with_tool_output(tool_args);
+    let outcome = tg
+        .kg
+        .extract_facts(&mock, "I have to post a letter by tomorrow 5pm.")
+        .await
+        .unwrap();
+    assert_eq!(outcome.inserted.len(), 1);
+
+    let fact = &outcome.inserted[0];
+    let event = tg.kg.get_event_by_fact(fact.id).await.unwrap().unwrap();
+    assert_eq!(
+        event.auto_complete_policy_id,
+        AutoCompletePolicy::RequiresUserAction as i16
+    );
+    assert_eq!(event.event_type_id, EventType::Task as i16);
+    assert!(event.requires_user_action);
+}
+
+#[tokio::test]
+async fn test_extraction_skips_event_for_past_non_recurring_fact() {
+    let tg = TestGraph::new().await;
+    let past = chrono::Utc::now() - chrono::Duration::days(30);
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "devansh",
+        "subject_type": "Person",
+        "relationship_type": "favourite_colour",
+        "object": "blue",
+        "object_is_entity": false,
+        "temporal": { "valid_from": past.to_rfc3339() },
+        "is_sensitive": false
+    })]);
+
+    let mock = build_mock_with_tool_output(tool_args);
+    let outcome = tg
+        .kg
+        .extract_facts(&mock, "Last month I liked blue.")
+        .await
+        .unwrap();
+    assert_eq!(outcome.inserted.len(), 1);
+
+    // A past, non-recurring, non-actionable fact must not get an event overlay.
+    let event = tg
+        .kg
+        .get_event_by_fact(outcome.inserted[0].id)
+        .await
+        .unwrap();
+    assert!(event.is_none());
+}
+
+#[tokio::test]
+async fn test_sensitive_future_fact_gets_overlay_on_confirmation() {
+    use mimir_knowledge::models::enums::{AutoCompletePolicy, EventType};
+
+    let tg = TestGraph::new().await;
+    let future = chrono::Utc::now() + chrono::Duration::days(10);
+
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "devansh",
+        "subject_type": "Person",
+        "relationship_type": "has_appointment",
+        "object": "cardiology check-up",
+        "object_is_entity": false,
+        "temporal": { "valid_from": future.to_rfc3339() },
+        "is_sensitive": true,
+        "categories": ["230"]
+    })]);
+
+    let mock = build_mock_with_tool_output(tool_args);
+    let outcome = tg
+        .kg
+        .extract_facts(&mock, "I have a cardiology check-up next week.")
+        .await
+        .unwrap();
+
+    // Sensitive facts stay pending at extraction time and get no overlay yet.
+    assert_eq!(outcome.pending_confirmation.len(), 1);
+    let pending = &outcome.pending_confirmation[0];
+    assert!(
+        tg.kg
+            .get_event_by_fact(pending.fact_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "sensitive fact must not get an overlay before confirmation"
+    );
+
+    // Confirming creates the one-time event overlay.
+    tg.kg.confirm_fact(pending.fact_id).await.unwrap();
+
+    let event = tg
+        .kg
+        .get_event_by_fact(pending.fact_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        event.auto_complete_policy_id,
+        AutoCompletePolicy::AutoCompleteOnDate as i16
+    );
+    assert_eq!(event.event_type_id, EventType::Reminder as i16);
+    assert!(!event.is_recurring());
+    assert!(!event.requires_user_action);
+
+    // Re-confirming is a no-op for the overlay (idempotent) — the unique
+    // constraint must not trip. confirm_fact refuses non-pending facts, so we
+    // re-run the derive scan instead to exercise the idempotent insert path.
+    let summary = tg.kg.run_events_scan(30).await.unwrap();
+    assert_eq!(summary.derived, 0);
+}

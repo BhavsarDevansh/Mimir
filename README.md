@@ -30,6 +30,7 @@ Mimir is built in **Rust** with a modular, local-first architecture:
 - **HTTP Server** — Axum-based daemon with SSE streaming, session management, and graceful shutdown
 - **Storage Layer** — SQLite for conversation history, skill metrics, configuration, and the knowledge graph
 - **Knowledge Graph** — Live memory condensation, entity/fact storage, temporal reasoning, a category-first ontology (predicate aliases for verb canonicalization + Dewey categories with aliases and subtree retrieval for grouping), and event-driven regeneration via the unified background scheduler
+- **Events & Reminders** — A lifecycle + recurrence overlay on facts that surfaces upcoming birthdays, appointments, deadlines, and tasks in the Upcoming memory section, with a deterministic scan job for auto-completion and recurring advancement (Issue #74)
 - **LLM-orchestrated learning** — The LLM calls the `remember` tool during conversation to persist facts; the deterministic Rust pipeline enforces confidence, overwrite, and sensitive-fact policy. The Librarian Agent remains available as an on-demand extraction API (Issue #137)
 - **Retrieval Agent** — Dedicated ephemeral research agents that investigate the knowledge graph and conversation history on behalf of the main agent before answering complex questions
 

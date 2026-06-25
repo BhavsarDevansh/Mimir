@@ -13,16 +13,83 @@ pub enum RelationType {
     Contradicts = 4,
 }
 
-/// Classification of dates associated with entities.
+/// Kind of event tracked by the events/reminders subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Type, serde::Serialize, serde::Deserialize)]
 #[repr(i16)]
-pub enum EntityDateType {
-    Birth = 1,
-    Death = 2,
-    Anniversary = 3,
-    Created = 4,
-    Dissolved = 5,
+pub enum EventType {
+    Birthday = 1,
+    Appointment = 2,
+    Deadline = 3,
+    Task = 4,
+    Reminder = 5,
     Custom = 6,
+}
+
+impl TryFrom<i16> for EventType {
+    type Error = ();
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        match value {
+            x if x == Self::Birthday as i16 => Ok(Self::Birthday),
+            x if x == Self::Appointment as i16 => Ok(Self::Appointment),
+            x if x == Self::Deadline as i16 => Ok(Self::Deadline),
+            x if x == Self::Task as i16 => Ok(Self::Task),
+            x if x == Self::Reminder as i16 => Ok(Self::Reminder),
+            x if x == Self::Custom as i16 => Ok(Self::Custom),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Lifecycle status of an event overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Type, serde::Serialize, serde::Deserialize)]
+#[repr(i16)]
+pub enum EventStatus {
+    Pending = 1,
+    Active = 2,
+    Completed = 3,
+    Dismissed = 4,
+    Snoozed = 5,
+}
+
+impl TryFrom<i16> for EventStatus {
+    type Error = ();
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        match value {
+            x if x == Self::Pending as i16 => Ok(Self::Pending),
+            x if x == Self::Active as i16 => Ok(Self::Active),
+            x if x == Self::Completed as i16 => Ok(Self::Completed),
+            x if x == Self::Dismissed as i16 => Ok(Self::Dismissed),
+            x if x == Self::Snoozed as i16 => Ok(Self::Snoozed),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Deterministic completion policy applied by the `events.upcoming_scan` job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Type, serde::Serialize, serde::Deserialize)]
+#[repr(i16)]
+pub enum AutoCompletePolicy {
+    /// Transition to `Completed` once `trigger_date` has passed.
+    AutoCompleteOnDate = 1,
+    /// Stay `Active` until the user explicitly completes or dismisses.
+    RequiresUserAction = 2,
+    /// Never complete; advance `trigger_date` to the next recurrence.
+    Recurring = 3,
+}
+
+impl TryFrom<i16> for AutoCompletePolicy {
+    type Error = ();
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        match value {
+            x if x == Self::AutoCompleteOnDate as i16 => Ok(Self::AutoCompleteOnDate),
+            x if x == Self::RequiresUserAction as i16 => Ok(Self::RequiresUserAction),
+            x if x == Self::Recurring as i16 => Ok(Self::Recurring),
+            _ => Err(()),
+        }
+    }
 }
 
 /// How an entity date recurs (if at all).
@@ -94,7 +161,9 @@ pub enum MergeResolution {
 
 // Verify no zero-ID variants.
 const_assert!((RelationType::InferredFrom as i16) != 0);
-const_assert!((EntityDateType::Birth as i16) != 0);
+const_assert!((EventType::Birthday as i16) != 0);
+const_assert!((EventStatus::Active as i16) != 0);
+const_assert!((AutoCompletePolicy::AutoCompleteOnDate as i16) != 0);
 const_assert!((RecurrenceType::None as i16) != 0);
 const_assert!((LocationType::Home as i16) != 0);
 const_assert!((DedupStatus::Pending as i16) != 0);
@@ -151,10 +220,51 @@ mod tests {
     }
 
     #[test]
+    fn event_type_discriminants_are_stable() {
+        assert_eq!(EventType::Birthday as i16, 1);
+        assert_eq!(EventType::Appointment as i16, 2);
+        assert_eq!(EventType::Deadline as i16, 3);
+        assert_eq!(EventType::Task as i16, 4);
+        assert_eq!(EventType::Reminder as i16, 5);
+        assert_eq!(EventType::Custom as i16, 6);
+    }
+
+    #[test]
+    fn event_status_discriminants_are_stable() {
+        assert_eq!(EventStatus::Pending as i16, 1);
+        assert_eq!(EventStatus::Active as i16, 2);
+        assert_eq!(EventStatus::Completed as i16, 3);
+        assert_eq!(EventStatus::Dismissed as i16, 4);
+        assert_eq!(EventStatus::Snoozed as i16, 5);
+    }
+
+    #[test]
+    fn auto_complete_policy_discriminants_are_stable() {
+        assert_eq!(AutoCompletePolicy::AutoCompleteOnDate as i16, 1);
+        assert_eq!(AutoCompletePolicy::RequiresUserAction as i16, 2);
+        assert_eq!(AutoCompletePolicy::Recurring as i16, 3);
+    }
+
+    #[test]
+    fn event_enums_try_from_roundtrip() {
+        assert_eq!(EventType::try_from(4), Ok(EventType::Task));
+        assert_eq!(EventStatus::try_from(3), Ok(EventStatus::Completed));
+        assert_eq!(
+            AutoCompletePolicy::try_from(2),
+            Ok(AutoCompletePolicy::RequiresUserAction)
+        );
+        assert_eq!(EventType::try_from(0), Err(()));
+        assert_eq!(EventStatus::try_from(99), Err(()));
+        assert_eq!(AutoCompletePolicy::try_from(-1), Err(()));
+    }
+
+    #[test]
     fn all_enum_discriminants_fit_i16_and_are_nonzero() {
         // Spot-check each enum's first variant to guard against accidental
         // renumbering that would corrupt existing DB rows.
-        assert_ne!(EntityDateType::Birth as i16, 0);
+        assert_ne!(EventType::Birthday as i16, 0);
+        assert_ne!(EventStatus::Active as i16, 0);
+        assert_ne!(AutoCompletePolicy::AutoCompleteOnDate as i16, 0);
         assert_ne!(LocationType::Home as i16, 0);
         assert_ne!(DedupStatus::Pending as i16, 0);
         assert_ne!(MergeWorkflowStatus::Pending as i16, 0);
@@ -173,6 +283,9 @@ mod tests {
         }
         rt(RecurrenceType::Yearly);
         rt(RelationType::Contradicts);
+        rt(EventType::Deadline);
+        rt(EventStatus::Snoozed);
+        rt(AutoCompletePolicy::Recurring);
         rt(ConnectorType::Calendar);
         rt(MergeResolution::KeptSeparate);
     }

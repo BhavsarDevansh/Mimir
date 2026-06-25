@@ -1,7 +1,7 @@
 # Mimir — Implementation Context
 
 > **Created:** 2025-05-20
-> **Last Updated:** 2026-05-23
+> **Last Updated:** 2026-06-25
 > **Vision Docs:** `VISION/` directory (48 files, 10 sections)
 > **Phase 1 Plan:** `VISION/09-Roadmap/Phase-1-Core-Agent.md`
 > **GitHub:** https://github.com/BhavsarDevansh/Mimir
@@ -223,6 +223,7 @@ The daemon will listen on both a Unix domain socket and a TCP socket once UDS is
 - Confidence scores: 0.0-1.0. Facts color-coded by confidence.
 - Obsidian-compatible export/import (Markdown + YAML frontmatter + wiki-links).
 - Nightly optimization: deduplication, contradiction resolution, dormant cleanup.
+- **Events & reminders (#74, v0.57.0):** a lifecycle + recurrence overlay on facts. A future-dated fact is a one-time event; a recurring fact (e.g. a birthday) is a recurring event; a `requires_user_action` fact is a task. An `events.upcoming_scan` job (default 06:00 & 18:00) derives overlays, auto-completes past one-time events, and advances recurring events. Upcoming events surface in the "Upcoming" memory section. `entity_dates` is deprecated and removed (replaced by this overlay; recurrence logic moved to `models::recurrence`).
 
 ---
 

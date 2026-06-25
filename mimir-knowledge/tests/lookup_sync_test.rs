@@ -81,23 +81,73 @@ async fn entity_types_sync() {
 }
 
 #[tokio::test]
-async fn entity_date_types_sync() {
+async fn event_types_sync() {
     let dir = tempfile::tempdir().unwrap();
     let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
         .await
         .unwrap();
     assert_enum_db_sync(
         &kg,
-        "SELECT id, name FROM entity_date_types WHERE id = ?",
-        "SELECT id, name FROM entity_date_types",
-        "SELECT COUNT(*) FROM entity_date_types",
+        "SELECT id, name FROM event_types WHERE id = ?",
+        "SELECT id, name FROM event_types",
+        "SELECT COUNT(*) FROM event_types",
         &[
-            (1, "Birth", EntityDateType::Birth),
-            (2, "Death", EntityDateType::Death),
-            (3, "Anniversary", EntityDateType::Anniversary),
-            (4, "Created", EntityDateType::Created),
-            (5, "Dissolved", EntityDateType::Dissolved),
-            (6, "Custom", EntityDateType::Custom),
+            (1, "birthday", EventType::Birthday),
+            (2, "appointment", EventType::Appointment),
+            (3, "deadline", EventType::Deadline),
+            (4, "task", EventType::Task),
+            (5, "reminder", EventType::Reminder),
+            (6, "custom", EventType::Custom),
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn event_statuses_sync() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+    assert_enum_db_sync(
+        &kg,
+        "SELECT id, name FROM event_statuses WHERE id = ?",
+        "SELECT id, name FROM event_statuses",
+        "SELECT COUNT(*) FROM event_statuses",
+        &[
+            (1, "Pending", EventStatus::Pending),
+            (2, "Active", EventStatus::Active),
+            (3, "Completed", EventStatus::Completed),
+            (4, "Dismissed", EventStatus::Dismissed),
+            (5, "Snoozed", EventStatus::Snoozed),
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn auto_complete_policies_sync() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+    assert_enum_db_sync(
+        &kg,
+        "SELECT id, name FROM auto_complete_policies WHERE id = ?",
+        "SELECT id, name FROM auto_complete_policies",
+        "SELECT COUNT(*) FROM auto_complete_policies",
+        &[
+            (
+                1,
+                "AutoCompleteOnDate",
+                AutoCompletePolicy::AutoCompleteOnDate,
+            ),
+            (
+                2,
+                "RequiresUserAction",
+                AutoCompletePolicy::RequiresUserAction,
+            ),
+            (3, "Recurring", AutoCompletePolicy::Recurring),
         ],
     )
     .await;

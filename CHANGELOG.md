@@ -1,5 +1,128 @@
 # Changelog
 
+## [0.59.1] — 2026-06-25
+
+### Fixed — third pass on PR #173 review feedback
+
+- **`confirm_fact` no longer errors after the confirmation commit.** The
+  overlay-rebuild read of `pending_event_meta` ran after `tx.commit()`, so a
+  `?`-propagated failure would make confirmation look failed to the caller even
+  though the fact was already Active and no longer pending. The read now logs and
+  falls back to the legacy one-time overlay path instead of returning an error
+  (#3).
+- **Legacy-fallback test now exercises the future-dated branch.** The
+  `confirm_legacy_pending_fact_falls_back_to_one_time_reminder` test uses a
+  future-dated fixture and asserts the one-time `Reminder` overlay is created;
+  a second test covers the no-`valid_from` (no-overlay) case (#4).
+
+### Notes
+
+- CodeRabbit findings #1 (NULL confidence) and #2 (`event_type_roundtrips`
+  `#[tokio::test]`) are stale re-posts: `facts.confidence` is `NOT NULL` and the
+  test attribute is present at line 117. No code change required.
+
+## [0.59.0] — 2026-06-25
+
+### Fixed — second pass on PR #173 review feedback
+
+- **Sensitive facts preserve event metadata across confirmation.** The
+  extracted recurrence / `event_type` / `auto_complete_policy` /
+  `requires_user_action` are now persisted in a new `pending_event_meta` table at
+  extraction time and used by `confirm_fact` to rebuild the overlay faithfully,
+  instead of synthesising one-time `Reminder` defaults. A confirmed sensitive
+  recurring reminder keeps recurring; a confirmed sensitive task/deadline keeps
+  requiring user action and surfaces as overdue. Legacy pending facts that
+  predate the table fall back to the one-time `Reminder` overlay. This removes
+  the Phase A limitation noted in 0.58.0 (#6).
+- **`get_active_recurring` filters past-due rows in SQL.** The advance-pass
+  query now takes the scan `now` and adds `trigger_date < now`, so the
+  twice-daily scan only loads and sorts rows that can actually advance instead
+  of fetching every future recurring event (#7).
+
+### Added
+
+- **Migration 041** — `pending_event_meta` table (fact-keyed event-shape cache
+  for pending sensitive facts, removed on confirm / cascade-deleted on reject).
+- **Public API:** `queries::event::{PendingEventMeta, insert_pending_event_meta,
+  get_pending_event_meta, delete_pending_event_meta}`.
+
+### Notes
+
+- CodeRabbit findings #1 (advance filter) and #3 (`event_type_roundtrips`
+  `#[tokio::test]`) were already satisfied by the current code and required no
+  change; finding #2 (NULL confidence) is invalid because `facts.confidence` is
+  `NOT NULL` and the derive and Upcoming queries already share the
+  `confidence >= 0.5` gate.
+
+## [0.58.0] — 2026-06-25
+
+### Fixed — PR #173 review feedback on the events & reminders subsystem
+
+- **Idempotent overlay derivation.** The derive scan now inserts overlays with
+  `INSERT ... ON CONFLICT(fact_id) DO NOTHING` and only counts actual inserts,
+  so a concurrent extraction can no longer trip the `fact_id` unique constraint
+  (#3).
+- **Recurring user-action events are no longer auto-advanced.** The advance pass
+  now filters to `Recurring`-policy events with `requires_user_action = false`;
+  recurring deadlines/tasks stay past their trigger date and surface as overdue,
+  matching the documented contract (#4).
+- **Sensitive time-bound facts get an overlay on confirmation.** Sensitive facts
+  return `Pending` before the event block; `confirm_fact` now derives a one-time
+  `AutoCompleteOnDate` overlay for future-dated sensitive facts when they are
+  confirmed. Recurrence / `requires_user_action` are not carried across the
+  sensitivity gate in Phase A (documented limitation) (#5).
+- **Scan / Upcoming confidence alignment.** The derive query now applies the
+  same `confidence >= 0.5` gate as the Upcoming render, so overlays are only
+  created for facts that will surface (no hidden overlays for low-confidence
+  interaction facts) (#7). Note: `facts.confidence` is `NOT NULL`, so the
+  original "NULL confidence" framing was revised.
+- **Calendar-day relative suffix.** `format_upcoming_line` computes the
+  `today` / `in N days` suffix from `date_naive()` differences, so an event
+  early the next calendar day is no longer mislabelled `today` (#8).
+- **Docs.** `RecurringYearly` references in `docs/events-reminders.md` updated
+  to `Recurring` to match the renamed policy (#1).
+
+### Added
+
+- **Env overrides for events.** `MIMIR_KNOWLEDGE_EVENTS_SCHEDULE_TIMES`
+  (comma-separated `HH:MM`) and `MIMIR_KNOWLEDGE_EVENTS_HORIZON_DAYS` now flow
+  through `apply_env_overrides_with`, matching the rest of the config (#2).
+- **Public API:** `KnowledgeGraph::insert_event_if_absent` and
+  `queries::event::insert_event_if_absent` for idempotent overlay creation.
+
+### Notes
+
+- `event_type` from extraction is intentionally limited to `Task`/`Reminder` in
+  Phase A; the remaining `EventType` variants are seeded for later phases (#6).
+## [0.57.0] — 2026-06-25
+
+### Feature — events & reminders subsystem (issue #74)
+
+A smart events/reminders layer for the knowledge graph. Events are modelled as
+a lifecycle + recurrence overlay on facts: a fact with a future `valid_from` is
+a one-time event; a fact tagged with recurrence (e.g. a birthday) is a
+recurring event; a fact flagged `requires_user_action` is a task/deadline.
+Upcoming events surface automatically in the "Upcoming" memory section.
+
+- **New `events` table** (migration 039) with `event_types`, `event_statuses`,
+  and `auto_complete_policies` lookup tables, keyed on `facts(id)`.
+- **`entity_dates` deprecated and removed.** Its recurrence logic
+  (`next_occurrence`) moved to `models::recurrence`; the unused
+  `entity_dates` / `entity_date_types` tables are dropped (migration 040, no
+  data migration required).
+- **Deterministic scan job** `events.upcoming_scan` (default 06:00 & 18:00)
+  derives overlays for future-dated facts, auto-completes one-time events past
+  their trigger date, and advances recurring events to their next occurrence.
+  `RequiresUserAction` events stay active and surface as overdue.
+- **Extraction bridge.** The `remember` tool schema gains optional `recurrence`
+  and `requires_user_action` fields; the extraction pipeline creates event
+  overlays for qualifying facts (no natural-language date parsing in Rust —
+  the LLM supplies the ISO-8601 `valid_from`).
+- **`render_upcoming_section` refactored** to an event-based query, replacing
+  the `entity_dates` and category 900–999 branches.
+- **Config:** new `[knowledge.events]` section (`schedule_times`,
+  `horizon_days`).
+
 ## [0.56.2] — 2026-06-24
 
 ### Bugfix — daemon service reliability

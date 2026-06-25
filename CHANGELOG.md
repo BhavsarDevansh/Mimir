@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.56.2] — 2026-06-24
+
+### Bugfix — daemon service reliability
+
+Fixes the three interlocking issues that made the installed `mimir.service`
+fail to start cleanly and intermittently stop itself.
+
+- **CLI no longer targets the wrong port.** Client commands resolved their
+  base URL from a hardcoded `http://127.0.0.1:8080` (or `MIMIR_BASE_URL`),
+  ignoring the configured `server.bind_addr`. A daemon bound to, e.g.
+  `0.0.0.0:8008` was therefore reported as "not running", the daemon guard
+  prompted to start an already-running service, and the auto-spawned duplicate
+  failed to bind (address in use). The CLI now resolves `MIMIR_BASE_URL` →
+  `server.bind_addr` (wildcard hosts normalised to loopback) → compiled default
+  (`mimir/src/constants.rs`, `mimir-core::config::resolve_base_url`).
+- **Cheap `/health` liveness endpoint.** The daemon guard and `mimir stop`
+  probed `/status`, which performs a live LLM round-trip
+  (`fetch_model_context_window`) plus knowledge-graph reads on every call. A
+  slow/unreachable provider made the 500 ms probe time out on a healthy
+  daemon. Added `GET /health` (trivial 200, no LLM/DB work) and pointed the
+  guard + reachability check at it (`mimir/src/daemon_guard.rs`,
+  `mimir-server/src/lib.rs`).
+- **SIGTERM shutdown no longer deadlocks.** Only `POST /stop` broadcast the
+  `shutdown_tx` watch channel; the SIGTERM/Ctrl-C path relied on `AppState`
+  being dropped during runtime teardown to release the config file-watcher's
+  `spawn_blocking` thread — a race that, when lost, deadlocked tokio's
+  `BlockingPool::shutdown` until systemd aborted the unit with `SIGABRT` after
+  `TimeoutStopSec` (the "it stops itself" symptom). The server now broadcasts
+  `shutdown_tx` deterministically while the runtime is still alive, and wraps
+  the server future in the documented 30 s `tokio::time::timeout`
+  (`mimir-server/src/lib.rs`).
+- **Config file-watcher no longer floods the journal.** Reading the config
+  file generated `Access`/close events that, with only a filename filter, fed a
+  self-reload loop (~1 reload/second even with no real change). The watcher now
+  ignores `Access` events and dedupes by `(mtime, size)` so each genuine
+  content change reloads at most once (`mimir-server/src/lib.rs`).
+
+### Tests
+
+- `mimir-core::config::base_url_tests` — base-URL resolution and config
+  `bind_addr` reading (12 cases).
+- `mimir-server::tests::test_health_returns_ok_without_llm` — `/health` does
+  not touch the LLM backend.
+- `mimir/tests/e2e.rs::e2e_sigterm_exits_promptly` — the real binary exits
+  promptly on SIGTERM under an isolated environment.
+
 ## [0.56.1] — 2026-06-23
 
 ### Bugfix

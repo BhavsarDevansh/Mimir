@@ -1,6 +1,7 @@
 //! Shared helper to ensure the Mimir daemon is running before client commands.
 //!
-//! Provides [`ensure_daemon_running`] which probes the daemon via `GET /status`.
+//! Provides [`ensure_daemon_running`] which probes the daemon via the lightweight
+//! `GET /health` endpoint (kept separate from the heavyweight `/status`).
 //! If the daemon is unreachable, it prompts the user to auto-start it,
 //! spawns `mimir start`, and polls with exponential backoff.
 
@@ -33,10 +34,10 @@ pub enum DaemonGuardError {
 
 /// Ensure the Mimir daemon is running.
 ///
-/// 1. Fast-probe `GET /status` with a 500 ms timeout.
+/// 1. Fast-probe `GET /health` with a 500 ms timeout.
 /// 2. If the daemon is reachable, return `Ok(())` immediately.
 /// 3. If not, print an error and prompt the user to start it.
-/// 4. On approval, spawn `mimir start` and poll `/status` with exponential
+/// 4. On approval, spawn `mimir start` and poll `/health` with exponential
 ///    backoff until it comes up or a 10 s wall-clock timeout expires.
 /// 5. `already_tried` prevents more than one auto-start attempt per CLI
 ///    invocation.
@@ -84,7 +85,7 @@ struct HttpProbe;
 impl Probe for HttpProbe {
     fn check<'a>(&'a self, base_url: &'a str) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
         Box::pin(async move {
-            let url = format!("{}/status", base_url);
+            let url = format!("{}/health", base_url);
             match PROBE_CLIENT.as_ref() {
                 Ok(client) => {
                     match client

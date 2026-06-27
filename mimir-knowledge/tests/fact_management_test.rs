@@ -1897,6 +1897,8 @@ async fn explicit_new_overlapping_connector_supersedes_not_corroborates() {
 
 #[tokio::test]
 async fn duplicate_source_is_noop() {
+    use mimir_knowledge::models::audit_log::ChangeType;
+
     let dir = tempfile::tempdir().unwrap();
     let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
         .await
@@ -1937,6 +1939,17 @@ async fn duplicate_source_is_noop() {
     assert_eq!(source_count(&kg, f1.id).await, 1);
     let f1_after = kg.get_fact(f1.id).await.unwrap().unwrap();
     assert!((f1_after.confidence - 0.80).abs() < 1e-6);
+
+    // The duplicate-provenance fast path is audit-silent: it must not emit a
+    // SourceAdded or ConfidenceChange row for the unchanged fact.
+    assert_eq!(
+        audit_count(&kg, f1.id, ChangeType::SourceAdded as i16).await,
+        0
+    );
+    assert_eq!(
+        audit_count(&kg, f1.id, ChangeType::ConfidenceChange as i16).await,
+        0
+    );
 }
 
 #[tokio::test]
@@ -2131,4 +2144,157 @@ async fn corroboration_writes_audit_and_clears_stale_confidence() {
     let after = kg.get_fact(f1.id).await.unwrap().unwrap();
     assert!((after.confidence - 0.85).abs() < 1e-6);
     assert!(!after.stale_confidence);
+}
+
+#[tokio::test]
+async fn corroboration_cascades_to_inferred_child() {
+    use mimir_knowledge::models::audit_log::ChangeType;
+
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+    let alice = create_person(&kg, "Alice").await;
+    let london = create_place(&kg, "London").await;
+
+    // Parent connector fact (connector default confidence 0.80).
+    let parent = kg
+        .insert_fact(connector_new_fact(
+            alice,
+            "is_in",
+            Some(london),
+            None,
+            Some(dt(2020, 1, 1)),
+            None,
+            "s1",
+            "r1",
+        ))
+        .await
+        .unwrap();
+    assert!((parent.confidence - 0.80).abs() < 1e-6);
+
+    // Inferred child linked to the parent via an InferredFrom edge. Its
+    // structural confidence for a single positive parent at depth 1 is
+    // 0.80 * 0.8^1 * breadth(1)=0.6 = 0.384.
+    let child: mimir_knowledge::models::fact::Fact = sqlx::query_as(
+        "INSERT INTO facts \
+         (subject_id, relationship_type_id, object_id, confidence, fact_status_id, \
+          inferred, inference_depth, stale_confidence, pending_confirmation) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         RETURNING id, subject_id, relationship_type_id, object_id, object_literal, \
+         valid_from, valid_until, confidence, fact_status_id, inferred, \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at",
+    )
+    .bind(alice)
+    .bind(parent.relationship_type_id)
+    .bind(london)
+    .bind(0.384f32)
+    .bind(FactStatus::Inferred as i16)
+    .bind(true)
+    .bind(1i32)
+    .bind(false)
+    .bind(false)
+    .fetch_one(kg.pool())
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO fact_dependencies (parent_fact_id, child_fact_id, relation_type_id) \
+         VALUES (?, ?, ?)",
+    )
+    .bind(parent.id)
+    .bind(child.id)
+    .bind(1i16) // InferredFrom
+    .execute(kg.pool())
+    .await
+    .unwrap();
+
+    // A corroborating connector fact boosts the parent 0.80 -> 0.85, which
+    // must cascade and recalculate the child to 0.85 * 0.8 * 0.6 = 0.408.
+    kg.insert_fact(connector_new_fact(
+        alice,
+        "is_in",
+        Some(london),
+        None,
+        Some(dt(2021, 1, 1)),
+        None,
+        "s2",
+        "r2",
+    ))
+    .await
+    .unwrap();
+
+    let parent_after = kg.get_fact(parent.id).await.unwrap().unwrap();
+    assert!((parent_after.confidence - 0.85).abs() < 1e-6);
+
+    let child_after = kg.get_fact(child.id).await.unwrap().unwrap();
+    assert!(
+        (child_after.confidence - 0.408).abs() < 1e-6,
+        "expected child confidence 0.408, got {}",
+        child_after.confidence
+    );
+    assert!(!child_after.stale_confidence);
+
+    // The cascade writes a ConfidenceChange audit entry for the child.
+    assert_eq!(
+        audit_count(&kg, child.id, ChangeType::ConfidenceChange as i16).await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn explicit_system_overlapping_supersedes_not_corroborates() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+    let alice = create_person(&kg, "Alice").await;
+    let london = create_place(&kg, "London").await;
+
+    let f1 = kg
+        .insert_fact(connector_new_fact(
+            alice,
+            "is_in",
+            Some(london),
+            None,
+            Some(dt(2020, 1, 1)),
+            None,
+            "s1",
+            "r1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(source_count(&kg, f1.id).await, 1);
+
+    // An overlapping System assertion is explicit, so it supersedes rather
+    // than corroborating (mirrors the UserEdit path).
+    let f2 = kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            relationship_type: "is_in".to_string(),
+            object_id: Some(london),
+            object_literal: None,
+            valid_from: Some(dt(2021, 1, 1)),
+            valid_until: None,
+            source_type: SourceType::System,
+            connector_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    assert_ne!(f1.id, f2.id);
+    let f1_after = kg.get_fact(f1.id).await.unwrap().unwrap();
+    assert_eq!(f1_after.status().unwrap(), FactStatus::Superseded);
+    assert_eq!(f2.status().unwrap(), FactStatus::Active);
+    // No source added to the superseded fact; the new fact owns one source.
+    assert_eq!(source_count(&kg, f1.id).await, 1);
+    assert_eq!(source_count(&kg, f2.id).await, 1);
 }

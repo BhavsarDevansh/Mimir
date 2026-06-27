@@ -322,10 +322,15 @@ pub async fn insert_fact_in_tx(
     // below, so an explicit statement still supersedes rather than
     // corroborates. An identical re-statement (non-independent source) is a
     // no-op to avoid colliding with the sources UNIQUE index.
-    if !matches!(
+    // Explicit sources (direct user edits and system assertions) always
+    // supersede rather than corroborate. This predicate is shared with the
+    // explicit-supersession path below so the two branches stay aligned.
+    let is_explicit_source = matches!(
         new_fact.source_type,
         SourceType::UserEdit | SourceType::System
-    ) {
+    );
+
+    if !is_explicit_source {
         let candidate = overlaps.iter().find(|ef| {
             if !same_object_as(new_fact.object_id, new_fact.object_literal.as_deref(), ef) {
                 return false;
@@ -422,8 +427,15 @@ pub async fn insert_fact_in_tx(
             let can_boost = !existing_fact.inferred && explicit.is_none();
 
             if can_boost {
-                let new_confidence = (existing_fact.confidence + CORROBORATION_BOOST)
-                    .min(NON_EXPLICIT_CONFIDENCE_CAP);
+                // Keep the boost monotonic: a fact already at or above the cap
+                // keeps its current confidence rather than being clamped down,
+                // so corroboration never lowers confidence.
+                let new_confidence = if existing_fact.confidence >= NON_EXPLICIT_CONFIDENCE_CAP {
+                    existing_fact.confidence
+                } else {
+                    (existing_fact.confidence + CORROBORATION_BOOST)
+                        .min(NON_EXPLICIT_CONFIDENCE_CAP)
+                };
                 if (new_confidence - existing_fact.confidence).abs() > 1e-6 {
                     let old_json =
                         serde_json::json!({"confidence": existing_fact.confidence}).to_string();
@@ -472,7 +484,7 @@ pub async fn insert_fact_in_tx(
     let mut contradicts_pairs: Vec<i32> = Vec::new();
 
     if !overlaps.is_empty() {
-        if new_fact.source_type == SourceType::UserEdit {
+        if is_explicit_source {
             // Explicit replacement: supersede all overlapping facts.
             for existing_fact in &overlaps {
                 // Temporal closure for sole open-ended predecessor.

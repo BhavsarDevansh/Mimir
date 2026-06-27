@@ -59,7 +59,7 @@ by `0.05` per corroborating source, capped at `0.95`.
   confidence (it is already 1.0).
 - Corroborating an **inferred** fact adds the source but does not change
   confidence — inferred confidence is structural (derived from its parents).
-- A re-statement from the *same* source (same connector and reference) is a
+- A re-statement from the *same* source (same source type, connector, and reference) is a
   no-op, not corroboration.
 
 When a fact's confidence changes, the change cascades to every fact inferred

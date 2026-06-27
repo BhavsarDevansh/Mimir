@@ -193,21 +193,27 @@ fn cascade_inner_tx<'a>(
             }
             let new_confidence = recalculate_in_tx(tx, child_id).await?;
 
-            let old_confidence: Option<f32> =
-                sqlx::query_scalar("SELECT confidence FROM facts WHERE id = ?")
+            let old_state: Option<(f32, bool)> =
+                sqlx::query_as("SELECT confidence, stale_confidence FROM facts WHERE id = ?")
                     .bind(child_id)
                     .fetch_optional(&mut **tx)
                     .await?;
-            let old_confidence = old_confidence.unwrap_or(0.0);
+            let (old_confidence, was_stale) = old_state.unwrap_or((0.0, false));
 
-            if (new_confidence - old_confidence).abs() > 0.001 {
-                sqlx::query("UPDATE facts SET confidence = ?, updated_at = ? WHERE id = ?")
+            // A recalculated child is current again: clear its stale flag even
+            // when the numeric confidence is unchanged, so it stops being
+            // selected/exposed as stale after the cascade.
+            let confidence_changed = (new_confidence - old_confidence).abs() > 0.001;
+            if confidence_changed || was_stale {
+                sqlx::query("UPDATE facts SET confidence = ?, stale_confidence = FALSE, updated_at = ? WHERE id = ?")
                     .bind(new_confidence)
                     .bind(now)
                     .bind(child_id)
                     .execute(&mut **tx)
                     .await?;
+            }
 
+            if confidence_changed {
                 // Write confidence_change audit entry.
                 let old_json = serde_json::json!({"confidence": old_confidence}).to_string();
                 let new_json = serde_json::json!({"confidence": new_confidence}).to_string();

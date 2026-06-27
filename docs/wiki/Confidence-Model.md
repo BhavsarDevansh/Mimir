@@ -43,6 +43,28 @@ When a source fact is forgotten or corrected:
 - If you remove a fact that was *opposing* an inference, the inference's confidence rises.
 - **Explicit facts never lose confidence** — they were true when you said them.
 
+## Corroboration (#79)
+
+When Mimir learns the same claim from a second **independent** source, it does
+not create a duplicate fact. Instead the existing fact gains a new source row
+(provenance) and, if it is non-explicit and non-inferred, its confidence rises
+by `0.05` per corroborating source, capped at `0.95`.
+
+- "Same claim" means same subject + predicate + object with **overlapping**
+  time ranges. Two facts about different time periods (e.g. "lived in London
+  last year" vs "last month") are separate timeline facts, not corroboration.
+- An explicit statement (something you said directly) always **supersedes**
+  rather than corroborates, so your direct input wins.
+- Corroborating an **explicit** fact adds the source but does not change
+  confidence (it is already 1.0).
+- Corroborating an **inferred** fact adds the source but does not change
+  confidence — inferred confidence is structural (derived from its parents).
+- A re-statement from the *same* source (same connector and reference) is a
+  no-op, not corroboration.
+
+When a fact's confidence changes, the change cascades to every fact inferred
+from it, all the way down the inference graph, so derived facts stay accurate.
+
 ## Connector Reliability
 
 Each connector (Gmail, Calendar, etc.) has a reliability score. When Mimir extracts a fact from that connector, the fact inherits the connector's current score.

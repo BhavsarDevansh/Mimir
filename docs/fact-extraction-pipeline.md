@@ -29,17 +29,45 @@ User message
     → LLM extraction ("remember" tool)
     → Rust validation (schema, entity types, temporal bounds)
     → Entity resolution (exact → alias → FTS5 fuzzy → create)
-    → Dedup / corroboration check (stub for #79)
     → Confidence assignment (classification → SourceType → confidence::initial)
     → Correction handling (temporal or retrospective)
     → Sensitive gate (Disputed + pending_confirmation)
     → Fact insertion + source attachment + audit log
+        (corroboration detected here — see Corroboration below)
     → Inference engine trigger
 ```
+
+## Corroboration (#79)
+
+Corroboration is resolved **inside `insert_fact_in_tx`** for every insert path
+(extraction, batch insert, direct `KnowledgeGraph::insert_fact`), within the
+same transaction as supersession. When a new **non-explicit** fact covers the
+same claim as an existing fact — same `subject_id + relationship_type_id +
+object`, temporally overlapping `valid_from`/`valid_until` — and the existing
+fact is `Active` (or awaiting confirmation):
+
+1. **No new facts row** is created; the existing fact is returned.
+2. A new `sources` row is inserted against the existing fact (provenance).
+3. If the existing fact is **non-explicit and non-inferred**, its confidence is
+   boosted by `+0.05`, capped at `0.95`. Explicit facts stay at `1.0`; inferred
+   fact confidence is structural (recalculated from parents) and is not
+   boosted.
+4. `SourceAdded` and `ConfidenceChange` audit entries are written and
+   `stale_confidence` is cleared; the confidence change cascades to all inferred
+   children comprehensively within the transaction.
+
+The corroboration path runs **before** supersession, so an explicit statement
+still supersedes rather than corroborates. A re-statement from an identical
+source (`(source_type, connector_id, raw_reference)` already recorded) is a
+**no-op** — it is not an independent source and would collide with the
+`sources` UNIQUE index. Non-overlapping temporal ranges never corroborate;
+they form a timeline of separate facts.
 
 ## Files
 
 - `mimir-knowledge/src/extract.rs` — pipeline implementation
+- `mimir-knowledge/src/queries/fact.rs` — `insert_fact_in_tx`, corroboration + supersession paths
+- `mimir-knowledge/src/confidence.rs` — structural confidence model + transactional confidence cascade
 - `mimir-knowledge/src/sensitivity.rs` — deterministic sensitivity gate (category + content checks)
 - `mimir-knowledge/src/lib.rs` — `KnowledgeGraph` facade methods
 - `mimir-knowledge/tests/extraction_test.rs` — 11 integration tests

@@ -26,6 +26,16 @@ use crate::models::enums::RelationType;
 use crate::models::fact::{Fact, FactStatus, NewFact};
 use crate::models::source::{ExtractionMethod, Source, SourceType};
 
+// ---------------------------------------------------------------------------
+// Corroboration constants (#79)
+// ---------------------------------------------------------------------------
+
+/// Confidence gained per independent corroborating source.
+const CORROBORATION_BOOST: f32 = 0.05;
+
+/// Upper bound for non-explicit fact confidence (explicit facts use 1.0).
+const NON_EXPLICIT_CONFIDENCE_CAP: f32 = 0.95;
+
 #[allow(clippy::too_many_arguments)]
 /// Update multiple mutable fields on a fact in a single transaction.
 /// Writes an audit entry per changed field.
@@ -191,6 +201,32 @@ fn changed_by_for_source_type(source_type: SourceType) -> ChangedBy {
     }
 }
 
+/// Fetch a single fact by id within an in-flight transaction.
+async fn fact_by_id_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    fact_id: i32,
+) -> Result<Fact, KnowledgeError> {
+    sqlx::query_as::<_, Fact>(
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
+         valid_from, valid_until, confidence, fact_status_id, inferred, \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
+         FROM facts WHERE id = ?",
+    )
+    .bind(fact_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(KnowledgeError::from)
+}
+
+/// Whether `ef` has the same object as the given new-fact object fields.
+fn same_object_as(new_object_id: Option<i32>, new_object_literal: Option<&str>, ef: &Fact) -> bool {
+    match (new_object_id, new_object_literal) {
+        (Some(new_oid), _) => ef.object_id == Some(new_oid),
+        (None, Some(new_lit)) => ef.object_literal.as_deref() == Some(new_lit),
+        (None, None) => ef.object_id.is_none() && ef.object_literal.is_none(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Insert
 // ---------------------------------------------------------------------------
@@ -263,11 +299,8 @@ pub async fn insert_fact_in_tx(
     let overlaps: Vec<&Fact> = existing
         .iter()
         .filter(|ef| {
-            let same_object = match (new_fact.object_id, new_fact.object_literal.as_deref()) {
-                (Some(new_oid), _) => ef.object_id == Some(new_oid),
-                (None, Some(new_lit)) => ef.object_literal.as_deref() == Some(new_lit),
-                (None, None) => ef.object_id.is_none() && ef.object_literal.is_none(),
-            };
+            let same_object =
+                same_object_as(new_fact.object_id, new_fact.object_literal.as_deref(), ef);
             if !same_object && is_multi_valued {
                 return false;
             }
@@ -279,6 +312,157 @@ pub async fn insert_fact_in_tx(
             )
         })
         .collect();
+
+    // --- Corroboration detection (#79) ---
+    // A new non-explicit fact covering the same claim as an existing
+    // Active/pending fact (same object, temporally overlapping) corroborates
+    // it: a source row is added to the existing fact and its confidence is
+    // boosted (+0.05, capped at 0.95 for non-explicit, non-inferred facts).
+    // No new facts row is created. This runs *before* the supersession path
+    // below, so an explicit statement still supersedes rather than
+    // corroborates. An identical re-statement (non-independent source) is a
+    // no-op to avoid colliding with the sources UNIQUE index.
+    if new_fact.source_type != SourceType::UserEdit {
+        let candidate = overlaps.iter().find(|ef| {
+            if !same_object_as(new_fact.object_id, new_fact.object_literal.as_deref(), ef) {
+                return false;
+            }
+            ef.status() == Some(FactStatus::Active) || ef.pending_confirmation
+        });
+
+        if let Some(existing_fact) = candidate {
+            let connector_id_ref = new_fact.connector_id.as_deref();
+            let raw_ref = new_fact.raw_reference.as_deref();
+
+            // Independence check: a source with identical provenance already
+            // recorded against this fact is a re-statement, not corroboration.
+            let already: Option<(i64,)> = sqlx::query_as(
+                "SELECT 1 FROM sources \
+                 WHERE fact_id = ? AND source_type_id = ? \
+                 AND COALESCE(connector_id, '') = COALESCE(?, '') \
+                 AND COALESCE(raw_reference, '') = COALESCE(?, '') \
+                 LIMIT 1",
+            )
+            .bind(existing_fact.id)
+            .bind(new_fact.source_type as i16)
+            .bind(connector_id_ref)
+            .bind(raw_ref)
+            .fetch_optional(&mut **tx)
+            .await?;
+
+            if already.is_some() {
+                // Duplicate re-statement: return the existing fact unchanged.
+                return fact_by_id_in_tx(tx, existing_fact.id).await;
+            }
+
+            // Insert the corroborating source against the existing fact.
+            let extraction_method_id = new_fact
+                .extraction_method
+                .map(|e| e as i16)
+                .or_else(|| default_extraction_method(new_fact.source_type));
+            let connector_type_id = new_fact.connector_type.map(|ct| ct as i16);
+
+            let source_id: i64 = sqlx::query_scalar(
+                "INSERT INTO sources \
+                 (fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?) \
+                 RETURNING id",
+            )
+            .bind(existing_fact.id)
+            .bind(new_fact.source_type as i16)
+            .bind(&new_fact.connector_id)
+            .bind(connector_type_id)
+            .bind(&new_fact.raw_reference)
+            .bind(now)
+            .bind(extraction_method_id)
+            .fetch_one(&mut **tx)
+            .await?;
+            let source_id = source_id as i32;
+
+            // SourceAdded audit entry (mirrors queries::source::add_source_to_fact).
+            let source_added_value = serde_json::json!({
+                "source_type_id": new_fact.source_type as i16,
+                "connector_id": new_fact.connector_id,
+                "connector_type_id": connector_type_id,
+                "raw_reference": new_fact.raw_reference,
+                "extraction_method_id": extraction_method_id,
+            })
+            .to_string();
+            sqlx::query(
+                "INSERT INTO fact_audit_log \
+                 (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(existing_fact.id)
+            .bind(ChangeType::SourceAdded as i16)
+            .bind(None::<&str>)
+            .bind(&source_added_value)
+            .bind(now)
+            .bind(changed_by_for_source_type(new_fact.source_type) as i16)
+            .bind(None::<&str>)
+            .execute(&mut **tx)
+            .await?;
+
+            // Confidence boost applies only to non-explicit, non-inferred
+            // facts. Explicit (UserEdit/System) facts stay at 1.0; inferred
+            // fact confidence is structural (recalculated from parents).
+            let explicit: Option<(i64,)> = sqlx::query_as(
+                "SELECT 1 FROM sources \
+                 WHERE fact_id = ? AND source_type_id IN (?, ?) LIMIT 1",
+            )
+            .bind(existing_fact.id)
+            .bind(SourceType::UserEdit as i16)
+            .bind(SourceType::System as i16)
+            .fetch_optional(&mut **tx)
+            .await?;
+
+            let can_boost = !existing_fact.inferred && explicit.is_none();
+
+            if can_boost {
+                let new_confidence = (existing_fact.confidence + CORROBORATION_BOOST)
+                    .min(NON_EXPLICIT_CONFIDENCE_CAP);
+                if (new_confidence - existing_fact.confidence).abs() > 1e-6 {
+                    let old_json =
+                        serde_json::json!({"confidence": existing_fact.confidence}).to_string();
+                    let new_json = serde_json::json!({
+                        "confidence": new_confidence,
+                        "source_id": source_id,
+                    })
+                    .to_string();
+                    sqlx::query(
+                        "UPDATE facts SET confidence = ?, stale_confidence = FALSE, updated_at = ? WHERE id = ?",
+                    )
+                    .bind(new_confidence)
+                    .bind(now)
+                    .bind(existing_fact.id)
+                    .execute(&mut **tx)
+                    .await?;
+
+                    sqlx::query(
+                        "INSERT INTO fact_audit_log \
+                         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    )
+                    .bind(existing_fact.id)
+                    .bind(ChangeType::ConfidenceChange as i16)
+                    .bind(&old_json)
+                    .bind(&new_json)
+                    .bind(now)
+                    .bind(ChangedBy::System as i16)
+                    .bind(None::<&str>)
+                    .execute(&mut **tx)
+                    .await?;
+
+                    // Cascade the confidence change to all inferred children,
+                    // comprehensively, within this transaction.
+                    crate::confidence::cascade_confidence_change_in_tx(tx, existing_fact.id, now)
+                        .await?;
+                }
+            }
+
+            return fact_by_id_in_tx(tx, existing_fact.id).await;
+        }
+    }
 
     let mut fact_status = FactStatus::Active;
     let mut facts_to_supersede: Vec<i32> = Vec::new();

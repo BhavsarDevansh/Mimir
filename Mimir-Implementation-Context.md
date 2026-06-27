@@ -221,6 +221,7 @@ The daemon will listen on both a Unix domain socket and a TCP socket once UDS is
 - Entities, Facts (directed temporal edges), Sources (provenance), Preferences.
 - Temporal facts: `valid_from`, `valid_until`. History is preserved.
 - Confidence scores: 0.0-1.0. Facts color-coded by confidence.
+- **Corroboration (#79):** inserting a non-explicit fact that covers the same claim as an existing Active fact (same subject+predicate+object, temporally overlapping) adds a source to the existing fact (no new row) and boosts its confidence +0.05 per independent source, capped at 0.95 (explicit/inferred facts excluded). Re-statements from the same source are a no-op. Runs inside `insert_fact_in_tx`, before supersession.
 - Obsidian-compatible export/import (Markdown + YAML frontmatter + wiki-links).
 - Nightly optimization: deduplication, contradiction resolution, dormant cleanup.
 - **Events & reminders (#74, v0.57.0):** a lifecycle + recurrence overlay on facts. A future-dated fact is a one-time event; a recurring fact (e.g. a birthday) is a recurring event; a `requires_user_action` fact is a task. An `events.upcoming_scan` job (default 06:00 & 18:00) derives overlays, auto-completes past one-time events, and advances recurring events. Upcoming events surface in the "Upcoming" memory section. `entity_dates` is deprecated and removed (replaced by this overlay; recurrence logic moved to `models::recurrence`).

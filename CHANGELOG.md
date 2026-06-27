@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.60.0] — 2026-06-27
+
+### Added — corroboration detection in fact insertion (#79)
+
+- **Corroboration is now resolved inside `insert_fact_in_tx`** for every insert
+  path (extraction pipeline, batch insert, direct `KnowledgeGraph::insert_fact`),
+  within the same transaction as supersession. When a new **non-explicit** fact
+  covers the same claim as an existing `Active` (or pending-confirmation) fact —
+  same `subject_id + relationship_type_id + object`, temporally overlapping
+  `valid_from`/`valid_until` — Mimir adds a source row to the existing fact
+  instead of creating a duplicate, and boosts the existing fact's confidence by
+  `+0.05` per independent corroborating source, capped at `0.95`.
+- **Explicit and inferred facts are excluded from the boost.** Explicit
+  (`UserEdit`/`System`) facts stay at `1.0` — corroboration only adds the source
+  for provenance. Inferred fact confidence is structural (recalculated from
+  parents) and is never boosted by a corroborating source.
+- **Re-statements are a no-op.** A source with identical provenance
+  (`(source_type, connector_id, raw_reference)`) already recorded against the
+  fact is not an independent corroboration and is skipped, which also avoids the
+  `sources` UNIQUE-index collision.
+- **Non-overlapping temporal ranges never corroborate** — they form a timeline
+  of separate facts, matching the existing temporal-facts model.
+- **Comprehensive in-transaction confidence cascade.** `cascade_confidence_change`
+  is now transaction-aware (`cascade_confidence_change_in_tx`) and runs
+  unbounded (cycle-guarded by a `visited` set) so a corroborated confidence
+  change propagates to every inferred child for accuracy, with no artificial
+  depth cap. The legacy depth-budget parameter was removed (the only caller, the
+  nightly optimiser, already ran unbounded).
+- **Audit + stale flag.** Corroboration writes `SourceAdded` and
+  `ConfidenceChange` audit entries (the latter recording the triggering
+  `source_id`) and clears `stale_confidence` on the existing fact.
+- **Removed the pre-insertion `find_existing_fact` stub** in `extract.rs` and the
+  now-unused `ExtractionOutcome.corroborated` / `ProcessResult::Corroborated`
+  plumbing; corroboration is owned by the insert layer.
+
+### Notes
+
+- The `deterministic_dedup_merges_identical_fact_triples` test now sets up its
+  duplicate via a direct SQL insert, because live same-claim non-explicit facts
+  corroborate at insert time and can no longer coexist. The nightly dedup pass
+  remains a safety net for coexisting duplicates (legacy data, direct writes).
+
 ## [0.59.1] — 2026-06-25
 
 ### Fixed — third pass on PR #173 review feedback

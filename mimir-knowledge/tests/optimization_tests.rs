@@ -25,9 +25,41 @@ async fn deterministic_dedup_merges_identical_fact_triples() {
     let first = graph
         .create_fact(person, "lives_in", Some(london), SourceType::Connector)
         .await;
-    let second = graph
-        .create_fact(person, "lives_in", Some(london), SourceType::Import)
-        .await;
+
+    // Insert an identical triple directly, bypassing the insert pipeline.
+    // Since #79, `insert_fact` corroborates same-claim non-explicit facts at
+    // insert time, so live duplicates can no longer coexist. The nightly dedup
+    // pass remains a safety net for coexisting duplicates (legacy data, direct
+    // writes), which is what we emulate here.
+    let now = Utc::now();
+    let second_id: i32 = sqlx::query_scalar(
+        "INSERT INTO facts \
+         (subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until, \
+          confidence, fact_status_id, inferred, inference_depth, pending_confirmation, \
+          memory_priority_id, created_at, updated_at) \
+         VALUES (?, ?, ?, NULL, NULL, NULL, 0.80, ?, 0, 0, 0, 3, ?, ?) \
+         RETURNING id",
+    )
+    .bind(person)
+    .bind(first.relationship_type_id)
+    .bind(london)
+    .bind(FactStatus::Active as i16)
+    .bind(now)
+    .bind(now)
+    .fetch_one(graph.kg.pool())
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO sources \
+         (fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
+         VALUES (?, ?, '', NULL, '', ?, NULL)",
+    )
+    .bind(second_id)
+    .bind(SourceType::Import as i16)
+    .bind(now)
+    .execute(graph.kg.pool())
+    .await
+    .unwrap();
 
     let runner = OptimizationRunner::new(
         &graph.kg,
@@ -60,7 +92,7 @@ async fn deterministic_dedup_merges_identical_fact_triples() {
     assert_eq!(source_count, 2);
 
     let old_status: i16 = sqlx::query_scalar("SELECT fact_status_id FROM facts WHERE id = ?")
-        .bind(second.id)
+        .bind(second_id)
         .fetch_one(graph.kg.pool())
         .await
         .unwrap();

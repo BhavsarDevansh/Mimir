@@ -60,12 +60,6 @@ impl Tool for RememberTool {
                         outcome.pending_confirmation.len()
                     ));
                 }
-                if !outcome.corroborated.is_empty() {
-                    parts.push(format!(
-                        "{} fact(s) matched existing records.",
-                        outcome.corroborated.len()
-                    ));
-                }
                 if !outcome.errors.is_empty() {
                     let error_msgs: Vec<String> =
                         outcome.errors.iter().map(|e| e.to_string()).collect();

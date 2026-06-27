@@ -560,7 +560,7 @@ impl<'a> OptimizationRunner<'a> {
                 .await?;
 
         for fact_id in stale_facts {
-            crate::confidence::cascade_confidence_change(self.kg.pool(), fact_id, None).await?;
+            crate::confidence::cascade_confidence_change(self.kg.pool(), fact_id).await?;
         }
         Ok(PassSummary::default())
     }

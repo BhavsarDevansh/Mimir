@@ -11,6 +11,7 @@ use crate::KnowledgeError;
 use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::enums::ConnectorType;
 use crate::models::source::SourceType;
+use chrono::{DateTime, Utc};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -95,6 +96,17 @@ pub fn inference_confidence(parents: &[(f32, bool)], static_depth: i32, num_pare
 ///
 /// Returns the new confidence value.
 pub async fn recalculate(pool: &SqlitePool, fact_id: i32) -> Result<f32, KnowledgeError> {
+    let mut tx = pool.begin().await?;
+    let conf = recalculate_in_tx(&mut tx, fact_id).await?;
+    tx.commit().await?;
+    Ok(conf)
+}
+
+/// Transaction-aware variant of [`recalculate`].
+pub async fn recalculate_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    fact_id: i32,
+) -> Result<f32, KnowledgeError> {
     let parents: Vec<(f32, bool)> = sqlx::query_as(
         "SELECT f.confidence, fd.is_positive \
          FROM facts f \
@@ -103,7 +115,7 @@ pub async fn recalculate(pool: &SqlitePool, fact_id: i32) -> Result<f32, Knowled
     )
     .bind(fact_id)
     .bind(crate::models::enums::RelationType::InferredFrom as i16)
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await?;
 
     let num_parents = parents.len();
@@ -111,7 +123,7 @@ pub async fn recalculate(pool: &SqlitePool, fact_id: i32) -> Result<f32, Knowled
     // Fetch the child's static inference_depth from the facts table.
     let depth: Option<i32> = sqlx::query_scalar("SELECT inference_depth FROM facts WHERE id = ?")
         .bind(fact_id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut **tx)
         .await?;
 
     let depth = depth.unwrap_or(0);
@@ -120,35 +132,46 @@ pub async fn recalculate(pool: &SqlitePool, fact_id: i32) -> Result<f32, Knowled
 }
 
 // ---------------------------------------------------------------------------
-// Eager bounded cascade
+// Confidence cascade
 // ---------------------------------------------------------------------------
 
-/// Recalculate confidence for all inferred children of `changed_fact_id`
-/// and cascade the change down the graph.
+/// Recalculate confidence for all inferred children of `changed_fact_id` and
+/// cascade the change down the graph.
 ///
-/// `depth_budget` limits recursion depth to prevent runaway cascades.
-/// TODO(#51-followup): replace with async background worker when system
-/// work queue is implemented.
+/// The cascade is **comprehensive**: it follows every `InferredFrom` edge to
+/// the leaves of the inference graph. Termination is guaranteed by a `visited`
+/// set (the graph is finite and acyclic in practice); there is no artificial
+/// depth cap, which would otherwise let deeper inferred facts drift stale.
 pub async fn cascade_confidence_change(
     pool: &SqlitePool,
     changed_fact_id: i32,
-    depth_budget: Option<u8>,
 ) -> Result<(), KnowledgeError> {
-    let mut visited = HashSet::new();
-    cascade_inner(pool, changed_fact_id, depth_budget, &mut visited).await
+    let mut tx = pool.begin().await?;
+    cascade_confidence_change_in_tx(&mut tx, changed_fact_id, Utc::now()).await?;
+    tx.commit().await?;
+    Ok(())
 }
 
-fn cascade_inner<'a>(
-    pool: &'a SqlitePool,
+/// Transaction-aware, comprehensive confidence cascade.
+///
+/// All child re-reads, confidence updates, and audit entries are written into
+/// `tx` so the caller can commit them atomically with the triggering change.
+pub async fn cascade_confidence_change_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     changed_fact_id: i32,
-    depth_budget: Option<u8>,
+    now: DateTime<Utc>,
+) -> Result<(), KnowledgeError> {
+    let mut visited = HashSet::new();
+    cascade_inner_tx(tx, changed_fact_id, now, &mut visited).await
+}
+
+fn cascade_inner_tx<'a>(
+    tx: &'a mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    changed_fact_id: i32,
+    now: DateTime<Utc>,
     visited: &'a mut HashSet<i32>,
 ) -> Pin<Box<dyn std::future::Future<Output = Result<(), KnowledgeError>> + Send + 'a>> {
     Box::pin(async move {
-        if depth_budget == Some(0) {
-            return Ok(());
-        }
-
         if !visited.insert(changed_fact_id) {
             return Ok(());
         }
@@ -161,31 +184,28 @@ fn cascade_inner<'a>(
         )
         .bind(changed_fact_id)
         .bind(crate::models::enums::RelationType::InferredFrom as i16)
-        .fetch_all(pool)
+        .fetch_all(&mut **tx)
         .await?;
 
         for (child_id, _child_depth) in children {
             if visited.contains(&child_id) {
                 continue;
             }
-            let new_confidence = recalculate(pool, child_id).await?;
+            let new_confidence = recalculate_in_tx(tx, child_id).await?;
 
             let old_confidence: Option<f32> =
                 sqlx::query_scalar("SELECT confidence FROM facts WHERE id = ?")
                     .bind(child_id)
-                    .fetch_optional(pool)
+                    .fetch_optional(&mut **tx)
                     .await?;
-
             let old_confidence = old_confidence.unwrap_or(0.0);
 
             if (new_confidence - old_confidence).abs() > 0.001 {
-                let mut tx = pool.begin().await?;
-
                 sqlx::query("UPDATE facts SET confidence = ?, updated_at = ? WHERE id = ?")
                     .bind(new_confidence)
-                    .bind(chrono::Utc::now())
+                    .bind(now)
                     .bind(child_id)
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await?;
 
                 // Write confidence_change audit entry.
@@ -200,21 +220,13 @@ fn cascade_inner<'a>(
                 .bind(ChangeType::ConfidenceChange as i16)
                 .bind(old_json)
                 .bind(new_json)
-                .bind(chrono::Utc::now())
+                .bind(now)
                 .bind(ChangedBy::System as i16)
                 .bind(None::<&str>)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
 
-                tx.commit().await?;
-
-                cascade_inner(
-                    pool,
-                    child_id,
-                    depth_budget.map(|d| d.saturating_sub(1)),
-                    visited,
-                )
-                .await?;
+                cascade_inner_tx(tx, child_id, now, visited).await?;
             }
         }
 

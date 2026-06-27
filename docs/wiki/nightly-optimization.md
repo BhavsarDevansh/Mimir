@@ -8,7 +8,7 @@ Every night Mimir performs a multi-step health check on your knowledge graph:
 2. **Deduplicate** – merges identical facts and boosts their confidence.
 3. **Semantic deduplication** – asks the LLM whether similar facts should be merged; high-confidence merges happen automatically, uncertain ones are queued for your review.
 4. **Resolve contradictions** – keeps the most reliable version when facts disagree.
-5. **Recalculate confidence** – updates confidence scores for inferred facts when their parents change.
+5. **Recalculate confidence** – updates any fact flagged as needing recalculation, recomputing it from its parents and clearing the flag, then refreshing the facts inferred from it.
 6. **Clean up dormant facts** – safely forgets old, disputed facts that have been superseded.
 7. **Compact database** – rebuilds search indexes and frees unused space.
 

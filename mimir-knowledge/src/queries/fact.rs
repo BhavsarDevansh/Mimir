@@ -436,14 +436,13 @@ pub async fn insert_fact_in_tx(
                     (existing_fact.confidence + CORROBORATION_BOOST)
                         .min(NON_EXPLICIT_CONFIDENCE_CAP)
                 };
-                if (new_confidence - existing_fact.confidence).abs() > 1e-6 {
-                    let old_json =
-                        serde_json::json!({"confidence": existing_fact.confidence}).to_string();
-                    let new_json = serde_json::json!({
-                        "confidence": new_confidence,
-                        "source_id": source_id,
-                    })
-                    .to_string();
+                let confidence_changed = (new_confidence - existing_fact.confidence).abs() > 1e-6;
+
+                // A corroborated fact is current again: clear its stale flag even
+                // when the confidence is unchanged (already at the cap), so new
+                // provenance does not leave the row exposed as stale. The audit
+                // entry and descendant cascade stay gated on an actual change.
+                if confidence_changed || existing_fact.stale_confidence {
                     sqlx::query(
                         "UPDATE facts SET confidence = ?, stale_confidence = FALSE, updated_at = ? WHERE id = ?",
                     )
@@ -452,20 +451,23 @@ pub async fn insert_fact_in_tx(
                     .bind(existing_fact.id)
                     .execute(&mut **tx)
                     .await?;
+                }
 
-                    sqlx::query(
-                        "INSERT INTO fact_audit_log \
-                         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?)",
+                if confidence_changed {
+                    let old_json =
+                        serde_json::json!({"confidence": existing_fact.confidence}).to_string();
+                    let new_json = serde_json::json!({
+                        "confidence": new_confidence,
+                        "source_id": source_id,
+                    })
+                    .to_string();
+                    crate::confidence::write_confidence_change_audit(
+                        tx,
+                        existing_fact.id,
+                        &old_json,
+                        &new_json,
+                        now,
                     )
-                    .bind(existing_fact.id)
-                    .bind(ChangeType::ConfidenceChange as i16)
-                    .bind(&old_json)
-                    .bind(&new_json)
-                    .bind(now)
-                    .bind(ChangedBy::System as i16)
-                    .bind(None::<&str>)
-                    .execute(&mut **tx)
                     .await?;
 
                     // Cascade the confidence change to all inferred children,

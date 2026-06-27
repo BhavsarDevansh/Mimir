@@ -64,6 +64,22 @@ by `0.05` per corroborating source, capped at `0.95`.
 
 When a fact's confidence changes, the change cascades to every fact inferred
 from it, all the way down the inference graph, so derived facts stay accurate.
+The cascade is comprehensive (no depth limit) and correct even when a fact is
+reachable through multiple inference paths — it is recalculated once per
+updated parent and ends up with the right value.
+
+- Corroboration never **lowers** confidence: once a fact reaches the `0.95`
+  cap, further corroboration keeps the current value.
+- Corroboration also clears a fact's "needs recalculation" flag even at the cap,
+  so a corroborated fact is no longer treated as stale.
+
+## Keeping Confidence Fresh
+
+Some facts are flagged as needing recalculation (`stale_confidence`). The
+nightly optimisation pass recalculates each stale fact from its parents and
+clears the flag, then cascades the result to inferred descendants — all in one
+transaction. This means a stale fact itself gets updated, not just its
+children, so nothing stays "needs recalculation" forever.
 
 ## Connector Reliability
 

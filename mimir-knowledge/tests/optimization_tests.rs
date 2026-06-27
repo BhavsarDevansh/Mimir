@@ -362,3 +362,126 @@ async fn pending_confirmation_cleanup_skips_facts_within_retention_window() {
     assert_eq!(summary.facts_forgotten, 0);
     assert!(kg.get_fact(fresh_id).await.unwrap().is_some());
 }
+
+// ---------------------------------------------------------------------------
+// PR #174 review follow-up: confidence_recalc must update the stale root.
+// ---------------------------------------------------------------------------
+
+async fn audit_count_for(kg: &KnowledgeGraph, fact_id: i32, change_type_id: i16) -> i64 {
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM fact_audit_log WHERE fact_id = ? AND change_type_id = ?",
+    )
+    .bind(fact_id)
+    .bind(change_type_id)
+    .fetch_one(kg.pool())
+    .await
+    .unwrap();
+    count
+}
+
+#[tokio::test]
+async fn confidence_recalc_recalculates_stale_inferred_root() {
+    use mimir_knowledge::models::audit_log::ChangeType;
+
+    let graph = TestGraph::new().await;
+    let person = graph.create_person("Devansh").await;
+    let london = graph.create_place("London").await;
+
+    // Parent connector fact at the connector default 0.80.
+    let parent = graph
+        .create_fact(person, "lives_in", Some(london), SourceType::Connector)
+        .await;
+    assert!((parent.confidence - 0.80).abs() < 1e-6);
+
+    // Inferred child with a deliberately stale/wrong confidence (0.5) flagged
+    // stale, as the nightly pass would find it. Correct value for a single
+    // positive parent at depth 1 is 0.80 * 0.8 * 0.6 = 0.384.
+    let child: mimir_knowledge::models::fact::Fact = sqlx::query_as(
+        "INSERT INTO facts \
+         (subject_id, relationship_type_id, object_id, confidence, fact_status_id, \
+          inferred, inference_depth, stale_confidence, pending_confirmation) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         RETURNING id, subject_id, relationship_type_id, object_id, object_literal, \
+         valid_from, valid_until, confidence, fact_status_id, inferred, \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at",
+    )
+    .bind(person)
+    .bind(parent.relationship_type_id)
+    .bind(london)
+    .bind(0.5f32)
+    .bind(FactStatus::Inferred as i16)
+    .bind(true)
+    .bind(1i32)
+    .bind(true)
+    .bind(false)
+    .fetch_one(graph.kg.pool())
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO fact_dependencies (parent_fact_id, child_fact_id, relation_type_id) \
+         VALUES (?, ?, ?)",
+    )
+    .bind(parent.id)
+    .bind(child.id)
+    .bind(1i16) // InferredFrom
+    .execute(graph.kg.pool())
+    .await
+    .unwrap();
+
+    let runner = OptimizationRunner::new(
+        &graph.kg,
+        OptimizationConfig::for_test(graph._dir.path().join("backups")),
+        None,
+    );
+    runner.run_pass(PassName::ConfidenceRecalc).await.unwrap();
+
+    let after = graph.kg.get_fact(child.id).await.unwrap().unwrap();
+    assert!(
+        (after.confidence - 0.384).abs() < 1e-6,
+        "expected 0.384, got {}",
+        after.confidence
+    );
+    assert!(!after.stale_confidence);
+    assert_eq!(
+        audit_count_for(&graph.kg, child.id, ChangeType::ConfidenceChange as i16).await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn confidence_recalc_clears_stale_non_inferred_root_without_audit() {
+    use mimir_knowledge::models::audit_log::ChangeType;
+
+    let graph = TestGraph::new().await;
+    let person = graph.create_person("Devansh").await;
+    let london = graph.create_place("London").await;
+
+    let fact = graph
+        .create_fact(person, "lives_in", Some(london), SourceType::Connector)
+        .await;
+    let original_confidence = fact.confidence;
+
+    // Mark a non-inferred fact stale. Its confidence is structural (not derived
+    // from parents), so the recalc pass must only clear the flag.
+    sqlx::query("UPDATE facts SET stale_confidence = TRUE WHERE id = ?")
+        .bind(fact.id)
+        .execute(graph.kg.pool())
+        .await
+        .unwrap();
+
+    let runner = OptimizationRunner::new(
+        &graph.kg,
+        OptimizationConfig::for_test(graph._dir.path().join("backups")),
+        None,
+    );
+    runner.run_pass(PassName::ConfidenceRecalc).await.unwrap();
+
+    let after = graph.kg.get_fact(fact.id).await.unwrap().unwrap();
+    assert!(!after.stale_confidence);
+    assert!((after.confidence - original_confidence).abs() < 1e-6);
+    assert_eq!(
+        audit_count_for(&graph.kg, fact.id, ChangeType::ConfidenceChange as i16).await,
+        0
+    );
+}

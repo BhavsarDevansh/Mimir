@@ -10,7 +10,7 @@ The nightly optimization pipeline maintains graph health by running a fixed sequ
 2. **Semantic Deduplication** – sends near-match candidates to the LLM with a strict JSON schema. Auto-merges pairs with confidence >= 0.9; queues uncertain pairs in `dedup_queue`.
 3. **Contradiction Resolution** – evaluates explicit vs inferred facts using `ContradictionRule`.
 4. **Inference Chain Re-evaluation** – runs the rule engine (`TransitivityRule`, `ContradictionRule`) and inserts newly inferred facts. Includes `ThresholdRule` nightly re-count.
-5. **Confidence Recalculation** – recalculates stale inferred facts and cascades changes.
+5. **Confidence Recalculation** – for each stale fact (`stale_confidence = TRUE`), runs a root-aware recalculation (`confidence::recalculate_stale_fact`): it recalculates the stale row itself from its parents (inferred) or just clears the flag (non-inferred), writes a `ConfidenceChange` audit entry only when confidence actually changes, and cascades the result to inferred descendants within the same transaction. This prevents the pass from leaving the selected stale rows unrecalculated while only updating their children.
 6. **Dormant Cleanup** – forgets old disputed non-user facts that have a higher-confidence counterpart.
 7. **Pattern Consolidation** – currently a stub; will group repeated fact patterns in a future release.
 8. **Pending Confirmation Cleanup** – hard-deletes pending-confirmation facts older than 7 days.

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.60.2] — 2026-06-27
+
+### Fixed — confidence cascade & nightly recalculation correctness (#79, PR #174)
+
+- **Corroboration at the cap clears `stale_confidence`.** A corroborated fact already at the non-explicit cap (`0.95`) had its confidence unchanged, so the previous delta check skipped the whole update and left the row flagged stale despite new provenance. The update that clears `stale_confidence` now runs whenever corroboration applies, while the `ConfidenceChange` audit entry and the descendant cascade remain gated on an actual confidence delta.
+- **Cascade uses a recursion-stack guard, not a global visited set.** `cascade_inner_tx` removed a fact from the visited set when its subtree finished, so a descendant reachable through multiple parents (a diamond graph) is recalculated once per updated parent and ends up with the correct final confidence instead of being skipped after the first parent updates.
+- **Nightly `confidence_recalc` updates the stale root fact.** The pass previously only cascaded from each stale fact to its children and never recalculated/cleared the selected row itself, so the same facts could stay stale indefinitely. It now uses a root-aware transactional path (`confidence::recalculate_stale_fact`) that recalculates the stale row (inferred) or just clears its flag (non-inferred), writes a `ConfidenceChange` audit entry only when confidence changes, and then cascades to inferred descendants in the same transaction.
+
 ## [0.60.1] — 2026-06-27
 
 ### Fixed — corroboration guard consistency (#79)

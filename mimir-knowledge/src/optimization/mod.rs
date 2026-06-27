@@ -559,8 +559,11 @@ impl<'a> OptimizationRunner<'a> {
                 .fetch_all(self.kg.pool())
                 .await?;
 
+        // Root-aware recalculation: each stale fact is recalculated/cleared
+        // itself (not just its descendants) inside one transaction, so the
+        // nightly pass can no longer leave the selected rows stale forever.
         for fact_id in stale_facts {
-            crate::confidence::cascade_confidence_change(self.kg.pool(), fact_id).await?;
+            crate::confidence::recalculate_stale_fact(self.kg.pool(), fact_id).await?;
         }
         Ok(PassSummary::default())
     }

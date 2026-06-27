@@ -322,7 +322,10 @@ pub async fn insert_fact_in_tx(
     // below, so an explicit statement still supersedes rather than
     // corroborates. An identical re-statement (non-independent source) is a
     // no-op to avoid colliding with the sources UNIQUE index.
-    if new_fact.source_type != SourceType::UserEdit {
+    if !matches!(
+        new_fact.source_type,
+        SourceType::UserEdit | SourceType::System
+    ) {
         let candidate = overlaps.iter().find(|ef| {
             if !same_object_as(new_fact.object_id, new_fact.object_literal.as_deref(), ef) {
                 return false;

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.60.1] — 2026-06-27
+
+### Fixed — corroboration guard consistency (#79)
+
+- The corroboration guard in `insert_fact_in_tx` now treats `System`-sourced new facts as explicit, matching the boost-eligibility check and the documented contract. A `System` fact is no longer able to corroborate (and boost) an overlapping non-explicit fact; explicit facts (`UserEdit`/`System`) only add their source and supersede, never corroborate.
+
 ## [0.60.0] — 2026-06-27
 
 ### Added — corroboration detection in fact insertion (#79)

@@ -57,7 +57,16 @@ spawns `spawn_os_signal_shutdown`, a dedicated task that races `ctrl_c()` and
 `SIGTERM` (Unix) and, on either, sends `true` on the shared `shutdown_tx` watch
 channel — the same channel the `/stop` endpoint writes to. Both axum's
 `with_graceful_shutdown` future and the phase-1 serving loop observe that channel
-through `watch_shutdown` (a thin wrapper over `watch::Receiver::changed()`).
+through `watch_shutdown`, which first inspects the current watch value via
+`borrow_and_update()` and only then awaits `changed()`. This guards against the
+subscription race: because `spawn_os_signal_shutdown` is spawned **before**
+`graceful_rx`/`trigger_rx` are created with `subscribe()`, a SIGTERM/Ctrl-C
+arriving in that gap sends `true` before any receiver exists. A freshly
+subscribed receiver's `changed()` only wakes on *future* updates, so without
+the upfront value check the already-fired trigger would be missed and the
+server would wait indefinitely. Checking the current value first means an
+already-fired trigger returns immediately, while later triggers are still
+caught by `changed()`.
 
 This avoids the previous race where two independent `shutdown_signal` futures
 each built their own `ctrl_c()`/`SIGTERM` listeners: the phase-1 waiter could

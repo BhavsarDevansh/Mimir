@@ -172,9 +172,15 @@ fn spawn_os_signal_shutdown(shutdown_tx: tokio::sync::watch::Sender<bool>) {
 /// so they react to the same notification — whether it originated from
 /// `/stop` writing to the watch channel or from [`spawn_os_signal_shutdown`].
 async fn watch_shutdown(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
-    // `changed()` resolves immediately if the value already advanced past the
-    // receiver's last seen value (e.g. `/stop` was called before this was
-    // first polled), so no trigger is ever missed.
+    // A freshly `subscribe()`d receiver's `changed()` only wakes on *future*
+    // updates — a trigger fired before subscription (e.g. SIGTERM arriving in
+    // the gap between `spawn_os_signal_shutdown` and `shutdown_tx.subscribe()`)
+    // would otherwise be missed and leave the server waiting indefinitely.
+    // Check the current value first so an already-fired trigger returns
+    // immediately, then await further changes for triggers that fire later.
+    if *shutdown_rx.borrow_and_update() {
+        return;
+    }
     let _ = shutdown_rx.changed().await;
 }
 
@@ -1311,6 +1317,34 @@ mod tests {
         assert!(
             result.unwrap().is_ok(),
             "server task panicked or returned error"
+        );
+    }
+
+    /// Regression: a shutdown trigger fired *before* a receiver subscribes
+    /// (e.g. SIGTERM arriving in the gap between `spawn_os_signal_shutdown`
+    /// and `shutdown_tx.subscribe()`) must not be missed. `changed()` only
+    /// wakes on future updates, so `watch_shutdown` must check the current
+    /// watch value first.
+    #[tokio::test]
+    async fn test_watch_shutdown_handles_already_fired_trigger() {
+        use std::time::Duration;
+
+        let (shutdown_tx, _rx) = tokio::sync::watch::channel(false);
+
+        // Fire the trigger BEFORE subscribing — the race window.
+        shutdown_tx.send(true).unwrap();
+
+        // Subscribe after the send, as `serve_with_bounded_drain` does.
+        let rx = shutdown_tx.subscribe();
+
+        // `watch_shutdown` must return promptly despite the trigger having
+        // already fired. If it only awaited `changed()`, it would hang until
+        // the sender is dropped (which never happens during serving).
+        let result =
+            tokio::time::timeout(Duration::from_millis(500), super::watch_shutdown(rx)).await;
+        assert!(
+            result.is_ok(),
+            "watch_shutdown hung on an already-fired trigger"
         );
     }
 

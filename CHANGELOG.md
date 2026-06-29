@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.60.7] — 2026-06-29
+
+### Fix — Handle already-fired shutdown trigger in `watch_shutdown`
+
+Addressed PR #176 review feedback (CodeRabbit): `watch_shutdown` could miss a
+SIGTERM/Ctrl-C fired in the gap between `spawn_os_signal_shutdown` and
+`shutdown_tx.subscribe()`. `watch::Receiver::changed()` only wakes on *future*
+updates, so a freshly subscribed receiver whose trigger already fired before
+subscription would wait indefinitely (until sender drop, which never happens
+during serving).
+
+**Fix:** Check the current watch value via `borrow_and_update()` before
+awaiting `changed()`. An already-fired trigger returns immediately; later
+triggers are still caught by `changed()`.
+
+- `mimir-server/src/lib.rs` — `watch_shutdown` now checks the current value
+  first; added regression test
+  `test_watch_shutdown_handles_already_fired_trigger`.
+- `docs/shutdown.md` — documented the subscription-race guard.
+
 ## [0.60.6] — 2026-06-29
 
 ### Refactor — Single OS-signal listener for graceful shutdown

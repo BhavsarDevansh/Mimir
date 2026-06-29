@@ -10,28 +10,31 @@
 
 ### Lookup Tables (Stable Integer IDs)
 
-Lookup tables are seeded across migrations `001`, `012`, and `013` with stable integer IDs that map to Rust enums via `#[repr(i16)]` discriminants:
+Lookup tables are seeded across migrations `001`, `012`, `013`, and `039` with stable integer IDs that map to Rust enums via `#[repr(i16)]` discriminants:
 
-- Migration `001` seeds `entity_types` (7 variants), `entity_date_types`, `recurrence_types`, `location_types`, `fact_statuses`, `relation_types`, `source_types`, `preference_categories`, and `preference_source_types`.
+- Migration `001` seeds `entity_types` (7 variants), `recurrence_types`, `location_types`, `fact_statuses`, `relation_types`, `source_types`, `preference_categories`, and `preference_source_types`. (`entity_date_types` was also seeded here but is dropped in migration `040` — see Events & Reminders.)
 - Migration `012` adds the `DateTime = 8` variant to `entity_types`.
-- Migration `013` seeds `predicates` and `predicate_constraints`.
+- Migration `013` seeds `predicates` and `predicate_constraints` (renamed to `relationship_types` / `relationship_constraints` by migration `031`).
+- Migration `039` seeds the events overlay lookups: `event_types`, `event_statuses`, and `auto_complete_policies`.
 
 | Table | Rows | Rust Enum | Module |
 |-------|------|-----------|--------|
 | `entity_types` | 8 | `EntityType` | `models::entity` |
-| `entity_date_types` | 6 | `EntityDateType` | `models::enums` |
 | `recurrence_types` | 5 | `RecurrenceType` | `models::enums` |
 | `location_types` | 5 | `LocationType` | `models::enums` |
 | `fact_statuses` | 6 | `FactStatus` | `models::fact` |
-| `relation_types` | 3 | `RelationType` | `models::enums` |
+| `relation_types` | 4 | `RelationType` | `models::enums` |
 | `source_types` | 6 | `SourceType` | `models::source` |
 | `preference_categories` | 7 | `PreferenceCategory` | `models::preference` |
 | `preference_source_types` | 3 | `PreferenceSourceType` | `models::preference` |
-| `predicates` | 11 | `Predicate` | `models::enums` |
 | `extraction_methods` | 5 | `ExtractionMethod` | `models::source` |
-| `change_types` | 7 | `ChangeType` | `models::audit_log` |
+| `change_types` | 9 | `ChangeType` | `models::audit_log` |
 | `changed_by_types` | 4 | `ChangedBy` | `models::audit_log` |
 | `connector_types` | 4 | `ConnectorType` | `models::enums` |
+| `event_types` | 6 | `EventType` | `models::enums` |
+| `event_statuses` | 5 | `EventStatus` | `models::enums` |
+| `auto_complete_policies` | 3 | `AutoCompletePolicy` | `models::enums` |
+| `memory_priorities` | 4 | `MemoryPriority` | `models::memory` |
 
 ### Core Tables
 
@@ -39,7 +42,6 @@ Lookup tables are seeded across migrations `001`, `012`, and `013` with stable i
 |-------|-------------|
 | `entities` | Graph nodes: people, places, events, objects, dates, etc. |
 | `entity_aliases` | Alternative names for entities (dedup / search) |
-| `entity_dates` | Temporal annotations (birth, anniversary, custom) with recurrence |
 | `entity_locations` | Geographic / address data with validity windows |
 | `facts` | Directed temporal edges between entities |
 | `events` | Lifecycle + recurrence overlay on facts (trigger date, recurrence, status, auto-complete policy); see Events & Reminders |
@@ -52,6 +54,7 @@ Lookup tables are seeded across migrations `001`, `012`, and `013` with stable i
 | `relationship_types` | Canonical relationship predicates (thin verbs); see Relationship Type DAG |
 | `relationship_type_aliases` | Globally-unique English synonyms → canonical relationship type id |
 | `relationship_type_hierarchy` | Parent/child edges between relationship types (vestigial — grouping lives in `categories`; see Category Aliases) |
+| `relationship_constraints` | Valid subject/object entity-type combinations per relationship type (renamed from `predicate_constraints` by migration `031`) |
 | `categories` | Dewey-Decimal-style fact taxonomy with `memory_weight` |
 | `fact_categories` | Many-to-many junction: facts ↔ categories (multi-tag precision + ranking) |
 | `category_aliases` | Natural-language domain words → category id (see Category Aliases) |
@@ -67,29 +70,16 @@ Lookup tables are seeded across migrations `001`, `012`, and `013` with stable i
 | `trash` | Soft-deleted rows with full payload JSON |
 | `pending_event_meta` | Fact-keyed cache of the extracted event shape for pending sensitive facts; consumed on confirm, cascade-deleted on reject (migration 041) |
 | `entity_fts` | FTS5 virtual table for entity name / alias search |
+| `optimization_runs` | One row per nightly-optimization run (started/finished, status, trigger) — migration `030` |
+| `optimization_pass_runs` | One row per pass within a run (pass name, status, counts, error) — migration `030` |
 
-### Predicate Taxonomy (New in 0.23.0)
+### Predicate Taxonomy
 
-Migration `013` introduces a controlled vocabulary for predicates:
+Migration `013` introduced a controlled vocabulary for predicates as `predicates(id, name, description)` and `predicate_constraints(predicate_id, allowed_subject_type_id, allowed_object_type_id)`. Migration `031` renamed these to **`relationship_types`** and **`relationship_constraints`** (and dropped the old `predicates` / `Predicate`-enum mapping); the canonical predicate names now live in `relationship_types`, and `relationship_constraints` holds the valid subject/object type combinations per predicate.
 
-- `predicates(id, name, description)` — canonical predicate names with stable IDs.
-- `predicate_constraints(predicate_id, allowed_subject_type_id, allowed_object_type_id)` — valid subject/object type combinations per predicate.
+The original 11 seeded predicates (`is_in`, `visited`, `owns`, `works_as`, `has_partner`, `has_parent`, `born_on`, `died_on`, `located_in`, `created_on`, `has_preference`) were carried over, and migration `025` added `rejected_action` (id 12) for the threshold inference rule. The full set is data-driven and extensible — see [Relationship Type DAG](#relationship-type-dag) and [Category Aliases & Subtree Retrieval](#category-aliases--subtree-retrieval) for the alias and hierarchy layer.
 
-The following 11 predicates are the complete seeded set:
-
-1. `is_in`
-2. `visited`
-3. `owns`
-4. `works_as`
-5. `has_partner`
-6. `has_parent`
-7. `born_on`
-8. `died_on`
-9. `located_in`
-10. `created_on`
-11. `has_preference`
-
-Validation is enforced at fact-insert time via `validate_predicate(subject_type, predicate, object_type)`.
+Validation is enforced at fact-insert time via `validate_predicate(subject_type, predicate, object_type)`, which queries `relationship_constraints`.
 
 ---
 
@@ -136,7 +126,7 @@ Migrations are strictly ordered by foreign-key dependencies:
 
 1. `001` — Lookup tables + `system_state` (no FKs)
 2. `002` — `entities` (depends on `entity_types`)
-3. `003` — `entity_dates` (depends on `entities`, `entity_date_types`, `recurrence_types`)
+3. `003` — `entity_dates` (depends on `entities`, `entity_date_types`, `recurrence_types`) — **dropped by migration `040`**; superseded by the events overlay (migration `039`).
 4. `004` — `entity_locations` (depends on `entities`, `location_types`)
 5. `005` — `facts` (depends on `entities`, `fact_statuses`)
 6. `006` — `fact_dependencies` (depends on `facts`, `relation_types`)
@@ -154,6 +144,20 @@ Migrations are strictly ordered by foreign-key dependencies:
 18. `036` — Seed relationship type aliases (self-aliases + legacy synonyms)
 19. `037` — Seed remaining core predicates + self-aliases (#135); `ON CONFLICT` UPSERTs enforce the canonical `(id, name)` contract
 20. `038` — `category_aliases` table + domain alias seed (#135); transactional with FK enforcement on, `IF NOT EXISTS` for idempotency
+21. `023` — Preference system refactor (#53): normalized context, `source_fact_id`, contextual lookup; breaking recreate of `preferences` / `preference_sources`
+22. `024` — `Contradicts` relation type (id 4) for the contradiction rule (#54)
+23. `025` — `rejected_action` predicate (id 12) for the threshold rule (#54)
+24. `026` — `facts.pending_confirmation` flag + partial index for sensitive facts
+25. `027` — `rejected` change type (id 8) for explicit sensitive-fact rejection
+26. `028` — Composite performance index for `kg_query` / `kg_related` / `kg_search`
+27. `029` — `predicates.sensitive` flag + seed of medical/financial/identity predicates (bulk-forget safeguard)
+28. `030` — `optimization_runs` table for nightly-optimization run tracking
+29. `032` — `memory_priorities` lookup for the memory-ranking engine
+30. `033` — `relationship_types.default_memory_priority_id` with per-predicate defaults
+31. `034` — `content_update` change type (id 9) for object-literal edits
+32. `039` — Events & reminders overlay: `event_types`, `event_statuses`, `auto_complete_policies`, `events` (#74)
+33. `040` — Drop superseded `entity_dates` / `entity_date_types` (#74)
+34. `041` — `pending_event_meta` cache for sensitive-fact event shape across the confirmation boundary (#74)
 
 ---
 
@@ -188,25 +192,33 @@ Two-phase dedup implemented in Rust:
 
 ---
 
-## Entity Dates & Recurrence
+## Events & Reminders
 
-`entity_dates` stores ISO-8601 date/datetime values with a recurrence type:
+The `entity_dates` subsystem was superseded and dropped in migration `040` (issue #74). Temporal lifecycle is now a **recurrence + lifecycle overlay on facts**, implemented in migration `039`.
 
-- `None` — one-time date.
-- `Daily` — every day.
-- `Weekly` — same weekday each week.
-- `Monthly` — same day each month (falls back to last valid day).
-- `Yearly` — anniversary; Feb 29 falls back to Mar 1 in non-leap years.
+A fact whose `valid_from` lies in the future is a one-time event; a fact tagged with recurrence (e.g. a birthday) is a recurring event; a fact with `requires_user_action` is a task. The `events` table attaches one overlay row per fact (`fact_id` is `UNIQUE`, `ON DELETE CASCADE`):
 
-All recurrence math is UTC-internal; timezone formatting is a presentation-layer concern.
+- `trigger_date` — when the event next surfaces.
+- `recurrence_type_id` → `RecurrenceType` (`None`, `Daily`, `Weekly`, `Monthly`, `Yearly`). Feb 29 falls back to Mar 1 in non-leap years.
+- `event_type_id` → `EventType` (`birthday`, `appointment`, `deadline`, `task`, `reminder`, `custom`).
+- `status_id` → `EventStatus` (`Pending`, `Active`, `Completed`, `Dismissed`, `Snoozed`).
+- `auto_complete_policy_id` → `AutoCompletePolicy` (`AutoCompleteOnDate`, `RequiresUserAction`, `Recurring`).
+- `requires_user_action` — marks tasks that need explicit user action.
+
+The `events.upcoming_scan` job (default 06:00 & 18:00) derives overlays, auto-completes past one-time events, and advances recurring events. Source facts surface in the "Upcoming" memory section directly; the overlay manages lifecycle status and recurrence advancement only. `pending_event_meta` (migration `041`) preserves the derived event shape for sensitive facts across the confirmation boundary so `confirm_fact` can rebuild the overlay faithfully.
+
+All recurrence math is UTC-internal; timezone formatting is a presentation-layer concern. See [Events & Reminders](events-reminders.md).
 
 ---
 
-## Future Work
+## Implemented Subsystems
 
-- Inference engine (`inference/`) — Rust-native transitivity, contradiction, threshold rules.
-- Optimization pipeline (`optimization/`) — Nightly dedup, confidence recalc, dormant cleanup.
-- Fact extraction (`extract.rs`) — LLM-assisted structured extraction with Rust validation.
+The subsystems below are all implemented and documented separately:
+
+- Inference engine (`inference/`) — Rust-native transitivity, contradiction, and threshold rules. See [Inference Engine](inference-engine.md).
+- Optimization pipeline (`optimization/`) — Nightly dedup, confidence recalc, dormant cleanup, and compaction. See [Nightly Optimization](nightly-optimization.md).
+- Fact extraction (`extract.rs`) — LLM-orchestrated structured extraction with Rust validation. See [Fact Extraction Pipeline](fact-extraction-pipeline.md).
+- Confidence model — structural, graph-derived, no LLM, no decay. See [Confidence Model](Confidence-Model.md).
 
 ---
 

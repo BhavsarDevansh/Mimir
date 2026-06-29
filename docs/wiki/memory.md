@@ -44,11 +44,15 @@ char_limit = 2500
 condensation_top_n = 500
 ```
 
+### What Appears in Memory vs. What Stays in the Knowledge Graph
+
+The Knowledge Graph stores **everything** Mimir has learned — every fact, at full granularity, with provenance and history. The memory block is only a **small, ranked subset**: the top facts (by the formula above) that fit within the `char_limit` budget, condensed into natural language for the system prompt. Facts that do not make the cut are not lost — they remain in the Knowledge Graph and are fully queryable with `mimir kb query`, `mimir kb show`, and `mimir kb browse`. Memory is a *view* of the graph, optimised for the current conversation, not a separate store.
+
 ### What This Means for You
 
 - No need to manually edit memory — Mimir builds your memory automatically from conversations
 - The memory block is always current (regenerated when facts change, gated by scheduler)
-- You can still inspect what Mimir knows via `mimir memory` and `mimir kg query`
+- You can still inspect what Mimir knows via `mimir memory` and `mimir kb query`
 - If you want a fact pinned or deprioritised, that will be supported in a future update
 
 ### Your Name

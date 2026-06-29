@@ -13,6 +13,10 @@ This is a core architectural principle (issue #51).
 3. **Initial confidence is assigned by Rust** based on the learning mode.
 4. **Per-connector reliability scores** are tracked and adjusted by user corrections.
 
+## Why No Time-Based Decay
+
+Confidence deliberately does **not** erode with age. A fact that was true yesterday is no less true today simply because time has passed; only *new evidence* (a counter-fact, a correction, a corroborating source, or a removed parent) should move confidence. Time-based decay would silently demote long-standing, correct facts (e.g. an allergy or a parent's name) purely because they had not been re-asserted recently, eroding trust in the knowledge base and forcing the user to repeatedly re-confirm stable facts. The structural model keeps confidence stable until the graph itself changes, which is observable, auditable, and reversible. If a fact becomes genuinely outdated, the correct response is a correction (which supersedes it) or a contradiction (which disputes it) — both are explicit graph events, not a passive clock.
+
 ## Initial Confidence by Source Type
 
 | Source Type | Initial Confidence |
@@ -113,6 +117,20 @@ single transaction:
 
 This ensures the selected stale row itself is updated, not only its
 descendants, so the pass can no longer leave the same facts stale indefinitely.
+
+## Confidence Change Events
+
+Every confidence write that actually changes the stored value emits a `ConfidenceChange` entry in `fact_audit_log` (change type id 3), recording the old and new confidence as JSON snapshots. The threshold for “actually changes” is an absolute delta greater than `0.001`. Events that touch confidence:
+
+| Trigger | Actor (`ChangedBy`) | Effect |
+|---|---|---|
+| Corroboration — independent source added to an existing non-explicit fact | `System` | `+0.05` per independent source, capped at `0.95`; `SourceAdded` audit entry plus `ConfidenceChange` only on a real delta |
+| Explicit replacement (supersession) | `System` | Old fact → `Superseded`; its confidence is **preserved**, not adjusted |
+| Parent confidence change cascade | `System` / `InferenceEngine` | Each inferred descendant recalculated from parents; `ConfidenceChange` emitted per descendant whose delta > `0.001` |
+| Nightly stale-confidence recalculation | `NightlyOptimization` | Root-aware recalc of each stale fact + cascade to descendants; `ConfidenceChange` only on a real delta |
+| `mimir kb edit --confidence` | `User` | Direct override; `ConfidenceChange` audit entry written |
+
+Clearing the `stale_confidence` flag (e.g. via corroboration or recalculation) does **not** by itself emit a `ConfidenceChange` entry — only an actual numeric delta does. The full set of fact change types is documented in [Knowledge Graph Schema](knowledge-graph-schema.md).
 
 ## Connector Reliability
 

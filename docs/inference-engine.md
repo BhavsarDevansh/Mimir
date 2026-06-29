@@ -56,17 +56,28 @@ Inferred facts use `confidence::inference_confidence(parents, depth, num_parents
 
 **Nightly re-count:** If count drops below 3, write an audit log entry with reason `"threshold no longer met; review recommended"`.
 
+## How to Add a New Rule
+
+Each rule is a unit struct implementing the `InferenceRule` trait in its own file under `mimir-knowledge/src/inference/rules/`:
+
+1. **Create the rule file** — e.g. `mimir-knowledge/src/inference/rules/my_rule.rs`, implement `#[async_trait] impl InferenceRule for MyRule` returning `Vec<NewFact>` from `evaluate(&self, fact, kg)`.
+2. **Re-export it** from `mimir-knowledge/src/inference/rules/mod.rs` (`pub mod my_rule;`).
+3. **Register it** in `KnowledgeGraph::new` (`mimir-knowledge/src/lib.rs`): `engine.register(Box::new(MyRule));`.
+4. **Write tests first (TDD)** — add a test in `mimir-knowledge/tests/inference_tests.rs` using the `TestGraph` helper to seed a small DB and assert the inferred `NewFact`.
+
+Rules are pure async functions of `(Fact, &KnowledgeGraph) -> Vec<NewFact>`. They must be deterministic and side-effect-free — the engine handles insertion, cascade, and cycle detection via `CascadeContext`. Never mutate global state or read the system clock directly; inject a `Clock` where time is needed.
+
 ## Fact Dependencies
 
 Inferred facts write `InferredFrom` edges in `fact_dependencies` for each parent. `parent_fact_ids` on `NewFact` drives this.
 
 ## Nightly Optimization
 
-`run_nightly_optimization` orchestrates passes in order:
+The inference engine participates in the nightly optimization run, which executes a fixed sequence of 10 passes (dedup, semantic dedup, contradiction resolution, inference re-evaluation, confidence recalculation, dormant cleanup, pattern consolidation, pending-confirmation cleanup, trash cleanup, and compaction). The inference-relevant passes are:
 
-1. Contradiction auto-resolution (explicit > inferred)
-2. Root-aware confidence recalculation for `stale_confidence = true` facts (`confidence::recalculate_stale_fact`): each stale fact is recalculated/cleared itself and the change is cascaded to inferred descendants in one transaction. See [Nightly Knowledge Graph Optimization](nightly-optimization.md) for the full pass list.
-3. Inference re-evaluation (`RuleEngine::evaluate_batch`)
-4. Threshold nightly re-count
+1. **Contradiction auto-resolution** — `ContradictionRule::evaluate_batch` resolves explicit-over-inferred disputes (explicit > inferred).
+2. **Confidence recalculation** — root-aware `confidence::recalculate_stale_fact` for every `stale_confidence = true` fact, cascading to inferred descendants in one transaction.
+3. **Inference re-evaluation** — `RuleEngine::evaluate_batch` re-runs every rule over all `Active`/`Inferred` facts and inserts any newly-derivable facts.
+4. **Threshold nightly re-count** — `ThresholdRule` re-checks the ≥3 rejected-action condition and records an audit entry when it no longer holds.
 
-Dedup, dormant cleanup, and compaction are left as `TODO` stubs.
+See [Nightly Optimization](nightly-optimization.md) for the full pass list, transaction model, and backup strategy.

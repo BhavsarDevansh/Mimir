@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.60.4] — 2026-06-29
+
+### Docs — Knowledge Graph documentation audit & gap-fill (#64)
+
+Completed the Knowledge Graph documentation set requested by issue #64 by auditing the existing equivalent docs against the issue's required content and filling stale/missing sections, plus adding the two genuinely missing wiki pages. Existing filenames were kept (DRY; avoids breaking cross-references).
+
+**Technical docs (`docs/`):**
+- `knowledge-graph-schema.md` — removed the dropped `entity_dates`/`entity_date_types` tables; documented the events & reminders overlay (`event_types`, `event_statuses`, `auto_complete_policies`, `events`, `pending_event_meta`); corrected the `predicates`→`relationship_types`/`relationship_constraints` rename (migration `031`); fixed lookup-row counts (`relation_types` 3→4, `change_types` 7→9); added `optimization_runs`/`optimization_pass_runs`/`memory_priorities`; completed the migration ordering (023–041); replaced the stale "Entity Dates & Recurrence" and "Future Work" sections.
+- `Confidence-Model.md` — added a "Why No Time-Based Decay" rationale and a "Confidence Change Events" table mapping each trigger to its `ChangedBy` actor.
+- `inference-engine.md` — added a "How to Add a New Rule" section and replaced the stale "Nightly Optimization" stub list with a reference to the implemented 10-pass pipeline.
+- `nightly-optimization.md` — added a per-operation "Transaction Model" section, the `JobPriority` levels table, and a "Trigger & Daemon-Down Handling" note.
+- `fact-extraction-pipeline.md` — audited; already current (LLM-orchestrated `remember` tool, sensitivity gate, confirm/reject flow).
+
+**Wiki docs (`docs/wiki/`):**
+- `knowledge-graph.md` — reframed as the "second brain" distinct from condensed memory; replaced the dropped entity-dates bullet with events & reminders; added an inference key-concept; replaced the stale "Future Commands (Planned)" with real `mimir kb` examples and a "Relationship to the Wider System" section; corrected the semantic-dedup "future work" note.
+- `cli-commands.md` — fixed the stale `mimir memory` section (now KG-backed, not a file) and documented `--refresh`.
+- `memory.md` — added "What Appears in Memory vs. What Stays in the Knowledge Graph"; fixed the `mimir kg query`→`mimir kb query` typo.
+- `forgetting.md` (new) — soft-delete to a 30-day trash bin, restore, cascade forget, and bulk safeguards (>100 `--yes`, sensitive `--confirm-sensitive`, full-reset `DELETE EVERYTHING` + backup).
+- `obsidian-sync.md` (new) — planned export/import design and file format, documented as **not yet implemented and deferred to post-Phase-5**.
+
 ## [0.60.3] — 2026-06-29
 
 ### Fixed — corroboration docs & nightly recalculation efficiency (#79, PR #174)

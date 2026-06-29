@@ -54,6 +54,13 @@ Confidence depends on where the fact came from:
 If an inferred fact loses its supporting evidence, its confidence drops. When
 it falls below 0.20, Mimir flags it as `Disputed`.
 
+A fact also gains confidence when **corroborated** — a second independent source
+reports the same claim (same subject + predicate + object, overlapping in time).
+Mimir adds the new source to the existing fact and boosts its confidence by
+`0.05` per corroborating source, up to `0.95`. Explicit facts (already `1.0`)
+and inferred facts (structurally derived) keep their confidence; only the source
+is added. See the [Confidence Model](Confidence-Model.md#corroboration-79).
+
 ---
 
 ## Forgetting

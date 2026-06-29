@@ -99,7 +99,6 @@ pub struct PendingFact {
 pub struct ExtractionOutcome {
     pub inserted: Vec<Fact>,
     pub pending_confirmation: Vec<PendingFact>,
-    pub corroborated: Vec<i32>,
     pub errors: Vec<KnowledgeError>,
 }
 
@@ -386,7 +385,6 @@ async fn process_fact_batch(
             match process_extracted_fact(kg, fact, now, relationship_type_id).await {
                 Ok(ProcessResult::Inserted(f)) => outcome.inserted.push(f),
                 Ok(ProcessResult::Pending(p)) => outcome.pending_confirmation.push(p),
-                Ok(ProcessResult::Corroborated(id)) => outcome.corroborated.push(id),
                 Err(error) => outcome.errors.push(error),
             }
         }
@@ -512,44 +510,6 @@ fn split_list_objects(fact: &ExtractedFact) -> Vec<ExtractedFact> {
 }
 
 // ---------------------------------------------------------------------------
-// Dedup check (stub for #79)
-// ---------------------------------------------------------------------------
-
-/// Check whether an identical active fact already exists.
-/// Returns the existing fact ID if found.
-async fn find_existing_fact(
-    kg: &KnowledgeGraph,
-    subject_id: i32,
-    relationship_type_id: i16,
-    object_id: Option<i32>,
-    object_literal: Option<&str>,
-    valid_from: Option<DateTime<Utc>>,
-    valid_until: Option<DateTime<Utc>>,
-) -> Result<Option<i32>, KnowledgeError> {
-    let rows: Vec<(i32,)> = sqlx::query_as(
-        "SELECT id FROM facts \
-         WHERE subject_id = ? AND relationship_type_id = ? \
-         AND object_id IS ? AND object_literal IS ? \
-         AND (fact_status_id = ? OR pending_confirmation = TRUE) \
-         AND ((valid_from IS ?) OR (valid_from = ?)) \
-         AND ((valid_until IS ?) OR (valid_until = ?))",
-    )
-    .bind(subject_id)
-    .bind(relationship_type_id)
-    .bind(object_id)
-    .bind(object_literal)
-    .bind(FactStatus::Active as i16)
-    .bind(valid_from)
-    .bind(valid_from)
-    .bind(valid_until)
-    .bind(valid_until)
-    .fetch_all(kg.pool())
-    .await?;
-
-    Ok(rows.into_iter().next().map(|r| r.0))
-}
-
-// ---------------------------------------------------------------------------
 // Correction helpers
 // ---------------------------------------------------------------------------
 
@@ -653,7 +613,6 @@ pub async fn extract_facts_with_context(
 pub(crate) enum ProcessResult {
     Inserted(Fact),
     Pending(PendingFact),
-    Corroborated(i32),
 }
 
 /// Insert a sensitive fact atomically with Disputed status and pending_confirmation=TRUE.
@@ -846,21 +805,6 @@ pub(crate) async fn process_extracted_fact(
     } else {
         (None, Some(extracted.object.clone()))
     };
-
-    // Dedup / corroboration check (stub for #79).
-    if let Some(existing_id) = find_existing_fact(
-        kg,
-        subject.id,
-        relationship_type_id,
-        object_id,
-        object_literal.as_deref(),
-        valid_from,
-        valid_until,
-    )
-    .await?
-    {
-        return Ok(ProcessResult::Corroborated(existing_id));
-    }
 
     // If this fact establishes a preferred name, register the object as an alias
     // so future lookups by that short name resolve to the canonical entity.

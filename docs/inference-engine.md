@@ -65,7 +65,7 @@ Inferred facts write `InferredFrom` edges in `fact_dependencies` for each parent
 `run_nightly_optimization` orchestrates passes in order:
 
 1. Contradiction auto-resolution (explicit > inferred)
-2. Confidence propagation for `stale_confidence = true` facts
+2. Root-aware confidence recalculation for `stale_confidence = true` facts (`confidence::recalculate_stale_fact`): each stale fact is recalculated/cleared itself and the change is cascaded to inferred descendants in one transaction. See [Nightly Knowledge Graph Optimization](nightly-optimization.md) for the full pass list.
 3. Inference re-evaluation (`RuleEngine::evaluate_batch`)
 4. Threshold nightly re-count
 

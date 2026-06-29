@@ -11,6 +11,7 @@ use crate::KnowledgeError;
 use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::enums::ConnectorType;
 use crate::models::source::SourceType;
+use chrono::{DateTime, Utc};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -95,6 +96,17 @@ pub fn inference_confidence(parents: &[(f32, bool)], static_depth: i32, num_pare
 ///
 /// Returns the new confidence value.
 pub async fn recalculate(pool: &SqlitePool, fact_id: i32) -> Result<f32, KnowledgeError> {
+    let mut tx = pool.begin().await?;
+    let conf = recalculate_in_tx(&mut tx, fact_id).await?;
+    tx.commit().await?;
+    Ok(conf)
+}
+
+/// Transaction-aware variant of [`recalculate`].
+pub async fn recalculate_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    fact_id: i32,
+) -> Result<f32, KnowledgeError> {
     let parents: Vec<(f32, bool)> = sqlx::query_as(
         "SELECT f.confidence, fd.is_positive \
          FROM facts f \
@@ -103,7 +115,7 @@ pub async fn recalculate(pool: &SqlitePool, fact_id: i32) -> Result<f32, Knowled
     )
     .bind(fact_id)
     .bind(crate::models::enums::RelationType::InferredFrom as i16)
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await?;
 
     let num_parents = parents.len();
@@ -111,7 +123,7 @@ pub async fn recalculate(pool: &SqlitePool, fact_id: i32) -> Result<f32, Knowled
     // Fetch the child's static inference_depth from the facts table.
     let depth: Option<i32> = sqlx::query_scalar("SELECT inference_depth FROM facts WHERE id = ?")
         .bind(fact_id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut **tx)
         .await?;
 
     let depth = depth.unwrap_or(0);
@@ -120,35 +132,152 @@ pub async fn recalculate(pool: &SqlitePool, fact_id: i32) -> Result<f32, Knowled
 }
 
 // ---------------------------------------------------------------------------
-// Eager bounded cascade
+// Audit helper
 // ---------------------------------------------------------------------------
 
-/// Recalculate confidence for all inferred children of `changed_fact_id`
-/// and cascade the change down the graph.
+/// Write a `ConfidenceChange` audit entry for `fact_id` within `tx`.
 ///
-/// `depth_budget` limits recursion depth to prevent runaway cascades.
-/// TODO(#51-followup): replace with async background worker when system
-/// work queue is implemented.
+/// The caller supplies the serialised `old_value` / `new_value` payloads so the
+/// same helper serves the corroboration path (which includes a `source_id`) and
+/// the structural recalculation paths (which only record confidence).
+pub(crate) async fn write_confidence_change_audit(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    fact_id: i32,
+    old_value: &str,
+    new_value: &str,
+    now: DateTime<Utc>,
+) -> Result<(), KnowledgeError> {
+    sqlx::query(
+        "INSERT INTO fact_audit_log \
+         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(fact_id)
+    .bind(ChangeType::ConfidenceChange as i16)
+    .bind(old_value)
+    .bind(new_value)
+    .bind(now)
+    .bind(ChangedBy::System as i16)
+    .bind(None::<&str>)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Confidence cascade
+// ---------------------------------------------------------------------------
+
+/// Recalculate confidence for all inferred children of `changed_fact_id` and
+/// cascade the change down the graph.
+///
+/// The cascade is **comprehensive**: it follows every `InferredFrom` edge to
+/// the leaves of the inference graph. The `visited` set is used as a
+/// *recursion-stack guard* (cycle prevention), not a global "already
+/// processed" set: a fact is removed from the set when its subtree finishes,
+/// so a descendant reachable through multiple parents (a diamond graph) is
+/// recalculated once per updated parent and ends up with the correct final
+/// confidence. There is no artificial depth cap, which would otherwise let
+/// deeper inferred facts drift stale.
 pub async fn cascade_confidence_change(
     pool: &SqlitePool,
     changed_fact_id: i32,
-    depth_budget: Option<u8>,
 ) -> Result<(), KnowledgeError> {
-    let mut visited = HashSet::new();
-    cascade_inner(pool, changed_fact_id, depth_budget, &mut visited).await
+    let mut tx = pool.begin().await?;
+    cascade_confidence_change_in_tx(&mut tx, changed_fact_id, Utc::now()).await?;
+    tx.commit().await?;
+    Ok(())
 }
 
-fn cascade_inner<'a>(
-    pool: &'a SqlitePool,
+/// Transaction-aware, comprehensive confidence cascade.
+///
+/// All child re-reads, confidence updates, and audit entries are written into
+/// `tx` so the caller can commit them atomically with the triggering change.
+pub async fn cascade_confidence_change_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     changed_fact_id: i32,
-    depth_budget: Option<u8>,
+    now: DateTime<Utc>,
+) -> Result<(), KnowledgeError> {
+    let mut visited = HashSet::new();
+    cascade_inner_tx(tx, changed_fact_id, now, &mut visited).await
+}
+
+// ---------------------------------------------------------------------------
+// Stale-fact recalculation (root-aware)
+// ---------------------------------------------------------------------------
+
+/// Recalculate a single stale fact and cascade the result to its inferred
+/// children, atomically.
+///
+/// Unlike [`cascade_confidence_change`], this also handles the root `fact_id`
+/// itself: it recalculates the root (when inferred), clears its stale flag, and
+/// writes a `ConfidenceChange` audit entry when the value actually changes. The
+/// nightly confidence-recalculation pass uses this root-aware path so the
+/// selected stale row is no longer left stale while only its descendants are
+/// updated.
+pub async fn recalculate_stale_fact(pool: &SqlitePool, fact_id: i32) -> Result<(), KnowledgeError> {
+    let mut tx = pool.begin().await?;
+    recalculate_stale_fact_in_tx(&mut tx, fact_id, Utc::now()).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Transaction-aware variant of [`recalculate_stale_fact`].
+pub async fn recalculate_stale_fact_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    fact_id: i32,
+    now: DateTime<Utc>,
+) -> Result<(), KnowledgeError> {
+    // (confidence, inferred, stale_confidence).
+    let root: Option<(f32, bool, bool)> =
+        sqlx::query_as("SELECT confidence, inferred, stale_confidence FROM facts WHERE id = ?")
+            .bind(fact_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    let Some((old_confidence, inferred, was_stale)) = root else {
+        return Ok(());
+    };
+
+    // Only inferred facts derive confidence from their parents; a non-inferred
+    // root keeps its structural/explicit confidence and just needs its stale
+    // flag cleared.
+    let new_confidence = if inferred {
+        recalculate_in_tx(tx, fact_id).await?
+    } else {
+        old_confidence
+    };
+
+    let confidence_changed = (new_confidence - old_confidence).abs() > 0.001;
+    if confidence_changed || was_stale {
+        sqlx::query("UPDATE facts SET confidence = ?, stale_confidence = FALSE, updated_at = ? WHERE id = ?")
+            .bind(new_confidence)
+            .bind(now)
+            .bind(fact_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+
+    if confidence_changed {
+        let old_json = serde_json::json!({"confidence": old_confidence}).to_string();
+        let new_json = serde_json::json!({"confidence": new_confidence}).to_string();
+        write_confidence_change_audit(tx, fact_id, &old_json, &new_json, now).await?;
+    }
+
+    // Cascade to inferred descendants within the same transaction so any
+    // children still flagged stale are recalculated/cleared atomically.
+    cascade_confidence_change_in_tx(tx, fact_id, now).await
+}
+
+fn cascade_inner_tx<'a>(
+    tx: &'a mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    changed_fact_id: i32,
+    now: DateTime<Utc>,
     visited: &'a mut HashSet<i32>,
 ) -> Pin<Box<dyn std::future::Future<Output = Result<(), KnowledgeError>> + Send + 'a>> {
     Box::pin(async move {
-        if depth_budget == Some(0) {
-            return Ok(());
-        }
-
+        // Recursion-stack guard: prevents infinite loops on cycles without
+        // suppressing a legitimate re-visit from a different parent branch.
+        // The id is removed again on the way out (see the end of this block).
         if !visited.insert(changed_fact_id) {
             return Ok(());
         }
@@ -161,63 +290,48 @@ fn cascade_inner<'a>(
         )
         .bind(changed_fact_id)
         .bind(crate::models::enums::RelationType::InferredFrom as i16)
-        .fetch_all(pool)
+        .fetch_all(&mut **tx)
         .await?;
 
         for (child_id, _child_depth) in children {
             if visited.contains(&child_id) {
                 continue;
             }
-            let new_confidence = recalculate(pool, child_id).await?;
+            let new_confidence = recalculate_in_tx(tx, child_id).await?;
 
-            let old_confidence: Option<f32> =
-                sqlx::query_scalar("SELECT confidence FROM facts WHERE id = ?")
+            let old_state: Option<(f32, bool)> =
+                sqlx::query_as("SELECT confidence, stale_confidence FROM facts WHERE id = ?")
                     .bind(child_id)
-                    .fetch_optional(pool)
+                    .fetch_optional(&mut **tx)
                     .await?;
+            let (old_confidence, was_stale) = old_state.unwrap_or((0.0, false));
 
-            let old_confidence = old_confidence.unwrap_or(0.0);
-
-            if (new_confidence - old_confidence).abs() > 0.001 {
-                let mut tx = pool.begin().await?;
-
-                sqlx::query("UPDATE facts SET confidence = ?, updated_at = ? WHERE id = ?")
+            // A recalculated child is current again: clear its stale flag even
+            // when the numeric confidence is unchanged, so it stops being
+            // selected/exposed as stale after the cascade.
+            let confidence_changed = (new_confidence - old_confidence).abs() > 0.001;
+            if confidence_changed || was_stale {
+                sqlx::query("UPDATE facts SET confidence = ?, stale_confidence = FALSE, updated_at = ? WHERE id = ?")
                     .bind(new_confidence)
-                    .bind(chrono::Utc::now())
+                    .bind(now)
                     .bind(child_id)
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await?;
+            }
 
+            if confidence_changed {
                 // Write confidence_change audit entry.
                 let old_json = serde_json::json!({"confidence": old_confidence}).to_string();
                 let new_json = serde_json::json!({"confidence": new_confidence}).to_string();
-                sqlx::query(
-                    "INSERT INTO fact_audit_log \
-                     (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?)",
-                )
-                .bind(child_id)
-                .bind(ChangeType::ConfidenceChange as i16)
-                .bind(old_json)
-                .bind(new_json)
-                .bind(chrono::Utc::now())
-                .bind(ChangedBy::System as i16)
-                .bind(None::<&str>)
-                .execute(&mut *tx)
-                .await?;
+                write_confidence_change_audit(tx, child_id, &old_json, &new_json, now).await?;
 
-                tx.commit().await?;
-
-                cascade_inner(
-                    pool,
-                    child_id,
-                    depth_budget.map(|d| d.saturating_sub(1)),
-                    visited,
-                )
-                .await?;
+                cascade_inner_tx(tx, child_id, now, visited).await?;
             }
         }
 
+        // Leaving this subtree: allow the fact to be re-visited from another
+        // parent branch so diamond-shaped graphs recalculate correctly.
+        visited.remove(&changed_fact_id);
         Ok(())
     })
 }

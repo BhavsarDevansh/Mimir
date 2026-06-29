@@ -1,5 +1,69 @@
 # Changelog
 
+## [0.60.3] — 2026-06-29
+
+### Fixed — corroboration docs & nightly recalculation efficiency (#79, PR #174)
+
+- **Documented the pending-confirmation corroboration path.** The confidence-model and "what works now" docs described corroboration only against an existing `Active` fact; `insert_fact_in_tx` also corroborates matching `pending_confirmation` facts. Both docs now state `Active` **or** `pending_confirmation`, matching the implementation.
+- **Corrected the wiki corroboration cap statement.** Verified the wiki already states the non-explicit corroboration cap as `0.95` (not `1.1`); wording aligned with the pending-confirmation path for accuracy.
+- **Nightly `confidence_recalc` skips already-refreshed rows.** Because each root-aware recalculation cascades to inferred descendants and clears their stale flags in one transaction, later iterations in the stale-fact snapshot could reopen transactions and re-walk subtrees already cleared by an ancestor pass. The loop now re-checks `stale_confidence` cheaply before recalculating, avoiding quadratic work on large stale branches.
+
+## [0.60.2] — 2026-06-27
+
+### Fixed — confidence cascade & nightly recalculation correctness (#79, PR #174)
+
+- **Corroboration at the cap clears `stale_confidence`.** A corroborated fact already at the non-explicit cap (`0.95`) had its confidence unchanged, so the previous delta check skipped the whole update and left the row flagged stale despite new provenance. The update that clears `stale_confidence` now runs whenever corroboration applies, while the `ConfidenceChange` audit entry and the descendant cascade remain gated on an actual confidence delta.
+- **Cascade uses a recursion-stack guard, not a global visited set.** `cascade_inner_tx` removed a fact from the visited set when its subtree finished, so a descendant reachable through multiple parents (a diamond graph) is recalculated once per updated parent and ends up with the correct final confidence instead of being skipped after the first parent updates.
+- **Nightly `confidence_recalc` updates the stale root fact.** The pass previously only cascaded from each stale fact to its children and never recalculated/cleared the selected row itself, so the same facts could stay stale indefinitely. It now uses a root-aware transactional path (`confidence::recalculate_stale_fact`) that recalculates the stale row (inferred) or just clears its flag (non-inferred), writes a `ConfidenceChange` audit entry only when confidence changes, and then cascades to inferred descendants in the same transaction.
+
+## [0.60.1] — 2026-06-27
+
+### Fixed — corroboration guard consistency (#79)
+
+- The corroboration guard in `insert_fact_in_tx` now treats `System`-sourced new facts as explicit, matching the boost-eligibility check and the documented contract. A `System` fact is no longer able to corroborate (and boost) an overlapping non-explicit fact; explicit facts (`UserEdit`/`System`) only add their source and supersede, never corroborate.
+
+## [0.60.0] — 2026-06-27
+
+### Added — corroboration detection in fact insertion (#79)
+
+- **Corroboration is now resolved inside `insert_fact_in_tx`** for every insert
+  path (extraction pipeline, batch insert, direct `KnowledgeGraph::insert_fact`),
+  within the same transaction as supersession. When a new **non-explicit** fact
+  covers the same claim as an existing `Active` (or pending-confirmation) fact —
+  same `subject_id + relationship_type_id + object`, temporally overlapping
+  `valid_from`/`valid_until` — Mimir adds a source row to the existing fact
+  instead of creating a duplicate, and boosts the existing fact's confidence by
+  `+0.05` per independent corroborating source, capped at `0.95`.
+- **Explicit and inferred facts are excluded from the boost.** Explicit
+  (`UserEdit`/`System`) facts stay at `1.0` — corroboration only adds the source
+  for provenance. Inferred fact confidence is structural (recalculated from
+  parents) and is never boosted by a corroborating source.
+- **Re-statements are a no-op.** A source with identical provenance
+  (`(source_type, connector_id, raw_reference)`) already recorded against the
+  fact is not an independent corroboration and is skipped, which also avoids the
+  `sources` UNIQUE-index collision.
+- **Non-overlapping temporal ranges never corroborate** — they form a timeline
+  of separate facts, matching the existing temporal-facts model.
+- **Comprehensive in-transaction confidence cascade.** `cascade_confidence_change`
+  is now transaction-aware (`cascade_confidence_change_in_tx`) and runs
+  unbounded (cycle-guarded by a `visited` set) so a corroborated confidence
+  change propagates to every inferred child for accuracy, with no artificial
+  depth cap. The legacy depth-budget parameter was removed (the only caller, the
+  nightly optimiser, already ran unbounded).
+- **Audit + stale flag.** Corroboration writes `SourceAdded` and
+  `ConfidenceChange` audit entries (the latter recording the triggering
+  `source_id`) and clears `stale_confidence` on the existing fact.
+- **Removed the pre-insertion `find_existing_fact` stub** in `extract.rs` and the
+  now-unused `ExtractionOutcome.corroborated` / `ProcessResult::Corroborated`
+  plumbing; corroboration is owned by the insert layer.
+
+### Notes
+
+- The `deterministic_dedup_merges_identical_fact_triples` test now sets up its
+  duplicate via a direct SQL insert, because live same-claim non-explicit facts
+  corroborate at insert time and can no longer coexist. The nightly dedup pass
+  remains a safety net for coexisting duplicates (legacy data, direct writes).
+
 ## [0.59.1] — 2026-06-25
 
 ### Fixed — third pass on PR #173 review feedback

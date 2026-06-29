@@ -559,8 +559,24 @@ impl<'a> OptimizationRunner<'a> {
                 .fetch_all(self.kg.pool())
                 .await?;
 
+        // Root-aware recalculation: each stale fact is recalculated/cleared
+        // itself (not just its descendants) inside one transaction, so the
+        // nightly pass can no longer leave the selected rows stale forever.
+        // Because each pass also cascades to inferred descendants and clears
+        // their stale flags, an earlier iteration may have already refreshed
+        // a fact that still appears in this snapshot. Re-check staleness
+        // cheaply before reopening a transaction so already-cleared subtrees
+        // are not revisited, avoiding quadratic work on large stale branches.
         for fact_id in stale_facts {
-            crate::confidence::cascade_confidence_change(self.kg.pool(), fact_id, None).await?;
+            let still_stale: Option<bool> =
+                sqlx::query_scalar("SELECT stale_confidence FROM facts WHERE id = ?")
+                    .bind(fact_id)
+                    .fetch_optional(self.kg.pool())
+                    .await?;
+            if !still_stale.unwrap_or(false) {
+                continue;
+            }
+            crate::confidence::recalculate_stale_fact(self.kg.pool(), fact_id).await?;
         }
         Ok(PassSummary::default())
     }

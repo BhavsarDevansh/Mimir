@@ -17,6 +17,10 @@ The nightly optimization pipeline maintains graph health by running a fixed sequ
 9. **Trash Cleanup** – permanently removes expired trash rows.
 10. **Compaction** – rebuilds FTS5 index, runs `ANALYZE`, and `VACUUM`s the database.
 
+## Transaction Model
+
+Each mutating operation runs in its **own short transaction** rather than one transaction wrapping an entire pass. For example, deduplication and semantic-dedup both `begin()` / `commit()` per fact pair (`merge_fact_pair`), so a single merge failure cannot roll back an entire pass worth of work. Confidence recalculation, by contrast, recalculates a stale root **and** cascades to its inferred descendants within a single transaction, so a root and its subtree are always consistent. Each pass records its outcome (facts merged, candidates queued, facts forgotten, or error) in `optimization_pass_runs` regardless of per-item success.
+
 ## Backup
 
 Before the first pass, `VACUUM INTO` creates a dated backup at `~/.local/share/mimir/backups/knowledge-YYYY-MM-DD.db`. If the file already exists, a numeric suffix is appended. Rotation (keep last 7 daily + 4 Sunday weekly) is planned as follow-up work.
@@ -33,9 +37,21 @@ schedule_time = "02:00"
 
 ## Background Scheduler Integration
 
-The optimization job is registered in the durable `JobQueue` with a daily schedule. The `BackgroundScheduler` polls for scheduled jobs every 60 seconds. When the optimization job is due, it is submitted through the scheduler and follows the same dedupe/debounce/idle rules as any other background job.
+The optimization job is registered in the durable `JobQueue` with a daily schedule at `JobPriority::System` (the lowest-priority class, so it never preempts user or connector work). The `JobPriority` classes are:
+
+| Priority | Value | Meaning |
+|---|---|---|
+| `System` | 0 | Daemon maintenance — never competes with active user work (optimization, condensation) |
+| `Maintenance` | 1 | Connector sync and background upkeep |
+| `User` | 2 | Explicitly requested user jobs |
+
+The `BackgroundScheduler` polls for scheduled jobs every 60 seconds. When the optimization job is due, it is submitted through the scheduler and follows the same dedupe/debounce/idle rules as any other background job.
 
 After optimization completes, its callback submits `DaemonJob::MemoryCondensation` through the scheduler (not directly via `JobQueue::run_now`), ensuring condensation also waits for user downtime before running.
+
+## Trigger & Daemon-Down Handling
+
+Optimization is a **daemon-only** job: it is submitted and executed by the `BackgroundScheduler` running inside the daemon process, so it never runs when the daemon is down. There is no CLI-triggered optimization path that needs daemon-down recovery; the scheduler simply waits for the next due time. `mimir kb optimization --run-now` submits the job through the same scheduler (HTTP route → `DaemonJob::KnowledgeOptimization`), which queues it subject to the same idle/cooldown gates. If the daemon is not running, the CLI surfaces the standard daemon-down prompt (see [Daemon Auto-Start](wiki/daemon-auto-start.md)).
 
 ## Yielding on User Activity
 

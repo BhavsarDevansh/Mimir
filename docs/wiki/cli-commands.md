@@ -178,13 +178,19 @@ Output includes:
 
 ## `mimir memory` — View Memory
 
-Print the contents of your persistent memory file:
+Print the live condensed memory block — a ranked summary of your most important facts rendered **from the Knowledge Graph**, not a text file (see [Memory](memory.md)):
 
 ```bash
 mimir memory
 ```
 
-This shows what Mimir remembers about you across sessions.
+Memory is regenerated on demand when facts change, and the background scheduler only condenses during LLM downtime so it never slows your conversations. Force a fresh condensation immediately:
+
+```bash
+mimir memory --refresh
+```
+
+`--refresh` prints the condensation run id and status; it does not print the memory block itself. Run `mimir memory` again afterwards to see the updated summary.
 
 ## `mimir tool` — Tool Management
 

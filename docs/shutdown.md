@@ -50,12 +50,27 @@ After the drain completes (or the drain bound elapses), `start_server_with_llm_a
 
 The broadcast is sent while the runtime is still fully alive, so the tasks are guaranteed to be polled and tear down deterministically. Previously the SIGTERM/Ctrl-C path never sent on `shutdown_tx` (only `POST /stop` did), so background shutdown relied on `AppState` being dropped during runtime teardown to resolve the watchers' `shutdown_rx.changed()` via sender-drop — a race that, when lost, left the file-watcher `spawn_blocking` thread alive and deadlocked tokio's `BlockingPool::shutdown` until systemd aborted the unit with `SIGABRT`. The explicit broadcast removes that race.
 
+## Trigger Architecture
+
+There is exactly **one** OS-signal listener per process. `serve_with_bounded_drain`
+spawns `spawn_os_signal_shutdown`, a dedicated task that races `ctrl_c()` and
+`SIGTERM` (Unix) and, on either, sends `true` on the shared `shutdown_tx` watch
+channel — the same channel the `/stop` endpoint writes to. Both axum's
+`with_graceful_shutdown` future and the phase-1 serving loop observe that channel
+through `watch_shutdown` (a thin wrapper over `watch::Receiver::changed()`).
+
+This avoids the previous race where two independent `shutdown_signal` futures
+each built their own `ctrl_c()`/`SIGTERM` listeners: the phase-1 waiter could
+observe a signal before axum's graceful-shutdown future had registered interest,
+leaving axum still accepting connections until the drain bound kicked in. With a
+single listener fanning into one shared trigger, both phases fire in lockstep.
+
 ## Timeout Behavior
 
 Shutdown is split into two phases by `serve_with_bounded_drain`:
 
-1. **Serve (unbounded)** — the server future is polled concurrently with a shutdown-trigger future (`shutdown_signal`). The server keeps accepting and handling connections until a trigger fires (Ctrl-C, SIGTERM, or `/stop`). If the server future resolves on its own (e.g. a fatal listener error), it is propagated immediately.
-2. **Drain (bounded to `GRACEFUL_DRAIN_TIMEOUT` = 30 s)** — once a trigger fires, axum has stopped accepting and is draining in-flight connections. `tokio::time::timeout` bounds **only** this drain:
+1. **Serve (unbounded)** — the server future is polled concurrently with `watch_shutdown(trigger_rx)`, which completes when the shared `shutdown_tx` watch trigger fires (Ctrl-C, SIGTERM, or `/stop`). The server keeps accepting and handling connections until a trigger fires. If the server future resolves on its own (e.g. a fatal listener error), it is propagated immediately.
+2. **Drain (bounded to `GRACEFUL_DRAIN_TIMEOUT` = 30 s)** — once the trigger fires, axum's own `watch_shutdown(graceful_rx)` has fired too (same trigger), so it has stopped accepting and is draining in-flight connections. `tokio::time::timeout` bounds **only** this drain:
    - If the drain completes within 30 s, cleanup proceeds normally.
    - If the drain bound elapses, a warning is logged (`"Graceful drain timed out after 30s; forcing exit."`) and the pinned server future is dropped, immediately cutting remaining connections.
 
@@ -63,7 +78,7 @@ Resource cleanup (`AppState::shutdown()`) runs in either case.
 
 ## Code References
 
-- `mimir-server/src/lib.rs` — `shutdown_signal()`, `serve_with_bounded_drain()`, `GRACEFUL_DRAIN_TIMEOUT`, and `start_server()`
+- `mimir-server/src/lib.rs` — `spawn_os_signal_shutdown()`, `watch_shutdown()`, `serve_with_bounded_drain()`, `GRACEFUL_DRAIN_TIMEOUT`, and `start_server()`
 - `mimir-server/src/state.rs` — `AppState::shutdown()`
 - `mimir-core/src/scheduler.rs` — `BackgroundScheduler::shutdown()`
 - `mimir-core/src/context.rs` — `ContextManager::close()`

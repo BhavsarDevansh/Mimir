@@ -137,26 +137,45 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// Combined shutdown signal that races Ctrl-C, SIGTERM (Unix), and the
-/// `/stop` endpoint watch channel.
-async fn shutdown_signal(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {},
-            _ = sigterm.recv() => {},
-            _ = shutdown_rx.changed() => {},
+/// Capture Ctrl-C / SIGTERM **once** and fan the notification into the shared
+/// `shutdown_tx` watch trigger.
+///
+/// Spawning a dedicated task (rather than building a fresh `ctrl_c()`/SIGTERM
+/// future in every consumer) guarantees there is a single OS-signal listener
+/// for the whole process. Both axum's graceful-shutdown future and the
+/// phase-1 waiter observe the *same* `shutdown_tx` watch channel via
+/// [`watch_shutdown`], so neither can observe a signal before the other has
+/// registered interest — the original race that could leave axum accepting
+/// connections until the drain timeout kicked in.
+fn spawn_os_signal_shutdown(shutdown_tx: tokio::sync::watch::Sender<bool>) {
+    tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {},
+                _ = sigterm.recv() => {},
+            }
         }
-    }
-    #[cfg(not(unix))]
-    {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {},
-            _ = shutdown_rx.changed() => {},
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
         }
-    }
+        let _ = shutdown_tx.send(true);
+    });
+}
+
+/// Complete once the shared shutdown watch trigger fires.
+///
+/// Used by both axum's `with_graceful_shutdown` and the phase-1 serving loop
+/// so they react to the same notification — whether it originated from
+/// `/stop` writing to the watch channel or from [`spawn_os_signal_shutdown`].
+async fn watch_shutdown(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
+    // `changed()` resolves immediately if the value already advanced past the
+    // receiver's last seen value (e.g. `/stop` was called before this was
+    // first polled), so no trigger is ever missed.
+    let _ = shutdown_rx.changed().await;
 }
 
 /// Maximum time to wait for in-flight connections to finish after a shutdown
@@ -175,9 +194,16 @@ async fn serve_with_bounded_drain(
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     drain_timeout: Duration,
 ) -> anyhow::Result<()> {
+    // Capture OS signals (Ctrl-C / SIGTERM) exactly once and fan them into the
+    // shared `shutdown_tx` watch trigger. The `/stop` endpoint also writes to
+    // this channel, so a single watch observation covers every trigger source
+    // for both phases below — no duplicate `ctrl_c()`/SIGTERM listeners.
+    spawn_os_signal_shutdown(shutdown_tx.clone());
+
     // One receiver drives axum's graceful-shutdown (stop accepting); the other
     // lets this function detect the trigger independently so it can bound only
-    // the *drain* phase rather than the whole serving lifetime.
+    // the *drain* phase rather than the whole serving lifetime. Both observe
+    // the same watch trigger, so they fire in lockstep.
     let graceful_rx = shutdown_tx.subscribe();
     let trigger_rx = shutdown_tx.subscribe();
 
@@ -190,7 +216,7 @@ async fn serve_with_bounded_drain(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .with_graceful_shutdown(shutdown_signal(graceful_rx))
+        .with_graceful_shutdown(watch_shutdown(graceful_rx))
         .await
     };
 
@@ -198,13 +224,13 @@ async fn serve_with_bounded_drain(
     // serving (unbounded), then draining (bounded by `drain_timeout`).
     tokio::pin!(server_fut);
 
-    // Phase 1 — serve until a shutdown trigger fires (Ctrl-C, SIGTERM, or
-    // `/stop`). The server keeps accepting and handling connections
-    // throughout; this wait is intentionally unbounded. If the server
-    // future resolves first (e.g. a fatal listener error), propagate it.
+    // Phase 1 — serve until the shared shutdown trigger fires (Ctrl-C,
+    // SIGTERM, or `/stop`). The server keeps accepting and handling
+    // connections throughout; this wait is intentionally unbounded. If the
+    // server future resolves first (e.g. a fatal listener error), propagate it.
     tokio::select! {
         biased;
-        _ = shutdown_signal(trigger_rx) => {},
+        _ = watch_shutdown(trigger_rx) => {},
         result = &mut server_fut => {
             info!("Server shut down gracefully.");
             return Ok(result?);

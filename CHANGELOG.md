@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.60.6] — 2026-06-29
+
+### Refactor — Single OS-signal listener for graceful shutdown
+
+Addressed PR #176 review feedback (CodeRabbit): `serve_with_bounded_drain`
+previously built two independent `shutdown_signal` futures — one for axum's
+`with_graceful_shutdown` and one for the phase-1 serving loop — each
+registering its own `ctrl_c()`/`SIGTERM` listener. The phase-1 waiter could
+observe a signal before axum's graceful-shutdown future had registered
+interest, leaving axum accepting connections until the drain bound kicked in.
+
+**Fix:** Capture Ctrl-C / SIGTERM **once** in a dedicated
+`spawn_os_signal_shutdown` task that fans the notification into the shared
+`shutdown_tx` watch channel (the same channel `/stop` writes to). Both axum's
+graceful-shutdown future and the phase-1 loop now observe that channel via
+`watch_shutdown`, so they fire in lockstep with no duplicate OS-signal
+listeners.
+
+- `mimir-server/src/lib.rs` — replaced `shutdown_signal` with
+  `spawn_os_signal_shutdown` and `watch_shutdown`; updated
+  `serve_with_bounded_drain` to use the shared trigger.
+- `docs/shutdown.md` — documented the single-listener trigger architecture.
+
+
 ## [0.60.5] — 2026-06-29
 
 ### Fix — Daemon no longer self-terminates 30 s after start

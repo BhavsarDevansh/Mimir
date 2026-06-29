@@ -159,6 +159,79 @@ async fn shutdown_signal(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
     }
 }
 
+/// Maximum time to wait for in-flight connections to finish after a shutdown
+/// is requested. Bounds **only** the post-signal drain phase; the server runs
+/// indefinitely while no shutdown is requested.
+const GRACEFUL_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Run `app` on `listener` until a shutdown trigger fires, then bound the
+/// graceful drain of in-flight connections to `drain_timeout`.
+///
+/// Extracted from `start_server_with_llm_and_listener` so the drain bound can
+/// be unit-tested with a short timeout (see `test_serve_outlives_drain_timeout`).
+async fn serve_with_bounded_drain(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
+    drain_timeout: Duration,
+) -> anyhow::Result<()> {
+    // One receiver drives axum's graceful-shutdown (stop accepting); the other
+    // lets this function detect the trigger independently so it can bound only
+    // the *drain* phase rather than the whole serving lifetime.
+    let graceful_rx = shutdown_tx.subscribe();
+    let trigger_rx = shutdown_tx.subscribe();
+
+    // Wrap axum's `IntoFuture` in an `async` block to obtain a concrete
+    // `Future` that can be pinned and polled across two phases below.
+    // (axum 0.8's `WithGracefulShutdown` implements `IntoFuture` but not
+    // `Future`, so it cannot be `tokio::pin!`-ed or `&mut`-polled directly.)
+    let server_fut = async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal(graceful_rx))
+        .await
+    };
+
+    // Pin the server future so it can be polled across two phases: first
+    // serving (unbounded), then draining (bounded by `drain_timeout`).
+    tokio::pin!(server_fut);
+
+    // Phase 1 — serve until a shutdown trigger fires (Ctrl-C, SIGTERM, or
+    // `/stop`). The server keeps accepting and handling connections
+    // throughout; this wait is intentionally unbounded. If the server
+    // future resolves first (e.g. a fatal listener error), propagate it.
+    tokio::select! {
+        biased;
+        _ = shutdown_signal(trigger_rx) => {},
+        result = &mut server_fut => {
+            info!("Server shut down gracefully.");
+            return Ok(result?);
+        }
+    }
+
+    // Phase 2 — trigger fired. axum's own graceful-shutdown signal (wired to
+    // the same triggers via `graceful_rx`) has fired too, so it has stopped
+    // accepting and is now draining in-flight connections. Bound that drain
+    // so a wedged SSE stream cannot keep the process alive past systemd's
+    // `TimeoutStopSec`. On timeout, dropping `server_fut` cuts the connections.
+    let server_result = match tokio::time::timeout(drain_timeout, &mut server_fut).await {
+        Ok(result) => {
+            info!("Server shut down gracefully.");
+            result
+        }
+        Err(_) => {
+            warn!(
+                "Graceful drain timed out after {}s; forcing exit.",
+                drain_timeout.as_secs()
+            );
+            Ok(())
+        }
+    };
+    Ok(server_result?)
+}
+
 /// Start the Mimir HTTP server using the provided configuration.
 ///
 /// Loads shared state from `config`, binds to `config.server.bind_addr`,
@@ -201,7 +274,6 @@ pub async fn start_server_with_llm_and_listener(
     let (app_state, scheduler_shutdown_rx) =
         AppState::from_config_with_llm(Arc::clone(&config), llm_client).await?;
     let state = Arc::new(app_state);
-    let shutdown_rx = state.shutdown_tx.subscribe();
 
     // ---- Start background scheduler dispatch loop ----
     let sched = Arc::clone(&state.scheduler);
@@ -359,24 +431,16 @@ pub async fn start_server_with_llm_and_listener(
 
     info!("Mimir daemon listening on {}", listener.local_addr()?);
 
-    let server_fut = axum::serve(
+    // Serve until a shutdown trigger fires (Ctrl-C, SIGTERM, or `/stop`),
+    // then drain in-flight connections for at most `GRACEFUL_DRAIN_TIMEOUT`.
+    // Only the drain phase is bounded — the serving lifetime is unbounded.
+    let server_result = serve_with_bounded_drain(
         listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        app,
+        state.shutdown_tx.clone(),
+        GRACEFUL_DRAIN_TIMEOUT,
     )
-    .with_graceful_shutdown(shutdown_signal(shutdown_rx));
-
-    // Bound graceful shutdown so a wedged connection (e.g. a long-lived SSE
-    // stream) can never keep the process alive past systemd's `TimeoutStopSec`.
-    let server_result = match tokio::time::timeout(Duration::from_secs(30), server_fut).await {
-        Ok(result) => {
-            info!("Server shut down gracefully.");
-            result
-        }
-        Err(_) => {
-            warn!("Graceful shutdown timed out after 30s; forcing exit.");
-            Ok(())
-        }
-    };
+    .await;
 
     // Broadcast the shutdown watch so every background task spawned from
     // `start_server_with_llm_and_listener` (file watcher, SIGHUP handler,
@@ -1218,6 +1282,62 @@ mod tests {
         // The server should exit within 5 seconds.
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
         assert!(result.is_ok(), "server did not exit within 5 seconds");
+        assert!(
+            result.unwrap().is_ok(),
+            "server task panicked or returned error"
+        );
+    }
+
+    /// Regression: the drain timeout must bound only the post-signal drain
+    /// phase, NOT the serving lifetime. Previously `tokio::time::timeout`
+    /// wrapped the entire server future, so the daemon self-terminated
+    /// `drain_timeout` after start even with no shutdown requested.
+    #[tokio::test]
+    async fn test_serve_outlives_drain_timeout() {
+        use axum::routing::get;
+        use std::time::Duration;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let app = axum::Router::new().route("/health", get(|| async { "ok" }));
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let trigger = shutdown_tx.clone();
+
+        // 100 ms drain bound — far shorter than the 300 ms alive check below.
+        let drain_timeout = Duration::from_millis(100);
+        let handle = tokio::spawn(async move {
+            super::serve_with_bounded_drain(listener, app, shutdown_tx, drain_timeout).await
+        });
+
+        // Wait until the server accepts connections (up to 5 s).
+        let poll_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut ready = false;
+        while tokio::time::Instant::now() < poll_deadline {
+            if handle.is_finished() {
+                let result = handle.await.unwrap();
+                panic!("server exited early (before alive check): {:?}", result);
+            }
+            if tokio::net::TcpStream::connect(addr).await.is_ok() {
+                ready = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(ready, "server did not become reachable within 5 seconds");
+
+        // Sleep well past the drain timeout. If the timeout bounded the
+        // serving lifetime (the bug), the server would already be dead.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !handle.is_finished(),
+            "server self-terminated after the drain timeout with no shutdown requested (the bug)"
+        );
+
+        // Request shutdown; the server should exit within the drain timeout.
+        trigger.send(true).expect("send shutdown trigger");
+        let result = tokio::time::timeout(Duration::from_secs(2), handle).await;
+        assert!(result.is_ok(), "server did not exit within 2s of shutdown");
         assert!(
             result.unwrap().is_ok(),
             "server task panicked or returned error"

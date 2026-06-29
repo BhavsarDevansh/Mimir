@@ -28,9 +28,13 @@ What happens:
 When shutdown is triggered:
 
 - The server stops accepting new HTTP connections.
-- In-flight requests are allowed to finish (within a 30-second limit).
+- In-flight requests are allowed to finish (within a 30-second drain limit).
 - The SQLite database pool is closed, flushing any pending writes.
 - LLM worker threads are stopped and their HTTP connections closed.
+
+The daemon runs indefinitely while no shutdown is requested — there is no
+idle or lifetime timeout. The 30-second limit bounds only the drain of
+in-flight requests after a shutdown signal (Ctrl-C, `SIGTERM`, or `mimir stop`).
 
 ## SIGTERM and systemd
 

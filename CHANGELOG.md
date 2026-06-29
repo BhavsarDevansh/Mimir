@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.60.5] — 2026-06-29
+
+### Fix — Daemon no longer self-terminates 30 s after start
+
+The graceful-shutdown drain bound was incorrectly applied to the **entire**
+server lifetime: `tokio::time::timeout(Duration::from_secs(30), server_fut)`
+wrapped the whole serving future, so the daemon unconditionally exited 30 s
+after it began listening — whether or not a shutdown was ever requested. The
+first `mimir chat`/`mimir ask` after start worked (inside the 30 s window);
+any command issued later failed with `Mimir is not running.` because the
+daemon had already exited with status 0 (so `Restart=on-failure` did not
+relaunch it).
+
+**Root cause:** `mimir-server/src/lib.rs` bounded the server future instead of
+only the post-signal drain phase.
+
+**Fix:** Extracted `serve_with_bounded_drain`, which splits shutdown into two
+phases — an **unbounded serve** phase (poll the server concurrently with the
+shutdown trigger) and a **drain bounded to `GRACEFUL_DRAIN_TIMEOUT` (30 s)**
+phase (applied only after a trigger fires via Ctrl-C, `SIGTERM`, or `/stop`).
+A wedged SSE stream can no longer keep the process alive past systemd's
+`TimeoutStopSec`, and the daemon no longer dies on a fixed timer.
+
+- `mimir-server/src/lib.rs` — `serve_with_bounded_drain`, `GRACEFUL_DRAIN_TIMEOUT`,
+  regression test `test_serve_outlives_drain_timeout`.
+- `docs/shutdown.md`, `docs/wiki/daemon-shutdown.md`, `docs/systemd-integration.md`
+  — updated to describe the two-phase shutdown and the unbounded serving lifetime.
+
+
 ## [0.60.4] — 2026-06-29
 
 ### Docs — Knowledge Graph documentation audit & gap-fill (#64)

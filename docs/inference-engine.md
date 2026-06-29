@@ -77,7 +77,7 @@ The inference engine participates in the nightly optimization run, which execute
 
 1. **Contradiction auto-resolution** — `ContradictionRule::evaluate_batch` resolves explicit-over-inferred disputes (explicit > inferred).
 2. **Confidence recalculation** — root-aware `confidence::recalculate_stale_fact` for every `stale_confidence = true` fact, cascading to inferred descendants in one transaction.
-3. **Inference re-evaluation** — `RuleEngine::evaluate_batch` re-runs every rule over all `Active`/`Inferred` facts and inserts any newly-derivable facts.
+3. **Inference re-evaluation** — `RuleEngine::evaluate_batch` re-runs every rule over all `Active`/`Inferred` facts and inserts any newly derivable facts.
 4. **Threshold nightly re-count** — `ThresholdRule` re-checks the ≥3 rejected-action condition and records an audit entry when it no longer holds.
 
 See [Nightly Optimization](nightly-optimization.md) for the full pass list, transaction model, and backup strategy.

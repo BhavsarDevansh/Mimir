@@ -10,7 +10,7 @@
 
 ### Lookup Tables (Stable Integer IDs)
 
-Lookup tables are seeded across migrations `001`, `012`, `013`, and `039` with stable integer IDs that map to Rust enums via `#[repr(i16)]` discriminants:
+Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `032`, and `039` with stable integer IDs that map to Rust enums via `#[repr(i16)]` discriminants:
 
 - Migration `001` seeds `entity_types` (7 variants), `recurrence_types`, `location_types`, `fact_statuses`, `relation_types`, `source_types`, `preference_categories`, and `preference_source_types`. (`entity_date_types` was also seeded here but is dropped in migration `040` — see Events & Reminders.)
 - Migration `012` adds the `DateTime = 8` variant to `entity_types`.
@@ -205,7 +205,7 @@ A fact whose `valid_from` lies in the future is a one-time event; a fact tagged 
 - `auto_complete_policy_id` → `AutoCompletePolicy` (`AutoCompleteOnDate`, `RequiresUserAction`, `Recurring`).
 - `requires_user_action` — marks tasks that need explicit user action.
 
-The `events.upcoming_scan` job (default 06:00 & 18:00) derives overlays, auto-completes past one-time events, and advances recurring events. Source facts surface in the "Upcoming" memory section directly; the overlay manages lifecycle status and recurrence advancement only. `pending_event_meta` (migration `041`) preserves the derived event shape for sensitive facts across the confirmation boundary so `confirm_fact` can rebuild the overlay faithfully.
+The `events.upcoming_scan` job (default 06:00 & 18:00) derives overlays, auto-completes past one-time events, and advances recurring events. Source facts surface in the "Upcoming" memory section directly; the overlay manages lifecycle status and recurrence advancement only. `pending_event_meta` (migration `041`) preserves the derived event shape for sensitive facts across the confirmation boundary so that `confirm_fact` can rebuild the overlay faithfully.
 
 All recurrence math is UTC-internal; timezone formatting is a presentation-layer concern. See [Events & Reminders](events-reminders.md).
 

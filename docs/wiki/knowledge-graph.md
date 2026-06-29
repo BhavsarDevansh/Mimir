@@ -2,7 +2,7 @@
 
 The **Knowledge Graph** is Mimir's long-term memory — a structured “second brain” that stores facts about you, your world, and your preferences in a queryable database that grows more useful the longer you use it.
 
-It is distinct from the condensed memory that `mimir memory` prints. The condensed memory is a **short, ranked summary** rendered *from* the Knowledge Graph to fit inside the agent's system prompt each turn. The Knowledge Graph itself is the full structured store: every entity, every fact with its temporal bounds, confidence, provenance, and inferred relationships. The old flat `memory.md` file has been retired in favour of this on-demand rendering — there is no separate text file to keep in sync.
+It is distinct from the condensed memory that `mimir memory` prints. The condensed memory is a **short, ranked summary** rendered *from* the Knowledge Graph to fit inside the agent's system prompt each turn. The Knowledge Graph itself is the fully structured store: every entity, every fact with its temporal bounds, confidence, provenance, and inferred relationships. The old flat `memory.md` file has been retired in favour of this on-demand rendering — there is no separate text file to keep in sync.
 
 ---
 

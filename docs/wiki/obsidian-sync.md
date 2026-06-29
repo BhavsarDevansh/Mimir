@@ -31,7 +31,7 @@ Export would write one `.md` file per entity to the target folder:
 
 ```markdown
 ---
-entity_id: 7
+entity_id: 018fa3e4-7b1c-7e6c-9e3a-2c4d8f0a2b1c
 name: Alice
 type: Person
 aliases: ["Al", "Alice Smith"]
@@ -49,7 +49,7 @@ aliases: ["Al", "Alice Smith"]
 - email: Rate your Roman History Tour
 ```
 
-The `entity_id` in the YAML frontmatter links the file back to its Knowledge Graph row, so a later re-import can upsert rather than duplicate. Facts are rendered as wiki-links so Obsidian's graph view mirrors Mimir's.
+The `entity_id` in the YAML frontmatter links the file back to its Knowledge Graph row, so a later re-import can upsert rather than duplicate. Facts are rendered as wiki-links, so Obsidian's graph view mirrors Mimir's.
 
 ---
 
@@ -62,7 +62,7 @@ mimir kb import facts.json --format json
 mimir kb import facts.txt --format plaintext
 ```
 
-Import would parse each file, resolve wiki-links back to entities (creating new entities where needed), and upsert facts with `source_type = Import` and a confidence of `0.80` (see [Confidence Model](Confidence-Model.md)). Conflict detection would flag facts that disagree with existing ones, and a `--dry-run` flag would preview the changes without writing.
+Import would parse each file, resolve wiki-links back to entities (creating new entities where needed), and upsert facts with `source_type = Import` and a confidence of `0.80` (see [Confidence Model](../Confidence-Model.md)). Conflict detection would flag facts that disagree with existing ones, and a `--dry-run` flag would preview the changes without writing.
 
 Imported facts follow the same deterministic Rust pipeline as chat-extracted facts: validation, entity resolution, sensitivity gating, and insertion are all handled in Rust — the import source only supplies structured data.
 
@@ -90,6 +90,6 @@ Sensitive facts (e.g. allergies) would not be exported unless explicitly request
 
 ---
 
-## When It Will Arrive
+## When It Arrives
 
 This feature is deferred to **post-Phase-5** (after the Reasoning Engine and Proactive Agent phases). The Knowledge Graph, memory, inference, and nightly optimization that the export/import would surface are all implemented today — see [Knowledge Graph](knowledge-graph.md) — but the Obsidian bridge itself has not been built. Watch the roadmap for a tracking issue when work begins.

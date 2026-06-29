@@ -51,7 +51,7 @@ After optimization completes, its callback submits `DaemonJob::MemoryCondensatio
 
 ## Trigger & Daemon-Down Handling
 
-Optimization is a **daemon-only** job: it is submitted and executed by the `BackgroundScheduler` running inside the daemon process, so it never runs when the daemon is down. There is no CLI-triggered optimization path that needs daemon-down recovery; the scheduler simply waits for the next due time. `mimir kb optimization --run-now` submits the job through the same scheduler (HTTP route → `DaemonJob::KnowledgeOptimization`), which queues it subject to the same idle/cooldown gates. If the daemon is not running, the CLI surfaces the standard daemon-down prompt (see [Daemon Auto-Start](../wiki/daemon-auto-start.md)).
+Optimization is a **daemon-only** job: it is submitted and executed by the `BackgroundScheduler` running inside the daemon process, so it never runs when the daemon is down. There is no CLI-triggered optimization path that needs daemon-down recovery; the scheduler simply waits for the next due time. `mimir kb optimization --run-now` submits the job through the same scheduler (HTTP route → `DaemonJob::KnowledgeOptimization`), which queues it subject to the same idle/cooldown gates. If the daemon is not running, the CLI surfaces the standard daemon-down prompt (see [Daemon Auto-Start](wiki/daemon-auto-start.md)).
 
 ## Yielding on User Activity
 

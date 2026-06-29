@@ -82,7 +82,8 @@ confidence rather than being skipped after the first parent updates.
 ## Corroboration
 
 When a new **non-explicit** fact covers the same claim as an existing `Active`
-fact (same subject + predicate + object, temporally overlapping) and has
+or `pending_confirmation` fact (same subject + predicate + object, temporally
+overlapping) and has
 independent provenance (`(source_type, connector_id, raw_reference)` differs
 from every existing source), `insert_fact_in_tx` corroborates instead of
 duplicating:

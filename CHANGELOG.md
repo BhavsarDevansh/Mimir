@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.60.3] — 2026-06-29
+
+### Fixed — corroboration docs & nightly recalculation efficiency (#79, PR #174)
+
+- **Documented the pending-confirmation corroboration path.** The confidence-model and "what works now" docs described corroboration only against an existing `Active` fact; `insert_fact_in_tx` also corroborates matching `pending_confirmation` facts. Both docs now state `Active` **or** `pending_confirmation`, matching the implementation.
+- **Corrected the wiki corroboration cap statement.** Verified the wiki already states the non-explicit corroboration cap as `0.95` (not `1.1`); wording aligned with the pending-confirmation path for accuracy.
+- **Nightly `confidence_recalc` skips already-refreshed rows.** Because each root-aware recalculation cascades to inferred descendants and clears their stale flags in one transaction, later iterations in the stale-fact snapshot could reopen transactions and re-walk subtrees already cleared by an ancestor pass. The loop now re-checks `stale_confidence` cheaply before recalculating, avoiding quadratic work on large stale branches.
+
 ## [0.60.2] — 2026-06-27
 
 ### Fixed — confidence cascade & nightly recalculation correctness (#79, PR #174)

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::Stream;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot, watch};
-use tracing::{debug, error};
+use tracing::debug;
 
 use crate::config::LlmConfig;
 use crate::llm::client::LlmClient;
@@ -79,12 +79,9 @@ impl LlmWorkerPool {
     ///
     /// Must be called from within a Tokio runtime context because it spawns
     /// the background worker tasks via [`tokio::spawn`].
-    pub async fn new(
-        llm_config: LlmConfig,
-        config: WorkerPoolConfig,
-    ) -> Result<Self, &'static str> {
+    pub async fn new(llm_config: LlmConfig, config: WorkerPoolConfig) -> Result<Self, String> {
         if config.worker_threads == 0 {
-            return Err("WorkerPoolConfig.worker_threads must be > 0");
+            return Err("WorkerPoolConfig.worker_threads must be > 0".to_string());
         }
 
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
@@ -98,17 +95,14 @@ impl LlmWorkerPool {
         });
 
         for i in 0..config.worker_threads {
+            // Build the worker's HTTP client up front so a construction failure
+            // aborts pool creation instead of silently degrading to zero live
+            // workers (PR #177 review: propagate worker start-up failures).
+            let client = LlmClient::new_direct(llm_config.clone())
+                .map_err(|e| format!("LLM worker {i} failed to build HTTP client: {e}"))?;
             let inner_spawn = Arc::clone(&inner);
-            let llm_config = llm_config.clone();
             let mut shutdown_rx = inner_spawn.shutdown_tx.subscribe();
             let handle = tokio::spawn(async move {
-                let client = match LlmClient::new_direct(llm_config) {
-                    Ok(client) => client,
-                    Err(e) => {
-                        error!(worker_id = i, error = %e, "LLM worker failed to build HTTP client; worker exiting");
-                        return;
-                    }
-                };
                 debug!(worker_id = i, "LLM worker started");
                 loop {
                     tokio::select! {

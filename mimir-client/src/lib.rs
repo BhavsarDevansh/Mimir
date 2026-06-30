@@ -62,16 +62,25 @@ impl MimirClient {
     ///
     /// `connect_timeout` bounds the connection-establishment phase and `timeout`
     /// bounds an entire request. Use a large `timeout` for long-lived sessions.
+    /// `base_url` is validated and normalised (trailing slashes stripped) up
+    /// front so malformed input is rejected and endpoint paths never contain a
+    /// double slash (PR #177 review).
     pub fn try_new(
         base_url: impl Into<String>,
         connect_timeout: std::time::Duration,
         timeout: std::time::Duration,
     ) -> Result<Self, ClientError> {
+        let base_url = Self::normalize_base_url(base_url.into())?;
         let client = Self::build_client(connect_timeout, timeout)?;
-        Ok(Self {
-            base_url: base_url.into(),
-            client,
-        })
+        Ok(Self { base_url, client })
+    }
+
+    /// Validate and normalise `base_url`: it must parse as a base URL, and any
+    /// trailing slashes are stripped so `url()` never produces `//path`.
+    fn normalize_base_url(base_url: String) -> Result<String, ClientError> {
+        reqwest::Url::parse(&base_url)
+            .map_err(|e| ClientError::Connection(format!("invalid base URL: {e}")))?;
+        Ok(base_url.trim_end_matches('/').to_string())
     }
 
     /// Build the underlying `reqwest::Client`, mapping any builder failure to a
@@ -623,6 +632,38 @@ mod tests {
             std::time::Duration::from_secs(30),
         );
         assert!(client.is_ok());
+    }
+
+    #[test]
+    fn try_new_strips_trailing_slash_from_base_url() {
+        // PR #177 review: a trailing slash must not produce `//path` requests.
+        let client = MimirClient::try_new(
+            "http://127.0.0.1:8080/",
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30),
+        )
+        .unwrap();
+        // `url()` is private; exercise it indirectly via the public `url` helper
+        // by checking the constructed path through a GET to a known endpoint.
+        // Here we just assert the stored base via the `sessions` URL builder.
+        assert_eq!(client.url("chat"), "http://127.0.0.1:8080/chat",);
+    }
+
+    #[test]
+    fn try_new_rejects_malformed_base_url() {
+        // PR #177 review: a non-URL base must surface as a Connection error.
+        let client = MimirClient::try_new(
+            "not a url",
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30),
+        );
+        match client {
+            Err(ClientError::Connection(msg)) => assert!(
+                msg.contains("invalid base URL"),
+                "unexpected message: {msg}"
+            ),
+            other => panic!("expected Connection error, got {other:?}"),
+        }
     }
 
     #[test]

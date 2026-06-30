@@ -67,7 +67,11 @@ Constructs a client from configuration. Must be called from within a Tokio runti
 
 The underlying `reqwest::Client` uses a 30-second **connect timeout** rather than a global request timeout, so that long-lived SSE streaming responses are not prematurely aborted.
 
-`new_direct(config)` (used internally by pool workers) is also fallible: a worker that cannot build its HTTP client logs the error and exits rather than aborting the pool.
+`new_direct(config)` (used internally by pool workers) is also fallible. The
+`reqwest::Client` is built **before** the worker pool spawns, and each worker's
+client is built up front inside `LlmWorkerPool::new`; the first build failure
+propagates as `LlmError::ClientBuild` so the pool can never start in a
+zero-live-worker state.
 
 ### `chat(messages) -> Result<(String, Usage), LlmError>`
 

@@ -125,12 +125,15 @@ impl LlmClient {
         config: LlmConfig,
         pool_config: WorkerPoolConfig,
     ) -> Result<Self, LlmError> {
+        // Build the HTTP client first so a failure cannot leave already-spawned
+        // workers detached (PR #177 review: build HTTP client before spawning
+        // workers; `LlmWorkerPool` has no Drop cleanup on this path).
+        let client = Self::build_reqwest_client()?;
         let pool = Arc::new(
             LlmWorkerPool::new(config.clone(), pool_config)
                 .await
                 .map_err(|e| LlmError::ClientBuild(format!("worker pool init: {e}")))?,
         );
-        let client = Self::build_reqwest_client()?;
         Ok(Self {
             client,
             config,

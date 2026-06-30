@@ -65,6 +65,10 @@ startup on misconfigured TLS backends) use `MimirClient::try_new(base_url,
 connect_timeout, timeout) -> Result<Self, ClientError>` (issue #165). Build
 failures map to `ClientError::Connection`.
 
+`try_new` validates `base_url` up front (it must parse as a base URL) and
+strips trailing slashes, so malformed input is rejected and endpoint paths
+never contain a double slash.
+
 ### Request helpers (DRY)
 
 Every method routes through a small set of private helpers so the

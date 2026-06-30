@@ -67,3 +67,4 @@ After config and memory files are created, `handle_init()` (Linux only):
 
 - If the `mimir` binary is moved after running `mimir init`, the service file still points to the old absolute path. Re-run `mimir init` to regenerate it.
 - The unit is a **user service** (`--user`), so it does not require root privileges.
+- `Restart=on-failure` (not `always`) is intentional: the daemon runs indefinitely and only exits when explicitly stopped (`mimir stop` / `SIGTERM`), so a clean exit (status 0) should not trigger a restart. The graceful drain of in-flight requests is bounded to 30 s (`GRACEFUL_DRAIN_TIMEOUT`), well within systemd's default `TimeoutStopSec`.

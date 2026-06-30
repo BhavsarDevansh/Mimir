@@ -1,5 +1,78 @@
 # Changelog
 
+## [0.60.7] — 2026-06-29
+
+### Fix — Handle already-fired shutdown trigger in `watch_shutdown`
+
+Addressed PR #176 review feedback (CodeRabbit): `watch_shutdown` could miss a
+SIGTERM/Ctrl-C fired in the gap between `spawn_os_signal_shutdown` and
+`shutdown_tx.subscribe()`. `watch::Receiver::changed()` only wakes on *future*
+updates, so a freshly subscribed receiver whose trigger already fired before
+subscription would wait indefinitely (until sender drop, which never happens
+during serving).
+
+**Fix:** Check the current watch value via `borrow_and_update()` before
+awaiting `changed()`. An already-fired trigger returns immediately; later
+triggers are still caught by `changed()`.
+
+- `mimir-server/src/lib.rs` — `watch_shutdown` now checks the current value
+  first; added regression test
+  `test_watch_shutdown_handles_already_fired_trigger`.
+- `docs/shutdown.md` — documented the subscription-race guard.
+
+## [0.60.6] — 2026-06-29
+
+### Refactor — Single OS-signal listener for graceful shutdown
+
+Addressed PR #176 review feedback (CodeRabbit): `serve_with_bounded_drain`
+previously built two independent `shutdown_signal` futures — one for axum's
+`with_graceful_shutdown` and one for the phase-1 serving loop — each
+registering its own `ctrl_c()`/`SIGTERM` listener. The phase-1 waiter could
+observe a signal before axum's graceful-shutdown future had registered
+interest, leaving axum accepting connections until the drain bound kicked in.
+
+**Fix:** Capture Ctrl-C / SIGTERM **once** in a dedicated
+`spawn_os_signal_shutdown` task that fans the notification into the shared
+`shutdown_tx` watch channel (the same channel `/stop` writes to). Both axum's
+graceful-shutdown future and the phase-1 loop now observe that channel via
+`watch_shutdown`, so they fire in lockstep with no duplicate OS-signal
+listeners.
+
+- `mimir-server/src/lib.rs` — replaced `shutdown_signal` with
+  `spawn_os_signal_shutdown` and `watch_shutdown`; updated
+  `serve_with_bounded_drain` to use the shared trigger.
+- `docs/shutdown.md` — documented the single-listener trigger architecture.
+
+
+## [0.60.5] — 2026-06-29
+
+### Fix — Daemon no longer self-terminates 30 s after start
+
+The graceful-shutdown drain bound was incorrectly applied to the **entire**
+server lifetime: `tokio::time::timeout(Duration::from_secs(30), server_fut)`
+wrapped the whole serving future, so the daemon unconditionally exited 30 s
+after it began listening — whether or not a shutdown was ever requested. The
+first `mimir chat`/`mimir ask` after start worked (inside the 30 s window);
+any command issued later failed with `Mimir is not running.` because the
+daemon had already exited with status 0 (so `Restart=on-failure` did not
+relaunch it).
+
+**Root cause:** `mimir-server/src/lib.rs` bounded the server future instead of
+only the post-signal drain phase.
+
+**Fix:** Extracted `serve_with_bounded_drain`, which splits shutdown into two
+phases — an **unbounded serve** phase (poll the server concurrently with the
+shutdown trigger) and a **drain bounded to `GRACEFUL_DRAIN_TIMEOUT` (30 s)**
+phase (applied only after a trigger fires via Ctrl-C, `SIGTERM`, or `/stop`).
+A wedged SSE stream can no longer keep the process alive past systemd's
+`TimeoutStopSec`, and the daemon no longer dies on a fixed timer.
+
+- `mimir-server/src/lib.rs` — `serve_with_bounded_drain`, `GRACEFUL_DRAIN_TIMEOUT`,
+  regression test `test_serve_outlives_drain_timeout`.
+- `docs/shutdown.md`, `docs/wiki/daemon-shutdown.md`, `docs/systemd-integration.md`
+  — updated to describe the two-phase shutdown and the unbounded serving lifetime.
+
+
 ## [0.60.4] — 2026-06-29
 
 ### Docs — Knowledge Graph documentation audit & gap-fill (#64)

@@ -42,16 +42,56 @@ impl MimirClient {
     ///
     /// The base URL should include the scheme and host/port, e.g.
     /// `http://127.0.0.1:8080`.
+    ///
+    /// Uses the default connect (10s) and total (120s) timeouts. A failure to
+    /// build the underlying `reqwest::Client` panics, mirroring the historical
+    /// behaviour; callers that prefer a fallible path should use [`Self::try_new`]
+    /// (issue #165).
     pub fn new(base_url: impl Into<String>) -> Self {
-        let client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .expect("failed to build HTTP client");
-        Self {
+        Self::try_new(
+            base_url,
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(120),
+        )
+        .expect("default reqwest client must build")
+    }
+
+    /// Create a new client with explicit timeouts, returning a [`ClientError`]
+    /// instead of panicking when the HTTP client cannot be built (e.g. invalid
+    /// TLS backend or missing native certificates).
+    ///
+    /// `connect_timeout` bounds the connection-establishment phase and `timeout`
+    /// bounds an entire request. Use a large `timeout` for long-lived sessions.
+    pub fn try_new(
+        base_url: impl Into<String>,
+        connect_timeout: std::time::Duration,
+        timeout: std::time::Duration,
+    ) -> Result<Self, ClientError> {
+        let client = Self::build_client(connect_timeout, timeout)?;
+        Ok(Self {
             base_url: base_url.into(),
             client,
-        }
+        })
+    }
+
+    /// Build the underlying `reqwest::Client`, mapping any builder failure to a
+    /// [`ClientError::Connection`] so daemon/CLI startup can report the problem
+    /// instead of panicking (issue #165). Extracted so the error mapping is
+    /// unit-testable without a deterministic builder failure.
+    fn build_client(
+        connect_timeout: std::time::Duration,
+        timeout: std::time::Duration,
+    ) -> Result<reqwest::Client, ClientError> {
+        reqwest::Client::builder()
+            .connect_timeout(connect_timeout)
+            .timeout(timeout)
+            .build()
+            .map_err(Self::map_build_error)
+    }
+
+    /// Map a `reqwest::Client` build failure to a [`ClientError::Connection`].
+    fn map_build_error(e: reqwest::Error) -> ClientError {
+        ClientError::Connection(format!("failed to build HTTP client: {e}"))
     }
 
     /// Validate the HTTP response status, returning the response on success or a
@@ -69,6 +109,54 @@ impl MimirClient {
         }
     }
 
+    /// Validate the HTTP response status, returning `Ok(())` on success or a
+    /// [`ClientError::Server`] on failure. Consolidates the bespoke status
+    /// checks that previously inlined the same `Server` mapping (issue #167).
+    async fn check_status(resp: reqwest::Response) -> Result<(), ClientError> {
+        Self::check_response(resp).await?;
+        Ok(())
+    }
+
+    /// Send a request builder and validate the response status, returning the
+    /// raw [`reqwest::Response`] for callers that need the body as text or a
+    /// byte stream. The status-check + error-mapping logic lives here so the
+    /// per-method wrappers stay DRY (issue #167).
+    async fn send_response(req: reqwest::RequestBuilder) -> Result<reqwest::Response, ClientError> {
+        let resp = req.send().await?;
+        Self::check_response(resp).await
+    }
+
+    /// Send a request builder, check the response status, and decode the JSON
+    /// body. Builds on [`Self::send_response`] so the status-check + JSON-decode
+    /// + error-mapping logic is centralised (issue #167).
+    async fn send_json<T: serde::de::DeserializeOwned>(
+        req: reqwest::RequestBuilder,
+    ) -> Result<T, ClientError> {
+        Self::send_response(req)
+            .await?
+            .json::<T>()
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Issue a GET request with query parameters and decode the JSON body.
+    async fn get_json<T: serde::de::DeserializeOwned, P: serde::Serialize + ?Sized>(
+        &self,
+        url: &str,
+        query: &P,
+    ) -> Result<T, ClientError> {
+        Self::send_json(self.client.get(url).query(query)).await
+    }
+
+    /// Issue a POST request with a JSON body and decode the JSON body.
+    async fn post_json<T: serde::de::DeserializeOwned, B: serde::Serialize>(
+        &self,
+        url: &str,
+        body: &B,
+    ) -> Result<T, ClientError> {
+        Self::send_json(self.client.post(url).json(body)).await
+    }
+
     /// Build a URL by appending `path` to the configured base URL.
     fn url(&self, path: &str) -> String {
         format!("{}/{}", self.base_url, path)
@@ -76,11 +164,7 @@ impl MimirClient {
 
     /// Send a non-streaming chat request.
     pub async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, ClientError> {
-        let url = self.url("chat");
-        let resp = self.client.post(&url).json(&req).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<ChatResponse>().await?;
-        Ok(body)
+        self.post_json(&self.url("chat"), &req).await
     }
 
     /// Send a streaming chat request and return an SSE item stream.
@@ -88,55 +172,36 @@ impl MimirClient {
         &self,
         req: ChatRequest,
     ) -> Result<impl Stream<Item = Result<StreamItem, ClientError>>, ClientError> {
-        let url = self.url("chat/stream");
-        let resp = self.client.post(&url).json(&req).send().await?;
-        let resp = Self::check_response(resp).await?;
+        let resp =
+            Self::send_response(self.client.post(self.url("chat/stream")).json(&req)).await?;
         Ok(parse_sse_stream(resp.bytes_stream()))
     }
 
     /// Query the daemon status.
     pub async fn status(&self) -> Result<StatusResponse, ClientError> {
-        let url = self.url("status");
-        let resp = self.client.get(&url).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<StatusResponse>().await?;
-        Ok(body)
+        self.get_json(&self.url("status"), &()).await
     }
 
     /// Return the current contents of the live memory block.
     pub async fn memory(&self) -> Result<String, ClientError> {
-        let url = self.url("memory");
-        let resp = self.client.get(&url).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.text().await?;
-        Ok(body)
+        let resp = Self::send_response(self.client.get(self.url("memory"))).await?;
+        Ok(resp.text().await?)
     }
 
     /// Trigger memory condensation immediately.
     pub async fn memory_refresh(&self) -> Result<OptimizationRunNowResponse, ClientError> {
-        let url = self.url("memory/refresh");
-        let resp = self.client.post(&url).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<OptimizationRunNowResponse>().await?;
-        Ok(body)
+        Self::send_json(self.client.post(self.url("memory/refresh"))).await
     }
 
     /// Query the knowledge graph optimization job status.
     pub async fn kb_optimization_status(&self) -> Result<OptimizationStatusResponse, ClientError> {
-        let url = self.url("kb/optimization/status");
-        let resp = self.client.get(&url).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<OptimizationStatusResponse>().await?;
-        Ok(body)
+        self.get_json(&self.url("kb/optimization/status"), &())
+            .await
     }
 
     /// Trigger the knowledge graph optimization job immediately.
     pub async fn kb_optimization_run_now(&self) -> Result<OptimizationRunNowResponse, ClientError> {
-        let url = self.url("kb/optimization/run-now");
-        let resp = self.client.post(&url).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<OptimizationRunNowResponse>().await?;
-        Ok(body)
+        Self::send_json(self.client.post(self.url("kb/optimization/run-now"))).await
     }
 
     // Trigger a graceful shutdown of the daemon.
@@ -146,7 +211,6 @@ impl MimirClient {
 
     /// Query facts for an entity.
     pub async fn kb_query(&self, req: FactQueryParams) -> Result<FactQueryResponse, ClientError> {
-        let url = self.url("kb/query");
         let mut params = vec![("entity", req.entity)];
         if let Some(p) = req.predicate {
             params.push(("predicate", p));
@@ -160,19 +224,13 @@ impl MimirClient {
         if let Some(l) = req.limit {
             params.push(("limit", l.to_string()));
         }
-        let resp = self.client.get(&url).query(&params).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<FactQueryResponse>().await?;
-        Ok(body)
+        self.get_json(&self.url("kb/query"), &params).await
     }
 
     /// Show a single fact by ID.
     pub async fn kb_show(&self, fact_id: i32) -> Result<FactDetailResponse, ClientError> {
-        let url = self.url(&format!("kb/facts/{fact_id}"));
-        let resp = self.client.get(&url).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<FactDetailResponse>().await?;
-        Ok(body)
+        self.get_json(&self.url(&format!("kb/facts/{fact_id}")), &())
+            .await
     }
 
     /// Edit a single fact.
@@ -181,16 +239,16 @@ impl MimirClient {
         fact_id: i32,
         req: FactEditRequest,
     ) -> Result<FactEditResponse, ClientError> {
-        let url = self.url(&format!("kb/facts/{fact_id}"));
-        let resp = self.client.patch(&url).json(&req).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<FactEditResponse>().await?;
-        Ok(body)
+        Self::send_json(
+            self.client
+                .patch(self.url(&format!("kb/facts/{fact_id}")))
+                .json(&req),
+        )
+        .await
     }
 
     /// Browse the knowledge graph from an entity.
     pub async fn kb_browse(&self, req: BrowseRequest) -> Result<BrowseResponse, ClientError> {
-        let url = self.url("kb/browse");
         let mut params: Vec<(&str, String)> =
             vec![("entity", req.entity), ("depth", req.depth.to_string())];
         if let Some(o) = req.offset {
@@ -199,23 +257,16 @@ impl MimirClient {
         if let Some(l) = req.limit {
             params.push(("limit", l.to_string()));
         }
-        let resp = self.client.get(&url).query(&params).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<BrowseResponse>().await?;
-        Ok(body)
+        self.get_json(&self.url("kb/browse"), &params).await
     }
 
     /// Get a profile for an entity.
     pub async fn kb_profile(&self, req: ProfileRequest) -> Result<ProfileResponse, ClientError> {
-        let url = self.url("kb/profile");
         let mut params: Vec<(&str, String)> = vec![];
         if let Some(e) = req.entity {
             params.push(("entity", e));
         }
-        let resp = self.client.get(&url).query(&params).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<ProfileResponse>().await?;
-        Ok(body)
+        self.get_json(&self.url("kb/profile"), &params).await
     }
 
     /// Query the audit log.
@@ -223,7 +274,6 @@ impl MimirClient {
         &self,
         req: AuditQueryRequest,
     ) -> Result<AuditQueryResponse, ClientError> {
-        let url = self.url("kb/audit");
         let mut params: Vec<(&str, String)> = vec![];
         if let Some(e) = req.entity {
             params.push(("entity", e));
@@ -246,28 +296,17 @@ impl MimirClient {
         if let Some(l) = req.limit {
             params.push(("limit", l.to_string()));
         }
-        let resp = self.client.get(&url).query(&params).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<AuditQueryResponse>().await?;
-        Ok(body)
+        self.get_json(&self.url("kb/audit"), &params).await
     }
 
     /// Forget facts (single or bulk).
     pub async fn kb_forget(&self, req: ForgetRequest) -> Result<ForgetResponse, ClientError> {
-        let url = self.url("kb/facts/forget");
-        let resp = self.client.post(&url).json(&req).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<ForgetResponse>().await?;
-        Ok(body)
+        self.post_json(&self.url("kb/facts/forget"), &req).await
     }
 
     /// Restore facts from trash.
     pub async fn kb_restore(&self, req: RestoreRequest) -> Result<RestoreResponse, ClientError> {
-        let url = self.url("kb/trash/restore");
-        let resp = self.client.post(&url).json(&req).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<RestoreResponse>().await?;
-        Ok(body)
+        self.post_json(&self.url("kb/trash/restore"), &req).await
     }
 
     /// List trash contents.
@@ -276,98 +315,63 @@ impl MimirClient {
         offset: u32,
         limit: u32,
     ) -> Result<TrashListResponse, ClientError> {
-        let url = self.url("kb/trash");
         let params = [("offset", offset.to_string()), ("limit", limit.to_string())];
-        let resp = self.client.get(&url).query(&params).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<TrashListResponse>().await?;
-        Ok(body)
+        self.get_json(&self.url("kb/trash"), &params).await
     }
 
     /// Empty the trash.
     pub async fn kb_trash_empty(&self) -> Result<(), ClientError> {
-        let url = self.url("kb/trash");
-        let resp = self.client.delete(&url).send().await?;
-        let status = resp.status();
-        if status.is_success() {
-            Ok(())
-        } else {
-            let text = resp.text().await.unwrap_or_default();
-            Err(ClientError::Server {
-                status: status.as_u16(),
-                message: text,
-            })
-        }
+        Self::check_status(self.client.delete(self.url("kb/trash")).send().await?).await
     }
     /// List pending sensitive facts awaiting confirmation.
     pub async fn kb_pending(&self) -> Result<PendingListResponse, ClientError> {
-        let url = self.url("kb/pending");
-        let resp = self.client.get(&url).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<PendingListResponse>().await?;
-        Ok(body)
+        self.get_json(&self.url("kb/pending"), &()).await
     }
 
     /// Confirm a pending sensitive fact.
     pub async fn kb_confirm(&self, fact_id: i32) -> Result<ConfirmFactResponse, ClientError> {
-        let url = self.url(&format!("kb/facts/{fact_id}/confirm"));
-        let resp = self.client.post(&url).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<ConfirmFactResponse>().await?;
-        Ok(body)
+        Self::send_json(
+            self.client
+                .post(self.url(&format!("kb/facts/{fact_id}/confirm"))),
+        )
+        .await
     }
 
     /// Reject a pending sensitive fact. An optional reason is written to the
     /// audit log. Returns `Ok(())` on a 204 No Content.
     pub async fn kb_reject(&self, fact_id: i32, reason: Option<&str>) -> Result<(), ClientError> {
-        let url = self.url(&format!("kb/facts/{fact_id}/reject"));
         let req = RejectFactRequest {
             reason: reason.map(|s| s.to_string()),
         };
-        let resp = self.client.post(&url).json(&req).send().await?;
-        let status = resp.status();
-        if status.is_success() {
-            Ok(())
-        } else {
-            let text = resp.text().await.unwrap_or_default();
-            Err(ClientError::Server {
-                status: status.as_u16(),
-                message: text,
-            })
-        }
+        Self::check_status(
+            self.client
+                .post(self.url(&format!("kb/facts/{fact_id}/reject")))
+                .json(&req)
+                .send()
+                .await?,
+        )
+        .await
     }
 
+    /// Trigger a graceful shutdown of the daemon.
+    ///
+    /// A 503 response is treated as success because the server may already be
+    /// shutting down; every other non-success status routes through
+    /// [`Self::check_status`] for consistent `ClientError::Server` mapping.
     pub async fn stop(&self) -> Result<(), ClientError> {
-        let url = self.url("stop");
-        let resp = self.client.post(&url).send().await?;
+        let resp = self.client.post(self.url("stop")).send().await?;
         let status = resp.status();
-        if status.is_success() || status == StatusCode::SERVICE_UNAVAILABLE {
+        if status == StatusCode::SERVICE_UNAVAILABLE {
             // 503 may be returned if the server is already shutting down.
             Ok(())
         } else {
-            let text = resp.text().await.unwrap_or_default();
-            Err(ClientError::Server {
-                status: status.as_u16(),
-                message: text,
-            })
+            Self::check_status(resp).await
         }
     }
 
     /// List all conversation sessions.
     pub async fn sessions(&self) -> Result<Vec<SessionSummary>, ClientError> {
-        let url = self.url("sessions");
-        let resp = self.client.get(&url).send().await?;
-        let status = resp.status();
-        if status.is_success() {
-            let body = resp.json::<Vec<SessionSummary>>().await?;
-            Ok(body)
-        } else {
-            let text = resp.text().await.unwrap_or_default();
-            Err(ClientError::Server {
-                status: status.as_u16(),
-                message: text,
-            })
-        }
+        self.get_json(&self.url("sessions"), &()).await
     }
 
     /// Fetch messages for a single session from the last compaction point.
@@ -382,32 +386,24 @@ impl MimirClient {
             .push("sessions")
             .push(&session_id.to_string())
             .push("messages");
-        let resp = self.client.get(url).send().await?;
-        let resp = Self::check_response(resp).await?;
-        let body = resp.json::<SessionMessagesResponse>().await?;
-        Ok(body)
+        Self::send_json(self.client.get(url)).await
     }
     /// List knowledge graph categories.
     pub async fn kb_categories(
         &self,
         parent: Option<i32>,
     ) -> Result<Vec<CategoryResponse>, ClientError> {
-        let url = self.url("kb/categories");
         let mut params: Vec<(&str, String)> = Vec::new();
         if let Some(p) = parent {
             params.push(("parent", p.to_string()));
         }
-        let resp = self.client.get(&url).query(&params).send().await?;
-        let resp = Self::check_response(resp).await?;
-        Ok(resp.json::<Vec<CategoryResponse>>().await?)
+        self.get_json(&self.url("kb/categories"), &params).await
     }
 
     /// Show a single category with its children.
     pub async fn kb_category_show(&self, id: i32) -> Result<CategoryDetailResponse, ClientError> {
-        let url = self.url(&format!("kb/categories/{id}"));
-        let resp = self.client.get(&url).send().await?;
-        let resp = Self::check_response(resp).await?;
-        Ok(resp.json::<CategoryDetailResponse>().await?)
+        self.get_json(&self.url(&format!("kb/categories/{id}")), &())
+            .await
     }
 
     /// Create a new knowledge graph category.
@@ -419,7 +415,6 @@ impl MimirClient {
         description: Option<String>,
         memory_weight: Option<f32>,
     ) -> Result<CategoryResponse, ClientError> {
-        let url = self.url("kb/categories");
         let body = serde_json::json!({
             "id": id,
             "name": name,
@@ -427,17 +422,18 @@ impl MimirClient {
             "description": description,
             "memory_weight": memory_weight,
         });
-        let resp = self.client.post(&url).json(&body).send().await?;
-        let resp = Self::check_response(resp).await?;
-        Ok(resp.json::<CategoryResponse>().await?)
+        self.post_json(&self.url("kb/categories"), &body).await
     }
 
     /// Delete a knowledge graph category.
     pub async fn kb_category_delete(&self, id: i32) -> Result<(), ClientError> {
-        let url = self.url(&format!("kb/categories/{id}"));
-        let resp = self.client.delete(&url).send().await?;
-        Self::check_response(resp).await?;
-        Ok(())
+        Self::check_status(
+            self.client
+                .delete(self.url(&format!("kb/categories/{id}")))
+                .send()
+                .await?,
+        )
+        .await
     }
 }
 
@@ -616,6 +612,37 @@ mod tests {
             message: "busy".to_string(),
         };
         assert_eq!(err2.to_string(), "server error 503: busy");
+    }
+
+    #[test]
+    fn try_new_builds_client_with_explicit_timeouts() {
+        // Issue #165: the fallible constructor must succeed for sane timeouts.
+        let client = MimirClient::try_new(
+            "http://127.0.0.1:8080",
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30),
+        );
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn map_build_error_produces_connection_variant() {
+        // Issue #165: a reqwest client build failure must surface as
+        // `ClientError::Connection` rather than a panic. reqwest accepts every
+        // timeout value, so obtain a real `reqwest::Error` from a deliberately
+        // invalid request URL and verify the mapping.
+        let err = reqwest::Client::new()
+            .get("ht!tp://invalid url")
+            .build()
+            .unwrap_err();
+        let mapped = MimirClient::map_build_error(err);
+        match mapped {
+            ClientError::Connection(msg) => assert!(
+                msg.contains("failed to build HTTP client"),
+                "unexpected message: {msg}"
+            ),
+            other => panic!("expected Connection error, got {other:?}"),
+        }
     }
 
     #[tokio::test]

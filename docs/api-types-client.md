@@ -56,6 +56,28 @@ By extracting the wire types into a zero-dependency crate (only `serde`), both t
 - No connection pooling beyond `reqwest`'s default — the daemon is local.
 - SSE parsing is a lightweight line parser over `reqwest::Response::bytes_stream()` with no extra SSE crate.
 
+### Construction
+
+`MimirClient::new(base_url)` builds a `reqwest::Client` with the default 10 s
+connect timeout and 120 s total timeout. It panics if the client cannot be
+built; callers that prefer a fallible path (e.g. explicit timeouts, or graceful
+startup on misconfigured TLS backends) use `MimirClient::try_new(base_url,
+connect_timeout, timeout) -> Result<Self, ClientError>` (issue #165). Build
+failures map to `ClientError::Connection`.
+
+### Request helpers (DRY)
+
+Every method routes through a small set of private helpers so the
+status-check + JSON-decode + error-mapping logic is centralised (issue #167):
+
+- `send_response(req)` — send + status check, returns the raw `reqwest::Response`.
+- `send_json::<T>(req)` — `send_response` + `.json::<T>()`, mapping reqwest errors to `ClientError`.
+- `get_json::<T, P>(url, &query)` / `post_json::<T, B>(url, &body)` — convenience wrappers.
+- `check_status(resp)` — status-only validation returning `Result<(), ClientError>`.
+
+`stop` keeps bespoke status handling because a 503 response (server already
+shutting down) must be treated as success.
+
 ### SSE Parsing
 
 The parser accumulates bytes into a buffer, splits on `\n\n` (SSE event boundaries), and parses each block:
@@ -65,6 +87,12 @@ The parser accumulates bytes into a buffer, splits on `\n\n` (SSE event boundari
 - No event type or `event: text` → `StreamItem::Text(data)`
 - `event: usage` → parse JSON as `Usage` → `StreamItem::Usage`
 - `event: error` → `ClientError::Server`
+
+The buffer is capped at 1 MiB (`MAX_SSE_EVENT_SIZE`); a stream that never emits
+a delimiter produces `ClientError::Connection("SSE event exceeded max size")`
+instead of growing unbounded. The delimiter scan resumes from the last
+inspected offset and uses SIMD-accelerated `memchr::memmem`, so accumulation is
+linear rather than quadratic (issue #164).
 
 ### Methods
 

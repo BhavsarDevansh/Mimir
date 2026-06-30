@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::Stream;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot, watch};
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::config::LlmConfig;
 use crate::llm::client::LlmClient;
@@ -102,7 +102,13 @@ impl LlmWorkerPool {
             let llm_config = llm_config.clone();
             let mut shutdown_rx = inner_spawn.shutdown_tx.subscribe();
             let handle = tokio::spawn(async move {
-                let client = LlmClient::new_direct(llm_config);
+                let client = match LlmClient::new_direct(llm_config) {
+                    Ok(client) => client,
+                    Err(e) => {
+                        error!(worker_id = i, error = %e, "LLM worker failed to build HTTP client; worker exiting");
+                        return;
+                    }
+                };
                 debug!(worker_id = i, "LLM worker started");
                 loop {
                     tokio::select! {

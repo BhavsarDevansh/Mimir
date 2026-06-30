@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.61.0] — 2026-06-30
+
+### Optimization & robustness sweep (issues #161–#168)
+
+- **#161** (core): Completed truncated doc comments on `JobError::is_not_registered`
+  and `JobError::is_already_running` (`mimir-core/src/job_queue.rs`).
+- **#162** (core): `DailySchedule::parse` now enforces a strict five-character
+  `HH:MM` format with zero-padded fields; non-zero-padded inputs like `"2:30"`
+  are rejected with `JobError::InvalidSchedule` for config-file determinism.
+- **#164** (client): SSE stream parser already caps the buffer at 1 MiB
+  (`MAX_SSE_EVENT_SIZE`) and scans delimiters linearly via `memchr` with a
+  resume-from-cursor optimization — verified and documented.
+- **#165** (client): Added fallible `MimirClient::try_new(base_url,
+  connect_timeout, timeout) -> Result<Self, ClientError>`; `new` keeps the
+  panicking default for back-compat. Build failures map to
+  `ClientError::Connection`.
+- **#166** (core): `LlmClient::new` and `new_direct` are now fallible
+  (`Result<Self, LlmError>`); added `LlmError::ClientBuild`. Daemon startup
+  (`start_server`, `AppState::from_config`) propagates the error instead of
+  panicking; pool workers log and exit on a build failure.
+- **#167** (client): DRY'd the repeated `check_response` + `resp.json::<T>()`
+  pattern behind `send_response`/`send_json`/`get_json`/`post_json`/`check_status`;
+  `stop` keeps bespoke 503 handling.
+- **#168** (cli): `parse_datetime` interprets offsetless datetimes and
+  date-only inputs in the local timezone (sharing the now-public
+  `DailySchedule::naive_to_utc_local`); explicit RFC3339 offsets are preserved
+  as UTC.
+
+**Breaking (internal API):** `LlmClient::new` / `LlmClient::new_direct` now
+return `Result`. Internal callers are updated; the OpenAI-compatible HTTP
+endpoint is unaffected.
+
 ## [0.60.7] — 2026-06-29
 
 ### Fix — Handle already-fired shutdown trigger in `watch_shutdown`

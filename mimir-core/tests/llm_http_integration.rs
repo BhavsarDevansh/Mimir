@@ -18,7 +18,9 @@ async fn test_client(base_url: String) -> LlmClient {
         max_tokens: Some(10),
         temperature: 0.0,
     };
-    LlmClient::new(config).await
+    LlmClient::new(config)
+        .await
+        .expect("LLM client must build in tests")
 }
 
 #[tokio::test]

@@ -6,13 +6,24 @@ use mimir_api_types::{
 };
 use mimir_client::MimirClient;
 
+/// Parse a user-supplied date/datetime string for KB audit and forget filters.
+///
+/// Explicit RFC3339 offsets (e.g. `"2020-06-15T10:30:00Z"`) are preserved as
+/// UTC. Offsetless datetimes (e.g. `"2020-06-15T10:30:00"` or
+/// `"2020-06-15 10:30:00"`) and date-only inputs are interpreted in the
+/// daemon/CLI local timezone via
+/// [`mimir_core::job_queue::DailySchedule::naive_to_utc_local`], so
+/// user-authored local times behave intuitively rather than being silently
+/// shifted to UTC (issue #168).
 #[allow(dead_code)]
 fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
     if let Ok(dt) = s.parse::<DateTime<Utc>>() {
         return Some(dt);
     }
     if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        return d.and_hms_opt(0, 0, 0).map(|t| t.and_utc());
+        return d
+            .and_hms_opt(0, 0, 0)
+            .map(mimir_core::job_queue::DailySchedule::naive_to_utc_local);
     }
     for fmt in [
         "%Y-%m-%dT%H:%M:%S",
@@ -21,7 +32,9 @@ fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
         "%Y-%m-%d %H:%M:%S%.f",
     ] {
         if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
-            return Some(ndt.and_utc());
+            return Some(mimir_core::job_queue::DailySchedule::naive_to_utc_local(
+                ndt,
+            ));
         }
     }
     None
@@ -720,29 +733,56 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{Local, Offset, TimeZone};
 
     #[test]
     fn parse_datetime_rfc3339() {
         let dt = parse_datetime("2020-06-15T10:30:00Z").unwrap();
+        // Explicit offsets are preserved as UTC.
         assert_eq!(dt.format("%Y-%m-%d %H:%M").to_string(), "2020-06-15 10:30");
+        assert_eq!(dt.offset().fix().local_minus_utc(), 0);
     }
 
     #[test]
     fn parse_datetime_date_only_is_midnight() {
         let dt = parse_datetime("2020-06-15").unwrap();
-        assert_eq!(dt.format("%H:%M:%S").to_string(), "00:00:00");
+        // Date-only is interpreted as local midnight, so the local wall clock
+        // of the result must be 00:00:00 regardless of the host timezone.
+        let local = Local.from_utc_datetime(&dt.naive_utc());
+        assert_eq!(
+            local.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2020-06-15 00:00:00"
+        );
     }
 
     #[test]
     fn parse_datetime_iso_without_zone() {
         let dt = parse_datetime("2020-06-15T10:30:00").unwrap();
-        assert_eq!(dt.format("%H:%M").to_string(), "10:30");
+        // Offsetless inputs are interpreted in the local timezone, so the
+        // local wall clock of the result must match the input (issue #168).
+        let local = Local.from_utc_datetime(&dt.naive_utc());
+        assert_eq!(
+            local.format("%Y-%m-%d %H:%M").to_string(),
+            "2020-06-15 10:30"
+        );
+    }
+
+    #[test]
+    fn parse_datetime_explicit_offset_preserved() {
+        // An explicit non-Z offset is preserved and converted to UTC.
+        let dt = parse_datetime("2020-06-15T12:30:00+02:00").unwrap();
+        assert_eq!(dt.format("%Y-%m-%d %H:%M").to_string(), "2020-06-15 10:30");
+        assert_eq!(dt.offset().fix().local_minus_utc(), 0);
     }
 
     #[test]
     fn parse_datetime_space_separator() {
         let dt = parse_datetime("2020-06-15 10:30:00").unwrap();
-        assert_eq!(dt.format("%H:%M").to_string(), "10:30");
+        let local = Local.from_utc_datetime(&dt.naive_utc());
+        assert_eq!(
+            local.format("%Y-%m-%d %H:%M").to_string(),
+            "2020-06-15 10:30"
+        );
     }
 
     #[test]

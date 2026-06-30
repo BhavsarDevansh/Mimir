@@ -169,6 +169,10 @@ pub enum LlmError {
     /// The worker pool queues are full.
     #[error("worker pool queue full")]
     QueueFull,
+
+    /// The HTTP client or worker pool could not be constructed at startup.
+    #[error("client build error: {0}")]
+    ClientBuild(String),
 }
 
 impl ChatRequest {

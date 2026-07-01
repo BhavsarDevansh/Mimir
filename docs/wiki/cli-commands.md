@@ -276,6 +276,17 @@ Query the fact audit log with filters:
 mimir kb audit --entity Alice --predicate visited --from 2025-01-01 --change_type created
 ```
 
+#### Date filter format
+
+`--from`/`--to` (and the same flags on `mimir kb forget`) accept:
+
+- **RFC3339 with offset** — `2025-01-01T10:30:00Z`, `2025-01-01T10:30:00+02:00` (preserved as UTC).
+- **Offsetless datetime** — `2025-01-01T10:30:00` or `2025-01-01 10:30:00` (interpreted in your local timezone).
+- **Date only** — `2025-01-01` (midnight in your local timezone).
+
+If you omit an offset, the time is treated as local, so a filter like
+`--from 2025-01-01T09:00:00` means 09:00 on your machine, not 09:00 UTC.
+
 ### `mimir kb forget`
 
 Forget facts at various granularities. Facts are soft-deleted to a trash bin with a 30-day expiry.

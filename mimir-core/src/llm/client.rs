@@ -97,6 +97,10 @@ impl LlmClient {
 
     /// Create a new client from the provided LLM configuration.
     ///
+    /// Returns [`LlmError::ClientBuild`] if the worker pool or HTTP client
+    /// cannot be constructed, so startup can fail gracefully instead of
+    /// panicking (issue #166).
+    ///
     /// Internally creates a default [`LlmWorkerPool`] with one worker thread
     /// and bounded queues of size 100.
     ///
@@ -107,34 +111,59 @@ impl LlmClient {
     /// [`connect_timeout`](reqwest::ClientBuilder::connect_timeout) rather than
     /// a global request timeout so that long-lived SSE streams are not
     /// prematurely aborted.
-    pub async fn new(config: LlmConfig) -> Self {
+    pub async fn new(config: LlmConfig) -> Result<Self, LlmError> {
+        Self::new_with_pool_config(config, WorkerPoolConfig::default()).await
+    }
+
+    /// Create a new client with an explicit [`WorkerPoolConfig`].
+    ///
+    /// Like [`Self::new`] but lets tests (and future embedders) control the
+    /// worker pool shape. A failure to initialise the pool or build the HTTP
+    /// client surfaces as [`LlmError::ClientBuild`] instead of panicking
+    /// (issue #166).
+    async fn new_with_pool_config(
+        config: LlmConfig,
+        pool_config: WorkerPoolConfig,
+    ) -> Result<Self, LlmError> {
+        // Build the HTTP client first so a failure cannot leave already-spawned
+        // workers detached (PR #177 review: build HTTP client before spawning
+        // workers; `LlmWorkerPool` has no Drop cleanup on this path).
+        let client = Self::build_reqwest_client()?;
         let pool = Arc::new(
-            LlmWorkerPool::new(config.clone(), WorkerPoolConfig::default())
+            LlmWorkerPool::new(config.clone(), pool_config)
                 .await
-                .expect("default WorkerPoolConfig has worker_threads=1"),
+                .map_err(|e| LlmError::ClientBuild(format!("worker pool init: {e}")))?,
         );
-        Self {
-            client: reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(30))
-                .build()
-                .expect("valid reqwest client"),
+        Ok(Self {
+            client,
             config,
             pool: Some(pool),
-        }
+        })
     }
 
     /// Create a client that bypasses the worker pool and makes direct HTTP calls.
     ///
     /// This is used internally by pool workers; external callers should use [`Self::new`].
-    pub(crate) fn new_direct(config: LlmConfig) -> Self {
-        Self {
-            client: reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(30))
-                .build()
-                .expect("valid reqwest client"),
+    pub(crate) fn new_direct(config: LlmConfig) -> Result<Self, LlmError> {
+        let client = Self::build_reqwest_client()?;
+        Ok(Self {
+            client,
             config,
             pool: None,
-        }
+        })
+    }
+
+    /// Build the shared `reqwest::Client` used for upstream LLM calls.
+    ///
+    /// Extracted so a construction failure surfaces as [`LlmError::ClientBuild`]
+    /// instead of a startup panic (issue #166). A `connect_timeout` is used
+    /// rather than a global request timeout so long-lived SSE streams are not
+    /// prematurely aborted.
+    fn build_reqwest_client() -> Result<reqwest::Client, LlmError> {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| LlmError::ClientBuild(format!("failed to build reqwest client: {e}")))
     }
 
     /// Replace the default worker pool with a custom one (test injection).
@@ -565,7 +594,7 @@ mod tests {
             max_tokens: Some(100),
             temperature: 0.2,
         };
-        let client = LlmClient::new_direct(config);
+        let client = LlmClient::new_direct(config).expect("LLM direct client must build in tests");
         let debug = format!("{:?}", client);
         assert!(
             !debug.contains("sk-super-secret"),
@@ -584,12 +613,38 @@ mod tests {
             max_tokens: Some(10),
             temperature: 0.2,
         };
-        let client = LlmClient::new_direct(config);
+        let client = LlmClient::new_direct(config).expect("LLM direct client must build in tests");
         let overridden = client
             .with_temperature_override(0.7)
             .expect("temperature override supported");
         let debug = format!("{:?}", overridden);
         assert!(debug.contains("temperature: 0.7"), "debug: {debug}");
+    }
+
+    #[tokio::test]
+    async fn new_returns_client_build_error_for_invalid_pool_config() {
+        // Issue #166: a worker pool that cannot initialise must surface as
+        // `LlmError::ClientBuild` instead of panicking at daemon startup.
+        // `worker_threads = 0` is rejected by `LlmWorkerPool::new`.
+        let config = LlmConfig {
+            endpoint: "https://api.openai.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-4o".to_string(),
+            max_tokens: Some(10),
+            temperature: 0.2,
+        };
+        let result = LlmClient::new_with_pool_config(
+            config,
+            crate::llm::pool::WorkerPoolConfig {
+                worker_threads: 0,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(
+            matches!(result, Err(LlmError::ClientBuild(ref m)) if m.contains("worker pool init")),
+            "expected ClientBuild error, got {result:?}"
+        );
     }
 
     #[tokio::test]
@@ -603,7 +658,9 @@ mod tests {
             max_tokens: Some(10),
             temperature: 0.2,
         };
-        let client = LlmClient::new(config).await;
+        let client = LlmClient::new(config)
+            .await
+            .expect("LLM client must build in tests");
         assert!(client.pool.is_some(), "pooled client should have a pool");
 
         let overridden = client
@@ -648,7 +705,9 @@ mod tests {
             max_tokens: Some(10),
             temperature: 0.0,
         };
-        let client = LlmClient::new(config).await;
+        let client = LlmClient::new(config)
+            .await
+            .expect("LLM client must build in tests");
 
         let result = client.chat(vec![Message::user("hi")], None).await;
         assert!(result.is_err());

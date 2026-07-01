@@ -92,14 +92,30 @@ impl DailySchedule {
     }
 
     /// Parse an `HH:MM` schedule.
+    ///
+    /// The format is strict: the input must be exactly five characters with
+    /// zero-padded two-digit hour and minute fields (e.g. `"02:30"`, not
+    /// `"2:30"`). Non-zero-padded forms are rejected so user-authored
+    /// `[[scheduler]]` strings stay deterministic (issue #162).
     pub fn parse(value: &str) -> Result<Self, JobError> {
+        let bytes = value.as_bytes();
+        let strict = bytes.len() == 5
+            && bytes[2] == b':'
+            && bytes[0..2].iter().all(u8::is_ascii_digit)
+            && bytes[3..5].iter().all(u8::is_ascii_digit);
+        if !strict {
+            return Err(JobError::InvalidSchedule(value.to_string()));
+        }
         let time = NaiveTime::parse_from_str(value, "%H:%M")
             .map_err(|_| JobError::InvalidSchedule(value.to_string()))?;
         Ok(Self::new(time))
     }
 
     /// Convert a naive local datetime to UTC, handling DST gaps and ambiguities.
-    fn naive_to_utc_local(naive: chrono::NaiveDateTime) -> DateTime<Utc> {
+    ///
+    /// Shared with the CLI date filters (`mimir/src/kb.rs`) so user-authored
+    /// local times are interpreted consistently (issue #168).
+    pub fn naive_to_utc_local(naive: chrono::NaiveDateTime) -> DateTime<Utc> {
         match chrono::Local.from_local_datetime(&naive) {
             chrono::LocalResult::Single(dt) => dt.with_timezone(&Utc),
             chrono::LocalResult::Ambiguous(earlier, _later) => earlier.with_timezone(&Utc),
@@ -221,12 +237,12 @@ pub enum JobError {
 }
 
 impl JobError {
-    /// Returns  if this error indicates the requested job is not registered.
+    /// Returns `true` if this error indicates the requested job is not registered.
     pub fn is_not_registered(&self) -> bool {
         matches!(self, Self::JobNotRegistered(_))
     }
 
-    /// Returns  if this error indicates the job is already running.
+    /// Returns `true` if this error indicates the job is already running.
     pub fn is_already_running(&self) -> bool {
         matches!(self, Self::JobAlreadyRunning(_))
     }
@@ -524,7 +540,7 @@ mod tests {
 
     #[test]
     fn daily_schedule_parse_rejects_invalid_formats() {
-        // Out-of-range hour is rejected by chrono's %H parser.
+        // Out-of-range hour/minute are rejected by chrono's %H:%M parser.
         assert!(matches!(
             DailySchedule::parse("25:00"),
             Err(JobError::InvalidSchedule(_))
@@ -541,15 +557,38 @@ mod tests {
             DailySchedule::parse("10:99"),
             Err(JobError::InvalidSchedule(_))
         ));
+        // Non-zero-padded forms are rejected by the strict HH:MM guard.
+        assert!(matches!(
+            DailySchedule::parse("2:30"),
+            Err(JobError::InvalidSchedule(_))
+        ));
+        assert!(matches!(
+            DailySchedule::parse("9:5"),
+            Err(JobError::InvalidSchedule(_))
+        ));
+        // Wrong separator / missing field.
+        assert!(matches!(
+            DailySchedule::parse("02-30"),
+            Err(JobError::InvalidSchedule(_))
+        ));
+        assert!(matches!(
+            DailySchedule::parse("2:30:00"),
+            Err(JobError::InvalidSchedule(_))
+        ));
     }
 
     #[test]
-    fn daily_schedule_parse_accepts_non_zero_padded_input() {
-        // Chrono's `%H:%M` parser is padding-agnostic: it accepts both
-        // zero-padded and bare digits. Document the accepted forms so any
-        // future tightening of the parser is caught here.
-        assert_eq!(DailySchedule::parse("2:30").unwrap().as_hhmm(), "02:30");
-        assert_eq!(DailySchedule::parse("9:5").unwrap().as_hhmm(), "09:05");
+    fn daily_schedule_parse_rejects_non_zero_padded_input() {
+        // The strict `HH:MM` guard rejects single-digit hour/minute fields
+        // that chrono's padding-agnostic `%H` parser would otherwise accept.
+        assert!(matches!(
+            DailySchedule::parse("2:30"),
+            Err(JobError::InvalidSchedule(_))
+        ));
+        assert!(matches!(
+            DailySchedule::parse("9:5"),
+            Err(JobError::InvalidSchedule(_))
+        ));
     }
 
     #[test]

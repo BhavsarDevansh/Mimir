@@ -274,7 +274,7 @@ async fn serve_with_bounded_drain(
 /// forcefully aborted so that resource cleanup can still run.
 pub async fn start_server(config: Arc<ReloadableConfig>) -> anyhow::Result<()> {
     let llm_client: Arc<dyn LlmBackend> =
-        Arc::new(LlmClient::new(config.snapshot().await.llm.clone()).await);
+        Arc::new(LlmClient::new(config.snapshot().await.llm.clone()).await?);
     start_server_with_llm(config, llm_client).await
 }
 

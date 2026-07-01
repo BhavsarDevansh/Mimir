@@ -92,7 +92,7 @@ impl AppState {
         config: Arc<ReloadableConfig>,
     ) -> anyhow::Result<(Self, tokio::sync::watch::Receiver<bool>)> {
         let llm_client: Arc<dyn LlmBackend> =
-            Arc::new(LlmClient::new(config.snapshot().await.llm.clone()).await);
+            Arc::new(LlmClient::new(config.snapshot().await.llm.clone()).await?);
         Self::from_config_with_llm(config, llm_client).await
     }
 

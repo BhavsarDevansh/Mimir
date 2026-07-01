@@ -79,12 +79,9 @@ impl LlmWorkerPool {
     ///
     /// Must be called from within a Tokio runtime context because it spawns
     /// the background worker tasks via [`tokio::spawn`].
-    pub async fn new(
-        llm_config: LlmConfig,
-        config: WorkerPoolConfig,
-    ) -> Result<Self, &'static str> {
+    pub async fn new(llm_config: LlmConfig, config: WorkerPoolConfig) -> Result<Self, String> {
         if config.worker_threads == 0 {
-            return Err("WorkerPoolConfig.worker_threads must be > 0");
+            return Err("WorkerPoolConfig.worker_threads must be > 0".to_string());
         }
 
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
@@ -97,12 +94,24 @@ impl LlmWorkerPool {
             in_flight: AtomicUsize::new(0),
         });
 
+        // Build every worker's HTTP client up front so a construction failure
+        // aborts pool creation *before* any worker task is spawned. Spawning a
+        // worker and then failing on a later iteration would leave earlier
+        // workers detached with no `LlmWorkerPool` handle to signal shutdown
+        // (PR #177 review: avoid leaking partially-started workers on
+        // constructor failure).
+        let mut clients = Vec::with_capacity(config.worker_threads as usize);
         for i in 0..config.worker_threads {
+            clients.push(
+                LlmClient::new_direct(llm_config.clone())
+                    .map_err(|e| format!("LLM worker {i} failed to build HTTP client: {e}"))?,
+            );
+        }
+
+        for (i, client) in clients.into_iter().enumerate() {
             let inner_spawn = Arc::clone(&inner);
-            let llm_config = llm_config.clone();
             let mut shutdown_rx = inner_spawn.shutdown_tx.subscribe();
             let handle = tokio::spawn(async move {
-                let client = LlmClient::new_direct(llm_config);
                 debug!(worker_id = i, "LLM worker started");
                 loop {
                     tokio::select! {
@@ -544,6 +553,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_pool_spawns_exactly_configured_workers() {
+        // PR #177 review: a successful `LlmWorkerPool::new` must spawn exactly
+        // `worker_threads` worker tasks and register one handle per worker, so
+        // a construction failure can never leave spawned workers detached.
+        // All worker clients are built up front before any task is spawned.
+        let config = WorkerPoolConfig {
+            worker_threads: 3,
+            user_queue_size: 4,
+            system_queue_size: 4,
+        };
+        let pool = LlmWorkerPool::new(test_config(), config)
+            .await
+            .expect("pool must build with a valid config");
+
+        assert_eq!(pool.worker_threads(), 3);
+        let handle_count = pool.inner.handles.lock().await.len();
+        assert_eq!(handle_count, 3, "expected exactly 3 worker handles");
+
+        pool.shutdown().await;
+        let after = pool.inner.handles.lock().await.len();
+        assert_eq!(after, 0, "shutdown must drain all worker handles");
+    }
+
+    #[tokio::test]
     async fn test_in_flight_counter_tracks_active_jobs() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -560,11 +593,7 @@ mod tests {
 
             let body = r#"{"id":"1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
             let response = format!(
-                "HTTP/1.1 200 OK
-Content-Length: {}
-Content-Type: application/json
-
-{}",
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
                 body.len(),
                 body
             );

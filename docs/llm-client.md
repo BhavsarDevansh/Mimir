@@ -57,14 +57,21 @@ Structured error enum:
 - `Parse(serde_json::Error)` — malformed JSON
 - `RetryExhausted { attempts }` — all retries failed
 - `StreamError(String)` — invalid SSE event
+- `ClientBuild(String)` — the `reqwest::Client` or worker pool could not be constructed at startup
 
 ## Client (`LlmClient`)
 
-### `async fn new(config: LlmConfig) -> Self`
+### `async fn new(config: LlmConfig) -> Result<Self, LlmError>`
 
-Constructs a client from configuration. Must be called from within a Tokio runtime context because it spawns the internal worker pool.
+Constructs a client from configuration. Must be called from within a Tokio runtime context because it spawns the internal worker pool. A failure to build the `reqwest::Client` or initialise the worker pool surfaces as `LlmError::ClientBuild` instead of panicking, so daemon startup (`start_server`, `AppState::from_config`) can report the problem and exit cleanly via the normal error path (issue #166).
 
 The underlying `reqwest::Client` uses a 30-second **connect timeout** rather than a global request timeout, so that long-lived SSE streaming responses are not prematurely aborted.
+
+`new_direct(config)` (used internally by pool workers) is also fallible. The
+`reqwest::Client` is built **before** the worker pool spawns, and each worker's
+client is built up front inside `LlmWorkerPool::new`; the first build failure
+propagates as `LlmError::ClientBuild` so the pool can never start in a
+zero-live-worker state.
 
 ### `chat(messages) -> Result<(String, Usage), LlmError>`
 

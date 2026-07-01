@@ -85,6 +85,16 @@ Displays:
 
 Prints the live condensed memory block from the knowledge graph.
 
+### `mimir kb` date filters
+
+KB audit and forget commands accept `--from`/`--to` date filters via
+`kb.rs::parse_datetime`. Strings with an explicit timezone offset (RFC3339,
+e.g. `2020-06-15T10:30:00Z` or `...+02:00`) are preserved as UTC. Offsetless
+datetimes (`2020-06-15T10:30:00`, `2020-06-15 10:30:00`) and date-only inputs
+(`2020-06-15`) are interpreted in the CLI/daemon **local timezone** (sharing
+`DailySchedule::naive_to_utc_local`), so user-authored local times behave
+intuitively rather than being silently shifted to UTC (issue #168).
+
 ## Key Design Decisions
 
 - **Single binary**: The `mimir` binary contains both the daemon and client code. `mimir start` runs the Axum server in-process; no separate `mimir-server` binary is needed.

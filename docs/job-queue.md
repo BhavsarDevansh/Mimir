@@ -45,6 +45,27 @@ pub enum DaemonJob {
 - `scheduler.start(shutdown_rx)` — spawn the dispatch loop.
 - `scheduler.shutdown()` — signal the dispatch loop to exit gracefully.
 
+## `DailySchedule`
+
+A daily local-time schedule (`HH:MM`) stored as a `chrono::NaiveTime` and
+converted to UTC for daemon state. Key points:
+
+- `DailySchedule::parse("HH:MM")` enforces a **strict** five-character
+  `HH:MM` format with zero-padded two-digit fields. Non-zero-padded inputs
+  such as `"2:30"` or `"9:5"` are rejected with `JobError::InvalidSchedule`,
+  even though chrono's `%H` parser is padding-agnostic. This keeps
+  user-authored `[[scheduler]]`/job schedule strings deterministic (issue #162).
+- `DailySchedule::next_after(now)` returns the next UTC instant strictly after
+  `now`. Conversion from local wall-clock to UTC uses
+  `DailySchedule::naive_to_utc_local`, which resolves DST gaps (spring-forward)
+  and ambiguities (falls back to the earlier offset).
+- `naive_to_utc_local` is `pub` and shared with the CLI date filters
+  (`mimir/src/kb.rs::parse_datetime`) so local times are interpreted
+  consistently across the daemon and CLI (issue #168).
+
+`JobError::is_not_registered` and `JobError::is_already_running` are documented
+predicate helpers over the error enum (issue #161).
+
 ## Configuration
 
 ```toml

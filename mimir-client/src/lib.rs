@@ -75,11 +75,17 @@ impl MimirClient {
         Ok(Self { base_url, client })
     }
 
-    /// Validate and normalise `base_url`: it must parse as a base URL, and any
+    /// Validate and normalise `base_url`: it must parse as a hierarchical base
+    /// URL (non-hierarchical schemes such as `mailto:` are rejected), and any
     /// trailing slashes are stripped so `url()` never produces `//path`.
     fn normalize_base_url(base_url: String) -> Result<String, ClientError> {
-        reqwest::Url::parse(&base_url)
+        let parsed = reqwest::Url::parse(&base_url)
             .map_err(|e| ClientError::Connection(format!("invalid base URL: {e}")))?;
+        if parsed.cannot_be_a_base() {
+            return Err(ClientError::Connection(format!(
+                "invalid base URL: {base_url} is not a hierarchical base URL"
+            )));
+        }
         Ok(base_url.trim_end_matches('/').to_string())
     }
 
@@ -654,6 +660,25 @@ mod tests {
         // PR #177 review: a non-URL base must surface as a Connection error.
         let client = MimirClient::try_new(
             "not a url",
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30),
+        );
+        match client {
+            Err(ClientError::Connection(msg)) => assert!(
+                msg.contains("invalid base URL"),
+                "unexpected message: {msg}"
+            ),
+            other => panic!("expected Connection error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_new_rejects_non_base_url() {
+        // PR #177 review: a non-hierarchical URL (e.g. `mailto:`) parses
+        // successfully but `cannot_be_a_base()`, so it must still be rejected
+        // to avoid late failures in `url()`/`session_messages()`.
+        let client = MimirClient::try_new(
+            "mailto:user@example.com",
             std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(30),
         );

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.61.1] — 2026-07-01
+
+### Fix — Address PR #177 review feedback
+
+- (client): `normalize_base_url` now rejects non-hierarchical base URLs (e.g.
+  `mailto:`) via `cannot_be_a_base()`, preventing late failures in `url()` /
+  `session_messages()`. Added `try_new_rejects_non_base_url` test.
+- (core): Handcrafted HTTP response in the pool in-flight counter test now uses
+  CRLF line endings per HTTP/1.x framing, matching the suggestion from the review.
+
+
 ## [0.61.0] — 2026-06-30
 
 ### Optimization & robustness sweep (issues #161–#168)

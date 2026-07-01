@@ -560,11 +560,7 @@ mod tests {
 
             let body = r#"{"id":"1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
             let response = format!(
-                "HTTP/1.1 200 OK
-Content-Length: {}
-Content-Type: application/json
-
-{}",
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
                 body.len(),
                 body
             );

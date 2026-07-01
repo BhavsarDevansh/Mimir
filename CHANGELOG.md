@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.61.3] — 2026-07-01
+
+### Docs — Phase 3 (Connectors) implementation plan
+
+- Added `VISION/09-Roadmap/Phase-3-Plan.md`: the Phase 3 design source of
+  truth. Captures all eight locked architectural decisions (crate structure,
+  extraction reuse/DRY, sync-state + DB-access boundary, orchestration, LLM
+  call queuing, auth/secret storage, multi-backend architecture, tool-vs-
+  connector disambiguation), the version-checked dependency ledger
+  (`oauth2 5.0.0`, `async-imap 0.11.2`, `mail-parser 0.11.4`,
+  `icalendar 0.17.12`, `kamadak-exif 0.6.1`, `keyring 4.1.2`), the 30-issue
+  breakdown across five epics, and the dependency graph. Companion GitHub
+  issues #178–#207 were created and tagged `phase-3`.
+
 ## [0.61.2] — 2026-07-01
 
 ### Fix — Avoid leaking partially-started workers (PR #177 review)

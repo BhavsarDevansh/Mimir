@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.61.2] — 2026-07-01
+
+### Fix — Avoid leaking partially-started workers (PR #177 review)
+
+- (core): `LlmWorkerPool::new` now builds every worker's `LlmClient` up front
+  into a `Vec` and spawns worker tasks only after all clients succeed. A
+  later-iteration `LlmClient::new_direct` failure can no longer leave earlier
+  spawned workers detached with no `LlmWorkerPool` handle to signal shutdown.
+  Added `test_pool_spawns_exactly_configured_workers` regression test and a
+  "Constructor Safety" section to `docs/llm-worker-pool.md`.
+
+
 ## [0.61.1] — 2026-07-01
 
 ### Fix — Address PR #177 review feedback

@@ -94,12 +94,21 @@ impl LlmWorkerPool {
             in_flight: AtomicUsize::new(0),
         });
 
+        // Build every worker's HTTP client up front so a construction failure
+        // aborts pool creation *before* any worker task is spawned. Spawning a
+        // worker and then failing on a later iteration would leave earlier
+        // workers detached with no `LlmWorkerPool` handle to signal shutdown
+        // (PR #177 review: avoid leaking partially-started workers on
+        // constructor failure).
+        let mut clients = Vec::with_capacity(config.worker_threads as usize);
         for i in 0..config.worker_threads {
-            // Build the worker's HTTP client up front so a construction failure
-            // aborts pool creation instead of silently degrading to zero live
-            // workers (PR #177 review: propagate worker start-up failures).
-            let client = LlmClient::new_direct(llm_config.clone())
-                .map_err(|e| format!("LLM worker {i} failed to build HTTP client: {e}"))?;
+            clients.push(
+                LlmClient::new_direct(llm_config.clone())
+                    .map_err(|e| format!("LLM worker {i} failed to build HTTP client: {e}"))?,
+            );
+        }
+
+        for (i, client) in clients.into_iter().enumerate() {
             let inner_spawn = Arc::clone(&inner);
             let mut shutdown_rx = inner_spawn.shutdown_tx.subscribe();
             let handle = tokio::spawn(async move {
@@ -541,6 +550,30 @@ mod tests {
         // but the workers have exited. We verify by checking that a second
         // shutdown is a no-op (no handles left to await).
         pool.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_pool_spawns_exactly_configured_workers() {
+        // PR #177 review: a successful `LlmWorkerPool::new` must spawn exactly
+        // `worker_threads` worker tasks and register one handle per worker, so
+        // a construction failure can never leave spawned workers detached.
+        // All worker clients are built up front before any task is spawned.
+        let config = WorkerPoolConfig {
+            worker_threads: 3,
+            user_queue_size: 4,
+            system_queue_size: 4,
+        };
+        let pool = LlmWorkerPool::new(test_config(), config)
+            .await
+            .expect("pool must build with a valid config");
+
+        assert_eq!(pool.worker_threads(), 3);
+        let handle_count = pool.inner.handles.lock().await.len();
+        assert_eq!(handle_count, 3, "expected exactly 3 worker handles");
+
+        pool.shutdown().await;
+        let after = pool.inner.handles.lock().await.len();
+        assert_eq!(after, 0, "shutdown must drain all worker handles");
     }
 
     #[tokio::test]

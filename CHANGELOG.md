@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.62.0] — 2026-07-02
+
+### Phase 3 — Connectors framework scaffold (issue #178 / F1)
+
+- **New crate:** `mimir-connectors` — the service ingestion framework for
+  Mimir. Connectors are background sync workers that fetch external data
+  (email, calendar, photos) and normalize it into knowledge-graph facts through
+  the existing fact pipeline. Wired into the workspace `members` and added as a
+  dependency of `mimir-server`.
+- **DB-access boundary:** the crate depends on `mimir-core` and `mimir-knowledge`
+  only and never declares a direct `sqlx` dependency; all persistence goes
+  through the `KnowledgeGraph` facade.
+- **Feature flags:** `default = ["photos","calendar","gmail"]`; the framework
+  core and mock connector are always built, so
+  `cargo build -p mimir-connectors --no-default-features` still compiles a
+  working framework + mock harness. The flags gate no code yet — backends land
+  in later Phase 3 issues (C1–C7).
+- **Stubs:** minimal `Connector` trait, `ConnectorRegistry`, and `MockConnector`
+  placeholders that compile and are object-safe. F6/F7/F13 own the real
+  implementations.
+- **Safety:** `#![deny(unsafe_code)]` enforced at the crate root.
+- **Tests:** scaffolding smoke test asserting the registry constructs empty and
+  the mock connector implements the trait (passes under all feature
+  combinations).
+- **Docs:** added `docs/connectors-framework.md` (technical) and
+  `docs/wiki/connectors.md` (user-facing); updated `README.md`,
+  `docs/workspace.md`, `docs/wiki/what-works-now.md`, and
+  `Mimir-Implementation-Context.md` to register the new crate and reflect
+  Phase 3 as in progress.
+
 ## [0.61.3] — 2026-07-01
 
 ### Docs — Phase 3 (Connectors) implementation plan

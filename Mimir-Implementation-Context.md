@@ -56,6 +56,9 @@ mimir (single binary)
 | `mimir-core` | library | LLM client, config, memory, context, personality, tools, skills, paths |
 | `mimir-server` | library | Axum routes, state, middleware |
 | `mimir-client` | library | HTTP client for talking to the daemon |
+| `mimir-knowledge` | library | SQLite knowledge graph (entities, facts, temporal queries, provenance) |
+| `mimir-api-types` | library | Shared serde wire types decoupling server and client |
+| `mimir-connectors` | library | Service ingestion framework — connectors fetch external data and normalize it into KB facts; DB access only via the `KnowledgeGraph` facade (Phase 3) |
 | `mimir` | binary | Single entry point — dispatches daemon or client mode |
 
 ### Transport
@@ -138,6 +141,9 @@ The workspace produces one binary (`mimir`) but uses library crates for code org
 - `mimir-core` — shared domain logic (used by both daemon and tests)
 - `mimir-server` — HTTP API layer (library, no binary)
 - `mimir-client` — HTTP client for CLI commands (library, no binary)
+- `mimir-knowledge` — SQLite knowledge graph (Phase 2)
+- `mimir-api-types` — shared serde wire types
+- `mimir-connectors` — service ingestion framework; connectors normalize external data into KB facts via the `KnowledgeGraph` facade, no direct `sqlx` (Phase 3, scaffolded)
 - `mimir` — binary crate, thin dispatcher
 
 This avoids the problems of a two-binary architecture (separate `mimir` CLI and `mimir-server`):

@@ -74,6 +74,45 @@ observe a signal before axum's graceful-shutdown future had registered interest,
 leaving axum still accepting connections until the drain bound kicked in. With a
 single listener fanning into one shared trigger, both phases fire in lockstep.
 
+## Shutdown Trigger Attribution
+
+Every code path that fires the shared `shutdown_tx` watch trigger now logs the
+**cause** of the shutdown *before* sending, via the `ShutdownSource` enum:
+
+| Variant | Origin | Log line (example) |
+|---|---|---|
+| `StopEndpoint(SocketAddr)` | `POST /stop` endpoint (e.g. `mimir stop`) | `Shutdown requested via /stop endpoint from 127.0.0.1:45678.` |
+| `Terminate` | `SIGTERM` | `Shutdown triggered by SIGTERM (signal).` |
+| `Interrupt` | `Ctrl-C` / `SIGINT` | `Shutdown triggered by interrupt (Ctrl-C).` |
+
+`ShutdownSource::attribution()` returns the human-readable line; the
+`/stop` handler additionally captures the requesting peer's `SocketAddr`
+through an axum `ConnectInfo` extractor (loopback-guaranteed by the
+`require_loopback` middleware).
+
+This was added because all three paths previously emitted the identical line
+`Server shut down gracefully.`, which recorded *that* the daemon stopped but
+not *what* stopped it. An unexplained stop on 2026-06-30 (systemd recorded no
+`Stopping`/`Stopped` lifecycle line, so the trigger came from within the
+process) was impossible to attribute from the journal.
+
+### Untriggered exits are no longer mislabelled
+
+`serve_with_bounded_drain` distinguishes two exit outcomes through the pure
+`server_exit_message(triggered: bool)` helper:
+
+- **`true`** — the shared trigger fired first (Phase 2 drain completed):
+  `Server shut down gracefully.`
+- **`false`** — the server future resolved on its own *without* any trigger
+  firing first (e.g. a fatal listener error), logged at `warn!` level as
+  `Server future resolved without a shutdown trigger; exiting.`
+
+Previously both outcomes logged `Server shut down gracefully.`, so a
+non-graceful server exit was misreported as graceful and masked the real
+cause. `server_exit_message` is a pure function so the
+"untriggered ≠ graceful" invariant is unit-tested without capturing log
+output.
+
 ## Timeout Behavior
 
 Shutdown is split into two phases by `serve_with_bounded_drain`:
@@ -87,7 +126,8 @@ Resource cleanup (`AppState::shutdown()`) runs in either case.
 
 ## Code References
 
-- `mimir-server/src/lib.rs` — `spawn_os_signal_shutdown()`, `watch_shutdown()`, `serve_with_bounded_drain()`, `GRACEFUL_DRAIN_TIMEOUT`, and `start_server()`
+- `mimir-server/src/lib.rs` — `ShutdownSource`, `server_exit_message()`, `spawn_os_signal_shutdown()`, `watch_shutdown()`, `serve_with_bounded_drain()`, `GRACEFUL_DRAIN_TIMEOUT`, and `start_server()`
+- `mimir-server/src/routes/stop.rs` — `stop_handler()` (logs `ShutdownSource::StopEndpoint` with the peer address)
 - `mimir-server/src/state.rs` — `AppState::shutdown()`
 - `mimir-core/src/scheduler.rs` — `BackgroundScheduler::shutdown()`
 - `mimir-core/src/context.rs` — `ContextManager::close()`

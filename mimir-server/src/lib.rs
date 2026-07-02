@@ -147,20 +147,73 @@ pub fn build_app(state: Arc<AppState>) -> Router {
 /// [`watch_shutdown`], so neither can observe a signal before the other has
 /// registered interest — the original race that could leave axum accepting
 /// connections until the drain timeout kicked in.
+/// The origin of a daemon shutdown request.
+///
+/// Every code path that fires the shared `shutdown_tx` watch trigger
+/// constructs a `ShutdownSource` and logs [`ShutdownSource::attribution`]
+/// *before* sending, so the journal records *what* stopped the daemon — not
+/// merely that it stopped. Previously all paths emitted the identical line
+/// "Server shut down gracefully.", making the cause of unexpected exits
+/// (e.g. 2026-06-30) impossible to determine from logs.
+#[derive(Debug)]
+pub(crate) enum ShutdownSource {
+    /// The `/stop` HTTP endpoint, invoked by a loopback peer (e.g. `mimir stop`).
+    StopEndpoint(SocketAddr),
+    /// A `SIGTERM` delivered by the OS (e.g. `systemctl stop`, `kill`).
+    Terminate,
+    /// An interrupt signal (`Ctrl-C` / `SIGINT`).
+    Interrupt,
+}
+
+impl ShutdownSource {
+    /// Human-readable attribution line written to the log immediately before
+    /// the shutdown trigger fires.
+    pub(crate) fn attribution(&self) -> String {
+        match self {
+            ShutdownSource::StopEndpoint(peer) => {
+                format!("Shutdown requested via /stop endpoint from {peer}.")
+            }
+            ShutdownSource::Terminate => "Shutdown triggered by SIGTERM (signal).".to_string(),
+            ShutdownSource::Interrupt => "Shutdown triggered by interrupt (Ctrl-C).".to_string(),
+        }
+    }
+}
+
+/// Exit log line for [`serve_with_bounded_drain`], classifying whether the
+/// server stopped because a shutdown trigger fired (graceful) or because the
+/// server future resolved on its own without any trigger (unexpected).
+///
+/// Extracted as a pure function so the "do not mislabel an untriggered exit as
+/// graceful" invariant is unit-testable without capturing log output.
+pub(crate) fn server_exit_message(triggered: bool) -> &'static str {
+    if triggered {
+        "Server shut down gracefully."
+    } else {
+        "Server future resolved without a shutdown trigger; exiting."
+    }
+}
+
 fn spawn_os_signal_shutdown(shutdown_tx: tokio::sync::watch::Sender<bool>) {
     tokio::spawn(async move {
         #[cfg(unix)]
         {
             use tokio::signal::unix::{SignalKind, signal};
             let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
+            // Distinguish which signal fired so the journal attributes the
+            // shutdown to its real cause rather than a generic "graceful" line.
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => {},
-                _ = sigterm.recv() => {},
+                _ = tokio::signal::ctrl_c() => {
+                    info!("{}", ShutdownSource::Interrupt.attribution());
+                }
+                _ = sigterm.recv() => {
+                    info!("{}", ShutdownSource::Terminate.attribution());
+                }
             }
         }
         #[cfg(not(unix))]
         {
             let _ = tokio::signal::ctrl_c().await;
+            info!("{}", ShutdownSource::Interrupt.attribution());
         }
         let _ = shutdown_tx.send(true);
     });
@@ -238,7 +291,10 @@ async fn serve_with_bounded_drain(
         biased;
         _ = watch_shutdown(trigger_rx) => {},
         result = &mut server_fut => {
-            info!("Server shut down gracefully.");
+            // The server future resolved without a shutdown trigger firing
+            // first (e.g. a fatal listener error). Do NOT label this
+            // "gracefully" — that masked the real cause of unexpected exits.
+            warn!("{}", server_exit_message(false));
             return Ok(result?);
         }
     }
@@ -250,7 +306,7 @@ async fn serve_with_bounded_drain(
     // `TimeoutStopSec`. On timeout, dropping `server_fut` cuts the connections.
     let server_result = match tokio::time::timeout(drain_timeout, &mut server_fut).await {
         Ok(result) => {
-            info!("Server shut down gracefully.");
+            info!("{}", server_exit_message(true));
             result
         }
         Err(_) => {
@@ -1239,6 +1295,86 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_stop_handler_fires_shutdown_trigger() {
+        use std::time::Duration;
+
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+
+        // Subscribe *before* issuing the request so the trigger is observed.
+        let mut shutdown_rx = state.shutdown_tx.subscribe();
+        assert!(
+            !*shutdown_rx.borrow_and_update(),
+            "shutdown trigger should be idle before /stop"
+        );
+
+        let app = super::build_app(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/stop")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // The handler delays the send by STOP_DELAY_MS; allow up to 2 s.
+        let observed = tokio::time::timeout(Duration::from_secs(2), shutdown_rx.changed()).await;
+        assert!(
+            observed.is_ok(),
+            "shutdown trigger did not fire after /stop"
+        );
+        assert!(
+            *shutdown_rx.borrow(),
+            "trigger value must be true after /stop"
+        );
+    }
+
+    /// Attribution strings are the whole point of this fix: the journal must
+    /// record *what* stopped the daemon. Lock the exact wording so a future
+    /// refactor cannot silently drop attribution.
+    #[test]
+    fn test_shutdown_source_attribution_messages() {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+        let stop = super::ShutdownSource::StopEndpoint(peer).attribution();
+        assert!(stop.contains("/stop endpoint"), "got: {stop}");
+        assert!(stop.contains("127.0.0.1:8080"), "got: {stop}");
+
+        let term = super::ShutdownSource::Terminate.attribution();
+        assert!(term.contains("SIGTERM"), "got: {term}");
+
+        let interrupt = super::ShutdownSource::Interrupt.attribution();
+        assert!(interrupt.contains("Ctrl-C"), "got: {interrupt}");
+    }
+
+    /// Regression: an exit where the server future resolved *without* a
+    /// shutdown trigger must not be mislabeled "gracefully" (the original
+    /// bug masked the real cause of unexpected daemon exits).
+    #[test]
+    fn test_server_exit_message_distinguishes_untriggered_exit() {
+        let graceful = super::server_exit_message(true);
+        let untriggered = super::server_exit_message(false);
+        assert_eq!(graceful, "Server shut down gracefully.");
+        assert_ne!(
+            untriggered, graceful,
+            "an exit without a trigger must not be reported as graceful"
+        );
+        assert!(
+            untriggered.contains("without a shutdown trigger"),
+            "got: {untriggered}"
+        );
     }
 
     #[tokio::test]

@@ -40,6 +40,32 @@ in-flight requests after a shutdown signal (Ctrl-C, `SIGTERM`, or `mimir stop`).
 
 `systemctl --user stop mimir` sends `SIGTERM`. The daemon catches it, drains in-flight requests (up to 30 s), tears down all background tasks (config file-watcher, SIGHUP handler, condensation listener), and exits promptly — well within systemd's `TimeoutStopSec`. Previously the `SIGTERM` path could hang during runtime teardown (deadlocking the tokio blocking pool until systemd aborted the unit with `SIGABRT`); that is fixed by an explicit shutdown broadcast before the runtime drops.
 
+## Finding Out Why the Daemon Stopped
+
+The daemon now logs the **cause** of every shutdown to the journal, just before
+it stops, so an unexplained stop can be diagnosed instead of guessed at:
+
+- `mimir stop` / `POST /stop` → `Shutdown requested via /stop endpoint from <peer>.`
+- `Ctrl-C` / `SIGINT`        → `Shutdown triggered by interrupt (Ctrl-C).`
+- `SIGTERM`                  → `Shutdown triggered by SIGTERM (signal).`
+- The server exited on its own (no trigger) → `Server future resolved without a shutdown trigger; exiting.` (logged as a warning)
+
+To investigate an unexpected stop:
+
+```bash
+journalctl --user -u mimir -n 50 --no-pager
+```
+
+Look for the attribution line immediately above `Server shut down gracefully.`.
+If you instead see `Server future resolved without a shutdown trigger`, the
+daemon exited for a reason other than a stop request (e.g. a listener error) —
+report it.
+
+> Tip: if you want the daemon to come back automatically after a graceful stop
+> (e.g. across logouts), set `Restart=always` in the systemd unit and run
+> `loginctl enable-linger <user>`. With the default `Restart=on-failure`, a
+> *clean* stop is not restarted.
+
 ## Best Practices
 
 - **Prefer `mimir stop` over `kill -9`**: The CLI verifies the daemon actually exits.

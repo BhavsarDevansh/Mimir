@@ -1,14 +1,27 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::{extract::State, http::StatusCode};
+use axum::extract::{ConnectInfo, State};
+use axum::http::StatusCode;
+use tracing::info;
 
+use crate::ShutdownSource;
 use crate::state::AppState;
 
 /// Delay in milliseconds before initiating shutdown to allow HTTP response to reach the client.
 const STOP_DELAY_MS: u64 = 500;
 
 /// Trigger a graceful shutdown of the daemon.
-pub async fn stop_handler(State(state): State<Arc<AppState>>) -> StatusCode {
+///
+/// The requesting peer is logged via [`ShutdownSource::StopEndpoint`] before
+/// the shared shutdown trigger fires, so the journal records *who* requested
+/// the stop (e.g. `mimir stop`) rather than only that the daemon stopped.
+pub async fn stop_handler(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+) -> StatusCode {
+    info!("{}", ShutdownSource::StopEndpoint(peer).attribution());
+
     // Spawn shutdown with a small delay so the HTTP 200 response has time
     // to reach the client before the server stops accepting connections.
     tokio::spawn(async move {

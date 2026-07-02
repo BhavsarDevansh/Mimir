@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.62.1] — 2026-07-02
+
+### Bugfix — shutdown trigger attribution logging
+
+The daemon logged only `Server shut down gracefully.` for **every** shutdown
+path, so the *cause* of a stop was unobservable from the journal. An
+unexplained stop on 2026-06-30 (systemd recorded no `Stopping`/`Stopped`
+lifecycle line, proving the trigger originated inside the process) could
+not be attributed from logs.
+
+- **`ShutdownSource` enum** (`mimir-server/src/lib.rs`) classifies the origin
+  of a shutdown: `StopEndpoint(SocketAddr)`, `Terminate` (SIGTERM), or
+  `Interrupt` (Ctrl-C / SIGINT). Each trigger path now logs
+  `ShutdownSource::attribution()` *before* firing the shared `shutdown_tx`
+  watch trigger, e.g. `Shutdown requested via /stop endpoint from 127.0.0.1:45678.`
+- **`/stop` handler** (`mimir-server/src/routes/stop.rs`) now captures the
+  requesting peer via an axum `ConnectInfo<SocketAddr>` extractor and logs it
+  (loopback-guaranteed by the existing `require_loopback` middleware).
+- **OS-signal listener** (`spawn_os_signal_shutdown`) now distinguishes which
+  signal fired (SIGTERM vs Ctrl-C) and logs the matching attribution.
+- **Untriggered exits are no longer mislabelled.** `serve_with_bounded_drain`
+  previously logged `Server shut down gracefully.` even when the server future
+  resolved on its own with no shutdown trigger (Phase 1). This is now reported
+  at `warn!` level as `Server future resolved without a shutdown trigger; exiting.`
+  via the pure `server_exit_message(triggered: bool)` helper, so a non-graceful
+  exit can no longer masquerade as graceful.
+- **No public API change.** `ShutdownSource` and `server_exit_message` are
+  `pub(crate)`; the `/stop` route behaviour is unchanged.
+- **Tests:** `test_shutdown_source_attribution_messages`,
+  `test_server_exit_message_distinguishes_untriggered_exit`, and
+  `test_stop_handler_fires_shutdown_trigger` (TDD).
+- **Docs:** updated `docs/shutdown.md` and `docs/wiki/daemon-shutdown.md`.
+
+
 ## [0.62.0] — 2026-07-02
 
 ### Phase 3 — Connectors framework scaffold (issue #178 / F1)

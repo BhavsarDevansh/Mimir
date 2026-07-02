@@ -2,7 +2,7 @@
 
 ## Overview
 
-Mimir is organised as a Cargo workspace with one binary crate and five library crates. The workspace root defines shared metadata via `[workspace.package]` so that all members inherit version, authors, licence, and repository information automatically.
+Mimir is organised as a Cargo workspace with one binary crate and six library crates. The workspace root defines shared metadata via `[workspace.package]` so that all members inherit version, authors, licence, and repository information automatically.
 
 ## Crate Responsibilities
 

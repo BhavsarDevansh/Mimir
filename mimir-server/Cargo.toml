@@ -13,6 +13,7 @@ rust-version.workspace = true
 mimir-core = { path = "../mimir-core" }
 mimir-api-types = { path = "../mimir-api-types" }
 mimir-knowledge = { path = "../mimir-knowledge" }
+mimir-connectors = { path = "../mimir-connectors" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "signal"] }
 axum = { version = "0.8", features = ["macros", "tokio", "json"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }

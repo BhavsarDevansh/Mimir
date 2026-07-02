@@ -2,7 +2,7 @@
 
 ## Overview
 
-Mimir is organised as a Cargo workspace with one binary crate and four library crates. The workspace root defines shared metadata via `[workspace.package]` so that all members inherit version, authors, licence, and repository information automatically.
+Mimir is organised as a Cargo workspace with one binary crate and five library crates. The workspace root defines shared metadata via `[workspace.package]` so that all members inherit version, authors, licence, and repository information automatically.
 
 ## Crate Responsibilities
 
@@ -13,6 +13,8 @@ Mimir is organised as a Cargo workspace with one binary crate and four library c
 | `mimir-server` | library | HTTP server layer built on Axum. Defines routes, application state, middleware, and SSE streaming handlers. No `main.rs`. |
 | `mimir-client` | library | Thin HTTP client for talking to the daemon. Wraps `reqwest` and parses SSE streams into `StreamItem` values. |
 | `mimir-api-types` | library | Minimal shared serde wire types (`ChatRequest`, `ChatResponse`, `StatusResponse`, `Usage`, `StreamItem`) decoupling the server and client from `mimir-core`. |
+| `mimir-knowledge` | library | SQLite-based knowledge graph: entity/fact storage, temporal queries, provenance tracking, and full-text search (Phase 2). |
+| `mimir-connectors` | library | Service ingestion framework: background sync workers that fetch external data (email, calendar, photos) and normalize it into knowledge-graph facts. DB access only via the `KnowledgeGraph` facade (no direct `sqlx`). Feature-flagged by backend: `photos`, `calendar`, `gmail`; framework + mock always built. Phase 3 (scaffolded). |
 
 ## Metadata Inheritance
 

@@ -1,0 +1,28 @@
+[package]
+name = "mimir-connectors"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Connector framework for Mimir: service ingestion workers that normalize external data into knowledge-graph facts"
+repository.workspace = true
+homepage.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# Per Phase 3 design decision A, this crate depends on mimir-core and
+# mimir-knowledge only and never declares a direct `sqlx` dependency: all
+# persistence is mediated by the `KnowledgeGraph` facade. The infra crates
+# (serde, tokio, tracing, thiserror, async-trait, …) are added by F6/F7/F10/F13
+# as the real trait, registry, secret store, and mock harness are filled in.
+[dependencies]
+mimir-core = { path = "../mimir-core" }
+mimir-knowledge = { path = "../mimir-knowledge" }
+
+[features]
+default = ["photos", "calendar", "gmail"]
+## Google Photos / Apple Photos / local photo library ingestion (C1–C2).
+photos = []
+## CalDAV calendar ingestion: read/sync + event fact extraction (C3–C4).
+calendar = []
+## IMAP email ingestion, Gmail and other providers (C5–C7).
+gmail = []

@@ -159,55 +159,39 @@ pub async fn set_connector_status(
     error: Option<Option<&str>>,
     now: DateTime<Utc>,
 ) -> Result<Connector, KnowledgeError> {
-    // Bind order must follow placeholder order, so branch on `error` to build
-    // the matching literal SQL + bind sequence (no string interpolation).
-    let row = match error {
-        // Leave last_error untouched.
-        None => {
-            sqlx::query_as::<_, Connector>(
-                "UPDATE connectors SET status_id = ?, updated_at = ? WHERE id = ? \
-             RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                       status_id, auth_state_id, sync_cursor, last_sync_at, last_error, \
-                       created_at, updated_at",
-            )
-            .bind(status as i16)
-            .bind(now)
-            .bind(id)
-            .fetch_optional(pool)
-            .await?
-        }
-        // Clear last_error to NULL.
-        Some(None) => {
-            sqlx::query_as::<_, Connector>(
-                "UPDATE connectors SET status_id = ?, last_error = NULL, updated_at = ? \
-             WHERE id = ? \
-             RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                       status_id, auth_state_id, sync_cursor, last_sync_at, last_error, \
-                       created_at, updated_at",
-            )
-            .bind(status as i16)
-            .bind(now)
-            .bind(id)
-            .fetch_optional(pool)
-            .await?
-        }
-        // Record an error message.
-        Some(Some(msg)) => {
-            sqlx::query_as::<_, Connector>(
-                "UPDATE connectors SET status_id = ?, last_error = ?, updated_at = ? \
-             WHERE id = ? \
-             RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                       status_id, auth_state_id, sync_cursor, last_sync_at, last_error, \
-                       created_at, updated_at",
-            )
-            .bind(status as i16)
-            .bind(msg)
-            .bind(now)
-            .bind(id)
-            .fetch_optional(pool)
-            .await?
-        }
+    // Map the Rust Option<Option<&str>> to a discriminant + value pair:
+    // discriminant 0 = leave untouched, 1 = set NULL, 2 = set to value.
+    let (discriminant, error_msg) = match error {
+        None => (0, ""),
+        Some(None) => (1, ""),
+        Some(Some(msg)) => (2, msg),
     };
+
+    // Single UPDATE with a CASE expression that conditionally updates last_error
+    // based on the discriminant. Bind order: status_id, discriminant, error_msg,
+    // updated_at, id.
+    let row = sqlx::query_as::<_, Connector>(
+        "UPDATE connectors SET \
+           status_id = ?, \
+           last_error = CASE \
+             WHEN ? = 0 THEN last_error \
+             WHEN ? = 1 THEN NULL \
+             ELSE ? \
+           END, \
+           updated_at = ? \
+         WHERE id = ? \
+         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
+                   status_id, auth_state_id, sync_cursor, last_sync_at, last_error, \
+                   created_at, updated_at",
+    )
+    .bind(status as i16)
+    .bind(discriminant)
+    .bind(discriminant)
+    .bind(error_msg)
+    .bind(now)
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
     row.ok_or(KnowledgeError::ConnectorNotFound(id))
 }
 

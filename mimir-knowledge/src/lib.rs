@@ -83,6 +83,12 @@ pub enum KnowledgeError {
     #[error("Category {0} not found")]
     CategoryNotFound(i32),
 
+    #[error("Connector {0} not found")]
+    ConnectorNotFound(i32),
+
+    #[error("Connector slug `{0}` already exists with a different connector type")]
+    ConnectorTypeMismatch(String),
+
     #[error("Relationship type hierarchy cycle detected")]
     RelationshipTypeCycle,
 }
@@ -1669,6 +1675,81 @@ impl KnowledgeGraph {
         connector: models::enums::ConnectorType,
     ) -> Result<f32, KnowledgeError> {
         confidence::connector_reliability(&self.pool, connector).await
+    }
+
+    // ------------------------------------------------------------------
+    // Connector instance registry delegates (issue #179 / Phase 3 F2)
+    // ------------------------------------------------------------------
+
+    /// List every registered connector instance, oldest first.
+    pub async fn list_connectors(
+        &self,
+    ) -> Result<Vec<models::connector::Connector>, KnowledgeError> {
+        queries::connector::list_connectors(&self.pool).await
+    }
+
+    /// Fetch a connector instance by its unique human label (`slug`).
+    pub async fn get_connector_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<models::connector::Connector>, KnowledgeError> {
+        queries::connector::get_connector_by_slug(&self.pool, slug).await
+    }
+
+    /// Fetch a connector instance by its integer primary key.
+    pub async fn get_connector(
+        &self,
+        id: i32,
+    ) -> Result<Option<models::connector::Connector>, KnowledgeError> {
+        queries::connector::get_connector(&self.pool, id).await
+    }
+
+    /// Insert a new connector instance or update the mutable config surface of
+    /// an existing one (keyed on `slug`). Sync-progress fields are preserved on
+    /// conflict.
+    pub async fn upsert_connector(
+        &self,
+        input: models::connector::UpsertConnectorInput,
+    ) -> Result<models::connector::Connector, KnowledgeError> {
+        queries::connector::upsert_connector(&self.pool, &input, self.now()).await
+    }
+
+    /// Advance a connector's opaque sync cursor, stamping `last_sync_at`.
+    /// `cursor = None` clears the cursor (e.g. for a full re-sync).
+    pub async fn update_sync_cursor(
+        &self,
+        id: i32,
+        cursor: Option<&str>,
+    ) -> Result<models::connector::Connector, KnowledgeError> {
+        queries::connector::update_sync_cursor(&self.pool, id, cursor, self.now()).await
+    }
+
+    /// Transition a connector to a new lifecycle status, optionally touching
+    /// `last_error`. See [`queries::connector::set_connector_status`] for the
+    /// `error` nullable-update semantics.
+    pub async fn set_connector_status(
+        &self,
+        id: i32,
+        status: models::enums::ConnectorStatus,
+        error: Option<Option<String>>,
+    ) -> Result<models::connector::Connector, KnowledgeError> {
+        queries::connector::set_connector_status(
+            &self.pool,
+            id,
+            status,
+            error.as_ref().map(|o| o.as_deref()),
+            self.now(),
+        )
+        .await
+    }
+
+    /// Set a connector's auth state.
+    pub async fn set_auth_state(
+        &self,
+        id: i32,
+        auth_state: models::enums::ConnectorAuthState,
+    ) -> Result<models::connector::Connector, KnowledgeError> {
+        queries::connector::set_auth_state(&self.pool, id, auth_state, self.now()).await
     }
 
     // ------------------------------------------------------------------

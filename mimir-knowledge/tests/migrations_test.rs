@@ -58,6 +58,9 @@ async fn all_migrations_apply_cleanly() {
     assert!(names.contains(&"change_types".to_string()));
     assert!(names.contains(&"changed_by_types".to_string()));
     assert!(names.contains(&"connector_types".to_string()));
+    assert!(names.contains(&"connector_statuses".to_string()));
+    assert!(names.contains(&"connector_auth_states".to_string()));
+    assert!(names.contains(&"connectors".to_string()));
 }
 
 #[tokio::test]
@@ -79,6 +82,8 @@ async fn lookup_tables_seeded_correctly() {
         ("SELECT COUNT(*) FROM preference_categories", 7),
         ("SELECT COUNT(*) FROM preference_source_types", 3),
         ("SELECT COUNT(*) FROM relationship_types", 31),
+        ("SELECT COUNT(*) FROM connector_statuses", 4),
+        ("SELECT COUNT(*) FROM connector_auth_states", 3),
     ];
 
     for (query, expected) in queries {

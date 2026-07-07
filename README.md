@@ -33,7 +33,7 @@ Mimir is built in **Rust** with a modular, local-first architecture:
 - **Events & Reminders** — A lifecycle + recurrence overlay on facts that surfaces upcoming birthdays, appointments, deadlines, and tasks in the Upcoming memory section, with a deterministic scan job for auto-completion and recurring advancement (Issue #74)
 - **LLM-orchestrated learning** — The LLM calls the `remember` tool during conversation to persist facts; the deterministic Rust pipeline enforces confidence, overwrite, and sensitive-fact policy. The Librarian Agent remains available as an on-demand extraction API (Issue #137)
 - **Retrieval Agent** — Dedicated ephemeral research agents that investigate the knowledge graph and conversation history on behalf of the main agent before answering complex questions
-- **Connectors (Phase 3, scaffolded)** — A pluggable service ingestion framework (`mimir-connectors`) that will sync email, calendar, and photo libraries into the knowledge graph as connector-provenanced facts. The crate, feature flags (`photos`/`calendar`/`gmail`), and the DB-access boundary (via the `KnowledgeGraph` facade only, no direct `sqlx`) are in place; backend implementations land in later Phase 3 issues
+- **Connectors (Phase 3, in progress)** — A pluggable service ingestion framework (`mimir-connectors`) that will sync email, calendar, and photo libraries into the knowledge graph as connector-provenanced facts. The crate, feature flags (`photos`/`calendar`/`gmail`), the DB-access boundary (via the `KnowledgeGraph` facade only, no direct `sqlx`), and the `connectors` instance-registry table + facade methods (sync cursor, auth state, health) are in place; backend implementations land in later Phase 3 issues
 
 ## Installation
 

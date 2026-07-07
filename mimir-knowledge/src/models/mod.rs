@@ -1,5 +1,6 @@
 pub mod audit_log;
 pub mod category;
+pub mod connector;
 pub mod entity;
 pub mod entity_location;
 pub mod enums;

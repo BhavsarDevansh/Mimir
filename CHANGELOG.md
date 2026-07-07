@@ -12,10 +12,10 @@ confidence model can read the connector kind without a join.
 
 - **Migration `043_sources_connector_instance_fk.sql`** rebuilds the `sources`
   table (SQLite cannot change a column type in place). It is lossless for
-  existing DBs: no connector instances are registered yet, so every legacy row
-  carried either `NULL` or `''` (the insert paths differ — `queries/source.rs`
-  normalised a missing connector to `''`, `queries/fact.rs` bound `NULL`), and
-  both map to `connector_instance_id IS NULL`. The NULL-aware unique index is
+  existing DBs: legacy `sources.connector_id` values were already limited to
+  `NULL` or `''` (the insert paths differ — `queries/source.rs` normalised a
+  missing connector to `''`, `queries/fact.rs` bound `NULL`), and both map to
+  `connector_instance_id IS NULL`. The NULL-aware unique index is
   rebuilt as `(fact_id, source_type_id, COALESCE(connector_instance_id, 0),
   COALESCE(raw_reference, ''))` (`0` is a safe sentinel since autoincrement ids
   start at `1`), plus a new `idx_sources_instance` index for item-count queries.
@@ -30,7 +30,11 @@ confidence model can read the connector kind without a join.
   `raw_reference` and `extraction_method`, resolves the instance, and enforces
   consistency — a supplied `connector_type` must match the instance's registered
   `connector_type_id` (else `KnowledgeError::Validation`), or it is derived from
-  the instance when omitted. An unregistered instance id is rejected.
+  the instance when omitted. An unregistered instance id is rejected. This
+  provenance validation always runs when `connector_instance_id` is set,
+  independent of whether `confidence` is supplied explicitly, so an explicit
+  confidence can no longer bypass the `raw_reference`/`extraction_method`
+  requirement or the `connector_type` consistency check.
 - **Forget filter:** `forget --source <slug>` now matches `connectors.slug` via
   subquery (plus the existing `source_types.name` arm), since the column is no
   longer a free-form string.

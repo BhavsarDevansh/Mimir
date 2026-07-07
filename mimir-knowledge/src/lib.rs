@@ -1209,22 +1209,22 @@ impl KnowledgeGraph {
                 new_fact.object_literal.clone(),
             );
 
-            // Determine confidence.
-            let confidence = if let Some(conf) = new_fact.confidence {
-                conf
-            } else if new_fact.inferred {
-                confidence::initial(SourceType::Inference, None)
-            } else if let Some(instance_id) = new_fact.connector_instance_id {
-                // Connector provenance: a registered connector instance is the
-                // identity. Require raw_reference and extraction_method, resolve
-                // the instance, and enforce that the denormalised connector_type
-                // (if supplied) matches the instance's registered type — or derive
-                // it from the instance when omitted.
+            // Connector provenance validation — always enforced when
+            // connector_instance_id is set, independent of whether confidence is
+            // supplied explicitly. A registered connector instance is the identity:
+            // require raw_reference and extraction_method, resolve the instance, and
+            // enforce that the denormalised connector_type (if supplied) matches the
+            // instance's registered type — or derive it from the instance when
+            // omitted. Returns the connector-derived confidence score for use when
+            // confidence is not supplied explicitly.
+            let connector_confidence: Option<f32> = if let Some(instance_id) =
+                new_fact.connector_instance_id
+            {
                 if new_fact.raw_reference.is_none() || new_fact.extraction_method.is_none() {
                     return Err(KnowledgeError::Validation(
-                        "Connector provenance requires connector_instance_id, raw_reference, and extraction_method"
-                            .to_string(),
-                    ));
+                            "Connector provenance requires connector_instance_id, raw_reference, and extraction_method"
+                                .to_string(),
+                        ));
                 }
                 let instance_type_id: Option<i16> =
                     sqlx::query_scalar("SELECT connector_type_id FROM connectors WHERE id = ?")
@@ -1258,17 +1258,32 @@ impl KnowledgeGraph {
                     };
                 }
                 let resolved_ct = new_fact.connector_type.ok_or_else(|| {
-                    KnowledgeError::Validation(format!(
-                        "connector_instance_id {instance_id} has unknown connector_type_id {instance_type_id}"
-                    ))
-                })?;
+                        KnowledgeError::Validation(format!(
+                            "connector_instance_id {instance_id} has unknown connector_type_id {instance_type_id}"
+                        ))
+                    })?;
                 let db_score: Option<f32> = sqlx::query_scalar(
                     "SELECT score FROM connector_reliability WHERE connector_type_id = ?",
                 )
                 .bind(instance_type_id)
                 .fetch_optional(&self.pool)
                 .await?;
-                db_score.unwrap_or_else(|| confidence::default_connector_score(resolved_ct))
+                Some(db_score.unwrap_or_else(|| confidence::default_connector_score(resolved_ct)))
+            } else {
+                None
+            };
+
+            // Determine confidence. Explicit confidence takes precedence, then
+            // inferred facts, then the connector-derived score, then the default
+            // initial score for the source type. Connector provenance validation
+            // above always runs when connector_instance_id is set, so an explicit
+            // confidence can no longer bypass it.
+            let confidence = if let Some(conf) = new_fact.confidence {
+                conf
+            } else if new_fact.inferred {
+                confidence::initial(SourceType::Inference, None)
+            } else if let Some(score) = connector_confidence {
+                score
             } else {
                 confidence::initial(new_fact.source_type, None)
             };

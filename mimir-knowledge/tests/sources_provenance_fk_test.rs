@@ -10,7 +10,7 @@
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::entity::EntityType;
-use mimir_knowledge::models::enums::ConnectorType;
+use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorStatus, ConnectorType};
 use mimir_knowledge::models::fact::NewFact;
 use mimir_knowledge::models::source::{ExtractionMethod, SourceType};
 
@@ -48,6 +48,40 @@ fn gmail_input(slug: &str) -> UpsertConnectorInput {
     }
 }
 
+/// Shared `NewFact` builder for connector-provenance tests: centralises the
+/// common fields and exposes only the values that vary per test
+/// (`connector_instance_id`, `connector_type`, `raw_reference`,
+/// `extraction_method`). Mirrors the `connector_new_fact` helper in
+/// `fact_management_test.rs` and the `gmail_input` pattern above.
+#[allow(clippy::too_many_arguments)]
+fn connector_fact(
+    subject_id: i32,
+    object_id: Option<i32>,
+    connector_instance_id: Option<i32>,
+    connector_type: Option<ConnectorType>,
+    raw_reference: Option<&str>,
+    extraction_method: Option<ExtractionMethod>,
+) -> NewFact {
+    NewFact {
+        subject_id,
+        relationship_type: "is_in".to_string(),
+        object_id,
+        object_literal: None,
+        valid_from: None,
+        valid_until: None,
+        source_type: SourceType::Connector,
+        connector_instance_id,
+        connector_type,
+        raw_reference: raw_reference.map(str::to_string),
+        extraction_method,
+        inferred: false,
+        inference_depth: 0,
+        confidence: None,
+        parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
+    }
+}
+
 #[tokio::test]
 async fn connector_fact_round_trips_integer_instance_id() {
     let (kg, _dir) = init_kg().await;
@@ -56,24 +90,14 @@ async fn connector_fact_round_trips_integer_instance_id() {
     let instance = kg.upsert_connector(gmail_input("gmail-1")).await.unwrap();
 
     let fact = kg
-        .insert_fact(NewFact {
-            subject_id: alice,
-            relationship_type: "is_in".to_string(),
-            object_id: Some(london),
-            object_literal: None,
-            valid_from: None,
-            valid_until: None,
-            source_type: SourceType::Connector,
-            connector_instance_id: Some(instance.id),
-            connector_type: Some(ConnectorType::Gmail),
-            raw_reference: Some("msg-1".to_string()),
-            extraction_method: Some(ExtractionMethod::StructuredParse),
-            inferred: false,
-            inference_depth: 0,
-            confidence: None,
-            parent_fact_ids: Vec::new(),
-            category_ids: Vec::new(),
-        })
+        .insert_fact(connector_fact(
+            alice,
+            Some(london),
+            Some(instance.id),
+            Some(ConnectorType::Gmail),
+            Some("msg-1"),
+            Some(ExtractionMethod::StructuredParse),
+        ))
         .await
         .unwrap();
 
@@ -106,23 +130,15 @@ async fn item_count_derivable_per_connector_instance() {
         .await
         .unwrap();
 
-    let mk = |instance_id: i32, raw: &str| NewFact {
-        subject_id: alice,
-        relationship_type: "is_in".to_string(),
-        object_id: Some(london),
-        object_literal: None,
-        valid_from: None,
-        valid_until: None,
-        source_type: SourceType::Connector,
-        connector_instance_id: Some(instance_id),
-        connector_type: None, // derived by the gate from the instance
-        raw_reference: Some(raw.to_string()),
-        extraction_method: Some(ExtractionMethod::StructuredParse),
-        inferred: false,
-        inference_depth: 0,
-        confidence: None,
-        parent_fact_ids: Vec::new(),
-        category_ids: Vec::new(),
+    let mk = |instance_id: i32, raw: &str| {
+        connector_fact(
+            alice,
+            Some(london),
+            Some(instance_id),
+            None, // derived by the gate from the instance
+            Some(raw),
+            Some(ExtractionMethod::StructuredParse),
+        )
     };
 
     kg.insert_fact(mk(gmail.id, "g-1")).await.unwrap();
@@ -154,24 +170,14 @@ async fn gate_rejects_connector_type_mismatch() {
     let gmail = kg.upsert_connector(gmail_input("gmail-1")).await.unwrap();
 
     let result = kg
-        .insert_fact(NewFact {
-            subject_id: alice,
-            relationship_type: "is_in".to_string(),
-            object_id: Some(london),
-            object_literal: None,
-            valid_from: None,
-            valid_until: None,
-            source_type: SourceType::Connector,
-            connector_instance_id: Some(gmail.id),
-            connector_type: Some(ConnectorType::Calendar),
-            raw_reference: Some("msg-1".to_string()),
-            extraction_method: Some(ExtractionMethod::StructuredParse),
-            inferred: false,
-            inference_depth: 0,
-            confidence: None,
-            parent_fact_ids: Vec::new(),
-            category_ids: Vec::new(),
-        })
+        .insert_fact(connector_fact(
+            alice,
+            Some(london),
+            Some(gmail.id),
+            Some(ConnectorType::Calendar),
+            Some("msg-1"),
+            Some(ExtractionMethod::StructuredParse),
+        ))
         .await;
     assert!(
         result.is_err(),
@@ -188,24 +194,14 @@ async fn gate_rejects_missing_raw_reference_or_extraction_method() {
 
     // Missing raw_reference.
     let missing_ref = kg
-        .insert_fact(NewFact {
-            subject_id: alice,
-            relationship_type: "is_in".to_string(),
-            object_id: Some(london),
-            object_literal: None,
-            valid_from: None,
-            valid_until: None,
-            source_type: SourceType::Connector,
-            connector_instance_id: Some(gmail.id),
-            connector_type: Some(ConnectorType::Gmail),
-            raw_reference: None,
-            extraction_method: Some(ExtractionMethod::StructuredParse),
-            inferred: false,
-            inference_depth: 0,
-            confidence: None,
-            parent_fact_ids: Vec::new(),
-            category_ids: Vec::new(),
-        })
+        .insert_fact(connector_fact(
+            alice,
+            Some(london),
+            Some(gmail.id),
+            Some(ConnectorType::Gmail),
+            None,
+            Some(ExtractionMethod::StructuredParse),
+        ))
         .await;
     assert!(
         missing_ref.is_err(),
@@ -214,24 +210,14 @@ async fn gate_rejects_missing_raw_reference_or_extraction_method() {
 
     // Missing extraction_method.
     let missing_method = kg
-        .insert_fact(NewFact {
-            subject_id: alice,
-            relationship_type: "is_in".to_string(),
-            object_id: Some(london),
-            object_literal: None,
-            valid_from: None,
-            valid_until: None,
-            source_type: SourceType::Connector,
-            connector_instance_id: Some(gmail.id),
-            connector_type: Some(ConnectorType::Gmail),
-            raw_reference: Some("msg-1".to_string()),
-            extraction_method: None,
-            inferred: false,
-            inference_depth: 0,
-            confidence: None,
-            parent_fact_ids: Vec::new(),
-            category_ids: Vec::new(),
-        })
+        .insert_fact(connector_fact(
+            alice,
+            Some(london),
+            Some(gmail.id),
+            Some(ConnectorType::Gmail),
+            Some("msg-1"),
+            None,
+        ))
         .await;
     assert!(
         missing_method.is_err(),
@@ -246,24 +232,14 @@ async fn gate_rejects_unknown_connector_instance() {
     let london = place(&kg, "London").await;
 
     let result = kg
-        .insert_fact(NewFact {
-            subject_id: alice,
-            relationship_type: "is_in".to_string(),
-            object_id: Some(london),
-            object_literal: None,
-            valid_from: None,
-            valid_until: None,
-            source_type: SourceType::Connector,
-            connector_instance_id: Some(999_999), // no such instance
-            connector_type: Some(ConnectorType::Gmail),
-            raw_reference: Some("msg-1".to_string()),
-            extraction_method: Some(ExtractionMethod::StructuredParse),
-            inferred: false,
-            inference_depth: 0,
-            confidence: None,
-            parent_fact_ids: Vec::new(),
-            category_ids: Vec::new(),
-        })
+        .insert_fact(connector_fact(
+            alice,
+            Some(london),
+            Some(999_999), // no such instance
+            Some(ConnectorType::Gmail),
+            Some("msg-1"),
+            Some(ExtractionMethod::StructuredParse),
+        ))
         .await;
     assert!(
         result.is_err(),
@@ -295,24 +271,14 @@ async fn gate_derives_connector_type_from_instance_when_omitted() {
         .unwrap();
 
     let fact = kg
-        .insert_fact(NewFact {
-            subject_id: alice,
-            relationship_type: "is_in".to_string(),
-            object_id: Some(london),
-            object_literal: None,
-            valid_from: None,
-            valid_until: None,
-            source_type: SourceType::Connector,
-            connector_instance_id: Some(calendar.id),
-            connector_type: None, // gate derives Calendar from the instance
-            raw_reference: Some("evt-1".to_string()),
-            extraction_method: Some(ExtractionMethod::StructuredParse),
-            inferred: false,
-            inference_depth: 0,
-            confidence: None,
-            parent_fact_ids: Vec::new(),
-            category_ids: Vec::new(),
-        })
+        .insert_fact(connector_fact(
+            alice,
+            Some(london),
+            Some(calendar.id),
+            None, // gate derives Calendar from the instance
+            Some("evt-1"),
+            Some(ExtractionMethod::StructuredParse),
+        ))
         .await
         .unwrap();
 
@@ -351,7 +317,7 @@ async fn gate_rejects_instance_with_type_outside_connector_type_enum() {
     let instance_id: i32 = sqlx::query_scalar(
         "INSERT INTO connectors \
          (connector_type_id, slug, backend, display_name, config_json, status_id, auth_state_id, \
-         created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) \
+         created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) \
          RETURNING id",
     )
     .bind(99_i16)
@@ -359,32 +325,82 @@ async fn gate_rejects_instance_with_type_outside_connector_type_enum() {
     .bind("test")
     .bind("Experimental")
     .bind("{}")
+    // Derive status/auth-state ids from the enum variants upsert_connector
+    // defaults to (Setup / Unauthenticated) rather than hardcoding ordinals,
+    // so the test stays correct if the enum repr ever changes.
+    .bind(ConnectorStatus::Setup as i16)
+    .bind(ConnectorAuthState::Unauthenticated as i16)
     .fetch_one(kg.pool())
     .await
     .unwrap();
 
     let result = kg
-        .insert_fact(NewFact {
-            subject_id: alice,
-            relationship_type: "is_in".to_string(),
-            object_id: Some(london),
-            object_literal: None,
-            valid_from: None,
-            valid_until: None,
-            source_type: SourceType::Connector,
-            connector_instance_id: Some(instance_id),
-            connector_type: None, // gate must derive and reject, not panic
-            raw_reference: Some("x".to_string()),
-            extraction_method: Some(ExtractionMethod::StructuredParse),
-            inferred: false,
-            inference_depth: 0,
-            confidence: None,
-            parent_fact_ids: Vec::new(),
-            category_ids: Vec::new(),
-        })
+        .insert_fact(connector_fact(
+            alice,
+            Some(london),
+            Some(instance_id),
+            None, // gate must derive and reject, not panic
+            Some("x"),
+            Some(ExtractionMethod::StructuredParse),
+        ))
         .await;
     assert!(
         result.is_err(),
         "an instance whose type is outside the ConnectorType enum must be rejected, not panicked on"
+    );
+}
+
+#[tokio::test]
+async fn gate_still_requires_raw_reference_when_confidence_is_explicit() {
+    // Regression for the confidence fast-path bypass: an explicit confidence
+    // must not skip connector provenance validation. A connector fact missing
+    // raw_reference is rejected even when confidence is supplied.
+    let (kg, _dir) = init_kg().await;
+    let alice = person(&kg, "Alice").await;
+    let london = place(&kg, "London").await;
+    let gmail = kg.upsert_connector(gmail_input("gmail-1")).await.unwrap();
+
+    let mut fact = connector_fact(
+        alice,
+        Some(london),
+        Some(gmail.id),
+        Some(ConnectorType::Gmail),
+        None, // missing raw_reference
+        Some(ExtractionMethod::StructuredParse),
+    );
+    fact.confidence = Some(0.99);
+
+    let result = kg.insert_fact(fact).await;
+    assert!(
+        result.is_err(),
+        "explicit confidence must not bypass the raw_reference provenance check"
+    );
+}
+
+#[tokio::test]
+async fn gate_still_rejects_type_mismatch_when_confidence_is_explicit() {
+    // Regression for the confidence fast-path bypass: an explicit confidence
+    // must not skip the connector_type consistency check. A type mismatch
+    // between the instance and the denormalised connector_type is rejected
+    // even when confidence is supplied.
+    let (kg, _dir) = init_kg().await;
+    let alice = person(&kg, "Alice").await;
+    let london = place(&kg, "London").await;
+    let gmail = kg.upsert_connector(gmail_input("gmail-1")).await.unwrap();
+
+    let mut fact = connector_fact(
+        alice,
+        Some(london),
+        Some(gmail.id),
+        Some(ConnectorType::Calendar), // mismatched: instance is Gmail
+        Some("msg-1"),
+        Some(ExtractionMethod::StructuredParse),
+    );
+    fact.confidence = Some(0.99);
+
+    let result = kg.insert_fact(fact).await;
+    assert!(
+        result.is_err(),
+        "explicit confidence must not bypass the connector_type consistency check"
     );
 }

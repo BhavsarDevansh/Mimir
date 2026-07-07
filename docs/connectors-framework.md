@@ -135,9 +135,9 @@ Issue #180 migrated `sources.connector_id TEXT` to
 `connector_instance_id INTEGER REFERENCES connectors(id)` (migration
 `043_sources_connector_instance_fk.sql`). SQLite cannot change a column type in
 place, so this is the standard table-rebuild dance; it is lossless for existing
-DBs because no connector instances are registered yet, so every legacy row
-carried either `NULL` or `''` (the insert paths differ — `queries/source.rs`
-normalised a missing connector to `''`, `queries/fact.rs` bound `NULL`), and
+DBs because legacy `sources.connector_id` values were already limited to `NULL`
+or `''` (the insert paths differ — `queries/source.rs` normalised a missing
+connector to `''`, `queries/fact.rs` bound `NULL`), and
 both map to `connector_instance_id IS NULL`. `connector_type_id` is retained
 (denormalised) so the confidence model can read the connector kind without a
 join even when `connector_instance_id` is `NULL`.

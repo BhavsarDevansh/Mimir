@@ -86,6 +86,9 @@ pub enum KnowledgeError {
     #[error("Connector {0} not found")]
     ConnectorNotFound(i32),
 
+    #[error("Connector slug `{0}` already exists with a different connector type")]
+    ConnectorTypeMismatch(String),
+
     #[error("Relationship type hierarchy cycle detected")]
     RelationshipTypeCycle,
 }

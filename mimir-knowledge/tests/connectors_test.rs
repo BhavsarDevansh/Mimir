@@ -206,3 +206,43 @@ async fn duplicate_slug_upserts_instead_of_erroring() {
     assert_eq!(first.id, second.id);
     assert_eq!(kg.list_connectors().await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn upsert_rejects_type_mismatch_on_existing_slug() {
+    let (kg, _dir) = init_kg().await;
+    let original = kg.upsert_connector(gmail_input("personal")).await.unwrap();
+
+    // Reusing the same slug with a different connector type must error rather
+    // than silently rewrite the instance's kind (which would leave the previous
+    // backend's sync state attached to a different type).
+    let mut cal = gmail_input("personal");
+    cal.connector_type = ConnectorType::Calendar;
+    let err = kg.upsert_connector(cal).await;
+    assert!(matches!(
+        err,
+        Err(mimir_knowledge::KnowledgeError::ConnectorTypeMismatch(ref s))
+        if s == "personal"
+    ));
+
+    // The original row is untouched: still Gmail, still Setup/Unauthenticated.
+    let stored = kg.get_connector_by_slug("personal").await.unwrap().unwrap();
+    assert_eq!(stored.id, original.id);
+    assert_eq!(stored.connector_type_id, ConnectorType::Gmail as i16);
+    assert_eq!(stored.status(), Some(ConnectorStatus::Setup));
+
+    // A same-type re-upsert still updates the mutable surface.
+    let same_type = UpsertConnectorInput {
+        connector_type: ConnectorType::Gmail,
+        slug: "personal".to_string(),
+        backend: "graph".to_string(),
+        display_name: "Renamed".to_string(),
+        config_json: "{}".to_string(),
+        status: Some(ConnectorStatus::Active),
+        auth_state: None,
+    };
+    let updated = kg.upsert_connector(same_type).await.unwrap();
+    assert_eq!(updated.id, original.id);
+    assert_eq!(updated.connector_type_id, ConnectorType::Gmail as i16);
+    assert_eq!(updated.backend, "graph");
+    assert_eq!(updated.status(), Some(ConnectorStatus::Active));
+}

@@ -28,17 +28,21 @@ supervisor (F8) and per-connector backends (C1–C7).
 - **Facade methods** on `KnowledgeGraph`: `list_connectors`,
   `get_connector_by_slug`, `get_connector`, `upsert_connector`,
   `update_sync_cursor`, `set_connector_status`, `set_auth_state`. Upsert is
-  keyed on `slug`: on conflict it updates the mutable config surface
-  (`backend`, `display_name`, `config_json`, `status`, `auth_state`) and
-  preserves sync-progress fields (`sync_cursor`, `last_sync_at`,
-  `last_error`). `set_connector_status` takes an `Option<Option<String>>`
-  `error` parameter (leave / clear / set `last_error`). New
-  `KnowledgeError::ConnectorNotFound` variant (unknown connector id); the
-  typed `ConnectorType` input makes the `connector_types` FK guaranteed valid.
+  keyed on `slug`; `slug` and `connector_type` are immutable identity. On
+  conflict it updates the mutable config surface (`backend`, `display_name`,
+  `config_json`, `status`, `auth_state`) and preserves sync-progress fields
+  (`sync_cursor`, `last_sync_at`, `last_error`); reusing a slug with a
+  different `ConnectorType` returns `KnowledgeError::ConnectorTypeMismatch`
+  rather than silently rewriting the instance's kind. `set_connector_status`
+  takes an `Option<Option<String>>` `error` parameter (leave / clear / set
+  `last_error`). New `KnowledgeError::ConnectorNotFound` (unknown id) and
+  `ConnectorTypeMismatch` variants; the typed `ConnectorType` input makes the
+  `connector_types` FK guaranteed valid.
 - **Tests:** `tests/connectors_test.rs` covers defaults, slug/id/list lookup,
-  upsert update-vs-preserve, sync cursor, status set/clear/leave, auth state,
-  duplicate-slug upsert, and missing-id errors; `tests/migrations_test.rs`
-  asserts the new tables exist and are seeded.
+  upsert update-vs-preserve, connector-type mismatch rejection, sync cursor,
+  status set/clear/leave, auth state, duplicate-slug upsert, and missing-id
+  errors; `tests/migrations_test.rs` asserts the new tables exist and are
+  seeded.
 - **Docs:** updated `docs/connectors-framework.md`, `docs/wiki/connectors.md`,
   `README.md`, `Mimir-Implementation-Context.md`, and
   `docs/wiki/what-works-now.md`.

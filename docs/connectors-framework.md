@@ -108,18 +108,26 @@ rule.
 `get_connector` (by id), `upsert_connector`, `update_sync_cursor`,
 `set_connector_status`, and `set_auth_state`.
 
-- `upsert_connector` is keyed on `slug`. On conflict it overwrites the mutable
-  config surface (`backend`, `display_name`, `config_json`, `status`,
-  `auth_state`) and bumps `updated_at`; it **preserves** `id`, `created_at`,
-  and the sync-progress fields (`sync_cursor`, `last_sync_at`, `last_error`),
-  which are owned by their dedicated mutators.
+- `upsert_connector` is keyed on `slug`. `slug` and `connector_type` are
+  immutable identity: on conflict it overwrites the mutable config surface
+  (`backend`, `display_name`, `config_json`, `status`, `auth_state`) and bumps
+  `updated_at`; it **preserves** `id`, `created_at`, and the sync-progress
+  fields (`sync_cursor`, `last_sync_at`, `last_error`), which are owned by
+  their dedicated mutators. Reusing an existing `slug` with a different
+  `ConnectorType` returns `KnowledgeError::ConnectorTypeMismatch` rather than
+  silently rewriting the instance's kind (which would leave the previous
+  backend's type-specific sync state attached to a different connector type).
+  The check is atomic: the `ON CONFLICT DO UPDATE ... WHERE
+  connectors.connector_type_id = excluded.connector_type_id` guard updates zero
+  rows on a mismatch, so `RETURNING` is empty and a clean error is surfaced.
 - `set_connector_status` takes an `Option<Option<String>>` `error` argument:
   `None` leaves `last_error` untouched, `Some(None)` clears it to NULL, and
   `Some(Some(msg))` records `msg` (e.g. a circuit-breaker reason).
-- Unknown ids return `KnowledgeError::ConnectorNotFound`. The `connector_type`
-  field is the typed `ConnectorType` enum (variants map to seeded
-  `connector_types` rows), so the `connector_types(id)` foreign key is the
-  DB-level guard and no separate type-validation error is needed.
+- Unknown ids return `KnowledgeError::ConnectorNotFound`; a slug reused with a
+  different type returns `KnowledgeError::ConnectorTypeMismatch`. The
+  `connector_type` field is the typed `ConnectorType` enum (variants map to
+  seeded `connector_types` rows), so the `connector_types(id)` foreign key is
+  the DB-level guard and no separate type-existence validation is needed.
 
 ## What is NOT done in F1
 

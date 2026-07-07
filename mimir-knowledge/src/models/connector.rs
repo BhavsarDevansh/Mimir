@@ -54,11 +54,14 @@ impl Connector {
 
 /// Input for [`crate::KnowledgeGraph::upsert_connector`].
 ///
-/// Upsert is keyed on `slug`. On conflict the mutable config surface
-/// (`backend`, `display_name`, `config_json`, `status`, `auth_state`) is
-/// overwritten and `updated_at` is bumped; `id`, `created_at`, and the
-/// sync-progress fields (`sync_cursor`, `last_sync_at`, `last_error`) are
-/// preserved because they are owned by dedicated mutators.
+/// Upsert is keyed on `slug`. `slug` and `connector_type` are immutable
+/// identity: on conflict the mutable config surface (`backend`,
+/// `display_name`, `config_json`, `status`, `auth_state`) is overwritten and
+/// `updated_at` is bumped, while `id`, `created_at`, and the sync-progress
+/// fields (`sync_cursor`, `last_sync_at`, `last_error`) are preserved because
+/// they are owned by dedicated mutators. Reusing an existing `slug` with a
+/// different `connector_type` returns
+/// [`crate::KnowledgeError::ConnectorTypeMismatch`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpsertConnectorInput {
     pub connector_type: ConnectorType,

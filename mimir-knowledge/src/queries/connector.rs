@@ -56,35 +56,49 @@ pub async fn get_connector(
 }
 
 /// Insert a new connector or update the mutable config surface of an existing
-/// one (keyed on `slug`). Sync-progress fields are preserved on conflict.
+/// one (keyed on `slug`).
+///
+/// `slug` and `connector_type` are immutable identity: on conflict only the
+/// mutable surface (`backend`, `display_name`, `config_json`, `status`,
+/// `auth_state`) is overwritten and `updated_at` is bumped, while `id`,
+/// `created_at`, and the sync-progress fields (`sync_cursor`, `last_sync_at`,
+/// `last_error`) are preserved. Reusing an existing `slug` with a *different*
+/// `ConnectorType` returns [`KnowledgeError::ConnectorTypeMismatch`] rather
+/// than silently rewriting the instance's kind (which would leave the previous
+/// backend's type-specific sync state attached to a different connector type).
+///
+/// `connector_type` is the typed `ConnectorType` enum whose variants map to the
+/// seeded `connector_types` rows, so the FK is guaranteed valid; the
+/// `connector_types(id)` foreign key is the DB-level guard.
 pub async fn upsert_connector(
     pool: &SqlitePool,
     input: &UpsertConnectorInput,
     now: DateTime<Utc>,
 ) -> Result<Connector, KnowledgeError> {
     let connector_type_id = input.connector_type as i16;
-    // `connector_type` is the typed `ConnectorType` enum whose variants map to
-    // the seeded `connector_types` rows, so the FK is guaranteed valid here;
-    // the `connector_types(id)` foreign key is the DB-level guard.
-
     let status_id = input.status.unwrap_or(ConnectorStatus::Setup) as i16;
     let auth_state_id = input
         .auth_state
         .unwrap_or(ConnectorAuthState::Unauthenticated) as i16;
 
+    // The `WHERE connectors.connector_type_id = excluded.connector_type_id`
+    // guard makes the type immutable on conflict: a type-mismatch conflict
+    // updates zero rows, so `RETURNING` yields nothing and we surface a clean
+    // `ConnectorTypeMismatch` error (a pure insert or a same-type conflict
+    // always returns exactly one row).
     let row = sqlx::query_as::<_, Connector>(
         "INSERT INTO connectors \
          (connector_type_id, slug, backend, display_name, config_json, status_id, auth_state_id, \
           created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(slug) DO UPDATE SET \
-            connector_type_id = excluded.connector_type_id, \
             backend = excluded.backend, \
             display_name = excluded.display_name, \
             config_json = excluded.config_json, \
             status_id = excluded.status_id, \
             auth_state_id = excluded.auth_state_id, \
             updated_at = excluded.updated_at \
+         WHERE connectors.connector_type_id = excluded.connector_type_id \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
                    status_id, auth_state_id, sync_cursor, last_sync_at, last_error, \
                    created_at, updated_at",
@@ -98,8 +112,9 @@ pub async fn upsert_connector(
     .bind(auth_state_id)
     .bind(now)
     .bind(now)
-    .fetch_one(pool)
-    .await?;
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| KnowledgeError::ConnectorTypeMismatch(input.slug.clone()))?;
     Ok(row)
 }
 

@@ -2,6 +2,7 @@
 
 pub mod audit;
 pub mod category;
+pub mod connector;
 pub mod entity;
 pub mod event;
 pub mod fact;

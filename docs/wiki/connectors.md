@@ -1,7 +1,7 @@
 # Connectors
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178). No connector syncs data yet.
+> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). No connector syncs data yet.
 
 ## What connectors are
 
@@ -17,7 +17,7 @@ sensitivity gating as facts you tell Mimir directly.
 
 ## What works right now
 
-**Nothing functional yet.** Phase 3 has only just begun. As of this version:
+**No sync yet, but the registry is in place.** As of this version:
 
 - The `mimir-connectors` crate exists and is wired into the workspace.
 - The feature flags for the three core connector types (`photos`, `calendar`,
@@ -25,6 +25,14 @@ sensitivity gating as facts you tell Mimir directly.
 - The database-access boundary is in place: connectors talk to the knowledge
   graph only through its public facade and never touch the database pool
   directly.
+- The `connectors` instance-registry table exists (issue #179 / F2). Each row
+  is one configured connector instance (e.g. a single Gmail account) and
+  stores its type, backend, config, lifecycle status (`Setup`/`Active`/
+  `Paused`/`Error`), auth state (`Unauthenticated`/`Authenticated`/`Expired`),
+  sync cursor, last sync time, and last error — so connectors survive daemon
+  restarts. The `KnowledgeGraph` facade exposes `list_connectors`,
+  `get_connector_by_slug`, `upsert_connector`, `update_sync_cursor`,
+  `set_connector_status`, and `set_auth_state`.
 
 There is no working backend yet — no calendar sync, no email fetch, no photo
 watcher. The trait, registry, and mock connector are scaffolding stubs that

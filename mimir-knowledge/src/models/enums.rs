@@ -180,6 +180,65 @@ pub enum ConnectorType {
     LinkedIn = 4,
 }
 
+/// Lifecycle status of a connector instance.
+///
+/// Stored as the `status_id` foreign key on the `connectors` table and mirrored
+/// in the `connector_statuses` lookup table (migration 042).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Type, serde::Serialize, serde::Deserialize)]
+#[repr(i16)]
+pub enum ConnectorStatus {
+    /// Initial state — configured but not yet authenticated or started.
+    Setup = 1,
+    /// Running and healthy; the supervisor may poll it.
+    Active = 2,
+    /// Manually paused by the user; not auto-restarted.
+    Paused = 3,
+    /// Circuit-breaker tripped after repeated failures; requires manual resume.
+    Error = 4,
+}
+
+impl TryFrom<i16> for ConnectorStatus {
+    type Error = ();
+
+    fn try_from(value: i16) -> Result<Self, ()> {
+        match value {
+            x if x == Self::Setup as i16 => Ok(Self::Setup),
+            x if x == Self::Active as i16 => Ok(Self::Active),
+            x if x == Self::Paused as i16 => Ok(Self::Paused),
+            x if x == Self::Error as i16 => Ok(Self::Error),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Authentication state of a connector instance.
+///
+/// Stored as the `auth_state_id` foreign key on the `connectors` table and
+/// mirrored in the `connector_auth_states` lookup table (migration 042).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Type, serde::Serialize, serde::Deserialize)]
+#[repr(i16)]
+pub enum ConnectorAuthState {
+    /// No credentials stored yet.
+    Unauthenticated = 1,
+    /// Valid credentials present; the connector may sync.
+    Authenticated = 2,
+    /// Token expired or revoked; re-authentication required.
+    Expired = 3,
+}
+
+impl TryFrom<i16> for ConnectorAuthState {
+    type Error = ();
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        match value {
+            x if x == Self::Unauthenticated as i16 => Ok(Self::Unauthenticated),
+            x if x == Self::Authenticated as i16 => Ok(Self::Authenticated),
+            x if x == Self::Expired as i16 => Ok(Self::Expired),
+            _ => Err(()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,6 +348,35 @@ mod tests {
         rt(ConnectorType::Calendar);
         rt(MergeResolution::KeptSeparate);
     }
+
+    #[test]
+    fn connector_status_discriminants_are_stable() {
+        assert_eq!(ConnectorStatus::Setup as i16, 1);
+        assert_eq!(ConnectorStatus::Active as i16, 2);
+        assert_eq!(ConnectorStatus::Paused as i16, 3);
+        assert_eq!(ConnectorStatus::Error as i16, 4);
+    }
+
+    #[test]
+    fn connector_auth_state_discriminants_are_stable() {
+        assert_eq!(ConnectorAuthState::Unauthenticated as i16, 1);
+        assert_eq!(ConnectorAuthState::Authenticated as i16, 2);
+        assert_eq!(ConnectorAuthState::Expired as i16, 3);
+    }
+
+    #[test]
+    fn connector_enums_try_from_roundtrip() {
+        assert_eq!(ConnectorStatus::try_from(3), Ok(ConnectorStatus::Paused));
+        assert_eq!(
+            ConnectorAuthState::try_from(2),
+            Ok(ConnectorAuthState::Authenticated)
+        );
+        assert_eq!(ConnectorStatus::try_from(0), Err(()));
+        assert_eq!(ConnectorAuthState::try_from(9), Err(()));
+    }
 }
 
 const_assert!((ConnectorType::Gmail as i16) != 0);
+
+const_assert!((ConnectorStatus::Setup as i16) != 0);
+const_assert!((ConnectorAuthState::Unauthenticated as i16) != 0);

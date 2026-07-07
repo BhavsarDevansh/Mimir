@@ -1,7 +1,7 @@
 # Connectors Framework (mimir-connectors)
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178 / F1). Trait, registry, and mock are stubs; filled by F6/F7/F13.
+> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). Trait, registry, and mock are stubs; filled by F6/F7/F13.
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -61,11 +61,71 @@ gated dependencies (`kamadak-exif`, `icalendar`, `async-imap`, `mail-parser`,
 `#![deny(unsafe_code)]` is enforced at the crate root, consistent with the
 workspace-wide no-`unsafe` guarantee.
 
+## Connector instance registry (F2)
+
+Issue #179 added the `connectors` instance-registry table (migration
+`042_create_connectors.sql`) plus its Rust model, queries, and
+`KnowledgeGraph` facade methods. Each row is a single configured connector
+instance — one Gmail account, one CalDAV calendar — so backends can persist
+sync cursor, auth state, and health across daemon restarts.
+
+### Schema
+
+```sql
+CREATE TABLE connectors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  connector_type_id INTEGER NOT NULL REFERENCES connector_types(id),
+  slug TEXT NOT NULL UNIQUE,
+  backend TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  config_json TEXT NOT NULL,
+  status_id INTEGER NOT NULL DEFAULT 1 REFERENCES connector_statuses(id),
+  auth_state_id INTEGER NOT NULL DEFAULT 1 REFERENCES connector_auth_states(id),
+  sync_cursor TEXT,
+  last_sync_at TIMESTAMP,
+  last_error TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+Two lookup tables mirror the `event_statuses` pattern: `connector_statuses`
+(`Setup=1`, `Active=2`, `Paused=3`, `Error=4`) and `connector_auth_states`
+(`Unauthenticated=1`, `Authenticated=2`, `Expired=3`). The Rust enums
+`ConnectorStatus` and `ConnectorAuthState` (`#[repr(i16)]`, `sqlx::Type`)
+live in `mimir-knowledge/src/models/enums.rs`. This deliberately uses typed
+integer enums rather than the `TEXT` columns proposed in the issue, to match
+the rest of the knowledge-graph schema and the project's "smallest data type"
+rule.
+
+> The `sources.connector_instance_id` provenance FK and the
+> `SELECT COUNT(*) FROM sources WHERE connector_instance_id = ?` item-count
+> query are **deferred to F3**; until F3 lands, item counts are not derivable.
+
+### Facade methods
+
+`KnowledgeGraph` exposes: `list_connectors`, `get_connector_by_slug`,
+`get_connector` (by id), `upsert_connector`, `update_sync_cursor`,
+`set_connector_status`, and `set_auth_state`.
+
+- `upsert_connector` is keyed on `slug`. On conflict it overwrites the mutable
+  config surface (`backend`, `display_name`, `config_json`, `status`,
+  `auth_state`) and bumps `updated_at`; it **preserves** `id`, `created_at`,
+  and the sync-progress fields (`sync_cursor`, `last_sync_at`, `last_error`),
+  which are owned by their dedicated mutators.
+- `set_connector_status` takes an `Option<Option<String>>` `error` argument:
+  `None` leaves `last_error` untouched, `Some(None)` clears it to NULL, and
+  `Some(Some(msg))` records `msg` (e.g. a circuit-breaker reason).
+- Unknown ids return `KnowledgeError::ConnectorNotFound`. The `connector_type`
+  field is the typed `ConnectorType` enum (variants map to seeded
+  `connector_types` rows), so the `connector_types(id)` foreign key is the
+  DB-level guard and no separate type-validation error is needed.
+
 ## What is NOT done in F1
 
 - No `Connector` behaviour (auth, health, sync, extract, lifecycle).
 - No `connectors` DB table, model, queries, or `KnowledgeGraph` facade
-  additions (F2).
+  additions — **done in F2 (#179)**; see [Connector instance registry](#connector-instance-registry-f2).
 - No `sources` provenance FK migration (F3).
 - No `NormalizedFact`/`normalize_and_insert` refactor (F4).
 - No entity-resolution enhancement (F5).

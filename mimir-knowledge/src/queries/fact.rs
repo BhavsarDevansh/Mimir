@@ -339,7 +339,7 @@ pub async fn insert_fact_in_tx(
         });
 
         if let Some(existing_fact) = candidate {
-            let connector_id_ref = new_fact.connector_id.as_deref();
+            let connector_instance_id = new_fact.connector_instance_id;
             let raw_ref = new_fact.raw_reference.as_deref();
 
             // Independence check: a source with identical provenance already
@@ -347,13 +347,13 @@ pub async fn insert_fact_in_tx(
             let already: Option<(i64,)> = sqlx::query_as(
                 "SELECT 1 FROM sources \
                  WHERE fact_id = ? AND source_type_id = ? \
-                 AND COALESCE(connector_id, '') = COALESCE(?, '') \
+                 AND COALESCE(connector_instance_id, 0) = COALESCE(?, 0) \
                  AND COALESCE(raw_reference, '') = COALESCE(?, '') \
                  LIMIT 1",
             )
             .bind(existing_fact.id)
             .bind(new_fact.source_type as i16)
-            .bind(connector_id_ref)
+            .bind(connector_instance_id)
             .bind(raw_ref)
             .fetch_optional(&mut **tx)
             .await?;
@@ -372,13 +372,13 @@ pub async fn insert_fact_in_tx(
 
             let source_id: i64 = sqlx::query_scalar(
                 "INSERT INTO sources \
-                 (fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
+                 (fact_id, source_type_id, connector_instance_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
                  VALUES (?, ?, ?, ?, ?, ?, ?) \
                  RETURNING id",
             )
             .bind(existing_fact.id)
             .bind(new_fact.source_type as i16)
-            .bind(&new_fact.connector_id)
+            .bind(new_fact.connector_instance_id)
             .bind(connector_type_id)
             .bind(&new_fact.raw_reference)
             .bind(now)
@@ -390,7 +390,7 @@ pub async fn insert_fact_in_tx(
             // SourceAdded audit entry (mirrors queries::source::add_source_to_fact).
             let source_added_value = serde_json::json!({
                 "source_type_id": new_fact.source_type as i16,
-                "connector_id": new_fact.connector_id,
+                "connector_instance_id": new_fact.connector_instance_id,
                 "connector_type_id": connector_type_id,
                 "raw_reference": new_fact.raw_reference,
                 "extraction_method_id": extraction_method_id,
@@ -668,12 +668,12 @@ pub async fn insert_fact_in_tx(
     let connector_type_id = new_fact.connector_type.map(|ct| ct as i16);
     sqlx::query(
         "INSERT INTO sources \
-         (fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
+         (fact_id, source_type_id, connector_instance_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
          VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(fact_id)
     .bind(new_fact.source_type as i16)
-    .bind(&new_fact.connector_id)
+    .bind(new_fact.connector_instance_id)
     .bind(connector_type_id)
     .bind(&new_fact.raw_reference)
     .bind(now)
@@ -1123,7 +1123,7 @@ async fn enrich_with_sources(
     let fact_ids: Vec<i32> = rows.iter().map(|r| r.id).collect();
     let placeholders: Vec<&str> = fact_ids.iter().map(|_| "?").collect();
     let src_sql = format!(
-        "SELECT id, fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id \
+        "SELECT id, fact_id, source_type_id, connector_instance_id, connector_type_id, raw_reference, extracted_at, extraction_method_id \
          FROM sources \
          WHERE fact_id IN ({})",
         placeholders.join(",")

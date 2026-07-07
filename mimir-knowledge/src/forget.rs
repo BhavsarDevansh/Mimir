@@ -262,7 +262,7 @@ pub(crate) async fn forget_fact_tx(
     let fact = fact.ok_or(KnowledgeError::FactNotFound(fact_id))?;
 
     let sources: Vec<Source> = sqlx::query_as::<_, Source>(
-        "SELECT id, fact_id, source_type_id, connector_id, connector_type_id, raw_reference,          extracted_at, extraction_method_id          FROM sources WHERE fact_id = ?",
+        "SELECT id, fact_id, source_type_id, connector_instance_id, connector_type_id, raw_reference,          extracted_at, extraction_method_id          FROM sources WHERE fact_id = ?",
     )
     .bind(fact_id)
     .fetch_all(&mut **tx)
@@ -499,9 +499,9 @@ async fn query_matching_fact_ids(
         builder.push(")");
     }
     if let Some(ref src) = filters.source {
-        builder.push(" AND f.id IN (SELECT so.fact_id FROM sources so WHERE so.connector_id = ");
+        builder.push(" AND f.id IN (SELECT so.fact_id FROM sources so WHERE so.connector_instance_id IN (SELECT id FROM connectors WHERE slug = ");
         builder.push_bind(src);
-        builder.push(" OR so.source_type_id = (SELECT id FROM source_types WHERE name = ");
+        builder.push(") OR so.source_type_id = (SELECT id FROM source_types WHERE name = ");
         builder.push_bind(src);
         builder.push("))");
     }
@@ -547,9 +547,9 @@ async fn has_sensitive_match(
         builder.push(")");
     }
     if let Some(ref src) = filters.source {
-        builder.push(" AND f.id IN (SELECT so.fact_id FROM sources so WHERE so.connector_id = ");
+        builder.push(" AND f.id IN (SELECT so.fact_id FROM sources so WHERE so.connector_instance_id IN (SELECT id FROM connectors WHERE slug = ");
         builder.push_bind(src);
-        builder.push(" OR so.source_type_id = (SELECT id FROM source_types WHERE name = ");
+        builder.push(") OR so.source_type_id = (SELECT id FROM source_types WHERE name = ");
         builder.push_bind(src);
         builder.push("))");
     }

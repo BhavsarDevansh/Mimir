@@ -218,7 +218,7 @@ pub struct FactQueryResponse {
 pub struct SourceRow {
     pub source_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub connector_id: Option<String>,
+    pub connector_instance_id: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_reference: Option<String>,
     pub extracted_at: String,
@@ -768,17 +768,17 @@ line2",
         source_row,
         full: SourceRow {
             source_type: "chat".to_string(),
-            connector_id: Some("cli".to_string()),
+            connector_instance_id: Some(1),
             raw_reference: Some("ref-1".to_string()),
             extracted_at: "2020-01-01T00:00:00Z".to_string(),
         },
         sparse: SourceRow {
             source_type: "chat".to_string(),
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extracted_at: "2020-01-01T00:00:00Z".to_string(),
         },
-        sparse_skips: ["connector_id", "raw_reference"]
+        sparse_skips: ["connector_instance_id", "raw_reference"]
     );
 
     #[test]
@@ -833,7 +833,7 @@ line2",
             fact: sample_fact_row(),
             sources: vec![SourceRow {
                 source_type: "chat".to_string(),
-                connector_id: None,
+                connector_instance_id: None,
                 raw_reference: None,
                 extracted_at: "2020-01-01T00:00:00Z".to_string(),
             }],

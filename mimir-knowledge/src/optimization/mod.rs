@@ -810,8 +810,8 @@ async fn merge_fact_pair(
 
     sqlx::query(
         "INSERT OR IGNORE INTO sources \
-         (fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
-         SELECT ?, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id \
+         (fact_id, source_type_id, connector_instance_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
+         SELECT ?, source_type_id, connector_instance_id, connector_type_id, raw_reference, extracted_at, extraction_method_id \
          FROM sources WHERE fact_id = ?",
     )
     .bind(keep_id)

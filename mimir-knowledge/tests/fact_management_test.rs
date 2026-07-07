@@ -3,7 +3,9 @@
 use chrono::{TimeZone, Utc};
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::audit_log::ChangedBy;
+use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::entity::EntityType;
+use mimir_knowledge::models::enums::ConnectorType;
 
 use mimir_knowledge::models::fact::{FactStatus, NewFact};
 use mimir_knowledge::models::source::{ExtractionMethod, SourceType};
@@ -50,7 +52,7 @@ async fn fact_crud_roundtrip() {
         valid_from: None,
         valid_until: None,
         source_type: SourceType::UserEdit,
-        connector_id: None,
+        connector_instance_id: None,
         raw_reference: None,
         extraction_method: None,
         connector_type: None,
@@ -117,7 +119,7 @@ async fn fact_temporal_timeline() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -139,7 +141,7 @@ async fn fact_temporal_timeline() {
             valid_from: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -180,7 +182,7 @@ async fn fact_temporal_disputed() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -202,7 +204,7 @@ async fn fact_temporal_disputed() {
             valid_from: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -245,7 +247,7 @@ async fn fact_temporal_closure() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -267,7 +269,7 @@ async fn fact_temporal_closure() {
             valid_from: Some(kg.now()),
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -310,7 +312,7 @@ async fn fact_relationship_type_id_lookup() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -361,7 +363,7 @@ async fn fact_audit_log_written() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -408,7 +410,7 @@ async fn fact_source_attached() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::Connector,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -453,7 +455,7 @@ async fn cascade_forget_orphan() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -531,7 +533,7 @@ async fn cascade_forget_survives() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -553,7 +555,7 @@ async fn cascade_forget_survives() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -639,7 +641,7 @@ async fn trash_contains_payload() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -689,7 +691,7 @@ async fn confidence_initial_values() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -712,7 +714,7 @@ async fn confidence_initial_values() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::Inference,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -735,7 +737,7 @@ async fn confidence_initial_values() {
             valid_from: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::Connector,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -773,7 +775,7 @@ async fn unknown_status_id_returns_none() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -826,7 +828,7 @@ async fn unknown_relationship_type_id_returns_none() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -878,7 +880,7 @@ async fn get_active_facts_at_half_open_boundary() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(boundary),
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -901,7 +903,7 @@ async fn get_active_facts_at_half_open_boundary() {
             valid_from: Some(boundary),
             valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -951,7 +953,7 @@ async fn get_active_facts_at_filters_by_active_status() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1010,7 +1012,7 @@ async fn automatic_closure_writes_audit_log() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1033,7 +1035,7 @@ async fn automatic_closure_writes_audit_log() {
             valid_from: Some(now),
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1084,7 +1086,7 @@ async fn insert_rejects_inverted_time_range() {
             valid_from: Some(from),
             valid_until: Some(until),
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1126,7 +1128,7 @@ async fn forget_cascade_status_change_writes_audit_log() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1217,7 +1219,7 @@ async fn explicit_replaces_explicit() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1240,7 +1242,7 @@ async fn explicit_replaces_explicit() {
             valid_from: Some(Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap()),
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1321,7 +1323,7 @@ async fn explicit_replaces_inferred() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1359,7 +1361,7 @@ async fn explicit_replaces_connector() {
             valid_from: Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::Connector,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1382,7 +1384,7 @@ async fn explicit_replaces_connector() {
             valid_from: Some(Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap()),
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1421,7 +1423,7 @@ async fn explicit_no_overlap_no_supersession() {
             valid_from: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
             valid_until: Some(Utc.with_ymd_and_hms(2022, 1, 1, 0, 0, 0).unwrap()),
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1444,7 +1446,7 @@ async fn explicit_no_overlap_no_supersession() {
             valid_from: Some(Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap()),
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1484,7 +1486,7 @@ async fn explicit_replaces_already_superseded_is_idempotent() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1507,7 +1509,7 @@ async fn explicit_replaces_already_superseded_is_idempotent() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1530,7 +1532,7 @@ async fn explicit_replaces_already_superseded_is_idempotent() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -1588,7 +1590,7 @@ async fn multiple_atemporal_facts_different_objects_all_persist() {
                 valid_from: None,
                 valid_until: None,
                 source_type: SourceType::UserEdit,
-                connector_id: None,
+                connector_instance_id: None,
                 raw_reference: None,
                 extraction_method: None,
                 connector_type: None,
@@ -1635,7 +1637,8 @@ async fn multiple_atemporal_facts_different_objects_all_persist() {
 /// Build a connector-sourced `NewFact` with distinct provenance so two facts
 /// are independent sources (required to clear the `sources` UNIQUE index).
 #[allow(clippy::too_many_arguments)]
-fn connector_new_fact(
+async fn connector_new_fact(
+    kg: &KnowledgeGraph,
     subject_id: i32,
     predicate: &str,
     object_id: Option<i32>,
@@ -1645,6 +1648,22 @@ fn connector_new_fact(
     connector_id: &str,
     raw_reference: &str,
 ) -> NewFact {
+    // Each distinct `connector_id` label is a distinct registered Photos
+    // connector instance (default reliability 0.80), so two facts with
+    // different labels are independent sources for corroboration.
+    let instance_id = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Photos,
+            slug: connector_id.to_string(),
+            backend: "test".to_string(),
+            display_name: connector_id.to_string(),
+            config_json: "{}".to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap()
+        .id;
     NewFact {
         subject_id,
         relationship_type: predicate.to_string(),
@@ -1653,8 +1672,8 @@ fn connector_new_fact(
         valid_from,
         valid_until,
         source_type: SourceType::Connector,
-        connector_id: Some(connector_id.to_string()),
-        connector_type: None,
+        connector_instance_id: Some(instance_id),
+        connector_type: Some(ConnectorType::Photos),
         raw_reference: Some(raw_reference.to_string()),
         extraction_method: Some(ExtractionMethod::StructuredParse),
         inferred: false,
@@ -1700,32 +1719,40 @@ async fn corroboration_adds_source_not_new_fact() {
     let london = create_place(&kg, "London").await;
 
     let f1 = kg
-        .insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2020, 1, 1)),
-            None,
-            "gmail",
-            "msg-1",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2020, 1, 1)),
+                None,
+                "gmail",
+                "msg-1",
+            )
+            .await,
+        )
         .await
         .unwrap();
     assert_eq!(source_count(&kg, f1.id).await, 1);
 
     // Second independent connector source, same claim, temporally overlapping.
     let corroborated = kg
-        .insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2021, 6, 1)),
-            None,
-            "calendar",
-            "event-1",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2021, 6, 1)),
+                None,
+                "calendar",
+                "event-1",
+            )
+            .await,
+        )
         .await
         .unwrap();
 
@@ -1753,32 +1780,40 @@ async fn corroboration_boosts_confidence_capped_at_ninety_five() {
     let london = create_place(&kg, "London").await;
 
     let f1 = kg
-        .insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2020, 1, 1)),
-            None,
-            "s1",
-            "r1",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2020, 1, 1)),
+                None,
+                "s1",
+                "r1",
+            )
+            .await,
+        )
         .await
         .unwrap();
     // Connector default confidence is 0.80.
     assert!((f1.confidence - 0.80).abs() < 1e-6);
 
     for (cid, rid) in [("s2", "r2"), ("s3", "r3"), ("s4", "r4"), ("s5", "r5")] {
-        kg.insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2021, 1, 1)),
-            None,
-            cid,
-            rid,
-        ))
+        kg.insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2021, 1, 1)),
+                None,
+                cid,
+                rid,
+            )
+            .await,
+        )
         .await
         .unwrap();
     }
@@ -1801,31 +1836,39 @@ async fn non_overlapping_temporal_ranges_stay_separate() {
     let london = create_place(&kg, "London").await;
 
     let f1 = kg
-        .insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2020, 1, 1)),
-            Some(dt(2022, 1, 1)),
-            "s1",
-            "r1",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2020, 1, 1)),
+                Some(dt(2022, 1, 1)),
+                "s1",
+                "r1",
+            )
+            .await,
+        )
         .await
         .unwrap();
 
     // Disjoint range — separate fact, no corroboration.
     let f2 = kg
-        .insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2023, 1, 1)),
-            Some(dt(2024, 1, 1)),
-            "s2",
-            "r2",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2023, 1, 1)),
+                Some(dt(2024, 1, 1)),
+                "s2",
+                "r2",
+            )
+            .await,
+        )
         .await
         .unwrap();
 
@@ -1849,16 +1892,20 @@ async fn explicit_new_overlapping_connector_supersedes_not_corroborates() {
     let london = create_place(&kg, "London").await;
 
     let f1 = kg
-        .insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2020, 1, 1)),
-            None,
-            "s1",
-            "r1",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2020, 1, 1)),
+                None,
+                "s1",
+                "r1",
+            )
+            .await,
+        )
         .await
         .unwrap();
     assert_eq!(source_count(&kg, f1.id).await, 1);
@@ -1873,7 +1920,7 @@ async fn explicit_new_overlapping_connector_supersedes_not_corroborates() {
             valid_from: Some(dt(2021, 1, 1)),
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
@@ -1907,31 +1954,39 @@ async fn duplicate_source_is_noop() {
     let london = create_place(&kg, "London").await;
 
     let f1 = kg
-        .insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2020, 1, 1)),
-            None,
-            "s1",
-            "r1",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2020, 1, 1)),
+                None,
+                "s1",
+                "r1",
+            )
+            .await,
+        )
         .await
         .unwrap();
 
     // Identical provenance — not an independent source, so a no-op.
     let result = kg
-        .insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2021, 1, 1)),
-            None,
-            "s1",
-            "r1",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2021, 1, 1)),
+                None,
+                "s1",
+                "r1",
+            )
+            .await,
+        )
         .await
         .unwrap();
 
@@ -1970,7 +2025,7 @@ async fn explicit_existing_corroborated_no_boost() {
             valid_from: Some(dt(2020, 1, 1)),
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
@@ -1986,16 +2041,20 @@ async fn explicit_existing_corroborated_no_boost() {
     assert_eq!(source_count(&kg, f1.id).await, 1);
 
     let result = kg
-        .insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2021, 1, 1)),
-            None,
-            "s1",
-            "r1",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2021, 1, 1)),
+                None,
+                "s1",
+                "r1",
+            )
+            .await,
+        )
         .await
         .unwrap();
 
@@ -2026,7 +2085,7 @@ async fn inferred_fact_corroboration_adds_source_no_boost() {
             valid_from: Some(dt(2020, 1, 1)),
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
@@ -2049,7 +2108,7 @@ async fn inferred_fact_corroboration_adds_source_no_boost() {
             valid_from: Some(dt(2020, 1, 1)),
             valid_until: None,
             source_type: SourceType::Inference,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: Some(ExtractionMethod::InferenceRule),
@@ -2066,16 +2125,20 @@ async fn inferred_fact_corroboration_adds_source_no_boost() {
     assert_eq!(source_count(&kg, inferred.id).await, 1);
 
     let result = kg
-        .insert_fact(connector_new_fact(
-            bob,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2021, 1, 1)),
-            None,
-            "s1",
-            "r1",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                bob,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2021, 1, 1)),
+                None,
+                "s1",
+                "r1",
+            )
+            .await,
+        )
         .await
         .unwrap();
 
@@ -2098,16 +2161,20 @@ async fn corroboration_writes_audit_and_clears_stale_confidence() {
     let london = create_place(&kg, "London").await;
 
     let f1 = kg
-        .insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2020, 1, 1)),
-            None,
-            "s1",
-            "r1",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2020, 1, 1)),
+                None,
+                "s1",
+                "r1",
+            )
+            .await,
+        )
         .await
         .unwrap();
 
@@ -2118,16 +2185,20 @@ async fn corroboration_writes_audit_and_clears_stale_confidence() {
         .await
         .unwrap();
 
-    kg.insert_fact(connector_new_fact(
-        alice,
-        "is_in",
-        Some(london),
-        None,
-        Some(dt(2021, 1, 1)),
-        None,
-        "s2",
-        "r2",
-    ))
+    kg.insert_fact(
+        connector_new_fact(
+            &kg,
+            alice,
+            "is_in",
+            Some(london),
+            None,
+            Some(dt(2021, 1, 1)),
+            None,
+            "s2",
+            "r2",
+        )
+        .await,
+    )
     .await
     .unwrap();
 
@@ -2159,16 +2230,20 @@ async fn corroboration_cascades_to_inferred_child() {
 
     // Parent connector fact (connector default confidence 0.80).
     let parent = kg
-        .insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2020, 1, 1)),
-            None,
-            "s1",
-            "r1",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2020, 1, 1)),
+                None,
+                "s1",
+                "r1",
+            )
+            .await,
+        )
         .await
         .unwrap();
     assert!((parent.confidence - 0.80).abs() < 1e-6);
@@ -2211,16 +2286,20 @@ async fn corroboration_cascades_to_inferred_child() {
 
     // A corroborating connector fact boosts the parent 0.80 -> 0.85, which
     // must cascade and recalculate the child to 0.85 * 0.8 * 0.6 = 0.408.
-    kg.insert_fact(connector_new_fact(
-        alice,
-        "is_in",
-        Some(london),
-        None,
-        Some(dt(2021, 1, 1)),
-        None,
-        "s2",
-        "r2",
-    ))
+    kg.insert_fact(
+        connector_new_fact(
+            &kg,
+            alice,
+            "is_in",
+            Some(london),
+            None,
+            Some(dt(2021, 1, 1)),
+            None,
+            "s2",
+            "r2",
+        )
+        .await,
+    )
     .await
     .unwrap();
 
@@ -2252,16 +2331,20 @@ async fn explicit_system_overlapping_supersedes_not_corroborates() {
     let london = create_place(&kg, "London").await;
 
     let f1 = kg
-        .insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2020, 1, 1)),
-            None,
-            "s1",
-            "r1",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2020, 1, 1)),
+                None,
+                "s1",
+                "r1",
+            )
+            .await,
+        )
         .await
         .unwrap();
     assert_eq!(source_count(&kg, f1.id).await, 1);
@@ -2277,7 +2360,7 @@ async fn explicit_system_overlapping_supersedes_not_corroborates() {
             valid_from: Some(dt(2021, 1, 1)),
             valid_until: None,
             source_type: SourceType::System,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
@@ -2315,32 +2398,40 @@ async fn corroboration_at_cap_clears_stale_confidence_without_audit() {
     let london = create_place(&kg, "London").await;
 
     let f1 = kg
-        .insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2020, 1, 1)),
-            None,
-            "s1",
-            "r1",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2020, 1, 1)),
+                None,
+                "s1",
+                "r1",
+            )
+            .await,
+        )
         .await
         .unwrap();
     assert!((f1.confidence - 0.80).abs() < 1e-6);
 
     // Boost to the non-explicit cap: 0.80 -> 0.85 -> 0.90 -> 0.95.
     for (cid, rid) in [("s2", "r2"), ("s3", "r3"), ("s4", "r4")] {
-        kg.insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2021, 1, 1)),
-            None,
-            cid,
-            rid,
-        ))
+        kg.insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2021, 1, 1)),
+                None,
+                cid,
+                rid,
+            )
+            .await,
+        )
         .await
         .unwrap();
     }
@@ -2356,16 +2447,20 @@ async fn corroboration_at_cap_clears_stale_confidence_without_audit() {
 
     // A further independent corroboration cannot boost confidence (already at
     // the cap), but it adds provenance and must still clear the stale flag.
-    kg.insert_fact(connector_new_fact(
-        alice,
-        "is_in",
-        Some(london),
-        None,
-        Some(dt(2022, 1, 1)),
-        None,
-        "s5",
-        "r5",
-    ))
+    kg.insert_fact(
+        connector_new_fact(
+            &kg,
+            alice,
+            "is_in",
+            Some(london),
+            None,
+            Some(dt(2022, 1, 1)),
+            None,
+            "s5",
+            "r5",
+        )
+        .await,
+    )
     .await
     .unwrap();
 
@@ -2400,16 +2495,20 @@ async fn corroboration_cascade_recalculates_through_diamond_graph() {
 
     // Root connector fact A at the connector default 0.80.
     let a = kg
-        .insert_fact(connector_new_fact(
-            alice,
-            "is_in",
-            Some(london),
-            None,
-            Some(dt(2020, 1, 1)),
-            None,
-            "s1",
-            "r1",
-        ))
+        .insert_fact(
+            connector_new_fact(
+                &kg,
+                alice,
+                "is_in",
+                Some(london),
+                None,
+                Some(dt(2020, 1, 1)),
+                None,
+                "s1",
+                "r1",
+            )
+            .await,
+        )
         .await
         .unwrap();
     assert!((a.confidence - 0.80).abs() < 1e-6);
@@ -2489,16 +2588,20 @@ async fn corroboration_cascade_recalculates_through_diamond_graph() {
     // Corroborate A: 0.80 -> 0.85. The cascade must recalculate B and C to
     // 0.408 and then D from BOTH updated parents:
     // (0.408 + 0.408) * 0.64 * 0.75 = 0.39168.
-    kg.insert_fact(connector_new_fact(
-        alice,
-        "is_in",
-        Some(london),
-        None,
-        Some(dt(2021, 1, 1)),
-        None,
-        "s2",
-        "r2",
-    ))
+    kg.insert_fact(
+        connector_new_fact(
+            &kg,
+            alice,
+            "is_in",
+            Some(london),
+            None,
+            Some(dt(2021, 1, 1)),
+            None,
+            "s2",
+            "r2",
+        )
+        .await,
+    )
     .await
     .unwrap();
 

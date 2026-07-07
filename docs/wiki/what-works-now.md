@@ -1,7 +1,7 @@
 # What Works in Mimir Today
 
 > **Last updated:** 2026-07-07
-> **Version:** 0.63.0
+> **Version:** 0.64.0
 > **Release summary:** Phase 2 knowledge-graph work is live — core relationship ontology seeded category-first (Issue #135): predicate aliases for verb canonicalization plus `category_aliases` and category-subtree retrieval for grouping/multi-tag precision; relationship type aliases are the single source of truth for predicate resolution (Issue #133), Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system, Agentic Pre-Response Context Retrieval (#128), the Librarian Agent (#130), LLM-orchestrated learning via the `remember` tool (#137), a hardened system prompt that enforces the agentic contract — `retrieve_context` dispatch, no fact invention, and `remember` encouragement (#138), and a redesigned Librarian extraction prompt that injects the same core-facts block as the core agent and learns only from user-labelled messages (#139), and the full pending sensitive-fact confirmation lifecycle — HTTP routes, CLI commands, and a daily auto-cleanup job (#141). v0.57.0 adds the events & reminders subsystem — a lifecycle + recurrence overlay on facts that surfaces upcoming birthdays, appointments, deadlines, and tasks in the Upcoming memory section, with a deterministic scan job and the deprecation of `entity_dates` (#74).
 > 
 > v0.60.0 adds corroboration detection (#79): when a new non-explicit fact covers the same claim as an existing Active or pending_confirmation fact (same subject + predicate + object, temporally overlapping), Mimir adds a source to the existing fact instead of creating a duplicate, and boosts its confidence +0.05 per independent source (capped at 0.95; explicit and inferred facts excluded). Re-statements from the same source are a no-op, and the confidence change cascades comprehensively to inferred children.
@@ -196,7 +196,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Fact CRUD | ✅ Works | Temporal bounds, statuses, dependencies, cascade forget |
 | Confidence model | ✅ Works | Graph-derived; no LLM involvement, no decay |
 | Inference engine (Rust) | ✅ Works | Transitivity, contradiction, propagation, threshold rules |
-| Provenance tracking | ✅ Works | Source tracking with connector_id/raw_reference + typed audit log with change_type/changed_by |
+| Provenance tracking | ✅ Works | Source tracking with connector_instance_id FK + raw_reference + typed audit log with change_type/changed_by |
 | Forgetting system | ✅ Works | Trash, cascade forget, restore, bulk operations |
 | FTS5 search | ✅ Works | Full-text search over entities and aliases |
 | **Fact extraction pipeline** | ✅ Works | LLM → Rust validation → entity resolution → confidence → sensitive confirmation → insert (issue #55) |
@@ -252,7 +252,7 @@ The daemon exposes an OpenAI-compatible chat endpoint plus Mimir-specific manage
 
 - **Phase 1 — Core Agent** ✅ Complete
 - **Phase 2 — Knowledge Graph** ✅ Complete
-- **Phase 3 — Connectors** 🚧 In progress — the `mimir-connectors` crate is scaffolded (crate, feature flags `photos`/`calendar`/`gmail`, DB-access boundary via `KnowledgeGraph` only) and the `connectors` instance-registry table + `KnowledgeGraph` facade methods landed in #179 / F2 (sync cursor, auth state, and health persist across restarts). Backend implementations (calendar, email, file watchers) land in later Phase 3 issues
+- **Phase 3 — Connectors** 🚧 In progress — the `mimir-connectors` crate is scaffolded (crate, feature flags `photos`/`calendar`/`gmail`, DB-access boundary via `KnowledgeGraph` only), the `connectors` instance-registry table + `KnowledgeGraph` facade methods landed in #179 / F2 (sync cursor, auth state, and health persist across restarts), and the `sources.connector_instance_id` provenance FK migration + per-connector item-count query landed in #180 / F3. Backend implementations (calendar, email, file watchers) land in later Phase 3 issues
 - **Phase 4 — Reasoning** ⏳ Planned (inference engine expansion)
 - **Phase 5 — Proactive Agent** ⏳ Planned (events, reminders, domain surfacing)
 - **Phase 6 — Vision** ⏳ Planned (long-term memory consolidation)

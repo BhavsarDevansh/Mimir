@@ -1,3 +1,4 @@
+use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::enums::ConnectorType;
 use mimir_knowledge::models::fact::NewFact;
 use mimir_knowledge::models::source::SourceType;
@@ -258,7 +259,7 @@ async fn test_user_edit_confidence_is_one() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -293,7 +294,7 @@ async fn test_casual_mention_confidence_is_low() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::Interaction,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -328,7 +329,7 @@ async fn test_system_confidence_is_one() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::System,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -363,7 +364,7 @@ async fn test_import_confidence_is_eighty() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::Import,
-            connector_id: None,
+            connector_instance_id: None,
             raw_reference: None,
             extraction_method: None,
             connector_type: None,
@@ -394,6 +395,20 @@ async fn test_connector_confidence_uses_db_reliability() {
     let alice = create_person(&kg, "Alice").await;
     let london = create_place(&kg, "London").await;
 
+    let gmail_instance = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Gmail,
+            slug: "gmail-1".to_string(),
+            backend: "imap".to_string(),
+            display_name: "Personal Gmail".to_string(),
+            config_json: "{}".to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap()
+        .id;
+
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
@@ -403,7 +418,7 @@ async fn test_connector_confidence_uses_db_reliability() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::Connector,
-            connector_id: Some("gmail-1".to_string()),
+            connector_instance_id: Some(gmail_instance),
             connector_type: Some(ConnectorType::Gmail),
             raw_reference: Some("msg-123".to_string()),
             extraction_method: Some(

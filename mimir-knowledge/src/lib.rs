@@ -34,7 +34,7 @@ use crate::inference::rules::contradiction::ContradictionRule;
 use crate::inference::rules::threshold::{RELATIONSHIP_TYPE_REJECTED_ACTION, ThresholdRule};
 use crate::inference::rules::transitivity::TransitivityRule;
 use crate::inference::{CascadeContext, RuleEngine};
-use crate::models::enums::RelationType;
+use crate::models::enums::{ConnectorType, RelationType};
 use crate::models::fact::{FactStatus, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
 
@@ -1214,23 +1214,48 @@ impl KnowledgeGraph {
                 conf
             } else if new_fact.inferred {
                 confidence::initial(SourceType::Inference, None)
-            } else if let Some(ct) = new_fact.connector_type {
-                if new_fact.connector_id.is_none()
-                    || new_fact.raw_reference.is_none()
-                    || new_fact.extraction_method.is_none()
-                {
+            } else if let Some(instance_id) = new_fact.connector_instance_id {
+                // Connector provenance: a registered connector instance is the
+                // identity. Require raw_reference and extraction_method, resolve
+                // the instance, and enforce that the denormalised connector_type
+                // (if supplied) matches the instance's registered type — or derive
+                // it from the instance when omitted.
+                if new_fact.raw_reference.is_none() || new_fact.extraction_method.is_none() {
                     return Err(KnowledgeError::Validation(
-                        "Connector provenance requires connector_id, raw_reference, and extraction_method"
+                        "Connector provenance requires connector_instance_id, raw_reference, and extraction_method"
                             .to_string(),
                     ));
                 }
+                let instance_type_id: Option<i16> =
+                    sqlx::query_scalar("SELECT connector_type_id FROM connectors WHERE id = ?")
+                        .bind(instance_id)
+                        .fetch_optional(&self.pool)
+                        .await?;
+                let instance_type_id = instance_type_id.ok_or_else(|| {
+                    KnowledgeError::Validation(format!(
+                        "connector instance {instance_id} not found"
+                    ))
+                })?;
+                if let Some(ct) = new_fact.connector_type {
+                    if (ct as i16) != instance_type_id {
+                        return Err(KnowledgeError::Validation(format!(
+                            "connector_instance_id {instance_id} has type {instance_type_id}                              but connector_type was supplied as {}",
+                            ct as i16
+                        )));
+                    }
+                } else {
+                    new_fact.connector_type = ConnectorType::try_from(instance_type_id).ok();
+                }
+                let resolved_ct = new_fact
+                    .connector_type
+                    .expect("connector_type resolved from instance");
                 let db_score: Option<f32> = sqlx::query_scalar(
                     "SELECT score FROM connector_reliability WHERE connector_type_id = ?",
                 )
-                .bind(ct as i16)
+                .bind(instance_type_id)
                 .fetch_optional(&self.pool)
                 .await?;
-                db_score.unwrap_or_else(|| confidence::default_connector_score(ct))
+                db_score.unwrap_or_else(|| confidence::default_connector_score(resolved_ct))
             } else {
                 confidence::initial(new_fact.source_type, None)
             };
@@ -1635,7 +1660,7 @@ impl KnowledgeGraph {
         let input = queries::source::SourceInput {
             fact_id: request.fact_id,
             source_type_id: request.source_type as i16,
-            connector_id: request.connector_id,
+            connector_instance_id: request.connector_instance_id,
             connector_type_id: request.connector_type.map(|c| c as i16),
             raw_reference: request.raw_reference,
             extraction_method_id: request.extraction_method.map(|e| e as i16),

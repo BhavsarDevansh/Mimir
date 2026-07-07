@@ -1,7 +1,7 @@
 # Connectors Framework (mimir-connectors)
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). Trait, registry, and mock are stubs; filled by F6/F7/F13.
+> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Trait, registry, and mock are stubs; filled by F6/F7/F13.
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -100,7 +100,7 @@ rule.
 
 > The `sources.connector_instance_id` provenance FK and the
 > `SELECT COUNT(*) FROM sources WHERE connector_instance_id = ?` item-count
-> query are **deferred to F3**; until F3 lands, item counts are not derivable.
+> query landed in **F3 (#180)**: see [Sources provenance FK (F3)](#sources-provenance-fk-f3).
 
 ### Facade methods
 
@@ -129,12 +129,49 @@ rule.
   seeded `connector_types` rows), so the `connector_types(id)` foreign key is
   the DB-level guard and no separate type-existence validation is needed.
 
+## Sources provenance FK (F3)
+
+Issue #180 migrated `sources.connector_id TEXT` to
+`connector_instance_id INTEGER REFERENCES connectors(id)` (migration
+`043_sources_connector_instance_fk.sql`). SQLite cannot change a column type in
+place, so this is the standard table-rebuild dance; it is lossless for existing
+DBs because no connector instances are registered yet, so every legacy row
+carried either `NULL` or `''` (the insert paths differ — `queries/source.rs`
+normalised a missing connector to `''`, `queries/fact.rs` bound `NULL`), and
+both map to `connector_instance_id IS NULL`. `connector_type_id` is retained
+(denormalised) so the confidence model can read the connector kind without a
+join even when `connector_instance_id` is `NULL`.
+
+The rebuild restores the NULL-aware unique index as
+`(fact_id, source_type_id, COALESCE(connector_instance_id, 0), COALESCE(raw_reference, ''))`
+— `0` is a safe sentinel because autoincrement ids start at `1` — plus a new
+`idx_sources_instance` index for the item-count query.
+
+### Rust model + validation gate
+
+`Source.connector_instance_id: Option<i32>` and `NewFact.connector_instance_id:
+Option<i32>` replace the old `Option<String>` labels; every insert site
+(`extract.rs`, `queries/fact.rs` corroboration + `insert_fact_in_tx`,
+`queries/trash.rs` restore, `optimization/mod.rs` dedup-merge) was updated.
+
+The `insert_fact` confidence gate now keys connector provenance off
+`connector_instance_id` rather than `connector_type`. When set it requires
+`raw_reference` and `extraction_method`, resolves the instance, and **enforces
+consistency**: if `connector_type` is also supplied it must match the instance's
+registered `connector_type_id`, otherwise `KnowledgeError::Validation` is
+returned; when `connector_type` is omitted it is **derived** from the instance.
+An unregistered instance id is rejected (`ConnectorNotFound`-style validation).
+The `forget --source <slug>` filter now matches `connectors.slug` via subquery
+(plus the existing `source_types.name` arm), since the column is no longer a
+free-form string.
+
+
 ## What is NOT done in F1
 
 - No `Connector` behaviour (auth, health, sync, extract, lifecycle).
 - No `connectors` DB table, model, queries, or `KnowledgeGraph` facade
   additions — **done in F2 (#179)**; see [Connector instance registry](#connector-instance-registry-f2).
-- No `sources` provenance FK migration (F3).
+- No `sources` provenance FK migration — **done in F3 (#180)**; see [Sources provenance FK (F3)](#sources-provenance-fk-f3).
 - No `NormalizedFact`/`normalize_and_insert` refactor (F4).
 - No entity-resolution enhancement (F5).
 - No supervisor, secret store, rate limiter, or any backend.

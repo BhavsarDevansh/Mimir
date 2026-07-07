@@ -38,7 +38,7 @@ pub struct Source {
     pub id: i32,
     pub fact_id: i32,
     pub source_type_id: i16,
-    pub connector_id: Option<String>,
+    pub connector_instance_id: Option<i32>,
     pub connector_type_id: Option<i16>,
     pub raw_reference: Option<String>,
     pub extracted_at: DateTime<Utc>,

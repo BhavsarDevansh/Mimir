@@ -672,12 +672,12 @@ async fn insert_sensitive_fact(
     let connector_type_id = new_fact.connector_type.map(|ct| ct as i16);
     sqlx::query(
         "INSERT INTO sources \
-         (fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
+         (fact_id, source_type_id, connector_instance_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
          VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(fact_id)
     .bind(new_fact.source_type as i16)
-    .bind(&new_fact.connector_id)
+    .bind(new_fact.connector_instance_id)
     .bind(connector_type_id)
     .bind(&new_fact.raw_reference)
     .bind(now)
@@ -908,7 +908,7 @@ pub(crate) async fn process_extracted_fact(
         valid_from,
         valid_until,
         source_type,
-        connector_id: None,
+        connector_instance_id: None,
         connector_type: None,
         raw_reference: None,
         extraction_method: Some(crate::models::source::ExtractionMethod::LlmExtraction),

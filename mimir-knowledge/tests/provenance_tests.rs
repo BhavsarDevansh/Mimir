@@ -3,7 +3,9 @@
 use chrono::{TimeZone, Utc};
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::audit_log::{ChangeType, ChangedBy};
+use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::entity::EntityType;
+use mimir_knowledge::models::enums::ConnectorType;
 
 use mimir_knowledge::models::fact::{FactStatus, NewFact};
 use mimir_knowledge::models::source::{ExtractionMethod, SourceType};
@@ -57,6 +59,20 @@ async fn sources_unique_constraint() {
     let alice = create_person(&kg, "Alice").await;
     let london = create_place(&kg, "London").await;
 
+    let gmail_instance = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Gmail,
+            slug: "gmail-1".to_string(),
+            backend: "imap".to_string(),
+            display_name: "Personal Gmail".to_string(),
+            config_json: "{}".to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap()
+        .id;
+
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
@@ -66,10 +82,10 @@ async fn sources_unique_constraint() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::Connector,
-            connector_id: Some("gmail-1".to_string()),
-            connector_type: None,
+            connector_instance_id: Some(gmail_instance),
+            connector_type: Some(ConnectorType::Gmail),
             raw_reference: Some("msg-123".to_string()),
-            extraction_method: None,
+            extraction_method: Some(ExtractionMethod::StructuredParse),
             inferred: false,
             inference_depth: 0,
             confidence: None,
@@ -80,12 +96,13 @@ async fn sources_unique_constraint() {
         .unwrap();
 
     let result = sqlx::query(
-        "INSERT INTO sources (fact_id, source_type_id, connector_id, raw_reference, extracted_at) \
+        "INSERT INTO sources \
+         (fact_id, source_type_id, connector_instance_id, raw_reference, extracted_at) \
          VALUES (?, ?, ?, ?, ?)",
     )
     .bind(fact.id)
     .bind(SourceType::Connector as i16)
-    .bind("gmail-1")
+    .bind(gmail_instance)
     .bind("msg-123")
     .bind(Utc::now())
     .execute(kg.pool())
@@ -113,7 +130,7 @@ async fn audit_on_insert_creates_entry() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
@@ -162,7 +179,7 @@ async fn audit_on_temporal_update() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
@@ -215,7 +232,7 @@ async fn audit_on_status_change() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
@@ -265,7 +282,7 @@ async fn audit_on_forget() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
@@ -313,7 +330,7 @@ async fn audit_on_confidence_cascade() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
@@ -335,7 +352,7 @@ async fn audit_on_confidence_cascade() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
@@ -357,7 +374,7 @@ async fn audit_on_confidence_cascade() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::Inference,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
@@ -441,7 +458,7 @@ async fn source_crud_adds_source_and_audit() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
@@ -454,12 +471,26 @@ async fn source_crud_adds_source_and_audit() {
         .await
         .unwrap();
 
+    let gmail_instance = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Gmail,
+            slug: "gmail-1".to_string(),
+            backend: "imap".to_string(),
+            display_name: "Personal Gmail".to_string(),
+            config_json: "{}".to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap()
+        .id;
+
     let source = kg
         .add_source_to_fact(mimir_knowledge::queries::source::AddSourceRequest {
             fact_id: fact.id,
             source_type: SourceType::Connector,
-            connector_id: Some("gmail-1".to_string()),
-            connector_type: None,
+            connector_instance_id: Some(gmail_instance),
+            connector_type: Some(ConnectorType::Gmail),
             raw_reference: Some("msg-456".to_string()),
             extraction_method: Some(ExtractionMethod::StructuredParse),
             changed_by: ChangedBy::User,
@@ -468,7 +499,7 @@ async fn source_crud_adds_source_and_audit() {
         .unwrap();
 
     assert_eq!(source.source_type_id, SourceType::Connector as i16);
-    assert_eq!(source.connector_id.as_deref(), Some("gmail-1"));
+    assert_eq!(source.connector_instance_id, Some(gmail_instance));
 
     let sources = kg.get_sources_for_fact(fact.id).await.unwrap();
     assert_eq!(sources.len(), 2);
@@ -503,7 +534,7 @@ async fn query_audit_log_filtered() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,
@@ -556,7 +587,7 @@ async fn query_audit_log_includes_forgotten_facts() {
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,

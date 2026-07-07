@@ -182,7 +182,7 @@ async fn make_fact_with_category(kg: &KnowledgeGraph, predicate: &str, category_
         valid_from: None,
         valid_until: None,
         source_type: SourceType::UserEdit,
-        connector_id: None,
+        connector_instance_id: None,
         connector_type: None,
         raw_reference: None,
         extraction_method: None,

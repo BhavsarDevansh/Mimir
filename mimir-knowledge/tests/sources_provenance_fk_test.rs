@@ -328,3 +328,63 @@ async fn gate_derives_connector_type_from_instance_when_omitted() {
         Some(ConnectorType::Calendar as i16)
     );
 }
+
+#[tokio::test]
+async fn gate_rejects_instance_with_type_outside_connector_type_enum() {
+    // Regression for a latent panic: if a connectors row references a
+    // connector_types id that is not a ConnectorType enum variant, the gate
+    // must surface a validation error rather than panicking on the derived
+    // connector_type.
+    let (kg, _dir) = init_kg().await;
+    let alice = person(&kg, "Alice").await;
+    let london = place(&kg, "London").await;
+
+    // Seed a connector_types row outside the ConnectorType enum, then a
+    // connectors instance pointing at it (bypassing upsert_connector, which
+    // only accepts known ConnectorType values).
+    sqlx::query("INSERT INTO connector_types (id, name) VALUES (?, ?)")
+        .bind(99_i16)
+        .bind("Experimental")
+        .execute(kg.pool())
+        .await
+        .unwrap();
+    let instance_id: i32 = sqlx::query_scalar(
+        "INSERT INTO connectors \
+         (connector_type_id, slug, backend, display_name, config_json, status_id, auth_state_id, \
+         created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) \
+         RETURNING id",
+    )
+    .bind(99_i16)
+    .bind("experimental")
+    .bind("test")
+    .bind("Experimental")
+    .bind("{}")
+    .fetch_one(kg.pool())
+    .await
+    .unwrap();
+
+    let result = kg
+        .insert_fact(NewFact {
+            subject_id: alice,
+            relationship_type: "is_in".to_string(),
+            object_id: Some(london),
+            object_literal: None,
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::Connector,
+            connector_instance_id: Some(instance_id),
+            connector_type: None, // gate must derive and reject, not panic
+            raw_reference: Some("x".to_string()),
+            extraction_method: Some(ExtractionMethod::StructuredParse),
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await;
+    assert!(
+        result.is_err(),
+        "an instance whose type is outside the ConnectorType enum must be rejected, not panicked on"
+    );
+}

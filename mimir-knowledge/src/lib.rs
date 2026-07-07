@@ -1239,16 +1239,29 @@ impl KnowledgeGraph {
                 if let Some(ct) = new_fact.connector_type {
                     if (ct as i16) != instance_type_id {
                         return Err(KnowledgeError::Validation(format!(
-                            "connector_instance_id {instance_id} has type {instance_type_id}                              but connector_type was supplied as {}",
+                            "connector_instance_id {instance_id} has type {instance_type_id} but connector_type was supplied as {}",
                             ct as i16
                         )));
                     }
                 } else {
-                    new_fact.connector_type = ConnectorType::try_from(instance_type_id).ok();
+                    // Derive the denormalised connector_type from the instance.
+                    // If the instance's type id is outside the seeded ConnectorType
+                    // enum (e.g. a connector_types row added before the enum was
+                    // extended), surface a validation error rather than panicking.
+                    new_fact.connector_type = match ConnectorType::try_from(instance_type_id) {
+                        Ok(ct) => Some(ct),
+                        Err(()) => {
+                            return Err(KnowledgeError::Validation(format!(
+                                "connector_instance_id {instance_id} has unknown connector_type_id {instance_type_id}"
+                            )));
+                        }
+                    };
                 }
-                let resolved_ct = new_fact
-                    .connector_type
-                    .expect("connector_type resolved from instance");
+                let resolved_ct = new_fact.connector_type.ok_or_else(|| {
+                    KnowledgeError::Validation(format!(
+                        "connector_instance_id {instance_id} has unknown connector_type_id {instance_type_id}"
+                    ))
+                })?;
                 let db_score: Option<f32> = sqlx::query_scalar(
                     "SELECT score FROM connector_reliability WHERE connector_type_id = ?",
                 )

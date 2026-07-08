@@ -276,3 +276,53 @@ async fn connector_fact_missing_raw_reference_is_rejected() {
     ));
     assert!(outcome.inserted.is_empty());
 }
+
+#[tokio::test]
+async fn sensitive_fact_persists_its_catalogue_categories() {
+    let (kg, _dir) = fresh_kg().await;
+    let gmail_instance = upsert(&kg, ConnectorType::Gmail, "gmail-1").await;
+
+    // A connector-sourced allergy flagged sensitive with the Allergies (230)
+    // category lands as pending_confirmation via insert_sensitive_fact. Its
+    // category links must be persisted exactly like the normal insert path so
+    // category-based reads and downstream sensitivity logic see them.
+    let fact = NormalizedFact {
+        source_type: SourceType::Connector,
+        subject: "Devansh".to_string(),
+        subject_type: EntityType::Person,
+        relationship_type: "allergy".to_string(),
+        object: "peanuts".to_string(),
+        object_is_entity: false,
+        object_type: None,
+        valid_from: None,
+        valid_until: None,
+        is_sensitive: true,
+        is_correction: false,
+        correction_scope: None,
+        category_ids: vec![230],
+        recurrence: RecurrenceType::None,
+        requires_user_action: false,
+        raw_reference: Some("gmail-msg-42".to_string()),
+    };
+
+    let outcome = normalize_and_insert(
+        &kg,
+        vec![fact],
+        Provenance::connector(
+            gmail_instance,
+            ConnectorType::Gmail,
+            ExtractionMethod::StructuredParse,
+        ),
+    )
+    .await
+    .expect("sensitive connector insert should succeed");
+
+    assert_eq!(outcome.pending_confirmation.len(), 1, "{:?}", outcome);
+    let pending = &outcome.pending_confirmation[0];
+    let categories = kg.get_categories_for_fact(pending.fact_id).await.unwrap();
+    assert!(
+        categories.iter().any(|c| c.id == 230),
+        "sensitive fact missing its catalogue category; got {:?}",
+        categories
+    );
+}

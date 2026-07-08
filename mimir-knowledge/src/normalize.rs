@@ -711,6 +711,18 @@ async fn insert_sensitive_fact(
     .execute(&mut *tx)
     .await?;
 
+    // Persist catalogue category links within the same transaction, mirroring
+    // the normal insert path (`insert_fact_internal` / `insert_facts_batch`).
+    // Without this, sensitive facts lost their categories, breaking
+    // category-based reads and downstream memory/sensitivity logic.
+    for category_id in &new_fact.category_ids {
+        sqlx::query("INSERT OR IGNORE INTO fact_categories (fact_id, category_id) VALUES (?, ?)")
+            .bind(fact_id)
+            .bind(category_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
     tx.commit().await?;
 
     let fact: Fact = sqlx::query_as::<_, Fact>(

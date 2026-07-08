@@ -81,6 +81,25 @@ that signal instead, so the `handle_correction` `None` arm is reachable again. A
 regression test (`test_correction_no_scope_defaults_to_temporal_at_now`) covers
 the path.
 
+### Review fix — sensitive facts dropped catalogue categories
+
+`insert_sensitive_fact` (the pending-confirmation insert path) wrote the fact
+and source but skipped the `fact_categories` junction writes that the normal
+insert path performs, so sensitive facts lost their catalogue category links.
+Category-based reads and downstream memory/sensitivity logic could therefore
+miss them. Fixed by persisting `new_fact.category_ids` in the same transaction
+via `INSERT OR IGNORE INTO fact_categories`, mirroring `insert_fact_internal`.
+A regression test (`sensitive_fact_persists_its_catalogue_categories`) covers
+the path.
+
+### Review fix — markdown lint hygiene
+
+- `docs/wiki/what-works-now.md`: replace the blank blockquote separator (MD028,
+  no-blanks-blockquote) between the release-summary and corroboration blocks
+  with a plain blank line so they render as separate blockquotes.
+- `docs/fact-extraction-pipeline.md`: add a blank line after the new
+  `### Scope-less Correction (`None`)` heading (MD022, blanks-around-headings).
+
 ## [0.64.0] — 2026-07-07
 
 ### Phase 3 — Sources provenance FK migration (issue #180 / F3)

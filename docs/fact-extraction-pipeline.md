@@ -177,6 +177,7 @@ Confidence is **never** taken from the LLM. It is derived from classification:
 - The new fact is inserted as `Active` with confidence `1.0`.
 
 ### Scope-less Correction (`None`)
+
 - The shared `normalize_and_insert` boundary gates corrections on the
   `is_correction` flag (set by the chat adapter from the LLM `Correction`
   classification), **not** on `correction_scope` being present.

@@ -2843,7 +2843,12 @@ mod tests {
                     temporal: None,
                     is_sensitive: true,
                     correction_scope: None,
-                    categories: Vec::new(),
+                    // Category 230 = Allergies & Intolerances, a sensitive
+                    // catalogue category. The #142 sensitivity AND-gate
+                    // requires the LLM flag *and* a sensitive category/keyword,
+                    // so without this the fact is correctly narrowed to
+                    // non-sensitive and never reaches pending_confirmation.
+                    categories: vec!["230".to_string()],
                     recurrence: None,
                     requires_user_action: None,
                 }],
@@ -3243,16 +3248,19 @@ mod tests {
                 .to_string(),
             },
         };
-        let first = Message {
-            role: "assistant".to_string(),
-            content: String::new(),
-            tool_calls: Some(vec![tool_call]),
-            tool_call_id: None,
-        };
+        // The streaming endpoint reads from the mock's stream-response queue
+        // (push_stream / StreamItem), not the blocking chat-message queue, so
+        // queue a `remember` tool-call stream followed by the final reply.
         let mock = Arc::new(
             MockLlmClient::builder()
-                .push_chat_message(first, Usage::default())
-                .push_chat("Noted.", Usage::default())
+                .push_stream(vec![
+                    Ok(StreamItem::ToolCalls(vec![tool_call])),
+                    Ok(StreamItem::Usage(Usage::default())),
+                ])
+                .push_stream(vec![
+                    Ok(StreamItem::Text("Noted.".to_string())),
+                    Ok(StreamItem::Usage(Usage::default())),
+                ])
                 .build(),
         );
         let (state, _temp) = test_state(mock).await;
@@ -3315,16 +3323,19 @@ mod tests {
                 .to_string(),
             },
         };
-        let first = Message {
-            role: "assistant".to_string(),
-            content: String::new(),
-            tool_calls: Some(vec![tool_call]),
-            tool_call_id: None,
-        };
+        // The streaming endpoint reads from the mock's stream-response queue
+        // (push_stream / StreamItem), not the blocking chat-message queue, so
+        // queue a `remember` tool-call stream followed by the final reply.
         let mock = Arc::new(
             MockLlmClient::builder()
-                .push_chat_message(first, Usage::default())
-                .push_chat("Noted.", Usage::default())
+                .push_stream(vec![
+                    Ok(StreamItem::ToolCalls(vec![tool_call])),
+                    Ok(StreamItem::Usage(Usage::default())),
+                ])
+                .push_stream(vec![
+                    Ok(StreamItem::Text("Noted.".to_string())),
+                    Ok(StreamItem::Usage(Usage::default())),
+                ])
                 .build(),
         );
         let (state, _temp) = test_state(mock).await;
@@ -3348,6 +3359,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+
+        // Drain the SSE response body so the spawned stream task completes the
+        // `remember` tool execution (and fact persistence) before we assert.
+        let _bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
 
         let found = kg.search_entities("Incognito Test User", 10).await.unwrap();
         assert!(

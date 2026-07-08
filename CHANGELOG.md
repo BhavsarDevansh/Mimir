@@ -42,6 +42,32 @@ service connectors now funnel through one deterministic Rust pipeline.
   provenance gate. All existing extraction/optimization/confirmation tests pass
   unchanged.
 
+### Tests — pre-existing `mimir-server` harness failures fixed
+
+Six `mimir-server` lib tests that failed identically on `main` (verified in a
+detached worktree) were stale test-harness bugs, not production defects:
+
+- **`insert_pending_fact` helper** (5 `test_kb_*` tests): the helper built a
+  sensitive allergy fact with `is_sensitive: true` but **no catalogue category**.
+  After the #142 sensitivity `AND`-gate landed, Rust correctly narrows such a
+  fact to non-sensitive (no sensitive category and no sensitive keyword in
+  `"peanuts"`), so it never reached `pending_confirmation` and the helper
+  panicked indexing into an empty result. Fixed by assigning category 230
+  (Allergies & Intolerances), mirroring `extract.rs`'s `sensitive_allergy_fact`
+  helper.
+- **`test_non_incognito_allows_remember_tool_and_persists_fact_stream`** and the
+  paired `test_incognito_..._stream` (which was a false pass): both hit
+  `/chat/stream` but queued responses via the blocking-path mock API
+  (`push_chat_message`/`push_chat`) instead of the stream-path API
+  (`push_stream`/`StreamItem`). The stream therefore errored out on an empty
+  queue before executing the `remember` tool. Fixed by queueing
+  `StreamItem::ToolCalls` + a follow-up `StreamItem::Text`, and (for the
+  non-incognito case) draining the SSE body so the spawned stream task completes
+  fact persistence before the assertion. The incognito test now exercises the
+  incognito write-guard for the right reason instead of passing by accident.
+
+Production code was unchanged; only test harnesses were corrected.
+
 ## [0.64.0] — 2026-07-07
 
 ### Phase 3 — Sources provenance FK migration (issue #180 / F3)

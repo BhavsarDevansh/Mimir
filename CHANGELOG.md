@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.67.1] — 2026-07-08
+
+### Review fixes (PR #214)
+
+- **docs:** Corrected the `mimir-connectors` framework status summary so the
+  mock harness is no longer described as a stub (it is now implemented and
+  documented), keeping the phase status consistent with the `MockConnector`
+  section.
+- **tests:** The `trait_is_object_safe` test now exercises the default
+  `act()` implementation through `Arc<dyn Connector>`, confirming it
+  dispatches correctly through the trait object and returns
+  `ConnectorError::UnsupportedAction`.
+
 ## [0.67.0] — 2026-07-08
 
 ### Phase 3 — Connector trait + data types (issue #183 / F6)

@@ -222,6 +222,16 @@ async fn trait_is_object_safe() {
     assert!(mock.extract().await.unwrap().is_empty());
     mock.forget().await.unwrap();
 
+    // The default `act()` implementation is also callable through the trait object.
+    let err = mock
+        .act(ConnectorAction {
+            kind: "create_event".to_string(),
+            payload: serde_json::json!({}),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ConnectorError::UnsupportedAction(_)));
+
     // The shared reference is still usable after the calls (not consumed).
     assert_eq!(mock.id(), "mock");
 }

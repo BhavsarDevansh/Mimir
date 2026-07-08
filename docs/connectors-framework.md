@@ -1,7 +1,7 @@
 # Connectors Framework (mimir-connectors)
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). **Runtime `Connector` trait + data types landed (issue #183 / F6).** Registry and mock harness remain stubs; filled by F7/F13.
+> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). **Runtime `Connector` trait + data types landed (issue #183 / F6).** Registry remains a stub; the mock harness is now implemented and documented below.
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose

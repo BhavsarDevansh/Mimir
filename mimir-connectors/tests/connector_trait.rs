@@ -143,7 +143,7 @@ async fn mock_health_is_online() {
 
 #[tokio::test]
 async fn mock_authenticate_returns_authenticated() {
-    let mut mock = MockConnector;
+    let mock = MockConnector;
     assert_eq!(
         mock.authenticate().await.unwrap(),
         ConnectorAuthState::Authenticated
@@ -152,7 +152,7 @@ async fn mock_authenticate_returns_authenticated() {
 
 #[tokio::test]
 async fn mock_sync_then_extract_yields_empty_normalized_facts() {
-    let mut mock = MockConnector;
+    let mock = MockConnector;
     let outcome = mock
         .sync(SyncOptions {
             full: false,
@@ -179,7 +179,7 @@ async fn mock_act_default_is_unsupported() {
 
 #[tokio::test]
 async fn mock_forget_succeeds() {
-    let mut mock = MockConnector;
+    let mock = MockConnector;
     mock.forget().await.unwrap();
 }
 
@@ -189,13 +189,39 @@ async fn mock_forget_succeeds() {
 
 #[tokio::test]
 async fn trait_is_object_safe() {
+    // A shared `Arc<dyn Connector>` is the documented storage shape for the
+    // registry (F7) and supervisor (F8). Every async method takes `&self`, so
+    // the whole surface — including sync/extract/authenticate/forget — is
+    // callable through the shared reference without interior mutability at
+    // the *storage* layer. (Connectors that need mutable state own it behind
+    // their own interior mutability; the mock needs none.)
     let mock: Arc<dyn Connector> = Arc::new(MockConnector);
 
     // Sync accessors through the trait object.
     assert_eq!(mock.id(), "mock");
+    assert_eq!(mock.name(), "Mock Connector");
     assert_eq!(mock.connector_type(), ConnectorType::Gmail);
     assert!(matches!(mock.mode(), ConnectorMode::Polling { .. }));
+    assert!(mock.config_schema().is_object());
 
-    // Async accessors through the trait object.
+    // Async accessors — including the ones that used to be `&mut self` — must
+    // be callable through the shared `Arc<dyn Connector>`.
     assert_eq!(mock.health().await.unwrap(), HealthStatus::Online);
+    assert_eq!(
+        mock.authenticate().await.unwrap(),
+        ConnectorAuthState::Authenticated
+    );
+    let outcome = mock
+        .sync(SyncOptions {
+            full: false,
+            since: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(outcome.fetched, 0);
+    assert!(mock.extract().await.unwrap().is_empty());
+    mock.forget().await.unwrap();
+
+    // The shared reference is still usable after the calls (not consumed).
+    assert_eq!(mock.id(), "mock");
 }

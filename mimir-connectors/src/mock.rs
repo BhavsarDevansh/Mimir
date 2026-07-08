@@ -49,7 +49,7 @@ impl Connector for MockConnector {
         serde_json::json!({})
     }
 
-    async fn authenticate(&mut self) -> Result<ConnectorAuthState, ConnectorError> {
+    async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError> {
         Ok(ConnectorAuthState::Authenticated)
     }
 
@@ -57,7 +57,7 @@ impl Connector for MockConnector {
         Ok(HealthStatus::Online)
     }
 
-    async fn sync(&mut self, _options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
+    async fn sync(&self, _options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
         Ok(SyncOutcome {
             fetched: 0,
             new_cursor: None,
@@ -65,11 +65,11 @@ impl Connector for MockConnector {
         })
     }
 
-    async fn extract(&mut self) -> Result<Vec<NormalizedFact>, ConnectorError> {
+    async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError> {
         Ok(Vec::new())
     }
 
-    async fn forget(&mut self) -> Result<(), ConnectorError> {
+    async fn forget(&self) -> Result<(), ConnectorError> {
         Ok(())
     }
 }

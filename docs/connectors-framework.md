@@ -79,6 +79,14 @@ Because the connector never touches the database, the trait takes **no
 `&KnowledgeGraph`** parameter. This keeps the crate `sqlx`-free and makes
 connectors unit-testable without a live knowledge graph (F13 mock).
 
+Every method takes `&self` (matching the workspace `Tool` trait), so the
+whole surface is callable through the shared `Arc<dyn Connector>` storage used
+by the registry (F7) and supervisor (F8). A connector that needs to mutate
+internal state (raw-item buffer, sync cursor, cached auth state) owns that
+state behind interior mutability (e.g. `tokio::sync::Mutex`) inside its
+concrete type — the trait surface itself stays shared-reference friendly and
+needs no storage-layer `Mutex<dyn Connector>`.
+
 ### Trait surface
 
 ```rust
@@ -90,13 +98,13 @@ pub trait Connector: Send + Sync {
     fn mode(&self) -> ConnectorMode;               // Polling { interval, jitter } | Push
     fn config_schema(&self) -> serde_json::Value;
 
-    async fn authenticate(&mut self) -> Result<ConnectorAuthState, ConnectorError>;
+    async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError>;
     async fn health(&self) -> Result<HealthStatus, ConnectorError>;
-    async fn sync(&mut self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError>;
-    async fn extract(&mut self) -> Result<Vec<NormalizedFact>, ConnectorError>;
+    async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError>;
+    async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError>;
     async fn act(&self, action: ConnectorAction)   // default: UnsupportedAction
         -> Result<ActionResult, ConnectorError>;
-    async fn forget(&mut self) -> Result<(), ConnectorError>;
+    async fn forget(&self) -> Result<(), ConnectorError>;
 }
 ```
 

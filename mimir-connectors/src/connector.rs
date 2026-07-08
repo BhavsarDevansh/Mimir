@@ -210,6 +210,15 @@ pub struct ActionResult {
 /// (e.g. `Arc<dyn LlmBackend>` per decision D′) are injected at construction
 /// by the factory (F7) / secret store (F10), so [`Connector::authenticate`]
 /// takes no arguments.
+///
+/// # Mutable state — `&self`, not `&mut self`
+///
+/// Every method takes `&self` (matching the workspace `Tool` trait), so the
+/// trait is callable through the shared `Arc<dyn Connector>` storage used by
+/// the registry (F7) and supervisor (F8). A connector that needs to mutate
+/// internal state (its raw-item buffer, sync cursor, cached auth state) owns
+/// that state behind interior mutability (e.g. `tokio::sync::Mutex`) inside
+/// its concrete type — the trait surface stays shared-reference friendly.
 #[async_trait]
 pub trait Connector: Send + Sync {
     /// Stable, unique, slug-style identifier for this connector instance.
@@ -233,7 +242,7 @@ pub trait Connector: Send + Sync {
     /// Credentials are injected at construction; this performs the handshake
     /// and returns the resulting auth state for the supervisor to persist via
     /// `KnowledgeGraph::set_auth_state`.
-    async fn authenticate(&mut self) -> Result<ConnectorAuthState, ConnectorError>;
+    async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError>;
 
     /// Probe the service's current reachability and auth health.
     ///
@@ -245,14 +254,14 @@ pub trait Connector: Send + Sync {
     ///
     /// Does **not** extract facts or touch the knowledge graph. Returns sync
     /// stats and an updated cursor for the supervisor to persist.
-    async fn sync(&mut self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError>;
+    async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError>;
 
     /// Drain buffered raw items into typed, parsed normalized facts.
     ///
     /// Entity ids are **not** resolved here — that is `normalize_and_insert`'s
     /// job. The supervisor calls this after [`sync`](Self::sync) and then
     /// inserts the returned facts through the shared pipeline.
-    async fn extract(&mut self) -> Result<Vec<NormalizedFact>, ConnectorError>;
+    async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError>;
 
     /// Optional write-back to the service.
     ///
@@ -267,5 +276,5 @@ pub trait Connector: Send + Sync {
     /// The supervisor additionally cascades the deletion to knowledge-graph
     /// facts with this `connector_instance_id` via the existing trash
     /// machinery; this method handles the connector-local cleanup.
-    async fn forget(&mut self) -> Result<(), ConnectorError>;
+    async fn forget(&self) -> Result<(), ConnectorError>;
 }

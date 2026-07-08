@@ -1,7 +1,7 @@
 # Connectors Framework (mimir-connectors)
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Trait, registry, and mock are stubs; filled by F6/F7/F13.
+> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). **Runtime `Connector` trait + data types landed (issue #183 / F6).** Registry and mock harness remain stubs; filled by F7/F13.
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -52,13 +52,94 @@ pub async fn normalize_and_insert(
 Because `mimir-connectors` depends on `mimir-knowledge`, it reaches these types
 directly; it never needs a parallel insert path.
 
+## Connector trait + data types (F6 / #183)
+
+The runtime `Connector` trait is the contract every service-ingestion worker
+implements. It is `#[async_trait]` with a `Send + Sync` supertrait so it is
+object-safe as `Arc<dyn Connector>` (native `async fn` in traits is not
+dyn-compatible; `async-trait` is required). Each trait object represents one
+configured connector *instance* (one row in the `connectors` table).
+
+### Ingestion model
+
+Ingestion is a **two-step, DB-free** process owned by the connector, with the
+*supervisor* (F8) performing the database insert:
+
+1. `sync(SyncOptions) -> SyncOutcome` — fetches raw items from the service into
+   the connector's own internal buffer. Returns the item count and an updated
+   sync cursor. Raw types stay connector-internal (no generic `RawEvent`).
+2. `extract() -> Vec<NormalizedFact>` — drains the buffer into typed, parsed
+   facts. Entity *types* are set; entity *ids* are **not** resolved here.
+3. The supervisor builds `Provenance::connector(instance_id, type, method)` and
+   calls `mimir_knowledge::normalize::normalize_and_insert`, which resolves
+   entities (F5 chain), assigns confidence, runs the sensitivity gate, and
+   inserts (inheriting corroboration / supersession / inference).
+
+Because the connector never touches the database, the trait takes **no
+`&KnowledgeGraph`** parameter. This keeps the crate `sqlx`-free and makes
+connectors unit-testable without a live knowledge graph (F13 mock).
+
+### Trait surface
+
+```rust
+#[async_trait]
+pub trait Connector: Send + Sync {
+    fn id(&self) -> &str;                         // instance slug
+    fn name(&self) -> &str;                        // display name
+    fn connector_type(&self) -> ConnectorType;     // provenance + reliability axis
+    fn mode(&self) -> ConnectorMode;               // Polling { interval, jitter } | Push
+    fn config_schema(&self) -> serde_json::Value;
+
+    async fn authenticate(&mut self) -> Result<ConnectorAuthState, ConnectorError>;
+    async fn health(&self) -> Result<HealthStatus, ConnectorError>;
+    async fn sync(&mut self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError>;
+    async fn extract(&mut self) -> Result<Vec<NormalizedFact>, ConnectorError>;
+    async fn act(&self, action: ConnectorAction)   // default: UnsupportedAction
+        -> Result<ActionResult, ConnectorError>;
+    async fn forget(&mut self) -> Result<(), ConnectorError>;
+}
+```
+
+- **`authenticate`** takes no arguments: credentials are injected at
+  construction by the factory (F7) / secret store (F10), per decision D′
+  (which also injects `Arc<dyn LlmBackend>`). It returns the resulting
+  `ConnectorAuthState` for the supervisor to persist.
+- **`act`** is optional write-back with a default implementation returning
+  `ConnectorError::UnsupportedAction`; backends that support write-back
+  (e.g. Calendar event creation in C4) override it.
+- **`forget`** handles connector-local cleanup; the supervisor additionally
+  cascades the deletion to knowledge-graph facts with this
+  `connector_instance_id` via the existing trash machinery.
+
+### Data types
+
+| Type | Purpose |
+|------|---------|
+| `ConnectorMode` | `Polling { interval, jitter }` (supervisor-polled) or `Push` (IMAP IDLE / file watcher). |
+| `SyncOptions` | `full: bool` (ignore cursor) + optional `since: Option<Duration>` time-window hint. The opaque incremental cursor lives in `connectors.sync_cursor`, not here. |
+| `SyncOutcome` | `fetched: u32`, `new_cursor: Option<String>`, `fetched_at: DateTime<Utc>`. |
+| `HealthStatus` | Transient probe: `Online` / `Offline` / `Degraded` / `AuthExpired` / `NotConfigured`. |
+| `ConnectorAction` / `ActionResult` | Write-back request (`kind` + JSON `payload`) and outcome (`success`, `native_id`, `message`). |
+| `ConnectorError` | `thiserror` enum: `Authentication`, `NotAuthenticated`, `Network`, `Config`, `Parse`, `UnsupportedAction`, `Io`, `Other`. Does not wrap `KnowledgeError` (the connector does not insert). |
+
+### `HealthStatus` vs persisted lifecycle
+
+`HealthStatus` is a **transient runtime probe** (is the service reachable and
+authenticated *right now*), deliberately renamed to disambiguate from the
+persisted enums `ConnectorStatus` (`Setup`/`Active`/`Paused`/`Error`) and
+`ConnectorAuthState` (`Unauthenticated`/`Authenticated`/`Expired`). The
+supervisor calls `health()` and maps the probe onto the persisted columns —
+e.g. `AuthExpired` → `auth_state = Expired`, `status = Paused`; `Offline` →
+`status = Error`.
+
 ## Crate layout
+
 
 | Module | Role | Filled by |
 |--------|------|-----------|
-| `connector` | Runtime `Connector` trait (identity accessors only) | F6 — full trait + `ConnectorMode`/`SyncOptions`/`HealthStatus` |
+| `connector` | Runtime `Connector` trait + data types (`ConnectorMode`, `SyncOptions`, `SyncOutcome`, `HealthStatus`, `ConnectorAction`, `ActionResult`, `ConnectorError`) | F6 — done (#183) |
 | `registry` | `ConnectorRegistry` (construction + length) | F7 — registration, lookup, multi-backend factory dispatch |
-| `mock` | `MockConnector` (no-op identity impl) | F13 — configurable in-memory test harness |
+| `mock` | `MockConnector` (satisfies the full `Connector` trait with empty-success outcomes) | F13 — configurable in-memory test harness |
 
 Provenance types that connectors reference (`ConnectorType`, `SourceType`)
 live in `mimir-knowledge` and are re-used, not duplicated (DRY).
@@ -197,16 +278,23 @@ The `forget --source <slug>` filter now matches `connectors.slug` via subquery
 free-form string.
 
 
-## What is NOT done in F1
+## What remains to be built
 
-- No `Connector` behaviour (auth, health, sync, extract, lifecycle).
-- No `connectors` DB table, model, queries, or `KnowledgeGraph` facade
-  additions — **done in F2 (#179)**; see [Connector instance registry](#connector-instance-registry-f2).
-- No `sources` provenance FK migration — **done in F3 (#180)**; see [Sources provenance FK (F3)](#sources-provenance-fk-f3).
-- No `NormalizedFact`/`normalize_and_insert` refactor (F4).
-- No entity-resolution enhancement (F5).
-- No supervisor, secret store, rate limiter, or any backend.
+- **F7** — `ConnectorRegistry` registration, lookup, and multi-backend factory
+  dispatch (currently a length-only stub).
+- **F8** — `ConnectorSupervisor` (supervised lifecycle: spawn / restart /
+  backoff / circuit-breaker / startup-restore / graceful-shutdown / cursor
+  persistence). This is the caller that runs `sync` → `extract` →
+  `normalize_and_insert`.
+- **F9–F13** — manual sync triggering, `SecretStore` + `FileSecretStore`,
+  rate limiter, and the configurable mock harness.
+- **C1–C7** — the concrete backends (Photos, CalDAV Calendar, IMAP Email).
+- **A1–A4** — server `AppState` wiring + CLI subcommands.
 - `mimir-server` does not yet use the crate beyond declaring the dependency.
+
+The framework pieces already landed: F1 (scaffold), F2 (instance table +
+facade), F3 (provenance FK), F4 (`normalize_and_insert` boundary), F5
+(entity-resolution chain), and F6 (the `Connector` trait + data types).
 
 ## Verification
 

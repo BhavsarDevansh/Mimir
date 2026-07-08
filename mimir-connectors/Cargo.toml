@@ -12,11 +12,19 @@ rust-version.workspace = true
 # Per Phase 3 design decision A, this crate depends on mimir-core and
 # mimir-knowledge only and never declares a direct `sqlx` dependency: all
 # persistence is mediated by the `KnowledgeGraph` facade. The infra crates
-# (serde, tokio, tracing, thiserror, async-trait, …) are added by F6/F7/F10/F13
-# as the real trait, registry, secret store, and mock harness are filled in.
+# below are added by F6 (trait + data types); the gated backend dependencies
+# (kamadak-exif, icalendar, async-imap, …) land with C1–C7 / F10.
 [dependencies]
 mimir-core = { path = "../mimir-core" }
 mimir-knowledge = { path = "../mimir-knowledge" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = ["photos", "calendar", "gmail"]

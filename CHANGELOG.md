@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.67.0] — 2026-07-08
+
+### Phase 3 — Connector trait + data types (issue #183 / F6)
+
+The runtime `Connector` trait and its supporting data types are now defined in
+`mimir-connectors`, replacing the F1 identity-only stub. This is the contract
+every service-ingestion worker implements; no concrete backends yet.
+
+- **`Connector` trait** (`#[async_trait]`, `Send + Sync`, object-safe as
+  `dyn Connector`): `id()` (instance slug), `name()`, `connector_type() ->
+  ConnectorType`, `mode() -> ConnectorMode`, `config_schema() ->
+  serde_json::Value`, `authenticate() -> ConnectorAuthState`, `health() ->
+  HealthStatus`, `sync(SyncOptions) -> SyncOutcome`, `extract() ->
+  Vec<NormalizedFact>`, optional `act(ConnectorAction) -> ActionResult`
+  (default impl returns `UnsupportedAction`), and `forget()`.
+- **Ingestion model (locked):** two-step and DB-free. `sync()` fetches raw
+  items into a connector-internal buffer; `extract()` drains them into typed
+  `NormalizedFact`s (entity *types* set, entity *ids* unresolved). The
+  supervisor (F8) builds the `Provenance` and calls
+  `mimir_knowledge::normalize::normalize_and_insert` to resolve entities, score
+  confidence, gate sensitivity, and insert. The trait takes no
+  `&KnowledgeGraph`, so connectors stay `sqlx`-free and unit-testable without a
+  live knowledge graph.
+- **New data types:** `ConnectorMode { Polling{interval,jitter} | Push }`,
+  `SyncOptions { full, since }`, `SyncOutcome { fetched, new_cursor,
+  fetched_at }`, `HealthStatus { Online | Offline | Degraded | AuthExpired |
+  NotConfigured }`, `ConnectorAction`, `ActionResult`, and a `thiserror`-based
+  `ConnectorError`.
+- **`HealthStatus` is a transient runtime probe**, deliberately renamed to
+  disambiguate from the persisted `ConnectorStatus` / `ConnectorAuthState`
+  enums; the supervisor maps probe outcomes onto the persisted lifecycle
+  columns.
+- **Reuse (DRY):** `ConnectorType` / `ConnectorAuthState` and `NormalizedFact`
+  are consumed directly from `mimir-knowledge`; no parallel `ExtractedFact` /
+  `RawEvent` types are introduced.
+- `MockConnector` now satisfies the full trait so the always-compiled mock path
+  stays valid under every feature combination. 13 new behavioural tests cover
+  the trait surface, object safety, the polling/push distinction, and the
+  renamed health variants.
+
+Dependencies added to `mimir-connectors` (version-checked on crates.io):
+`async-trait 0.1`, `serde 1.0`, `serde_json 1.0`, `chrono 0.4`, `thiserror 2.0`
+(+ `tokio 1` dev-dependency). No `sqlx`.
+
 ## [0.66.0] — 2026-07-08
 
 ### Phase 3 — Full entity-resolution chain (issue #182 / F5)

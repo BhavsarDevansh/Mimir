@@ -13,9 +13,19 @@
 //! [`mimir_knowledge::KnowledgeGraph`] facade. This crate never holds a
 //! `sqlx` pool handle directly, and does not depend on `sqlx` itself.
 //!
+//! # Ingestion model
+//!
+//! [`Connector::sync`] fetches raw items into a connector-internal buffer;
+//! [`Connector::extract`] drains them into `Vec<NormalizedFact>`. The
+//! supervisor (F8) then calls `mimir_knowledge::normalize::normalize_and_insert`
+//! to resolve entities, score confidence, gate sensitivity, and insert. The
+//! connector itself never touches the database.
+//!
 //! # Crate layout
 //!
-//! - [`connector`] — runtime [`Connector`] trait (stub; filled by F6).
+//! - [`connector`] — runtime [`Connector`] trait + data types
+//!   (`ConnectorMode`, `SyncOptions`, `SyncOutcome`, `HealthStatus`,
+//!   `ConnectorAction`, `ActionResult`, `ConnectorError`).
 //! - [`registry`] — [`ConnectorRegistry`] and multi-backend factory dispatch
 //!   (stub; filled by F7).
 //! - [`mock`] — always-compiled mock connector test harness (stub; filled by
@@ -32,6 +42,9 @@ pub mod connector;
 pub mod mock;
 pub mod registry;
 
-pub use connector::Connector;
+pub use connector::{
+    ActionResult, Connector, ConnectorAction, ConnectorError, ConnectorMode, HealthStatus,
+    SyncOptions, SyncOutcome,
+};
 pub use mock::MockConnector;
 pub use registry::ConnectorRegistry;

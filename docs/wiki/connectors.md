@@ -1,7 +1,7 @@
 # Connectors
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). No connector syncs data yet.
+> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). **The runtime `Connector` trait + data types landed (issue #183 / F6).** No connector syncs data yet — backends arrive in later Phase 3 issues.
 
 ## What connectors are
 
@@ -35,8 +35,11 @@ sensitivity gating as facts you tell Mimir directly.
   `set_connector_status`, and `set_auth_state`.
 
 There is no working backend yet — no calendar sync, no email fetch, no photo
-watcher. The trait, registry, and mock connector are scaffolding stubs that
-later issues will fill in.
+watcher. The `Connector` **trait and its data types are now defined**
+(issue #183 / F6): every connector implements an async `Connector` interface
+with `sync` (fetch raw items) → `extract` (produce `NormalizedFact`s), plus
+`authenticate`, `health`, optional `act` write-back, and `forget`. The
+registry and the configurable mock harness remain stubs (F7 / F13).
 
 **The shared ingestion boundary is in place (issue #181 / F4).** Connectors
 will build `NormalizedFact`s from their items and call

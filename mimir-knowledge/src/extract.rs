@@ -610,6 +610,7 @@ fn parse_extracted_fact(extracted: &ExtractedFact) -> Result<NormalizedFact, Kno
         valid_from,
         valid_until,
         is_sensitive: extracted.is_sensitive,
+        is_correction: extracted.classification == Classification::Correction,
         correction_scope: extracted.correction_scope.clone(),
         category_ids,
         recurrence,

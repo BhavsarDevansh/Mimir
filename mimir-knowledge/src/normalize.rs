@@ -128,8 +128,15 @@ pub struct NormalizedFact {
     /// Producer's initial sensitivity flag; Rust narrows it via the
     /// sensitivity `AND`-gate.
     pub is_sensitive: bool,
+    /// Whether this fact is a conversational correction. The chat adapter sets
+    /// this from the LLM `Correction` classification; connectors always leave it
+    /// `false` (corrections are conversational-only). When `true` the fact is
+    /// routed through [`handle_correction`] even if [`correction_scope`](Self::correction_scope)
+    /// is `None`, which defaults to a temporal correction at `now`.
+    pub is_correction: bool,
     /// Conversational correction scope (`Some("always")` or a datetime, or
-    /// `None` for a temporal correction). Connectors leave this `None`.
+    /// `None` for a temporal correction at `now` when [`is_correction`](Self::is_correction)
+    /// is set). Connectors leave this `None`.
     pub correction_scope: Option<String>,
     /// Already-parsed catalogue category IDs; validated against the DB.
     pub category_ids: Vec<i32>,
@@ -228,6 +235,7 @@ async fn process_normalized_fact(
         valid_from,
         valid_until,
         is_sensitive,
+        is_correction,
         ref correction_scope,
         ref category_ids,
         recurrence,
@@ -354,9 +362,12 @@ async fn process_normalized_fact(
         category_ids: valid_category_ids,
     };
 
-    // Corrections are conversational-only (connectors leave correction_scope
-    // None); the handler is a no-op in that case.
-    if correction_scope.is_some() {
+    // Corrections are conversational-only: the chat adapter sets
+    // `is_correction` from the LLM `Correction` classification, while
+    // connectors always leave it `false`. Gate on the correction *signal*
+    // (not merely a present scope) so a conversational `Correction` with no
+    // scope still defaults to a temporal correction at `now`.
+    if is_correction {
         handle_correction(
             kg,
             correction_scope.as_deref(),
@@ -508,9 +519,11 @@ fn event_from_extraction(
 /// every overlapping active fact is marked `Corrected`, moved to trash, and its
 /// orphaned children re-evaluated. Any other string is parsed as a datetime and
 /// used as the new `valid_from` (the existing insert temporal-overlap logic
-/// closes the sole open-ended predecessor automatically). `None` (only reached
-/// from the chat adapter when the LLM emitted `Correction` with no scope) defaults
-/// to a temporal correction at `now`.
+/// closes the sole open-ended predecessor automatically). `None` (reached from
+/// the chat adapter when the LLM emitted `Correction` with no scope) defaults to
+/// a temporal correction at `now`. The handler is only called when the
+/// producer flagged the fact as a correction (`is_correction`), so the `None`
+/// arm is reachable and exercised by chat corrections with no scope.
 async fn handle_correction(
     kg: &KnowledgeGraph,
     scope: Option<&str>,

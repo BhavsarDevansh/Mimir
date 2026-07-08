@@ -68,6 +68,19 @@ detached worktree) were stale test-harness bugs, not production defects:
 
 Production code was unchanged; only test harnesses were corrected.
 
+### Review fix — scope-less correction regression
+
+The boundary originally gated `handle_correction` on `correction_scope.is_some()`,
+which silently dropped the defensive temporal-correction-at-`now` behaviour: a
+conversational `Correction` fact with no `correction_scope` (which the LLM may
+emit despite being told to set one) was treated as an ordinary `Explicit` fact
+and never superseded its open-ended predecessor. Fixed by carrying an
+`is_correction: bool` on `NormalizedFact` (set by the chat adapter from the LLM
+`Correction` classification; connectors always leave it `false`) and gating on
+that signal instead, so the `handle_correction` `None` arm is reachable again. A
+regression test (`test_correction_no_scope_defaults_to_temporal_at_now`) covers
+the path.
+
 ## [0.64.0] — 2026-07-07
 
 ### Phase 3 — Sources provenance FK migration (issue #180 / F3)

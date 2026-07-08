@@ -234,6 +234,53 @@ async fn test_temporal_correction() {
 }
 
 // ---------------------------------------------------------------------------
+// Test 5b: Correction with no scope defaults to a temporal correction at now
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_correction_no_scope_defaults_to_temporal_at_now() {
+    let tg = TestGraph::new().await;
+    let devansh = tg.create_person("devansh").await;
+
+    // Pre-insert an open-ended fact.
+    tg.create_fact_with_temporal(devansh, "lives_in", None, None, None, SourceType::UserEdit)
+        .await;
+
+    // The LLM emits a Correction classification but omits correction_scope
+    // (which it is told to set but may not). The boundary must still treat
+    // this as a temporal correction at `now`, superseding the predecessor.
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Correction",
+        "subject": "devansh",
+        "subject_type": "Person",
+        "relationship_type": "lives_in",
+        "object": "Manchester",
+        "object_is_entity": false,
+        "correction_scope": null,
+        "is_sensitive": false
+    })]);
+
+    let mock = build_mock_with_tool_output(tool_args);
+    let outcome = tg
+        .kg
+        .extract_facts(&mock, "Actually I live in Manchester now.")
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.inserted.len(), 1);
+    let new_fact = &outcome.inserted[0];
+    assert_eq!(new_fact.status(), Some(FactStatus::Active));
+    // The boundary defaulted the correction to a temporal correction at now.
+    assert!(new_fact.valid_from.is_some());
+
+    // Old fact should have been closed at the new fact's valid_from.
+    let facts = tg.kg.get_facts_by_subject(devansh, 10).await.unwrap();
+    let old = facts.iter().find(|f| f.id != new_fact.id).unwrap();
+    assert!(old.valid_until.is_some());
+    assert_eq!(old.status(), Some(FactStatus::Superseded));
+}
+
+// ---------------------------------------------------------------------------
 // Test 6: Retrospective correction
 // ---------------------------------------------------------------------------
 

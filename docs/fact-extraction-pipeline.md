@@ -137,7 +137,7 @@ The `remember` tool schema is a JSON object with a `facts` array. Each fact cont
 | `object_type` | Entity type (if `object_is_entity` is true) |
 | `temporal` | Optional `valid_from` / `valid_until` (ISO-8601) |
 | `is_sensitive` | Boolean |
-| `correction_scope` | ISO-8601 datetime or `"always"` |
+| `correction_scope` | ISO-8601 datetime, `"always"`, or omitted (defaults to a temporal correction at `now` for `Correction` facts) |
 
 The extraction prompt defines role, schema, classification criteria, and a softened sensitivity instruction ("Flag health, financial, relationship, religious, political, or legal facts. Mimir will validate your assessment."). It contains **no conditional logic, no workflow instructions, and no "if X then Y"** — all of that lives in Rust.
 
@@ -175,6 +175,17 @@ Confidence is **never** taken from the LLM. It is derived from classification:
 - Each is marked as `Corrected` via `set_status`.
 - Each is then moved to trash via `forget_fact` (soft-delete with cascade to inferred children).
 - The new fact is inserted as `Active` with confidence `1.0`.
+
+### Scope-less Correction (`None`)
+- The shared `normalize_and_insert` boundary gates corrections on the
+  `is_correction` flag (set by the chat adapter from the LLM `Correction`
+  classification), **not** on `correction_scope` being present.
+- When the LLM emits `Correction` but omits `correction_scope`, `handle_correction`
+  receives `None` and defaults the new fact's `valid_from` to `now`, so the
+  correction takes effect from the current moment onward.
+- The insert temporal-overlap logic then closes the sole open-ended predecessor
+  at `now`, mirroring the explicit-datetime path.
+- Connectors never set `is_correction`, so this path is conversational-only.
 
 ## Sensitive Fact Confirmation
 

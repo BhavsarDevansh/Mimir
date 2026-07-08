@@ -49,7 +49,7 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 ### 2.2 Entity Management
 - [ ] CRUD operations for entities
 - [ ] Entity type system (lookup table + Rust enum)
-- [ ] Alias resolution: exact match → alias match → FTS5 fuzzy → create new
+- [x] Alias resolution: exact match → alias match → FTS5 fuzzy → create new (Phase 3 F5 / #182)
 - [ ] Entity deduplication: Rust exact match (auto-merge) + LLM semantic match (flag for review)
 - [ ] Entity merge: re-point all facts → append aliases → soft-delete merged entity
 - [ ] Entity dates (full implementation): birthdays, appointments, deadlines with recurrence

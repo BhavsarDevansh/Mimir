@@ -105,12 +105,48 @@ pub async fn get_by_id(pool: &SqlitePool, id: i32) -> Result<Option<Entity>, Kno
 
 /// Search for entities by exact name match, then exact alias match, then FTS5 fuzzy.
 /// Results are sorted by score descending and capped at 10.
+///
+/// All three steps are type-agnostic. For the resolution path that must respect
+/// an entity's declared type, use [`get_by_name_typed`].
 pub async fn get_by_name(
     pool: &SqlitePool,
     name: &str,
 ) -> Result<Vec<AliasSearchResult>, KnowledgeError> {
+    search_by_name(pool, name, None).await
+}
+
+/// Same three-stage search as [`get_by_name`], restricted to entities of the
+/// given type. Cross-type matches are excluded so that, e.g. resolving "Rome"
+/// as a [`EntityType::Place`] never merges into a `Person` named "Rome".
+///
+/// This is the lookup used by entity resolution (`resolve_entity`); the
+/// untyped [`get_by_name`] remains the general-purpose search surface.
+pub async fn get_by_name_typed(
+    pool: &SqlitePool,
+    name: &str,
+    entity_type: EntityType,
+) -> Result<Vec<AliasSearchResult>, KnowledgeError> {
+    search_by_name(pool, name, Some(entity_type as i16)).await
+}
+
+/// Core exact-name → exact-alias → FTS5-fuzzy search, optionally restricted to
+/// one entity type. When `type_filter` is set, cross-type candidates are
+/// dropped after fetch (entity counts are small and personal-scale, so this
+/// avoids duplicating the three-step SQL while keeping the public surface DRY).
+///
+/// Results are sorted by score descending: exact alias (1.1) > exact name (1.0)
+/// ≥ fuzzy (≤ 1.0). At equal scores the stable sort preserves insertion order,
+/// so an exact name always precedes a fuzzy hit scored 1.0.
+async fn search_by_name(
+    pool: &SqlitePool,
+    name: &str,
+    type_filter: Option<i16>,
+) -> Result<Vec<AliasSearchResult>, KnowledgeError> {
     let mut results: Vec<AliasSearchResult> = Vec::new();
     let mut seen_ids = std::collections::HashSet::new();
+
+    // Type gate shared by all three steps: `None` accepts any type.
+    let type_matches = |entity_type_id: i16| type_filter.is_none_or(|t| t == entity_type_id);
 
     // Step 1: exact name match.
     let exact_name: Vec<Entity> = sqlx::query_as::<_, Entity>(
@@ -122,7 +158,7 @@ pub async fn get_by_name(
     .await?;
 
     for e in exact_name {
-        if seen_ids.insert(e.id) {
+        if type_matches(e.entity_type_id) && seen_ids.insert(e.id) {
             results.push(AliasSearchResult {
                 entity: e,
                 match_kind: MatchKind::ExactName,
@@ -141,7 +177,7 @@ pub async fn get_by_name(
     for (entity_id,) in alias_matches {
         if !seen_ids.contains(&entity_id) {
             if let Some(e) = get_by_id(pool, entity_id).await? {
-                if seen_ids.insert(e.id) {
+                if type_matches(e.entity_type_id) && seen_ids.insert(e.id) {
                     results.push(AliasSearchResult {
                         entity: e,
                         match_kind: MatchKind::ExactAlias,
@@ -165,7 +201,7 @@ pub async fn get_by_name(
     for (rowid, rank) in fts_rows {
         if !seen_ids.contains(&rowid) {
             if let Some(e) = get_by_id(pool, rowid).await? {
-                if seen_ids.insert(e.id) {
+                if type_matches(e.entity_type_id) && seen_ids.insert(e.id) {
                     // Map bm25 rank to 0..1 score; more negative rank → higher score.
                     let score = ((-rank as f32) * 4.0).clamp(0.0, 1.0);
                     results.push(AliasSearchResult {

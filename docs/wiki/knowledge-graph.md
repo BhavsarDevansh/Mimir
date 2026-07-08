@@ -41,9 +41,15 @@ When you mention a name, Mimir tries to resolve it in three steps:
 
 1. **Exact name match** — case-insensitive match on the primary entity name.
 2. **Exact alias match** — case-insensitive match on any registered alias.
-3. **Fuzzy search** — SQLite FTS5 full-text search with a relevance score.
+3. **Fuzzy search** — SQLite FTS5 full-text search with a relevance score, used
+   only when the score is high enough (≥ 0.9) to trust.
 
-You can add or remove aliases at any time via the API.
+Resolution is **type-aware**: only entities matching the declared type (Person,
+Place, Organization, …) are considered, so "Apple" mentioned as a concept is
+never confused with the company "Apple Inc". If nothing matches — including a
+weak fuzzy hit — Mimir creates a new entity with the declared type. You can add
+or remove aliases at any time via the API; aliases are learned explicitly (for
+example through a `preferred_name` fact), not auto-guessed from fuzzy matches.
 
 ### Relationship Types
 

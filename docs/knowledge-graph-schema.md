@@ -180,6 +180,24 @@ Search flow (`get_by_name`):
 
 Results are deduplicated, scored, and capped at 10.
 
+### Entity resolution (`get_by_name_typed` + `resolve_entity`)
+
+The ingestion pipeline resolves a name to an entity before inserting a fact
+(`mimir-knowledge::normalize::resolve_entity`, Phase 3 F5 / #182). It reuses the
+same three-stage search but restricts candidates to the requested
+`EntityType` via `get_by_name_typed`, then applies a resolution policy
+(`pick_resolution`):
+
+1. An exact-name or exact-alias hit always resolves to the existing entity.
+2. A fuzzy hit resolves only when its normalised score is ≥
+   `FUZZY_RESOLVE_THRESHOLD` (`0.9`); a weaker fuzzy match is treated as a miss.
+3. If no candidate resolves, a new entity is created with the requested type.
+
+Cross-type matches are dropped, so "Apple" resolved as a `Concept` never merges
+into the `Organization` "Apple Inc". The untyped `get_by_name` remains the
+general-purpose search surface (kg_search, auto-merge). Alias creation is not
+auto-learned from fuzzy matches; it stays explicit via `preferred_name`.
+
 ---
 
 ## Entity Deduplication

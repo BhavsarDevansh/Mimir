@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.65.0] — 2026-07-08
+
+### Phase 3 — Shared normalize/insert boundary (issue #181 / F4)
+
+Extract the resolve → confidence → sensitivity-gate → insert orchestration from
+the conversational `remember` path into a reusable
+`normalize_and_insert(kg, Vec<NormalizedFact>, Provenance) -> ExtractionOutcome`
+boundary in `mimir-knowledge::normalize`. Both chat learning and (future)
+service connectors now funnel through one deterministic Rust pipeline.
+
+- **New public types** in `mimir-knowledge::normalize`:
+  - `NormalizedFact` — provenance-annotated, per-fact content with typed entity
+    types, parsed temporal bounds, typed `RecurrenceType`, validated category
+    ids, the sensitivity flag, an optional correction scope, and the per-fact
+    `raw_reference`. `source_type` is per-fact because a chat batch may mix
+    `Explicit`/`Casual` facts; connectors set `Connector`.
+  - `Provenance` — batch-level origin: the connector instance id + type (for
+    connector syncs) and the `extraction_method` (`LlmExtraction` for chat,
+    `StructuredParse` for structurally-parsed connector items). Constructors
+    `Provenance::chat` and `Provenance::connector`.
+  - `ExtractionOutcome` / `PendingFact` move to `normalize` and are re-exported
+    from `mimir_knowledge::extract` for existing callers.
+- **Confidence** is `confidence::initial(source_type, connector_type)` — the
+  per-source-type / per-connector reliability score with **no extraction-method
+  discount**. Corroboration, supersession, and inference are inherited for free
+  from `insert_fact_in_tx`.
+- **Sensitivity** uses the same Rust `AND`-gate as conversational facts:
+  connector facts the producer flags sensitive land as `pending_confirmation`
+  and surface via `kb audit`.
+- **Conversational refactor:** `extract.rs` keeps the LLM-call half (tool
+  schema, prompts, output parsing) plus an `extracted_to_normalized` adapter
+  that canonicalises predicates, splits list objects, and parses LLM string
+  fields into typed `NormalizedFact`s. `process_remember_output`,
+  `extract_facts`, and `extract_facts_with_context` route through
+  `normalize_and_insert`; chat behaviour is unchanged.
+- **Tests:** new `mimir-knowledge/tests/normalize_test.rs` covers a
+  connector-produced `NormalizedFact` insert, the cross-connector corroboration
+  acceptance criterion (Gmail flight + Calendar event → one fact, two sources,
+  confidence boosted to the 0.95 cap), chat provenance, and the connector
+  provenance gate. All existing extraction/optimization/confirmation tests pass
+  unchanged.
+
 ## [0.64.0] — 2026-07-07
 
 ### Phase 3 — Sources provenance FK migration (issue #180 / F3)

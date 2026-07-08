@@ -1,8 +1,8 @@
 # Fact Extraction Pipeline
 
-> **Issue:** #55  
-> **Phase:** 2 — Knowledge Graph  
-> **Version:** 0.29.0
+> **Issues:** #55, #181 (Phase 3 F4 — shared normalize/insert boundary)
+> **Phase:** 2 — Knowledge Graph (boundary shared with Phase 3 connectors)
+> **Version:** 0.65.0
 
 ## Overview
 
@@ -26,16 +26,24 @@ every turn. Incognito sessions never learn.
 
 ```
 User message
-    → LLM extraction ("remember" tool)
-    → Rust validation (schema, entity types, temporal bounds)
-    → Entity resolution (exact → alias → FTS5 fuzzy → create)
-    → Confidence assignment (classification → SourceType → confidence::initial)
-    → Correction handling (temporal or retrospective)
-    → Sensitive gate (Disputed + pending_confirmation)
-    → Fact insertion + source attachment + audit log
-        (corroboration detected here — see Corroboration below)
-    → Inference engine trigger
+    → LLM extraction ("remember" tool)                 [extract.rs]
+    → Conversational adapter:
+        predicate canonicalisation + list splitting
+        + parse LLM string fields → NormalizedFact       [extract.rs]
+    → normalize_and_insert(kg, Vec<NormalizedFact>, Provenance)   [normalize.rs]
+        → entity resolution (exact → create; FTS5/alias chain is F5/#182)
+        → confidence = confidence::initial(source_type, connector_type)
+        → correction handling (temporal or retrospective)
+        → sensitive gate (Disputed + pending_confirmation)
+        → fact insertion + source attachment + audit log
+            (corroboration detected here — see Corroboration below)
+        → inference engine trigger
 ```
+
+Connectors build `NormalizedFact`s directly from structured/LLM-extracted items
+and call the same `normalize_and_insert` with a connector `Provenance`, so
+connector-sourced facts get identical confidence scoring, corroboration,
+supersession, and sensitivity gating as facts you tell Mimir directly.
 
 ## Corroboration (#79)
 
@@ -63,14 +71,54 @@ source (`(source_type, connector_instance_id, raw_reference)` already recorded) 
 `sources` UNIQUE index. Non-overlapping temporal ranges never corroborate;
 they form a timeline of separate facts.
 
+## Shared normalize/insert boundary (#181, Phase 3 F4)
+
+The resolve → confidence → sensitivity-gate → insert orchestration is extracted
+from the conversational path into a single reusable function so that chat
+learning and connector ingestion funnel through one deterministic Rust pipeline:
+
+```rust
+pub async fn normalize_and_insert(
+    kg: &KnowledgeGraph,
+    facts: Vec<NormalizedFact>,
+    provenance: Provenance,
+) -> Result<ExtractionOutcome, KnowledgeError>
+```
+
+- **`Provenance`** (one per call) carries the batch-level origin: the connector
+  instance id + connector type (for connector syncs) and the `extraction_method`
+  (`LlmExtraction` for chat, `StructuredParse` for structurally-parsed connector
+  items). Conversational learning uses `Provenance::chat`.
+- **`NormalizedFact`** (one per fact) carries the typed fact content — entity
+  types, parsed temporal bounds, typed `RecurrenceType`, validated category ids,
+  the sensitivity flag, the optional correction scope, and the per-fact
+  `raw_reference` (the native source item id, e.g. an email UID). `source_type`
+  is per-fact because a single chat batch may mix `Explicit` (`UserEdit`) and
+  `Casual` (`Interaction`) facts; connectors set `Connector`.
+- **Confidence** is `confidence::initial(source_type, connector_type)` — the
+  per-source-type / per-connector reliability score with **no extraction-method
+  discount**. Corroboration, supersession, and inference are inherited for free
+  from `insert_fact_in_tx`, so a cross-connector corroboration (e.g. a Gmail
+  flight fact + a Calendar event on overlapping dates) adds a source and boosts
+  confidence without creating a duplicate fact.
+
+The conversational adapter (`extracted_to_normalized` in `extract.rs`) does the
+LLM-output normalisation the shared boundary cannot: predicate canonicalisation
+(so list-splitting sees canonical names), list splitting, and parsing the LLM's
+string-typed fields into the typed `NormalizedFact`. Per-fact canonicalisation
+and parse errors are tolerated and surfaced via `ExtractionOutcome::errors`,
+preserving the previous batch behaviour.
+
 ## Files
 
-- `mimir-knowledge/src/extract.rs` — pipeline implementation
+- `mimir-knowledge/src/extract.rs` — conversational half: `remember` tool schema, extraction prompts, LLM-output parsing, and the adapter that maps `ExtractedFact` onto `NormalizedFact`/`Provenance`
+- `mimir-knowledge/src/normalize.rs` — shared `normalize_and_insert` boundary (entity resolution, confidence, sensitivity gate, insertion, event overlay) used by both chat and connectors
 - `mimir-knowledge/src/queries/fact.rs` — `insert_fact_in_tx`, corroboration + supersession paths
 - `mimir-knowledge/src/confidence.rs` — structural confidence model + transactional confidence cascade
 - `mimir-knowledge/src/sensitivity.rs` — deterministic sensitivity gate (category + content checks)
 - `mimir-knowledge/src/lib.rs` — `KnowledgeGraph` facade methods
-- `mimir-knowledge/tests/extraction_test.rs` — 11 integration tests
+- `mimir-knowledge/tests/extraction_test.rs` — conversational extraction integration tests
+- `mimir-knowledge/tests/normalize_test.rs` — shared-boundary integration tests (connector insert + cross-connector corroboration)
 - `mimir-knowledge/src/db/migrations/026_add_pending_confirmation.sql`
 - `mimir-knowledge/src/db/migrations/027_add_rejected_change_type.sql`
 
@@ -192,6 +240,8 @@ After each non-sensitive fact insertion, the rule engine evaluates all registere
 
 ## Public API
 
+Conversational entrypoints (in `mimir_knowledge::extract`):
+
 ```rust
 pub async fn extract_facts(
     &self,
@@ -199,9 +249,27 @@ pub async fn extract_facts(
     user_message: &str,
 ) -> Result<ExtractionOutcome, KnowledgeError>
 
+pub async fn process_remember_output(
+    kg: &KnowledgeGraph,
+    output: RememberOutput,
+) -> Result<ExtractionOutcome, KnowledgeError>
+
 pub async fn confirm_fact(&self, fact_id: i32) -> Result<Fact, KnowledgeError>
 pub async fn reject_fact(&self, fact_id: i32) -> Result<(), KnowledgeError>
 ```
+
+Shared boundary (in `mimir_knowledge::normalize`), used by both chat and connectors:
+
+```rust
+pub async fn normalize_and_insert(
+    kg: &KnowledgeGraph,
+    facts: Vec<NormalizedFact>,
+    provenance: Provenance,
+) -> Result<ExtractionOutcome, KnowledgeError>
+```
+
+`ExtractionOutcome` and `PendingFact` are defined in `mimir_knowledge::normalize`
+and re-exported from `mimir_knowledge::extract` for existing callers.
 
 ## Testing
 
@@ -225,7 +293,7 @@ All tests use `MockLlmClient` with `mimir-core`'s `mock-llm` feature for determi
 
 During extraction, each fact's `relationship_type` is resolved through `KnowledgeGraph::ensure_relationship_type`, which trims/lowercases the name (via `normalize_alias`), looks it up in the `relationship_type_aliases` table — the single source of truth — and, on a miss, auto-creates a canonical `relationship_types` row plus a self-alias. The resolved canonical name then drives `split_list_objects`. LLM synonyms such as `attended`, `hobbies`, or `works_for` therefore map to their canonical types (`studied_at`, `hobby`, `works_at`) purely from seeded data — there is no hardcoded synonym map in code.
 
-The batch processor (`process_fact_batch`, shared by `extract_facts`/`extract_facts_with_context` and the `remember` tool entrypoint `process_remember_output`) tolerates predicate-resolution errors per-fact: one invalid predicate is recorded in `ExtractionOutcome::errors` without aborting the rest of the batch.
+The batch flow (`extracted_to_normalized` → `normalize_and_insert`, shared by `extract_facts`/`extract_facts_with_context` and the `remember` tool entrypoint `process_remember_output`) tolerates predicate-resolution errors per-fact: one invalid predicate is recorded in `ExtractionOutcome::errors` without aborting the rest of the batch.
 
 > **Issue #136:** the deprecated hardcoded `normalize_predicate` map and the duplicate `normalize_relationship_type` snake_case helper were removed from `mimir-knowledge/src/extract.rs`. Migrations `036_seed_relationship_type_aliases.sql` and `037_seed_core_predicates_and_aliases.sql` seed every legacy synonym as data, so behaviour is unchanged for `attended`→`studied_at`, `hobbies`→`hobby`, etc. A side effect of routing through `ensure_relationship_type` is that an unknown predicate on a fact that is later rejected (e.g. invalid `subject_type`) still registers its canonical type; this is intentional and idempotent.
 

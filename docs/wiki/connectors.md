@@ -1,7 +1,7 @@
 # Connectors
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). No connector syncs data yet.
+> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). No connector syncs data yet.
 
 ## What connectors are
 
@@ -37,6 +37,16 @@ sensitivity gating as facts you tell Mimir directly.
 There is no working backend yet — no calendar sync, no email fetch, no photo
 watcher. The trait, registry, and mock connector are scaffolding stubs that
 later issues will fill in.
+
+**The shared ingestion boundary is in place (issue #181 / F4).** Connectors
+will build `NormalizedFact`s from their items and call
+`mimir_knowledge::normalize::normalize_and_insert` with a connector `Provenance`,
+funnelling through the exact same entity-resolution → confidence →
+sensitivity-gate → insert pipeline as conversational `remember` calls. That
+means connector facts get corroboration for free: a Gmail flight fact and a
+Calendar event describing the same trip corroborate the single knowledge-graph
+fact (a source is added, confidence is boosted) instead of creating a
+duplicate.
 
 ## What is planned
 

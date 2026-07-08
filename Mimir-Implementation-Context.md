@@ -1,7 +1,7 @@
 # Mimir — Implementation Context
 
 > **Created:** 2025-05-20
-> **Last Updated:** 2026-06-25
+> **Last Updated:** 2026-07-08
 > **Vision Docs:** `VISION/` directory (48 files, 10 sections)
 > **Phase 1 Plan:** `VISION/09-Roadmap/Phase-1-Core-Agent.md`
 > **GitHub:** https://github.com/BhavsarDevansh/Mimir
@@ -143,7 +143,7 @@ The workspace produces one binary (`mimir`) but uses library crates for code org
 - `mimir-client` — HTTP client for CLI commands (library, no binary)
 - `mimir-knowledge` — SQLite knowledge graph (Phase 2)
 - `mimir-api-types` — shared serde wire types
-- `mimir-connectors` — service ingestion framework; connectors normalize external data into KB facts via the `KnowledgeGraph` facade, no direct `sqlx` (Phase 3, in progress). The `connectors` instance-registry table + facade methods (`list_connectors`, `get_connector_by_slug`, `upsert_connector`, `update_sync_cursor`, `set_connector_status`, `set_auth_state`) landed in #179 / F2; the `sources.connector_instance_id` provenance FK + per-connector item-count query landed in #180 / F3
+- `mimir-connectors` — service ingestion framework; connectors normalize external data into KB facts via the `KnowledgeGraph` facade, no direct `sqlx` (Phase 3, in progress). The `connectors` instance-registry table + facade methods (`list_connectors`, `get_connector_by_slug`, `upsert_connector`, `update_sync_cursor`, `set_connector_status`, `set_auth_state`) landed in #179 / F2; the `sources.connector_instance_id` provenance FK + per-connector item-count query landed in #180 / F3; the shared `normalize_and_insert(kg, Vec<NormalizedFact>, Provenance) -> ExtractionOutcome` boundary (provenance-annotated `NormalizedFact` exported from `mimir-knowledge`) landed in #181 / F4, so both chat `remember` extraction and connectors funnel through one deterministic resolve → confidence → sensitivity-gate → insert pipeline (corroboration/supersession/inference inherited from `insert_fact_in_tx`)
 - `mimir` — binary crate, thin dispatcher
 
 This avoids the problems of a two-binary architecture (separate `mimir` CLI and `mimir-server`):

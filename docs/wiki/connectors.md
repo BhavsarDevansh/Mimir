@@ -1,7 +1,7 @@
 # Connectors
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). **The runtime `Connector` trait + data types landed (issue #183 / F6).** No connector syncs data yet — backends arrive in later Phase 3 issues.
+> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). **The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7).** No connector syncs data yet — backends arrive in later Phase 3 issues.
 
 ## What connectors are
 
@@ -38,8 +38,18 @@ There is no working backend yet — no calendar sync, no email fetch, no photo
 watcher. The `Connector` **trait and its data types are now defined**
 (issue #183 / F6): every connector implements an async `Connector` interface
 with `sync` (fetch raw items) → `extract` (produce `NormalizedFact`s), plus
-`authenticate`, `health`, optional `act` write-back, and `forget`. The
-registry and the configurable mock harness remain stubs (F7 / F13).
+`authenticate`, `health`, optional `act` write-back, and `forget`.
+
+**The multi-backend registry is in place (issue #184 / F7).** The
+`ConnectorRegistry` maps each `(connector_type, backend)` pair — e.g.
+`(Email, imap)` or `(Calendar, caldav)` — to a `ConnectorFactory` that
+constructs the right implementation from a connector's stored config. A
+connector *type* is the reliability/provenance axis; a *backend* is the
+provider implementation chosen per instance. Adding a new backend is a new
+factory registration — no database change — and many backends can coexist
+under one type. Reliability stays per-type, so a Gmail-IMAP fact and a future
+Gmail-Graph fact share the same confidence scoring. The configurable mock
+harness remains a stub (F13).
 
 **The shared ingestion boundary is in place (issue #181 / F4).** Connectors
 will build `NormalizedFact`s from their items and call

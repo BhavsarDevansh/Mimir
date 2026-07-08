@@ -85,6 +85,26 @@ pub enum ConnectorError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// No factory is registered for the requested `(connector_type, backend)`
+    /// pair. Raised by [`crate::registry::ConnectorRegistry::create`] when the
+    /// registry cannot dispatch the requested backend.
+    #[error("no connector factory for {connector_type:?} backend `{backend}`")]
+    BackendNotFound {
+        connector_type: mimir_knowledge::models::enums::ConnectorType,
+        backend: String,
+    },
+
+    /// A factory is already registered for the requested
+    /// `(connector_type, backend)` pair. Raised by
+    /// [`crate::registry::ConnectorRegistry::register`] on a duplicate
+    /// registration so accidental re-registration fails loud rather than
+    /// silently shadowing a previously-registered backend.
+    #[error("connector factory already registered for {connector_type:?} backend `{backend}`")]
+    BackendAlreadyRegistered {
+        connector_type: mimir_knowledge::models::enums::ConnectorType,
+        backend: String,
+    },
+
     /// Any other connector-specific failure not covered above.
     #[error("{0}")]
     Other(String),
@@ -277,4 +297,45 @@ pub trait Connector: Send + Sync {
     /// facts with this `connector_instance_id` via the existing trash
     /// machinery; this method handles the connector-local cleanup.
     async fn forget(&self) -> Result<(), ConnectorError>;
+}
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
+
+/// Constructs a [`Connector`] instance from its persisted configuration.
+///
+/// The registry (F7 / issue #184) maps `(connector_type, backend)` to one
+/// `ConnectorFactory`. When the supervisor (F8) or the `connector add` CLI
+/// path needs to instantiate a configured connector, it looks up the factory
+/// for the row's `(type, backend)` and calls [`ConnectorFactory::create`]
+/// with the `config_json` parsed value.
+///
+/// # Construction context
+///
+/// For Phase 3 V1 `create` takes only the config payload, matching the issue
+/// spec. Decision D′ of the Phase 3 plan states that connectors receive the
+/// shared `Arc<dyn LlmBackend>` at construction, and F10 will inject
+/// credentials via the `SecretStore`; those dependencies land with F8 / F10
+/// and are not yet available. When they arrive the factory signature will be
+/// extended to accept a construction context — a breaking change to an
+/// internal API, which is explicitly acceptable per the project's breaking
+/// changes policy.
+///
+/// # Object safety
+///
+/// The trait is `Send + Sync` with a single non-generic method returning
+/// `Arc<dyn Connector>`, so it is object-safe and stored by the registry as
+/// `Arc<dyn ConnectorFactory>`.
+pub trait ConnectorFactory: Send + Sync {
+    /// Build a ready-to-run connector instance from its configuration.
+    ///
+    /// `config` is the deserialised `config_json` column of the
+    /// `connectors` row. Construction must be cheap and synchronous: network
+    /// handshakes happen later via [`Connector::authenticate`], and data
+    /// fetches via [`Connector::sync`].
+    fn create(
+        &self,
+        config: serde_json::Value,
+    ) -> Result<std::sync::Arc<dyn Connector>, ConnectorError>;
 }

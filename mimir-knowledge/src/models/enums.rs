@@ -171,7 +171,7 @@ const_assert!((MergeWorkflowStatus::Pending as i16) != 0);
 const_assert!((MergeResolution::Merged as i16) != 0);
 
 /// External service connectors that extract facts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Type, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Type, serde::Serialize, serde::Deserialize)]
 #[repr(i16)]
 pub enum ConnectorType {
     Gmail = 1,

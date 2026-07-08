@@ -25,9 +25,12 @@
 //!
 //! - [`connector`] — runtime [`Connector`] trait + data types
 //!   (`ConnectorMode`, `SyncOptions`, `SyncOutcome`, `HealthStatus`,
-//!   `ConnectorAction`, `ActionResult`, `ConnectorError`).
+//!   `ConnectorAction`, `ActionResult`, `ConnectorError`) and the
+//!   [`ConnectorFactory`] trait.
 //! - [`registry`] — [`ConnectorRegistry`] and multi-backend factory dispatch
-//!   (stub; filled by F7).
+//!   (F7 / #184): maps `(connector_type, backend)` to a [`ConnectorFactory`]
+//!   and constructs instances on demand; includes the closure-backed
+//!   [`FnConnectorFactory`].
 //! - [`mock`] — always-compiled mock connector test harness (stub; filled by
 //!   F13).
 //!
@@ -43,8 +46,8 @@ pub mod mock;
 pub mod registry;
 
 pub use connector::{
-    ActionResult, Connector, ConnectorAction, ConnectorError, ConnectorMode, HealthStatus,
-    SyncOptions, SyncOutcome,
+    ActionResult, Connector, ConnectorAction, ConnectorError, ConnectorFactory, ConnectorMode,
+    HealthStatus, SyncOptions, SyncOutcome,
 };
-pub use mock::MockConnector;
-pub use registry::ConnectorRegistry;
+pub use mock::{MockConnector, MockConnectorFactory};
+pub use registry::{ConnectorRegistry, FnConnectorFactory};

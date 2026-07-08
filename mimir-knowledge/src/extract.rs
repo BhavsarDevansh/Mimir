@@ -1,5 +1,10 @@
-//! Fact extraction pipeline: LLM → Rust validation → entity resolution →
-//! confidence assignment → sensitive confirmation → fact insertion.
+//! Conversational fact extraction: LLM `remember` tool → structured
+//! [`ExtractedFact`]s → the shared [`crate::normalize::normalize_and_insert`]
+//! boundary. This module owns the LLM-call half (prompt building, tool schema,
+//! output parsing) and the conversational adapter that maps LLM output onto
+//! [`crate::normalize::NormalizedFact`]/[`crate::normalize::Provenance`]. The
+//! resolve → confidence → sensitivity-gate → insert orchestration lives in
+//! [`crate::normalize`] and is shared with connectors (Phase 3 F4 / #181).
 
 use std::sync::Arc;
 
@@ -13,11 +18,12 @@ use mimir_core::personality::Personality;
 
 use crate::inference::CascadeContext;
 use crate::models::audit_log::{ChangeType, ChangedBy};
-use crate::models::entity::{Entity, EntityType};
+use crate::models::entity::EntityType;
 use crate::models::enums::{AutoCompletePolicy, EventType, RecurrenceType};
 use crate::models::event::NewEvent;
-use crate::models::fact::{Fact, FactStatus, NewFact};
+use crate::models::fact::{Fact, FactStatus};
 use crate::models::source::{ExtractionMethod, SourceType};
+use crate::normalize::{NormalizedFact, Provenance, normalize_and_insert};
 use crate::queries;
 use crate::{KnowledgeError, KnowledgeGraph};
 
@@ -82,25 +88,11 @@ pub struct RememberOutput {
 }
 
 // ---------------------------------------------------------------------------
-// Outcome types
+// Outcome types (defined in [`crate::normalize`], re-exported for callers
+// that still reach them via `mimir_knowledge::extract`).
 // ---------------------------------------------------------------------------
 
-/// A fact awaiting user confirmation because it was flagged as sensitive.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PendingFact {
-    pub fact_id: i32,
-    pub subject_name: String,
-    pub relationship_type: String,
-    pub object_display: String,
-}
-
-/// Result of running the extraction pipeline over a user message.
-#[derive(Debug, Default)]
-pub struct ExtractionOutcome {
-    pub inserted: Vec<Fact>,
-    pub pending_confirmation: Vec<PendingFact>,
-    pub errors: Vec<KnowledgeError>,
-}
+pub use crate::normalize::{ExtractionOutcome, PendingFact};
 
 // ---------------------------------------------------------------------------
 // Tool schema
@@ -339,77 +331,12 @@ fn parse_remember_output(assistant_msg: Message) -> Result<RememberOutput, Knowl
 }
 
 // ---------------------------------------------------------------------------
-// Extraction processing
+// Classification → SourceType (chat adapter)
 // ---------------------------------------------------------------------------
 
-/// Shared batch processor used by both the LLM extraction pipeline
-/// ([`extract_facts`] / [`extract_facts_with_context`]) and the `remember` tool
-/// entrypoint ([`process_remember_output`]).
-///
-/// Predicate canonicalization is the single step that touches the alias system:
-/// each fact's `relationship_type` is resolved through
-/// [`KnowledgeGraph::ensure_relationship_type`], which normalizes the name,
-/// resolves it via the `relationship_type_aliases` table (the single source of
-/// truth), and auto-creates a canonical type plus self-alias on a miss. The
-/// resulting canonical name drives [`split_list_objects`]. Resolution errors are
-/// tolerated per-fact so one bad predicate never aborts the whole batch.
-async fn process_fact_batch(
-    kg: &KnowledgeGraph,
-    facts: Vec<ExtractedFact>,
-    now: DateTime<Utc>,
-) -> Result<ExtractionOutcome, KnowledgeError> {
-    let mut outcome = ExtractionOutcome::default();
-
-    for mut fact in facts {
-        // Resolve the predicate once: `ensure_relationship_type` normalizes,
-        // consults the alias table (single source of truth), and auto-creates a
-        // canonical type + self-alias on a miss. The id threads through to the
-        // per-fact processor so the resolution is not repeated downstream.
-        let relationship_type_id = match kg.ensure_relationship_type(&fact.relationship_type).await
-        {
-            Ok(id) => id,
-            Err(error) => {
-                outcome.errors.push(error);
-                continue;
-            }
-        };
-
-        // `ensure_relationship_type` always creates/resolves the type, so the
-        // name lookup succeeds in practice; fall back to the normalized input
-        // purely as a defensive measure.
-        let canonical_name = kg.relationship_type_name(relationship_type_id).await;
-        fact.relationship_type = canonical_name
-            .unwrap_or_else(|| crate::normalize_alias(&fact.relationship_type).unwrap_or_default());
-
-        for fact in split_list_objects(&fact) {
-            match process_extracted_fact(kg, fact, now, relationship_type_id).await {
-                Ok(ProcessResult::Inserted(f)) => outcome.inserted.push(f),
-                Ok(ProcessResult::Pending(p)) => outcome.pending_confirmation.push(p),
-                Err(error) => outcome.errors.push(error),
-            }
-        }
-    }
-
-    Ok(outcome)
-}
-
-/// Process a `RememberOutput` by applying validation, dedup, confidence
-/// assignment, and insertion logic.
-///
-/// Thin wrapper over [`process_fact_batch`]; the LLM call has already happened
-/// in [`extract_facts`] / [`extract_facts_with_context`].
-async fn process_extracted_facts(
-    kg: &KnowledgeGraph,
-    extracted: RememberOutput,
-    now: DateTime<Utc>,
-) -> Result<ExtractionOutcome, KnowledgeError> {
-    process_fact_batch(kg, extracted.facts, now).await
-}
-
-// ---------------------------------------------------------------------------
-// Classification → SourceType + confidence
-// ---------------------------------------------------------------------------
-
+/// Map an LLM [`Classification`] to the [`SourceType`] carried on the
+/// [`NormalizedFact`]. Explicit statements and corrections are user edits
+/// (confidence 1.0); casual mentions are interactions (confidence 0.30).
 fn source_type_for(classification: Classification) -> SourceType {
     match classification {
         Classification::Explicit | Classification::Correction => SourceType::UserEdit,
@@ -417,26 +344,9 @@ fn source_type_for(classification: Classification) -> SourceType {
     }
 }
 
-fn confidence_for(classification: Classification) -> f32 {
-    crate::confidence::initial(source_type_for(classification), None)
-}
-
 // ---------------------------------------------------------------------------
-// Entity resolution
+// LLM-output parsing helpers (entity types, temporal, recurrence, categories)
 // ---------------------------------------------------------------------------
-
-/// Resolve a name to an entity ID, creating the entity if necessary.
-async fn resolve_entity(
-    kg: &KnowledgeGraph,
-    name: &str,
-    entity_type: EntityType,
-) -> Result<Entity, KnowledgeError> {
-    let results = queries::entity::get_by_name(kg.pool(), name).await?;
-    if let Some(best) = results.into_iter().next() {
-        return Ok(best.entity);
-    }
-    queries::entity::create_entity(kg.pool(), name, entity_type, &[]).await
-}
 
 /// Parse an entity type string into the Rust enum.
 fn parse_entity_type(s: &str) -> Result<EntityType, KnowledgeError> {
@@ -510,39 +420,6 @@ fn split_list_objects(fact: &ExtractedFact) -> Vec<ExtractedFact> {
 }
 
 // ---------------------------------------------------------------------------
-// Correction helpers
-// ---------------------------------------------------------------------------
-
-/// Find active facts with the same subject + relationship_type that overlap the new fact.
-async fn find_active_overlapping(
-    kg: &KnowledgeGraph,
-    subject_id: i32,
-    relationship_type_id: i16,
-    valid_from: Option<DateTime<Utc>>,
-    valid_until: Option<DateTime<Utc>>,
-) -> Result<Vec<Fact>, KnowledgeError> {
-    let rows: Vec<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
-         valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
-         FROM facts \
-         WHERE subject_id = ? AND relationship_type_id = ? AND fact_status_id = ?",
-    )
-    .bind(subject_id)
-    .bind(relationship_type_id)
-    .bind(FactStatus::Active as i16)
-    .fetch_all(kg.pool())
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .filter(|f| {
-            queries::fact::ranges_overlap(f.valid_from, f.valid_until, valid_from, valid_until)
-        })
-        .collect())
-}
-
-// ---------------------------------------------------------------------------
 // Pipeline entrypoint
 // ---------------------------------------------------------------------------
 
@@ -559,7 +436,6 @@ pub async fn extract_facts(
     llm: &Arc<dyn LlmBackend>,
     user_message: &str,
 ) -> Result<ExtractionOutcome, KnowledgeError> {
-    let now = kg.now();
     let prompt = build_base_prompt(kg).await?;
     let messages = vec![Message::system(prompt), Message::user(user_message)];
     let tool = remember_tool_schema();
@@ -570,7 +446,7 @@ pub async fn extract_facts(
         .map_err(|e| KnowledgeError::Validation(format!("LLM call failed: {}", e)))?;
 
     let extracted = parse_remember_output(assistant_msg)?;
-    process_extracted_facts(kg, extracted, now).await
+    process_remember_output(kg, extracted).await
 }
 
 /// Run the fact extraction pipeline over a labelled conversation transcript
@@ -586,7 +462,6 @@ pub async fn extract_facts_with_context(
     messages: &[ConversationMessage],
     condensed_memory: Option<&str>,
 ) -> Result<ExtractionOutcome, KnowledgeError> {
-    let now = kg.now();
     let prompt = build_extraction_prompt(kg, condensed_memory, messages).await?;
     // The transcript is embedded in the system prompt above; the user turn is
     // just the action instruction so the LLM is not handed the conversation
@@ -607,147 +482,79 @@ pub async fn extract_facts_with_context(
         .map_err(|e| KnowledgeError::Validation(format!("LLM call failed: {}", e)))?;
 
     let extracted = parse_remember_output(assistant_msg)?;
-    process_extracted_facts(kg, extracted, now).await
+    process_remember_output(kg, extracted).await
 }
 
-pub(crate) enum ProcessResult {
-    Inserted(Fact),
-    Pending(PendingFact),
-}
-
-/// Insert a sensitive fact atomically with Disputed status and pending_confirmation=TRUE.
-async fn insert_sensitive_fact(
-    kg: &KnowledgeGraph,
-    new_fact: NewFact,
-    now: DateTime<Utc>,
-    relationship_type_id: i16,
-) -> Result<Fact, KnowledgeError> {
-    // Calculate confidence
-    let confidence = new_fact.confidence.unwrap_or_else(|| {
-        let source_type = source_type_for(Classification::Explicit);
-        crate::confidence::initial(source_type, None)
-    });
-
-    let mut tx = kg.pool().begin().await?;
-
-    // Insert with Disputed status and pending_confirmation=TRUE in a single atomic operation.
-    let memory_priority_id: i16 = sqlx::query_scalar(
-        "SELECT COALESCE(r.default_memory_priority_id, p.id) \
-         FROM relationship_types r \
-         CROSS JOIN memory_priorities p \
-         WHERE r.id = ? AND p.name = 'Normal'",
-    )
-    .bind(relationship_type_id)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    let fact_id: i64 = sqlx::query_scalar(
-        "INSERT INTO facts \
-         (subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until, \
-          confidence, fact_status_id, inferred, inference_depth, pending_confirmation, memory_priority_id, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-         RETURNING id",
-    )
-    .bind(new_fact.subject_id)
-    .bind(relationship_type_id)
-    .bind(new_fact.object_id)
-    .bind(&new_fact.object_literal)
-    .bind(new_fact.valid_from)
-    .bind(new_fact.valid_until)
-    .bind(confidence)
-    .bind(FactStatus::Disputed as i16)
-    .bind(new_fact.inferred)
-    .bind(new_fact.inference_depth)
-    .bind(true) // pending_confirmation
-    .bind(memory_priority_id)
-    .bind(now)
-    .bind(now)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    let fact_id = fact_id as i32;
-
-    // Insert source
-    let extraction_method_id = new_fact.extraction_method.map(|e| e as i16);
-    let connector_type_id = new_fact.connector_type.map(|ct| ct as i16);
-    sqlx::query(
-        "INSERT INTO sources \
-         (fact_id, source_type_id, connector_instance_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(fact_id)
-    .bind(new_fact.source_type as i16)
-    .bind(new_fact.connector_instance_id)
-    .bind(connector_type_id)
-    .bind(&new_fact.raw_reference)
-    .bind(now)
-    .bind(extraction_method_id)
-    .execute(&mut *tx)
-    .await?;
-
-    // Audit log
-    let new_value = serde_json::json!({
-        "fact_id": fact_id,
-        "confidence": confidence,
-        "fact_status_id": FactStatus::Disputed as i16,
-        "pending_confirmation": true,
-    })
-    .to_string();
-
-    sqlx::query(
-        "INSERT INTO fact_audit_log \
-         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(fact_id)
-    .bind(ChangeType::Created as i16)
-    .bind(None::<&str>)
-    .bind(new_value)
-    .bind(now)
-    .bind(ChangedBy::System as i16)
-    .bind(Some("Sensitive fact pending confirmation"))
-    .execute(&mut *tx)
-    .await?;
-
-    tx.commit().await?;
-
-    // Fetch the created fact
-    let fact: Fact = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
-         valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
-         FROM facts WHERE id = ?",
-    )
-    .bind(fact_id)
-    .fetch_one(kg.pool())
-    .await?;
-
-    Ok(fact)
-}
-
-/// Process a `RememberOutput` by applying the same validation, dedup,
-/// confidence assignment, and insertion logic used by the full extraction pipeline.
-///
-/// This is the entrypoint for the `remember` tool: the LLM has already structured
-/// the facts, so we only need to validate and persist them.
 pub async fn process_remember_output(
     kg: &KnowledgeGraph,
     output: RememberOutput,
 ) -> Result<ExtractionOutcome, KnowledgeError> {
-    let now = kg.now();
-    process_fact_batch(kg, output.facts, now).await
+    // Conversational learning always comes through the LLM `remember` tool.
+    let provenance = Provenance::chat(ExtractionMethod::LlmExtraction);
+    let (normalized, build_errors) = extracted_to_normalized(kg, output.facts).await;
+
+    let mut outcome = normalize_and_insert(kg, normalized, provenance).await?;
+    // Prepend any predicate-canonicalisation / parse errors so callers see the
+    // full picture (these never abort the batch).
+    let mut errors = build_errors;
+    errors.append(&mut outcome.errors);
+    outcome.errors = errors;
+    Ok(outcome)
 }
 
-pub(crate) async fn process_extracted_fact(
+/// Adapt LLM-emitted [`ExtractedFact`]s onto the shared
+/// [`crate::normalize::NormalizedFact`] shape.
+///
+/// This is the conversational-only normalisation the shared boundary cannot do:
+/// predicate canonicalisation (so list-splitting sees canonical names), list
+/// splitting (the LLM may cram a list into one fact), and parsing the LLM's
+/// string-typed entity/temporal/recurrence/category fields into the typed
+/// `NormalizedFact`. Per-fact canonicalisation/parse errors are collected and
+/// returned alongside the successfully-built facts so one bad fact never aborts
+/// the batch - mirroring the old `process_fact_batch` tolerance.
+async fn extracted_to_normalized(
     kg: &KnowledgeGraph,
-    extracted: ExtractedFact,
-    now: DateTime<Utc>,
-    relationship_type_id: i16,
-) -> Result<ProcessResult, KnowledgeError> {
-    // Relationship type was already resolved (and the canonical type ensured)
-    // by `process_fact_batch` before list expansion; reuse the resolved id.
+    facts: Vec<ExtractedFact>,
+) -> (Vec<NormalizedFact>, Vec<KnowledgeError>) {
+    let mut normalized = Vec::new();
+    let mut errors = Vec::new();
 
-    // Validate entity types.
+    for mut fact in facts {
+        // Canonicalise the predicate once: `ensure_relationship_type` normalises,
+        // consults the alias table (single source of truth), and auto-creates a
+        // canonical type + self-alias on a miss. The canonical name drives
+        // list-splitting below. `normalize_and_insert` re-resolves the id
+        // (idempotently) so connectors get the same canonicalisation for free.
+        let relationship_type_id = match kg.ensure_relationship_type(&fact.relationship_type).await
+        {
+            Ok(id) => id,
+            Err(error) => {
+                errors.push(error);
+                continue;
+            }
+        };
+        let canonical_name = kg.relationship_type_name(relationship_type_id).await;
+        fact.relationship_type = canonical_name
+            .unwrap_or_else(|| crate::normalize_alias(&fact.relationship_type).unwrap_or_default());
+
+        for fact in split_list_objects(&fact) {
+            match parse_extracted_fact(&fact) {
+                Ok(nf) => normalized.push(nf),
+                Err(error) => errors.push(error),
+            }
+        }
+    }
+
+    (normalized, errors)
+}
+
+/// Parse a single (canonical, split) [`ExtractedFact`] into a [`NormalizedFact`].
+///
+/// All LLM string fields are decoded here; the shared boundary receives typed
+/// values and does no string parsing. `source_type` is derived per-fact from the
+/// classification so a batch mixing Explicit and Casual facts keeps the right
+/// confidence family on each.
+fn parse_extracted_fact(extracted: &ExtractedFact) -> Result<NormalizedFact, KnowledgeError> {
     let subject_type = parse_entity_type(&extracted.subject_type)?;
     let object_type = extracted
         .object_type
@@ -755,266 +562,18 @@ pub(crate) async fn process_extracted_fact(
         .map(|s| parse_entity_type(s))
         .transpose()?;
 
-    // Parse temporal.
-    let valid_from = if let Some(temporal) = &extracted.temporal {
-        if let Some(s) = &temporal.valid_from {
-            match DateTime::parse_from_rfc3339(s) {
-                Ok(dt) => Some(dt.with_timezone::<Utc>(&Utc)),
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to parse valid_from temporal bound '{}': {}. Temporal constraint ignored.",
-                        s,
-                        e
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let valid_until = if let Some(temporal) = &extracted.temporal {
-        if let Some(s) = &temporal.valid_until {
-            match DateTime::parse_from_rfc3339(s) {
-                Ok(dt) => Some(dt.with_timezone::<Utc>(&Utc)),
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to parse valid_until temporal bound '{}': {}. Temporal constraint ignored.",
-                        s,
-                        e
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    // Resolve entities.
-    let subject = resolve_entity(kg, &extracted.subject, subject_type).await?;
-    let (object_id, object_literal) = if extracted.object_is_entity {
-        let ot = object_type.unwrap_or(EntityType::Concept);
-        let obj = resolve_entity(kg, &extracted.object, ot).await?;
-        (Some(obj.id), None)
-    } else {
-        (None, Some(extracted.object.clone()))
-    };
-
-    // If this fact establishes a preferred name, register the object as an alias
-    // so future lookups by that short name resolve to the canonical entity.
-    if extracted.relationship_type == "preferred_name" {
-        let alias = &extracted.object;
-        if let Err(e) = kg.add_alias(subject.id, alias).await {
-            tracing::warn!(
-                "Failed to add preferred-name alias '{}' to entity {}: {}",
-                alias,
-                subject.id,
-                e
-            );
-        }
-
-        // If a bare-name duplicate entity exists (created before the alias was
-        // wired up), auto-merge it when it looks accidental (very few facts).
-        if let Ok(candidates) = queries::entity::get_by_name(kg.pool(), alias).await {
-            for cand in candidates {
-                if cand.entity.id == subject.id {
-                    continue;
-                }
-                if cand.entity.name.to_lowercase() == alias.to_lowercase() {
-                    match sqlx::query_as::<_, (i64,)>(
-                        "SELECT COUNT(*) FROM facts WHERE subject_id = ? OR object_id = ?",
-                    )
-                    .bind(cand.entity.id)
-                    .bind(cand.entity.id)
-                    .fetch_one(kg.pool())
-                    .await
-                    {
-                        Ok((fact_count,)) if fact_count <= 2 => {
-                            // Auto-merge only if the duplicate has very few facts (≤2), suggesting it
-                            // was created accidentally before the alias was wired up.
-                            if let Err(e) = queries::entity::auto_merge_pair(
-                                kg.pool(),
-                                subject.id,
-                                cand.entity.id,
-                            )
-                            .await
-                            {
-                                tracing::warn!(
-                                    "Failed to auto-merge duplicate entity {} into {}: {}",
-                                    cand.entity.id,
-                                    subject.id,
-                                    e
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to count facts for candidate entity {} during auto-merge check: {}",
-                                cand.entity.id,
-                                e
-                            );
-                        }
-                        _ => {}
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    // Map classification to source + confidence.
-    let source_type = source_type_for(extracted.classification);
-    let confidence = confidence_for(extracted.classification);
-
-    // Validate and collect category IDs.
-    let mut category_ids = Vec::new();
-    for cat_str in &extracted.categories {
-        if let Ok(id) = cat_str.parse::<i32>() {
-            match kg.get_category(id).await? {
-                Some(_) => category_ids.push(id),
-                None => {
-                    tracing::warn!(
-                        "LLM suggested unknown category {} for fact '{} {} {}'; ignoring",
-                        id,
-                        extracted.subject,
-                        extracted.relationship_type,
-                        extracted.object
-                    );
-                }
-            }
-        } else {
-            tracing::warn!(
-                "LLM suggested invalid category '{}' for fact '{} {} {}'; ignoring",
-                cat_str,
-                extracted.subject,
-                extracted.relationship_type,
-                extracted.object
-            );
-        }
-    }
-
-    // Handle corrections.
-    let mut new_fact = NewFact {
-        subject_id: subject.id,
-        relationship_type: extracted.relationship_type.clone(),
-        object_id,
-        object_literal,
-        valid_from,
-        valid_until,
-        source_type,
-        connector_instance_id: None,
-        connector_type: None,
-        raw_reference: None,
-        extraction_method: Some(crate::models::source::ExtractionMethod::LlmExtraction),
-        inferred: false,
-        inference_depth: 0,
-        confidence: Some(confidence),
-        parent_fact_ids: Vec::new(),
-        category_ids,
-    };
-
-    if extracted.classification == Classification::Correction {
-        handle_correction(
-            kg,
-            &extracted,
-            subject.id,
-            relationship_type_id,
-            &mut new_fact,
-            now,
-        )
-        .await?;
-    }
-
-    // Sensitivity gate (#142): the LLM provides an initial is_sensitive flag,
-    // but Rust validates it against the fact's catalogue categories and object
-    // text. Rust can only narrow (AND gate) — it never flags a fact as
-    // sensitive when the LLM did not.
-    if crate::sensitivity::is_sensitive(
-        extracted.is_sensitive,
-        &new_fact.category_ids,
-        &extracted.object,
-    ) {
-        let fact = insert_sensitive_fact(kg, new_fact, now, relationship_type_id).await?;
-
-        // Only add to in-memory cache after successful commit.
-        kg.pending_confirmations().write().await.insert(fact.id);
-
-        // Persist the derived event shape so `confirm_fact` can rebuild the
-        // overlay from the extracted recurrence/event_type/policy/
-        // requires_user_action instead of synthesising one-time defaults.
-        // Sensitive facts skip the event block below, so without this the
-        // metadata would be lost across the confirmation boundary (#74, #173).
-        if let Some(new_event) =
-            event_from_extraction(&extracted, subject.id, fact.id, valid_from, now)
-        {
-            if let Err(e) =
-                queries::event::insert_pending_event_meta(kg.pool(), fact.id, &new_event).await
-            {
-                tracing::warn!(
-                    "failed to persist pending event meta for fact {}: {}",
-                    fact.id,
-                    e
-                );
-            }
-        }
-
-        return Ok(ProcessResult::Pending(PendingFact {
-            fact_id: fact.id,
-            subject_name: extracted.subject,
-            relationship_type: extracted.relationship_type,
-            object_display: extracted.object,
-        }));
-    }
-
-    // Non-sensitive facts go through the normal path.
-    let fact = kg.insert_fact(new_fact).await?;
-
-    // Events subsystem (#74): create a lifecycle overlay when the fact is
-    // time-bound (future date), recurring, or requires user action. The insert
-    // is idempotent (ON CONFLICT DO NOTHING) so a concurrent derive scan cannot
-    // trip the `fact_id` unique constraint.
-    if let Some(new_event) = event_from_extraction(&extracted, subject.id, fact.id, valid_from, now)
-    {
-        if let Err(e) = kg.insert_event_if_absent(new_event).await {
-            tracing::warn!("failed to create event overlay for fact {}: {}", fact.id, e);
-        }
-    }
-
-    Ok(ProcessResult::Inserted(fact))
-}
-
-/// Build an event overlay from an extracted fact, if it qualifies.
-///
-/// Qualification (deterministic, issue #74): the fact has a `valid_from`
-/// (trigger date) AND at least one of:
-/// - `valid_from` is in the future (one-time upcoming event),
-/// - the LLM emitted a non-`none` recurrence (recurring event),
-/// - the LLM flagged `requires_user_action` (task/deadline).
-///
-/// Policy is derived deterministically: recurring -> `Recurring`,
-/// `requires_user_action` -> `RequiresUserAction`, otherwise
-/// `AutoCompleteOnDate`. No natural-language date parsing happens in Rust; the
-/// LLM supplies the ISO-8601 `valid_from` used as the trigger date.
-///
-/// `event_type` is intentionally limited to `Task`/`Reminder` in Phase A: the
-/// LLM does not emit an explicit event kind, and inferring `Birthday`/
-/// `Appointment`/`Deadline` from recurrence alone would be unreliable. The
-/// remaining `EventType` variants are seeded for later phases that derive
-/// richer typing (e.g. from catalogue categories or an explicit LLM field).
-fn event_from_extraction(
-    extracted: &ExtractedFact,
-    entity_id: i32,
-    fact_id: i32,
-    valid_from: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> Option<NewEvent> {
-    let trigger_date = valid_from?;
+    let valid_from = parse_temporal_bound(
+        extracted
+            .temporal
+            .as_ref()
+            .and_then(|t| t.valid_from.as_deref()),
+    );
+    let valid_until = parse_temporal_bound(
+        extracted
+            .temporal
+            .as_ref()
+            .and_then(|t| t.valid_until.as_deref()),
+    );
 
     let recurrence = extracted
         .recurrence
@@ -1023,33 +582,59 @@ fn event_from_extraction(
         .unwrap_or(RecurrenceType::None);
     let requires_user_action = extracted.requires_user_action.unwrap_or(false);
 
-    let is_future = trigger_date > now;
-    if !is_future && recurrence == RecurrenceType::None && !requires_user_action {
-        return None;
+    // Categories arrive as strings from the LLM; parse to IDs, warning on any
+    // that are not valid integers (the shared boundary validates them against
+    // the DB). This preserves the previous per-fact warning behaviour.
+    let mut category_ids = Vec::new();
+    for cat_str in &extracted.categories {
+        match cat_str.parse::<i32>() {
+            Ok(id) => category_ids.push(id),
+            Err(_) => tracing::warn!(
+                "LLM suggested invalid category '{}' for fact '{} {} {}'; ignoring",
+                cat_str,
+                extracted.subject,
+                extracted.relationship_type,
+                extracted.object
+            ),
+        }
     }
 
-    let auto_complete_policy = if recurrence != RecurrenceType::None {
-        AutoCompletePolicy::Recurring
-    } else if requires_user_action {
-        AutoCompletePolicy::RequiresUserAction
-    } else {
-        AutoCompletePolicy::AutoCompleteOnDate
-    };
-    let event_type = if requires_user_action {
-        EventType::Task
-    } else {
-        EventType::Reminder
-    };
-
-    Some(NewEvent {
-        fact_id,
-        entity_id,
-        trigger_date,
+    Ok(NormalizedFact {
+        source_type: source_type_for(extracted.classification),
+        subject: extracted.subject.clone(),
+        subject_type,
+        relationship_type: extracted.relationship_type.clone(),
+        object: extracted.object.clone(),
+        object_is_entity: extracted.object_is_entity,
+        object_type,
+        valid_from,
+        valid_until,
+        is_sensitive: extracted.is_sensitive,
+        is_correction: extracted.classification == Classification::Correction,
+        correction_scope: extracted.correction_scope.clone(),
+        category_ids,
         recurrence,
-        event_type,
-        auto_complete_policy,
         requires_user_action,
+        // Conversational facts have no native source item id.
+        raw_reference: None,
     })
+}
+
+/// Parse an RFC-3339 temporal bound, warning and dropping it on failure so a
+/// malformed bound never aborts the whole fact (matches the legacy behaviour).
+fn parse_temporal_bound(s: Option<&str>) -> Option<DateTime<Utc>> {
+    let s = s?;
+    match DateTime::parse_from_rfc3339(s) {
+        Ok(dt) => Some(dt.with_timezone::<Utc>(&Utc)),
+        Err(e) => {
+            tracing::warn!(
+                "Failed to parse temporal bound '{}': {}. Temporal constraint ignored.",
+                s,
+                e
+            );
+            None
+        }
+    }
 }
 
 /// Map an LLM-emitted recurrence string to a `RecurrenceType`.
@@ -1062,82 +647,6 @@ fn parse_recurrence(value: &str) -> Option<RecurrenceType> {
         "yearly" => Some(RecurrenceType::Yearly),
         _ => None,
     }
-}
-
-async fn handle_correction(
-    kg: &KnowledgeGraph,
-    extracted: &ExtractedFact,
-    subject_id: i32,
-    relationship_type_id: i16,
-    new_fact: &mut NewFact,
-    now: DateTime<Utc>,
-) -> Result<(), KnowledgeError> {
-    let scope = extracted.correction_scope.as_deref();
-
-    match scope {
-        Some("always") => {
-            // Retrospective correction: old fact was never true.
-            let overlapping = find_active_overlapping(
-                kg,
-                subject_id,
-                relationship_type_id,
-                new_fact.valid_from,
-                new_fact.valid_until,
-            )
-            .await?;
-
-            let mut tx = kg.pool().begin().await?;
-            let mut all_children: Vec<(i32, bool)> = Vec::new();
-
-            for old in overlapping {
-                // Mark as Corrected.
-                queries::fact::set_status_tx(
-                    &mut tx,
-                    old.id,
-                    FactStatus::Corrected,
-                    now,
-                    ChangedBy::System,
-                )
-                .await?;
-
-                // Move to trash (soft-delete with cascade).
-                let children =
-                    crate::forget::forget_fact_tx(&mut tx, old.id, ChangedBy::System, now).await?;
-                all_children.extend(children);
-            }
-
-            tx.commit().await?;
-
-            // Deduplicate children so each orphan is evaluated once.
-            let mut seen = std::collections::HashSet::new();
-            all_children.retain(|(id, _)| seen.insert(*id));
-
-            crate::forget::evaluate_children(kg.pool(), all_children, now).await?;
-        }
-        Some(datetime_str) => {
-            // Temporal correction: parse the datetime and use it as valid_from.
-            match DateTime::parse_from_rfc3339(datetime_str) {
-                Ok(dt) => {
-                    new_fact.valid_from = Some(dt.with_timezone::<Utc>(&Utc));
-                    // The existing insert_fact temporal-overlap logic will close the
-                    // sole open-ended predecessor at this datetime automatically.
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to parse correction_scope datetime '{}': {}. valid_from will not be set.",
-                        datetime_str,
-                        e
-                    );
-                }
-            }
-        }
-        None => {
-            // No scope provided: default to temporal correction with now().
-            new_fact.valid_from = Some(now);
-        }
-    }
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,105 @@
 # Changelog
 
+## [0.65.0] — 2026-07-08
+
+### Phase 3 — Shared normalize/insert boundary (issue #181 / F4)
+
+Extract the resolve → confidence → sensitivity-gate → insert orchestration from
+the conversational `remember` path into a reusable
+`normalize_and_insert(kg, Vec<NormalizedFact>, Provenance) -> ExtractionOutcome`
+boundary in `mimir-knowledge::normalize`. Both chat learning and (future)
+service connectors now funnel through one deterministic Rust pipeline.
+
+- **New public types** in `mimir-knowledge::normalize`:
+  - `NormalizedFact` — provenance-annotated, per-fact content with typed entity
+    types, parsed temporal bounds, typed `RecurrenceType`, validated category
+    ids, the sensitivity flag, an optional correction scope, and the per-fact
+    `raw_reference`. `source_type` is per-fact because a chat batch may mix
+    `Explicit`/`Casual` facts; connectors set `Connector`.
+  - `Provenance` — batch-level origin: the connector instance id + type (for
+    connector syncs) and the `extraction_method` (`LlmExtraction` for chat,
+    `StructuredParse` for structurally-parsed connector items). Constructors
+    `Provenance::chat` and `Provenance::connector`.
+  - `ExtractionOutcome` / `PendingFact` move to `normalize` and are re-exported
+    from `mimir_knowledge::extract` for existing callers.
+- **Confidence** is `confidence::initial(source_type, connector_type)` — the
+  per-source-type / per-connector reliability score with **no extraction-method
+  discount**. Corroboration, supersession, and inference are inherited for free
+  from `insert_fact_in_tx`.
+- **Sensitivity** uses the same Rust `AND`-gate as conversational facts:
+  connector facts the producer flags sensitive land as `pending_confirmation`
+  and surface via `kb audit`.
+- **Conversational refactor:** `extract.rs` keeps the LLM-call half (tool
+  schema, prompts, output parsing) plus an `extracted_to_normalized` adapter
+  that canonicalises predicates, splits list objects, and parses LLM string
+  fields into typed `NormalizedFact`s. `process_remember_output`,
+  `extract_facts`, and `extract_facts_with_context` route through
+  `normalize_and_insert`; chat behaviour is unchanged.
+- **Tests:** new `mimir-knowledge/tests/normalize_test.rs` covers a
+  connector-produced `NormalizedFact` insert, the cross-connector corroboration
+  acceptance criterion (Gmail flight + Calendar event → one fact, two sources,
+  confidence boosted to the 0.95 cap), chat provenance, and the connector
+  provenance gate. All existing extraction/optimization/confirmation tests pass
+  unchanged.
+
+### Tests — pre-existing `mimir-server` harness failures fixed
+
+Six `mimir-server` lib tests that failed identically on `main` (verified in a
+detached worktree) were stale test-harness bugs, not production defects:
+
+- **`insert_pending_fact` helper** (5 `test_kb_*` tests): the helper built a
+  sensitive allergy fact with `is_sensitive: true` but **no catalogue category**.
+  After the #142 sensitivity `AND`-gate landed, Rust correctly narrows such a
+  fact to non-sensitive (no sensitive category and no sensitive keyword in
+  `"peanuts"`), so it never reached `pending_confirmation` and the helper
+  panicked indexing into an empty result. Fixed by assigning category 230
+  (Allergies & Intolerances), mirroring `extract.rs`'s `sensitive_allergy_fact`
+  helper.
+- **`test_non_incognito_allows_remember_tool_and_persists_fact_stream`** and the
+  paired `test_incognito_..._stream` (which was a false pass): both hit
+  `/chat/stream` but queued responses via the blocking-path mock API
+  (`push_chat_message`/`push_chat`) instead of the stream-path API
+  (`push_stream`/`StreamItem`). The stream therefore errored out on an empty
+  queue before executing the `remember` tool. Fixed by queueing
+  `StreamItem::ToolCalls` + a follow-up `StreamItem::Text`, and (for the
+  non-incognito case) draining the SSE body so the spawned stream task completes
+  fact persistence before the assertion. The incognito test now exercises the
+  incognito write-guard for the right reason instead of passing by accident.
+
+Production code was unchanged; only test harnesses were corrected.
+
+### Review fix — scope-less correction regression
+
+The boundary originally gated `handle_correction` on `correction_scope.is_some()`,
+which silently dropped the defensive temporal-correction-at-`now` behaviour: a
+conversational `Correction` fact with no `correction_scope` (which the LLM may
+emit despite being told to set one) was treated as an ordinary `Explicit` fact
+and never superseded its open-ended predecessor. Fixed by carrying an
+`is_correction: bool` on `NormalizedFact` (set by the chat adapter from the LLM
+`Correction` classification; connectors always leave it `false`) and gating on
+that signal instead, so the `handle_correction` `None` arm is reachable again. A
+regression test (`test_correction_no_scope_defaults_to_temporal_at_now`) covers
+the path.
+
+### Review fix — sensitive facts dropped catalogue categories
+
+`insert_sensitive_fact` (the pending-confirmation insert path) wrote the fact
+and source but skipped the `fact_categories` junction writes that the normal
+insert path performs, so sensitive facts lost their catalogue category links.
+Category-based reads and downstream memory/sensitivity logic could therefore
+miss them. Fixed by persisting `new_fact.category_ids` in the same transaction
+via `INSERT OR IGNORE INTO fact_categories`, mirroring `insert_fact_internal`.
+A regression test (`sensitive_fact_persists_its_catalogue_categories`) covers
+the path.
+
+### Review fix — markdown lint hygiene
+
+- `docs/wiki/what-works-now.md`: replace the blank blockquote separator (MD028,
+  no-blanks-blockquote) between the release-summary and corroboration blocks
+  with a plain blank line so they render as separate blockquotes.
+- `docs/fact-extraction-pipeline.md`: add a blank line after the new
+  `### Scope-less Correction (`None`)` heading (MD022, blanks-around-headings).
+
 ## [0.64.0] — 2026-07-07
 
 ### Phase 3 — Sources provenance FK migration (issue #180 / F3)

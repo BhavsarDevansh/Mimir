@@ -12,6 +12,19 @@ The extraction pipeline applies Rust-side normalisation and splitting to improve
 - **List splitting**: When the LLM outputs a single fact with a comma-separated list (e.g., `hobby → "Geopolitics, Software Development, Tech"`), the pipeline automatically splits it into three independent facts.
 - **Deduplication**: Before inserting a new fact, the pipeline checks if an identical active fact already exists. If so, it increments the confidence instead of creating a duplicate.
 
+## Shared with connectors
+
+The resolve → confidence → sensitivity-gate → insert steps are not
+conversation-specific. They live in a single shared function,
+`mimir_knowledge::normalize::normalize_and_insert`, that both the chat
+`remember` path and (future) service connectors call. Connectors build the
+same `NormalizedFact` values from their items and supply a connector
+`Provenance`, so facts learned from your email, calendar, or photos get the
+identical confidence scoring, corroboration, supersession, and sensitivity
+gating as facts you tell Mimir directly — including cross-source corroboration,
+where the same fact reported by two different connectors is merged into one
+knowledge-graph entry with boosted confidence rather than duplicated.
+
 ## What Gets Extracted
 
 Mimir looks for **subject-predicate-object** triples in your messages:

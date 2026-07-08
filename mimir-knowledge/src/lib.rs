@@ -14,6 +14,7 @@ pub mod forget;
 pub mod inference;
 pub mod librarian;
 pub mod models;
+pub mod normalize;
 pub mod optimization;
 pub mod queries;
 pub mod retrieval;

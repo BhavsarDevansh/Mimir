@@ -1,10 +1,12 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-07-07
-> **Version:** 0.64.0
+> **Last updated:** 2026-07-08
+> **Version:** 0.65.0
 > **Release summary:** Phase 2 knowledge-graph work is live — core relationship ontology seeded category-first (Issue #135): predicate aliases for verb canonicalization plus `category_aliases` and category-subtree retrieval for grouping/multi-tag precision; relationship type aliases are the single source of truth for predicate resolution (Issue #133), Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system, Agentic Pre-Response Context Retrieval (#128), the Librarian Agent (#130), LLM-orchestrated learning via the `remember` tool (#137), a hardened system prompt that enforces the agentic contract — `retrieve_context` dispatch, no fact invention, and `remember` encouragement (#138), and a redesigned Librarian extraction prompt that injects the same core-facts block as the core agent and learns only from user-labelled messages (#139), and the full pending sensitive-fact confirmation lifecycle — HTTP routes, CLI commands, and a daily auto-cleanup job (#141). v0.57.0 adds the events & reminders subsystem — a lifecycle + recurrence overlay on facts that surfaces upcoming birthdays, appointments, deadlines, and tasks in the Upcoming memory section, with a deterministic scan job and the deprecation of `entity_dates` (#74).
-> 
+
 > v0.60.0 adds corroboration detection (#79): when a new non-explicit fact covers the same claim as an existing Active or pending_confirmation fact (same subject + predicate + object, temporally overlapping), Mimir adds a source to the existing fact instead of creating a duplicate, and boosts its confidence +0.05 per independent source (capped at 0.95; explicit and inferred facts excluded). Re-statements from the same source are a no-op, and the confidence change cascades comprehensively to inferred children.
+
+> v0.65.0 adds the shared `normalize_and_insert` ingestion boundary (Phase 3 F4 / #181): the resolve → confidence → sensitivity-gate → insert orchestration is extracted from the conversational `remember` path into one reusable function in `mimir-knowledge::normalize`. Both chat learning and (future) service connectors funnel through it via a provenance-annotated `NormalizedFact` type and a batch-level `Provenance`, so connector-sourced facts get identical confidence scoring, corroboration, supersession, and sensitivity gating — including cross-connector corroboration, where a Gmail flight fact and a Calendar event describing the same trip merge into one knowledge-graph fact with boosted confidence instead of duplicating.
 
 ---
 
@@ -252,7 +254,7 @@ The daemon exposes an OpenAI-compatible chat endpoint plus Mimir-specific manage
 
 - **Phase 1 — Core Agent** ✅ Complete
 - **Phase 2 — Knowledge Graph** ✅ Complete
-- **Phase 3 — Connectors** 🚧 In progress — the `mimir-connectors` crate is scaffolded (crate, feature flags `photos`/`calendar`/`gmail`, DB-access boundary via `KnowledgeGraph` only), the `connectors` instance-registry table + `KnowledgeGraph` facade methods landed in #179 / F2 (sync cursor, auth state, and health persist across restarts), and the `sources.connector_instance_id` provenance FK migration + per-connector item-count query landed in #180 / F3. Backend implementations (calendar, email, file watchers) land in later Phase 3 issues
+- **Phase 3 — Connectors** 🚧 In progress — the `mimir-connectors` crate is scaffolded (crate, feature flags `photos`/`calendar`/`gmail`, DB-access boundary via `KnowledgeGraph` only), the `connectors` instance-registry table + `KnowledgeGraph` facade methods landed in #179 / F2 (sync cursor, auth state, and health persist across restarts), the `sources.connector_instance_id` provenance FK migration + per-connector item-count query landed in #180 / F3, and the shared `normalize_and_insert` ingestion boundary landed in #181 / F4 (connectors funnel through the same confidence/corroboration/sensitivity pipeline as chat). Backend implementations (calendar, email, file watchers) land in later Phase 3 issues
 - **Phase 4 — Reasoning** ⏳ Planned (inference engine expansion)
 - **Phase 5 — Proactive Agent** ⏳ Planned (events, reminders, domain surfacing)
 - **Phase 6 — Vision** ⏳ Planned (long-term memory consolidation)

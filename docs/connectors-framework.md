@@ -1,7 +1,7 @@
 # Connectors Framework (mimir-connectors)
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Trait, registry, and mock are stubs; filled by F6/F7/F13.
+> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Trait, registry, and mock are stubs; filled by F6/F7/F13.
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -20,6 +20,37 @@ Connectors never hold a `sqlx` pool handle. All persistence goes through the
 depends on `mimir-core` and `mimir-knowledge` **only** and does **not** declare
 a direct `sqlx` dependency (it enters the build graph only transitively, via
 `mimir-knowledge`'s internal use).
+
+## Shared ingestion boundary (F4 / #181)
+
+The resolve → confidence → sensitivity-gate → insert orchestration lives in
+`mimir-knowledge::normalize` as a single reusable function, so connector
+ingestion and conversational `remember` extraction share one deterministic
+Rust pipeline:
+
+```rust
+pub async fn normalize_and_insert(
+    kg: &KnowledgeGraph,
+    facts: Vec<NormalizedFact>,
+    provenance: Provenance,
+) -> Result<ExtractionOutcome, KnowledgeError>
+```
+
+- **`Provenance`** (batch-level) carries the connector instance id + type and
+  the `extraction_method`. A connector sync calls this once per batch with a
+  `Provenance::connector(instance_id, connector_type, method)`.
+- **`NormalizedFact`** (per-fact) carries typed content (entity types, parsed
+  temporal bounds, typed recurrence, validated category ids, sensitivity flag,
+  optional correction scope) and the per-fact `raw_reference` (the native item
+  id). `source_type` is per-fact (`Connector` for connector facts).
+- **Confidence** is `confidence::initial(source_type, connector_type)` with no
+  extraction-method discount. Corroboration / supersession / inference are
+  inherited from `insert_fact_in_tx`, so cross-connector corroboration (Gmail
+  flight + Calendar event on overlapping dates) is an explicit acceptance
+  criterion, not an accident.
+
+Because `mimir-connectors` depends on `mimir-knowledge`, it reaches these types
+directly; it never needs a parallel insert path.
 
 ## Crate layout
 

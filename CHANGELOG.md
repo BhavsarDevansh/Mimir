@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.66.0] — 2026-07-08
+
+### Phase 3 — Full entity-resolution chain (issue #182 / F5)
+
+`resolve_entity` (`mimir-knowledge::normalize`) now runs the full resolution
+chain shared by chat extraction and connectors: exact name → exact alias →
+FTS5 fuzzy → create new, with two correctness policies layered on top of the
+existing `get_by_name` search:
+
+- **Strict same-type filtering.** A new `get_by_name_typed` lookup restricts
+  candidates to the requested `EntityType`, so a cross-type token-overlap match
+  (e.g. "Apple" resolved as a `Concept` vs "Apple Inc" the `Organization`) is
+  dropped and a new entity is created instead of a wrong merge. The untyped
+  `get_by_name` remains the general-purpose search surface.
+- **Fuzzy resolution gate.** A pure `pick_resolution` policy resolves
+  exact-name and exact-alias hits unconditionally, but accepts a fuzzy hit only
+  when its normalised score is ≥ `FUZZY_RESOLVE_THRESHOLD` (`0.9`); weaker
+  fuzzy matches fall through to create-new. Alias creation is not auto-learned
+  from fuzzy matches — it stays explicit via `preferred_name`.
+
+Tests: 9 unit tests for the decision policy (threshold boundary, alias/exact
+precedence) and 6 integration tests through `normalize_and_insert` (alias-,
+fuzzy-, exact-, create-on-miss, and cross-type-create paths). No regression in
+the chat extraction E2E suite.
+
 ## [0.65.0] — 2026-07-08
 
 ### Phase 3 — Shared normalize/insert boundary (issue #181 / F4)

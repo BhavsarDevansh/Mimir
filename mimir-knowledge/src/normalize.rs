@@ -444,19 +444,64 @@ async fn process_normalized_fact(
 // Entity resolution
 // ---------------------------------------------------------------------------
 
-/// Resolve a name to an entity, creating it if necessary (exact match first).
+/// Minimum normalised score (0..1) for an FTS5 fuzzy match to resolve to an
+/// existing entity instead of creating a new one. Exact-name and exact-alias
+/// matches always resolve regardless of score; this gate only governs the
+/// fuzzy branch. The bar is intentionally high so that weak token overlaps
+/// fall through to create-new rather than silently merging into the wrong
+/// entity.
+const FUZZY_RESOLVE_THRESHOLD: f32 = 0.9;
+
+/// Pick the entity to resolve to from a set of (same-type) search results,
+/// applying the resolution policy: exact-name and exact-alias always resolve;
+/// a fuzzy match resolves only at score ≥ [`FUZZY_RESOLVE_THRESHOLD`]; a
+/// below-threshold fuzzy (and an empty result set) yield `None` so the caller
+/// creates a new entity.
 ///
-/// The full exact → alias → FTS5 fuzzy → create chain is added by F5 (#182);
-/// this boundary deliberately keeps the current resolution behaviour so chat
-/// extraction stays identical.
+/// `results` must be sorted by score descending, as [`queries::entity::get_by_name`]
+/// / [`queries::entity::get_by_name_typed`] guarantee. Because the sort is
+/// stable and exact-name is pushed before fuzzy at equal score, an exact name
+/// always wins over a fuzzy hit scored 1.0.
+fn pick_resolution(results: &[queries::entity::AliasSearchResult]) -> Option<&Entity> {
+    // Results are sorted by score descending: exact alias (1.1) > exact name
+    // (1.0) ≥ fuzzy (≤ 1.0), with a stable sort keeping exact name ahead of a
+    // 1.0 fuzzy. The first element is therefore always the best candidate, so
+    // only it needs inspecting.
+    let result = results.first()?;
+    match result.match_kind {
+        queries::entity::MatchKind::ExactName | queries::entity::MatchKind::ExactAlias => {
+            Some(&result.entity)
+        }
+        queries::entity::MatchKind::Fuzzy => {
+            if result.score >= FUZZY_RESOLVE_THRESHOLD {
+                Some(&result.entity)
+            } else {
+                // Below the threshold there is no better same-type match, so
+                // resolve to None and let the caller create a new entity.
+                None
+            }
+        }
+    }
+}
+
+/// Resolve a name to an entity via the full chain — exact name → alias → FTS5
+/// fuzzy (score ≥ [`FUZZY_RESOLVE_THRESHOLD`]) → create new — restricted to
+/// entities of the requested type (Phase 3 F5 / issue #182). Shared by chat
+/// extraction and connector ingestion.
+///
+/// Note: entity names are globally unique (case-insensitive) at the schema
+/// level, so the type filter guards against cross-type *fuzzy* / token-overlap
+/// merges; an identical name of a different type cannot coexist, and the
+/// create-on-miss path will return the existing same-name entity regardless of
+/// type. Alias creation is not auto-learned from fuzzy matches.
 async fn resolve_entity(
     kg: &KnowledgeGraph,
     name: &str,
     entity_type: EntityType,
 ) -> Result<Entity, KnowledgeError> {
-    let results = queries::entity::get_by_name(kg.pool(), name).await?;
-    if let Some(best) = results.into_iter().next() {
-        return Ok(best.entity);
+    let results = queries::entity::get_by_name_typed(kg.pool(), name, entity_type).await?;
+    if let Some(entity) = pick_resolution(&results) {
+        return Ok(entity.clone());
     }
     queries::entity::create_entity(kg.pool(), name, entity_type, &[]).await
 }
@@ -736,4 +781,145 @@ async fn insert_sensitive_fact(
     .await?;
 
     Ok(fact)
+}
+
+#[cfg(test)]
+mod resolution_tests {
+    //! Unit tests for the entity-resolution *decision* policy
+    //! ([`super::pick_resolution`]): exact-name and exact-alias always resolve;
+    //! a fuzzy hit resolves only at score >= [`super::FUZZY_RESOLVE_THRESHOLD`];
+    //! anything weaker (and an empty result set) yields `None` so the caller
+    //! creates a new entity. The decision is pure and deterministic — it does
+    //! not touch the database — so the score-threshold boundary is tested here
+    //! with synthetic results rather than relying on hard-to-predict bm25
+    //! scores (see the integration tests in `tests/normalize_test.rs` for the
+    //! end-to-end resolve path).
+
+    use chrono::Utc;
+
+    use super::FUZZY_RESOLVE_THRESHOLD;
+    use super::pick_resolution;
+    use crate::models::entity::{Entity, EntityType};
+    use crate::queries::entity::{AliasSearchResult, MatchKind};
+
+    fn entity(id: i32, name: &str, ty: EntityType) -> Entity {
+        let now = Utc::now();
+        Entity {
+            id,
+            name: name.to_string(),
+            entity_type_id: ty as i16,
+            aliases: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn result(
+        id: i32,
+        name: &str,
+        ty: EntityType,
+        kind: MatchKind,
+        score: f32,
+    ) -> AliasSearchResult {
+        AliasSearchResult {
+            entity: entity(id, name, ty),
+            match_kind: kind,
+            score,
+        }
+    }
+
+    #[test]
+    fn empty_results_resolve_to_none() {
+        assert!(pick_resolution(&[]).is_none());
+    }
+
+    #[test]
+    fn exact_name_always_resolves() {
+        let r = result(1, "Rome", EntityType::Place, MatchKind::ExactName, 1.0);
+        assert_eq!(pick_resolution(&[r]).map(|e| e.id), Some(1));
+    }
+
+    #[test]
+    fn exact_alias_always_resolves() {
+        let r = result(
+            1,
+            "John Smith",
+            EntityType::Person,
+            MatchKind::ExactAlias,
+            1.1,
+        );
+        assert_eq!(pick_resolution(&[r]).map(|e| e.id), Some(1));
+    }
+
+    #[test]
+    fn alias_outranks_exact_name() {
+        // Sorted by score desc: alias (1.1) precedes exact name (1.0).
+        let alias = result(
+            1,
+            "John Smith",
+            EntityType::Person,
+            MatchKind::ExactAlias,
+            1.1,
+        );
+        let exact = result(
+            2,
+            "John Smith",
+            EntityType::Person,
+            MatchKind::ExactName,
+            1.0,
+        );
+        assert_eq!(pick_resolution(&[alias, exact]).map(|e| e.id), Some(1));
+    }
+
+    #[test]
+    fn fuzzy_above_threshold_resolves() {
+        let r = result(1, "John Smith", EntityType::Person, MatchKind::Fuzzy, 0.95);
+        assert_eq!(pick_resolution(&[r]).map(|e| e.id), Some(1));
+    }
+
+    #[test]
+    fn fuzzy_at_threshold_resolves() {
+        let r = result(
+            1,
+            "John Smith",
+            EntityType::Person,
+            MatchKind::Fuzzy,
+            FUZZY_RESOLVE_THRESHOLD,
+        );
+        assert_eq!(pick_resolution(&[r]).map(|e| e.id), Some(1));
+    }
+
+    #[test]
+    fn fuzzy_below_threshold_resolves_to_none() {
+        let r = result(1, "John Smith", EntityType::Person, MatchKind::Fuzzy, 0.85);
+        assert!(pick_resolution(&[r]).is_none());
+    }
+
+    #[test]
+    fn exact_name_outranks_fuzzy_at_equal_score() {
+        // get_by_name pushes exact-name before fuzzy; at equal score the stable
+        // sort keeps that order, so exact name wins.
+        let exact = result(1, "Auckland", EntityType::Place, MatchKind::ExactName, 1.0);
+        let fuzzy = result(
+            2,
+            "University of Auckland",
+            EntityType::Place,
+            MatchKind::Fuzzy,
+            1.0,
+        );
+        assert_eq!(pick_resolution(&[exact, fuzzy]).map(|e| e.id), Some(1));
+    }
+
+    #[test]
+    fn alias_wins_over_below_threshold_fuzzy() {
+        let alias = result(
+            1,
+            "John Smith",
+            EntityType::Person,
+            MatchKind::ExactAlias,
+            1.1,
+        );
+        let fuzzy = result(3, "Jon Smith", EntityType::Person, MatchKind::Fuzzy, 0.6);
+        assert_eq!(pick_resolution(&[alias, fuzzy]).map(|e| e.id), Some(1));
+    }
 }

@@ -31,7 +31,8 @@ User message
         predicate canonicalisation + list splitting
         + parse LLM string fields → NormalizedFact       [extract.rs]
     → normalize_and_insert(kg, Vec<NormalizedFact>, Provenance)   [normalize.rs]
-        → entity resolution (exact → create; FTS5/alias chain is F5/#182)
+        → entity resolution (exact name → alias → FTS5 fuzzy ≥ 0.9 → create new,
+           restricted to the requested entity type; Phase 3 F5 / #182)
         → confidence = confidence::initial(source_type, connector_type)
         → correction handling (temporal or retrospective)
         → sensitive gate (Disputed + pending_confirmation)
@@ -149,9 +150,23 @@ The extraction prompt defines role, schema, classification criteria, and a softe
 
 ## Entity Resolution
 
-1. Search by name via `queries::entity::get_by_name` (exact → alias → FTS5 fuzzy).
-2. If found, use the existing entity ID.
-3. If not found, create a new entity with the LLM-provided type.
+1. Search by name via `queries::entity::get_by_name_typed` (exact name → exact
+   alias → FTS5 fuzzy), restricted to entities of the LLM-provided
+   `subject_type` / `object_type`. Cross-type matches are dropped so a name
+   like "Apple" resolved as a `Concept` never merges into the `Organization`
+   "Apple Inc".
+2. Apply the resolution policy (`pick_resolution`): an exact-name or
+   exact-alias hit always resolves to the existing entity; a fuzzy hit resolves
+   only when its normalised score is ≥ `FUZZY_RESOLVE_THRESHOLD` (0.9), otherwise
+   it is treated as a miss. Results are sorted by score descending (alias 1.1 >
+   exact name 1.0 ≥ fuzzy), so only the best same-type candidate is inspected.
+3. If no candidate resolves, create a new entity with the LLM-provided type.
+
+> **Phase 3 F5 / #182:** the chain is shared by chat extraction and connector
+> ingestion. Entity names are globally unique (case-insensitive) by schema, so
+> the cross-type guard matters for token-overlap / fuzzy matches rather than
+> identical names. Alias creation stays explicit via `preferred_name`; fuzzy
+> resolution does not auto-learn aliases.
 
 ## Confidence Assignment
 

@@ -326,3 +326,184 @@ async fn sensitive_fact_persists_its_catalogue_categories() {
         categories
     );
 }
+
+// ---------------------------------------------------------------------------
+// Entity resolution chain (Phase 3 F5 / issue #182)
+//
+// End-to-end resolution through `normalize_and_insert`: exact name → alias →
+// FTS5 fuzzy (>= threshold) → create new, with strict same-type filtering.
+// The pure decision policy (threshold boundary) is unit-tested in
+// `normalize::resolution_tests`; these integration tests cover the real
+// resolve path against the SQLite FTS5 index.
+//
+// FTS5 bm25 IDF is corpus-sensitive: a query token that appears in most/all
+// documents scores ~0 and is filtered out by the `rank <= -0.2` gate. The fuzzy
+// tests therefore seed a handful of distractor entities so query tokens have a
+// positive IDF — mirroring a real, populated knowledge graph.
+// ---------------------------------------------------------------------------
+
+/// Build a simple subject-fact with a literal object so only the subject name
+/// is resolved. `favourite_colour` is seeded and stays non-sensitive.
+fn subject_fact(subject: &str, subject_type: EntityType, object: &str) -> NormalizedFact {
+    NormalizedFact {
+        source_type: SourceType::Interaction,
+        subject: subject.to_string(),
+        subject_type,
+        relationship_type: "favourite_colour".to_string(),
+        object: object.to_string(),
+        object_is_entity: false,
+        object_type: None,
+        valid_from: None,
+        valid_until: None,
+        is_sensitive: false,
+        is_correction: false,
+        correction_scope: None,
+        category_ids: Vec::new(),
+        recurrence: RecurrenceType::None,
+        requires_user_action: false,
+        raw_reference: None,
+    }
+}
+
+/// Seed unrelated entities so FTS5 query tokens get a positive IDF. Without
+/// these, a token present in the only indexed document has IDF ≈ 0 and the
+/// `rank <= -0.2` gate suppresses the fuzzy match.
+async fn seed_distractors(kg: &KnowledgeGraph) {
+    for name in [
+        "Berlin", "Tokyo", "Madrid", "Vienna", "Prague", "Boston", "Seattle", "Dublin",
+    ] {
+        kg.create_entity(name, EntityType::Place, &[])
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn create_on_miss_creates_new_entity() {
+    let (kg, _dir) = fresh_kg().await;
+
+    let outcome = normalize_and_insert(
+        &kg,
+        vec![subject_fact("Ada Lovelace", EntityType::Person, "blue")],
+        Provenance::chat(ExtractionMethod::LlmExtraction),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.inserted.len(), 1);
+    let new_id = outcome.inserted[0].subject_id;
+    let entity = kg.get_entity(new_id).await.unwrap().unwrap();
+    assert_eq!(entity.name, "Ada Lovelace");
+    assert_eq!(entity.entity_type_id, EntityType::Person as i16);
+}
+
+#[tokio::test]
+async fn exact_name_resolves_to_existing_entity() {
+    let (kg, _dir) = fresh_kg().await;
+    let canonical = kg
+        .create_entity("Ada Lovelace", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let outcome = normalize_and_insert(
+        &kg,
+        vec![subject_fact("Ada Lovelace", EntityType::Person, "green")],
+        Provenance::chat(ExtractionMethod::LlmExtraction),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.inserted.len(), 1);
+    assert_eq!(outcome.inserted[0].subject_id, canonical.id);
+    // No duplicate entity was created.
+    let search = kg.search_entities("Ada Lovelace", 10).await.unwrap();
+    let matching: Vec<_> = search
+        .iter()
+        .filter(|r| r.entity.name == "Ada Lovelace")
+        .collect();
+    assert_eq!(matching.len(), 1, "expected a single canonical entity");
+}
+
+#[tokio::test]
+async fn alias_match_resolves_to_existing_entity() {
+    let (kg, _dir) = fresh_kg().await;
+    let canonical = kg
+        .create_entity("John Smith", EntityType::Person, &["J. Smith"])
+        .await
+        .unwrap();
+
+    let outcome = normalize_and_insert(
+        &kg,
+        vec![subject_fact("J. Smith", EntityType::Person, "red")],
+        Provenance::chat(ExtractionMethod::LlmExtraction),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.inserted.len(), 1);
+    assert_eq!(
+        outcome.inserted[0].subject_id, canonical.id,
+        "alias 'J. Smith' should resolve to the canonical 'John Smith' entity"
+    );
+}
+
+#[tokio::test]
+async fn fts5_fuzzy_match_resolves_to_existing_entity() {
+    let (kg, _dir) = fresh_kg().await;
+    seed_distractors(&kg).await;
+    // Canonical name is multi-token; a single-token query that is *not* an
+    // exact name or alias exercises the FTS5 fuzzy branch. With distractors
+    // seeded, "John" has a positive IDF and scores 1.0 (>= 0.9 threshold).
+    let canonical = kg
+        .create_entity("John Smith", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let outcome = normalize_and_insert(
+        &kg,
+        vec![subject_fact("John", EntityType::Person, "yellow")],
+        Provenance::chat(ExtractionMethod::LlmExtraction),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.inserted.len(), 1);
+    assert_eq!(
+        outcome.inserted[0].subject_id, canonical.id,
+        "fuzzy query 'John' should resolve to 'John Smith'"
+    );
+}
+
+#[tokio::test]
+async fn cross_type_fuzzy_match_creates_new_entity() {
+    let (kg, _dir) = fresh_kg().await;
+    seed_distractors(&kg).await;
+    // "Apple" is a token in the Organization "Apple Inc". Resolving "Apple" as
+    // a Concept must NOT merge into the cross-type Organization: strict
+    // same-type filtering drops the fuzzy hit and a new Concept entity is
+    // created instead. (Entity names are globally unique by LOWER(name), so
+    // the cross-type guard matters for token-overlap/fuzzy matches, not for
+    // identical names which cannot coexist anyway.)
+    let org = kg
+        .create_entity("Apple Inc", EntityType::Organization, &[])
+        .await
+        .unwrap();
+
+    let outcome = normalize_and_insert(
+        &kg,
+        vec![subject_fact("Apple", EntityType::Concept, "crisp")],
+        Provenance::chat(ExtractionMethod::LlmExtraction),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.inserted.len(), 1);
+    let concept_id = outcome.inserted[0].subject_id;
+    assert_ne!(
+        concept_id, org.id,
+        "Concept query must not fuzzy-resolve into a cross-type Organization"
+    );
+    let concept = kg.get_entity(concept_id).await.unwrap().unwrap();
+    assert_eq!(concept.name, "Apple");
+    assert_eq!(concept.entity_type_id, EntityType::Concept as i16);
+}

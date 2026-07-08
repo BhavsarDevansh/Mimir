@@ -58,7 +58,7 @@ fact is `Active` (or awaiting confirmation):
 
 The corroboration path runs **before** supersession, so an explicit statement
 still supersedes rather than corroborates. A re-statement from an identical
-source (`(source_type, connector_id, raw_reference)` already recorded) is a
+source (`(source_type, connector_instance_id, raw_reference)` already recorded) is a
 **no-op** — it is not an independent source and would collide with the
 `sources` UNIQUE index. Non-overlapping temporal ranges never corroborate;
 they form a timeline of separate facts.

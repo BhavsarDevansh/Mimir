@@ -34,7 +34,7 @@ use crate::inference::rules::contradiction::ContradictionRule;
 use crate::inference::rules::threshold::{RELATIONSHIP_TYPE_REJECTED_ACTION, ThresholdRule};
 use crate::inference::rules::transitivity::TransitivityRule;
 use crate::inference::{CascadeContext, RuleEngine};
-use crate::models::enums::RelationType;
+use crate::models::enums::{ConnectorType, RelationType};
 use crate::models::fact::{FactStatus, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
 
@@ -1209,28 +1209,81 @@ impl KnowledgeGraph {
                 new_fact.object_literal.clone(),
             );
 
-            // Determine confidence.
+            // Connector provenance validation — always enforced when
+            // connector_instance_id is set, independent of whether confidence is
+            // supplied explicitly. A registered connector instance is the identity:
+            // require raw_reference and extraction_method, resolve the instance, and
+            // enforce that the denormalised connector_type (if supplied) matches the
+            // instance's registered type — or derive it from the instance when
+            // omitted. Returns the connector-derived confidence score for use when
+            // confidence is not supplied explicitly.
+            let connector_confidence: Option<f32> = if let Some(instance_id) =
+                new_fact.connector_instance_id
+            {
+                if new_fact.raw_reference.is_none() || new_fact.extraction_method.is_none() {
+                    return Err(KnowledgeError::Validation(
+                            "Connector provenance requires connector_instance_id, raw_reference, and extraction_method"
+                                .to_string(),
+                        ));
+                }
+                let instance_type_id: Option<i16> =
+                    sqlx::query_scalar("SELECT connector_type_id FROM connectors WHERE id = ?")
+                        .bind(instance_id)
+                        .fetch_optional(&self.pool)
+                        .await?;
+                let instance_type_id = instance_type_id.ok_or_else(|| {
+                    KnowledgeError::Validation(format!(
+                        "connector instance {instance_id} not found"
+                    ))
+                })?;
+                if let Some(ct) = new_fact.connector_type {
+                    if (ct as i16) != instance_type_id {
+                        return Err(KnowledgeError::Validation(format!(
+                            "connector_instance_id {instance_id} has type {instance_type_id} but connector_type was supplied as {}",
+                            ct as i16
+                        )));
+                    }
+                } else {
+                    // Derive the denormalised connector_type from the instance.
+                    // If the instance's type id is outside the seeded ConnectorType
+                    // enum (e.g. a connector_types row added before the enum was
+                    // extended), surface a validation error rather than panicking.
+                    new_fact.connector_type = match ConnectorType::try_from(instance_type_id) {
+                        Ok(ct) => Some(ct),
+                        Err(()) => {
+                            return Err(KnowledgeError::Validation(format!(
+                                "connector_instance_id {instance_id} has unknown connector_type_id {instance_type_id}"
+                            )));
+                        }
+                    };
+                }
+                let resolved_ct = new_fact.connector_type.ok_or_else(|| {
+                        KnowledgeError::Validation(format!(
+                            "connector_instance_id {instance_id} has unknown connector_type_id {instance_type_id}"
+                        ))
+                    })?;
+                let db_score: Option<f32> = sqlx::query_scalar(
+                    "SELECT score FROM connector_reliability WHERE connector_type_id = ?",
+                )
+                .bind(instance_type_id)
+                .fetch_optional(&self.pool)
+                .await?;
+                Some(db_score.unwrap_or_else(|| confidence::default_connector_score(resolved_ct)))
+            } else {
+                None
+            };
+
+            // Determine confidence. Explicit confidence takes precedence, then
+            // inferred facts, then the connector-derived score, then the default
+            // initial score for the source type. Connector provenance validation
+            // above always runs when connector_instance_id is set, so an explicit
+            // confidence can no longer bypass it.
             let confidence = if let Some(conf) = new_fact.confidence {
                 conf
             } else if new_fact.inferred {
                 confidence::initial(SourceType::Inference, None)
-            } else if let Some(ct) = new_fact.connector_type {
-                if new_fact.connector_id.is_none()
-                    || new_fact.raw_reference.is_none()
-                    || new_fact.extraction_method.is_none()
-                {
-                    return Err(KnowledgeError::Validation(
-                        "Connector provenance requires connector_id, raw_reference, and extraction_method"
-                            .to_string(),
-                    ));
-                }
-                let db_score: Option<f32> = sqlx::query_scalar(
-                    "SELECT score FROM connector_reliability WHERE connector_type_id = ?",
-                )
-                .bind(ct as i16)
-                .fetch_optional(&self.pool)
-                .await?;
-                db_score.unwrap_or_else(|| confidence::default_connector_score(ct))
+            } else if let Some(score) = connector_confidence {
+                score
             } else {
                 confidence::initial(new_fact.source_type, None)
             };
@@ -1635,7 +1688,7 @@ impl KnowledgeGraph {
         let input = queries::source::SourceInput {
             fact_id: request.fact_id,
             source_type_id: request.source_type as i16,
-            connector_id: request.connector_id,
+            connector_instance_id: request.connector_instance_id,
             connector_type_id: request.connector_type.map(|c| c as i16),
             raw_reference: request.raw_reference,
             extraction_method_id: request.extraction_method.map(|e| e as i16),

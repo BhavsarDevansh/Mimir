@@ -197,6 +197,20 @@ pub enum ConnectorStatus {
     Error = 4,
 }
 
+impl TryFrom<i16> for ConnectorType {
+    type Error = ();
+
+    fn try_from(value: i16) -> Result<Self, ()> {
+        match value {
+            x if x == Self::Gmail as i16 => Ok(Self::Gmail),
+            x if x == Self::Calendar as i16 => Ok(Self::Calendar),
+            x if x == Self::Photos as i16 => Ok(Self::Photos),
+            x if x == Self::LinkedIn as i16 => Ok(Self::LinkedIn),
+            _ => Err(()),
+        }
+    }
+}
+
 impl TryFrom<i16> for ConnectorStatus {
     type Error = ();
 

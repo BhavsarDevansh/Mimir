@@ -371,7 +371,7 @@ pub async fn kb_show_handler(
         .into_iter()
         .map(|s| SourceRow {
             source_type: source_type_name(s.source_type_id),
-            connector_id: s.connector_id,
+            connector_instance_id: s.connector_instance_id,
             raw_reference: s.raw_reference,
             extracted_at: s.extracted_at.to_rfc3339(),
         })

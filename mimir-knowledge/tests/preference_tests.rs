@@ -31,7 +31,7 @@ async fn create_has_preference_fact(kg: &KnowledgeGraph, subject_id: i32) -> i32
             valid_from: None,
             valid_until: None,
             source_type: SourceType::UserEdit,
-            connector_id: None,
+            connector_instance_id: None,
             connector_type: None,
             raw_reference: None,
             extraction_method: None,

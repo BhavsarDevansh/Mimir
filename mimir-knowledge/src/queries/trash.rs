@@ -328,11 +328,11 @@ async fn restore_payload_no_deps(
 
     for source in &payload.sources {
         sqlx::query(
-            "INSERT INTO sources              (fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id)              VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sources              (fact_id, source_type_id, connector_instance_id, connector_type_id, raw_reference, extracted_at, extraction_method_id)              VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(new_fact_id)
         .bind(source.source_type_id)
-        .bind(&source.connector_id)
+        .bind(source.connector_instance_id)
         .bind(source.connector_type_id)
         .bind(&source.raw_reference)
         .bind(source.extracted_at)

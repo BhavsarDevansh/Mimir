@@ -51,8 +51,8 @@ async fn deterministic_dedup_merges_identical_fact_triples() {
     .unwrap();
     sqlx::query(
         "INSERT INTO sources \
-         (fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
-         VALUES (?, ?, '', NULL, '', ?, NULL)",
+         (fact_id, source_type_id, connector_instance_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
+         VALUES (?, ?, NULL, NULL, '', ?, NULL)",
     )
     .bind(second_id)
     .bind(SourceType::Import as i16)

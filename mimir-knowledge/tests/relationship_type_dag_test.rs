@@ -349,7 +349,7 @@ async fn transactional_fact_insert_resolves_relationship_type_alias() {
         valid_from: None,
         valid_until: None,
         source_type: SourceType::UserEdit,
-        connector_id: None,
+        connector_instance_id: None,
         connector_type: None,
         raw_reference: None,
         extraction_method: None,

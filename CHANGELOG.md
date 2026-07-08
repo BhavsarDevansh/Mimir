@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.64.0] — 2026-07-07
+
+### Phase 3 — Sources provenance FK migration (issue #180 / F3)
+
+Migrate `sources.connector_id TEXT` to
+`connector_instance_id INTEGER REFERENCES connectors(id)`, so every fact's
+connector provenance points at a registered connector instance instead of a
+free-form string label. `connector_type_id` is retained (denormalised) so the
+confidence model can read the connector kind without a join.
+
+- **Migration `043_sources_connector_instance_fk.sql`** rebuilds the `sources`
+  table (SQLite cannot change a column type in place). It is lossless for
+  existing DBs: legacy `sources.connector_id` values were already limited to
+  `NULL` or `''` (the insert paths differ — `queries/source.rs` normalised a
+  missing connector to `''`, `queries/fact.rs` bound `NULL`), and both map to
+  `connector_instance_id IS NULL`. The NULL-aware unique index is
+  rebuilt as `(fact_id, source_type_id, COALESCE(connector_instance_id, 0),
+  COALESCE(raw_reference, ''))` (`0` is a safe sentinel since autoincrement ids
+  start at `1`), plus a new `idx_sources_instance` index for item-count queries.
+- **Rust model:** `Source.connector_instance_id: Option<i32>` and
+  `NewFact.connector_instance_id: Option<i32>` replace the old `Option<String>`
+  labels. Every insert site (`extract.rs`, the corroboration + `insert_fact_in_tx`
+  paths in `queries/fact.rs`, `queries/trash.rs` restore, `optimization/mod.rs`
+  dedup-merge), the `SourceInput`/`AddSourceRequest` facade, and the public
+  `SourceRow` wire type (`connector_instance_id: Option<i32>`) were updated.
+- **Validation gate:** `insert_fact` now keys connector provenance off
+  `connector_instance_id` rather than `connector_type`. When set it requires
+  `raw_reference` and `extraction_method`, resolves the instance, and enforces
+  consistency — a supplied `connector_type` must match the instance's registered
+  `connector_type_id` (else `KnowledgeError::Validation`), or it is derived from
+  the instance when omitted. An unregistered instance id is rejected. This
+  provenance validation always runs when `connector_instance_id` is set,
+  independent of whether `confidence` is supplied explicitly, so an explicit
+  confidence can no longer bypass the `raw_reference`/`extraction_method`
+  requirement or the `connector_type` consistency check.
+- **Forget filter:** `forget --source <slug>` now matches `connectors.slug` via
+  subquery (plus the existing `source_types.name` arm), since the column is no
+  longer a free-form string.
+- **Item counts** are now derivable via
+  `SELECT COUNT(*) FROM sources WHERE connector_instance_id = ?`, closing the
+  acceptance deferred from #179.
+
 ## [0.63.0] — 2026-07-07
 
 ### Phase 3 — Connector instance registry (issue #179 / F2)

@@ -12,7 +12,7 @@ use crate::models::source::Source;
 pub struct SourceInput {
     pub fact_id: i32,
     pub source_type_id: i16,
-    pub connector_id: Option<String>,
+    pub connector_instance_id: Option<i32>,
     pub connector_type_id: Option<i16>,
     pub raw_reference: Option<String>,
     pub extraction_method_id: Option<i16>,
@@ -22,30 +22,31 @@ pub struct SourceInput {
 pub struct AddSourceRequest {
     pub fact_id: i32,
     pub source_type: crate::models::source::SourceType,
-    pub connector_id: Option<String>,
+    pub connector_instance_id: Option<i32>,
     pub connector_type: Option<crate::models::enums::ConnectorType>,
     pub raw_reference: Option<String>,
     pub extraction_method: Option<crate::models::source::ExtractionMethod>,
     pub changed_by: crate::models::audit_log::ChangedBy,
 }
+
 /// Insert a source row for a fact.
 pub async fn insert_source(
     pool: &SqlitePool,
     input: &SourceInput,
     extracted_at: DateTime<Utc>,
 ) -> Result<Source, KnowledgeError> {
-    let connector_id_norm = input.connector_id.as_deref().unwrap_or("");
     let raw_reference_norm = input.raw_reference.as_deref().unwrap_or("");
 
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO sources \
-         (fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
+         (fact_id, source_type_id, connector_instance_id, connector_type_id, raw_reference, \
+         extracted_at, extraction_method_id) \
          VALUES (?, ?, ?, ?, ?, ?, ?) \
          RETURNING id",
     )
     .bind(input.fact_id)
     .bind(input.source_type_id)
-    .bind(connector_id_norm)
+    .bind(input.connector_instance_id)
     .bind(input.connector_type_id)
     .bind(raw_reference_norm)
     .bind(extracted_at)
@@ -54,9 +55,8 @@ pub async fn insert_source(
     .await?;
 
     let source = sqlx::query_as::<_, Source>(
-        "SELECT id, fact_id, source_type_id, connector_id, connector_type_id, raw_reference, \
-         extracted_at, extraction_method_id \
-         FROM sources WHERE id = ?",
+        "SELECT id, fact_id, source_type_id, connector_instance_id, connector_type_id, \
+         raw_reference, extracted_at, extraction_method_id FROM sources WHERE id = ?",
     )
     .bind(id)
     .fetch_one(pool)
@@ -71,9 +71,8 @@ pub async fn get_sources_for_fact(
     fact_id: i32,
 ) -> Result<Vec<Source>, KnowledgeError> {
     let sources: Vec<Source> = sqlx::query_as::<_, Source>(
-        "SELECT id, fact_id, source_type_id, connector_id, connector_type_id, raw_reference, \
-         extracted_at, extraction_method_id \
-         FROM sources WHERE fact_id = ?",
+        "SELECT id, fact_id, source_type_id, connector_instance_id, connector_type_id, \
+         raw_reference, extracted_at, extraction_method_id FROM sources WHERE fact_id = ?",
     )
     .bind(fact_id)
     .fetch_all(pool)
@@ -91,19 +90,19 @@ pub async fn add_source_to_fact(
 ) -> Result<Source, KnowledgeError> {
     let mut tx = pool.begin().await?;
 
-    let connector_id_norm = input.connector_id.as_deref().unwrap_or("");
     let raw_reference_norm = input.raw_reference.as_deref().unwrap_or("");
     let changed_at = Utc::now();
 
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO sources \
-         (fact_id, source_type_id, connector_id, connector_type_id, raw_reference, extracted_at, extraction_method_id) \
+         (fact_id, source_type_id, connector_instance_id, connector_type_id, raw_reference, \
+         extracted_at, extraction_method_id) \
          VALUES (?, ?, ?, ?, ?, ?, ?) \
          RETURNING id",
     )
     .bind(input.fact_id)
     .bind(input.source_type_id)
-    .bind(connector_id_norm)
+    .bind(input.connector_instance_id)
     .bind(input.connector_type_id)
     .bind(raw_reference_norm)
     .bind(extracted_at)
@@ -112,9 +111,8 @@ pub async fn add_source_to_fact(
     .await?;
 
     let source = sqlx::query_as::<_, Source>(
-        "SELECT id, fact_id, source_type_id, connector_id, connector_type_id, raw_reference, \
-         extracted_at, extraction_method_id \
-         FROM sources WHERE id = ?",
+        "SELECT id, fact_id, source_type_id, connector_instance_id, connector_type_id, \
+         raw_reference, extracted_at, extraction_method_id FROM sources WHERE id = ?",
     )
     .bind(id)
     .fetch_one(&mut *tx)
@@ -122,7 +120,7 @@ pub async fn add_source_to_fact(
 
     let new_value = serde_json::json!({
         "source_type_id": input.source_type_id,
-        "connector_id": connector_id_norm,
+        "connector_instance_id": input.connector_instance_id,
         "connector_type_id": input.connector_type_id,
         "raw_reference": raw_reference_norm,
         "extraction_method_id": input.extraction_method_id,

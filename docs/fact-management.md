@@ -37,10 +37,12 @@ chains can be re-evaluated before removal.
 ### `sources` table
 
 One row per fact (plus any additional sources added via `add_source_to_fact`),
-linking the fact to its `SourceType` with optional `connector_id`,
-`connector_type_id`, `raw_reference`, and `extraction_method_id`.
+linking the fact to its `SourceType` with optional `connector_instance_id`
+(FK to `connectors(id)`), `connector_type_id`, `raw_reference`, and
+`extraction_method_id`.
 
-Unique constraint: `(fact_id, source_type_id, connector_id, raw_reference)`.
+Unique constraint: `(fact_id, source_type_id, connector_instance_id, raw_reference)`
+(NULLs coerced via `COALESCE`).
 
 ### `fact_audit_log` table
 

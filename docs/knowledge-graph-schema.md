@@ -46,7 +46,7 @@ Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `0
 | `facts` | Directed temporal edges between entities |
 | `events` | Lifecycle + recurrence overlay on facts (trigger date, recurrence, status, auto-complete policy); see Events & Reminders |
 | `fact_dependencies` | Junction table linking inferred facts to parents |
-| `sources` | Provenance for every fact (with `connector_id`, `connector_type_id`, `raw_reference`, `extraction_method_id`) |
+| `sources` | Provenance for every fact (with `connector_instance_id` FK to `connectors(id)`, `connector_type_id`, `raw_reference`, `extraction_method_id`) |
 | `preferences` | Learned user preferences with confidence, source_fact_id, and contextual lookup |
 | `preference_contexts` | Normalized context conditions for preferences (no JSON) |
 | `preference_sources` | Provenance for preference values |

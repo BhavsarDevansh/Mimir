@@ -35,6 +35,17 @@ a new factory — no schema change. No concrete backends sync yet.
   `confidence::initial(SourceType::Connector, connector_type)`, keyed on the
   type axis only; the registry never branches reliability on `backend`.
 
+### Review fixes (PR #215)
+
+- **deps:** Removed redundant `async-trait` and `chrono` re-declarations from
+  `mimir-connectors` `[dev-dependencies]` (both are already regular
+  dependencies and thus available to integration tests) — DRY.
+- **registry:** Poisoned-`RwLock` handling is now consistent across every
+  accessor: all read/write acquisitions go through private `read`/`write`
+  helpers that `.expect` on poison, matching the `ToolRegistry` convention.
+  Previously the write-side methods surfaced poison as
+  `ConnectorError::Other` while read-side methods silently returned
+  empty/false/`None`, which could report contradictory state after a panic.
 ## [0.67.1] — 2026-07-08
 
 ### Review fixes (PR #214)

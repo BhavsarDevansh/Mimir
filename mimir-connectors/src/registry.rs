@@ -24,6 +24,14 @@
 //! and queried concurrently at runtime. `register` fails loud on a duplicate
 //! `(type, backend)` to surface accidental re-registration rather than
 //! silently shadowing a previously-registered backend.
+//!
+//! # Poison handling
+//!
+//! A poisoned `RwLock` means a task panicked while holding the write lock — the
+//! map may be partially mutated and the state is unrecoverable. Every accessor
+//! therefore propagates poison by panicking (via private `read`/`write` helpers
+//! that `.expect`), matching the workspace `ToolRegistry` convention, so the
+//! registry never reports contradictory state after a panic.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -49,11 +57,7 @@ impl std::fmt::Debug for ConnectorRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `dyn ConnectorFactory` is not `Debug`, so report the registered
         // (type, backend) keys rather than recursing into the trait objects.
-        let keys = self
-            .factories
-            .read()
-            .map(|guard| guard.keys().cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
+        let keys = self.read().keys().cloned().collect::<Vec<_>>();
         f.debug_struct("ConnectorRegistry")
             .field("len", &keys.len())
             .field("entries", &keys)
@@ -75,9 +79,34 @@ impl ConnectorRegistry {
         }
     }
 
+    /// Acquire a read lock, panicking on poison.
+    ///
+    /// Poison means a task panicked mid-write, leaving potentially
+    /// partially-mutated state — unrecoverable, so it is propagated rather
+    /// than silently degraded. This keeps every accessor consistent: none
+    /// report contradictory (e.g. "empty yet locked") state after a panic.
+    fn read(
+        &self,
+    ) -> std::sync::RwLockReadGuard<'_, HashMap<(ConnectorType, String), Arc<dyn ConnectorFactory>>>
+    {
+        self.factories
+            .read()
+            .expect("ConnectorRegistry lock poisoned")
+    }
+
+    /// Acquire a write lock, panicking on poison (see [`read`](Self::read)).
+    fn write(
+        &self,
+    ) -> std::sync::RwLockWriteGuard<'_, HashMap<(ConnectorType, String), Arc<dyn ConnectorFactory>>>
+    {
+        self.factories
+            .write()
+            .expect("ConnectorRegistry lock poisoned")
+    }
+
     /// Number of registered `(type, backend)` factories.
     pub fn len(&self) -> usize {
-        self.factories.read().map(|g| g.len()).unwrap_or(0)
+        self.read().len()
     }
 
     /// Whether no factories are registered.
@@ -118,10 +147,7 @@ impl ConnectorRegistry {
     ) -> Result<(), ConnectorError> {
         let backend = backend.into();
         let key = (connector_type, backend.clone());
-        let mut guard = self
-            .factories
-            .write()
-            .map_err(|_| ConnectorError::Other("registry lock poisoned".to_string()))?;
+        let mut guard = self.write();
         if guard.contains_key(&key) {
             return Err(ConnectorError::BackendAlreadyRegistered {
                 connector_type,
@@ -134,10 +160,8 @@ impl ConnectorRegistry {
 
     /// Whether a factory is registered for the given `(type, backend)`.
     pub fn is_registered(&self, connector_type: ConnectorType, backend: &str) -> bool {
-        self.factories
-            .read()
-            .map(|g| g.contains_key(&(connector_type, backend.to_string())))
-            .unwrap_or(false)
+        self.read()
+            .contains_key(&(connector_type, backend.to_string()))
     }
 
     /// Clone out the factory registered for `(type, backend)`, if any.
@@ -146,40 +170,29 @@ impl ConnectorRegistry {
         connector_type: ConnectorType,
         backend: &str,
     ) -> Option<Arc<dyn ConnectorFactory>> {
-        self.factories
-            .read()
-            .ok()
-            .and_then(|g| g.get(&(connector_type, backend.to_string())).cloned())
+        self.read()
+            .get(&(connector_type, backend.to_string()))
+            .cloned()
     }
 
     /// List the backend names registered under a connector type, in arbitrary
     /// order. Useful for the `connector add` flow's backend discovery.
     pub fn backends_for(&self, connector_type: ConnectorType) -> Vec<String> {
-        self.factories
-            .read()
-            .ok()
-            .map(|g| {
-                g.keys()
-                    .filter(|(ct, _)| *ct == connector_type)
-                    .map(|(_, b)| b.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
+        self.read()
+            .keys()
+            .filter(|(ct, _)| *ct == connector_type)
+            .map(|(_, b)| b.clone())
+            .collect::<Vec<_>>()
     }
 
     /// All connector types that have at least one registered backend.
     pub fn registered_types(&self) -> Vec<ConnectorType> {
-        self.factories
-            .read()
-            .ok()
-            .map(|g| {
-                g.keys()
-                    .map(|(ct, _)| *ct)
-                    .collect::<HashSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
+        self.read()
+            .keys()
+            .map(|(ct, _)| *ct)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
     }
 
     /// Construct a connector instance for `(type, backend)` from its config.
@@ -199,9 +212,7 @@ impl ConnectorRegistry {
         let backend = backend.to_string();
         let key = (connector_type, backend.clone());
         let factory = self
-            .factories
             .read()
-            .map_err(|_| ConnectorError::Other("registry lock poisoned".to_string()))?
             .get(&key)
             .cloned()
             .ok_or(ConnectorError::BackendNotFound {

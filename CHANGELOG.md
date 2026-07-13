@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.69.2] — 2026-07-13
+
+### Review fixes for PR #216 (CodeRabbit)
+
+- **Docs:** clarified the shutdown integration boundary in
+  `docs/wiki/connectors.md` and `docs/wiki/what-works-now.md` — the supervisor
+  supports the shared `watch` shutdown channel, but `mimir stop` does not yet
+  drive it (daemon/CLI wiring is deferred to later Phase 3 issues).
+- **`mimir-connectors`:** de-duplicated the `CycleResult::Err` and
+  `CycleResult::Panic` failure handling into a shared `record_failure` async
+  helper so the circuit-breaker / backoff policy cannot drift between the
+  sync-error and panic paths.
+- **Tests:** `none_cursor_preserves_existing_sync_cursor` now captures the
+  seeded `last_sync_at` and waits for it to advance (not merely exist),
+  ensuring the poll observes a completed `None`-cursor cycle rather than the
+  pre-existing row state.
+
 ## [0.69.1] — 2026-07-13
 
 ### Bugfix — None sync cursor no longer wipes persisted progress token

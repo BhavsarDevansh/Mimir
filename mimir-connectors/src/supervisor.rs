@@ -359,24 +359,10 @@ async fn run_connector(
             CycleResult::Err(message) => {
                 failures += 1;
                 warn!(connector_id = instance_id, failures, error = %message, "connector cycle failed");
-                if failures >= config.max_failures {
-                    let _ = kg
-                        .set_connector_status(
-                            instance_id,
-                            ConnectorStatus::Error,
-                            Some(Some(message)),
-                        )
-                        .await;
-                    info!(
-                        connector_id = instance_id,
-                        failures, "circuit breaker tripped; connector moved to Error"
-                    );
+                if record_failure(&kg, instance_id, failures, config, &message, &mut shutdown).await
+                {
                     return;
                 }
-                let _ = kg
-                    .set_connector_status(instance_id, ConnectorStatus::Active, Some(Some(message)))
-                    .await;
-                backoff_sleep(config, failures, &mut shutdown).await;
                 continue;
             }
             CycleResult::Panic => {
@@ -386,24 +372,10 @@ async fn run_connector(
                     connector_id = instance_id,
                     failures, "connector cycle panicked"
                 );
-                if failures >= config.max_failures {
-                    let _ = kg
-                        .set_connector_status(
-                            instance_id,
-                            ConnectorStatus::Error,
-                            Some(Some(message)),
-                        )
-                        .await;
-                    info!(
-                        connector_id = instance_id,
-                        failures, "circuit breaker tripped after panic; connector moved to Error"
-                    );
+                if record_failure(&kg, instance_id, failures, config, &message, &mut shutdown).await
+                {
                     return;
                 }
-                let _ = kg
-                    .set_connector_status(instance_id, ConnectorStatus::Active, Some(Some(message)))
-                    .await;
-                backoff_sleep(config, failures, &mut shutdown).await;
                 continue;
             }
             CycleResult::Cancelled => {
@@ -432,6 +404,46 @@ async fn run_connector(
         connector_id = instance_id,
         "connector runner exited on shutdown"
     );
+}
+
+/// Record a cycle failure: persist `last_error` as `Active`, apply exponential
+/// backoff, and trip the circuit breaker once `failures` reaches `max_failures`.
+///
+/// Shared by the [`CycleResult::Err`] and [`CycleResult::Panic`] arms so the
+/// breaker / backoff policy cannot drift between the sync-error and panic paths.
+/// Returns `true` when the breaker has tripped (the caller should `return`);
+/// `false` after backoff (the caller should `continue`).
+async fn record_failure(
+    kg: &KnowledgeGraph,
+    instance_id: i32,
+    failures: u32,
+    config: SupervisorConfig,
+    message: &str,
+    shutdown: &mut watch::Receiver<bool>,
+) -> bool {
+    if failures >= config.max_failures {
+        let _ = kg
+            .set_connector_status(
+                instance_id,
+                ConnectorStatus::Error,
+                Some(Some(message.to_string())),
+            )
+            .await;
+        info!(
+            connector_id = instance_id,
+            failures, "circuit breaker tripped; connector moved to Error"
+        );
+        return true;
+    }
+    let _ = kg
+        .set_connector_status(
+            instance_id,
+            ConnectorStatus::Active,
+            Some(Some(message.to_string())),
+        )
+        .await;
+    backoff_sleep(config, failures, shutdown).await;
+    false
 }
 
 /// A single ingestion cycle, isolated in its own task for panic containment.

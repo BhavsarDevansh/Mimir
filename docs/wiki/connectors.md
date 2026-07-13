@@ -57,11 +57,12 @@ status is `Active`, and centralises everything needed to keep a connector
 running safely: spawn on startup, exponential backoff and restart on a failed
 sync or a task panic, a circuit breaker that moves a connector to `Error`
 after repeated consecutive failures (so it does not hot-loop), pausing when the
-service reports expired auth, graceful shutdown on `mimir stop`, and
-persistence of each connector's sync cursor so a restart resumes from where
+service reports expired auth, graceful shutdown over a shared `watch` channel,
+and persistence of each connector's sync cursor, so a restart resumes from where
 the last completed sync left off. `Paused`, `Error`, and `Setup` connectors are
 not auto-started. The supervisor is a library component; daemon and CLI wiring
-arrive in later Phase 3 issues, so no connector syncs data yet.
+arrive in later Phase 3 issues (so `mimir stop` does not yet drive the
+supervisor), and no connector syncs data yet.
 
 **The shared ingestion boundary is in place (issue #181 / F4).** Connectors
 will build `NormalizedFact`s from their items and call

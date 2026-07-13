@@ -373,6 +373,61 @@ async fn shutdown_persists_cursor_and_exits_cleanly() {
 }
 
 // ---------------------------------------------------------------------------
+// None cursor (unchanged) must not wipe persisted progress token
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn none_cursor_preserves_existing_sync_cursor() {
+    let (kg, _dir) = init_kg().await;
+    let mut input = upsert(
+        "nocursor",
+        ConnectorType::Gmail,
+        "test",
+        ConnectorStatus::Active,
+    );
+    // No "cursor" key => TestConnector returns new_cursor: None ("unchanged").
+    input.config_json = with_slug(
+        "nocursor",
+        json!({ "__ctype": ConnectorType::Gmail as i64 }),
+    );
+    let row = kg.upsert_connector(input).await.unwrap();
+    let kg = Arc::new(kg);
+
+    // Seed a pre-existing cursor so we can prove it survives a None-cursor cycle.
+    kg.update_sync_cursor(row.id, Some("seed-token"))
+        .await
+        .unwrap();
+
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = make_supervisor(kg.clone(), test_registry(), rx);
+    supervisor.restore().await.unwrap();
+
+    // Wait for at least one successful sync to stamp last_sync_at, then confirm
+    // the seeded cursor is intact (not wiped to NULL).
+    wait_for_async(
+        || async {
+            kg.get_connector(row.id)
+                .await
+                .unwrap()
+                .map(|c| {
+                    c.sync_cursor.as_deref() == Some("seed-token")
+                        && c.last_sync_at.is_some()
+                        && c.status() == Some(ConnectorStatus::Active)
+                })
+                .unwrap_or(false)
+        },
+        Duration::from_secs(3),
+    )
+    .await;
+
+    tx.send(true).unwrap();
+    supervisor.shutdown().await;
+
+    let after = kg.get_connector(row.id).await.unwrap().unwrap();
+    assert_eq!(after.sync_cursor.as_deref(), Some("seed-token"));
+}
+
+// ---------------------------------------------------------------------------
 // Transient failures → backoff → success resets failure count
 // ---------------------------------------------------------------------------
 

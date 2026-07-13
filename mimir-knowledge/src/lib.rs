@@ -1778,6 +1778,18 @@ impl KnowledgeGraph {
         queries::connector::update_sync_cursor(&self.pool, id, cursor, self.now()).await
     }
 
+    /// Stamp `last_sync_at` **without** rewriting `sync_cursor`.
+    ///
+    /// Use this when a connector reports `SyncOutcome::new_cursor = None`
+    /// (meaning "cursor unchanged") so the persisted progress token is
+    /// preserved while the sync timestamp is still advanced.
+    pub async fn touch_last_sync(
+        &self,
+        id: i32,
+    ) -> Result<models::connector::Connector, KnowledgeError> {
+        queries::connector::touch_last_sync(&self.pool, id, self.now()).await
+    }
+
     /// Transition a connector to a new lifecycle status, optionally touching
     /// `last_error`. See [`queries::connector::set_connector_status`] for the
     /// `error` nullable-update semantics.

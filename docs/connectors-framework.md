@@ -125,7 +125,7 @@ pub trait Connector: Send + Sync {
 |------|---------|
 | `ConnectorMode` | `Polling { interval, jitter }` (supervisor-polled) or `Push` (IMAP IDLE / file watcher). |
 | `SyncOptions` | `full: bool` (ignore cursor) + optional `since: Option<Duration>` time-window hint. The opaque incremental cursor lives in `connectors.sync_cursor`, not here. |
-| `SyncOutcome` | `fetched: u32`, `new_cursor: Option<String>`, `fetched_at: DateTime<Utc>`. |
+| `SyncOutcome` | `fetched: u32`, `new_cursor: Option<String>` (`Some` advances/clears the cursor, `None` = unchanged), `fetched_at: DateTime<Utc>`. |
 | `HealthStatus` | Transient probe: `Online` / `Offline` / `Degraded` / `AuthExpired` / `NotConfigured`. |
 | `ConnectorAction` / `ActionResult` | Write-back request (`kind` + JSON `payload`) and outcome (`success`, `native_id`, `message`). |
 | `ConnectorError` | `thiserror` enum: `Authentication`, `NotAuthenticated`, `Network`, `Config`, `Parse`, `UnsupportedAction`, `Io`, `BackendNotFound`, `BackendAlreadyRegistered`, `Other`. Does not wrap `KnowledgeError` (the connector does not insert). |
@@ -273,8 +273,11 @@ pauses the connector and exits), then loops:
    wins, the cycle's `AbortHandle` cancels the in-flight work and the runner
    exits.
 3. Classify the cycle result and act:
-   - **Ok** — reset the failure count, persist the cursor (`update_sync_cursor`),
-     clear `last_error` (`set_connector_status(Active, Some(None))`).
+   - **Ok** — reset the failure count, persist sync progress, then
+     clear `last_error` (`set_connector_status(Active, Some(None))`). When
+     `new_cursor` is `Some`, the cursor is advanced/cleared via
+     `update_sync_cursor`; when `None` (unchanged), only `last_sync_at` is
+     stamped via `touch_last_sync`, preserving the existing progress token.
    - **Err / Panic** — increment failures, write `last_error` (status stays
      `Active`), exponential backoff; once failures reach `max_failures`, move
      to `Error` and stop auto-restarting (manual `resume` required).
@@ -397,7 +400,7 @@ rule.
 
 `KnowledgeGraph` exposes: `list_connectors`, `get_connector_by_slug`,
 `get_connector` (by id), `upsert_connector`, `update_sync_cursor`,
-`set_connector_status`, and `set_auth_state`.
+`touch_last_sync`, `set_connector_status`, and `set_auth_state`.
 
 - `upsert_connector` is keyed on `slug`. `slug` and `connector_type` are
   immutable identity: on conflict it overwrites the mutable config surface

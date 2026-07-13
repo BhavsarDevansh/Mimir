@@ -145,6 +145,33 @@ pub async fn update_sync_cursor(
     Ok(row)
 }
 
+/// Stamp `last_sync_at` and `updated_at` **without** touching `sync_cursor`.
+///
+/// Use this when a connector reports `SyncOutcome::new_cursor = None`
+/// (meaning "cursor unchanged") so the persisted progress token is preserved
+/// while the sync timestamp is still advanced. Returns
+/// [`KnowledgeError::ConnectorNotFound`] when no row matches `id`.
+pub async fn touch_last_sync(
+    pool: &SqlitePool,
+    id: i32,
+    now: DateTime<Utc>,
+) -> Result<Connector, KnowledgeError> {
+    let row = sqlx::query_as::<_, Connector>(
+        "UPDATE connectors SET last_sync_at = ?, updated_at = ? \
+         WHERE id = ? \
+         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
+                   status_id, auth_state_id, sync_cursor, last_sync_at, last_error, \
+                   created_at, updated_at",
+    )
+    .bind(now)
+    .bind(now)
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(KnowledgeError::ConnectorNotFound(id))?;
+    Ok(row)
+}
+
 /// Transition a connector to a new lifecycle status, optionally touching
 /// `last_error`.
 ///

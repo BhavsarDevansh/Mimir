@@ -32,7 +32,7 @@ sensitivity gating as facts you tell Mimir directly.
   sync cursor, last sync time, and last error — so connectors survive daemon
   restarts. The `KnowledgeGraph` facade exposes `list_connectors`,
   `get_connector_by_slug`, `upsert_connector`, `update_sync_cursor`,
-  `set_connector_status`, and `set_auth_state`.
+  `touch_last_sync`, `set_connector_status`, and `set_auth_state`.
 
 There is no working backend yet — no calendar sync, no email fetch, no photo
 watcher. The `Connector` **trait and its data types are now defined**

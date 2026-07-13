@@ -486,11 +486,19 @@ async fn run_cycle(
         return CycleOutcome::Err(error.to_string());
     }
 
-    // Persist the sync cursor so a mid-sync `mimir stop` does not re-fetch.
-    if let Err(error) = kg
-        .update_sync_cursor(instance_id, outcome.new_cursor.as_deref())
-        .await
-    {
+    // Persist sync progress so a mid-sync `mimir stop` does not re-fetch.
+    //
+    // `SyncOutcome::new_cursor` follows nullable-update semantics: `Some`
+    // advances (or clears) the cursor, `None` means "unchanged". Passing
+    // `None` to `update_sync_cursor` would *clear* the persisted cursor
+    // (its `None`-clears contract), so we branch: a real cursor value goes
+    // through `update_sync_cursor`; an unchanged cursor only stamps
+    // `last_sync_at` via `touch_last_sync`, preserving the progress token.
+    let persist = match outcome.new_cursor.as_deref() {
+        Some(cursor) => kg.update_sync_cursor(instance_id, Some(cursor)).await,
+        None => kg.touch_last_sync(instance_id).await,
+    };
+    if let Err(error) = persist {
         return CycleOutcome::Err(error.to_string());
     }
 

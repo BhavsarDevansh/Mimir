@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.69.1] — 2026-07-13
+
+### Bugfix — None sync cursor no longer wipes persisted progress token
+
+`run_cycle` previously passed `SyncOutcome::new_cursor` straight into
+`KnowledgeGraph::update_sync_cursor`, whose `None`-clears contract wiped the
+persisted `sync_cursor` whenever a connector returned `new_cursor: None`
+(documented as "unchanged"). The next incremental sync then re-fetched from
+the beginning, defeating the "no re-fetch after `mimir stop`" guarantee.
+
+- **Fix:** `run_cycle` now branches — `Some(cursor)` advances (or clears) the
+  cursor via `update_sync_cursor`; `None` stamps `last_sync_at` only via the
+  new `KnowledgeGraph::touch_last_sync`, preserving the progress token.
+- **New KG method:** `touch_last_sync(id)` — stamps `last_sync_at` and
+  `updated_at` without rewriting `sync_cursor`.
+
 ## [0.69.0] — 2026-07-13
 
 ### Phase 3 — ConnectorSupervisor supervised lifecycle (issue #185 / F8)

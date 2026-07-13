@@ -33,6 +33,10 @@
 //!   [`FnConnectorFactory`].
 //! - [`mock`] — always-compiled mock connector test harness (stub; filled by
 //!   F13).
+//! - [`supervisor`] — [`ConnectorSupervisor`] + [`SupervisorConfig`]
+//!   (F8 / #185): supervised per-connector task lifecycle (spawn / restart /
+//!   backoff / circuit-breaker / startup-restore / graceful-shutdown /
+//!   cursor-persistence).
 //!
 //! # Feature flags
 //!
@@ -44,6 +48,7 @@
 pub mod connector;
 pub mod mock;
 pub mod registry;
+pub mod supervisor;
 
 pub use connector::{
     ActionResult, Connector, ConnectorAction, ConnectorError, ConnectorFactory, ConnectorMode,
@@ -51,3 +56,4 @@ pub use connector::{
 };
 pub use mock::{MockConnector, MockConnectorFactory};
 pub use registry::{ConnectorRegistry, FnConnectorFactory};
+pub use supervisor::{ConnectorSupervisor, SupervisorConfig, SupervisorError};

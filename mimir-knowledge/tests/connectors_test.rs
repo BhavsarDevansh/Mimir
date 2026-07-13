@@ -127,6 +127,29 @@ async fn update_sync_cursor_persists_and_errors_on_missing() {
 }
 
 #[tokio::test]
+async fn touch_last_sync_preserves_cursor_and_stamps_time() {
+    let (kg, _dir) = init_kg().await;
+    let c = kg.upsert_connector(gmail_input("personal")).await.unwrap();
+
+    // Set a cursor first.
+    let with_cursor = kg.update_sync_cursor(c.id, Some("abc")).await.unwrap();
+    assert_eq!(with_cursor.sync_cursor, Some("abc".to_string()));
+    let stamp_before = with_cursor.last_sync_at;
+
+    // touch_last_sync must advance last_sync_at without touching the cursor.
+    let touched = kg.touch_last_sync(c.id).await.unwrap();
+    assert_eq!(touched.sync_cursor, Some("abc".to_string()));
+    assert!(touched.last_sync_at >= stamp_before);
+
+    // Missing connector errors.
+    let err = kg.touch_last_sync(i32::MAX).await;
+    assert!(matches!(
+        err,
+        Err(mimir_knowledge::KnowledgeError::ConnectorNotFound(_))
+    ));
+}
+
+#[tokio::test]
 async fn set_connector_status_set_clear_leave_error() {
     let (kg, _dir) = init_kg().await;
     let c = kg.upsert_connector(gmail_input("personal")).await.unwrap();

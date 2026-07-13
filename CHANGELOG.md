@@ -1,5 +1,100 @@
 # Changelog
 
+## [0.69.2] — 2026-07-13
+
+### Review fixes for PR #216 (CodeRabbit)
+
+- **Docs:** clarified the shutdown integration boundary in
+  `docs/wiki/connectors.md` and `docs/wiki/what-works-now.md` — the supervisor
+  supports the shared `watch` shutdown channel, but `mimir stop` does not yet
+  drive it (daemon/CLI wiring is deferred to later Phase 3 issues).
+- **`mimir-connectors`:** de-duplicated the `CycleResult::Err` and
+  `CycleResult::Panic` failure handling into a shared `record_failure` async
+  helper so the circuit-breaker / backoff policy cannot drift between the
+  sync-error and panic paths.
+- **Tests:** `none_cursor_preserves_existing_sync_cursor` now captures the
+  seeded `last_sync_at` and waits for it to advance (not merely exist),
+  ensuring the poll observes a completed `None`-cursor cycle rather than the
+  pre-existing row state.
+
+## [0.69.1] — 2026-07-13
+
+### Bugfix — None sync cursor no longer wipes persisted progress token
+
+`run_cycle` previously passed `SyncOutcome::new_cursor` straight into
+`KnowledgeGraph::update_sync_cursor`, whose `None`-clears contract wiped the
+persisted `sync_cursor` whenever a connector returned `new_cursor: None`
+(documented as "unchanged"). The next incremental sync then re-fetched from
+the beginning, defeating the "no re-fetch after `mimir stop`" guarantee.
+
+- **Fix:** `run_cycle` now branches — `Some(cursor)` advances (or clears) the
+  cursor via `update_sync_cursor`; `None` stamps `last_sync_at` only via the
+  new `KnowledgeGraph::touch_last_sync`, preserving the progress token.
+- **New KG method:** `touch_last_sync(id)` — stamps `last_sync_at` and
+  `updated_at` without rewriting `sync_cursor`.
+
+## [0.69.0] — 2026-07-13
+
+### Phase 3 — ConnectorSupervisor supervised lifecycle (issue #185 / F8)
+
+`ConnectorSupervisor` owns one supervised background task per connector whose
+lifecycle status is `Active`, centralising everything needed to keep a
+connector running safely. It is the caller that runs the two-step ingestion
+model end to end: `health` → `sync` → `extract` → `normalize_and_insert`, then
+`update_sync_cursor`. All status / auth / cursor writes go through the
+`KnowledgeGraph` facade — the crate stays `sqlx`-free. No concrete backends
+sync yet (this is a library component; daemon wiring lands in A1).
+
+- **`SupervisorConfig`** (`max_failures`, `base_backoff`, `max_backoff`):
+  injected at construction (no environment mutation, per the safety policy).
+  Backoff is deterministic in V1 (`base_backoff * 2^(n-1)`, capped at
+  `max_backoff`); randomised jitter / rate-limit primitives belong to F12.
+- **`ConnectorSupervisor`**:
+  - `restore()` — loads the `connectors` table and spawns a runner for every
+    `status == Active` row. `Paused` / `Error` / `Setup` rows are left down.
+    Rows with no registered `(type, backend)` factory or invalid `config_json`
+    are logged and skipped (one bad connector never aborts startup).
+  - `shutdown()` — aborts and joins all runner handles (defensive fallback;
+    the shared `watch` channel normally drains them first).
+  - `running_count()` / `is_running(id)` — observability for tests/wiring.
+- **Per-connector runner loop.** Initial `authenticate()` handshake (a failed
+  handshake pauses and exits). Then each cycle runs in an **isolated sub-task**
+  (`tokio::spawn`) so a connector panic surfaces as `JoinError::is_panic`
+  instead of unwinding the runner. The cycle and the shared shutdown signal race
+  in a `tokio::select!`; shutdown aborts the in-flight cycle via its
+  `AbortHandle`.
+- **Lifecycle mapping.** Success resets failures, persists the cursor, clears
+  `last_error`. Error/panic increments failures (status stays `Active` +
+  recorded `last_error`), applies exponential backoff, and after `max_failures`
+  consecutive failures moves the connector to `Error` (circuit breaker; stops
+  auto-restart, manual `resume` required). `health() == AuthExpired` sets
+  `auth_state = Expired` + `status = Paused` and exits (not auto-restarted).
+- **Graceful shutdown + cursor persistence.** The supervisor observes the same
+  shared `watch::Receiver<bool>` shutdown channel the daemon uses for OS signals
+  and `/stop`, so `mimir stop` drains every runner. The cursor is persisted
+  after every successful `sync`, so it always reflects the last completed sync;
+  `mimir stop` mid-cycle aborts the in-flight cycle (no cursor advance) and the
+  next restart resumes from the last persisted cursor.
+- **Instance identity injection.** `restore` augments each row's `config_json`
+  with `__slug`, `__ctype`, and `__instance_id` before passing it to the
+  factory — the V1 mechanism for giving a connector instance its row identity
+  through the minimal `create(config)` signature (the LLM/SecretStore
+  construction context is deferred to F10 / the first real backend).
+- **`yield-on-user-activity`** deferred for V1 (`last_user_activity` is not
+  consulted yet).
+- **`SupervisorError`** (`Knowledge`, `Connector`, `Json`): thiserror enum.
+- **Dependencies.** `tokio` promoted from dev-only to a real dependency of
+  `mimir-connectors` (`rt`, `sync`, `time`, `macros`); `tracing` added for
+  structured logging. No new external crates (tokio is already pinned to `1`
+  workspace-wide; patterns verified via Context7).
+- **Tests.** New `tests/supervisor_lifecycle.rs` (7 integration tests against a
+  real in-memory knowledge graph and a configurable test-local connector mock):
+  startup restore (Active only), cursor persistence on shutdown, transient
+  failures → backoff → recovery, circuit breaker, auth-expiry pausing, panic
+  recovery, and push-mode in-flight cancellation. The shared `MockConnector`
+  is untouched (F13 owns the real harness).
+
+
 ## [0.68.0] — 2026-07-08
 
 ### Phase 3 — ConnectorRegistry + multi-backend factory dispatch (issue #184 / F7)

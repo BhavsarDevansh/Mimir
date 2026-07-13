@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.68.0] — 2026-07-08
+
+### Phase 3 — ConnectorRegistry + multi-backend factory dispatch (issue #184 / F7)
+
+`ConnectorRegistry` now maps `(connector_type, backend)` to a
+`ConnectorFactory`, enabling the multi-backend architecture: a connector
+*type* (Email/Calendar/Photos) is the provenance/reliability axis; a *backend*
+(IMAP, CalDAV, local-FS, …) is the provider implementation chosen per instance
+and stored as the `backend` column on `connectors` (F2). New backends register
+a new factory — no schema change. No concrete backends sync yet.
+
+- **`ConnectorFactory` trait** (`Send + Sync`, object-safe): `create(config:
+  serde_json::Value) -> Result<Arc<dyn Connector>, ConnectorError>`.
+  Construction is synchronous and cheap; network/auth happen later via
+  `Connector::authenticate` / `sync`. The V1 factory takes only `config`;
+  decision D′ (`Arc<dyn LlmBackend>` at construction) and F10 (`SecretStore`)
+  will extend the signature when F8/F10 land (acceptable internal-API break).
+- **`ConnectorRegistry`** (`RwLock<HashMap<(ConnectorType, String),
+  Arc<dyn ConnectorFactory>>>`, `&self` registration matching `ToolRegistry`):
+  `register`/`register_arc`, `is_registered`, `factory`, `backends_for`,
+  `registered_types`, `create`, plus `len`/`is_empty`. Duplicate
+  `(type, backend)` registration fails loud with `BackendAlreadyRegistered`;
+  unknown-pair `create` returns `BackendNotFound`.
+- **`FnConnectorFactory`** — closure-backed factory for simple backends/tests.
+- **`MockConnectorFactory`** — always-compiled factory producing
+  `MockConnector`s, keeping the registry exercisable under every feature
+  combination (including `--no-default-features`).
+- **`ConnectorError`** — new variants `BackendNotFound` and
+  `BackendAlreadyRegistered`.
+- **`mimir-knowledge`** — `ConnectorType` now derives `Hash` so it can key the
+  registry's `HashMap`.
+- **Reliability stays per-type:** confidence remains
+  `confidence::initial(SourceType::Connector, connector_type)`, keyed on the
+  type axis only; the registry never branches reliability on `backend`.
+
+### Review fixes (PR #215)
+
+- **deps:** Removed redundant `async-trait` and `chrono` re-declarations from
+  `mimir-connectors` `[dev-dependencies]` (both are already regular
+  dependencies and thus available to integration tests) — DRY.
+- **registry:** Poisoned-`RwLock` handling is now consistent across every
+  accessor: all read/write acquisitions go through private `read`/`write`
+  helpers that `.expect` on poison, matching the `ToolRegistry` convention.
+  Previously the write-side methods surfaced poison as
+  `ConnectorError::Other` while read-side methods silently returned
+  empty/false/`None`, which could report contradictory state after a panic.
 ## [0.67.1] — 2026-07-08
 
 ### Review fixes (PR #214)

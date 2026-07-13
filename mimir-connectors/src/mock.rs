@@ -73,3 +73,22 @@ impl Connector for MockConnector {
         Ok(())
     }
 }
+
+/// [`ConnectorFactory`](crate::ConnectorFactory) that produces
+/// [`MockConnector`]s.
+///
+/// Always-compiled, so the registry can be exercised under every feature
+/// combination (including `--no-default-features`). F13 will replace the mock
+/// with a configurable harness; this factory simply hands back the no-op
+/// [`MockConnector`], ignoring `config`.
+#[derive(Debug, Default)]
+pub struct MockConnectorFactory;
+
+impl crate::connector::ConnectorFactory for MockConnectorFactory {
+    fn create(
+        &self,
+        _config: serde_json::Value,
+    ) -> Result<std::sync::Arc<dyn Connector>, ConnectorError> {
+        Ok(std::sync::Arc::new(MockConnector) as std::sync::Arc<dyn Connector>)
+    }
+}

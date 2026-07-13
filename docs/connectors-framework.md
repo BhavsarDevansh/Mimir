@@ -1,7 +1,7 @@
 # Connectors Framework (mimir-connectors)
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). **Runtime `Connector` trait + data types landed (issue #183 / F6).** Registry remains a stub; the mock harness is now implemented and documented below.
+> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). Runtime `Connector` trait + data types landed (issue #183 / F6). **`ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7).** The supervisor, secret store, and concrete backends remain to be built.
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -128,7 +128,7 @@ pub trait Connector: Send + Sync {
 | `SyncOutcome` | `fetched: u32`, `new_cursor: Option<String>`, `fetched_at: DateTime<Utc>`. |
 | `HealthStatus` | Transient probe: `Online` / `Offline` / `Degraded` / `AuthExpired` / `NotConfigured`. |
 | `ConnectorAction` / `ActionResult` | Write-back request (`kind` + JSON `payload`) and outcome (`success`, `native_id`, `message`). |
-| `ConnectorError` | `thiserror` enum: `Authentication`, `NotAuthenticated`, `Network`, `Config`, `Parse`, `UnsupportedAction`, `Io`, `Other`. Does not wrap `KnowledgeError` (the connector does not insert). |
+| `ConnectorError` | `thiserror` enum: `Authentication`, `NotAuthenticated`, `Network`, `Config`, `Parse`, `UnsupportedAction`, `Io`, `BackendNotFound`, `BackendAlreadyRegistered`, `Other`. Does not wrap `KnowledgeError` (the connector does not insert). |
 
 ### `HealthStatus` vs persisted lifecycle
 
@@ -140,14 +140,84 @@ supervisor calls `health()` and maps the probe onto the persisted columns —
 e.g. `AuthExpired` → `auth_state = Expired`, `status = Paused`; `Offline` →
 `status = Error`.
 
+## Multi-backend registry + factory dispatch (F7 / #184)
+
+`ConnectorRegistry` maps `(connector_type, backend)` to a `ConnectorFactory`.
+A connector **type** (`Gmail` / `Calendar` / `Photos` / …) is the provenance and
+reliability axis — fixed and seeded. A **backend** (`imap`, `caldav`,
+`local-fs`, …) is the provider implementation chosen per instance and persisted
+as the `backend` column on `connectors` (F2). Adding a new backend is a new
+`register` call — no schema change.
+
+### API
+
+```rust
+pub trait ConnectorFactory: Send + Sync {
+    fn create(&self, config: serde_json::Value)
+        -> Result<Arc<dyn Connector>, ConnectorError>;
+}
+
+pub struct ConnectorRegistry { /* RwLock<HashMap<(ConnectorType, String), Arc<dyn ConnectorFactory>>> */ }
+
+impl ConnectorRegistry {
+    pub fn new() -> Self;
+    pub fn len(&self) -> usize;
+    pub fn is_empty(&self) -> bool;
+    pub fn register<F: ConnectorFactory + 'static>(
+        &self, connector_type: ConnectorType, backend: impl Into<String>, factory: F,
+    ) -> Result<(), ConnectorError>;
+    pub fn register_arc(
+        &self, connector_type: ConnectorType, backend: impl Into<String>,
+        factory: Arc<dyn ConnectorFactory>,
+    ) -> Result<(), ConnectorError>;
+    pub fn is_registered(&self, connector_type: ConnectorType, backend: &str) -> bool;
+    pub fn factory(&self, connector_type: ConnectorType, backend: &str)
+        -> Option<Arc<dyn ConnectorFactory>>;
+    pub fn backends_for(&self, connector_type: ConnectorType) -> Vec<String>;
+    pub fn registered_types(&self) -> Vec<ConnectorType>;
+    pub fn create(
+        &self, connector_type: ConnectorType, backend: &str, config: serde_json::Value,
+    ) -> Result<Arc<dyn Connector>, ConnectorError>;
+}
+```
+
+### Design notes
+
+- **Concurrency.** Following the workspace `ToolRegistry` / `SkillRegistry`
+  pattern, registration uses interior mutability (`RwLock`) with a `&self`
+  receiver, so a registry shared in `AppState` behind `Arc` can be populated at
+  startup and queried concurrently at runtime.
+- **Fail-loud duplicates.** `register` returns
+  `ConnectorError::BackendAlreadyRegistered` on a repeated `(type, backend)`
+  rather than silently shadowing the existing factory. `register_arc` is the
+  pre-built-`Arc` variant.
+- **Dispatch errors.** `create` returns `ConnectorError::BackendNotFound` when
+  no factory is registered for the requested pair.
+- **`FnConnectorFactory`.** A closure-backed `ConnectorFactory` (`new<F:
+  Fn(serde_json::Value) -> Result<…> + Send + Sync + 'static>`) for simple
+  backends and tests. `MockConnectorFactory` (always-compiled) produces
+  `MockConnector`s, keeping the registry exercisable under every feature
+  combination, including `--no-default-features`.
+- **Reliability stays per-type.** Confidence for connector facts is
+  `confidence::initial(SourceType::Connector, connector_type)`, keyed on the
+  type axis only. The registry never branches reliability on `backend`; an
+  instance reports the same `connector_type()` regardless of which backend
+  constructed it.
+- **Construction context (forward-looking).** `create` takes only `config` for
+  V1, matching the issue spec. Decision D′ of the Phase 3 plan states that
+  connectors receive the shared `Arc<dyn LlmBackend>` at construction and F10
+  injects credentials via `SecretStore`; those land with F8 / F10, at which
+  point the factory signature will be extended to accept a construction
+  context — an acceptable breaking change to an internal API.
+
 ## Crate layout
 
 
 | Module | Role | Filled by |
 |--------|------|-----------|
-| `connector` | Runtime `Connector` trait + data types (`ConnectorMode`, `SyncOptions`, `SyncOutcome`, `HealthStatus`, `ConnectorAction`, `ActionResult`, `ConnectorError`) | F6 — done (#183) |
-| `registry` | `ConnectorRegistry` (construction + length) | F7 — registration, lookup, multi-backend factory dispatch |
-| `mock` | `MockConnector` (satisfies the full `Connector` trait with empty-success outcomes) | F13 — configurable in-memory test harness |
+| `connector` | Runtime `Connector` trait + data types (`ConnectorMode`, `SyncOptions`, `SyncOutcome`, `HealthStatus`, `ConnectorAction`, `ActionResult`, `ConnectorError`) and the `ConnectorFactory` trait | F6 — done (#183) |
+| `registry` | `ConnectorRegistry` + multi-backend factory dispatch: `(connector_type, backend)` → `ConnectorFactory`, plus the closure-backed `FnConnectorFactory` | F7 — done (#184) |
+| `mock` | `MockConnector` + `MockConnectorFactory` (satisfy the full `Connector`/`ConnectorFactory` traits with empty-success outcomes) | F13 — configurable in-memory test harness |
 
 Provenance types that connectors reference (`ConnectorType`, `SourceType`)
 live in `mimir-knowledge` and are re-used, not duplicated (DRY).
@@ -288,21 +358,21 @@ free-form string.
 
 ## What remains to be built
 
-- **F7** — `ConnectorRegistry` registration, lookup, and multi-backend factory
-  dispatch (currently a length-only stub).
 - **F8** — `ConnectorSupervisor` (supervised lifecycle: spawn / restart /
   backoff / circuit-breaker / startup-restore / graceful-shutdown / cursor
   persistence). This is the caller that runs `sync` → `extract` →
-  `normalize_and_insert`.
+  `normalize_and_insert` and that uses the registry to instantiate configured
+  connectors at startup.
 - **F9–F13** — manual sync triggering, `SecretStore` + `FileSecretStore`,
   rate limiter, and the configurable mock harness.
 - **C1–C7** — the concrete backends (Photos, CalDAV Calendar, IMAP Email).
-- **A1–A4** — server `AppState` wiring + CLI subcommands.
-- `mimir-server` does not yet use the crate beyond declaring the dependency.
+- **A1–A4** — server `AppState` registry/supervisor wiring + CLI subcommands.
+  `mimir-server` does not yet use the crate beyond declaring the dependency.
 
 The framework pieces already landed: F1 (scaffold), F2 (instance table +
 facade), F3 (provenance FK), F4 (`normalize_and_insert` boundary), F5
-(entity-resolution chain), and F6 (the `Connector` trait + data types).
+(entity-resolution chain), F6 (the `Connector` trait + data types), and F7
+(the `ConnectorRegistry` + multi-backend factory dispatch).
 
 ## Verification
 

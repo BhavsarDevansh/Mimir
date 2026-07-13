@@ -1,7 +1,7 @@
 # Connectors Framework (mimir-connectors)
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). Runtime `Connector` trait + data types landed (issue #183 / F6). **`ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7).** The supervisor, secret store, and concrete backends remain to be built.
+> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). Runtime `Connector` trait + data types landed (issue #183 / F6). `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). **`ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8).** The secret store, manual sync trigger, and concrete backends remain to be built.
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -210,6 +210,106 @@ impl ConnectorRegistry {
   point the factory signature will be extended to accept a construction
   context — an acceptable breaking change to an internal API.
 
+## ConnectorSupervisor — supervised lifecycle (F8 / #185)
+
+`ConnectorSupervisor` owns one supervised tokio task per *active* connector
+instance and centralises spawn, restart-with-backoff, circuit breaker, startup
+restore, graceful shutdown, and cursor persistence. It is the caller that
+runs the two-step ingestion model end to end: `health` -> `sync` -> `extract`
+-> `normalize_and_insert`, then `update_sync_cursor`. All status / auth /
+cursor writes go through the `KnowledgeGraph` facade — the supervisor never
+holds a `sqlx` pool, keeping the `sqlx`-free crate boundary intact.
+
+### Construction
+
+```rust
+pub struct SupervisorConfig {
+    pub max_failures: u32,   // consecutive failures before the breaker trips
+    pub base_backoff: Duration,
+    pub max_backoff: Duration,
+}
+
+pub struct ConnectorSupervisor { /* registry, kg, config, shutdown rx, tasks */ }
+
+impl ConnectorSupervisor {
+    pub fn new(registry: Arc<ConnectorRegistry>, kg: Arc<KnowledgeGraph>,
+               config: SupervisorConfig, shutdown: watch::Receiver<bool>) -> Self;
+    pub async fn restore(&self) -> Result<usize, SupervisorError>; // spawn Active rows
+    pub async fn shutdown(&self);                                   // abort + join
+    pub async fn running_count(&self) -> usize;
+    pub async fn is_running(&self, id: i32) -> bool;
+}
+```
+
+`SupervisorConfig` is injected at construction (no environment mutation, per
+the safety policy). Backoff is deterministic in V1 — `base_backoff *
+2^(n-1)`, capped at `max_backoff`; randomised jitter / rate-limit primitives
+belong to F12 (#186) and are not duplicated here.
+
+### Startup restore
+
+`restore` loads the `connectors` table and spawns a runner for every row whose
+`status == Active`. `Paused`, `Error`, and `Setup` rows are left down (not
+auto-spawned). Rows whose `(type, backend)` has no registered factory, or whose
+`config_json` is invalid, are logged and skipped — one bad connector never
+aborts startup. Returns the number of tasks spawned.
+
+Before handing each row's `config_json` to the factory, the supervisor injects
+`__slug`, `__ctype`, and `__instance_id` so the connector instance knows which
+row it represents. This is the V1 mechanism for passing instance identity
+through the minimal `create(config)` factory signature (the LLM/SecretStore
+construction context is deferred to F10 / the first real backend — decision
+#2).
+
+### Per-connector runner loop
+
+Each runner performs an initial `authenticate()` handshake (a failed handshake
+pauses the connector and exits), then loops:
+
+1. Check the shared `watch::Receiver<bool>` shutdown signal; exit if set.
+2. Run one cycle in an **isolated sub-task** (`tokio::spawn`) so a connector
+   panic surfaces as a `JoinError::is_panic` rather than unwinding the runner.
+   The cycle and the shutdown signal race in a `tokio::select!`; if shutdown
+   wins, the cycle's `AbortHandle` cancels the in-flight work and the runner
+   exits.
+3. Classify the cycle result and act:
+   - **Ok** — reset the failure count, persist the cursor (`update_sync_cursor`),
+     clear `last_error` (`set_connector_status(Active, Some(None))`).
+   - **Err / Panic** — increment failures, write `last_error` (status stays
+     `Active`), exponential backoff; once failures reach `max_failures`, move
+     to `Error` and stop auto-restarting (manual `resume` required).
+   - **AuthExpired** (from `health`) — `set_auth_state(Expired)` +
+     `set_connector_status(Paused, ...)`, then exit (not auto-restarted).
+4. For `Polling` connectors, sleep the declared `interval + jitter` (cancellable
+   by shutdown) before the next cycle. `Push` connectors block inside `sync`
+   and loop immediately.
+
+### Graceful shutdown + cursor persistence
+
+The shared `watch::Receiver<bool>` is the same shutdown channel the daemon
+already uses for OS signals and `/stop`, so a single `mimir stop` drains every
+runner. Because the cursor is persisted after every *successful* `sync`, the
+cursor always reflects the last completed sync — `mimir stop` mid-cycle aborts
+the in-flight cycle (no cursor advance) and the next restart resumes from the
+last persisted cursor, re-fetching at most the abandoned batch. `shutdown()`
+aborts and joins all handles as a defensive fallback for stragglers.
+
+### `yield-on-user-activity` deferred
+
+Decision D of the Phase 3 plan calls for connectors to yield to user activity.
+This is **deferred for V1** (`last_user_activity` is not consulted yet); it
+lands with the proactive-agent / scheduling work.
+
+### Server wiring (forward-looking)
+
+F8 lands the supervisor as a library component in `mimir-connectors` with
+unit/integration tests against a configurable in-memory mock. Daemon
+`AppState` wiring (owning a `ConnectorSupervisor`, calling `restore()` after
+KG/LLM are up, and `shutdown()` in the graceful-drain path) and the
+`mimir connector ...` CLI subcommands are separate Phase 3 issues (A1-A3) that
+depend on F8.
+
+
 ## Crate layout
 
 
@@ -217,6 +317,7 @@ impl ConnectorRegistry {
 |--------|------|-----------|
 | `connector` | Runtime `Connector` trait + data types (`ConnectorMode`, `SyncOptions`, `SyncOutcome`, `HealthStatus`, `ConnectorAction`, `ActionResult`, `ConnectorError`) and the `ConnectorFactory` trait | F6 — done (#183) |
 | `registry` | `ConnectorRegistry` + multi-backend factory dispatch: `(connector_type, backend)` → `ConnectorFactory`, plus the closure-backed `FnConnectorFactory` | F7 — done (#184) |
+| `supervisor` | `ConnectorSupervisor` + `SupervisorConfig` + `SupervisorError`: supervised per-connector task lifecycle (spawn / restart / backoff / circuit-breaker / startup-restore / graceful-shutdown / cursor-persistence) | F8 — done (#185) |
 | `mock` | `MockConnector` + `MockConnectorFactory` (satisfy the full `Connector`/`ConnectorFactory` traits with empty-success outcomes) | F13 — configurable in-memory test harness |
 
 Provenance types that connectors reference (`ConnectorType`, `SourceType`)
@@ -358,28 +459,26 @@ free-form string.
 
 ## What remains to be built
 
-- **F8** — `ConnectorSupervisor` (supervised lifecycle: spawn / restart /
-  backoff / circuit-breaker / startup-restore / graceful-shutdown / cursor
-  persistence). This is the caller that runs `sync` → `extract` →
-  `normalize_and_insert` and that uses the registry to instantiate configured
-  connectors at startup.
-- **F9–F13** — manual sync triggering, `SecretStore` + `FileSecretStore`,
-  rate limiter, and the configurable mock harness.
+- **F9–F13** — manual sync triggering (per-connector `Notify` + serialisation),
+  `SecretStore` + `FileSecretStore`, optional OS-keyring backend, rate limiter
+  / retry primitives, and the configurable mock harness.
 - **C1–C7** — the concrete backends (Photos, CalDAV Calendar, IMAP Email).
 - **A1–A4** — server `AppState` registry/supervisor wiring + CLI subcommands.
-  `mimir-server` does not yet use the crate beyond declaring the dependency.
+  `mimir-server` declares the `mimir-connectors` dependency but does not yet own
+  a `ConnectorSupervisor`; that wiring lands with A1 and depends on F8.
 
 The framework pieces already landed: F1 (scaffold), F2 (instance table +
 facade), F3 (provenance FK), F4 (`normalize_and_insert` boundary), F5
-(entity-resolution chain), F6 (the `Connector` trait + data types), and F7
-(the `ConnectorRegistry` + multi-backend factory dispatch).
+(entity-resolution chain), F6 (the `Connector` trait + data types), F7
+(the `ConnectorRegistry` + multi-backend factory dispatch), and F8 (the
+`ConnectorSupervisor` supervised lifecycle).
 
 ## Verification
 
 ```bash
 cargo build --workspace                              # full workspace
 cargo build -p mimir-connectors --no-default-features # framework + mock only
-cargo test -p mimir-connectors                        # scaffolding smoke test
+cargo test -p mimir-connectors                        # includes supervisor lifecycle tests (F8)
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```

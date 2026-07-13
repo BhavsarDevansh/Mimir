@@ -22,9 +22,16 @@ serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
 async-trait = "0.1"
+# F8 (issue #185): the ConnectorSupervisor drives supervised tokio tasks with
+# exponential backoff and observes a watch-channel shutdown signal. `rt`,
+# `sync` (watch/mutex), `time` (backoff sleeps), and `macros` (select!) are
+# required; `rt-multi-thread` is added by the dev-dependency for tests.
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+tracing = "0.1"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tempfile = "3"
 
 [features]
 default = ["photos", "calendar", "gmail"]

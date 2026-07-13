@@ -1,0 +1,590 @@
+//! F8 behavioural tests (issue #185): the `ConnectorSupervisor` supervised
+//! per-connector task lifecycle.
+//!
+//! These exercise spawn / restart-with-backoff / circuit-breaker /
+//! auth-expired-pause / startup-restore / graceful-shutdown / cursor
+//! persistence against a real in-memory knowledge graph and configurable
+//! test-local connector mocks. The shared `MockConnector` is intentionally
+//! left untouched (F13 owns the real harness); these mocks live here so the
+//! failure/panic/auth-expiry paths can be driven deterministically.
+
+use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use chrono::Utc;
+use serde_json::json;
+
+use mimir_connectors::{
+    Connector, ConnectorError, ConnectorMode, ConnectorRegistry, ConnectorSupervisor,
+    FnConnectorFactory, HealthStatus, SupervisorConfig, SyncOptions, SyncOutcome,
+};
+use mimir_knowledge::KnowledgeGraph;
+use mimir_knowledge::models::connector::UpsertConnectorInput;
+use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorStatus, ConnectorType};
+use mimir_knowledge::normalize::NormalizedFact;
+
+// ---------------------------------------------------------------------------
+// Knowledge-graph test harness
+// ---------------------------------------------------------------------------
+
+async fn init_kg() -> (KnowledgeGraph, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+    (kg, dir)
+}
+
+fn upsert(
+    slug: &str,
+    ctype: ConnectorType,
+    backend: &str,
+    status: ConnectorStatus,
+) -> UpsertConnectorInput {
+    UpsertConnectorInput {
+        connector_type: ctype,
+        slug: slug.to_string(),
+        backend: backend.to_string(),
+        display_name: slug.to_string(),
+        config_json: "{}".to_string(),
+        status: Some(status),
+        auth_state: Some(ConnectorAuthState::Authenticated),
+    }
+}
+
+fn fast_config() -> SupervisorConfig {
+    SupervisorConfig {
+        max_failures: 3,
+        base_backoff: Duration::from_millis(10),
+        max_backoff: Duration::from_millis(40),
+    }
+}
+
+fn make_supervisor(
+    kg: Arc<KnowledgeGraph>,
+    registry: Arc<ConnectorRegistry>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+) -> ConnectorSupervisor {
+    ConnectorSupervisor::new(registry, kg, fast_config(), shutdown)
+}
+
+/// Poll an async `predicate` until it returns true or `timeout` elapses.
+async fn wait_for_async<F, Fut>(predicate: F, timeout: Duration)
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if predicate().await {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("wait_for_async timed out after {timeout:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+fn with_slug(slug: &str, extra: serde_json::Value) -> String {
+    let mut cfg = extra;
+    if let serde_json::Value::Object(map) = &mut cfg {
+        map.insert("__slug".to_string(), json!(slug));
+    }
+    serde_json::to_string(&cfg).unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// Configurable test connector
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+struct TestConnector {
+    slug: String,
+    ctype: ConnectorType,
+    interval: Duration,
+    /// `sync()` returns `Err` for the first N calls, then `Ok`.
+    fail_first: u32,
+    /// `sync()` panics for the first N calls, then `Ok`.
+    panic_first: u32,
+    /// `sync()` always returns `Err`.
+    always_fail: bool,
+    /// `health()` returns `AuthExpired` (pauses the connector).
+    auth_expired: bool,
+    /// `sync()` blocks for a long time (push / shutdown-cancellation test).
+    blocking: bool,
+    /// Cursor reported by every successful `sync()`.
+    cursor: Option<String>,
+    sync_calls: AtomicU32,
+}
+
+impl TestConnector {
+    fn from_config(config: serde_json::Value) -> Self {
+        let slug = config
+            .get("__slug")
+            .and_then(|v| v.as_str())
+            .unwrap_or("test")
+            .to_string();
+        let ctype = match config
+            .get("__ctype")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(ConnectorType::Gmail as i64)
+        {
+            x if x == ConnectorType::Calendar as i64 => ConnectorType::Calendar,
+            x if x == ConnectorType::Photos as i64 => ConnectorType::Photos,
+            _ => ConnectorType::Gmail,
+        };
+        let fail_first = config
+            .get("fail_first")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+        let panic_first = config
+            .get("panic_first")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+        let always_fail = config
+            .get("always_fail")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let auth_expired = config
+            .get("auth_expired")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let blocking = config
+            .get("blocking")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let cursor = config
+            .get("cursor")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let interval_ms = config
+            .get("interval_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5);
+        Self {
+            slug,
+            ctype,
+            interval: Duration::from_millis(interval_ms),
+            fail_first,
+            panic_first,
+            always_fail,
+            auth_expired,
+            blocking,
+            cursor,
+            sync_calls: AtomicU32::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl Connector for TestConnector {
+    fn id(&self) -> &str {
+        &self.slug
+    }
+
+    fn name(&self) -> &str {
+        &self.slug
+    }
+
+    fn connector_type(&self) -> ConnectorType {
+        self.ctype
+    }
+
+    fn mode(&self) -> ConnectorMode {
+        if self.blocking {
+            ConnectorMode::Push
+        } else {
+            ConnectorMode::Polling {
+                interval: self.interval,
+                jitter: Duration::ZERO,
+            }
+        }
+    }
+
+    fn config_schema(&self) -> serde_json::Value {
+        json!({})
+    }
+
+    async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError> {
+        Ok(ConnectorAuthState::Authenticated)
+    }
+
+    async fn health(&self) -> Result<HealthStatus, ConnectorError> {
+        if self.auth_expired {
+            Ok(HealthStatus::AuthExpired)
+        } else {
+            Ok(HealthStatus::Online)
+        }
+    }
+
+    async fn sync(&self, _options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
+        let n = self.sync_calls.fetch_add(1, Ordering::SeqCst);
+        if self.blocking {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        }
+        if n < self.panic_first {
+            panic!("test connector panic #{n}");
+        }
+        if self.always_fail || n < self.fail_first {
+            return Err(ConnectorError::Network(format!("simulated failure #{n}")));
+        }
+        Ok(SyncOutcome {
+            fetched: 0,
+            new_cursor: self.cursor.clone(),
+            fetched_at: Utc::now(),
+        })
+    }
+
+    async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError> {
+        Ok(Vec::new())
+    }
+
+    async fn forget(&self) -> Result<(), ConnectorError> {
+        Ok(())
+    }
+}
+
+/// Build a registry whose `TestConnector` factory reads behaviour entirely
+/// from `config_json` (including the row slug/type, smuggled in by the
+/// supervisor at restore time).
+fn test_registry() -> Arc<ConnectorRegistry> {
+    let registry = ConnectorRegistry::new();
+    for ctype in [
+        ConnectorType::Gmail,
+        ConnectorType::Calendar,
+        ConnectorType::Photos,
+    ] {
+        let factory = FnConnectorFactory::new(|config| {
+            Ok(Arc::new(TestConnector::from_config(config)) as Arc<dyn Connector>)
+        });
+        registry
+            .register(ctype, "test".to_string(), factory)
+            .unwrap();
+    }
+    Arc::new(registry)
+}
+
+// ---------------------------------------------------------------------------
+// Startup restore
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn restore_spawns_only_active_connectors() {
+    let (kg, _dir) = init_kg().await;
+    let mut a = upsert(
+        "active",
+        ConnectorType::Gmail,
+        "test",
+        ConnectorStatus::Active,
+    );
+    a.config_json = with_slug("active", json!({ "__ctype": ConnectorType::Gmail as i64 }));
+    let mut p = upsert(
+        "paused",
+        ConnectorType::Gmail,
+        "test",
+        ConnectorStatus::Paused,
+    );
+    p.config_json = with_slug("paused", json!({ "__ctype": ConnectorType::Gmail as i64 }));
+    let mut e = upsert(
+        "errored",
+        ConnectorType::Gmail,
+        "test",
+        ConnectorStatus::Error,
+    );
+    e.config_json = with_slug("errored", json!({ "__ctype": ConnectorType::Gmail as i64 }));
+    let mut s = upsert(
+        "setup",
+        ConnectorType::Gmail,
+        "test",
+        ConnectorStatus::Setup,
+    );
+    s.config_json = with_slug("setup", json!({ "__ctype": ConnectorType::Gmail as i64 }));
+
+    kg.upsert_connector(a).await.unwrap();
+    let paused_id = kg.upsert_connector(p).await.unwrap().id;
+    let errored_id = kg.upsert_connector(e).await.unwrap().id;
+    let setup_id = kg.upsert_connector(s).await.unwrap().id;
+    let active_id = kg
+        .get_connector_by_slug("active")
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+
+    let kg = Arc::new(kg);
+    let (_tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = make_supervisor(kg.clone(), test_registry(), rx);
+    let spawned = supervisor.restore().await.unwrap();
+    assert_eq!(spawned, 1, "only the Active connector is spawned");
+    assert!(supervisor.is_running(active_id).await);
+    assert!(!supervisor.is_running(paused_id).await);
+    assert!(!supervisor.is_running(errored_id).await);
+    assert!(!supervisor.is_running(setup_id).await);
+    supervisor.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown + cursor persistence
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn shutdown_persists_cursor_and_exits_cleanly() {
+    let (kg, _dir) = init_kg().await;
+    let mut input = upsert(
+        "curs",
+        ConnectorType::Calendar,
+        "test",
+        ConnectorStatus::Active,
+    );
+    input.config_json = with_slug(
+        "curs",
+        json!({ "__ctype": ConnectorType::Calendar as i64, "cursor": "v1" }),
+    );
+    let row = kg.upsert_connector(input).await.unwrap();
+    let kg = Arc::new(kg);
+
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = make_supervisor(kg.clone(), test_registry(), rx);
+    supervisor.restore().await.unwrap();
+
+    // Wait until at least one successful sync persists the cursor.
+    wait_for_async(
+        || async {
+            kg.get_connector(row.id)
+                .await
+                .unwrap()
+                .map(|c| c.sync_cursor.as_deref() == Some("v1"))
+                .unwrap_or(false)
+        },
+        Duration::from_secs(3),
+    )
+    .await;
+
+    tx.send(true).unwrap();
+    supervisor.shutdown().await;
+    assert!(!supervisor.is_running(row.id).await);
+
+    let after = kg.get_connector(row.id).await.unwrap().unwrap();
+    assert_eq!(after.sync_cursor.as_deref(), Some("v1"));
+}
+
+// ---------------------------------------------------------------------------
+// Transient failures → backoff → success resets failure count
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn transient_failures_then_success_clears_last_error() {
+    let (kg, _dir) = init_kg().await;
+    let mut input = upsert(
+        "flaky",
+        ConnectorType::Gmail,
+        "test",
+        ConnectorStatus::Active,
+    );
+    input.config_json = with_slug(
+        "flaky",
+        json!({ "__ctype": ConnectorType::Gmail as i64, "fail_first": 2, "cursor": "recovered" }),
+    );
+    let row = kg.upsert_connector(input).await.unwrap();
+    let kg = Arc::new(kg);
+
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = make_supervisor(kg.clone(), test_registry(), rx);
+    supervisor.restore().await.unwrap();
+
+    // `fail_first: 2` makes the first two syncs fail; the third succeeds and
+    // persists the `recovered` cursor. Waiting for that cursor proves the
+    // backoff-restart path actually ran — it cannot be satisfied by the
+    // initial row state (no cursor, `last_error = NULL`).
+    wait_for_async(
+        || async {
+            let c = kg.get_connector(row.id).await.unwrap();
+            c.map(|c| {
+                c.sync_cursor.as_deref() == Some("recovered")
+                    && c.status() == Some(ConnectorStatus::Active)
+                    && c.last_error.is_none()
+            })
+            .unwrap_or(false)
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+
+    tx.send(true).unwrap();
+    supervisor.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// Circuit breaker
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn circuit_breaker_sets_error_after_max_failures() {
+    let (kg, _dir) = init_kg().await;
+    let mut input = upsert(
+        "doomed",
+        ConnectorType::Gmail,
+        "test",
+        ConnectorStatus::Active,
+    );
+    input.config_json = with_slug(
+        "doomed",
+        json!({ "__ctype": ConnectorType::Gmail as i64, "always_fail": true }),
+    );
+    let row = kg.upsert_connector(input).await.unwrap();
+    let kg = Arc::new(kg);
+
+    let (_tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = make_supervisor(kg.clone(), test_registry(), rx);
+    supervisor.restore().await.unwrap();
+
+    // After `max_failures` consecutive failures the breaker trips.
+    wait_for_async(
+        || async {
+            kg.get_connector(row.id)
+                .await
+                .unwrap()
+                .map(|c| c.status() == Some(ConnectorStatus::Error))
+                .unwrap_or(false)
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+
+    let after = kg.get_connector(row.id).await.unwrap().unwrap();
+    assert_eq!(after.status(), Some(ConnectorStatus::Error));
+    assert!(after.last_error.is_some(), "last_error must be recorded");
+    // The breaker status is set before the runner exits; poll for the task to
+    // finish so the assertion does not race the runtime reaping it.
+    wait_for_async(
+        || async { !supervisor.is_running(row.id).await },
+        Duration::from_secs(2),
+    )
+    .await;
+    supervisor.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// Auth expired → paused
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn auth_expired_pauses_connector_and_exits() {
+    let (kg, _dir) = init_kg().await;
+    let mut input = upsert(
+        "expired",
+        ConnectorType::Photos,
+        "test",
+        ConnectorStatus::Active,
+    );
+    input.config_json = with_slug(
+        "expired",
+        json!({ "__ctype": ConnectorType::Photos as i64, "auth_expired": true }),
+    );
+    let row = kg.upsert_connector(input).await.unwrap();
+    let kg = Arc::new(kg);
+
+    let (_tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = make_supervisor(kg.clone(), test_registry(), rx);
+    supervisor.restore().await.unwrap();
+
+    wait_for_async(
+        || async {
+            kg.get_connector(row.id)
+                .await
+                .unwrap()
+                .map(|c| {
+                    c.status() == Some(ConnectorStatus::Paused)
+                        && c.auth_state() == Some(ConnectorAuthState::Expired)
+                })
+                .unwrap_or(false)
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+
+    // The DB state is set before the runner task returns, so poll for the
+    // task to actually finish rather than asserting immediately (which would
+    // race the runtime reaping the task).
+    wait_for_async(
+        || async { !supervisor.is_running(row.id).await },
+        Duration::from_secs(2),
+    )
+    .await;
+    supervisor.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// Panic recovery
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn task_panic_is_recovered_then_succeeds() {
+    let (kg, _dir) = init_kg().await;
+    let mut input = upsert(
+        "panic",
+        ConnectorType::Gmail,
+        "test",
+        ConnectorStatus::Active,
+    );
+    input.config_json = with_slug(
+        "panic",
+        json!({ "__ctype": ConnectorType::Gmail as i64, "panic_first": 1, "cursor": "p1" }),
+    );
+    let row = kg.upsert_connector(input).await.unwrap();
+    let kg = Arc::new(kg);
+
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = make_supervisor(kg.clone(), test_registry(), rx);
+    supervisor.restore().await.unwrap();
+
+    // First cycle panics (counted as a failure + backoff), the next succeeds.
+    wait_for_async(
+        || async {
+            kg.get_connector(row.id)
+                .await
+                .unwrap()
+                .map(|c| c.sync_cursor.as_deref() == Some("p1"))
+                .unwrap_or(false)
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+
+    tx.send(true).unwrap();
+    supervisor.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// Push mode: in-flight blocking sync is cancelled on shutdown
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn push_mode_blocking_sync_cancels_on_shutdown() {
+    let (kg, _dir) = init_kg().await;
+    let mut input = upsert(
+        "push",
+        ConnectorType::Gmail,
+        "test",
+        ConnectorStatus::Active,
+    );
+    input.config_json = with_slug(
+        "push",
+        json!({ "__ctype": ConnectorType::Gmail as i64, "blocking": true }),
+    );
+    let row = kg.upsert_connector(input).await.unwrap();
+    let kg = Arc::new(kg);
+
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = make_supervisor(kg.clone(), test_registry(), rx);
+    supervisor.restore().await.unwrap();
+    assert!(supervisor.is_running(row.id).await);
+
+    tx.send(true).unwrap();
+    supervisor.shutdown().await;
+    assert!(!supervisor.is_running(row.id).await);
+}

@@ -1,7 +1,7 @@
 # Connectors
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). **The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8).** No connector syncs data yet — backends arrive in later Phase 3 issues.
+> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). **Manual sync triggering landed (issue #186 / F9).** No connector syncs data yet — backends arrive in later Phase 3 issues.
 
 ## What connectors are
 
@@ -63,6 +63,19 @@ the last completed sync left off. `Paused`, `Error`, and `Setup` connectors are
 not auto-started. The supervisor is a library component; daemon and CLI wiring
 arrive in later Phase 3 issues (so `mimir stop` does not yet drive the
 supervisor), and no connector syncs data yet.
+
+**Manual sync triggering is in place (issue #186 / F9).** The supervisor can be
+asked to sync a connector immediately, instead of waiting for its next polling
+interval. A `trigger_sync` call delivers options to the connector's runner —
+`--full` forces a complete re-fetch (ignoring the saved cursor) and `--since`
+limits the window — and waits for that cycle to finish, returning how many
+items it fetched. Concurrent triggers on the same connector are serialised (they
+queue and run one at a time, never in parallel), and triggering a connector that
+is paused or errored reports that it is not running. This is the library
+building block for the future `mimir connector sync <slug> [--full|--since]`
+command, which lands once the daemon and CLI are wired in later Phase 3 issues.
+Push-style connectors (like a future IMAP IDLE feed) do not have a polling
+interval to preempt, so manual triggers are not supported for them yet.
 
 **The shared ingestion boundary is in place (issue #181 / F4).** Connectors
 will build `NormalizedFact`s from their items and call

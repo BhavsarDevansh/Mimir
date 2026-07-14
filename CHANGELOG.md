@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.70.0] — 2026-07-14
+
+### Phase 3 — manual sync triggering (issue #186 / F9)
+
+`ConnectorSupervisor::trigger_sync(id, SyncOptions)` (and a slug-based
+`trigger_sync_by_slug`) wakes a connector's runner from its polling-interval
+wait so a sync runs immediately with caller-supplied options — `--full`
+forces a non-incremental pass (cursor ignored/reset) and `since` is a
+relative time-window hint. A one-permit `tokio::sync::Semaphore` per
+connector serialises concurrent callers (overlapping triggers queue rather
+than launching parallel cycles), and a per-connector request channel carries
+the options and returns the cycle's `TriggerOutcome` (`Ok { fetched,
+new_cursor }`, `AuthExpired`, or `Failed`). Triggering a connector that is
+not running (`Paused`/`Error`/`Setup` or exited) returns
+`TriggerError::NotRunning`; push-mode connectors (no polling interval to
+preempt) return `TriggerError::PushUnsupported` — push manual sync is
+deferred to a later Phase 3 issue.
+
+- **New public API:** `ConnectorSupervisor::trigger_sync`,
+  `ConnectorSupervisor::trigger_sync_by_slug`, `TriggerOutcome`,
+  `TriggerError`, and `SyncOptions::Default` (incremental, no window).
+- **Runner loop rework:** the post-cycle wait is now a `select!` between the
+  polling interval, a manual trigger, and shutdown; a manual trigger preempts
+  the interval. Backoff after a failed cycle is likewise preemptable by a
+  trigger. `run_cycle` takes `SyncOptions`; `CycleOutcome::Ok` now carries the
+  `SyncOutcome` so a triggered cycle can report stats to the caller.
+- **No new dependencies** (`tokio` `sync` feature already enabled).
+- This is a library component in `mimir-connectors` with integration tests
+  against a configurable in-memory mock; daemon `AppState` wiring and the
+  `mimir connector sync …` CLI land in later Phase 3 issues (A1–A3).
+
 ## [0.69.2] — 2026-07-13
 
 ### Review fixes for PR #216 (CodeRabbit)

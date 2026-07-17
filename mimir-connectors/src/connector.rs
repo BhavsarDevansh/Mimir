@@ -137,7 +137,10 @@ pub enum ConnectorMode {
 /// otherwise the connector syncs incrementally using its opaque cursor
 /// (persisted in the `connectors.sync_cursor` column, not here). `since` is an
 /// optional relative time-window hint (e.g. "only the last 24 h").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// [`Default`] is an incremental sync with no time-window hint — the same
+/// options the supervisor uses for an automatic polling cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct SyncOptions {
     /// `true` for a full sync; `false` for incremental (cursor-based) sync.
     pub full: bool,

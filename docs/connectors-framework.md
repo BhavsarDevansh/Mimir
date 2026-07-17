@@ -1,7 +1,7 @@
 # Connectors Framework (mimir-connectors)
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). Runtime `Connector` trait + data types landed (issue #183 / F6). `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). **`ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8).** The secret store, manual sync trigger, and concrete backends remain to be built.
+> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). Runtime `Connector` trait + data types landed (issue #183 / F6). `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). **Manual sync triggering landed (issue #186 / F9).** The secret store, daemon wiring, and concrete backends remain to be built.
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -313,6 +313,73 @@ KG/LLM are up, and `shutdown()` in the graceful-drain path) and the
 depend on F8.
 
 
+## Manual sync triggering (F9 / #186)
+
+`ConnectorSupervisor::trigger_sync(id, SyncOptions)` wakes a connector's
+runner from its polling-interval wait so a sync runs immediately with the
+caller-supplied options, instead of waiting for the next interval. A slug-based
+`trigger_sync_by_slug` resolves the instance id via the knowledge graph first.
+
+### Mechanism
+
+- Each active connector owns a one-permit `tokio::sync::Semaphore` and a
+  per-connector request channel (`mpsc`) into its runner.
+- `trigger_sync` acquires the permit (serialising concurrent callers —
+  overlapping triggers queue rather than launching parallel cycles), sends a
+  `TriggerRequest { options, reply }`, and awaits the cycle's outcome.
+- The runner's post-cycle wait is a `select!` between the polling interval, a
+  trigger request, and shutdown. A trigger preempts the interval; the cycle
+  then runs with the trigger's `SyncOptions` and replies with a
+  `TriggerOutcome`. Backoff after a failed cycle is likewise preemptable by a
+  trigger.
+- `run_cycle` takes `SyncOptions` (so `full` / `since` reach
+  `Connector::sync`); `CycleOutcome::Ok` carries the `SyncOutcome` so a
+  triggered cycle can report `fetched` / `new_cursor` back to the caller.
+
+### `SyncOptions`
+
+| Field | Manual-trigger meaning |
+|-------|------------------------|
+| `full` | `true` forces a non-incremental pass — the connector ignores/resets its persisted cursor and re-fetches everything. |
+| `since` | Optional relative window (`now - since`) restricting fetched items. |
+
+`SyncOptions::default()` is an incremental sync with no window — the same
+options an automatic polling cycle uses.
+
+### Outcomes and errors
+
+`trigger_sync` returns `Result<TriggerOutcome, TriggerError>`:
+
+- `TriggerOutcome::Ok { fetched, new_cursor }` — the cycle succeeded.
+- `TriggerOutcome::AuthExpired` — the service rejected credentials; the
+  supervisor has already paused the connector.
+- `TriggerOutcome::Failed(msg)` — a recoverable cycle error (panic, offline,
+  parse failure, shutdown mid-cycle).
+- `TriggerError::NotFound` / `NotFoundSlug` — no connector row with that key.
+- `TriggerError::NotRunning` — the connector is `Paused` / `Error` / `Setup`
+  or its runner has exited (resume it first).
+- `TriggerError::PushUnsupported` — push-mode connectors have no polling
+  interval to preempt; push manual sync is deferred to a later Phase 3 issue.
+- `TriggerError::RunnerDropped` — the runner stopped mid-sync before
+  reporting.
+
+The issue spec described the mechanism as a per-connector `tokio::sync::Notify`
+plus a serialisation semaphore. The implementation uses a small request
+channel (carrying the `SyncOptions` and returning the outcome) instead of a
+bare `Notify`, because `--full` / `--since` must reach the cycle and the
+future HTTP route wants the sync result — but the one-permit semaphore is kept
+as the explicit serialisation gate, matching the spec's intent ("no concurrent
+sync on the same connector").
+
+### Wiring (forward-looking)
+
+F9 lands the trigger as a library API on `ConnectorSupervisor` in
+`mimir-connectors`, with integration tests against a configurable in-memory
+mock. The `mimir connector sync <slug> [--full|--since]` CLI command and its
+HTTP route are separate Phase 3 issues (A2 action routes / A3 CLI) that call
+`trigger_sync` / `trigger_sync_by_slug` once the supervisor is wired into
+`AppState` (A1).
+
 ## Crate layout
 
 
@@ -320,7 +387,7 @@ depend on F8.
 |--------|------|-----------|
 | `connector` | Runtime `Connector` trait + data types (`ConnectorMode`, `SyncOptions`, `SyncOutcome`, `HealthStatus`, `ConnectorAction`, `ActionResult`, `ConnectorError`) and the `ConnectorFactory` trait | F6 — done (#183) |
 | `registry` | `ConnectorRegistry` + multi-backend factory dispatch: `(connector_type, backend)` → `ConnectorFactory`, plus the closure-backed `FnConnectorFactory` | F7 — done (#184) |
-| `supervisor` | `ConnectorSupervisor` + `SupervisorConfig` + `SupervisorError`: supervised per-connector task lifecycle (spawn / restart / backoff / circuit-breaker / startup-restore / graceful-shutdown / cursor-persistence) | F8 — done (#185) |
+| `supervisor` | `ConnectorSupervisor` + `SupervisorConfig` + `SupervisorError` + `TriggerOutcome` + `TriggerError`: supervised per-connector task lifecycle (spawn / restart / backoff / circuit-breaker / startup-restore / graceful-shutdown / cursor-persistence), and manual sync triggering (`trigger_sync` / `trigger_sync_by_slug` — per-connector semaphore + request channel; preempts the polling interval) | F8 — done (#185), F9 — done (#186) |
 | `mock` | `MockConnector` + `MockConnectorFactory` (satisfy the full `Connector`/`ConnectorFactory` traits with empty-success outcomes) | F13 — configurable in-memory test harness |
 
 Provenance types that connectors reference (`ConnectorType`, `SourceType`)
@@ -462,9 +529,8 @@ free-form string.
 
 ## What remains to be built
 
-- **F9–F13** — manual sync triggering (per-connector `Notify` + serialisation),
-  `SecretStore` + `FileSecretStore`, optional OS-keyring backend, rate limiter
-  / retry primitives, and the configurable mock harness.
+- **F10–F13** — `SecretStore` + `FileSecretStore`, optional OS-keyring
+  backend, rate limiter / retry primitives, and the configurable mock harness.
 - **C1–C7** — the concrete backends (Photos, CalDAV Calendar, IMAP Email).
 - **A1–A4** — server `AppState` registry/supervisor wiring + CLI subcommands.
   `mimir-server` declares the `mimir-connectors` dependency but does not yet own

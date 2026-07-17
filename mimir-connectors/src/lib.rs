@@ -36,7 +36,10 @@
 //! - [`supervisor`] — [`ConnectorSupervisor`] + [`SupervisorConfig`]
 //!   (F8 / #185): supervised per-connector task lifecycle (spawn / restart /
 //!   backoff / circuit-breaker / startup-restore / graceful-shutdown /
-//!   cursor-persistence).
+//!   cursor-persistence). Also owns manual sync triggering (F9 / #186):
+//!   [`ConnectorSupervisor::trigger_sync`] preempts a connector's polling
+//!   interval with caller-supplied [`SyncOptions`] and serialises concurrent
+//!   triggers via a per-connector semaphore, returning the cycle outcome.
 //!
 //! # Feature flags
 //!
@@ -56,4 +59,6 @@ pub use connector::{
 };
 pub use mock::{MockConnector, MockConnectorFactory};
 pub use registry::{ConnectorRegistry, FnConnectorFactory};
-pub use supervisor::{ConnectorSupervisor, SupervisorConfig, SupervisorError};
+pub use supervisor::{
+    ConnectorSupervisor, SupervisorConfig, SupervisorError, TriggerError, TriggerOutcome,
+};

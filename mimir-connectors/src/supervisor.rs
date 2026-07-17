@@ -43,12 +43,23 @@
 //! is deferred to F10 / the first real backend), this is how a connector
 //! instance learns which `connectors` row it represents. Real backends read
 //! these keys to recover their identity without an extra factory argument.
+//!
+//! # Manual sync triggering (F9 / #186)
+//!
+//! [`ConnectorSupervisor::trigger_sync`] wakes a connector's runner from its
+//! polling-interval wait so a sync runs immediately with caller-supplied
+//! [`SyncOptions`] (e.g. `--full`). A one-permit `Semaphore` per connector
+//! serialises concurrent callers — overlapping triggers queue rather than
+//! launching parallel cycles — and a per-connector request channel carries
+//! the options and returns the cycle's [`TriggerOutcome`]. Push-mode
+//! connectors have no polling interval to preempt, so manual triggers are
+//! rejected for them in V1.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, Semaphore, mpsc, oneshot, watch};
 use tokio::task::{AbortHandle, JoinHandle};
 use tracing::{info, warn};
 
@@ -59,7 +70,7 @@ use mimir_knowledge::models::source::ExtractionMethod;
 use mimir_knowledge::normalize::{Provenance, normalize_and_insert};
 
 use crate::connector::ConnectorMode;
-use crate::connector::{Connector, ConnectorError, HealthStatus, SyncOptions};
+use crate::connector::{Connector, ConnectorError, HealthStatus, SyncOptions, SyncOutcome};
 use crate::registry::ConnectorRegistry;
 
 /// Tunable parameters for a [`ConnectorSupervisor`].
@@ -70,7 +81,7 @@ use crate::registry::ConnectorRegistry;
 ///
 /// Exponential backoff here is *deterministic*: `base_backoff * 2^(n-1)`,
 /// capped at `max_backoff`. Randomised jitter / rate-limit primitives belong
-/// to F12 (issue #186) and are intentionally not re-implemented here.
+/// to F12 (issue #189) and are intentionally not re-implemented here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SupervisorConfig {
     /// Consecutive failures before the circuit breaker trips and the
@@ -103,6 +114,111 @@ pub enum SupervisorError {
     Json(#[from] serde_json::Error),
 }
 
+// ---------------------------------------------------------------------------
+// Manual sync trigger types (F9 / #186)
+// ---------------------------------------------------------------------------
+
+/// A manual sync request queued from [`ConnectorSupervisor::trigger_sync`] to
+/// a connector's runner task. Carries the caller's [`SyncOptions`] and a
+/// [`oneshot::Sender`] to deliver the cycle's outcome back to the caller.
+struct TriggerRequest {
+    options: SyncOptions,
+    reply: oneshot::Sender<TriggerOutcome>,
+}
+
+/// Capacity of the per-connector trigger channel.
+///
+/// The per-connector [`Semaphore`] (one permit) is held across the send and
+/// the reply await, so at most one trigger request is ever in flight per
+/// connector — a previous request is always drained and replied before the
+/// next caller is allowed to send. A capacity of one therefore never blocks
+/// the sender and is the smallest sufficient buffer.
+const TRIGGER_CHANNEL_CAPACITY: usize = 1;
+
+/// Outcome of a manually-triggered sync cycle, returned to the caller of
+/// [`ConnectorSupervisor::trigger_sync`].
+///
+/// Mirrors the runner's internal [`CycleOutcome`]: a successful cycle reports
+/// the connector's [`SyncOutcome`] stats; `AuthExpired` reports that the
+/// service rejected the connector's credentials (the supervisor has already
+/// paused it); `Failed` reports a recoverable cycle error (panic, offline,
+/// parse failure, …). Infrastructure problems (unknown id, not running,
+/// push-mode, runner dropped mid-sync) surface as [`TriggerError`] instead.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TriggerOutcome {
+    /// The cycle succeeded.
+    Ok {
+        /// Number of raw items fetched and staged for extraction.
+        fetched: u32,
+        /// Updated sync cursor the supervisor persisted, or `None` if unchanged.
+        new_cursor: Option<String>,
+    },
+    /// The service reported expired auth; the connector has been paused.
+    AuthExpired,
+    /// The cycle failed with a recoverable error.
+    Failed(String),
+}
+
+/// Errors raised by [`ConnectorSupervisor::trigger_sync`] /
+/// [`ConnectorSupervisor::trigger_sync_by_slug`].
+///
+/// These are *infrastructure* failures of the trigger mechanism itself — the
+/// cycle's own success/failure is reported via [`TriggerOutcome`].
+#[derive(Debug, thiserror::Error)]
+pub enum TriggerError {
+    /// A knowledge-graph lookup failed while resolving the connector.
+    #[error(transparent)]
+    Knowledge(#[from] mimir_knowledge::KnowledgeError),
+    /// No connector row exists with the given instance id.
+    #[error("no connector with id {0}")]
+    NotFound(i32),
+    /// No connector row exists with the given slug.
+    #[error("no connector with slug `{0}`")]
+    NotFoundSlug(String),
+    /// The connector exists but is not running (it is `Paused`, `Error`, or
+    /// `Setup`, or its runner has exited). Resume it before triggering a sync.
+    #[error("connector {id} is not running (status: {status:?})")]
+    NotRunning {
+        /// Connector instance id.
+        id: i32,
+        /// Persisted lifecycle status, if the row could be loaded.
+        status: Option<ConnectorStatus>,
+    },
+    /// The connector runs in push mode. Manual sync triggers preempt the
+    /// polling interval, which push-mode connectors do not have; push-mode
+    /// manual sync is deferred to a later Phase 3 issue.
+    #[error(
+        "connector {id} runs in push mode; manual sync trigger is not supported for push connectors"
+    )]
+    PushUnsupported {
+        /// Connector instance id.
+        id: i32,
+    },
+    /// The runner task stopped (shutdown / breaker / auth-expiry) while the
+    /// triggered cycle was in flight, before it could report an outcome.
+    #[error("connector {0} runner stopped before the sync completed")]
+    RunnerDropped(i32),
+}
+
+/// Per-connector bookkeeping held by the supervisor alongside the runner task.
+///
+/// `trigger_tx` and `semaphore` implement manual sync triggering
+/// (F9 / #186): [`ConnectorSupervisor::trigger_sync`] acquires the one-permit
+/// `semaphore` (serialising concurrent callers) and sends a [`TriggerRequest`]
+/// down `trigger_tx`; the runner drains it in its post-cycle wait and runs a
+/// cycle with the request's [`SyncOptions`].
+struct ConnectorHandle {
+    /// The supervised runner task.
+    task: JoinHandle<()>,
+    /// Connector mode, captured at spawn so `trigger_sync` can reject push
+    /// connectors without holding the connector instance.
+    mode: ConnectorMode,
+    /// Sender half of the per-connector trigger channel.
+    trigger_tx: mpsc::Sender<TriggerRequest>,
+    /// One-permit semaphore serialising concurrent `trigger_sync` callers.
+    semaphore: Arc<Semaphore>,
+}
+
 /// Owns one supervised task per active connector instance.
 ///
 /// Constructed after the knowledge graph and (eventually) LLM pool are up.
@@ -116,7 +232,7 @@ pub struct ConnectorSupervisor {
     kg: Arc<KnowledgeGraph>,
     config: SupervisorConfig,
     shutdown: watch::Receiver<bool>,
-    tasks: Mutex<HashMap<i32, JoinHandle<()>>>,
+    handles: Mutex<HashMap<i32, ConnectorHandle>>,
 }
 
 impl ConnectorSupervisor {
@@ -133,7 +249,7 @@ impl ConnectorSupervisor {
             kg,
             config,
             shutdown,
-            tasks: Mutex::new(HashMap::new()),
+            handles: Mutex::new(HashMap::new()),
         }
     }
 
@@ -162,6 +278,11 @@ impl ConnectorSupervisor {
                     continue;
                 }
             };
+            // Capture the mode up front so `trigger_sync` can reject push
+            // connectors without holding the connector instance.
+            let mode = connector.mode();
+            let (trigger_tx, trigger_rx) = mpsc::channel(TRIGGER_CHANNEL_CAPACITY);
+            let semaphore = Arc::new(Semaphore::new(1));
             let handle = tokio::spawn(run_connector(
                 connector,
                 self.kg.clone(),
@@ -169,12 +290,115 @@ impl ConnectorSupervisor {
                 self.shutdown.clone(),
                 row.id,
                 connector_type,
+                trigger_rx,
             ));
-            self.tasks.lock().await.insert(row.id, handle);
+            self.handles.lock().await.insert(
+                row.id,
+                ConnectorHandle {
+                    task: handle,
+                    mode,
+                    trigger_tx,
+                    semaphore,
+                },
+            );
             spawned += 1;
             info!(connector_id = row.id, slug = %row.slug, backend = %row.backend, "spawned connector runner");
         }
         Ok(spawned)
+    }
+
+    /// Trigger an immediate sync of the connector with the given instance id,
+    /// bypassing its polling interval (Phase 3 F9 / #186).
+    ///
+    /// The caller's [`SyncOptions`] are delivered to the connector's runner,
+    /// which runs a single cycle with them (`full` forces a non-incremental
+    /// pass; `since` is a relative time-window hint). A one-permit semaphore
+    /// per connector serialises concurrent callers — overlapping triggers
+    /// queue rather than launching parallel cycles — and the method awaits
+    /// the triggered cycle and returns its [`TriggerOutcome`].
+    ///
+    /// # Errors
+    ///
+    /// - [`TriggerError::NotFound`] — no connector row with `id`.
+    /// - [`TriggerError::NotRunning`] — the connector is `Paused` / `Error` /
+    ///   `Setup`, or its runner has exited (resume it first).
+    /// - [`TriggerError::PushUnsupported`] — push-mode connectors have no
+    ///   polling interval to preempt; push manual sync is deferred.
+    /// - [`TriggerError::RunnerDropped`] — the runner stopped mid-sync
+    ///   (shutdown / breaker / auth-expiry) before reporting an outcome.
+    pub async fn trigger_sync(
+        &self,
+        id: i32,
+        options: SyncOptions,
+    ) -> Result<TriggerOutcome, TriggerError> {
+        // Clone the sendable parts out of the lock before awaiting so the
+        // mutex is never held across an await.
+        let (trigger_tx, semaphore, mode, finished) = {
+            let guard = self.handles.lock().await;
+            match guard.get(&id) {
+                Some(handle) => (
+                    handle.trigger_tx.clone(),
+                    handle.semaphore.clone(),
+                    handle.mode,
+                    handle.task.is_finished(),
+                ),
+                None => {
+                    drop(guard);
+                    let row = self.kg.get_connector(id).await?;
+                    let Some(row) = row else {
+                        return Err(TriggerError::NotFound(id));
+                    };
+                    return Err(TriggerError::NotRunning {
+                        id,
+                        status: row.status(),
+                    });
+                }
+            }
+        };
+        if finished {
+            // The runner exited (breaker / auth-expiry / shutdown). Reflect
+            // the persisted status so the caller knows to resume.
+            let row = self.kg.get_connector(id).await?;
+            let status = row.and_then(|r| r.status());
+            return Err(TriggerError::NotRunning { id, status });
+        }
+        if mode == ConnectorMode::Push {
+            return Err(TriggerError::PushUnsupported { id });
+        }
+        // Serialise concurrent triggers: only one caller holds the permit at a
+        // time, so overlapping `trigger_sync` calls queue rather than
+        // launching parallel cycles. `acquire` errors only if the semaphore is
+        // closed, which never happens for an `Arc<Semaphore>` we own.
+        let _permit = semaphore
+            .acquire()
+            .await
+            .map_err(|_| TriggerError::RunnerDropped(id))?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        trigger_tx
+            .send(TriggerRequest {
+                options,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| TriggerError::RunnerDropped(id))?;
+        // The runner replies once the cycle completes; a `RecvError` means it
+        // exited (shutdown / breaker / auth-expiry) mid-cycle.
+        reply_rx.await.map_err(|_| TriggerError::RunnerDropped(id))
+    }
+
+    /// Trigger an immediate sync by connector slug — convenience wrapper
+    /// around [`trigger_sync`](Self::trigger_sync) that resolves the slug to
+    /// an instance id via the knowledge graph.
+    pub async fn trigger_sync_by_slug(
+        &self,
+        slug: &str,
+        options: SyncOptions,
+    ) -> Result<TriggerOutcome, TriggerError> {
+        let row = self.kg.get_connector_by_slug(slug).await?;
+        let Some(row) = row else {
+            return Err(TriggerError::NotFoundSlug(slug.to_string()));
+        };
+        self.trigger_sync(row.id, options).await
     }
 
     /// Gracefully stop every runner: abort in-flight cycles and await exit.
@@ -182,33 +406,33 @@ impl ConnectorSupervisor {
     /// The shared shutdown `watch` is normally signalled first (so runners exit
     /// on their own); `abort` is a defensive fallback for stragglers.
     pub async fn shutdown(&self) {
-        let handles: Vec<JoinHandle<()>> =
-            self.tasks.lock().await.drain().map(|(_, h)| h).collect();
+        let handles: Vec<ConnectorHandle> =
+            self.handles.lock().await.drain().map(|(_, h)| h).collect();
         for handle in &handles {
-            handle.abort();
+            handle.task.abort();
         }
         for handle in handles {
-            let _ = handle.await;
+            let _ = handle.task.await;
         }
     }
 
     /// Number of runner tasks that are still alive (not yet finished).
     pub async fn running_count(&self) -> usize {
-        self.tasks
+        self.handles
             .lock()
             .await
             .values()
-            .filter(|handle| !handle.is_finished())
+            .filter(|handle| !handle.task.is_finished())
             .count()
     }
 
     /// Whether the runner for `id` is still alive.
     pub async fn is_running(&self, id: i32) -> bool {
-        self.tasks
+        self.handles
             .lock()
             .await
             .get(&id)
-            .is_some_and(|handle| !handle.is_finished())
+            .is_some_and(|handle| !handle.task.is_finished())
     }
 
     /// Parse a row's `config_json`, inject instance identity, and ask the
@@ -237,8 +461,10 @@ impl ConnectorSupervisor {
 
 /// Outcome of a single sync cycle, returned from [`run_cycle`].
 enum CycleOutcome {
-    /// Cycle succeeded; cursor persisted, `last_error` cleared.
-    Ok,
+    /// Cycle succeeded; cursor persisted, `last_error` cleared. Carries the
+    /// connector's [`SyncOutcome`] so a triggered cycle can report stats back
+    /// to the caller of [`ConnectorSupervisor::trigger_sync`].
+    Ok(SyncOutcome),
     /// The service reported expired auth; the connector must be paused.
     AuthExpired,
     /// The cycle failed with a recoverable error.
@@ -247,7 +473,7 @@ enum CycleOutcome {
 
 /// Classified result of awaiting a cycle's [`JoinHandle`].
 enum CycleResult {
-    Ok,
+    Ok(SyncOutcome),
     AuthExpired,
     Err(String),
     /// The cycle task panicked (counted as a failure).
@@ -259,13 +485,44 @@ enum CycleResult {
     Shutdown,
 }
 
+impl CycleResult {
+    /// Map a cycle result onto the reply sent to a manual-sync caller
+    /// (F9 / #186). Lifecycle side-effects (status writes, backoff) are
+    /// applied by the runner separately; this only describes the outcome.
+    fn to_trigger_outcome(&self) -> TriggerOutcome {
+        match self {
+            CycleResult::Ok(outcome) => TriggerOutcome::Ok {
+                fetched: outcome.fetched,
+                new_cursor: outcome.new_cursor.clone(),
+            },
+            CycleResult::AuthExpired => TriggerOutcome::AuthExpired,
+            CycleResult::Err(message) => TriggerOutcome::Failed(message.clone()),
+            CycleResult::Panic => TriggerOutcome::Failed("connector task panicked".to_string()),
+            CycleResult::Cancelled => TriggerOutcome::Failed("cycle cancelled".to_string()),
+            CycleResult::Shutdown => TriggerOutcome::Failed("shutdown".to_string()),
+        }
+    }
+}
+
+/// Event that starts the next cycle in a connector's runner loop.
+enum NextEvent {
+    /// Proceed with a default (incremental) cycle — the polling interval or
+    /// backoff elapsed, or a push connector is looping immediately.
+    Proceed,
+    /// A manual sync trigger arrived; run a cycle with its [`SyncOptions`].
+    Trigger(TriggerRequest),
+    /// Shutdown was signalled (or the trigger channel closed).
+    Shutdown,
+}
+
 /// Per-connector supervised loop.
 ///
-/// Performs an initial auth handshake, then repeatedly: run one cycle in an
-/// isolated sub-task (so a connector panic does not kill the runner), classify
-/// the result, apply backoff / circuit-breaker / auth-expiry / shutdown policy,
-/// and (for polling connectors) sleep the declared interval before the next
-/// cycle.
+/// Performs an initial auth handshake, then repeatedly: decide what should
+/// start the next cycle (the polling interval, a manual sync trigger, or
+/// shutdown), run one cycle in an isolated sub-task (so a connector panic
+/// does not kill the runner) with the chosen [`SyncOptions`], classify the
+/// result, apply backoff / circuit-breaker / auth-expiry / shutdown policy,
+/// and reply to any waiting trigger caller.
 async fn run_connector(
     connector: Arc<dyn Connector>,
     kg: Arc<KnowledgeGraph>,
@@ -273,6 +530,7 @@ async fn run_connector(
     mut shutdown: watch::Receiver<bool>,
     instance_id: i32,
     connector_type: ConnectorType,
+    mut trigger_rx: mpsc::Receiver<TriggerRequest>,
 ) {
     // Initial auth handshake. A failed handshake pauses the connector; a
     // successful one persists the reported auth state.
@@ -303,6 +561,11 @@ async fn run_connector(
 
     let mode = connector.mode();
     let mut failures: u32 = 0;
+    let mut first_cycle = true;
+    // Whether the previous cycle failed — selects backoff (preemptable by a
+    // trigger) instead of the polling interval as the wait before the next
+    // cycle.
+    let mut last_failed = false;
 
     loop {
         // Authoritative shutdown check (catches a signal that arrived while the
@@ -311,6 +574,36 @@ async fn run_connector(
             break;
         }
 
+        // Decide the options (and optional trigger reply) for this cycle. The
+        // first cycle runs immediately with default options; subsequent cycles
+        // wait for the polling interval, a manual trigger, or shutdown.
+        let (options, reply) = if first_cycle {
+            first_cycle = false;
+            (SyncOptions::default(), None)
+        } else {
+            match wait_next(
+                &mode,
+                &mut shutdown,
+                &mut trigger_rx,
+                last_failed,
+                failures,
+                config,
+            )
+            .await
+            {
+                NextEvent::Shutdown => break,
+                NextEvent::Proceed => (SyncOptions::default(), None),
+                NextEvent::Trigger(req) => {
+                    info!(
+                        connector_id = instance_id,
+                        options = ?req.options,
+                        "manual sync trigger received"
+                    );
+                    (req.options, Some(req.reply))
+                }
+            }
+        };
+
         // Run one cycle in an isolated sub-task so a connector panic surfaces as
         // a `JoinError::is_panic` rather than unwinding the runner itself.
         let handle: JoinHandle<CycleOutcome> = tokio::spawn(run_cycle(
@@ -318,12 +611,13 @@ async fn run_connector(
             kg.clone(),
             instance_id,
             connector_type,
+            options,
         ));
         let abort: AbortHandle = handle.abort_handle();
 
         let result = tokio::select! {
             res = handle => match res {
-                Ok(CycleOutcome::Ok) => CycleResult::Ok,
+                Ok(CycleOutcome::Ok(outcome)) => CycleResult::Ok(outcome),
                 Ok(CycleOutcome::AuthExpired) => CycleResult::AuthExpired,
                 Ok(CycleOutcome::Err(message)) => CycleResult::Err(message),
                 Err(join) if join.is_panic() => CycleResult::Panic,
@@ -335,9 +629,17 @@ async fn run_connector(
             }
         };
 
+        // Report the outcome to a waiting trigger caller before applying
+        // lifecycle policy that may exit the loop (so the caller is never
+        // left hanging on a `RecvError`).
+        if let Some(reply) = reply {
+            let _ = reply.send(result.to_trigger_outcome());
+        }
+
         match result {
-            CycleResult::Ok => {
+            CycleResult::Ok(_) => {
                 failures = 0;
+                last_failed = false;
             }
             CycleResult::AuthExpired => {
                 warn!(
@@ -358,22 +660,22 @@ async fn run_connector(
             }
             CycleResult::Err(message) => {
                 failures += 1;
+                last_failed = true;
                 warn!(connector_id = instance_id, failures, error = %message, "connector cycle failed");
-                if record_failure(&kg, instance_id, failures, config, &message, &mut shutdown).await
-                {
+                if record_failure(&kg, instance_id, failures, config, &message).await {
                     return;
                 }
                 continue;
             }
             CycleResult::Panic => {
                 failures += 1;
+                last_failed = true;
                 let message = "connector task panicked".to_string();
                 warn!(
                     connector_id = instance_id,
                     failures, "connector cycle panicked"
                 );
-                if record_failure(&kg, instance_id, failures, config, &message, &mut shutdown).await
-                {
+                if record_failure(&kg, instance_id, failures, config, &message).await {
                     return;
                 }
                 continue;
@@ -387,17 +689,6 @@ async fn run_connector(
             }
             CycleResult::Shutdown => break,
         }
-
-        // Polling connectors wait for their declared interval (+ jitter) before
-        // the next cycle. Push connectors block inside `sync`, so they loop
-        // immediately. The sleep is cancelled by the shutdown signal.
-        if let ConnectorMode::Polling { interval, jitter } = mode {
-            let delay = interval + jitter;
-            tokio::select! {
-                _ = tokio::time::sleep(delay) => {}
-                _ = shutdown.changed() => break,
-            }
-        }
     }
 
     info!(
@@ -406,20 +697,22 @@ async fn run_connector(
     );
 }
 
-/// Record a cycle failure: persist `last_error` as `Active`, apply exponential
-/// backoff, and trip the circuit breaker once `failures` reaches `max_failures`.
+/// Record a cycle failure: persist `last_error` as `Active` and trip the
+/// circuit breaker once `failures` reaches `max_failures`.
 ///
 /// Shared by the [`CycleResult::Err`] and [`CycleResult::Panic`] arms so the
-/// breaker / backoff policy cannot drift between the sync-error and panic paths.
-/// Returns `true` when the breaker has tripped (the caller should `return`);
-/// `false` after backoff (the caller should `continue`).
+/// breaker policy cannot drift between the sync-error and panic paths. The
+/// exponential-backoff *wait* is not performed here — it is folded into
+/// [`wait_next`] so a manual sync trigger can preempt it. Returns `true` when
+/// the breaker has tripped (the caller should `return`); `false` otherwise
+/// (the caller sets `last_failed` and `continue`s, and [`wait_next`] applies
+/// the backoff).
 async fn record_failure(
     kg: &KnowledgeGraph,
     instance_id: i32,
     failures: u32,
     config: SupervisorConfig,
     message: &str,
-    shutdown: &mut watch::Receiver<bool>,
 ) -> bool {
     if failures >= config.max_failures {
         let _ = kg
@@ -442,19 +735,70 @@ async fn record_failure(
             Some(Some(message.to_string())),
         )
         .await;
-    backoff_sleep(config, failures, shutdown).await;
     false
+}
+
+/// Wait for the event that should start the next cycle: the polling interval
+/// elapsing, a manual sync trigger, or shutdown. After a failed cycle the wait
+/// is exponential backoff (still preemptable by a trigger) instead of the
+/// polling interval.
+///
+/// Push-mode connectors loop immediately on success (they block inside `sync`
+/// waiting for service events, so there is no polling interval to wait on);
+/// manual triggers are rejected upstream for push connectors, so the trigger
+/// channel is never selected in the push success arm.
+async fn wait_next(
+    mode: &ConnectorMode,
+    shutdown: &mut watch::Receiver<bool>,
+    trigger_rx: &mut mpsc::Receiver<TriggerRequest>,
+    last_failed: bool,
+    failures: u32,
+    config: SupervisorConfig,
+) -> NextEvent {
+    let delay = if last_failed {
+        backoff_delay(config, failures)
+    } else if let ConnectorMode::Polling { interval, jitter } = *mode {
+        interval + jitter
+    } else {
+        // Push mode, successful last cycle: loop immediately.
+        return NextEvent::Proceed;
+    };
+
+    tokio::select! {
+        _ = tokio::time::sleep(delay) => NextEvent::Proceed,
+        req = trigger_rx.recv() => match req {
+            Some(req) => NextEvent::Trigger(req),
+            None => NextEvent::Shutdown,
+        },
+        _ = shutdown.changed() => NextEvent::Shutdown,
+    }
+}
+
+/// Exponential backoff delay: `min(base_backoff * 2^(failures-1), max_backoff)`.
+///
+/// The multiplier is clamped to avoid overflow; the product is saturated and
+/// capped. Pure (non-async) so [`wait_next`] can compose the delay into a
+/// `select!` that is preemptable by a trigger or shutdown.
+fn backoff_delay(config: SupervisorConfig, failures: u32) -> Duration {
+    let exponent = failures.saturating_sub(1).min(31);
+    let multiplier = 2u32.saturating_pow(exponent);
+    config
+        .base_backoff
+        .saturating_mul(multiplier)
+        .min(config.max_backoff)
 }
 
 /// A single ingestion cycle, isolated in its own task for panic containment.
 ///
-/// Health-probes, syncs, extracts, inserts through the shared pipeline, and
-/// persists the cursor. Returns a [`CycleOutcome`] for the runner to act on.
+/// Health-probes, syncs (with the caller-supplied [`SyncOptions`]), extracts,
+/// inserts through the shared pipeline, and persists the cursor. Returns a
+/// [`CycleOutcome`] for the runner to act on.
 async fn run_cycle(
     connector: Arc<dyn Connector>,
     kg: Arc<KnowledgeGraph>,
     instance_id: i32,
     connector_type: ConnectorType,
+    options: SyncOptions,
 ) -> CycleOutcome {
     // Health probe — maps the transient status onto lifecycle decisions.
     match connector.health().await {
@@ -468,13 +812,7 @@ async fn run_cycle(
     }
 
     // Fetch raw items into the connector buffer.
-    let outcome = match connector
-        .sync(SyncOptions {
-            full: false,
-            since: None,
-        })
-        .await
-    {
+    let outcome = match connector.sync(options).await {
         Ok(outcome) => outcome,
         Err(error) => return CycleOutcome::Err(error.to_string()),
     };
@@ -519,26 +857,5 @@ async fn run_cycle(
         .set_connector_status(instance_id, ConnectorStatus::Active, Some(None))
         .await;
 
-    CycleOutcome::Ok
-}
-
-/// Exponential backoff sleep, cancelled by the shutdown signal.
-///
-/// `delay = min(base_backoff * 2^(failures-1), max_backoff)`. The multiplier is
-/// clamped to avoid overflow; the product is saturated and capped.
-async fn backoff_sleep(
-    config: SupervisorConfig,
-    failures: u32,
-    shutdown: &mut watch::Receiver<bool>,
-) {
-    let exponent = failures.saturating_sub(1).min(31);
-    let multiplier = 2u32.saturating_pow(exponent);
-    let delay = config
-        .base_backoff
-        .saturating_mul(multiplier)
-        .min(config.max_backoff);
-    tokio::select! {
-        _ = tokio::time::sleep(delay) => {}
-        _ = shutdown.changed() => {}
-    }
+    CycleOutcome::Ok(outcome)
 }

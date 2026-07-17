@@ -1,7 +1,7 @@
 # Connectors Framework (mimir-connectors)
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). Runtime `Connector` trait + data types landed (issue #183 / F6). `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). **Manual sync triggering landed (issue #186 / F9).** The secret store, daemon wiring, and concrete backends remain to be built.
+> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). Runtime `Connector` trait + data types landed (issue #183 / F6). `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). **Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10).** The daemon wiring, optional OS-keyring backend (#188), and concrete backends remain to be built.
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -527,10 +527,85 @@ The `forget --source <slug>` filter now matches `connectors.slug` via subquery
 free-form string.
 
 
+
+## Secret store (F10 / #187)
+
+A single `SecretStore` trait backs every connector auth kind. One
+`SecretBundle` enum — `OAuth { access_token, refresh_token, expires_at }` |
+`ApiToken { token }` | `AppPassword { password }` — is keyed by the connector
+instance slug, so the supervisor, CLI, and server routes never branch on
+*which* store to talk to; they ask for a bundle by slug and pattern-match the
+kind.
+
+```rust
+#[async_trait]
+pub trait SecretStore: Send + Sync {
+    async fn load(&self, slug: &str) -> Result<Option<SecretBundle>, SecretError>;
+    async fn store(&self, slug: &str, bundle: &SecretBundle) -> Result<(), SecretError>;
+    async fn delete(&self, slug: &str) -> Result<(), SecretError>;
+}
+```
+
+`FileSecretStore` is the V1 default: one JSON file per connector instance at
+`~/.local/share/mimir/secrets/<slug>.json`, internally-tagged
+(`{"kind":"oauth",…}`), **plaintext at rest**, file mode `0600`, parent
+directory `0700`. Loads **fail closed**: if the secret file or its directory
+has any group/other permission bits set, `load` returns
+`SecretError::InsecurePermissions` rather than reading and potentially leaking
+the credential. Stores and the directory-ensure step always (re)apply the
+tight modes, so a manually-loosened file/dir is re-tightened on the next
+`store`. Writes are atomic (temp file + `rename`) so a crash cannot leave a
+truncated secret that silently logs a connector out. `delete` is idempotent
+(a missing slug is `Ok`).
+
+### Security model and deferrals
+
+- **Plaintext at rest** is deliberate and consistent with the existing
+  plaintext LLM API key in `config.toml` and the home-directory trust
+  boundary. At-rest encryption (`argon2` + `chacha20poly1305`) is deferred
+  (Phase 3 §7, out of scope) — see `VISION/09-Roadmap/Phase-3-Plan.md`. The
+  earlier note in `VISION/03-Connectors/Technical-Design.md` saying tokens are
+  "stored encrypted at rest" is **outdated**; the locked Phase-3 plan is the
+  source of truth.
+- **OS keyring** backend is tracked separately as #188 (deferred,
+  feature-gated `secrets-keyring`, off by default because headless systemd
+  boxes often lack a Secret Service daemon).
+- **Path-traversal safety:** slugs are validated against
+  `[A-Za-z0-9_-]{1,128}` before any filesystem access — empty, `..`, path
+  separators, spaces, dots, and non-ASCII are rejected. The knowledge graph
+  enforces slug uniqueness, but the store does not trust that.
+- **Non-Unix targets:** file-mode enforcement is skipped (no portable mode
+  concept). V1 targets Linux primarily; this is a documented limitation.
+
+### `SecretBundle` design note
+
+Struct variants (`ApiToken { token }`, `AppPassword { password }`) are used
+rather than newtype variants (`ApiToken(String)`) because serde's
+internally-tagged `kind` representation requires map-typed variant payloads;
+the named fields also make the on-disk JSON self-describing.
+`OAuth.refresh_token` and `OAuth.expires_at` are `Option` since not all grants
+issue a refresh token or return an expiry (e.g. client-credentials).
+
+### In-memory backend
+
+`InMemorySecretStore` (a `Mutex<HashMap<String, SecretBundle>>`) is included
+as a test/helper backend for the `mock` connector and unit tests; it is not
+for production persistence.
+
+### End-to-end secret wipe
+
+The `connector remove` flow (server `DELETE /connectors/:id` + CLI
+`mimir connector remove`, issues #202/#204/#203) calls `SecretStore::delete`
+on removal. F10 delivers the `delete(slug)` capability and its tests; the
+end-to-end "remove wipes the secret file" behaviour is verified when Epic 4
+lands.
+
+
 ## What remains to be built
 
-- **F10–F13** — `SecretStore` + `FileSecretStore`, optional OS-keyring
-  backend, rate limiter / retry primitives, and the configurable mock harness.
+- **F11–F13** — optional OS-keyring backend (#188, deferred), rate limiter /
+  retry primitives, and the configurable mock harness. The `SecretStore` +
+  `FileSecretStore` + `InMemorySecretStore` landed in #187 / F10.
 - **C1–C7** — the concrete backends (Photos, CalDAV Calendar, IMAP Email).
 - **A1–A4** — server `AppState` registry/supervisor wiring + CLI subcommands.
   `mimir-server` declares the `mimir-connectors` dependency but does not yet own
@@ -539,14 +614,16 @@ free-form string.
 The framework pieces already landed: F1 (scaffold), F2 (instance table +
 facade), F3 (provenance FK), F4 (`normalize_and_insert` boundary), F5
 (entity-resolution chain), F6 (the `Connector` trait + data types), F7
-(the `ConnectorRegistry` + multi-backend factory dispatch), and F8 (the
-`ConnectorSupervisor` supervised lifecycle).
+(the `ConnectorRegistry` + multi-backend factory dispatch), F8 (the
+`ConnectorSupervisor` supervised lifecycle), and F10 (the `SecretStore` +
+`FileSecretStore` + `InMemorySecretStore`).
 
 ## Verification
 
 ```bash
 cargo build --workspace                              # full workspace
 cargo build -p mimir-connectors --no-default-features # framework + mock only
+cargo test -p mimir-connectors --test secrets_store  # secret store round-trip + perm + slug tests (F10)
 cargo test -p mimir-connectors                        # includes supervisor lifecycle tests (F8)
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check

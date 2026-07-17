@@ -1,7 +1,7 @@
 # Connectors
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). **Manual sync triggering landed (issue #186 / F9).** No connector syncs data yet — backends arrive in later Phase 3 issues.
+> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). **Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10).** No connector syncs data yet — backends arrive in later Phase 3 issues.
 
 ## What connectors are
 
@@ -86,6 +86,44 @@ means connector facts get corroboration for free: a Gmail flight fact and a
 Calendar event describing the same trip corroborate the single knowledge-graph
 fact (a source is added, confidence is boosted) instead of creating a
 duplicate.
+
+**The connector secret store is in place (issue #187 / F10).** A single
+`SecretStore` handles every auth kind (OAuth 2.0, API token, app password),
+persisted as one `0600` JSON file per connector under
+`~/.local/share/mimir/secrets/`. Loads fail closed if permissions are too
+loose, writes are atomic, and slugs are validated against path traversal. See
+[How connector credentials are stored](#how-connector-credentials-are-stored)
+below.
+
+## How connector credentials are stored
+
+When you add a connector that needs a login (Gmail over OAuth, Fastmail over
+an app password, Home Assistant over an API token), Mimir stores its
+credentials in **one JSON file per connector**, under
+`~/.local/share/mimir/secrets/<connector-slug>.json`. The file is readable
+only by you (`0600`, group/other bits stripped) and the `secrets/` directory
+is `0700`. Mimir refuses to *read* a secret whose file or directory has been
+loosened (e.g. made world-readable) — it tells you to re-tighten the
+permissions rather than risk leaking the credential.
+
+Three kinds of credential are supported, all in the same store:
+
+- **OAuth 2.0** — access token + optional refresh token + optional expiry
+  (Gmail, Google Calendar).
+- **API token** — a single bearer token (Home Assistant, GitHub PAT).
+- **App password** — a single password string (Fastmail, legacy IMAP).
+
+Credentials are stored **in plaintext**, deliberately — the same way your LLM
+API key is stored in `config.toml` — because Mimir is a local-first app that
+relies on your home directory being private (the home-directory trust
+boundary). At-rest encryption is planned for a later release, and an
+optional OS keyring backend (macOS Keychain / Linux Secret Service / Windows
+Credential Manager) is tracked as a follow-up (#188) for those who prefer it.
+
+Removing a connector (`mimir connector remove`) wipes its secret file. (The
+`remove` CLI/server flow itself lands in a later Phase 3 issue; the secret
+store already supports deletion.)
+
 
 ## What is planned
 

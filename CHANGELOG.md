@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.71.0] — 2026-07-17
+
+### Phase 3 — connector secret store (issue #187 / F10)
+
+A single `SecretStore` trait now backs every connector auth kind. One
+`SecretBundle` enum covers OAuth 2.0, API tokens, and app passwords, and the
+V1 default `FileSecretStore` persists one JSON file per connector instance
+under `~/.local/share/mimir/secrets/<slug>.json`, file mode `0600`, parent
+directory `0700`, plaintext at rest. Loads *fail closed*: a secret file or
+directory with any group/other permission bits set is refused
+(`SecretError::InsecurePermissions`) rather than read. Writes are atomic
+(temp file + rename) so a crash cannot truncate a secret. Slugs are validated
+against `[A-Za-z0-9_-]{1,128}` before touching the filesystem, blocking
+path-traversal. An `InMemorySecretStore` is included as a test/helper backend.
+
+At-rest encryption is intentionally deferred (consistent with the plaintext
+LLM API key in `config.toml` and the home-directory trust boundary); a
+`keyring`-backed store is tracked separately as #188. The end-to-end
+`connector remove` secret wipe is the consumer's responsibility (server/CLI
+routes in #202/#204/#203); this issue delivers the `delete(slug)` capability.
+
+- **New public API (mimir-connectors):** `SecretStore`, `SecretBundle`,
+  `FileSecretStore`, `InMemorySecretStore`, `SecretError`.
+- **New public API (mimir-core paths):** `secrets_dir()`, `secrets_file(slug)`.
+- **No new dependencies** (uses existing `serde`/`serde_json`/`chrono`/
+  `async_trait`/`thiserror`/`tracing`; permission enforcement uses the
+  std `std::os::unix::fs::PermissionsExt` safe API).
+- **Design note:** `SecretBundle` uses struct variants (`ApiToken { token }`,
+  `AppPassword { password }`) rather than newtype variants so serde's
+  internally-tagged `kind` representation works; the on-disk JSON is
+  self-describing. `OAuth.refresh_token` and `OAuth.expires_at` are `Option`
+  since not all grants issue a refresh token or return an expiry.
+- Framework core (not feature-gated); `--no-default-features` still compiles
+  the secret store alongside the rest of the framework + mock.
+
+## [0.70.0] — 2026-07-14
+
 ## [0.70.0] — 2026-07-14
 
 ### Phase 3 — manual sync triggering (issue #186 / F9)

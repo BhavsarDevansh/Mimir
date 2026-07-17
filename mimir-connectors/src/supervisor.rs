@@ -593,7 +593,14 @@ async fn run_connector(
             {
                 NextEvent::Shutdown => break,
                 NextEvent::Proceed => (SyncOptions::default(), None),
-                NextEvent::Trigger(req) => (req.options, Some(req.reply)),
+                NextEvent::Trigger(req) => {
+                    info!(
+                        connector_id = instance_id,
+                        options = ?req.options,
+                        "manual sync trigger received"
+                    );
+                    (req.options, Some(req.reply))
+                }
             }
         };
 

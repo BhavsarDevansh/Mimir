@@ -44,6 +44,13 @@ use tokio::sync::Mutex;
 /// in the current window.
 const DAILY_WINDOW: Duration = Duration::from_secs(86_400);
 
+/// Fallback ceiling for a server-supplied `Retry-After` when the backoff
+/// strategy has no explicit `max` (i.e. [`BackoffStrategy::Fixed`]). Bounds an
+/// unreasonable server hint so it cannot stall a connector task for an
+/// unbounded duration; connectors wanting a different ceiling should use an
+/// `Exponential`/`Linear` strategy with their own `max`.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(300);
+
 // ---------------------------------------------------------------------------
 // Duration serde helper (human-readable via humantime)
 // ---------------------------------------------------------------------------
@@ -151,6 +158,16 @@ impl BackoffStrategy {
             Self::Exponential { jitter, .. }
             | Self::Linear { jitter, .. }
             | Self::Fixed { jitter, .. } => *jitter,
+        }
+    }
+
+    /// Upper bound on a single retry wait, used to clamp a server-supplied
+    /// `Retry-After`. `Exponential` and `Linear` expose their configured `max`;
+    /// `Fixed` has none and falls back to [`MAX_RETRY_AFTER`].
+    pub fn max_cap(&self) -> Option<Duration> {
+        match self {
+            Self::Exponential { max, .. } | Self::Linear { max, .. } => Some(*max),
+            Self::Fixed { .. } => None,
         }
     }
 }
@@ -442,8 +459,11 @@ pub enum RetryError<E> {
 /// On each error, the operation's [`Retryable::retry_hint`] decides whether to
 /// retry. The delay before a retry is the strategy's [`BackoffStrategy::delay`]
 /// for the failed attempt, unless the error supplied a `retry_after` (e.g. an
-/// HTTP `Retry-After` header), in which case that value is used; the strategy's
-/// jitter is then added uniformly in `[0, jitter]`.
+/// HTTP `Retry-After` header), in which case that value is honoured but clamped
+/// to the strategy's [`BackoffStrategy::max_cap`] (or [`MAX_RETRY_AFTER`] when
+/// the strategy has no `max`) so an unreasonable server hint cannot stall the
+/// connector beyond the configured ceiling; the strategy's jitter is then
+/// added uniformly in `[0, jitter]`.
 ///
 /// `max_attempts` is clamped to a minimum of 1. A non-retryable error returns
 /// [`RetryError::Terminal`] immediately; exhausting the budget returns
@@ -475,13 +495,32 @@ where
                             error,
                         });
                     }
-                    let backoff = strategy.delay(attempt);
-                    let delay = retry_after.unwrap_or(backoff);
+                    let delay = retry_delay(strategy, attempt, retry_after);
                     let delay = apply_jitter(delay, strategy.jitter());
                     tokio::time::sleep(delay).await;
                 }
             },
         }
+    }
+}
+
+/// Resolve the sleep delay for a retry attempt (before jitter).
+///
+/// A server-supplied `retry_after` (e.g. parsed from an HTTP `Retry-After`
+/// header) is honoured, but clamped to the strategy's [`BackoffStrategy::max_cap`]
+/// (or [`MAX_RETRY_AFTER`] when the strategy has no `max`) so an unreasonable
+/// hint cannot stall a connector task beyond the configured ceiling. When no
+/// `retry_after` is supplied the strategy's computed backoff is used (already
+/// capped by `max` inside [`BackoffStrategy::delay`]). Exposed so the clamping
+/// is unit-testable without sleeping.
+fn retry_delay(
+    strategy: &BackoffStrategy,
+    attempt: u32,
+    retry_after: Option<Duration>,
+) -> Duration {
+    match retry_after {
+        Some(ra) => ra.min(strategy.max_cap().unwrap_or(MAX_RETRY_AFTER)),
+        None => strategy.delay(attempt),
     }
 }
 
@@ -551,5 +590,86 @@ mod tests {
             jitter: Duration::ZERO,
         };
         assert_eq!(s.delay(u32::MAX), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn max_cap_exposed_for_capped_strategies_none_for_fixed() {
+        let exp = BackoffStrategy::Exponential {
+            base: Duration::from_millis(10),
+            max: Duration::from_millis(100),
+            jitter: Duration::ZERO,
+        };
+        assert_eq!(exp.max_cap(), Some(Duration::from_millis(100)));
+
+        let lin = BackoffStrategy::Linear {
+            base: Duration::from_millis(10),
+            step: Duration::from_millis(10),
+            max: Duration::from_millis(50),
+            jitter: Duration::ZERO,
+        };
+        assert_eq!(lin.max_cap(), Some(Duration::from_millis(50)));
+
+        let fixed = BackoffStrategy::Fixed {
+            delay: Duration::from_millis(25),
+            jitter: Duration::ZERO,
+        };
+        assert_eq!(fixed.max_cap(), None);
+    }
+
+    #[test]
+    fn retry_delay_honours_small_retry_after() {
+        let s = BackoffStrategy::Exponential {
+            base: Duration::from_millis(10),
+            max: Duration::from_millis(100),
+            jitter: Duration::ZERO,
+        };
+        // A server hint smaller than the cap is honoured as-is.
+        assert_eq!(
+            retry_delay(&s, 1, Some(Duration::from_millis(40))),
+            Duration::from_millis(40)
+        );
+    }
+
+    #[test]
+    fn retry_delay_clamps_large_retry_after_to_strategy_max() {
+        let s = BackoffStrategy::Exponential {
+            base: Duration::from_millis(10),
+            max: Duration::from_millis(100),
+            jitter: Duration::ZERO,
+        };
+        // An unreasonable server hint is clamped to the strategy's max cap.
+        assert_eq!(
+            retry_delay(&s, 1, Some(Duration::from_secs(600))),
+            Duration::from_millis(100)
+        );
+    }
+
+    #[test]
+    fn retry_delay_falls_back_to_default_ceiling_for_fixed_strategy() {
+        let s = BackoffStrategy::Fixed {
+            delay: Duration::from_millis(25),
+            jitter: Duration::ZERO,
+        };
+        // Fixed has no max_cap, so the default MAX_RETRY_AFTER ceiling applies.
+        assert_eq!(
+            retry_delay(&s, 1, Some(Duration::from_secs(600))),
+            MAX_RETRY_AFTER
+        );
+        // A hint below the default ceiling is honoured.
+        assert_eq!(
+            retry_delay(&s, 1, Some(Duration::from_secs(10))),
+            Duration::from_secs(10)
+        );
+    }
+
+    #[test]
+    fn retry_delay_uses_computed_backoff_when_no_retry_after() {
+        let s = BackoffStrategy::Exponential {
+            base: Duration::from_millis(10),
+            max: Duration::from_millis(100),
+            jitter: Duration::ZERO,
+        };
+        assert_eq!(retry_delay(&s, 1, None), Duration::from_millis(10));
+        assert_eq!(retry_delay(&s, 5, None), Duration::from_millis(100));
     }
 }

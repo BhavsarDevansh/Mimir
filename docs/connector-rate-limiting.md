@@ -118,10 +118,13 @@ budget returns `RetryError::Exhausted` with the last error and attempt count.
 already used by `mimir-core`'s `LlmClient`, so HTTP retry behaviour is
 consistent across the codebase. `RetryHint::from_status(status, retry_after)`
 classifies a status and carries an optional server-supplied `Retry-After`
-through. When present, `Retry-After` overrides the computed backoff delay (the
-strategy's jitter is still added on top). Connector backends implement
-`Retryable` on their request-error enum and delegate to `from_status` with a
-parsed `Retry-After` header.
+through. When present, `Retry-After` overrides the computed backoff delay but is
+**clamped to the strategy's `max` cap** (`BackoffStrategy::max_cap`), or a
+5-minute default ceiling when the strategy has no `max` (`Fixed`), so an
+unreasonable server hint cannot stall a connector task beyond the configured
+ceiling. The strategy's jitter is then added on top. Connector backends
+implement `Retryable` on their request-error enum and delegate to `from_status`
+with a parsed `Retry-After` header.
 
 ## Presets
 
@@ -155,4 +158,4 @@ reciprocal rounds to a zero replenish interval. All surface as
   exhaustion + reset, backoff progression + cap + overflow safety.
 - Integration tests: token-bucket burst-then-throttle timing, daily-quota
   exhaustion with `resets_at`, retry success/exhaustion/terminal/retry-after
-  honouring, config serde round-trips, preset values, status classification.
+  honouring, `Retry-After` clamping, config serde round-trips, preset values, status classification.

@@ -23,7 +23,9 @@ uniform throttling, daily-quota enforcement, and 429/503 retry.
 - `retry_with_backoff` — generic retry helper for transient failures, with a
   `Retryable` trait and `RetryHint::from_status` classifying
   `{429, 502, 503, 504}` (matching the `LlmClient` transient set) and
-  honouring a server-supplied `Retry-After`.
+  honouring a server-supplied `Retry-After`, clamped to the strategy's `max` cap
+  (or a 5-minute default for `Fixed`) so an unreasonable hint cannot stall a
+  connector task.
 - Connector **LLM** calls are exempt (decision D′): they route through the
   shared `LlmWorkerPool` system queue and are not wrapped by this limiter.
 
@@ -31,7 +33,7 @@ New dependencies (version-checked on crates.io): `governor` 0.10, `rand` 0.9
 (pinned to the line `governor` already pulls in transitively), `humantime`
 2.4. No `sqlx`; no `unsafe`. Unit + integration tests cover throttling,
 quota exhaustion/reset, backoff progression, retry success/exhaustion/terminal,
-`Retry-After` honouring, config serde, and presets.
+`Retry-After` honouring + clamping, config serde, and presets.
 
 ## [0.71.1] — 2026-07-17
 

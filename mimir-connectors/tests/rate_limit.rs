@@ -389,6 +389,56 @@ async fn retry_honours_server_retry_after() {
     assert!(elapsed < Duration::from_millis(2000));
 }
 
+#[tokio::test]
+async fn retry_after_is_clamped_to_strategy_max() {
+    // An unreasonable server hint (10s) must not stall the task: it is clamped
+    // to the strategy's max cap (100ms), so the actual retry wait stays bounded.
+    let calls = Arc::new(AtomicU32::new(0));
+    let calls_cl = Arc::clone(&calls);
+    let op = move |_a: u32| {
+        let n = calls_cl.fetch_add(1, Ordering::SeqCst) + 1;
+        Box::pin(async move {
+            if n <= 1 {
+                Err(HugeRetryAfterErr)
+            } else {
+                Ok(9u32)
+            }
+        })
+            as std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<u32, HugeRetryAfterErr>> + Send>,
+            >
+    };
+    let strategy = BackoffStrategy::Exponential {
+        base: Duration::from_millis(1),
+        max: Duration::from_millis(100),
+        jitter: Duration::ZERO,
+    };
+    let start = tokio::time::Instant::now();
+    let val = retry_with_backoff(&strategy, 5, op).await.unwrap();
+    let elapsed = start.elapsed();
+    assert_eq!(val, 9);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(
+        elapsed >= Duration::from_millis(90),
+        "should wait ~100ms (clamped), took {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(1500),
+        "unreasonable Retry-After leaked through unclamped: {elapsed:?}"
+    );
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HugeRetryAfterErr;
+
+impl Retryable for HugeRetryAfterErr {
+    fn retry_hint(&self) -> RetryHint {
+        RetryHint::Retry {
+            retry_after: Some(Duration::from_secs(10)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RetryAfterErr;
 

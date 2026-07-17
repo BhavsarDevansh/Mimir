@@ -33,6 +33,10 @@
 //!   [`FnConnectorFactory`].
 //! - [`mock`] — always-compiled mock connector test harness (stub; filled by
 //!   F13).
+//! - [`secrets`] — [`SecretStore`] trait + [`SecretBundle`] enum +
+//!   [`FileSecretStore`] / [`InMemorySecretStore`] (F10 / #187): per-connector
+//!   credential storage, one store for all auth kinds (OAuth / API token / app
+//!   password). V1 default is file-backed, plaintext at rest, 0600/0700 perms.
 //! - [`supervisor`] — [`ConnectorSupervisor`] + [`SupervisorConfig`]
 //!   (F8 / #185): supervised per-connector task lifecycle (spawn / restart /
 //!   backoff / circuit-breaker / startup-restore / graceful-shutdown /
@@ -51,6 +55,7 @@
 pub mod connector;
 pub mod mock;
 pub mod registry;
+pub mod secrets;
 pub mod supervisor;
 
 pub use connector::{
@@ -62,3 +67,5 @@ pub use registry::{ConnectorRegistry, FnConnectorFactory};
 pub use supervisor::{
     ConnectorSupervisor, SupervisorConfig, SupervisorError, TriggerError, TriggerOutcome,
 };
+
+pub use secrets::{FileSecretStore, InMemorySecretStore, SecretBundle, SecretError, SecretStore};

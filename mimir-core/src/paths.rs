@@ -88,6 +88,25 @@ pub fn jobs_db_path() -> Result<PathBuf, PathsError> {
     data_dir().map(|p| p.join("jobs.db"))
 }
 
+/// Returns the path to the connector secrets directory inside the data
+/// directory (`~/.local/share/mimir/secrets` on Linux).
+///
+/// One JSON file per connector instance lives here, keyed by the connector
+/// slug (see [`secrets_file`]). The directory is created with mode `0700` by
+/// `FileSecretStore`; this helper only *resolves* the path.
+pub fn secrets_dir() -> Result<PathBuf, PathsError> {
+    data_dir().map(|p| p.join("secrets"))
+}
+
+/// Returns the path to a single connector's secret file inside the secrets
+/// directory, i.e. `<secrets_dir>/<slug>.json`.
+///
+/// `slug` is used verbatim as a file stem; callers (the secret store) are
+/// responsible for validating it against path-traversal characters.
+pub fn secrets_file(slug: &str) -> Result<PathBuf, PathsError> {
+    secrets_dir().map(|p| p.join(format!("{slug}.json")))
+}
+
 /// Returns the path to the user skills directory inside the config directory.
 pub fn skills_dir() -> Result<PathBuf, PathsError> {
     config_dir().map(|p| p.join("skills"))
@@ -212,5 +231,17 @@ mod tests {
     fn test_personalities_dir_is_config_dir_plus_personalities() {
         let path = personalities_dir().unwrap();
         assert!(path.ends_with("mimir/personalities"));
+    }
+
+    #[test]
+    fn test_secrets_dir_is_data_dir_plus_secrets() {
+        let path = secrets_dir().unwrap();
+        assert!(path.ends_with("mimir/secrets"));
+    }
+
+    #[test]
+    fn test_secrets_file_is_secrets_dir_plus_slug_json() {
+        let path = secrets_file("gmail-personal").unwrap();
+        assert!(path.ends_with("mimir/secrets/gmail-personal.json"));
     }
 }

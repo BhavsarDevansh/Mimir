@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.72.0] — 2026-07-17
+
+### Phase 3 — connector rate limiting & retry (issue #189 / F12)
+
+Shared rate-limiting + retry/backoff primitives for network connectors, in the
+new `mimir_connectors::rate_limit` module. Every connector's outbound
+HTTP/IMAP/CalDAV API calls funnel through one per-instance `RateLimiter` for
+uniform throttling, daily-quota enforcement, and 429/503 retry.
+
+- `RateLimitConfig { requests_per_second, burst_size, daily_quota,
+  backoff_strategy }` — `serde`-serialisable (human-readable durations via
+  `humantime`) so it embeds in each connector's `config_json`; a
+  `RateLimitConfig::nominatim()` preset enforces the OSM Nominatim ≤ 1 req/s
+  usage policy.
+- `RateLimiter` — token bucket backed by `governor` (a vetted, `unsafe`-free
+  GCRA implementation) for `requests_per_second` + `burst_size`, with an
+  optional rolling 24h daily quota. Quota exhaustion returns a non-blocking
+  `RateLimitError::QuotaExhausted { resets_at }` so the `ConnectorSupervisor`
+  can pause the cycle gracefully instead of parking a task for up to 24h.
+- `BackoffStrategy` — exponential / linear / fixed, each with a jitter budget.
+- `retry_with_backoff` — generic retry helper for transient failures, with a
+  `Retryable` trait and `RetryHint::from_status` classifying
+  `{429, 502, 503, 504}` (matching the `LlmClient` transient set) and
+  honouring a server-supplied `Retry-After`.
+- Connector **LLM** calls are exempt (decision D′): they route through the
+  shared `LlmWorkerPool` system queue and are not wrapped by this limiter.
+
+New dependencies (version-checked on crates.io): `governor` 0.10, `rand` 0.9
+(pinned to the line `governor` already pulls in transitively), `humantime`
+2.4. No `sqlx`; no `unsafe`. Unit + integration tests cover throttling,
+quota exhaustion/reset, backoff progression, retry success/exhaustion/terminal,
+`Retry-After` honouring, config serde, and presets.
+
 ## [0.71.1] — 2026-07-17
 
 ### Docs

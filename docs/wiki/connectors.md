@@ -1,7 +1,7 @@
 # Connectors
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). **Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10).** No connector syncs data yet — backends arrive in later Phase 3 issues.
+> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). **Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10). Shared rate-limit + retry/backoff primitives landed (issue #189 / F12).** No connector syncs data yet — backends arrive in later Phase 3 issues.
 
 ## What connectors are
 
@@ -94,6 +94,15 @@ persisted as one `0600` JSON file per connector under
 loose, writes are atomic, and slugs are validated against path traversal. See
 [How connector credentials are stored](#how-connector-credentials-are-stored)
 below.
+
+**Shared rate limiting + retry is in place (issue #189 / F12).** Every
+ connector's outbound API calls (HTTP, IMAP, CalDAV) go through one
+ per-instance rate limiter: a token bucket for sustained requests-per-second
+ and burst, an optional rolling 24h daily quota (which pauses the connector
+ for the rest of the day instead of hanging), and automatic 429/502/503/504
+ retry with backoff + jitter honouring a server `Retry-After`. Connector LLM
+ calls are exempt — they use the shared LLM worker pool. See
+ [Connector Rate Limiting & Retry](connector-rate-limiting.md).
 
 ## How connector credentials are stored
 

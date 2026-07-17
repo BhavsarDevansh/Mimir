@@ -280,14 +280,20 @@ impl FileSecretStore {
         Ok(())
     }
 
-    /// Atomic write: serialise to a uniquely-named sibling temp file, then
-    /// `rename` onto the final path and (re)apply `0600`.
+    /// Atomic write: serialise to a uniquely-named sibling temp file, tighten
+    /// it to `0600` *before* `rename`-ing onto the final path.
     ///
     /// The temp file name embeds the process id and a per-process monotonic
     /// counter, so two concurrent `store` calls for the *same* slug never
     /// collide on the same temp file (the supervisor serialises per-connector
     /// already, but the store does not rely on that). If `rename` fails the
     /// temp file is best-effort removed so no stale files linger.
+    ///
+    /// Permissions are applied to the temp file before the rename so the
+    /// secret is never observable at its final path with the (potentially
+    /// looser) default mode inherited from the umask. `rename` then lands the
+    /// already-restrictive file atomically, so a fresh store and an overwrite
+    /// of a previously-loosened file both end up at `0600`.
     fn write_bundle(&self, slug: &str, bundle: &SecretBundle) -> Result<(), SecretError> {
         let path = self.secret_path(slug);
         let bytes = serde_json::to_vec_pretty(bundle)?;
@@ -299,6 +305,12 @@ impl FileSecretStore {
         };
         std::fs::write(&tmp, &bytes)?;
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        }
+
         let rename_res = std::fs::rename(&tmp, &path);
         if rename_res.is_err() {
             // Best-effort: don't leave the temp file behind on rename failure.
@@ -306,11 +318,6 @@ impl FileSecretStore {
         }
         rename_res?;
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-        }
         Ok(())
     }
 }
@@ -320,16 +327,20 @@ impl SecretStore for FileSecretStore {
     async fn load(&self, slug: &str) -> Result<Option<SecretBundle>, SecretError> {
         validate_slug(slug)?;
         let path = self.secret_path(slug);
-        // One metadata call: NotFound means "no secret stored yet"; anything
-        // else is read after the permission check. This avoids the TOCTOU of a
-        // separate `exists()` + `read()` pair.
-        let meta = match std::fs::metadata(&path) {
-            Ok(m) => m,
+        // Open the file first, then check permissions on the open handle and
+        // read through it. This avoids the TOCTOU race between a path-based
+        // `metadata` and a subsequent path-based `read` (an attacker could swap
+        // the file between the two calls). `NotFound` means "no secret stored
+        // yet"; everything else is read after the permission check.
+        let mut file = match std::fs::File::open(&path) {
+            Ok(f) => f,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err.into()),
         };
+        let meta = file.metadata()?;
         self.assert_permissions(slug, &meta)?;
-        let bytes = std::fs::read(&path)?;
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut bytes)?;
         let bundle = serde_json::from_slice::<SecretBundle>(&bytes).map_err(|source| {
             SecretError::Corrupt {
                 slug: slug.to_string(),

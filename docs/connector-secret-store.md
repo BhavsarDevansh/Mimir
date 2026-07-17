@@ -53,9 +53,14 @@ One JSON file per connector instance at
   directory has any group/other permission bits set, the store returns
   `SecretError::InsecurePermissions` instead of reading the file — it never
   leaks a credential whose protection has been weakened.
+  `load` opens the file first and stats the open descriptor (not the path)
+  before reading, so there is no time-of-check-to-time-of-use window where the
+  file could be swapped between the permission check and the read.
 - **Mode re-tightening.** `store` and the directory-ensure step always
   (re)apply `0600`/`0700`, so a manually-loosened file or dir is corrected on
-  the next write.
+  the next write. The temp file is tightened to `0600` *before* the
+  atomic `rename`, so the secret is never observable at its final path with the
+  looser default mode inherited from the umask.
 - **Atomic writes.** Serialise to a sibling `<slug>.json.tmp`, then `rename`
   onto the final path. A crash mid-write cannot leave a truncated secret that
   silently logs a connector out. No temp files are left behind on success.

@@ -127,7 +127,12 @@ pub enum SecretBundle {
         /// The secret token string.
         token: String,
     },
-    /// A username/password pair where the password is an app-specific secret.
+    /// An app-specific password (e.g. Fastmail, legacy IMAP).
+    ///
+    /// Only the secret `password` lives in the bundle. The accompanying
+    /// username is part of the connector instance's non-secret `config_json`
+    /// (stored on the `connectors` row), not the credential store — so it is
+    /// not duplicated here.
     AppPassword {
         /// The app-specific password.
         password: String,
@@ -175,16 +180,6 @@ const MAX_SLUG_LEN: usize = 128;
 /// Accepts `[A-Za-z0-9_-]{1,128}` — alphanumeric, underscore, and hyphen only.
 /// Rejects empty, path separators, `..`, spaces, dots, and non-ASCII, all of
 /// which would either traverse the filesystem or surprise the user.
-/// Monotonic counter guaranteeing unique temp-file names within a process.
-/// Combined with `std::process::id()` (via the directory scope, not needed here
-/// since each process has its own counter) this makes concurrent same-slug
-/// `store` calls write to distinct temp files.
-static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-fn next_temp_counter() -> u64 {
-    TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
 fn validate_slug(slug: &str) -> Result<(), SecretError> {
     if slug.is_empty() {
         return Err(SecretError::InvalidSlug {
@@ -208,6 +203,17 @@ fn validate_slug(slug: &str) -> Result<(), SecretError> {
         });
     }
     Ok(())
+}
+
+/// Monotonic per-process counter used to build unique temp-file names in
+/// [`FileSecretStore::write_bundle`]. Combined with [`std::process::id`] it
+/// guarantees that two concurrent `store` calls for the same slug — whether
+/// within one process or across two processes sharing the secrets directory
+/// (e.g. a daemon plus a CLI) — never write to the same temp file.
+static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn next_temp_counter() -> u64 {
+    TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 // ---------------------------------------------------------------------------
@@ -288,7 +294,8 @@ impl FileSecretStore {
 
         let tmp = {
             let n = next_temp_counter();
-            self.dir.join(format!("{slug}.json.tmp.{n}"))
+            self.dir
+                .join(format!("{slug}.json.tmp.{}.{}", std::process::id(), n))
         };
         std::fs::write(&tmp, &bytes)?;
 

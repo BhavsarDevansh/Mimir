@@ -7,10 +7,12 @@
 
 ## Purpose
 
-Shared rate-limiting and retry/backoff primitives consumed by **every network
+Shared rate-limiting and retry/backoff primitives **intended for every network
 connector** so that outbound HTTP / IMAP / CalDAV API calls throttle, cap, and
 retry uniformly across backends. One `RateLimitConfig` + `RateLimiter` per
 connector instance; one `retry_with_backoff` helper for transient failures.
+The primitives are available infrastructure now; individual connectors wire
+them up as their backends are implemented in later Phase 3 issues.
 
 **Connector LLM calls are exempt** (decision D′): those route through the
 shared `LlmWorkerPool` system queue and must *not* be wrapped here. This module
@@ -44,8 +46,19 @@ pub struct RateLimiter { /* built per connector instance */ }
 
 impl RateLimiter {
     pub fn new(config: RateLimitConfig) -> Result<Self, RateLimitError>;
+    pub fn with_quota_state(
+        config: RateLimitConfig,
+        quota_state: Option<QuotaSnapshot>,
+    ) -> Result<Self, RateLimitError>;
     pub fn config(&self) -> &RateLimitConfig;
     pub async fn acquire(&self) -> Result<(), RateLimitError>;
+    pub async fn quota_snapshot(&self) -> Option<QuotaSnapshot>;
+}
+
+/// Serializable daily-quota window state for persisting across restarts.
+pub struct QuotaSnapshot {
+    pub count: u32,
+    pub window_start: DateTime<Utc>,
 }
 
 pub trait Retryable {
@@ -99,6 +112,20 @@ this composes with the `ConnectorSupervisor`'s existing pause/circuit-breaker
 logic rather than fighting its shutdown / trigger preemption. The window is
 rolling: it starts on the first request and resets 24h later.
 
+`acquire` **fail-fasts** on a known-exhausted quota *before* awaiting the token
+bucket: with a low configured rate the bucket could otherwise park a task for
+the full replenish interval (potentially hours) before reporting the
+already-known exhaustion. The authoritative `check_and_increment` still runs
+after token admission, so concurrent acquires cannot overshoot the quota.
+
+The quota window is **persistable across restarts**. `quota_snapshot()` reads
+the current `count` / `window_start` as a `serde`-serialisable `QuotaSnapshot`,
+and `RateLimiter::with_quota_state(config, Some(snapshot))` reconstructs a
+limiter that resumes the saved window instead of resetting the allowance to
+zero — so a daemon or connector relaunch cannot silently bypass a provider's
+hard 24-hour quota. A snapshot whose window has already elapsed rolls over on
+first use; a snapshot supplied with no `daily_quota` is ignored.
+
 ## Retry / backoff
 
 `retry_with_backoff` wraps an async operation and retries it on retryable
@@ -122,7 +149,9 @@ through. When present, `Retry-After` overrides the computed backoff delay but is
 **clamped to the strategy's `max` cap** (`BackoffStrategy::max_cap`), or a
 5-minute default ceiling when the strategy has no `max` (`Fixed`), so an
 unreasonable server hint cannot stall a connector task beyond the configured
-ceiling. The strategy's jitter is then added on top. Connector backends
+ceiling. The strategy's jitter is then added uniformly in `[0, jitter]` and the
+result is **clamped back to the same cap**, so a hint at the ceiling can never
+become `cap + jitter` and breach the bounded-delay contract. Connector backends
 implement `Retryable` on their request-error enum and delegate to `from_status`
 with a parsed `Retry-After` header.
 
@@ -155,7 +184,10 @@ reciprocal rounds to a zero replenish interval. All surface as
 ## Testing
 
 - Inline unit tests (clock-injected, no async-timing flakiness): quota-window
-  exhaustion + reset, backoff progression + cap + overflow safety.
+  exhaustion + reset + snapshot/restore + fail-fast exhaustion, backoff
+  progression + cap + overflow safety, and near-`Duration::MAX` saturation.
 - Integration tests: token-bucket burst-then-throttle timing, daily-quota
-  exhaustion with `resets_at`, retry success/exhaustion/terminal/retry-after
-  honouring, `Retry-After` clamping, config serde round-trips, preset values, status classification.
+  exhaustion with an ~24h `resets_at` assertion, quota snapshot/restore across
+  limiter reconstruction, fail-fast exhaustion under a low rate, retry
+  success/exhaustion/terminal/retry-after honouring, `Retry-After` clamping
+  after jitter, config serde round-trips, preset values, status classification.

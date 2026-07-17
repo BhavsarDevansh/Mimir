@@ -95,13 +95,14 @@ loose, writes are atomic, and slugs are validated against path traversal. See
 [How connector credentials are stored](#how-connector-credentials-are-stored)
 below.
 
-**Shared rate limiting + retry is in place (issue #189 / F12).** Every
- connector's outbound API calls (HTTP, IMAP, CalDAV) go through one
- per-instance rate limiter: a token bucket for sustained requests-per-second
- and burst, an optional rolling 24h daily quota (which pauses the connector
- for the rest of the day instead of hanging), and automatic 429/502/503/504
- retry with backoff + jitter honouring a server `Retry-After`. Connector LLM
- calls are exempt — they use the shared LLM worker pool. See
+**Shared rate limiting + retry primitives are available (issue #189 / F12).** A
+ per-instance rate limiter is ready for connectors to adopt: a token bucket for
+ sustained requests-per-second and burst, an optional rolling 24h daily quota
+ (which pauses the connector for the rest of the day instead of hanging), and
+ automatic 429/502/503/504 retry with backoff + jitter honouring a server
+ `Retry-After`. Connector LLM calls are exempt — they use the shared LLM worker
+ pool. Connectors will wire these primitives into their outbound calls as their
+ backends are implemented in later Phase 3 issues. See
  [Connector Rate Limiting & Retry](connector-rate-limiting.md).
 
 ## How connector credentials are stored

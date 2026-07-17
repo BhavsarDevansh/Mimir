@@ -16,8 +16,8 @@ use std::time::Duration;
 use chrono::Utc;
 
 use mimir_connectors::rate_limit::{
-    BackoffStrategy, RateLimitConfig, RateLimitError, RateLimiter, RetryError, RetryHint,
-    Retryable, is_retryable_status, retry_with_backoff,
+    BackoffStrategy, QuotaSnapshot, RateLimitConfig, RateLimitError, RateLimiter, RetryError,
+    RetryHint, Retryable, is_retryable_status, retry_with_backoff,
 };
 
 // ---------------------------------------------------------------------------
@@ -301,14 +301,92 @@ async fn daily_quota_exhaustion_reports_resets_at() {
 
     match err {
         RateLimitError::QuotaExhausted { resets_at } => {
-            // Rolling 24h window from the first request.
+            // Rolling 24h window from the first request: resets_at must be
+            // approximately 24h after `before`, not merely later than it.
             assert!(
-                resets_at > before && resets_at < after + Duration::from_secs(86_400 + 60),
+                resets_at >= before + Duration::from_secs(86_400 - 60)
+                    && resets_at <= after + Duration::from_secs(86_400 + 60),
                 "resets_at {resets_at} should be ~24h after {before}"
             );
         }
         other => panic!("expected QuotaExhausted, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Daily quota persistence across limiter reconstruction (finding 4)
+// ---------------------------------------------------------------------------
+
+fn daily_quota_config(quota: u32) -> RateLimitConfig {
+    RateLimitConfig {
+        requests_per_second: 100.0,
+        burst_size: 10,
+        daily_quota: Some(quota),
+        backoff_strategy: BackoffStrategy::default(),
+    }
+}
+
+#[tokio::test]
+async fn quota_snapshot_restores_count_across_reconstruction() {
+    let limiter = RateLimiter::new(daily_quota_config(3)).unwrap();
+    // Consume two of three daily requests.
+    limiter.acquire().await.unwrap();
+    limiter.acquire().await.unwrap();
+    let snapshot = limiter.quota_snapshot().await.expect("quota enabled");
+    assert_eq!(snapshot.count, 2);
+
+    // Reconstruct from the snapshot: the third request is still allowed, and
+    // the fourth must report exhaustion (the window was *not* reset to zero).
+    let restored = RateLimiter::with_quota_state(daily_quota_config(3), Some(snapshot)).unwrap();
+    restored.acquire().await.unwrap();
+    let err = restored.acquire().await.unwrap_err();
+    assert!(matches!(err, RateLimitError::QuotaExhausted { .. }));
+}
+
+#[tokio::test]
+async fn quota_snapshot_is_none_without_daily_quota() {
+    let limiter = RateLimiter::new(RateLimitConfig::default()).unwrap();
+    assert!(limiter.quota_snapshot().await.is_none());
+}
+
+#[tokio::test]
+async fn with_quota_state_ignores_snapshot_when_quota_disabled() {
+    // A snapshot supplied with no daily_quota must not break construction.
+    let stale = QuotaSnapshot {
+        count: 99,
+        window_start: Utc::now(),
+    };
+    let limiter = RateLimiter::with_quota_state(RateLimitConfig::default(), Some(stale)).unwrap();
+    assert!(limiter.quota_snapshot().await.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Acquire fail-fast on exhausted quota (finding 5)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn acquire_fail_fasts_on_exhausted_quota_without_waiting() {
+    // 0.1 req/s => one token every ~10s. After the burst is spent the bucket
+    // would park a second acquire for ~10s. With the quota already exhausted
+    // the pre-check must return QuotaExhausted well inside that interval.
+    let limiter = RateLimiter::new(RateLimitConfig {
+        requests_per_second: 0.1,
+        burst_size: 1,
+        daily_quota: Some(1),
+        backoff_strategy: BackoffStrategy::default(),
+    })
+    .unwrap();
+
+    limiter.acquire().await.unwrap(); // spends the burst + the one daily request
+    let result = tokio::time::timeout(Duration::from_millis(500), limiter.acquire()).await;
+    assert!(
+        result.is_ok(),
+        "acquire should fail-fast, not park for the replenish interval"
+    );
+    assert!(matches!(
+        result.unwrap().unwrap_err(),
+        RateLimitError::QuotaExhausted { .. }
+    ));
 }
 
 // ---------------------------------------------------------------------------

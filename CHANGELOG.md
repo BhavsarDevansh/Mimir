@@ -1,13 +1,45 @@
 # Changelog
 
+## [0.73.0] — 2026-07-17
+
+### Phase 3 — rate-limit review fixes (PR #219)
+
+Addresses CodeRabbit review feedback on the connector rate-limiting primitives
+(issue #189 / F12).
+
+- **New public API** for daily-quota persistence across restarts:
+  `QuotaSnapshot`, `RateLimiter::with_quota_state`, and
+  `RateLimiter::quota_snapshot`. A reconstructed limiter resumes the saved
+  rolling 24h window instead of resetting the allowance to zero, so a daemon or
+  connector relaunch cannot silently bypass a provider's hard 24-hour quota.
+- **Fail-fast quota exhaustion** in `RateLimiter::acquire`: a known-exhausted
+  daily quota is now reported before awaiting the token bucket, so a low-rate
+  limiter no longer parks a task for the full replenish interval (potentially
+  hours) before returning `QuotaExhausted`. The authoritative increment still
+  runs after token admission.
+- **Bounded jittered delay**: the retry delay is now clamped *after* jitter is
+  applied, so a `Retry-After` at the strategy cap can no longer become
+  `cap + jitter` and breach the bounded-delay contract (`retry_delay_with_jitter`).
+- **Saturating duration arithmetic**: the `Linear` backoff and jitter paths use
+  `Duration::saturating_add`, preventing overflow panics on
+  config-derived values near `Duration::MAX` before the `max` clamp.
+- **Documentation** corrected to describe the primitives as available
+  infrastructure for future connector adoption, not as already wired into every
+  connector's outbound calls.
+- Tests added for snapshot round-trip/restore, fail-fast exhaustion,
+  clamp-after-jitter, and near-`Duration::MAX` saturation; the daily-quota
+  `resets_at` assertion now verifies an ~24h window rather than merely
+  `> before`.
+
 ## [0.72.0] — 2026-07-17
 
 ### Phase 3 — connector rate limiting & retry (issue #189 / F12)
 
 Shared rate-limiting + retry/backoff primitives for network connectors, in the
-new `mimir_connectors::rate_limit` module. Every connector's outbound
-HTTP/IMAP/CalDAV API calls funnel through one per-instance `RateLimiter` for
-uniform throttling, daily-quota enforcement, and 429/503 retry.
+new `mimir_connectors::rate_limit` module. The primitives are available
+infrastructure now; connectors will route their outbound HTTP/IMAP/CalDAV API
+calls through one per-instance `RateLimiter` for uniform throttling, daily-quota
+enforcement, and 429/503 retry as their backends land in later Phase 3 issues.
 
 - `RateLimitConfig { requests_per_second, burst_size, daily_quota,
   backoff_strategy }` — `serde`-serialisable (human-readable durations via

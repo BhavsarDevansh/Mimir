@@ -1,12 +1,14 @@
 //! Shared rate-limiting + retry/backoff primitives for network connectors
 //! (Phase 3 F12 / issue #189).
 //!
-//! Every connector that makes outbound HTTP / IMAP / CalDAV API calls funnels
-//! those calls through the types in this module so that throttling, daily
-//! quota enforcement, and 429/503 retry behaviour are uniform across
-//! backends. **Connector LLM calls are exempt** (decision D′ of the Phase 3
-//! plan): those route through the shared `LlmWorkerPool` system queue and must
-//! *not* be wrapped here — this limiter governs service API calls only.
+//! These primitives are intended for every connector that makes outbound
+//! HTTP / IMAP / CalDAV API calls, so that throttling, daily quota
+//! enforcement, and 429/503 retry behaviour are uniform across backends. They
+//! are available infrastructure now; connectors adopt them as their backends
+//! are implemented in later Phase 3 issues. **Connector LLM calls are exempt**
+//! (decision D′ of the Phase 3 plan): those route through the shared
+//! `LlmWorkerPool` system queue and must *not* be wrapped here — this limiter
+//! governs service API calls only.
 //!
 //! # Design
 //!
@@ -146,7 +148,9 @@ impl BackoffStrategy {
                 base, step, max, ..
             } => {
                 let grown = step.saturating_mul(a - 1);
-                (*base + grown).min(*max)
+                // `saturating_add` avoids a panic when config-derived `base`
+                // and `grown` overflow `Duration` before the `max` clamp.
+                base.saturating_add(grown).min(*max)
             }
             Self::Fixed { delay, .. } => *delay,
         }
@@ -246,10 +250,34 @@ pub enum RateLimitError {
 // Daily-quota tracker (private, clock-injectable for unit tests)
 // ---------------------------------------------------------------------------
 
+/// Serializable snapshot of a [`RateLimiter`]'s rolling daily-quota window,
+/// for persisting across daemon/connector restarts.
+///
+/// A reconstructed [`RateLimiter`] built via [`RateLimiter::with_quota_state`]
+/// resumes the saved `count` / `window_start` instead of resetting the daily
+/// allowance to zero, so a restart cannot silently bypass a provider's hard
+/// 24-hour quota. Read it with [`RateLimiter::quota_snapshot`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuotaSnapshot {
+    /// Requests already consumed in the current window.
+    pub count: u32,
+    /// When the current rolling window started (UTC).
+    pub window_start: DateTime<Utc>,
+}
+
 #[derive(Debug)]
 struct QuotaState {
     count: u32,
     window_start: DateTime<Utc>,
+}
+
+impl From<&QuotaState> for QuotaSnapshot {
+    fn from(state: &QuotaState) -> Self {
+        Self {
+            count: state.count,
+            window_start: state.window_start,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -274,6 +302,46 @@ impl QuotaTracker {
                 // window to `now`, so the window starts on first use.
                 window_start: DateTime::from_timestamp(0, 0).expect("epoch is valid"),
             }),
+        }
+    }
+
+    /// Build a tracker that resumes a previously persisted quota window
+    /// ([`QuotaSnapshot`]) instead of starting from zero. A snapshot whose
+    /// window has already elapsed behaves like a fresh tracker: the first
+    /// `check_and_increment` resets the window to `now`.
+    fn with_snapshot(quota: u32, window: Duration, snapshot: QuotaSnapshot) -> Self {
+        let window = TimeDelta::from_std(window).expect("quota window fits in TimeDelta");
+        Self {
+            quota,
+            window,
+            state: Mutex::new(QuotaState {
+                count: snapshot.count,
+                window_start: snapshot.window_start,
+            }),
+        }
+    }
+
+    /// Read the current window state for persistence.
+    async fn snapshot(&self) -> QuotaSnapshot {
+        let state = self.state.lock().await;
+        QuotaSnapshot::from(&*state)
+    }
+
+    /// Whether the quota is already spent at `now`, returning the `resets_at`
+    /// timestamp when it is. Used as a fail-fast pre-check in
+    /// [`RateLimiter::acquire`] so an exhausted quota is reported without first
+    /// parking on the token bucket (which, for low rates, can be a long wait).
+    /// A window that has already elapsed returns `None` (it will roll over on
+    /// the next `check_and_increment`).
+    async fn is_exhausted(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let state = self.state.lock().await;
+        if now >= state.window_start + self.window {
+            return None;
+        }
+        if state.count >= self.quota {
+            Some(state.window_start + self.window)
+        } else {
+            None
         }
     }
 
@@ -307,9 +375,10 @@ type GovernorLimiter = governor::DefaultDirectRateLimiter;
 ///
 /// Construct one per connector instance via [`RateLimiter::new`], then call
 /// [`RateLimiter::acquire`][Self::acquire] before every outbound request.
-/// `acquire` awaits the token bucket (throttling to `requests_per_second` /
-/// `burst_size`) and then checks the optional daily quota. LLM calls must not
-/// go through this gate (decision D′).
+/// `acquire` fail-fasts on an exhausted daily quota, awaits the token bucket
+/// (throttling to `requests_per_second` / `burst_size`), and then atomically
+/// checks and increments the optional daily quota. LLM calls must not go
+/// through this gate (decision D′).
 ///
 /// The limiter is `Send + Sync` and cheap to hold behind an `Arc`; it is *not*
 /// `Clone` because the underlying GCRA state is shared and mutable.
@@ -321,7 +390,27 @@ pub struct RateLimiter {
 
 impl RateLimiter {
     /// Build a limiter from its config, validating the rate / burst / quota.
+    ///
+    /// Equivalent to [`RateLimiter::with_quota_state`] with no prior quota
+    /// state — the daily quota window starts fresh on first use.
     pub fn new(config: RateLimitConfig) -> Result<Self, RateLimitError> {
+        Self::with_quota_state(config, None)
+    }
+
+    /// Build a limiter from its config, optionally restoring a persisted
+    /// daily-quota window ([`QuotaSnapshot`]).
+    ///
+    /// When `quota_state` is `Some` and the config enables a `daily_quota`,
+    /// the reconstructed limiter resumes the saved `count` / `window_start`
+    /// instead of resetting the allowance to zero, so a daemon or connector
+    /// restart cannot silently exceed a provider's hard 24-hour quota. A
+    /// `quota_state` supplied when `daily_quota` is `None`, or whose window has
+    /// already elapsed, is harmlessly ignored (the latter rolls over on first
+    /// use). Validation is the same as [`RateLimiter::new`].
+    pub fn with_quota_state(
+        config: RateLimitConfig,
+        quota_state: Option<QuotaSnapshot>,
+    ) -> Result<Self, RateLimitError> {
         validate(&config)?;
 
         // GCRA: one cell replenished every `1/rps` seconds, with an
@@ -338,9 +427,10 @@ impl RateLimiter {
             .allow_burst(NonZeroU32::new(config.burst_size).expect("burst_size validated >= 1"));
         let inner = governor::RateLimiter::direct(quota);
 
-        let tracker = config
-            .daily_quota
-            .map(|daily| QuotaTracker::new(daily, DAILY_WINDOW));
+        let tracker = config.daily_quota.map(|daily| match quota_state {
+            Some(snapshot) => QuotaTracker::with_snapshot(daily, DAILY_WINDOW, snapshot),
+            None => QuotaTracker::new(daily, DAILY_WINDOW),
+        });
 
         Ok(Self {
             config,
@@ -357,15 +447,37 @@ impl RateLimiter {
     /// Wait until the token bucket admits a request and the daily quota has
     /// not been spent.
     ///
-    /// Blocks on the GCRA token bucket first (governor handles its own
-    /// clock), then checks the daily quota. On quota exhaustion returns
-    /// [`RateLimitError::QuotaExhausted`] without sleeping until `resets_at`.
+    /// First fail-fasts on a known-exhausted daily quota (returning
+    /// [`RateLimitError::QuotaExhausted`] without sleeping), then blocks on the
+    /// GCRA token bucket (governor handles its own clock), then atomically
+    /// checks and increments the quota. The pre-check avoids parking for a
+    /// full replenish interval — which, for low configured rates, can be hours
+    /// — before reporting an already-known exhaustion. The authoritative
+    /// increment still happens after token admission so concurrent acquires
+    /// cannot overshoot the quota.
     pub async fn acquire(&self) -> Result<(), RateLimitError> {
+        if let Some(tracker) = &self.quota {
+            let now = Utc::now();
+            if let Some(resets_at) = tracker.is_exhausted(now).await {
+                return Err(RateLimitError::QuotaExhausted { resets_at });
+            }
+        }
         self.inner.until_ready().await;
         if let Some(tracker) = &self.quota {
             tracker.check_and_increment(Utc::now()).await?;
         }
         Ok(())
+    }
+
+    /// Snapshot the current daily-quota window state for persistence, or
+    /// `None` when no daily quota is configured. Pass the result to
+    /// [`RateLimiter::with_quota_state`] on reconstruction to resume the
+    /// rolling window across daemon/connector restarts.
+    pub async fn quota_snapshot(&self) -> Option<QuotaSnapshot> {
+        match &self.quota {
+            Some(tracker) => Some(tracker.snapshot().await),
+            None => None,
+        }
     }
 }
 
@@ -495,8 +607,7 @@ where
                             error,
                         });
                     }
-                    let delay = retry_delay(strategy, attempt, retry_after);
-                    let delay = apply_jitter(delay, strategy.jitter());
+                    let delay = retry_delay_with_jitter(strategy, attempt, retry_after);
                     tokio::time::sleep(delay).await;
                 }
             },
@@ -524,6 +635,32 @@ fn retry_delay(
     }
 }
 
+/// Compute the final retry sleep delay: the [`retry_delay`] base, plus uniform
+/// jitter, then clamped back to the strategy's bound so the jittered result
+/// never exceeds the bounded-delay contract.
+///
+/// For `Exponential`/`Linear` (which expose a `max_cap`) the jittered delay is
+/// always clamped to that `max`. For `Fixed` (no `max_cap`) a server-supplied
+/// `Retry-After` is clamped to [`MAX_RETRY_AFTER`] after jitter; a `Fixed`
+/// delay with no server hint is the caller's explicit configured value and is
+/// left unbounded. Exposed so the clamp-after-jitter is unit-testable without
+/// sleeping.
+fn retry_delay_with_jitter(
+    strategy: &BackoffStrategy,
+    attempt: u32,
+    retry_after: Option<Duration>,
+) -> Duration {
+    let base = retry_delay(strategy, attempt, retry_after);
+    let jittered = apply_jitter(base, strategy.jitter());
+    match strategy.max_cap() {
+        Some(cap) => jittered.min(cap),
+        None => match retry_after {
+            Some(_) => jittered.min(MAX_RETRY_AFTER),
+            None => jittered,
+        },
+    }
+}
+
 /// Add a uniform random amount in `[0, jitter]` to `base`. No-op when `jitter`
 /// is zero (keeps retries deterministic in tests and when jitter is disabled).
 fn apply_jitter(base: Duration, jitter: Duration) -> Duration {
@@ -533,7 +670,8 @@ fn apply_jitter(base: Duration, jitter: Duration) -> Duration {
     use rand::Rng;
     let max_nanos = u64::try_from(jitter.as_nanos()).unwrap_or(u64::MAX);
     let extra = rand::rng().random_range(0..max_nanos.saturating_add(1));
-    base + Duration::from_nanos(extra)
+    // `saturating_add` keeps the jittered delay from panicking on overflow.
+    base.saturating_add(Duration::from_nanos(extra))
 }
 
 // ---------------------------------------------------------------------------
@@ -671,5 +809,153 @@ mod tests {
         };
         assert_eq!(retry_delay(&s, 1, None), Duration::from_millis(10));
         assert_eq!(retry_delay(&s, 5, None), Duration::from_millis(100));
+    }
+
+    // --- Finding 3: saturating Duration arithmetic (no overflow panic) ---
+
+    #[test]
+    fn linear_delay_saturates_instead_of_panicking_near_duration_max() {
+        let s = BackoffStrategy::Linear {
+            base: Duration::MAX,
+            step: Duration::from_secs(1),
+            max: Duration::from_secs(1),
+            jitter: Duration::ZERO,
+        };
+        // `base + grown` would overflow without `saturating_add`; the `max`
+        // clamp must still dominate, yielding the configured cap.
+        assert_eq!(s.delay(u32::MAX), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn linear_delay_saturates_to_duration_max_when_cap_is_max() {
+        let s = BackoffStrategy::Linear {
+            base: Duration::MAX,
+            step: Duration::from_secs(1),
+            max: Duration::MAX,
+            jitter: Duration::ZERO,
+        };
+        assert_eq!(s.delay(u32::MAX), Duration::MAX);
+    }
+
+    #[test]
+    fn apply_jitter_saturates_instead_of_panicking_near_duration_max() {
+        // base + extra nanos overflows `Duration`; the result must saturate to
+        // `Duration::MAX` rather than panicking, for any random draw.
+        for _ in 0..128 {
+            assert_eq!(apply_jitter(Duration::MAX, Duration::MAX), Duration::MAX);
+        }
+    }
+
+    // --- Finding 6: clamp the jittered delay, not only its base ---
+
+    #[test]
+    fn retry_delay_with_jitter_respects_cap_when_jitter_is_zero() {
+        let s = BackoffStrategy::Exponential {
+            base: Duration::from_millis(10),
+            max: Duration::from_millis(100),
+            jitter: Duration::ZERO,
+        };
+        assert_eq!(
+            retry_delay_with_jitter(&s, 1, None),
+            Duration::from_millis(10)
+        );
+        assert_eq!(
+            retry_delay_with_jitter(&s, 1, Some(Duration::from_secs(600))),
+            Duration::from_millis(100)
+        );
+    }
+
+    #[test]
+    fn retry_delay_with_jitter_never_exceeds_strategy_cap() {
+        // A server hint at the cap plus any jitter in [0, 50ms] must remain
+        // clamped to the 100ms cap (not 150ms), for every random draw.
+        let s = BackoffStrategy::Exponential {
+            base: Duration::from_millis(10),
+            max: Duration::from_millis(100),
+            jitter: Duration::from_millis(50),
+        };
+        for _ in 0..256 {
+            let delay = retry_delay_with_jitter(&s, 1, Some(Duration::from_millis(100)));
+            assert!(
+                delay <= Duration::from_millis(100),
+                "jittered delay {delay:?} > cap"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_delay_with_jitter_bounds_fixed_strategy_server_hint() {
+        // Fixed has no max_cap; a server hint at MAX_RETRY_AFTER plus jitter
+        // must stay clamped to MAX_RETRY_AFTER, for every random draw.
+        let s = BackoffStrategy::Fixed {
+            delay: Duration::from_millis(25),
+            jitter: Duration::from_secs(30),
+        };
+        for _ in 0..256 {
+            let delay = retry_delay_with_jitter(&s, 1, Some(MAX_RETRY_AFTER));
+            assert!(
+                delay <= MAX_RETRY_AFTER,
+                "jittered delay {delay:?} > MAX_RETRY_AFTER"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_delay_with_jitter_leaves_fixed_no_hint_unbounded() {
+        // A configured Fixed delay with no server hint is the caller's explicit
+        // choice and is not re-clamped to MAX_RETRY_AFTER.
+        let s = BackoffStrategy::Fixed {
+            delay: Duration::from_secs(400),
+            jitter: Duration::ZERO,
+        };
+        assert_eq!(
+            retry_delay_with_jitter(&s, 1, None),
+            Duration::from_secs(400)
+        );
+    }
+
+    // --- Finding 4: QuotaTracker snapshot/restore ---
+
+    #[tokio::test]
+    async fn quota_tracker_snapshot_round_trips_state() {
+        let tracker = QuotaTracker::new(3, Duration::from_secs(60));
+        let now = t(1000);
+        tracker.check_and_increment(now).await.unwrap();
+        tracker.check_and_increment(now).await.unwrap();
+        let snap = tracker.snapshot().await;
+        assert_eq!(snap.count, 2);
+        assert_eq!(snap.window_start, now);
+
+        let restored = QuotaTracker::with_snapshot(3, Duration::from_secs(60), snap);
+        // The third request is still allowed; the fourth exhausts.
+        assert!(restored.check_and_increment(now).await.is_ok());
+        let err = restored.check_and_increment(now).await.unwrap_err();
+        match err {
+            RateLimitError::QuotaExhausted { resets_at } => assert_eq!(resets_at, t(1060)),
+            other => panic!("expected QuotaExhausted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn quota_tracker_with_elapsed_snapshot_rolls_over() {
+        // A snapshot whose window has already elapsed behaves like a fresh
+        // tracker: the first check resets the window to `now`.
+        let stale = QuotaSnapshot {
+            count: 5,
+            window_start: t(0),
+        };
+        let tracker = QuotaTracker::with_snapshot(2, Duration::from_secs(60), stale);
+        assert!(tracker.check_and_increment(t(100_000)).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn quota_tracker_is_exhausted_fail_fast() {
+        let tracker = QuotaTracker::new(1, Duration::from_secs(60));
+        let now = t(1000);
+        assert!(tracker.check_and_increment(now).await.is_ok());
+        // Quota spent: is_exhausted reports resets_at without incrementing.
+        assert_eq!(tracker.is_exhausted(now).await, Some(t(1060)));
+        // After the window elapses, it is no longer exhausted (rolls over).
+        assert!(tracker.is_exhausted(t(1061)).await.is_none());
     }
 }

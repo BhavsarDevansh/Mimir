@@ -8,9 +8,11 @@
 When Mimir's connectors fetch data from your email, calendar, or photo
 library, they make network requests to external services. Those services have
 rate limits — some strict (the free OSM Nominatim geocoder allows at most one
-request per second), some gentler. Mimir now has a single, shared rate limiter
-and retry mechanism that every connector uses, so it never accidentally hammers
-a service and always backs off politely when a service says "slow down".
+request per second), some gentler. Mimir now ships a single, shared rate
+limiter and retry mechanism for connectors to use. Connectors will route their
+outbound calls through it as their backends are implemented in later Phase 3
+issues, so Mimir never accidentally hammers a service and always backs off
+politely when a service says "slow down".
 
 ## How it works
 
@@ -22,7 +24,10 @@ Each connector instance is configured with a small rate-limit policy:
   pace kicks in.
 - **Daily quota** — an optional cap on total requests per rolling 24 hours.
   When it's spent, the connector pauses for the rest of the day rather than
-  blocking forever or getting banned.
+  blocking forever or getting banned. The limiter notices an exhausted quota
+  instantly (it doesn't sit waiting first), and it can save and reload the
+  quota window across Mimir restarts so a relaunch can't quietly reset your
+  daily allowance and overspend it.
 - **Backoff strategy** — how long to wait between retries if a request fails
   (exponential, linear, or fixed), plus a little random jitter so retries from
   different connectors don't all fire at the same instant.
@@ -31,7 +36,8 @@ Before every outbound API call, a connector asks the limiter for permission
 (`acquire`). If it's within the rate and quota, the call proceeds. If the
 service returns a "slow down" response (HTTP 429) or is temporarily unavailable
 (502/503/504), the request is retried automatically with increasing delays,
-honouring any `Retry-After` hint the service sends.
+honouring any `Retry-After` hint the service sends (capped so a large hint
+plus jitter can never wait longer than the configured ceiling).
 
 ## What it does *not* cover
 

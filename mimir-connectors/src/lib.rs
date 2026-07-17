@@ -75,7 +75,7 @@ pub use supervisor::{
 };
 
 pub use rate_limit::{
-    BackoffStrategy, RateLimitConfig, RateLimitError, RateLimiter, RetryError, RetryHint,
-    Retryable, is_retryable_status, retry_with_backoff,
+    BackoffStrategy, QuotaSnapshot, RateLimitConfig, RateLimitError, RateLimiter, RetryError,
+    RetryHint, Retryable, is_retryable_status, retry_with_backoff,
 };
 pub use secrets::{FileSecretStore, InMemorySecretStore, SecretBundle, SecretError, SecretStore};

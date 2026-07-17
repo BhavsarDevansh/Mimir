@@ -61,9 +61,15 @@ One JSON file per connector instance at
   the next write. The temp file is tightened to `0600` *before* the
   atomic `rename`, so the secret is never observable at its final path with the
   looser default mode inherited from the umask.
-- **Atomic writes.** Serialise to a sibling `<slug>.json.tmp`, then `rename`
-  onto the final path. A crash mid-write cannot leave a truncated secret that
-  silently logs a connector out. No temp files are left behind on success.
+- **Atomic writes.** Serialise to a uniquely-named sibling temp file, then
+  `rename` onto the final path. The temp file name is
+  `<slug>.json.tmp.<pid>.<counter>`, embedding the process id and a
+  per-process monotonic counter so two concurrent `store` calls for the same
+  slug (within one process or across processes sharing the secrets directory)
+  never collide on the same temp file. A crash mid-write cannot leave a
+  truncated secret that silently logs a connector out. On success the temp file
+  is replaced by the rename; if the rename fails the temp file is best-effort
+  removed so no stale temp files linger.
 - **Path-traversal safety.** Slugs are validated against
   `[A-Za-z0-9_-]{1,128}` before any filesystem access — empty, `..`, path
   separators, spaces, dots, and non-ASCII are rejected with

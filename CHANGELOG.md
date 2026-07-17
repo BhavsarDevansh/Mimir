@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.71.1] — 2026-07-17
+
+### Docs
+
+- Corrected the `FileSecretStore` atomic-write documentation in
+  `docs/connector-secret-store.md` to describe the actual temporary-file
+  naming pattern (`<slug>.json.tmp.<pid>.<counter>`, using the process id and
+  a per-process monotonic counter) rather than the placeholder
+  `<slug>.json.tmp`, so cleanup and monitoring logic is not misled. Addresses
+  PR #218 review feedback.
+
 ## [0.71.0] — 2026-07-17
 
 ### Phase 3 — connector secret store (issue #187 / F10)

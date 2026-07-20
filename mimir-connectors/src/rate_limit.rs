@@ -238,6 +238,14 @@ pub enum RateLimitError {
     #[error("invalid rate-limit config: {0}")]
     InvalidConfig(String),
 
+    /// A persisted [`QuotaSnapshot`] supplied to
+    /// [`RateLimiter::with_quota_state`] was invalid — for example its
+    /// `window_start` plus the configured window would overflow
+    /// `DateTime<Utc>`, which would otherwise panic during admission. Repair
+    /// or discard the snapshot before reconstructing the limiter.
+    #[error("invalid quota snapshot: {0}")]
+    InvalidSnapshot(String),
+
     /// The rolling 24h daily quota has been spent. `resets_at` is when the
     /// window rolls over and requests resume. The caller (connector /
     /// supervisor) should treat this as non-retryable for the current cycle
@@ -263,12 +271,27 @@ pub struct QuotaSnapshot {
     pub count: u32,
     /// When the current rolling window started (UTC).
     pub window_start: DateTime<Utc>,
+    /// Monotonic version that increases on every successful
+    /// `check_and_increment` (and is carried across reconstruction). A
+    /// persistence layer MUST treat `version` as the compare-and-swap guard
+    /// for a window: only overwrite a previously persisted snapshot whose
+    /// `version` is strictly lower, and never persist a snapshot before its
+    /// corresponding `acquire` has been admitted, so a delayed out-of-order
+    /// write (e.g. count 1 landing after count 2) cannot revive a stale,
+    /// lower count after a restart. Defaults to `0` for snapshots authored
+    /// before this field existed.
+    #[serde(default)]
+    pub version: u64,
 }
 
 #[derive(Debug)]
 struct QuotaState {
     count: u32,
     window_start: DateTime<Utc>,
+    /// Monotonic version bumped on every successful `check_and_increment` and
+    /// carried across reconstruction via [`QuotaSnapshot::version`], so a
+    /// persistence layer can reject regressive out-of-order writes.
+    version: u64,
 }
 
 impl From<&QuotaState> for QuotaSnapshot {
@@ -276,6 +299,7 @@ impl From<&QuotaState> for QuotaSnapshot {
         Self {
             count: state.count,
             window_start: state.window_start,
+            version: state.version,
         }
     }
 }
@@ -301,6 +325,7 @@ impl QuotaTracker {
                 // observes `now >= window_start + window` and resets the
                 // window to `now`, so the window starts on first use.
                 window_start: DateTime::from_timestamp(0, 0).expect("epoch is valid"),
+                version: 0,
             }),
         }
     }
@@ -309,16 +334,34 @@ impl QuotaTracker {
     /// ([`QuotaSnapshot`]) instead of starting from zero. A snapshot whose
     /// window has already elapsed behaves like a fresh tracker: the first
     /// `check_and_increment` resets the window to `now`.
-    fn with_snapshot(quota: u32, window: Duration, snapshot: QuotaSnapshot) -> Self {
+    fn with_snapshot(
+        quota: u32,
+        window: Duration,
+        snapshot: QuotaSnapshot,
+    ) -> Result<Self, RateLimitError> {
         let window = TimeDelta::from_std(window).expect("quota window fits in TimeDelta");
-        Self {
+        // `QuotaSnapshot` is public and `serde`-deserialisable, so a crafted
+        // `window_start` near `DateTime::<Utc>::MAX_UTC` could make the
+        // in-memory window-end arithmetic (`window_start + window`) panic in
+        // `is_exhausted` / `check_and_increment`. Validate the restored
+        // window end up front and reject snapshots that would overflow
+        // instead of constructing a state that can panic later.
+        if snapshot.window_start.checked_add_signed(window).is_none() {
+            return Err(RateLimitError::InvalidSnapshot(format!(
+                "window_start ({}) + window ({}s) overflows DateTime<Utc>",
+                snapshot.window_start,
+                window.num_seconds()
+            )));
+        }
+        Ok(Self {
             quota,
             window,
             state: Mutex::new(QuotaState {
                 count: snapshot.count,
                 window_start: snapshot.window_start,
+                version: snapshot.version,
             }),
-        }
+        })
     }
 
     /// Read the current window state for persistence.
@@ -360,6 +403,7 @@ impl QuotaTracker {
             });
         }
         state.count += 1;
+        state.version = state.version.saturating_add(1);
         Ok(())
     }
 }
@@ -427,10 +471,13 @@ impl RateLimiter {
             .allow_burst(NonZeroU32::new(config.burst_size).expect("burst_size validated >= 1"));
         let inner = governor::RateLimiter::direct(quota);
 
-        let tracker = config.daily_quota.map(|daily| match quota_state {
-            Some(snapshot) => QuotaTracker::with_snapshot(daily, DAILY_WINDOW, snapshot),
-            None => QuotaTracker::new(daily, DAILY_WINDOW),
-        });
+        let tracker = match config.daily_quota {
+            Some(daily) => match quota_state {
+                Some(snapshot) => Some(QuotaTracker::with_snapshot(daily, DAILY_WINDOW, snapshot)?),
+                None => Some(QuotaTracker::new(daily, DAILY_WINDOW)),
+            },
+            None => None,
+        };
 
         Ok(Self {
             config,
@@ -926,7 +973,7 @@ mod tests {
         assert_eq!(snap.count, 2);
         assert_eq!(snap.window_start, now);
 
-        let restored = QuotaTracker::with_snapshot(3, Duration::from_secs(60), snap);
+        let restored = QuotaTracker::with_snapshot(3, Duration::from_secs(60), snap).unwrap();
         // The third request is still allowed; the fourth exhausts.
         assert!(restored.check_and_increment(now).await.is_ok());
         let err = restored.check_and_increment(now).await.unwrap_err();
@@ -943,8 +990,9 @@ mod tests {
         let stale = QuotaSnapshot {
             count: 5,
             window_start: t(0),
+            version: 0,
         };
-        let tracker = QuotaTracker::with_snapshot(2, Duration::from_secs(60), stale);
+        let tracker = QuotaTracker::with_snapshot(2, Duration::from_secs(60), stale).unwrap();
         assert!(tracker.check_and_increment(t(100_000)).await.is_ok());
     }
 

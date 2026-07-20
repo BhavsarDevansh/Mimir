@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.74.0] — 2026-07-20
+
+### Phase 3 — rate-limit review follow-ups (PR #219)
+
+Addresses the remaining CodeRabbit review threads on the connector
+rate-limiting primitives (issue #189 / F12).
+
+- **Overflow-safe snapshot restore**: `RateLimiter::with_quota_state` now
+  validates a restored `QuotaSnapshot` with `DateTime::checked_add_signed`
+  before constructing quota state, returning the new
+  `RateLimitError::InvalidSnapshot` when `window_start + window` would
+  overflow `DateTime<Utc>`. A crafted, `serde`-deserialisable snapshot near
+  `DateTime::<Utc>::MAX_UTC` can no longer panic inside `is_exhausted` /
+  `check_and_increment`.
+- **Monotonic persistence protocol**: `QuotaSnapshot` gains a `version: u64`
+  field (with `#[serde(default)]`) that increases on every successful `acquire`
+  and is carried across reconstruction, so a persistence layer can use it as a
+  compare-and-swap guard and never regress a window's count via delayed,
+  out-of-order writes. `docs/connector-rate-limiting.md` documents the
+  persist-before-dispatch and never-regress protocol.
+- Tests added for `MAX_UTC` snapshot rejection, monotonic `version` across
+  acquires and reconstruction, and backward-compatible deserialisation of
+  pre-`version` snapshots.
+
 ## [0.73.0] — 2026-07-17
 
 ### Phase 3 — rate-limit review fixes (PR #219)

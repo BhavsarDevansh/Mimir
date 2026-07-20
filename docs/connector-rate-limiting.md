@@ -125,6 +125,28 @@ limiter that resumes the saved window instead of resetting the allowance to
 zero — so a daemon or connector relaunch cannot silently bypass a provider's
 hard 24-hour quota. A snapshot whose window has already elapsed rolls over on
 first use; a snapshot supplied with no `daily_quota` is ignored.
+`with_quota_state` validates the snapshot before construction: a `window_start`
+whose restored window end (`window_start + window`) would overflow
+`DateTime<Utc>` is rejected with `RateLimitError::InvalidSnapshot` instead of
+panicking during admission.
+
+`QuotaSnapshot` also carries a monotonic `version` that increases on every
+successful `acquire` and is carried across reconstruction. Persistence is the
+caller's responsibility (the limiter owns no storage), so the persistence layer
+MUST follow this protocol:
+
+- **Persist before dispatch.** Durably store the snapshot returned after each
+  successful `acquire` *before* sending the outbound request it admitted, so a
+  crash after dispatch cannot lose the consumed count.
+- **Never regress a window's count.** Use `version` as a compare-and-swap guard:
+  only overwrite the previously persisted snapshot for a window when the new
+  snapshot's `version` is strictly higher. This prevents a delayed, out-of-order
+  write (e.g. a `count: 1` snapshot landing after a `count: 2` snapshot) from
+  reviving a stale lower count after a restart, which would otherwise let the
+  connector exceed the provider's hard quota.
+
+Snapshots authored before `version` existed deserialize with `version: 0`, so
+rolling upgrades do not reject historical persistence state.
 
 ## Retry / backoff
 

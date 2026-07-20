@@ -355,9 +355,84 @@ async fn with_quota_state_ignores_snapshot_when_quota_disabled() {
     let stale = QuotaSnapshot {
         count: 99,
         window_start: Utc::now(),
+        version: 0,
     };
     let limiter = RateLimiter::with_quota_state(RateLimitConfig::default(), Some(stale)).unwrap();
     assert!(limiter.quota_snapshot().await.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot validation & monotonic persistence protocol (PR #219 reviews)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn with_quota_state_rejects_snapshot_whose_window_end_overflows() {
+    // A crafted, `serde`-deserialisable snapshot whose restored window end
+    // would overflow `DateTime<Utc>` must be rejected at reconstruction time
+    // rather than panicking later inside `is_exhausted` / `check_and_increment`.
+    use chrono::DateTime;
+    let crafted = QuotaSnapshot {
+        count: 1,
+        window_start: DateTime::<Utc>::MAX_UTC,
+        version: 0,
+    };
+    let result = RateLimiter::with_quota_state(daily_quota_config(3), Some(crafted));
+    assert!(
+        matches!(result, Err(RateLimitError::InvalidSnapshot(_))),
+        "an overflowing snapshot must be rejected, not panic; got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn quota_snapshot_version_is_monotonic_across_acquires() {
+    let limiter = RateLimiter::new(daily_quota_config(3)).unwrap();
+    let v0 = limiter
+        .quota_snapshot()
+        .await
+        .expect("quota enabled")
+        .version;
+    limiter.acquire().await.unwrap();
+    let v1 = limiter
+        .quota_snapshot()
+        .await
+        .expect("quota enabled")
+        .version;
+    limiter.acquire().await.unwrap();
+    let v2 = limiter
+        .quota_snapshot()
+        .await
+        .expect("quota enabled")
+        .version;
+    assert_eq!(v0, 0);
+    assert!(v1 > v0, "version must increase per acquire ({v0} -> {v1})");
+    assert!(v2 > v1, "version must increase per acquire ({v1} -> {v2})");
+
+    // The version survives reconstruction so a persistence layer can use it
+    // as a compare-and-swap guard against regressive out-of-order writes.
+    let snap = limiter.quota_snapshot().await.expect("quota enabled");
+    let restored = RateLimiter::with_quota_state(daily_quota_config(3), Some(snap)).unwrap();
+    let restored_v = restored
+        .quota_snapshot()
+        .await
+        .expect("quota enabled")
+        .version;
+    assert_eq!(
+        restored_v, v2,
+        "version must be preserved across reconstruction"
+    );
+}
+
+#[test]
+fn quota_snapshot_deserialises_old_payload_without_version() {
+    // Snap persisted before `version` existed must still load, defaulting to 0
+    // so a rolling upgrade does not reject historical persistence state.
+    let json = serde_json::json!({
+        "count": 7,
+        "window_start": "2025-01-02T03:04:05Z",
+    });
+    let snap: QuotaSnapshot = serde_json::from_value(json).unwrap();
+    assert_eq!(snap.count, 7);
+    assert_eq!(snap.version, 0);
 }
 
 // ---------------------------------------------------------------------------

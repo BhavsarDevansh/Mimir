@@ -33,6 +33,11 @@
 //!   [`FnConnectorFactory`].
 //! - [`mock`] — always-compiled mock connector test harness (stub; filled by
 //!   F13).
+//! - [`rate_limit`] — shared rate-limiting + retry/backoff primitives
+//!   ([`RateLimitConfig`] / [`RateLimiter`] / [`BackoffStrategy`] / [`retry_with_backoff`],
+//!   F12 / #189): token-bucket throttling (governor GCRA), optional rolling 24h
+//!   daily quota, and uniform 429/503 retry with jitter. Connector LLM calls are
+//!   exempt (decision D′); this governs HTTP/IMAP/CalDAV API calls only.
 //! - [`secrets`] — [`SecretStore`] trait + [`SecretBundle`] enum +
 //!   [`FileSecretStore`] / [`InMemorySecretStore`] (F10 / #187): per-connector
 //!   credential storage, one store for all auth kinds (OAuth / API token / app
@@ -54,6 +59,7 @@
 
 pub mod connector;
 pub mod mock;
+pub mod rate_limit;
 pub mod registry;
 pub mod secrets;
 pub mod supervisor;
@@ -68,4 +74,8 @@ pub use supervisor::{
     ConnectorSupervisor, SupervisorConfig, SupervisorError, TriggerError, TriggerOutcome,
 };
 
+pub use rate_limit::{
+    BackoffStrategy, QuotaSnapshot, RateLimitConfig, RateLimitError, RateLimiter, RetryError,
+    RetryHint, Retryable, is_retryable_status, retry_with_backoff,
+};
 pub use secrets::{FileSecretStore, InMemorySecretStore, SecretBundle, SecretError, SecretStore};

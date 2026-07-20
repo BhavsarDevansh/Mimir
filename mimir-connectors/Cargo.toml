@@ -29,6 +29,18 @@ async-trait = "0.1"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 tracing = "0.1"
 
+# F12 (issue #189): shared rate-limit + retry/backoff primitives. `governor`
+# provides a vetted, safe (no `unsafe`) GCRA token-bucket limiter with built-in
+# jitter and async `until_ready`; `rand` (pinned to the 0.9 line governor
+# already pulls in transitively, so no extra major version enters the tree)
+# provides jitter entropy for the retry/backoff layer. Governor's async sleeps
+# use its own clock (`futures-timer`), so no `tokio` feature flag is required.
+governor = "0.10"
+rand = "0.9"
+# `humantime` gives human-readable Duration serde (e.g. "500ms", "30s") for the
+# rate-limit config, so per-connector `config_json` stays editable by hand.
+humantime = "2.4"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tempfile = "3"

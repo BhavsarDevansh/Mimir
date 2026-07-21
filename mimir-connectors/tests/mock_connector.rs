@@ -219,6 +219,73 @@ async fn batch_size_emits_facts_incrementally() {
 }
 
 #[tokio::test]
+async fn batch_size_advances_only_on_successful_syncs() {
+    // Regression: the batch window must be keyed on *successful* syncs, not raw
+    // call count, so failed/panicked cycles do not consume a window and drop
+    // facts. fail_first=2 then success must still emit the first batch.
+    let facts: Vec<MockFactConfig> = (0..4)
+        .map(|i| person_fact(&format!("P{i}"), "rel", "obj", &format!("m-{i}")))
+        .collect();
+    let config = json!({
+        "__slug": "mock",
+        "cursor": "c",
+        "batch_size": 2u32,
+        "fail_first": 2,
+        "facts": facts,
+    });
+    let mock = MockConnector::from_config(config).unwrap();
+
+    // First two calls fail (do not consume a batch window).
+    assert!(mock.sync(SyncOptions::default()).await.is_err());
+    assert!(mock.sync(SyncOptions::default()).await.is_err());
+
+    // Third call (first success) emits the first batch [0,2).
+    assert_eq!(mock.sync(SyncOptions::default()).await.unwrap().fetched, 2);
+    assert_eq!(mock.extract().await.unwrap().len(), 2);
+    // Fourth call emits the remaining batch [2,4).
+    assert_eq!(mock.sync(SyncOptions::default()).await.unwrap().fetched, 2);
+    assert_eq!(mock.extract().await.unwrap().len(), 2);
+    // Fifth call: exhausted.
+    assert_eq!(mock.sync(SyncOptions::default()).await.unwrap().fetched, 0);
+    assert!(mock.extract().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn batch_size_advances_only_on_successful_syncs_after_panic() {
+    // Same regression for the panic-injection path. The panic is run in a
+    // spawned task (the way the supervisor catches it via `JoinError::is_panic`)
+    // so no `futures::catch_unwind` dependency is needed.
+    let facts: Vec<MockFactConfig> = (0..2)
+        .map(|i| person_fact(&format!("Q{i}"), "rel", "obj", &format!("m-{i}")))
+        .collect();
+    let config = json!({
+        "__slug": "mock",
+        "cursor": "c",
+        "batch_size": 1u32,
+        "panic_first": 1,
+        "facts": facts,
+    });
+    let mock = std::sync::Arc::new(MockConnector::from_config(config).unwrap());
+
+    // First call panics (does not consume a batch window). Catch it in a
+    // spawned task the way the supervisor does.
+    let panicking = mock.clone();
+    let handle = tokio::spawn(async move { panicking.sync(SyncOptions::default()).await });
+    let join = handle.await;
+    assert!(join.is_err(), "first sync should panic");
+    assert!(join.unwrap_err().is_panic(), "JoinError should be a panic");
+
+    // First success emits fact 0 (window not consumed by the panic).
+    assert_eq!(mock.sync(SyncOptions::default()).await.unwrap().fetched, 1);
+    assert_eq!(mock.extract().await.unwrap().len(), 1);
+    // Second success emits fact 1.
+    assert_eq!(mock.sync(SyncOptions::default()).await.unwrap().fetched, 1);
+    assert_eq!(mock.extract().await.unwrap().len(), 1);
+    // Exhausted.
+    assert_eq!(mock.sync(SyncOptions::default()).await.unwrap().fetched, 0);
+}
+
+#[tokio::test]
 async fn sensitive_fact_flag_is_carried_through() {
     let mut fact = person_fact("Secret", "earns", "100000", "s-1");
     fact.is_sensitive = true;

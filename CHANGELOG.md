@@ -37,6 +37,11 @@ and is the framework's test harness + the T1 sync→extract→insert→query veh
   (`SourceType::Connector`, `connector_instance_id`, `raw_reference`,
   `ExtractionMethod::StructuredParse`), with no real service.
 - **No new dependencies** (in-memory; reuses `tokio`, `serde`, `chrono`).
+- **Fix (review #220)**: the `batch_size` slice is now keyed on the
+  *successful*-sync counter, not the raw call count, so failed/panicked cycles
+  no longer consume a batch window and silently drop facts. Regression tests
+  added for the `fail_first` + `batch_size` and `panic_first` + `batch_size`
+  combinations.
 - **Breaking change** to the public `MockConnector` type (unit struct →
   config-driven struct); acceptable per the project breaking-changes policy
   (only the OpenAI-compatible chat endpoint is stability-sensitive).

@@ -302,6 +302,9 @@ pub struct MockConnector {
     interval: Duration,
     recorder: Option<Arc<MockSyncRecorder>>,
     sync_calls: AtomicU32,
+    /// Counts only *successful* syncs; drives the `batch_size` slice so
+    /// failed/panicked cycles do not consume a batch window.
+    sync_successes: AtomicU32,
     buffer: Mutex<Vec<NormalizedFact>>,
 }
 
@@ -327,6 +330,7 @@ impl Default for MockConnector {
             interval: Duration::from_millis(DEFAULT_INTERVAL_MS),
             recorder: None,
             sync_calls: AtomicU32::new(0),
+            sync_successes: AtomicU32::new(0),
             buffer: Mutex::new(Vec::new()),
         }
     }
@@ -398,6 +402,7 @@ impl MockConnector {
             interval: Duration::from_millis(parsed.interval_ms),
             recorder: None,
             sync_calls: AtomicU32::new(0),
+            sync_successes: AtomicU32::new(0),
             buffer: Mutex::new(Vec::new()),
         })
     }
@@ -534,7 +539,11 @@ impl Connector for MockConnector {
         }
 
         // Stage the canned facts for this cycle. With `batch_size`, slice
-        // incrementally to completion; otherwise emit the full list.
+        // incrementally to completion; otherwise emit the full list. The batch
+        // window is keyed on the *successful*-sync counter (`sync_successes`),
+        // not the raw call counter (`n`), so failed/panicked cycles do not
+        // consume a window and silently drop facts.
+        let success_index = self.sync_successes.fetch_add(1, Ordering::SeqCst);
         let staged: Vec<NormalizedFact> = match self.batch_size {
             None => self
                 .facts
@@ -544,7 +553,9 @@ impl Connector for MockConnector {
                 .collect(),
             Some(size) => {
                 let size = size as usize;
-                let start = (n as usize).saturating_mul(size).min(self.facts.len());
+                let start = (success_index as usize)
+                    .saturating_mul(size)
+                    .min(self.facts.len());
                 let end = (start + size).min(self.facts.len());
                 self.facts[start..end]
                     .iter()

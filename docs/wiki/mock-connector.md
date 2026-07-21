@@ -1,0 +1,73 @@
+# Mock Connector
+
+> **Phase:** 3 — Connectors
+> **Status:** Done (issue #190 / F13). Always compiled.
+
+## What it is
+
+The mock connector is Mimir's built-in test harness for the connector
+framework. It is a fake connector that emits pre-written ("canned") facts on a
+schedule you configure, so the framework and its supervisor can be tested
+end-to-end without connecting to any real service (no Gmail, no calendar, no
+photo library).
+
+It is **always compiled** — it ships in every build, including
+`--no-default-features`, so the connector framework is always exercisable.
+
+## Why it exists
+
+Real connectors talk to external services. Testing the framework (startup,
+restarts, backoff, the circuit breaker, auth expiry, manual sync triggers,
+cursor persistence) should not depend on those services being reachable. The
+mock stands in: you describe what it should do in JSON, and it behaves like a
+real connector for the purpose of the test.
+
+It is also the vehicle for the end-to-end "sync → extract → insert → query"
+test that proves the connector ingestion pipeline works before any real backend
+exists.
+
+## How it works
+
+- You write a connector row whose `backend` is the mock and whose `config_json`
+  describes the behaviour (mode, cadence, canned facts, health, failure
+  injection).
+- The supervisor starts it like any connector: it runs `health` → `sync` →
+  `extract` → inserts the canned facts through the same fact pipeline as a
+  conversation (`normalize_and_insert`).
+- The canned facts land in the knowledge graph with connector provenance, so
+  they get the same confidence scoring, corroboration, and sensitivity gating as
+  facts you tell Mimir directly.
+
+### Two modes
+
+- **Polling** — the supervisor waits `interval_ms + jitter_ms` between syncs.
+- **Push** — the mock sleeps `interval_ms` inside `sync()` to self-pace, then
+  emits. The supervisor cancels it on shutdown. Manual triggers are not
+  supported for push connectors (the framework rejects them).
+
+## Use cases
+
+- **Framework tests** — drive the supervisor's lifecycle (backoff, circuit
+  breaker, auth-expiry pause, cursor persistence, trigger preemption) with
+  deterministic, configurable behaviour.
+- **End-to-end ingestion test** — prove canned facts flow all the way into the
+  knowledge graph with correct provenance.
+- **Regression harness** — exercise both polling and push task loops.
+
+## Best practices
+
+- Always set a `cursor` when you want to assert sync progress was persisted.
+- Use `fail_first` / `panic_first` / `always_fail` to exercise failure and
+  recovery paths; keep these at `0` for happy-path tests.
+- Use `health: "auth_expired"` to test the auth-expiry pause path.
+- Give each canned fact a `raw_reference` (it is required for connector
+  provenance); the mock auto-generates one (`mock-<slug>-<index>`) if you omit
+  it.
+- The mock is a test harness — do not register it as a real connector in
+  production config.
+
+## See also
+
+- [Connectors](connectors.md) — the connector framework overview.
+- `docs/mock-connector.md` — the technical reference (config schema, public API).
+- `VISION/09-Roadmap/Phase-3-Plan.md` — the full Phase 3 design.

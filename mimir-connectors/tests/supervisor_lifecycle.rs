@@ -1,31 +1,29 @@
-//! F8 behavioural tests (issue #185): the `ConnectorSupervisor` supervised
-//! per-connector task lifecycle.
+//! F8/F9 behavioural tests (issues #185 / #186): the `ConnectorSupervisor`
+//! supervised per-connector task lifecycle + manual sync triggering.
 //!
 //! These exercise spawn / restart-with-backoff / circuit-breaker /
 //! auth-expired-pause / startup-restore / graceful-shutdown / cursor
-//! persistence against a real in-memory knowledge graph and configurable
-//! test-local connector mocks. The shared `MockConnector` is intentionally
-//! left untouched (F13 owns the real harness); these mocks live here so the
-//! failure/panic/auth-expiry paths can be driven deterministically.
+//! persistence / trigger preemption against a real in-memory knowledge graph.
+//! Since F13 (#190) the configurable, always-compiled `MockConnector` is the
+//! single test connector: behaviour (mode, cadence, health/auth,
+//! failure/panic injection, cursor) is read from `config_json`, and a
+//! `MockSyncRecorder` observes `SyncOptions` for the F9 concurrency tests.
+//! The previous private `TestConnector` has been removed (DRY).
 
 use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use async_trait::async_trait;
-use chrono::Utc;
 use serde_json::json;
 
 use mimir_connectors::{
-    Connector, ConnectorError, ConnectorMode, ConnectorRegistry, ConnectorSupervisor,
-    FnConnectorFactory, HealthStatus, SupervisorConfig, SyncOptions, SyncOutcome, TriggerError,
-    TriggerOutcome,
+    Connector, ConnectorError, ConnectorRegistry, ConnectorSupervisor, FnConnectorFactory,
+    MockConnector, MockConnectorFactory, MockSyncRecorder, SupervisorConfig, SyncOptions,
+    TriggerError, TriggerOutcome,
 };
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorStatus, ConnectorType};
-use mimir_knowledge::normalize::NormalizedFact;
 
 // ---------------------------------------------------------------------------
 // Knowledge-graph test harness
@@ -99,216 +97,13 @@ fn with_slug(slug: &str, extra: serde_json::Value) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Configurable test connector
+// Registries (MockConnector-backed)
 // ---------------------------------------------------------------------------
 
-/// Shared recorder for observing the [`SyncOptions`] a connector's `sync()`
-/// receives and the peak number of concurrent `sync()` calls (F9 / #186).
-///
-/// The connector is constructed inside the supervisor's runner task, so the
-/// test hands a clone of this `Arc` to the factory closure, which injects it
-/// into the [`TestConnector`]. Each successful `sync()` pushes its options
-/// and tracks in-flight concurrency.
-#[derive(Debug, Default)]
-struct SyncRecorder {
-    recorded: std::sync::Mutex<Vec<SyncOptions>>,
-    in_flight: AtomicU32,
-    max_concurrent: AtomicU32,
-}
-
-impl SyncRecorder {
-    fn len(&self) -> usize {
-        self.recorded.lock().unwrap().len()
-    }
-
-    fn last(&self) -> Option<SyncOptions> {
-        self.recorded.lock().unwrap().last().copied()
-    }
-
-    fn max_concurrent(&self) -> u32 {
-        self.max_concurrent.load(Ordering::SeqCst)
-    }
-}
-
-#[derive(Debug)]
-struct TestConnector {
-    slug: String,
-    ctype: ConnectorType,
-    interval: Duration,
-    /// `sync()` returns `Err` for the first N calls, then `Ok`.
-    fail_first: u32,
-    /// `sync()` panics for the first N calls, then `Ok`.
-    panic_first: u32,
-    /// `sync()` always returns `Err`.
-    always_fail: bool,
-    /// `health()` returns `AuthExpired` (pauses the connector).
-    auth_expired: bool,
-    /// `sync()` blocks for a long time (push / shutdown-cancellation test).
-    blocking: bool,
-    /// Cursor reported by every successful `sync()`.
-    cursor: Option<String>,
-    /// Artificial delay applied inside a successful `sync()` (serialization
-    /// test): lets concurrent triggers overlap so the recorder can observe
-    /// whether `sync()` was ever called concurrently.
-    sync_delay_ms: u64,
-    /// Optional shared recorder; when `Some`, each successful `sync()` records
-    /// its [`SyncOptions`] and tracks in-flight concurrency.
-    recorder: Option<Arc<SyncRecorder>>,
-    sync_calls: AtomicU32,
-}
-
-impl TestConnector {
-    fn from_config(config: serde_json::Value) -> Self {
-        let slug = config
-            .get("__slug")
-            .and_then(|v| v.as_str())
-            .unwrap_or("test")
-            .to_string();
-        let ctype = match config
-            .get("__ctype")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(ConnectorType::Gmail as i64)
-        {
-            x if x == ConnectorType::Calendar as i64 => ConnectorType::Calendar,
-            x if x == ConnectorType::Photos as i64 => ConnectorType::Photos,
-            _ => ConnectorType::Gmail,
-        };
-        let fail_first = config
-            .get("fail_first")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
-        let panic_first = config
-            .get("panic_first")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
-        let always_fail = config
-            .get("always_fail")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let auth_expired = config
-            .get("auth_expired")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let blocking = config
-            .get("blocking")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let cursor = config
-            .get("cursor")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        let interval_ms = config
-            .get("interval_ms")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(5);
-        let sync_delay_ms = config
-            .get("sync_delay_ms")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        Self {
-            slug,
-            ctype,
-            interval: Duration::from_millis(interval_ms),
-            fail_first,
-            panic_first,
-            always_fail,
-            auth_expired,
-            blocking,
-            cursor,
-            sync_delay_ms,
-            recorder: None,
-            sync_calls: AtomicU32::new(0),
-        }
-    }
-}
-
-#[async_trait]
-impl Connector for TestConnector {
-    fn id(&self) -> &str {
-        &self.slug
-    }
-
-    fn name(&self) -> &str {
-        &self.slug
-    }
-
-    fn connector_type(&self) -> ConnectorType {
-        self.ctype
-    }
-
-    fn mode(&self) -> ConnectorMode {
-        if self.blocking {
-            ConnectorMode::Push
-        } else {
-            ConnectorMode::Polling {
-                interval: self.interval,
-                jitter: Duration::ZERO,
-            }
-        }
-    }
-
-    fn config_schema(&self) -> serde_json::Value {
-        json!({})
-    }
-
-    async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError> {
-        Ok(ConnectorAuthState::Authenticated)
-    }
-
-    async fn health(&self) -> Result<HealthStatus, ConnectorError> {
-        if self.auth_expired {
-            Ok(HealthStatus::AuthExpired)
-        } else {
-            Ok(HealthStatus::Online)
-        }
-    }
-
-    async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
-        let n = self.sync_calls.fetch_add(1, Ordering::SeqCst);
-        if self.blocking {
-            tokio::time::sleep(Duration::from_secs(3600)).await;
-        }
-        if n < self.panic_first {
-            panic!("test connector panic #{n}");
-        }
-        if self.always_fail || n < self.fail_first {
-            return Err(ConnectorError::Network(format!("simulated failure #{n}")));
-        }
-        // Optional recorder: track in-flight concurrency (peak) and record
-        // the SyncOptions this sync received, after any artificial delay so
-        // overlapping triggers are observable.
-        if let Some(recorder) = &self.recorder {
-            let prev = recorder.in_flight.fetch_add(1, Ordering::SeqCst);
-            recorder
-                .max_concurrent
-                .fetch_max(prev + 1, Ordering::SeqCst);
-        }
-        if self.sync_delay_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(self.sync_delay_ms)).await;
-        }
-        if let Some(recorder) = &self.recorder {
-            recorder.in_flight.fetch_sub(1, Ordering::SeqCst);
-            recorder.recorded.lock().unwrap().push(options);
-        }
-        Ok(SyncOutcome {
-            fetched: 0,
-            new_cursor: self.cursor.clone(),
-            fetched_at: Utc::now(),
-        })
-    }
-
-    async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError> {
-        Ok(Vec::new())
-    }
-
-    async fn forget(&self) -> Result<(), ConnectorError> {
-        Ok(())
-    }
-}
-
-/// Build a registry whose `TestConnector` factory reads behaviour entirely
-/// from `config_json` (including the row slug/type, smuggled in by the
-/// supervisor at restore time).
+/// Build a registry whose `MockConnectorFactory` reads behaviour entirely from
+/// `config_json` (including the row slug/type, smuggled in by the supervisor at
+/// restore time). The mock is always compiled (F13 / #190), so this is the
+/// single connector used by every lifecycle test.
 fn test_registry() -> Arc<ConnectorRegistry> {
     let registry = ConnectorRegistry::new();
     for ctype in [
@@ -316,20 +111,18 @@ fn test_registry() -> Arc<ConnectorRegistry> {
         ConnectorType::Calendar,
         ConnectorType::Photos,
     ] {
-        let factory = FnConnectorFactory::new(|config| {
-            Ok(Arc::new(TestConnector::from_config(config)) as Arc<dyn Connector>)
-        });
         registry
-            .register(ctype, "test".to_string(), factory)
+            .register(ctype, "test".to_string(), MockConnectorFactory)
             .unwrap();
     }
     Arc::new(registry)
 }
 
-/// A registry whose `TestConnector` factory injects a shared [`SyncRecorder`]
-/// into every constructed instance, so F9 trigger tests can observe the
-/// `SyncOptions` each `sync()` receives and the peak concurrency.
-fn recording_registry(recorder: Arc<SyncRecorder>) -> Arc<ConnectorRegistry> {
+/// A registry whose factory injects a shared [`MockSyncRecorder`] into every
+/// constructed `MockConnector`, so the F9 trigger tests can observe the
+/// `SyncOptions` each `sync()` receives and the peak concurrency. The recorder
+/// is attached via [`MockConnector::with_recorder`] (not the config path).
+fn recording_registry(recorder: Arc<MockSyncRecorder>) -> Arc<ConnectorRegistry> {
     let registry = ConnectorRegistry::new();
     for ctype in [
         ConnectorType::Gmail,
@@ -337,11 +130,14 @@ fn recording_registry(recorder: Arc<SyncRecorder>) -> Arc<ConnectorRegistry> {
         ConnectorType::Photos,
     ] {
         let rec = recorder.clone();
-        let factory = FnConnectorFactory::new(move |config| {
-            let mut connector = TestConnector::from_config(config);
-            connector.recorder = Some(rec.clone());
-            Ok(Arc::new(connector) as Arc<dyn Connector>)
-        });
+        let factory = FnConnectorFactory::new(
+            move |config| -> Result<Arc<dyn Connector>, ConnectorError> {
+                Ok(
+                    Arc::new(MockConnector::from_config(config)?.with_recorder(rec.clone()))
+                        as Arc<dyn Connector>,
+                )
+            },
+        );
         registry
             .register(ctype, "test".to_string(), factory)
             .unwrap();
@@ -466,7 +262,7 @@ async fn none_cursor_preserves_existing_sync_cursor() {
         "test",
         ConnectorStatus::Active,
     );
-    // No "cursor" key => TestConnector returns new_cursor: None ("unchanged").
+    // No "cursor" key => MockConnector returns new_cursor: None ("unchanged").
     input.config_json = with_slug(
         "nocursor",
         json!({ "__ctype": ConnectorType::Gmail as i64 }),
@@ -626,7 +422,7 @@ async fn auth_expired_pauses_connector_and_exits() {
     );
     input.config_json = with_slug(
         "expired",
-        json!({ "__ctype": ConnectorType::Photos as i64, "auth_expired": true }),
+        json!({ "__ctype": ConnectorType::Photos as i64, "health": "auth_expired" }),
     );
     let row = kg.upsert_connector(input).await.unwrap();
     let kg = Arc::new(kg);
@@ -717,7 +513,7 @@ async fn push_mode_blocking_sync_cancels_on_shutdown() {
     );
     input.config_json = with_slug(
         "push",
-        json!({ "__ctype": ConnectorType::Gmail as i64, "blocking": true }),
+        json!({ "__ctype": ConnectorType::Gmail as i64, "mode": "push", "interval_ms": 3600000 }),
     );
     let row = kg.upsert_connector(input).await.unwrap();
     let kg = Arc::new(kg);
@@ -745,7 +541,7 @@ const PREEMPT_INTERVAL_MS: u64 = 100_000;
 /// recorder and a long interval, already restored.
 async fn trigger_harness(
     slug: &str,
-    recorder: Arc<SyncRecorder>,
+    recorder: Arc<MockSyncRecorder>,
     extra: serde_json::Value,
 ) -> (
     Arc<KnowledgeGraph>,
@@ -774,12 +570,12 @@ async fn trigger_harness(
 
 #[tokio::test]
 async fn trigger_sync_preempts_polling_interval() {
-    let recorder = Arc::new(SyncRecorder::default());
+    let recorder = Arc::new(MockSyncRecorder::default());
     let (_kg, supervisor, _tx, id, _dir) =
         trigger_harness("preempt", recorder.clone(), json!({})).await;
 
     // The first automatic cycle runs immediately on restore.
-    wait_for_async(|| async { recorder.len() >= 1 }, Duration::from_secs(5)).await;
+    wait_for_async(|| async { !recorder.is_empty() }, Duration::from_secs(5)).await;
 
     // A manual trigger must run a second sync far sooner than the 100 s
     // polling interval.
@@ -798,11 +594,11 @@ async fn trigger_sync_preempts_polling_interval() {
 
 #[tokio::test]
 async fn trigger_sync_full_option_reaches_connector() {
-    let recorder = Arc::new(SyncRecorder::default());
+    let recorder = Arc::new(MockSyncRecorder::default());
     let (_kg, supervisor, _tx, id, _dir) =
         trigger_harness("full", recorder.clone(), json!({})).await;
 
-    wait_for_async(|| async { recorder.len() >= 1 }, Duration::from_secs(5)).await;
+    wait_for_async(|| async { !recorder.is_empty() }, Duration::from_secs(5)).await;
     // The automatic cycle uses the default (incremental) options.
     assert_eq!(
         recorder.last().map(|o| o.full),
@@ -834,12 +630,12 @@ async fn trigger_sync_full_option_reaches_connector() {
 
 #[tokio::test]
 async fn trigger_sync_since_option_is_forwarded() {
-    let recorder = Arc::new(SyncRecorder::default());
+    let recorder = Arc::new(MockSyncRecorder::default());
     let window = Duration::from_secs(60 * 60 * 24 * 7); // 7 days
     let (_kg, supervisor, _tx, id, _dir) =
         trigger_harness("since", recorder.clone(), json!({})).await;
 
-    wait_for_async(|| async { recorder.len() >= 1 }, Duration::from_secs(5)).await;
+    wait_for_async(|| async { !recorder.is_empty() }, Duration::from_secs(5)).await;
 
     supervisor
         .trigger_sync(
@@ -868,14 +664,14 @@ async fn trigger_sync_since_option_is_forwarded() {
 
 #[tokio::test]
 async fn concurrent_triggers_are_serialised_not_duplicated() {
-    let recorder = Arc::new(SyncRecorder::default());
+    let recorder = Arc::new(MockSyncRecorder::default());
     // A per-sync delay so two concurrent triggers would overlap if they were
     // not serialised.
     let (_kg, supervisor, _tx, id, _dir) =
         trigger_harness("serial", recorder.clone(), json!({ "sync_delay_ms": 150 })).await;
 
     // Let the first automatic cycle finish before triggering.
-    wait_for_async(|| async { recorder.len() >= 1 }, Duration::from_secs(5)).await;
+    wait_for_async(|| async { !recorder.is_empty() }, Duration::from_secs(5)).await;
     let baseline = recorder.len();
 
     // Fire two triggers concurrently. The per-connector semaphore serialises
@@ -958,11 +754,11 @@ async fn trigger_sync_unknown_id_is_not_found() {
 
 #[tokio::test]
 async fn trigger_sync_by_slug_resolves_and_runs() {
-    let recorder = Arc::new(SyncRecorder::default());
+    let recorder = Arc::new(MockSyncRecorder::default());
     let (_kg, supervisor, _tx, _id, _dir) =
         trigger_harness("slug-target", recorder.clone(), json!({})).await;
 
-    wait_for_async(|| async { recorder.len() >= 1 }, Duration::from_secs(5)).await;
+    wait_for_async(|| async { !recorder.is_empty() }, Duration::from_secs(5)).await;
 
     let outcome = supervisor
         .trigger_sync_by_slug("slug-target", SyncOptions::default())
@@ -1005,7 +801,7 @@ async fn trigger_sync_on_push_connector_is_unsupported() {
     );
     input.config_json = with_slug(
         "pushy",
-        json!({ "__ctype": ConnectorType::Gmail as i64, "blocking": true }),
+        json!({ "__ctype": ConnectorType::Gmail as i64, "mode": "push", "interval_ms": 3600000 }),
     );
     let row = kg.upsert_connector(input).await.unwrap();
     let kg = Arc::new(kg);

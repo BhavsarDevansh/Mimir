@@ -16,7 +16,7 @@ fn registry_starts_empty() {
 
 #[test]
 fn mock_connector_reports_identity() {
-    let mock = MockConnector;
+    let mock = MockConnector::default();
 
     assert_eq!(mock.id(), "mock");
     assert_eq!(mock.name(), "Mock Connector");

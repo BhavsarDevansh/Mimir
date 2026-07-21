@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.75.0] — 2026-07-21
+
+### Phase 3 — configurable mock connector test harness (PR for #190 / F13)
+
+Replaces the placeholder `MockConnector` stub with a configurable,
+always-compiled test harness. The mock is driven entirely by its `config_json`
+and is the framework's test harness + the T1 sync→extract→insert→query vehicle.
+
+- **Configurable behaviour**: `mode` (`polling`/`push`), `interval_ms`/`jitter_ms`
+  cadence, canned `facts` (`MockFactConfig` DTO → `NormalizedFact` with
+  `SourceType::Connector`), optional `batch_size` for incremental sync, a static
+  `cursor`, configurable `health`/`auth_state`, and `fail_first`/`panic_first`/
+  `always_fail` injection. Missing `raw_reference` is auto-generated
+  (`mock-<slug>-<index>`) so connector provenance is always satisfied.
+  `MockConnector::default()` preserves the legacy no-op identity so existing
+  trait tests keep passing.
+- **Both modes**: polling paces via the supervisor interval; push self-paces
+  via an internal `tokio::time::sleep` inside `sync()` (the supervisor aborts the
+  task on shutdown for cancellation). F9 manual triggers remain rejected for
+  push connectors.
+- **Instance identity**: reads the supervisor-injected `__slug`/`__ctype`/
+  `__instance_id` to recover its identity, falling back to the legacy no-op when
+  absent.
+- **`MockSyncRecorder`**: optional shared observer (`with_recorder`) recording
+  the `SyncOptions` each `sync()` receives and the peak in-flight concurrency,
+  for F9-style serialization tests. Not part of the config schema or the factory
+  path.
+- **`config_schema()`**: returns a JSON Schema describing the config surface.
+- **DRY consolidation**: the private `TestConnector` in the supervisor lifecycle
+  tests was removed; every behavioural lifecycle test now drives the shared
+  `MockConnector` (single source of truth for test connectors).
+- **T1 vehicle** (`tests/mock_ingestion_e2e.rs`): the real `ConnectorSupervisor`
+  + `KnowledgeGraph` ingest a mock's canned facts end-to-end in both polling and
+  push modes, asserting KB facts + connector provenance
+  (`SourceType::Connector`, `connector_instance_id`, `raw_reference`,
+  `ExtractionMethod::StructuredParse`), with no real service.
+- **No new dependencies** (in-memory; reuses `tokio`, `serde`, `chrono`).
+- **Breaking change** to the public `MockConnector` type (unit struct →
+  config-driven struct); acceptable per the project breaking-changes policy
+  (only the OpenAI-compatible chat endpoint is stability-sensitive).
+
+Documentation: `docs/mock-connector.md` (technical), `docs/wiki/mock-connector.md`
+(user-facing), plus updates to `docs/connectors-framework.md`,
+`docs/wiki/connectors.md`, `docs/wiki/what-works-now.md`, and `README.md`.
+
 ## [0.74.0] — 2026-07-20
 
 ### Phase 3 — rate-limit review follow-ups (PR #219)

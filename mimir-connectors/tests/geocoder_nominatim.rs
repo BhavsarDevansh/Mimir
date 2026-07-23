@@ -256,3 +256,27 @@ async fn rate_limiter_throttles_consecutive_requests() {
         "expected throttling, elapsed {elapsed:?}"
     );
 }
+
+#[tokio::test]
+async fn invalid_rate_config_surfaces_as_backend_error_not_rate_limited() {
+    use wiremock::MockServer;
+    let server = MockServer::start().await;
+    let bad = NominatimConfig::new()
+        .with_endpoint(server.uri())
+        .with_rate_limit(RateLimitConfig {
+            requests_per_second: 0.0,
+            burst_size: 1,
+            daily_quota: None,
+            backoff_strategy: BackoffStrategy::Exponential {
+                base: Duration::from_millis(1),
+                max: Duration::from_millis(10),
+                jitter: Duration::ZERO,
+            },
+        });
+    // Construction-time config failure -> Backend, not RateLimited.
+    let err = NominatimGeocoder::new(bad).unwrap_err();
+    assert!(
+        matches!(err, GeocodeError::Backend(_)),
+        "expected Backend, got {err:?}"
+    );
+}

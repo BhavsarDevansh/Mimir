@@ -43,14 +43,11 @@ humantime = "2.4"
 # S1 (issue #191): the OSM Nominatim geocoder backend issues outbound HTTPS
 # requests via `reqwest`. rustls (no OpenSSL system dep) keeps this crate
 # consistent with `mimir-core`/`mimir-server`; `json` deserialises Nominatim
-# responses, and `query` builds the `/search` and `/reverse` query strings.
-# `mimir-core` re-exports the `Geocoder` trait the backend implements.
-# S1 (issue #191): the OSM Nominatim geocoder backend issues outbound HTTPS
-# requests via `reqwest`. rustls (no OpenSSL system dep) keeps this crate
-# consistent with `mimir-core`/`mimir-server`; `json` deserialises Nominatim
-# responses, and `query` builds the `/search` and `/reverse` query strings.
-# `mimir-core` re-exports the `Geocoder` trait the backend implements.
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "rustls-native-certs", "query"] }
+# responses. The backend builds `/search` and `/reverse` query strings by hand
+# (see `percent_encode_query` in `src/geocoder.rs`), so the `query` feature is
+# not required. `mimir-core` re-exports the `Geocoder` trait the backend
+# implements.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "rustls-native-certs"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

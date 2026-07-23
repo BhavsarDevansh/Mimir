@@ -118,6 +118,7 @@ impl Default for NominatimConfig {
 }
 
 /// OSM Nominatim [`Geocoder`] backend.
+#[derive(Debug)]
 pub struct NominatimGeocoder {
     config: NominatimConfig,
     client: reqwest::Client,
@@ -326,8 +327,14 @@ fn map_request_error(error: RequestError) -> GeocodeError {
     }
 }
 
+/// Map a *construction-time* `RateLimitError` (from `RateLimiter::new`, which
+/// only fails with `InvalidConfig` / `InvalidSnapshot`) to a backend error.
+/// These are configuration problems, not rate-limiting events, so they surface
+/// as [`GeocodeError::Backend`]; the live admission path
+/// ([`RequestError::RateLimited`]) still maps to [`GeocodeError::RateLimited`]
+/// via [`map_request_error`] so genuine quota exhaustion keeps its label.
 fn map_rate_err(error: RateLimitError) -> GeocodeError {
-    GeocodeError::RateLimited(error.to_string())
+    GeocodeError::Backend(format!("invalid rate-limit config: {error}"))
 }
 
 // ---------------------------------------------------------------------------

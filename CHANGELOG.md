@@ -40,6 +40,15 @@ This is a library component; daemon wiring lands with the Photos connector
 (C2), the entity-locations write path (S3/#65), and the Location Search tool
 (#98).
 
+### PR #221 review fixes
+
+- Dropped the unused `reqwest` `query` feature (the backend builds query
+  strings by hand) and de-duplicated the `reqwest` dependency comment block.
+- `map_rate_err` now maps construction-time `RateLimitConfig` errors to
+  `GeocodeError::Backend` instead of `GeocodeError::RateLimited`, reserving
+  `RateLimited` for genuine quota-exhaustion at the admission path. Added a
+  regression test.
+
 ## [0.76.0] — 2026-07-23
 
 ### Mock connector schema enum source-linking (PR #220 review)

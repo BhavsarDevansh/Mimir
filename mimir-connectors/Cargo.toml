@@ -40,10 +40,24 @@ rand = "0.9"
 # `humantime` gives human-readable Duration serde (e.g. "500ms", "30s") for the
 # rate-limit config, so per-connector `config_json` stays editable by hand.
 humantime = "2.4"
+# S1 (issue #191): the OSM Nominatim geocoder backend issues outbound HTTPS
+# requests via `reqwest`. rustls (no OpenSSL system dep) keeps this crate
+# consistent with `mimir-core`/`mimir-server`; `json` deserialises Nominatim
+# responses. The backend builds `/search` and `/reverse` query strings by hand
+# (see `percent_encode_query` in `src/geocoder.rs`), so the `query` feature is
+# not required. `mimir-core` re-exports the `Geocoder` trait the backend
+# implements.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "rustls-native-certs"] }
+# `percent-encoding` percent-encodes the `/search` query value. It is already a
+# transitive dependency (via `reqwest`/`url`, resolved at 2.3.2) so this adds no
+# new download; declared directly so the geocoder does not rely on transitive
+# availability. Replaces a hand-rolled encoder (PR #221 review).
+percent-encoding = "2.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tempfile = "3"
+wiremock = "0.6"
 
 [features]
 default = ["photos", "calendar", "gmail"]

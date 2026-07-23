@@ -1,5 +1,66 @@
 # Changelog
 
+## [0.77.0] — 2026-07-23
+
+### Geocoder service (Phase 3 S1 / #191)
+
+A pluggable geocoding abstraction with an OSM Nominatim default backend:
+forward geocoding (address / place name → coordinates) and reverse geocoding
+(latitude / longitude → place).
+
+- **Trait + types in `mimir-core`.** `Geocoder` (async, object-safe),
+  `GeocodeResult` (lat/lon/display_name/country/`country_code`/alternative
+  names), and `GeocodeError` live in `mimir-core` so the Location Search tool
+  (#98, a `mimir-core` tool) can name the trait without a dependency cycle
+  (`mimir-core` cannot depend on `mimir-connectors`). The issue's "lives in
+  `mimir-connectors`" wording is treated as referring to the backend, not the
+  abstraction.
+- **`NominatimGeocoder` backend in `mimir-connectors`.** Issues `GET /search`
+  (forward) and `GET /reverse` (reverse) with `format=json&addressdetails=1&
+  namedetails=1`; parses Nominatim's string `lat`/`lon` into `f64`. Reuses the
+  F12 `RateLimiter` (`RateLimitConfig::nominatim`, ≤ 1 req/s) and
+  `retry_with_backoff` for transient 429/502/503/504 + transport failures,
+  honouring a server `Retry-After`; daily-quota exhaustion is non-retryable
+  (`GeocodeError::RateLimited`).
+- **Configurable.** Endpoint (default public instance; self-hosted Nominatim
+  supported for heavy use), descriptive `User-Agent` (Nominatim policy),
+  optional contact email, `RateLimitConfig`, `max_attempts`, and per-request
+  timeout.
+- **Result contract.** A successful no-match yields `Ok(None)`; transport /
+  decode failures yield `Err(GeocodeError)` (logged, never a panic).
+- **Always built** (not behind a feature flag), consistent with the framework
+  core + mock connector.
+- **Tests.** `mimir-core` unit tests (`MockGeocoder` incl. builder chaining,
+  serde round-trip); `wiremock`-backed `mimir-connectors` integration tests
+  (forward/reverse parsing, empty → `None`, 429-retry-then-success, persistent
+  503 → `Err`, non-retryable 404 no-retry, connection-refused → `Err(Network)`,
+  rate-limiter throttling).
+
+This is a library component; daemon wiring lands with the Photos connector
+(C2), the entity-locations write path (S3/#65), and the Location Search tool
+(#98).
+
+### PR #221 review fixes
+
+- Dropped the unused `reqwest` `query` feature (the backend builds query
+  strings by hand) and de-duplicated the `reqwest` dependency comment block.
+- `map_rate_err` now maps construction-time `RateLimitConfig` errors to
+  `GeocodeError::Backend` instead of `GeocodeError::RateLimited`, reserving
+  `RateLimited` for genuine quota-exhaustion at the admission path. Added a
+  regression test.
+
+### CodeRabbit review fixes
+
+- Unparseable Nominatim `lat`/`lon` now surface as `GeocodeError::Parse`
+  instead of silently becoming `(0.0, 0.0)`; `place_to_result` takes parsed
+  `f64` coordinates and a new `parse_coord` helper maps malformed values to
+  `Parse`. Added unit + integration regression tests.
+- Replaced the hand-rolled query encoder with the vetted `percent-encoding`
+  crate (already a transitive dependency via `reqwest`, resolved at 2.3.2);
+  space now encodes as `%20` (Nominatim accepts it).
+- Removed a broken rustdoc intra-doc link (`GeocodeResult::or_none`) from the
+  `mimir-core` geocoder module docs.
+
 ## [0.76.0] — 2026-07-23
 
 ### Mock connector schema enum source-linking (PR #220 review)

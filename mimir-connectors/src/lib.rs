@@ -62,6 +62,7 @@
 //! working framework + mock harness.
 
 pub mod connector;
+pub mod geocoder;
 pub mod mock;
 pub mod rate_limit;
 pub mod registry;
@@ -72,6 +73,7 @@ pub use connector::{
     ActionResult, Connector, ConnectorAction, ConnectorError, ConnectorFactory, ConnectorMode,
     HealthStatus, SyncOptions, SyncOutcome,
 };
+pub use geocoder::{DEFAULT_NOMINATIM_ENDPOINT, NominatimConfig, NominatimGeocoder};
 pub use mock::{
     MockConnector, MockConnectorFactory, MockFactConfig, MockSyncGuard, MockSyncRecorder,
 };

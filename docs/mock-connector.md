@@ -30,6 +30,9 @@ but the mock and the framework core remain).
   its `config_json`; registered under a `(connector_type, backend)` pair.
 - `MockFactConfig` — the serde DTO for one canned fact.
 - `MockSyncRecorder` — shared observer for `SyncOptions` + in-flight concurrency.
+- `MockSyncGuard` — RAII guard returned by `MockSyncRecorder::enter`; its `Drop`
+  records the `SyncOptions` and decrements the in-flight counter, so `sync()`
+  tracking stays balanced across returns, panics, and task cancellation.
 
 ## Two-step ingestion
 
@@ -93,8 +96,32 @@ needs no trigger path.
 The supervisor injects `__slug`, `__ctype`, and `__instance_id` into a
 connector's `config_json` before handing it to the factory (see
 `ConnectorSupervisor::instantiate`). `MockConnector::from_config` reads these to
-recover its identity (`id()`, `connector_type()`). When absent it falls back to
-the legacy no-op identity.
+recover its identity (`id()`, `connector_type()`). When `__ctype` is absent it
+falls back to the legacy no-op identity (`Gmail`). When `__ctype` is present it
+must be an integer in range of `i16` and a known `ConnectorType` discriminant;
+otherwise `from_config` returns `ConnectorError::Config` rather than silently
+defaulting or wrapping.
+
+## Config validation
+
+`from_config` rejects malformed payloads up front:
+
+- `__ctype`, when present, must be a valid integer `ConnectorType` discriminant
+  (non-integer, out-of-range, and unknown values all yield `ConnectorError::Config`).
+- `batch_size`, when present, must be greater than zero. A zero value would let
+  `sync()` succeed forever while fetching no facts, silently defeating
+  ingestion; it is rejected with `ConnectorError::Config`.
+- The `facts` array item schema (`config_schema()`) is closed
+  (`additionalProperties: false`) and declares the required fields
+  (`subject`, `relationship_type`, `object`) plus the typed enums for
+  `subject_type` / `object_type` / `recurrence`, matching `MockFactConfig`.
+
+The `MockSyncRecorder` is cancellation-safe: `enter(options)` returns a
+`MockSyncGuard` created *before* the first `.await` of `sync()`, and its `Drop`
+decrements the in-flight counter and records the options. This guarantees the
+peak-concurrency counter is balanced even when `sync()` is aborted during the
+push-mode cadence sleep, the `sync_delay`, or unwinds on an injected panic, and
+that injected failures are recorded rather than omitted.
 
 ## Tests
 

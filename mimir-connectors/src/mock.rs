@@ -262,17 +262,43 @@ impl MockSyncRecorder {
         self.max_concurrent.load(Ordering::SeqCst)
     }
 
-    fn enter(&self) {
+    /// Enter a `sync()` call, returning an RAII guard that records the
+    /// [`SyncOptions`] and decrements the in-flight counter on [`Drop`].
+    ///
+    /// The guard is cancellation-, panic-, and failure-safe: it must be
+    /// created *before* the first `.await` of `sync()` and is dropped when
+    /// the call ends — whether by returning, unwinding on a panic, or having
+    /// its task aborted by the supervisor. This guarantees `in_flight` is
+    /// always balanced and that *every* call (including injected failures and
+    /// panics) is recorded, rather than only successful post-delay calls.
+    fn enter(&self, options: SyncOptions) -> MockSyncGuard<'_> {
         let prev = self.in_flight.fetch_add(1, Ordering::SeqCst);
         self.max_concurrent.fetch_max(prev + 1, Ordering::SeqCst);
+        MockSyncGuard {
+            recorder: self,
+            options,
+        }
     }
+}
 
-    fn leave(&self, options: SyncOptions) {
-        self.in_flight.fetch_sub(1, Ordering::SeqCst);
-        self.recorded
+/// RAII guard returned by [`MockSyncRecorder::enter`].
+///
+/// [`Drop`] records the captured [`SyncOptions`] and decrements the
+/// recorder's in-flight counter, so `sync()` tracking stays balanced across
+/// normal returns, panics, and task cancellation.
+pub struct MockSyncGuard<'a> {
+    recorder: &'a MockSyncRecorder,
+    options: SyncOptions,
+}
+
+impl Drop for MockSyncGuard<'_> {
+    fn drop(&mut self) {
+        self.recorder.in_flight.fetch_sub(1, Ordering::SeqCst);
+        self.recorder
+            .recorded
             .lock()
             .expect("recorder lock poisoned")
-            .push(options);
+            .push(self.options);
     }
 }
 
@@ -367,13 +393,26 @@ impl MockConnector {
             .map(str::to_string)
             .unwrap_or_else(default_slug);
 
-        let ctype = match config.get("__ctype").and_then(|v| v.as_i64()) {
-            Some(id) => ConnectorType::try_from(id as i16).unwrap_or(ConnectorType::Gmail),
+        let ctype = match config.get("__ctype") {
             None => ConnectorType::Gmail,
+            Some(value) => {
+                let id = value
+                    .as_i64()
+                    .ok_or_else(|| ConnectorError::Config("`__ctype` must be an integer".into()))?;
+                let id = i16::try_from(id)
+                    .map_err(|_| ConnectorError::Config("`__ctype` is out of range".into()))?;
+                ConnectorType::try_from(id)
+                    .map_err(|_| ConnectorError::Config(format!("unknown `__ctype`: {id}")))?
+            }
         };
 
         let parsed: MockConnectorConfig = serde_json::from_value(config)
             .map_err(|error| ConnectorError::Config(error.to_string()))?;
+        if parsed.batch_size == Some(0) {
+            return Err(ConnectorError::Config(
+                "`batch_size` must be greater than zero".into(),
+            ));
+        }
 
         let mode = match parsed.mode {
             MockMode::Polling => ConnectorMode::Polling {
@@ -443,7 +482,82 @@ impl MockConnector {
                 "facts": {
                     "type": "array",
                     "description": "Canned NormalizedFacts emitted by sync().",
-                    "items": { "type": "object" }
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["subject", "relationship_type", "object"],
+                        "properties": {
+                            "subject": {
+                                "type": "string",
+                                "description": "Subject display name."
+                            },
+                            "subject_type": {
+                                "type": "string",
+                                "enum": [
+                                    "Person", "Place", "Event", "Object",
+                                    "Concept", "Organization", "Activity", "DateTime"
+                                ],
+                                "default": "Concept",
+                                "description": "Entity type for the subject."
+                            },
+                            "relationship_type": {
+                                "type": "string",
+                                "description": "Predicate (canonicalised later by normalize_and_insert)."
+                            },
+                            "object": {
+                                "type": "string",
+                                "description": "Object display name or literal value."
+                            },
+                            "object_is_entity": {
+                                "type": "boolean",
+                                "default": false,
+                                "description": "Whether the object is an entity reference (vs a literal)."
+                            },
+                            "object_type": {
+                                "type": ["string", "null"],
+                                "enum": [
+                                    "Person", "Place", "Event", "Object",
+                                    "Concept", "Organization", "Activity", "DateTime",
+                                    null
+                                ],
+                                "default": null,
+                                "description": "Entity type for the object when object_is_entity is true."
+                            },
+                            "valid_from": {
+                                "type": ["string", "null"],
+                                "format": "date-time",
+                                "default": null,
+                                "description": "Temporal lower bound (RFC 3339)."
+                            },
+                            "valid_until": {
+                                "type": ["string", "null"],
+                                "format": "date-time",
+                                "default": null,
+                                "description": "Temporal upper bound (RFC 3339)."
+                            },
+                            "is_sensitive": {
+                                "type": "boolean",
+                                "default": false,
+                                "description": "Producer sensitivity flag."
+                            },
+                            "recurrence": {
+                                "type": "string",
+                                "enum": ["None", "Daily", "Weekly", "Monthly", "Yearly"],
+                                "default": "None",
+                                "description": "Recurrence kind."
+                            },
+                            "requires_user_action": {
+                                "type": "boolean",
+                                "default": false,
+                                "description": "Whether the fact requires user action (a task)."
+                            },
+                            "raw_reference": {
+                                "type": ["string", "null"],
+                                "default": null,
+                                "description": "Native id of the source item; auto-generated when absent."
+                            }
+                        }
+                    }
                 },
                 "batch_size": {
                     "type": ["integer", "null"],
@@ -507,6 +621,15 @@ impl Connector for MockConnector {
     async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
         let n = self.sync_calls.fetch_add(1, Ordering::SeqCst);
 
+        // Track the complete sync() call. The guard is created before the
+        // first await and dropped on return, panic unwind, or task
+        // cancellation, so `in_flight` is always balanced and every call —
+        // including injected failures and panics — is recorded.
+        let _guard = self
+            .recorder
+            .as_ref()
+            .map(|recorder| recorder.enter(options));
+
         // Push connectors block inside sync waiting for events; the mock
         // simulates this by sleeping the configured cadence. The supervisor
         // aborts the runner task on shutdown, cancelling the sleep.
@@ -526,16 +649,11 @@ impl Connector for MockConnector {
             )));
         }
 
-        // Optional recorder: track in-flight concurrency around the delay so
-        // overlapping triggers are observable.
-        if let Some(recorder) = &self.recorder {
-            recorder.enter();
-        }
+        // Optional artificial delay (serialization/concurrency tests). The
+        // recorder guard above already brackets this, so overlapping triggers
+        // are observable even if the delay is cancelled.
         if !self.sync_delay.is_zero() {
             tokio::time::sleep(self.sync_delay).await;
-        }
-        if let Some(recorder) = &self.recorder {
-            recorder.leave(options);
         }
 
         // Stage the canned facts for this cycle. With `batch_size`, slice

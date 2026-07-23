@@ -66,6 +66,24 @@ exists.
 - The mock is a test harness — do not register it as a real connector in
   production config.
 
+## Validation guarantees
+
+The mock validates its `config_json` up front so misconfigurations fail loudly
+instead of silently misbehaving:
+
+- `__ctype` (when the supervisor injects it) must be a valid integer
+  `ConnectorType`. An invalid value is rejected with a config error rather than
+  silently defaulting to Gmail.
+- `batch_size` must be greater than zero. A zero would let `sync()` succeed
+  forever while fetching nothing, so it is rejected.
+- The `facts` schema declares the required fields (`subject`,
+  `relationship_type`, `object`) and the typed enums for entity/recurrence
+  types, so a malformed fact is caught at config time.
+
+The sync-options recorder is cancellation-safe: it tracks each `sync()` call
+for its entire lifetime (including injected failures, panics, and supervisor
+shutdown cancellation), so the in-flight counter never leaks.
+
 ## See also
 
 - [Connectors](connectors.md) — the connector framework overview.

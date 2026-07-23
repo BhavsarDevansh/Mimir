@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.75.1] — 2026-07-23
+
+### Mock connector review hardening (PR #220)
+
+Actions CodeRabbit review feedback on the configurable mock connector
+(`mimir-connectors/src/mock.rs`):
+
+- **Cancellation-safe sync tracking.** `MockSyncRecorder::enter(options)` now
+  returns an RAII `MockSyncGuard` created before the first `.await` of
+  `sync()`. Its `Drop` decrements the in-flight counter and records the
+  `SyncOptions`, so peak-concurrency tracking stays balanced across injected
+  failures, panics, and supervisor shutdown cancellation (push cadence sleep
+  and `sync_delay`). Failed/panicked calls are no longer omitted from the
+  recorder.
+- **Strict `__ctype` validation.** `from_config` rejects non-integer,
+  out-of-range, and unknown `__ctype` values with `ConnectorError::Config`
+  instead of silently defaulting to Gmail or wrapping via `as i16`. The legacy
+  Gmail default is kept only when `__ctype` is absent.
+- **Non-zero `batch_size` contract.** `from_config` rejects `batch_size: 0`
+  (which would let `sync()` succeed forever while fetching no facts) with
+  `ConnectorError::Config`.
+- **Fact schema matches the DTO.** The `facts` array item schema is now closed
+  (`additionalProperties: false`) and declares the required fields plus the
+  `subject_type`/`object_type`/`recurrence` enums, matching `MockFactConfig`.
+
 ## [0.75.0] — 2026-07-21
 
 ### Phase 3 — configurable mock connector test harness (PR for #190 / F13)

@@ -441,3 +441,71 @@ fn config_schema_describes_mode_and_facts() {
     assert!(props.contains_key("facts"));
     assert!(props.contains_key("health"));
 }
+
+// ---------------------------------------------------------------------------
+// Review-fix regressions (PR #220)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn from_config_rejects_non_integer_ctype() {
+    let err = MockConnector::from_config(json!({ "__ctype": "gmail" }))
+        .err()
+        .unwrap();
+    assert!(matches!(err, ConnectorError::Config(_)));
+}
+
+#[test]
+fn from_config_rejects_out_of_range_ctype() {
+    // i64 that does not fit in i16.
+    let err = MockConnector::from_config(json!({ "__ctype": 999_999_999_999_i64 }))
+        .err()
+        .unwrap();
+    assert!(matches!(err, ConnectorError::Config(_)));
+}
+
+#[test]
+fn from_config_rejects_unknown_ctype() {
+    // In range but not a known ConnectorType discriminant.
+    let err = MockConnector::from_config(json!({ "__ctype": 127_i64 }))
+        .err()
+        .unwrap();
+    assert!(matches!(err, ConnectorError::Config(_)));
+}
+
+#[test]
+fn from_config_absent_ctype_defaults_to_gmail() {
+    let mock = MockConnector::from_config(json!({})).unwrap();
+    assert_eq!(mock.connector_type(), ConnectorType::Gmail);
+}
+
+#[tokio::test]
+async fn from_config_rejects_zero_batch_size() {
+    let err = MockConnector::from_config(json!({ "batch_size": 0u32 }))
+        .err()
+        .unwrap();
+    assert!(matches!(err, ConnectorError::Config(_)));
+}
+
+#[test]
+fn config_schema_describes_fact_item_contract() {
+    let schema = MockConnector::default().config_schema();
+    let items = schema
+        .get("properties")
+        .and_then(|v| v["facts"]["items"].as_object())
+        .unwrap();
+    // Required fields match MockFactConfig's non-defaulted surface.
+    let required = items["required"].as_array().unwrap();
+    let required: std::collections::HashSet<&str> =
+        required.iter().map(|v| v.as_str().unwrap()).collect();
+    assert!(required.contains("subject"));
+    assert!(required.contains("relationship_type"));
+    assert!(required.contains("object"));
+    // The item schema is closed, not a bare object.
+    assert_eq!(items["additionalProperties"].as_bool(), Some(false));
+    // subject_type enum matches EntityType variants.
+    let subject_type_enum = items["properties"]["subject_type"]["enum"]
+        .as_array()
+        .unwrap();
+    assert!(subject_type_enum.iter().any(|v| v == "Person"));
+    assert!(subject_type_enum.iter().any(|v| v == "Concept"));
+}

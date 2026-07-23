@@ -72,7 +72,9 @@ pub use connector::{
     ActionResult, Connector, ConnectorAction, ConnectorError, ConnectorFactory, ConnectorMode,
     HealthStatus, SyncOptions, SyncOutcome,
 };
-pub use mock::{MockConnector, MockConnectorFactory, MockFactConfig, MockSyncRecorder};
+pub use mock::{
+    MockConnector, MockConnectorFactory, MockFactConfig, MockSyncGuard, MockSyncRecorder,
+};
 pub use registry::{ConnectorRegistry, FnConnectorFactory};
 pub use supervisor::{
     ConnectorSupervisor, SupervisorConfig, SupervisorError, TriggerError, TriggerOutcome,

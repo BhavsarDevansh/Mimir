@@ -4,6 +4,7 @@ pub mod config;
 pub mod context;
 pub mod conversation;
 pub mod fts5;
+pub mod geocoder;
 pub mod job_queue;
 pub mod llm;
 pub mod paths;

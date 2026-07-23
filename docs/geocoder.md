@@ -1,0 +1,97 @@
+# Geocoder Service (Phase 3 S1 / Issue #191)
+
+> **Status:** Implemented (v0.77.0). Library-only; daemon wiring lands with the
+> Photos connector (C2), entity-locations write path (S3), and the Location
+> Search tool (#98).
+
+## Summary
+
+A pluggable geocoding abstraction with an OSM Nominatim default backend:
+forward geocoding (address / place name → coordinates) and reverse geocoding
+(latitude / longitude → place). It is shared infrastructure consumed by three
+Phase 3 paths.
+
+## Crate placement (design decision)
+
+The `Geocoder` trait and its `GeocodeResult` / `GeocodeError` types live in
+**`mimir-core`**; the `NominatimGeocoder` backend lives in **`mimir-connectors`**.
+
+The issue text says the geocoder "lives in `mimir-connectors`", but the
+workspace dependency graph is `mimir-core` ← `mimir-knowledge` ←
+`mimir-connectors` (and `mimir-server` on top of all three). One consumer — the
+Location Search conversational tool (#98) — is a `mimir-core` tool, and
+`mimir-core` cannot depend on `mimir-connectors` (a cycle). Placing the trait in
+the shared base layer lets all three consumers name one type; the concrete
+HTTP-making backend stays in the service-ingestion crate and is injected from
+`mimir-server` where needed. This is the standard "trait in base, impl in
+feature crate" pattern.
+
+## API contract
+
+```rust
+#[async_trait]
+pub trait Geocoder: Send + Sync {
+    async fn forward(&self, query: &str) -> Result<Option<GeocodeResult>, GeocodeError>;
+    async fn reverse(&self, latitude: f64, longitude: f64)
+        -> Result<Option<GeocodeResult>, GeocodeError>;
+}
+```
+
+`GeocodeResult` carries `latitude`, `longitude`, `display_name`, `country`,
+`country_code` (lowercased ISO 3166-1 alpha-2), and `alternative_names`.
+
+### Result vs `Option`
+
+The issue acceptance says "network failure returns `None` gracefully". The
+trait distinguishes the two failure modes instead of collapsing them:
+
+- `Ok(None)` — the backend responded successfully but found no match
+  (Nominatim's `[]` array or `{"error": …}` reverse payload).
+- `Err(GeocodeError)` — transport, decode, or rate-limit failure.
+
+This keeps the daemon observable (errors are logged) while preserving the "no
+panic" guarantee. Callers wanting the literal acceptance can map `Err` → `None`.
+
+## Nominatim backend
+
+`NominatimGeocoder` (`mimir-connectors/src/geocoder.rs`) issues `GET /search`
+(forward) and `GET /reverse` (reverse) with `format=json&addressdetails=1&
+namedetails=1`. `lat`/`lon` are returned by Nominatim as strings and parsed to
+`f64`.
+
+### Throttling + retry (reuses F12)
+
+Each request acquires a token from the shared `RateLimiter` built from
+`RateLimitConfig::nominatim()` (≤ 1 req/s, no burst). Transient failures
+(429 / 502 / 503 / 504 and transport errors) are retried via
+`retry_with_backoff`, honouring a server `Retry-After` header. Quota exhaustion
+is non-retryable (`GeocodeError::RateLimited`) so the caller pauses rather than
+hammering the service.
+
+### Configuration
+
+`NominatimConfig` is configurable: base `endpoint` (default the public instance;
+point at a self-hosted Nominatim for heavy use), descriptive `User-Agent`
+(required by the Nominatim usage policy), optional `contact_email` appended to
+the UA, the `RateLimitConfig`, `max_attempts`, and per-request `timeout`.
+
+## Consumers
+
+| Consumer | Issue | Where it consumes |
+|----------|-------|------------------|
+| Photos connector GPS → place entity | C2 | `mimir-connectors` (direct) |
+| Entity locations address → coords | #65 / S3 | injected from `mimir-server` into the write path |
+| Location Search conversational tool | #98 (S2, deferred) | `mimir-core` tool, impl injected from `mimir-server` |
+
+## Testing
+
+- `mimir-core` unit tests: `MockGeocoder` round-trips configured results /
+  `None` / errors; `GeocodeResult` serde round-trip.
+- `mimir-connectors/tests/geocoder_nominatim.rs`: `wiremock`-backed tests
+  covering forward/reverse parsing, empty-result → `None`, 429-retry-then-success,
+  persistent 503 → `Err(Status)`, non-retryable 404 (no retry), connection
+  refused → `Err(Network)` (no panic), and rate-limiter throttling of
+  consecutive requests.
+
+The backend is always built (not behind a feature flag), consistent with the
+framework core + mock connector.

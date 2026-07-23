@@ -21,9 +21,9 @@
 //! - `Err(GeocodeError)` — a transport, decode, or rate-limit failure.
 //!
 //! Callers that want the literal issue acceptance ("network failure → None")
-//! can [`GeocodeResult::or_none`] / log-and-flatten; surfacing the real error
-//! keeps the daemon observable instead of silently swallowing failures. The
-//! "no panic" guarantee holds either way.
+//! can map `Err(_)` to `None` (logging first); surfacing the real error by
+//! default keeps the daemon observable instead of silently swallowing failures.
+//! The "no panic" guarantee holds either way.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -104,7 +104,7 @@ pub trait Geocoder: Send + Sync {
 
 /// A programmable in-memory [`Geocoder`] for tests and consumer wiring.
 ///
-/// Each direction consults a shared [`MockState`] behind a `std::sync::Mutex`
+/// Each direction consults a shared `MockState` behind a `std::sync::Mutex`
 /// so the mock is `Send + Sync`, clones cheaply, and can be (re)configured
 /// synchronously via the builder methods. A `std::sync::Mutex` (not a tokio
 /// mutex) is used deliberately so the [`with_forward`](Self::with_forward) /

@@ -49,6 +49,18 @@ This is a library component; daemon wiring lands with the Photos connector
   `RateLimited` for genuine quota-exhaustion at the admission path. Added a
   regression test.
 
+### CodeRabbit review fixes
+
+- Unparseable Nominatim `lat`/`lon` now surface as `GeocodeError::Parse`
+  instead of silently becoming `(0.0, 0.0)`; `place_to_result` takes parsed
+  `f64` coordinates and a new `parse_coord` helper maps malformed values to
+  `Parse`. Added unit + integration regression tests.
+- Replaced the hand-rolled query encoder with the vetted `percent-encoding`
+  crate (already a transitive dependency via `reqwest`, resolved at 2.3.2);
+  space now encodes as `%20` (Nominatim accepts it).
+- Removed a broken rustdoc intra-doc link (`GeocodeResult::or_none`) from the
+  `mimir-core` geocoder module docs.
+
 ## [0.76.0] — 2026-07-23
 
 ### Mock connector schema enum source-linking (PR #220 review)

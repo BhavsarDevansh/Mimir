@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use mimir_core::geocoder::{GeocodeError, GeocodeResult, Geocoder};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
@@ -242,7 +243,10 @@ impl Geocoder for NominatimGeocoder {
         let body = self.send_with_retry(&url).await?;
         let places: Vec<NominatimPlace> =
             serde_json::from_str(&body).map_err(|e| GeocodeError::Parse(e.to_string()))?;
-        Ok(places.into_iter().next().map(NominatimPlace::into_result))
+        match places.into_iter().next() {
+            Some(place) => Ok(Some(place.into_result()?)),
+            None => Ok(None),
+        }
     }
 
     async fn reverse(
@@ -268,9 +272,11 @@ impl Geocoder for NominatimGeocoder {
         let Some(lon) = envelope.lon.as_deref() else {
             return Ok(None);
         };
+        let latitude = parse_coord(lat, "lat")?;
+        let longitude = parse_coord(lon, "lon")?;
         Ok(Some(place_to_result(
-            lat,
-            lon,
+            latitude,
+            longitude,
             envelope.display_name.unwrap_or_default(),
             envelope.address.as_ref(),
             envelope.namedetails.as_ref(),
@@ -363,14 +369,16 @@ struct NominatimPlace {
 }
 
 impl NominatimPlace {
-    fn into_result(self) -> GeocodeResult {
-        place_to_result(
-            &self.lat,
-            &self.lon,
+    fn into_result(self) -> Result<GeocodeResult, GeocodeError> {
+        let latitude = parse_coord(&self.lat, "lat")?;
+        let longitude = parse_coord(&self.lon, "lon")?;
+        Ok(place_to_result(
+            latitude,
+            longitude,
             self.display_name,
             self.address.as_ref(),
             self.namedetails.as_ref(),
-        )
+        ))
     }
 }
 
@@ -391,19 +399,17 @@ struct NominatimReverseEnvelope {
     namedetails: Option<JsonValue>,
 }
 
-/// Build a [`GeocodeResult`] from the shared Nominatim fields, parsing the
-/// string `lat`/`lon` into `f64`. Unparseable coordinates default to `0.0`
-/// (the reverse path has already validated both `lat` and `lon` presence
-/// before calling; the fallback only guards against malformed numeric strings).
+/// Build a [`GeocodeResult`] from already-parsed coordinates and the shared
+/// Nominatim fields. Coordinate parsing is the caller's responsibility (see
+/// [`parse_coord`]) so an unparseable `lat`/`lon` surfaces as
+/// [`GeocodeError::Parse`] rather than silently becoming `(0.0, 0.0)`.
 fn place_to_result(
-    lat: &str,
-    lon: &str,
+    latitude: f64,
+    longitude: f64,
     display_name: String,
     address: Option<&NominatimAddress>,
     namedetails: Option<&JsonValue>,
 ) -> GeocodeResult {
-    let latitude = lat.parse::<f64>().unwrap_or(0.0);
-    let longitude = lon.parse::<f64>().unwrap_or(0.0);
     let (country, country_code) = match address {
         Some(addr) => (
             addr.country.clone(),
@@ -420,6 +426,14 @@ fn place_to_result(
         country_code,
         alternative_names,
     }
+}
+
+/// Parse a Nominatim coordinate string (`lat`/`lon`) into `f64`, mapping a
+/// malformed value to [`GeocodeError::Parse`] instead of defaulting to `0.0`.
+fn parse_coord(value: &str, name: &str) -> Result<f64, GeocodeError> {
+    value
+        .parse::<f64>()
+        .map_err(|e| GeocodeError::Parse(format!("invalid {name} coordinate {value:?}: {e}")))
 }
 
 /// Collect non-empty string values from the `namedetails` map, de-duplicated
@@ -439,22 +453,12 @@ fn collect_alternative_names(namedetails: Option<&JsonValue>, display_name: &str
     names
 }
 
-/// Percent-encode a query string for a URL query parameter.
+/// Percent-encode a query parameter value using the vetted `percent-encoding`
+/// crate (already a transitive dependency via `reqwest`). `NON_ALPHANUMERIC`
+/// encodes everything outside `A-Za-z0-9` (space as `%20`), which Nominatim
+/// accepts.
 fn percent_encode_query(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for &byte in input.as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
-            }
-            b' ' => out.push('+'),
-            _ => {
-                out.push('%');
-                out.push_str(&format!("{byte:02X}"));
-            }
-        }
-    }
-    out
+    utf8_percent_encode(input, NON_ALPHANUMERIC).to_string()
 }
 
 #[cfg(test)]
@@ -465,13 +469,13 @@ mod tests {
     fn percent_encode_query_encodes_spaces_and_special() {
         assert_eq!(
             percent_encode_query("10 Downing St, London"),
-            "10+Downing+St%2C+London"
+            "10%20Downing%20St%2C%20London"
         );
         assert_eq!(percent_encode_query("café"), "caf%C3%A9");
     }
 
     #[test]
-    fn place_to_result_parses_strings_and_country() {
+    fn place_to_result_builds_result_with_country() {
         let addr = NominatimAddress {
             country: Some("United Kingdom".to_string()),
             country_code: Some("GB".to_string()),
@@ -482,8 +486,8 @@ mod tests {
             "alt_name": "London",
         });
         let result = place_to_result(
-            "51.5074",
-            "-0.1278",
+            51.5074,
+            -0.1278,
             "London, United Kingdom".to_string(),
             Some(&addr),
             Some(&namedetails),
@@ -493,6 +497,12 @@ mod tests {
         assert_eq!(result.country.as_deref(), Some("United Kingdom"));
         assert_eq!(result.country_code.as_deref(), Some("gb"));
         assert!(result.alternative_names.contains(&"Londres".to_string()));
+    }
+
+    #[test]
+    fn parse_coord_returns_err_on_garbage() {
+        let err = parse_coord("not-a-number", "lat").unwrap_err();
+        assert!(matches!(err, GeocodeError::Parse(_)), "got {err:?}");
     }
 
     #[test]

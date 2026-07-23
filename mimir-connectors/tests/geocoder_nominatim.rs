@@ -280,3 +280,19 @@ async fn invalid_rate_config_surfaces_as_backend_error_not_rate_limited() {
         "expected Backend, got {err:?}"
     );
 }
+
+#[tokio::test]
+async fn forward_unparseable_coordinate_surfaces_parse_error() {
+    let server = MockServer::start().await;
+    let body = r#"[{"lat":"not-a-number","lon":"-0.1276","display_name":"x"}]"#;
+    Mock::given(method("GET"))
+        .and(query_param("q", "weird"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let geocoder = NominatimGeocoder::new(config_for(&server)).unwrap();
+    let err = geocoder.forward("weird").await.unwrap_err();
+    assert!(matches!(err, GeocodeError::Parse(_)), "got {err:?}");
+}

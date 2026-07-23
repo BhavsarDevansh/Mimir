@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.76.0] — 2026-07-23
+
+### Mock connector schema enum source-linking (PR #220 review)
+
+Actions the remaining CodeRabbit review thread on the configurable mock
+connector (`mimir-connectors/src/mock.rs`):
+
+- **Source-linked facts schema enums.** The `subject_type`, `object_type`, and
+  `recurrence` JSON Schema `enum` lists (and their `default` values) are now
+  derived from the serde representation of the canonical enum variant arrays
+  instead of being hand-typed strings, so they can no longer silently desync
+  from `EntityType` / `RecurrenceType` on a future rename.
+- **Canonical variant arrays.** `mimir-knowledge` exposes
+  `ENTITY_TYPES` and `RECURRENCE_TYPES` as single sources of truth for any
+  caller that must enumerate the variants.
+- **Regression guard.** A connector test asserts the schema enum arrays and
+  defaults exactly equal the serde-serialised variants, and knowledge tests
+  assert the const arrays enumerate every variant in discriminant order.
+
+
 ## [0.75.1] — 2026-07-23
 
 ### Mock connector review hardening (PR #220)

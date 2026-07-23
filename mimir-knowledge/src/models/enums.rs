@@ -103,6 +103,20 @@ pub enum RecurrenceType {
     Yearly = 5,
 }
 
+/// Every [`RecurrenceType`] variant in discriminant order.
+///
+/// Single source of truth for callers that must enumerate the variants (for
+/// example, to derive a JSON Schema `enum` from the serde representation
+/// instead of re-typing the variant names). Keep this in lock-step with the
+/// enum: every variant appears exactly once.
+pub const RECURRENCE_TYPES: [RecurrenceType; 5] = [
+    RecurrenceType::None,
+    RecurrenceType::Daily,
+    RecurrenceType::Weekly,
+    RecurrenceType::Monthly,
+    RecurrenceType::Yearly,
+];
+
 impl TryFrom<i16> for RecurrenceType {
     type Error = ();
 
@@ -272,6 +286,21 @@ mod tests {
         assert_eq!(RecurrenceType::try_from(6), Err(()));
         assert_eq!(RecurrenceType::try_from(-1), Err(()));
         assert_eq!(RecurrenceType::try_from(i16::MAX), Err(()));
+    }
+
+    #[test]
+    fn recurrence_types_lists_every_variant_in_order() {
+        // Single source of truth: the const array must enumerate the enum's
+        // variants in discriminant order and stay in lock-step with it.
+        assert_eq!(RECURRENCE_TYPES.len(), 5);
+        assert_eq!(RECURRENCE_TYPES[0], RecurrenceType::None);
+        assert_eq!(RECURRENCE_TYPES[1], RecurrenceType::Daily);
+        assert_eq!(RECURRENCE_TYPES[2], RecurrenceType::Weekly);
+        assert_eq!(RECURRENCE_TYPES[3], RecurrenceType::Monthly);
+        assert_eq!(RECURRENCE_TYPES[4], RecurrenceType::Yearly);
+        let mut sorted = RECURRENCE_TYPES;
+        sorted.sort_by_key(|r| *r as i16);
+        assert_eq!(sorted, RECURRENCE_TYPES);
     }
 
     #[test]

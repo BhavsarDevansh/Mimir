@@ -79,6 +79,9 @@ instead of silently misbehaving:
 - The `facts` schema declares the required fields (`subject`,
   `relationship_type`, `object`) and the typed enums for entity/recurrence
   types, so a malformed fact is caught at config time.
+- The schema's entity/recurrence enum lists and defaults are generated from
+  the real enum variant arrays (`ENTITY_TYPES` / `RECURRENCE_TYPES`), not
+  re-typed by hand — so the schema stays in sync with the enums automatically.
 
 The sync-options recorder is cancellation-safe: it tracks each `sync()` call
 for its entire lifetime (including injected failures, panics, and supervisor

@@ -49,8 +49,10 @@ use crate::connector::{
     Connector, ConnectorError, ConnectorFactory, ConnectorMode, HealthStatus, SyncOptions,
     SyncOutcome,
 };
-use mimir_knowledge::models::entity::EntityType;
-use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType, RecurrenceType};
+use mimir_knowledge::models::entity::{ENTITY_TYPES, EntityType};
+use mimir_knowledge::models::enums::{
+    ConnectorAuthState, ConnectorType, RECURRENCE_TYPES, RecurrenceType,
+};
 use mimir_knowledge::models::source::SourceType;
 use mimir_knowledge::normalize::NormalizedFact;
 
@@ -457,6 +459,68 @@ impl MockConnector {
     /// JSON Schema describing the mock's config surface (for the future
     /// `mimir connector add` flow and discoverability).
     fn config_schema_value() -> serde_json::Value {
+        // The `subject_type`/`object_type`/`recurrence` enum lists *and* their
+        // defaults are derived from the serde representation of the canonical
+        // enum variant arrays (see [`ENTITY_TYPES`] / [`RECURRENCE_TYPES`]) so
+        // they cannot silently desync from the enums on a future rename.
+        // `object_type` additionally permits JSON `null`.
+        let entity_enum = Self::entity_type_schema_enum();
+        // `object_type` reuses the entity-type enum and additionally permits
+        // JSON `null` (the field is `Option<EntityType>`).
+        let mut object_enum = entity_enum.clone();
+        object_enum.push(serde_json::Value::Null);
+        let recurrence_enum = Self::recurrence_schema_enum();
+        let subject_default = Self::entity_type_schema_default();
+        let recurrence_default = Self::recurrence_schema_default();
+        Self::config_schema_template(
+            entity_enum,
+            object_enum,
+            recurrence_enum,
+            subject_default,
+            recurrence_default,
+        )
+    }
+
+    /// Serialise [`ENTITY_TYPES`] to the JSON Schema `enum` values for
+    /// `subject_type`. Falls back to the variant names because [`EntityType`]
+    /// serialises as its variant string.
+    fn entity_type_schema_enum() -> Vec<serde_json::Value> {
+        ENTITY_TYPES
+            .iter()
+            .map(|t| serde_json::to_value(*t).expect("EntityType serialises as string"))
+            .collect()
+    }
+
+    /// Serialise [`RECURRENCE_TYPES`] to the JSON Schema `enum` values for
+    /// `recurrence`.
+    fn recurrence_schema_enum() -> Vec<serde_json::Value> {
+        RECURRENCE_TYPES
+            .iter()
+            .map(|r| serde_json::to_value(*r).expect("RecurrenceType serialises as string"))
+            .collect()
+    }
+
+    /// Default `subject_type` schema value, serialised from
+    /// [`default_subject_type`] to stay source-linked with [`EntityType`].
+    fn entity_type_schema_default() -> serde_json::Value {
+        serde_json::to_value(default_subject_type()).expect("EntityType default serialises")
+    }
+
+    /// Default `recurrence` schema value, serialised from
+    /// [`default_recurrence`] to stay source-linked with [`RecurrenceType`].
+    fn recurrence_schema_default() -> serde_json::Value {
+        serde_json::to_value(default_recurrence()).expect("RecurrenceType default serialises")
+    }
+
+    /// Closed-over schema template, interpolating the serde-derived enum
+    /// arrays so the schema stays source-linked to the enums.
+    fn config_schema_template(
+        entity_enum: Vec<serde_json::Value>,
+        object_enum: Vec<serde_json::Value>,
+        recurrence_enum: Vec<serde_json::Value>,
+        subject_default: serde_json::Value,
+        recurrence_default: serde_json::Value,
+    ) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "additionalProperties": false,
@@ -493,11 +557,8 @@ impl MockConnector {
                             },
                             "subject_type": {
                                 "type": "string",
-                                "enum": [
-                                    "Person", "Place", "Event", "Object",
-                                    "Concept", "Organization", "Activity", "DateTime"
-                                ],
-                                "default": "Concept",
+                                "enum": entity_enum,
+                                "default": subject_default,
                                 "description": "Entity type for the subject."
                             },
                             "relationship_type": {
@@ -515,11 +576,7 @@ impl MockConnector {
                             },
                             "object_type": {
                                 "type": ["string", "null"],
-                                "enum": [
-                                    "Person", "Place", "Event", "Object",
-                                    "Concept", "Organization", "Activity", "DateTime",
-                                    null
-                                ],
+                                "enum": object_enum,
                                 "default": null,
                                 "description": "Entity type for the object when object_is_entity is true."
                             },
@@ -542,8 +599,8 @@ impl MockConnector {
                             },
                             "recurrence": {
                                 "type": "string",
-                                "enum": ["None", "Daily", "Weekly", "Monthly", "Yearly"],
-                                "default": "None",
+                                "enum": recurrence_enum,
+                                "default": recurrence_default,
                                 "description": "Recurrence kind."
                             },
                             "requires_user_action": {

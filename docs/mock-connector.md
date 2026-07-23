@@ -115,6 +115,13 @@ defaulting or wrapping.
   (`additionalProperties: false`) and declares the required fields
   (`subject`, `relationship_type`, `object`) plus the typed enums for
   `subject_type` / `object_type` / `recurrence`, matching `MockFactConfig`.
+- The `subject_type` / `object_type` / `recurrence` schema `enum` lists and
+  their `default` values are derived from the serde representation of the
+  canonical variant arrays `mimir_knowledge::models::entity::ENTITY_TYPES` and
+  `mimir_knowledge::models::enums::RECURRENCE_TYPES` rather than hand-typed
+  strings, so the schema cannot silently desync from `EntityType` /
+  `RecurrenceType` on a future rename. A regression test asserts the schema
+  values exactly equal the serialised variants.
 
 The `MockSyncRecorder` is cancellation-safe: `enter(options)` returns a
 `MockSyncGuard` created *before* the first `.await` of `sync()`, and its `Drop`

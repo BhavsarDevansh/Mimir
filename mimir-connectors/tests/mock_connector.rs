@@ -509,3 +509,59 @@ fn config_schema_describes_fact_item_contract() {
     assert!(subject_type_enum.iter().any(|v| v == "Person"));
     assert!(subject_type_enum.iter().any(|v| v == "Concept"));
 }
+
+// ---------------------------------------------------------------------------
+// Schema enums stay source-linked to the knowledge enums (PR #220 review)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_schema_fact_enums_derive_from_knowledge_variants() {
+    use mimir_knowledge::models::entity::ENTITY_TYPES;
+    use mimir_knowledge::models::enums::RECURRENCE_TYPES;
+
+    let schema = MockConnector::default().config_schema();
+    let items = schema
+        .get("properties")
+        .and_then(|v| v["facts"]["items"].as_object())
+        .unwrap();
+    let props = &items["properties"];
+
+    // subject_type enum == serde serialisation of ENTITY_TYPES.
+    let expected_entity: Vec<serde_json::Value> = ENTITY_TYPES
+        .iter()
+        .map(|t| serde_json::to_value(*t).unwrap())
+        .collect();
+    assert_eq!(
+        props["subject_type"]["enum"].as_array().unwrap(),
+        &expected_entity,
+    );
+    // subject_type default == serde of EntityType::Concept.
+    assert_eq!(
+        props["subject_type"]["default"],
+        serde_json::to_value(EntityType::Concept).unwrap(),
+    );
+
+    // object_type enum == entity variants plus JSON null.
+    let mut expected_object = expected_entity.clone();
+    expected_object.push(serde_json::Value::Null);
+    assert_eq!(
+        props["object_type"]["enum"].as_array().unwrap(),
+        &expected_object,
+    );
+    assert_eq!(props["object_type"]["default"], serde_json::Value::Null);
+
+    // recurrence enum == serde serialisation of RECURRENCE_TYPES.
+    let expected_recurrence: Vec<serde_json::Value> = RECURRENCE_TYPES
+        .iter()
+        .map(|r| serde_json::to_value(*r).unwrap())
+        .collect();
+    assert_eq!(
+        props["recurrence"]["enum"].as_array().unwrap(),
+        &expected_recurrence,
+    );
+    // recurrence default == serde of RecurrenceType::None.
+    assert_eq!(
+        props["recurrence"]["default"],
+        serde_json::to_value(mimir_knowledge::models::enums::RecurrenceType::None).unwrap(),
+    );
+}

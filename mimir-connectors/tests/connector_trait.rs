@@ -28,7 +28,7 @@ use mimir_knowledge::normalize::NormalizedFact;
 
 #[test]
 fn mock_reports_identity_type_and_mode() {
-    let mock = MockConnector;
+    let mock = MockConnector::default();
 
     assert_eq!(mock.id(), "mock");
     assert_eq!(mock.name(), "Mock Connector");
@@ -137,13 +137,13 @@ fn connector_error_variants_display() {
 
 #[tokio::test]
 async fn mock_health_is_online() {
-    let mock = MockConnector;
+    let mock = MockConnector::default();
     assert_eq!(mock.health().await.unwrap(), HealthStatus::Online);
 }
 
 #[tokio::test]
 async fn mock_authenticate_returns_authenticated() {
-    let mock = MockConnector;
+    let mock = MockConnector::default();
     assert_eq!(
         mock.authenticate().await.unwrap(),
         ConnectorAuthState::Authenticated
@@ -152,7 +152,7 @@ async fn mock_authenticate_returns_authenticated() {
 
 #[tokio::test]
 async fn mock_sync_then_extract_yields_empty_normalized_facts() {
-    let mock = MockConnector;
+    let mock = MockConnector::default();
     let outcome = mock
         .sync(SyncOptions {
             full: false,
@@ -168,7 +168,7 @@ async fn mock_sync_then_extract_yields_empty_normalized_facts() {
 
 #[tokio::test]
 async fn mock_act_default_is_unsupported() {
-    let mock = MockConnector;
+    let mock = MockConnector::default();
     let action = ConnectorAction {
         kind: "create_event".to_string(),
         payload: serde_json::json!({}),
@@ -179,7 +179,7 @@ async fn mock_act_default_is_unsupported() {
 
 #[tokio::test]
 async fn mock_forget_succeeds() {
-    let mock = MockConnector;
+    let mock = MockConnector::default();
     mock.forget().await.unwrap();
 }
 
@@ -195,7 +195,7 @@ async fn trait_is_object_safe() {
     // callable through the shared reference without interior mutability at
     // the *storage* layer. (Connectors that need mutable state own it behind
     // their own interior mutability; the mock needs none.)
-    let mock: Arc<dyn Connector> = Arc::new(MockConnector);
+    let mock: Arc<dyn Connector> = Arc::new(MockConnector::default());
 
     // Sync accessors through the trait object.
     assert_eq!(mock.id(), "mock");

@@ -31,8 +31,12 @@
 //!   (F7 / #184): maps `(connector_type, backend)` to a [`ConnectorFactory`]
 //!   and constructs instances on demand; includes the closure-backed
 //!   [`FnConnectorFactory`].
-//! - [`mock`] — always-compiled mock connector test harness (stub; filled by
-//!   F13).
+//! - [`mock`] — always-compiled, configurable mock connector test harness
+//!   (F13 / #190): emits canned `NormalizedFact`s on a configurable cadence in
+//!   both `Polling` and `Push` modes, with health/auth/failure/panic injection,
+//!   and is the T1 sync→extract→insert→query vehicle. Includes `MockFactConfig`
+//!   (canned-fact DTO) and `MockSyncRecorder` (sync-options observation for
+//!   concurrency tests).
 //! - [`rate_limit`] — shared rate-limiting + retry/backoff primitives
 //!   ([`RateLimitConfig`] / [`RateLimiter`] / [`BackoffStrategy`] / [`retry_with_backoff`],
 //!   F12 / #189): token-bucket throttling (governor GCRA), optional rolling 24h
@@ -68,7 +72,9 @@ pub use connector::{
     ActionResult, Connector, ConnectorAction, ConnectorError, ConnectorFactory, ConnectorMode,
     HealthStatus, SyncOptions, SyncOutcome,
 };
-pub use mock::{MockConnector, MockConnectorFactory};
+pub use mock::{
+    MockConnector, MockConnectorFactory, MockFactConfig, MockSyncGuard, MockSyncRecorder,
+};
 pub use registry::{ConnectorRegistry, FnConnectorFactory};
 pub use supervisor::{
     ConnectorSupervisor, SupervisorConfig, SupervisorError, TriggerError, TriggerOutcome,

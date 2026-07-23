@@ -1,7 +1,7 @@
 # Connectors
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). **Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10). Shared rate-limit + retry/backoff primitives landed (issue #189 / F12).** No connector syncs data yet — backends arrive in later Phase 3 issues.
+> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). **Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10). Shared rate-limit + retry/backoff primitives landed (issue #189 / F12). Configurable, always-compiled mock connector test harness landed (issue #190 / F13) — it emits canned facts in polling/push modes and is the T1 sync→extract→insert→query vehicle.** No real connector syncs data yet — backends arrive in later Phase 3 issues.
 
 ## What connectors are
 
@@ -49,7 +49,7 @@ provider implementation chosen per instance. Adding a new backend is a new
 factory registration — no database change — and many backends can coexist
 under one type. Reliability stays per-type, so a Gmail-IMAP fact and a future
 Gmail-Graph fact share the same confidence scoring. The configurable mock
-harness remains a stub (F13).
+harness is now real (issue #190 / F13): see [Mock Connector](mock-connector.md).
 
 **The supervised lifecycle is in place (issue #185 / F8).** A
 `ConnectorSupervisor` owns one background task per connector whose lifecycle
@@ -105,6 +105,15 @@ below.
  backends are implemented in later Phase 3 issues. See
  [Connector Rate Limiting & Retry](connector-rate-limiting.md).
 
+
+**The configurable mock connector test harness is in place (issue #190 / F13).**
+An always-compiled in-memory connector whose behaviour is driven entirely by its
+`config_json`: it emits canned `NormalizedFact`s on a configurable cadence in
+both polling and push modes, and can inject health/auth states, failures, and
+panics to exercise the supervisor. It is the T1 sync→extract→insert→query
+vehicle — the real `ConnectorSupervisor` + `KnowledgeGraph` ingest a mock's
+canned facts end-to-end with correct connector provenance, without any real
+service. See [Mock Connector](mock-connector.md).
 ## How connector credentials are stored
 
 When you add a connector that needs a login (Gmail over OAuth, Fastmail over

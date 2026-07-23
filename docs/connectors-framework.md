@@ -195,9 +195,12 @@ impl ConnectorRegistry {
   no factory is registered for the requested pair.
 - **`FnConnectorFactory`.** A closure-backed `ConnectorFactory` (`new<F:
   Fn(serde_json::Value) -> Result<…> + Send + Sync + 'static>`) for simple
-  backends and tests. `MockConnectorFactory` (always-compiled) produces
-  `MockConnector`s, keeping the registry exercisable under every feature
-  combination, including `--no-default-features`.
+  backends and tests. `MockConnectorFactory` (always-compiled, F13 / #190)
+  produces `MockConnector`s from their `config_json`, keeping the registry
+  exercisable under every feature combination, including
+  `--no-default-features`. The mock is fully configurable (mode, cadence,
+  canned facts, health/auth, failure/panic injection) and is the T1
+  sync→extract→insert→query vehicle.
 - **Reliability stays per-type.** Confidence for connector facts is
   `confidence::initial(SourceType::Connector, connector_type)`, keyed on the
   type axis only. The registry never branches reliability on `backend`; an
@@ -388,7 +391,7 @@ HTTP route are separate Phase 3 issues (A2 action routes / A3 CLI) that call
 | `connector` | Runtime `Connector` trait + data types (`ConnectorMode`, `SyncOptions`, `SyncOutcome`, `HealthStatus`, `ConnectorAction`, `ActionResult`, `ConnectorError`) and the `ConnectorFactory` trait | F6 — done (#183) |
 | `registry` | `ConnectorRegistry` + multi-backend factory dispatch: `(connector_type, backend)` → `ConnectorFactory`, plus the closure-backed `FnConnectorFactory` | F7 — done (#184) |
 | `supervisor` | `ConnectorSupervisor` + `SupervisorConfig` + `SupervisorError` + `TriggerOutcome` + `TriggerError`: supervised per-connector task lifecycle (spawn / restart / backoff / circuit-breaker / startup-restore / graceful-shutdown / cursor-persistence), and manual sync triggering (`trigger_sync` / `trigger_sync_by_slug` — per-connector semaphore + request channel; preempts the polling interval) | F8 — done (#185), F9 — done (#186) |
-| `mock` | `MockConnector` + `MockConnectorFactory` (satisfy the full `Connector`/`ConnectorFactory` traits with empty-success outcomes) | F13 — configurable in-memory test harness |
+| `mock` | `MockConnector` + `MockConnectorFactory` + `MockFactConfig` + `MockSyncRecorder` (configurable, always-compiled test harness: emits canned `NormalizedFact`s in `Polling`/`Push` modes with health/auth/failure/panic injection and sync-options observation) | F13 — done (#190) |
 
 Provenance types that connectors reference (`ConnectorType`, `SourceType`)
 live in `mimir-knowledge` and are re-used, not duplicated (DRY).
@@ -604,7 +607,7 @@ lands.
 ## What remains to be built
 
 - **F11–F13** — optional OS-keyring backend (#188, deferred), rate limiter /
-  retry primitives, and the configurable mock harness. The `SecretStore` +
+  retry primitives (done, #189), and the configurable mock harness (done, #190). The `SecretStore` +
   `FileSecretStore` + `InMemorySecretStore` landed in #187 / F10.
 - **C1–C7** — the concrete backends (Photos, CalDAV Calendar, IMAP Email).
 - **A1–A4** — server `AppState` registry/supervisor wiring + CLI subcommands.

@@ -1,5 +1,6 @@
 //! Entity CRUD, alias resolution, deduplication, dates, locations, and predicate validation.
 
+use chrono::{DateTime, Utc};
 use serde_json;
 use sqlx::SqlitePool;
 
@@ -399,7 +400,75 @@ pub async fn validate_predicate(
 // Entity Locations (stubs)
 // ---------------------------------------------------------------------------
 
-/// Insert a location stub (returns the inserted record).
+/// Insert a location row inside an existing transaction (Phase 3 S3 / #193).
+///
+/// Low-level write used by the upsert path; callers needing move/supersession
+/// semantics should go through [`KnowledgeGraph::upsert_location`] rather than
+/// calling this directly.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_location_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    entity_id: i32,
+    location_type_id: i16,
+    address: Option<&str>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    timezone: Option<&str>,
+    valid_from: Option<DateTime<Utc>>,
+    valid_until: Option<DateTime<Utc>>,
+    source_fact_id: Option<i32>,
+) -> Result<EntityLocation, KnowledgeError> {
+    let record = sqlx::query_as::<_, EntityLocation>(
+        "INSERT INTO entity_locations          (entity_id, location_type_id, address, latitude, longitude, timezone, valid_from, valid_until, source_fact_id)          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)          RETURNING id, entity_id, location_type_id, address, latitude, longitude, timezone, valid_from, valid_until, source_fact_id, created_at",
+    )
+    .bind(entity_id)
+    .bind(location_type_id)
+    .bind(address)
+    .bind(latitude)
+    .bind(longitude)
+    .bind(timezone)
+    .bind(valid_from)
+    .bind(valid_until)
+    .bind(source_fact_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(record)
+}
+
+/// Close any still-open location of the same entity + type that began before
+/// `new_valid_from`, setting its `valid_until` to `new_valid_from`.
+///
+/// Models a move: "home 2020-2023, home 2023-present". Already-closed rows
+/// (`valid_until IS NOT NULL`) and rows whose `valid_from` is at or after the
+/// new bound are left untouched. A `None` new bound is a no-op (a timeless
+/// new location cannot supersede a dated one).
+pub async fn close_prior_open_locations_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    entity_id: i32,
+    location_type_id: i16,
+    new_valid_from: Option<DateTime<Utc>>,
+) -> Result<u64, KnowledgeError> {
+    let Some(new_valid_from) = new_valid_from else {
+        return Ok(0);
+    };
+    let result = sqlx::query(
+        "UPDATE entity_locations          SET valid_until = ?          WHERE entity_id = ? AND location_type_id = ?            AND valid_until IS NULL            AND (valid_from IS NULL OR valid_from < ?)",
+    )
+    .bind(new_valid_from)
+    .bind(entity_id)
+    .bind(location_type_id)
+    .bind(new_valid_from)
+    .execute(&mut **tx)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// Insert a location for an entity (direct-seed path; no supersession).
+///
+/// Convenience wrapper around [`insert_location_in_tx`] that opens its own
+/// transaction. Use [`KnowledgeGraph::upsert_location`] when the new location
+/// should close a prior open-ended location of the same type (moves).
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_location(
     pool: &SqlitePool,
     entity_id: i32,
@@ -408,20 +477,25 @@ pub async fn insert_location(
     latitude: Option<f64>,
     longitude: Option<f64>,
     timezone: Option<&str>,
+    valid_from: Option<DateTime<Utc>>,
+    valid_until: Option<DateTime<Utc>>,
+    source_fact_id: Option<i32>,
 ) -> Result<EntityLocation, KnowledgeError> {
-    let record = sqlx::query_as::<_, EntityLocation>(
-        "INSERT INTO entity_locations (entity_id, location_type_id, address, latitude, longitude, timezone) \
-         VALUES (?, ?, ?, ?, ?, ?) \
-         RETURNING id, entity_id, location_type_id, address, latitude, longitude, timezone, valid_from, valid_until, created_at",
+    let mut tx = pool.begin().await?;
+    let record = insert_location_in_tx(
+        &mut tx,
+        entity_id,
+        location_type_id,
+        address,
+        latitude,
+        longitude,
+        timezone,
+        valid_from,
+        valid_until,
+        source_fact_id,
     )
-    .bind(entity_id)
-    .bind(location_type_id)
-    .bind(address)
-    .bind(latitude)
-    .bind(longitude)
-    .bind(timezone)
-    .fetch_one(pool)
     .await?;
+    tx.commit().await?;
     Ok(record)
 }
 
@@ -431,16 +505,15 @@ pub async fn get_locations(
     entity_id: i32,
 ) -> Result<Vec<EntityLocation>, KnowledgeError> {
     let rows: Vec<EntityLocation> = sqlx::query_as::<_, EntityLocation>(
-        "SELECT id, entity_id, location_type_id, address, latitude, longitude, timezone, valid_from, valid_until, created_at \
-         FROM entity_locations WHERE entity_id = ? ORDER BY created_at",
+        "SELECT id, entity_id, location_type_id, address, latitude, longitude, timezone, valid_from, valid_until, source_fact_id, created_at          FROM entity_locations WHERE entity_id = ? ORDER BY created_at",
     )
-    .bind(entity_id)
-    .fetch_all(pool)
-    .await?;
+        .bind(entity_id)
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 
-/// Update a location's fields.
+/// Update a location's mutable fields.
 pub async fn update_location(
     pool: &SqlitePool,
     id: i32,
@@ -450,13 +523,7 @@ pub async fn update_location(
     timezone: Option<&str>,
 ) -> Result<EntityLocation, KnowledgeError> {
     let record = sqlx::query_as::<_, EntityLocation>(
-        "UPDATE entity_locations \
-         SET address = COALESCE(?, address), \
-             latitude = COALESCE(?, latitude), \
-             longitude = COALESCE(?, longitude), \
-             timezone = COALESCE(?, timezone) \
-         WHERE id = ? \
-         RETURNING id, entity_id, location_type_id, address, latitude, longitude, timezone, valid_from, valid_until, created_at",
+        "UPDATE entity_locations          SET address = COALESCE(?, address),              latitude = COALESCE(?, latitude),              longitude = COALESCE(?, longitude),              timezone = COALESCE(?, timezone)          WHERE id = ?          RETURNING id, entity_id, location_type_id, address, latitude, longitude, timezone, valid_from, valid_until, source_fact_id, created_at",
     )
     .bind(address)
     .bind(latitude)

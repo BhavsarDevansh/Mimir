@@ -60,6 +60,7 @@ fn literal_fact(subject: &str, rel: &str, object: &str, raw: &str) -> MockFactCo
         recurrence: RecurrenceType::None,
         requires_user_action: false,
         raw_reference: Some(raw.to_string()),
+        location: None,
     }
 }
 

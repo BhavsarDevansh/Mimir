@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.78.0] — 2026-07-23
+
+### Entity-locations write path (Phase 3 S3 / #193)
+
+Persist structured locations (address + lat/lng + timezone) for an entity with
+temporal validity windows, wired into the shared `normalize_and_insert`
+extraction pipeline. Supersedes the write-path half of #65; proximity queries
+(`find_nearby`) remain a separate issue (#196).
+
+- **Typed location overlay.** A "where" fact carries an optional
+  `NormalizedLocation` (`location_type`, `address`, `latitude`, `longitude`,
+  `timezone`) on `NormalizedFact`. After a non-sensitive fact is inserted,
+  `apply_location_overlay` derives an `entity_locations` row for the resolved
+  subject entity, using the fact's `valid_from`/`valid_until` as the location's
+  bounds. Both the conversational `remember` path and connectors fill the same
+  field. `NormalizedFact` is `PartialEq`-only now (`f64` coords are not `Eq`).
+- **Geocode the missing half.** Via the injected `Geocoder` (stored on
+  `KnowledgeGraph` as `Option<Arc<dyn Geocoder>>`): address-only → forward
+  geocode to coords; coords-only → reverse geocode to a place name; both
+  present → stored as-is. Geocoder errors/no-match are logged and tolerated;
+  the pipeline never aborts on a geocode failure.
+- **Moves / supersession.** `KnowledgeGraph::upsert_location` closes any
+  still-open location of the same `entity_id` + `location_type` whose
+  `valid_from` precedes the new `valid_from` (sets `valid_until`), then inserts
+  the new row — modelling "home 2020–2023, home 2023–present". Atomic in one
+  transaction.
+- **Provenance link.** Migration `044` adds a nullable
+  `entity_locations.source_fact_id INTEGER REFERENCES facts(id) ON DELETE SET
+  NULL`, mirroring `events.fact_id`, so a location row traces to its
+  originating fact and survives the fact being forgotten (FK → `NULL`).
+- **Daemon wiring.** `AppState::from_config_with_llm` injects the default
+  `NominatimGeocoder` into the `KnowledgeGraph` at startup (cheap; no network
+  work until a location fact is processed); construction failure disables
+  geocoding rather than aborting start.
+- **LLM schema.** The `remember` tool schema gained an optional `location`
+  object (`location_type` enum Home/Work/Visited/Origin/Current, address,
+  latitude, longitude, timezone); `extract.rs` validates it into the overlay.
+- **Mock connector.** `MockFactConfig` gained an optional `location` field so
+  the connector → location path is exercisable.
+- **No `confidence` column.** Locations do not carry their own confidence in
+  V1; provenance is via `source_fact_id` and the source fact's confidence.
+- **Pending path deferred.** Sensitive "where" facts land as
+  `pending_confirmation`; the overlay is not applied until confirmation
+  (follow-up).
+- **Docs.** `docs/entity-locations.md` (technical), `docs/wiki/entity-locations.md`
+  (user-facing), updated `docs/knowledge-graph-schema.md`, `docs/wiki/what-works-now.md`,
+  and `README.md`.
+
 ## [0.77.0] — 2026-07-23
 
 ### Geocoder service (Phase 3 S1 / #191)

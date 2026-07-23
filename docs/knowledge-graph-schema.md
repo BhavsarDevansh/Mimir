@@ -42,7 +42,7 @@ Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `0
 |-------|-------------|
 | `entities` | Graph nodes: people, places, events, objects, dates, etc. |
 | `entity_aliases` | Alternative names for entities (dedup / search) |
-| `entity_locations` | Geographic / address data with validity windows |
+| `entity_locations` | Geographic / address data with validity windows; `source_fact_id` links a row to the fact that produced it (Phase 3 S3 / #193) |
 | `facts` | Directed temporal edges between entities |
 | `events` | Lifecycle + recurrence overlay on facts (trigger date, recurrence, status, auto-complete policy); see Events & Reminders |
 | `fact_dependencies` | Junction table linking inferred facts to parents |
@@ -158,6 +158,9 @@ Migrations are strictly ordered by foreign-key dependencies:
 32. `039` — Events & reminders overlay: `event_types`, `event_statuses`, `auto_complete_policies`, `events` (#74)
 33. `040` — Drop superseded `entity_dates` / `entity_date_types` (#74)
 34. `041` — `pending_event_meta` cache for sensitive-fact event shape across the confirmation boundary (#74)
+35. `042` — Connector instance registry: `connectors` + `connector_statuses` / `connector_auth_states` lookups (#179)
+36. `043` — `sources.connector_instance_id` FK migration (`connector_id TEXT` → integer FK to `connectors(id)`) (#180)
+37. `044` — `entity_locations.source_fact_id` FK for the location-overlay write path (#193)
 
 ---
 

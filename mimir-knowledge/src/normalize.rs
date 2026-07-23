@@ -26,7 +26,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::entity::{Entity, EntityType};
-use crate::models::enums::{AutoCompletePolicy, ConnectorType, EventType, RecurrenceType};
+use crate::models::enums::{
+    AutoCompletePolicy, ConnectorType, EventType, LocationType, RecurrenceType,
+};
 use crate::models::event::NewEvent;
 use crate::models::fact::{Fact, FactStatus, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
@@ -106,13 +108,53 @@ impl Provenance {
     }
 }
 
+/// Structured location overlay carried by a [`NormalizedFact`] (Phase 3 S3 /
+/// #193).
+///
+/// When a fact describes where an entity is/was (a "lives at" / "located at"
+/// assertion, or a connector-extracted address/GPS fix), the producer fills
+/// this overlay with the typed geo data. [`normalize_and_insert`] then derives
+/// an `entity_locations` row for the resolved subject entity, geocoding the
+/// missing half (address -> coords or coords -> address) via the injected
+/// [`Geocoder`](mimir_core::geocoder::Geocoder) when only one side is known.
+/// The temporal bounds (`valid_from` / `valid_until`) come from the fact, so a
+/// move ("home 2020-2023, home 2023-present") is modelled by the fact's bounds
+/// plus the upsert's supersession of the prior open-ended location.
+///
+/// `f64` coordinates keep this `PartialEq`-only (not `Eq`); consequently
+/// [`NormalizedFact`] is `PartialEq`-only too.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NormalizedLocation {
+    /// Classification of the location (Home / Work / Visited / Origin /
+    /// Current). Mirrors the `location_types` lookup.
+    pub location_type: LocationType,
+    /// Free-text address or place name. Forward-geocoded to coords when
+    /// `latitude` / `longitude` are both `None`.
+    pub address: Option<String>,
+    /// WGS-84 latitude in decimal degrees. Reverse-geocoded to a place name
+    /// (stored as `address`) when `address` is `None`.
+    pub latitude: Option<f64>,
+    /// WGS-84 longitude in decimal degrees.
+    pub longitude: Option<f64>,
+    /// IANA timezone name (e.g. `Europe/London`), when known.
+    pub timezone: Option<String>,
+}
+
+impl NormalizedLocation {
+    /// `true` when at least one half of the geo data is present.
+    pub fn has_geo_data(&self) -> bool {
+        self.address.is_some() || (self.latitude.is_some() && self.longitude.is_some())
+    }
+}
+
 /// A single fact ready for the shared insert pipeline, provenance-annotated.
 ///
 /// Both the LLM `remember` path and connector ingestion produce this type;
 /// they differ only in `source_type` and (via [`Provenance`]) `extraction_method`.
 /// Entity types and temporal bounds are already typed — no string parsing
-/// happens inside [`normalize_and_insert`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// happens inside [`normalize_and_insert`]. An optional [`NormalizedLocation`]
+/// overlay turns a "where" fact into an `entity_locations` row.
+#[derive(Debug, Clone, PartialEq)]
 pub struct NormalizedFact {
     /// Origin family for this fact. Chat sets `UserEdit`/`Interaction` per
     /// fact (a batch may mix them); connectors set `Connector`.
@@ -145,6 +187,10 @@ pub struct NormalizedFact {
     /// Native id of the source item (e.g. an email UID, a calendar event id).
     /// Required when [`Provenance::connector_instance_id`] is set.
     pub raw_reference: Option<String>,
+    /// Optional structured location overlay. When present, the resolved
+    /// subject entity gets an `entity_locations` row derived from this and the
+    /// fact's temporal bounds (Phase 3 S3 / #193).
+    pub location: Option<NormalizedLocation>,
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +287,7 @@ async fn process_normalized_fact(
         recurrence,
         requires_user_action,
         ref raw_reference,
+        location,
     } = extracted;
 
     // Connector provenance requires a native raw_reference (the insert gate
@@ -437,7 +484,97 @@ async fn process_normalized_fact(
         }
     }
 
+    // Entity-locations overlay (Phase 3 S3 / #193): a "where" fact carries a
+    // typed location that is geocoded (filling the missing half) and upserted
+    // for the subject entity with this fact's temporal bounds.
+    if let Some(loc) = location {
+        apply_location_overlay(kg, subject.id, loc, valid_from, valid_until, fact.id).await;
+    }
+
     Ok(ProcessResult::Inserted(fact))
+}
+
+// ---------------------------------------------------------------------------
+// Entity-locations overlay derivation
+// ---------------------------------------------------------------------------
+
+/// Derive and persist an `entity_locations` row from a [`NormalizedLocation`]
+/// overlay on a freshly-inserted fact (Phase 3 S3 / #193).
+///
+/// Fills the missing geo half via the injected
+/// [`Geocoder`](mimir_core::geocoder::Geocoder) when only one side is known
+/// (address -> coords via forward, coords -> address via reverse), then upserts
+/// the location for the subject entity with the fact's temporal bounds and
+/// `source_fact_id = fact_id`. Geocoder errors and no-match results are logged
+/// and tolerated — the location is stored with whatever data it carries and the
+/// pipeline never aborts on a geocode failure. A location with neither address
+/// nor coords is a no-op.
+///
+/// Only the non-sensitive (inserted) path applies the overlay today; wiring
+/// the pending-confirmation path is tracked as follow-up work.
+async fn apply_location_overlay(
+    kg: &KnowledgeGraph,
+    entity_id: i32,
+    mut location: NormalizedLocation,
+    valid_from: Option<DateTime<Utc>>,
+    valid_until: Option<DateTime<Utc>>,
+    fact_id: i32,
+) {
+    if !location.has_geo_data() {
+        return;
+    }
+
+    let has_coords = location.latitude.is_some() && location.longitude.is_some();
+
+    if location.address.is_some() && !has_coords {
+        if let Some(geocoder) = kg.geocoder() {
+            let query = location.address.as_deref().unwrap_or("");
+            match geocoder.forward(query).await {
+                Ok(Some(result)) => {
+                    location.latitude = Some(result.latitude);
+                    location.longitude = Some(result.longitude);
+                }
+                Ok(None) => tracing::debug!(
+                    "geocoder found no match for address {:?}; storing address-only location",
+                    location.address
+                ),
+                Err(error) => tracing::warn!(
+                    "forward geocode failed for location overlay (fact {fact_id}): {error}"
+                ),
+            }
+        }
+    } else if location.address.is_none() && has_coords {
+        if let Some(geocoder) = kg.geocoder() {
+            let lat = location.latitude.unwrap();
+            let lng = location.longitude.unwrap();
+            match geocoder.reverse(lat, lng).await {
+                Ok(Some(result)) => location.address = Some(result.display_name),
+                Ok(None) => tracing::debug!(
+                    "geocoder found no place for coords ({lat}, {lng}); storing coords-only location"
+                ),
+                Err(error) => tracing::warn!(
+                    "reverse geocode failed for location overlay (fact {fact_id}): {error}"
+                ),
+            }
+        }
+    }
+
+    if let Err(error) = kg
+        .upsert_location(
+            entity_id,
+            location.location_type,
+            location.address.as_deref(),
+            location.latitude,
+            location.longitude,
+            location.timezone.as_deref(),
+            valid_from,
+            valid_until,
+            Some(fact_id),
+        )
+        .await
+    {
+        tracing::warn!("failed to persist location overlay for fact {fact_id}: {error}");
+    }
 }
 
 // ---------------------------------------------------------------------------

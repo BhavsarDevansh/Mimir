@@ -38,6 +38,8 @@ use crate::inference::{CascadeContext, RuleEngine};
 use crate::models::enums::{ConnectorType, RelationType};
 use crate::models::fact::{FactStatus, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
+use chrono::{DateTime, Utc};
+use mimir_core::geocoder::Geocoder;
 
 /// Errors that can occur during knowledge graph initialization or operation.
 #[derive(Debug, thiserror::Error)]
@@ -179,6 +181,12 @@ pub struct KnowledgeGraph {
     centrality_cache: Arc<RwLock<HashMap<i32, f32>>>,
     condensation_dirty: AtomicBool,
     condensation_notify: Arc<Notify>,
+    /// Pluggable geocoder used by the entity-locations write path (Phase 3
+    /// S3 / #193) to fill the missing half of a location (address -> coords
+    /// or coords -> address). `None` until the server injects a backend
+    /// (the Nominatim default lives in `mimir-connectors`); a location fact
+    /// processed with no geocoder is stored with whatever data it carries.
+    geocoder: Option<Arc<dyn Geocoder>>,
 }
 
 impl std::fmt::Debug for KnowledgeGraph {
@@ -230,6 +238,7 @@ impl KnowledgeGraph {
             pending_confirmations: Arc::new(RwLock::new(pending)),
             condensation_dirty: AtomicBool::new(false),
             condensation_notify: Arc::new(Notify::new()),
+            geocoder: None,
         })
     }
 
@@ -241,6 +250,20 @@ impl KnowledgeGraph {
     /// Access the pending-confirmation in-memory cache.
     pub fn pending_confirmations(&self) -> &Arc<RwLock<HashSet<i32>>> {
         &self.pending_confirmations
+    }
+
+    /// Return the injected geocoder, if any (Phase 3 S3 / #193).
+    pub fn geocoder(&self) -> Option<&Arc<dyn Geocoder>> {
+        self.geocoder.as_ref()
+    }
+
+    /// Inject a geocoder backend for the entity-locations write path.
+    ///
+    /// Called once during server startup after the `KnowledgeGraph` is
+    /// initialised, before connectors or the chat extraction path can produce
+    /// location facts. Replaces any previously-injected backend.
+    pub fn set_geocoder(&mut self, geocoder: Arc<dyn Geocoder>) {
+        self.geocoder = Some(geocoder);
     }
 
     pub fn pool(&self) -> &SqlitePool {
@@ -957,10 +980,16 @@ impl KnowledgeGraph {
     }
 
     // ------------------------------------------------------------------
-    // Entity locations delegates (stubs)
+    // Entity locations (Phase 2 stubs + Phase 3 S3 / #193 write path)
     // ------------------------------------------------------------------
 
-    /// Insert a location for an entity.
+    /// Insert a location for an entity (direct-seed path; no supersession).
+    ///
+    /// Opens its own transaction. For location *moves* (closing a prior
+    /// open-ended location of the same type) use [`Self::upsert_location`].
+    /// `source_fact_id` links the row to the fact that produced it when the
+    /// location was derived through `normalize_and_insert`.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_location(
         &self,
         entity_id: i32,
@@ -969,6 +998,9 @@ impl KnowledgeGraph {
         latitude: Option<f64>,
         longitude: Option<f64>,
         timezone: Option<&str>,
+        valid_from: Option<DateTime<Utc>>,
+        valid_until: Option<DateTime<Utc>>,
+        source_fact_id: Option<i32>,
     ) -> Result<models::entity_location::EntityLocation, KnowledgeError> {
         queries::entity::insert_location(
             &self.pool,
@@ -978,8 +1010,59 @@ impl KnowledgeGraph {
             latitude,
             longitude,
             timezone,
+            valid_from,
+            valid_until,
+            source_fact_id,
         )
         .await
+    }
+
+    /// Upsert a location for an entity with move/supersession semantics.
+    ///
+    /// Closes any still-open location of the same `entity_id` + `location_type`
+    /// that began before `valid_from` (sets its `valid_until = valid_from`),
+    /// then inserts the new row — modelling a move such as
+    /// "home 2020-2023, home 2023-present". The whole operation is atomic in
+    /// one transaction. Returns the newly inserted location.
+    ///
+    /// Geocoding (filling the missing half of address/coords) is the caller's
+    /// responsibility; this method persists exactly what it is given.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upsert_location(
+        &self,
+        entity_id: i32,
+        location_type: models::enums::LocationType,
+        address: Option<&str>,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+        timezone: Option<&str>,
+        valid_from: Option<DateTime<Utc>>,
+        valid_until: Option<DateTime<Utc>>,
+        source_fact_id: Option<i32>,
+    ) -> Result<models::entity_location::EntityLocation, KnowledgeError> {
+        let mut tx = self.pool.begin().await?;
+        queries::entity::close_prior_open_locations_in_tx(
+            &mut tx,
+            entity_id,
+            location_type as i16,
+            valid_from,
+        )
+        .await?;
+        let record = queries::entity::insert_location_in_tx(
+            &mut tx,
+            entity_id,
+            location_type as i16,
+            address,
+            latitude,
+            longitude,
+            timezone,
+            valid_from,
+            valid_until,
+            source_fact_id,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(record)
     }
 
     /// Get locations for an entity.
@@ -988,6 +1071,19 @@ impl KnowledgeGraph {
         entity_id: i32,
     ) -> Result<Vec<models::entity_location::EntityLocation>, KnowledgeError> {
         queries::entity::get_locations(&self.pool, entity_id).await
+    }
+
+    /// Update a location's mutable fields (address/coords/timezone).
+    pub async fn update_location(
+        &self,
+        id: i32,
+        address: Option<&str>,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+        timezone: Option<&str>,
+    ) -> Result<models::entity_location::EntityLocation, KnowledgeError> {
+        queries::entity::update_location(&self.pool, id, address, latitude, longitude, timezone)
+            .await
     }
 
     // ------------------------------------------------------------------

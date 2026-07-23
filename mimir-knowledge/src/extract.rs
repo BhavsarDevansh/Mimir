@@ -19,11 +19,11 @@ use mimir_core::personality::Personality;
 use crate::inference::CascadeContext;
 use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::entity::EntityType;
-use crate::models::enums::{AutoCompletePolicy, EventType, RecurrenceType};
+use crate::models::enums::{AutoCompletePolicy, EventType, LocationType, RecurrenceType};
 use crate::models::event::NewEvent;
 use crate::models::fact::{Fact, FactStatus};
 use crate::models::source::{ExtractionMethod, SourceType};
-use crate::normalize::{NormalizedFact, Provenance, normalize_and_insert};
+use crate::normalize::{NormalizedFact, NormalizedLocation, Provenance, normalize_and_insert};
 use crate::queries;
 use crate::{KnowledgeError, KnowledgeGraph};
 
@@ -79,6 +79,28 @@ pub struct ExtractedFact {
     /// act (stays `Active` past the trigger date instead of auto-completing).
     #[serde(default)]
     pub requires_user_action: Option<bool>,
+    /// Optional structured location for a "where" fact (Phase 3 S3 / #193).
+    /// When present, the resolved subject entity gets an `entity_locations`
+    /// row derived from this overlay and the fact's temporal bounds.
+    #[serde(default)]
+    pub location: Option<ExtractedLocation>,
+}
+
+/// Structured location overlay emitted by the LLM for a "where" fact
+/// (Phase 3 S3 / #193). Rust validates and maps it onto
+/// [`NormalizedLocation`]; no natural-language parsing happens downstream.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ExtractedLocation {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latitude: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub longitude: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
 }
 
 /// Wrapper returned by the `remember` tool.
@@ -179,6 +201,34 @@ pub fn remember_tool_schema() -> serde_json::Value {
                                 "requires_user_action": {
                                     "type": "boolean",
                                     "description": "True for tasks/deadlines the user must complete (the event stays Active past its trigger date). False or omit for reminders that auto-complete when the date passes."
+                                },
+                                "location": {
+                                    "type": "object",
+                                    "description": "Optional. Present only for 'where' facts (where the subject lives/works/is located). Carries the structured geo data that becomes an entity location; the temporal bounds on the fact model moves (e.g. home 2020-2023, home 2023-present).",
+                                    "properties": {
+                                        "location_type": {
+                                            "type": "string",
+                                            "enum": ["Home", "Work", "Visited", "Origin", "Current"],
+                                            "description": "Classification of the location."
+                                        },
+                                        "address": {
+                                            "type": "string",
+                                            "description": "Free-text address or place name. Omit when only coordinates are known (Mimir reverse-geocodes them)."
+                                        },
+                                        "latitude": {
+                                            "type": "number",
+                                            "description": "WGS-84 latitude in decimal degrees. Omit when only an address is known (Mimir forward-geocodes it)."
+                                        },
+                                        "longitude": {
+                                            "type": "number",
+                                            "description": "WGS-84 longitude in decimal degrees."
+                                        },
+                                        "timezone": {
+                                            "type": "string",
+                                            "description": "IANA timezone name (e.g. Europe/London), when known."
+                                        }
+                                    },
+                                    "required": ["location_type"]
                                 }
                             },
                             "required": ["classification", "subject", "subject_type", "relationship_type", "object", "object_is_entity"]
@@ -599,6 +649,25 @@ fn parse_extracted_fact(extracted: &ExtractedFact) -> Result<NormalizedFact, Kno
         }
     }
 
+    // Optional structured location overlay (Phase 3 S3 / #193). A malformed
+    // overlay is warned and dropped rather than aborting the fact, matching the
+    // per-fact tolerance used for categories.
+    let location = extracted
+        .location
+        .as_ref()
+        .and_then(|loc| match parse_location(loc) {
+            Ok(parsed) => Some(parsed),
+            Err(error) => {
+                tracing::warn!(
+                    "invalid location overlay for fact '{} {} {}'; ignoring: {error}",
+                    extracted.subject,
+                    extracted.relationship_type,
+                    extracted.object
+                );
+                None
+            }
+        });
+
     Ok(NormalizedFact {
         source_type: source_type_for(extracted.classification),
         subject: extracted.subject.clone(),
@@ -617,6 +686,7 @@ fn parse_extracted_fact(extracted: &ExtractedFact) -> Result<NormalizedFact, Kno
         requires_user_action,
         // Conversational facts have no native source item id.
         raw_reference: None,
+        location,
     })
 }
 
@@ -647,6 +717,43 @@ fn parse_recurrence(value: &str) -> Option<RecurrenceType> {
         "yearly" => Some(RecurrenceType::Yearly),
         _ => None,
     }
+}
+
+/// Map an LLM-emitted location-type string to a [`LocationType`].
+fn parse_location_type(value: &str) -> Result<LocationType, KnowledgeError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "home" => Ok(LocationType::Home),
+        "work" => Ok(LocationType::Work),
+        "visited" => Ok(LocationType::Visited),
+        "origin" => Ok(LocationType::Origin),
+        "current" => Ok(LocationType::Current),
+        other => Err(KnowledgeError::Validation(format!(
+            "unknown location_type {other:?}"
+        ))),
+    }
+}
+
+/// Parse an [`ExtractedLocation`] overlay into a [`NormalizedLocation`].
+///
+/// `location_type` is required (it classifies the row); the geo half
+/// (address / coords) is optional and filled by the geocoder later when only
+/// one side is known.
+fn parse_location(loc: &ExtractedLocation) -> Result<NormalizedLocation, KnowledgeError> {
+    let location_type = match loc.location_type.as_deref() {
+        Some(s) => parse_location_type(s)?,
+        None => {
+            return Err(KnowledgeError::Validation(
+                "location overlay missing location_type".to_string(),
+            ));
+        }
+    };
+    Ok(NormalizedLocation {
+        location_type,
+        address: loc.address.clone(),
+        latitude: loc.latitude,
+        longitude: loc.longitude,
+        timezone: loc.timezone.clone(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1089,6 +1196,7 @@ mod confirmation_tests {
             categories: vec!["230".to_string()],
             recurrence: None,
             requires_user_action: None,
+            location: None,
         }
     }
 
@@ -1179,6 +1287,7 @@ mod confirmation_tests {
             categories: vec!["230".to_string()],
             recurrence: recurrence.map(|r| r.to_string()),
             requires_user_action,
+            location: None,
         }
     }
 

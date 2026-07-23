@@ -146,6 +146,7 @@ fn person_fact(subject: &str, rel: &str, object: &str, raw: &str) -> MockFactCon
         recurrence: mimir_knowledge::models::enums::RecurrenceType::None,
         requires_user_action: false,
         raw_reference: Some(raw.to_string()),
+        location: None,
     }
 }
 

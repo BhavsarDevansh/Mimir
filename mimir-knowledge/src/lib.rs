@@ -29,7 +29,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::{Notify, RwLock, mpsc, oneshot};
 
 use crate::inference::rules::contradiction::ContradictionRule;
 use crate::inference::rules::threshold::{RELATIONSHIP_TYPE_REJECTED_ACTION, ThresholdRule};
@@ -40,6 +40,8 @@ use crate::models::fact::{FactStatus, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
 use chrono::{DateTime, Utc};
 use mimir_core::geocoder::Geocoder;
+
+use crate::normalize::{OverlayJob, start_location_overlay_worker};
 
 /// Errors that can occur during knowledge graph initialization or operation.
 #[derive(Debug, thiserror::Error)]
@@ -187,6 +189,12 @@ pub struct KnowledgeGraph {
     /// (the Nominatim default lives in `mimir-connectors`); a location fact
     /// processed with no geocoder is stored with whatever data it carries.
     geocoder: Option<Arc<dyn Geocoder>>,
+    /// Sender for the location-overlay background worker (Phase 3 S3 / #193).
+    /// Location overlays are enqueued here instead of awaited inline so a
+    /// connector batch of location facts is not gated on the geocoder's
+    /// rate limit. The worker processes jobs in FIFO order, preserving
+    /// move/supersession semantics; see [`crate::normalize::OverlayJob`].
+    location_overlay_tx: mpsc::UnboundedSender<OverlayJob>,
 }
 
 impl std::fmt::Debug for KnowledgeGraph {
@@ -229,6 +237,8 @@ impl KnowledgeGraph {
 
         let pending: HashSet<i32> = pending_ids.into_iter().collect();
 
+        let location_overlay_tx = start_location_overlay_worker(pool.clone());
+
         Ok(Self {
             pool,
             clock,
@@ -239,6 +249,7 @@ impl KnowledgeGraph {
             condensation_dirty: AtomicBool::new(false),
             condensation_notify: Arc::new(Notify::new()),
             geocoder: None,
+            location_overlay_tx,
         })
     }
 
@@ -264,6 +275,27 @@ impl KnowledgeGraph {
     /// location facts. Replaces any previously-injected backend.
     pub fn set_geocoder(&mut self, geocoder: Arc<dyn Geocoder>) {
         self.geocoder = Some(geocoder);
+    }
+
+    /// Sender for the location-overlay background worker (Phase 3 S3 / #193).
+    pub(crate) fn location_overlay_tx(&self) -> &mpsc::UnboundedSender<OverlayJob> {
+        &self.location_overlay_tx
+    }
+
+    /// Await every location-overlay job enqueued before this call.
+    ///
+    /// Location overlays are applied asynchronously by a background worker so
+    /// the ingestion pipeline is not gated on the geocoder's rate limit. This
+    /// barrier drains the worker's queue up to the call point: it enqueues a
+    /// sentinel and resolves once the worker has finished every prior `Apply`
+    /// job, so callers (graceful shutdown, tests) can read `entity_locations`
+    /// deterministically. Jobs enqueued concurrently with the flush are not
+    /// guaranteed to have completed.
+    pub async fn flush_location_overlays(&self) {
+        let (tx, rx) = oneshot::channel();
+        if self.location_overlay_tx.send(OverlayJob::Flush(tx)).is_ok() {
+            let _ = rx.await;
+        }
     }
 
     pub fn pool(&self) -> &SqlitePool {
@@ -1040,16 +1072,8 @@ impl KnowledgeGraph {
         valid_until: Option<DateTime<Utc>>,
         source_fact_id: Option<i32>,
     ) -> Result<models::entity_location::EntityLocation, KnowledgeError> {
-        let mut tx = self.pool.begin().await?;
-        queries::entity::close_prior_open_locations_in_tx(
-            &mut tx,
-            entity_id,
-            location_type as i16,
-            valid_from,
-        )
-        .await?;
-        let record = queries::entity::insert_location_in_tx(
-            &mut tx,
+        queries::entity::upsert_location(
+            self.pool(),
             entity_id,
             location_type as i16,
             address,
@@ -1060,9 +1084,7 @@ impl KnowledgeGraph {
             valid_until,
             source_fact_id,
         )
-        .await?;
-        tx.commit().await?;
-        Ok(record)
+        .await
     }
 
     /// Get locations for an entity.

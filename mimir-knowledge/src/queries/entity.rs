@@ -499,6 +499,49 @@ pub async fn insert_location(
     Ok(record)
 }
 
+/// Upsert a location for an entity with move/supersession semantics
+/// (Phase 3 S3 / #193).
+///
+/// Begins a transaction, closes any still-open location of the same
+/// `entity_id` + `location_type_id` that began before `valid_from` (sets its
+/// `valid_until = valid_from`) via [`close_prior_open_locations_in_tx`], then
+/// inserts the new row via [`insert_location_in_tx`]. Atomic in one
+/// transaction. Shared by the [`KnowledgeGraph::upsert_location`] facade and
+/// the background location-overlay worker so both apply identical move
+/// semantics. Geocoding (filling the missing half) is the caller's
+/// responsibility; this persists exactly what it is given.
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_location(
+    pool: &SqlitePool,
+    entity_id: i32,
+    location_type_id: i16,
+    address: Option<&str>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    timezone: Option<&str>,
+    valid_from: Option<DateTime<Utc>>,
+    valid_until: Option<DateTime<Utc>>,
+    source_fact_id: Option<i32>,
+) -> Result<EntityLocation, KnowledgeError> {
+    let mut tx = pool.begin().await?;
+    close_prior_open_locations_in_tx(&mut tx, entity_id, location_type_id, valid_from).await?;
+    let record = insert_location_in_tx(
+        &mut tx,
+        entity_id,
+        location_type_id,
+        address,
+        latitude,
+        longitude,
+        timezone,
+        valid_from,
+        valid_until,
+        source_fact_id,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(record)
+}
+
 /// Get all locations for an entity.
 pub async fn get_locations(
     pool: &SqlitePool,

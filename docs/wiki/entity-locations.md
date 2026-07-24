@@ -21,9 +21,15 @@ overlay** alongside the usual subject–relationship–object triple. Mimir:
    coordinates; if you give only coordinates it looks up the place name. It
    uses the built-in OSM Nominatim geocoder (free, no API key). If geocoding
    fails or finds nothing, the fact is still stored with whatever you gave.
-2. **Records the location** for the entity with the fact's time bounds.
+2. **Records the location** for the entity with the inserted fact's time
+   bounds (so a correction like *"actually I live at Y now"* correctly retimes
+   and supersedes the prior home).
 3. **Handles moves** — adding a new home with a start date automatically closes
    the previous open-ended home at that date, so the history stays consistent.
+4. **Doesn't block on geocoding** — the address/GPS lookup + write happen on a
+   background worker, so remembering many places at once (e.g. a connector
+   importing lots of GPS-tagged photos) isn't slowed to the geocoder's ~1
+   lookup/sec rate.
 
 The location row links back to the fact that produced it, so it's traceable and
 honours forgetting (forgetting the fact keeps the address but unlinks it).
@@ -41,6 +47,9 @@ honours forgetting (forgetting the fact keeps the address but unlinks it).
 
 ## Notes / limits (v0.78.0)
 
+- The background overlay worker uses an unbounded queue, so a very large burst
+  of location facts (thousands) is held in memory while the geocoder catches up
+  at ~1 lookup/sec; shutdown should call `flush_location_overlays` to drain it.
 - Locations don't carry their own confidence score yet — provenance is via the
   source fact.
 - A *sensitive* "where" fact is held for confirmation like any sensitive fact;

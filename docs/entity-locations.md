@@ -51,19 +51,32 @@ pub struct NormalizedLocation {
 }
 ```
 
-The temporal bounds come from the fact's `valid_from` / `valid_until`, so a
-move is just a fact with bounds plus an overlay — no location-specific date
-parsing. Both the conversational `remember` path (`extract.rs`) and connectors
-(`MockFactConfig.location`, and future connector extraction) fill the same
-field, differing only in provenance. `NormalizedFact` is `PartialEq`-only
-(not `Eq`) because `f64` coordinates are not `Eq`.
+The temporal bounds come from the **inserted fact's** `valid_from` /
+`valid_until` (not the pre-correction extracted bounds), so a move is just a
+fact with bounds plus an overlay — no location-specific date parsing. Reading
+the bounds from the inserted `Fact` matters for corrections: `handle_correction`
+mutates `new_fact.valid_from` before the insert (a `None` scope → `now`, a
+datetime scope → that datetime), and the overlay must inherit the mutated
+bound so the `entity_locations` row matches its source fact and prior-location
+supersession fires. Both the conversational `remember` path (`extract.rs`) and
+connectors (`MockFactConfig.location`, and future connector extraction) fill
+the same field, differing only in provenance. `NormalizedFact` is
+`PartialEq`-only (not `Eq`) because `f64` coordinates are not `Eq`.
 
 ## Pipeline: `apply_location_overlay`
 
 In `normalize::process_normalized_fact`, after a non-sensitive fact is
-inserted, if `location` is `Some`:
+inserted, if `location` is `Some` the work is **enqueued to a background
+worker** rather than awaited inline, so a connector batch of location facts is
+not gated on the geocoder's rate limit (~1 req/sec for Nominatim). The worker
+processes jobs strictly in FIFO submission order, which preserves move /
+supersession semantics within a batch and across separate
+`normalize_and_insert` calls; a single worker loses no geocode throughput
+versus parallelism because the Nominatim backend is already rate-limited to
+~1 req/sec. Each job carries a clone of the geocoder read at submit time and
+the inserted fact's temporal bounds. Per job:
 
-1. **Fill the missing half** via the injected `Geocoder`
+1. **Fill the missing half** via the job's `Geocoder`
    (`KnowledgeGraph::geocoder`, `Option<Arc<dyn Geocoder>>`):
    - address-only → `forward(address)` → lat/lng;
    - coords-only → `reverse(lat, lng)` → place name stored as `address`;
@@ -72,11 +85,15 @@ inserted, if `location` is `Some`:
    Geocoder `Err` and `Ok(None)` are logged and tolerated — the location is
    stored with whatever data it carries and the pipeline never aborts on a
    geocode failure. With no geocoder injected, the missing half stays empty.
-2. **Upsert** via `KnowledgeGraph::upsert_location`: close any still-open
-   location of the same `entity_id` + `location_type` whose `valid_from` is
-   before the new `valid_from` (set its `valid_until = new.valid_from`), then
-   insert the new row with `source_fact_id = fact_id`. Atomic in one
-   transaction.
+2. **Upsert** via `queries::entity::upsert_location` (shared by the
+   `KnowledgeGraph::upsert_location` facade): close any still-open location of
+   the same `entity_id` + `location_type` whose `valid_from` is before the new
+   `valid_from` (set its `valid_until = new.valid_from`), then insert the new
+   row with `source_fact_id = fact_id`. Atomic in one transaction.
+
+`KnowledgeGraph::flush_location_overlays` is a barrier that awaits every
+overlay enqueued before the call, for deterministic graceful shutdown / tests.
+Jobs enqueued concurrently with a flush are not guaranteed to have completed.
 
 The `Geocoder` trait lives in `mimir-core` (so `mimir-knowledge` can name it
 without depending on `mimir-connectors`); the Nominatim default backend lives
@@ -100,10 +117,14 @@ the overlay into `confirm_fact` is tracked as follow-up work (see Issues).
   mutable-field update.
 - `KnowledgeGraph::set_geocoder(Arc<dyn Geocoder>)` / `geocoder()` — inject /
   read the geocoder backend.
+- `KnowledgeGraph::flush_location_overlays()` — await every overlay enqueued
+  before the call (deterministic shutdown / tests).
 
 ## Tests
 
 `mimir-knowledge/tests/entity_locations_test.rs` covers: address-only forward
 geocode; coords-only reverse geocode; both-present no-geocode; no-geocoder
 address-only; geocoder-error tolerance; move supersession; connector-provenance
-overlay; and the facade upsert directly.
+overlay; a batch of location facts persisted after a flush; correction overlays
+(no-scope and datetime-scope) using the inserted fact's bounds to supersede a
+prior open location; and the facade upsert directly.

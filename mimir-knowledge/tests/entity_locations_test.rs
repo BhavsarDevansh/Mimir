@@ -82,6 +82,10 @@ async fn subject_locations(
     kg: &KnowledgeGraph,
     fact_id_subject: i32,
 ) -> Vec<models::entity_location::EntityLocation> {
+    // Location overlays are applied by a background worker, so drain the
+    // worker's queue before reading to keep these integration tests
+    // deterministic.
+    kg.flush_location_overlays().await;
     kg.get_locations(fact_id_subject).await.unwrap()
 }
 
@@ -252,6 +256,106 @@ async fn move_supersedes_prior_open_location() {
     assert!(new.valid_until.is_none(), "new location is open-ended");
 }
 
+/// A "where" correction: `is_correction` with no scope defaults the inserted
+/// fact's `valid_from` to `now`. The location overlay must use the *inserted
+/// fact's* bounds (not the pre-correction `None`), so the new Home location is
+/// dated at `now` and supersedes the prior open Home (regression test for the
+/// pre-correction temporal-bounds bug).
+#[tokio::test]
+async fn correction_overlay_uses_corrected_bounds_and_supersedes() {
+    let (mut kg, _dir) = fresh_kg().await;
+    kg.set_geocoder(Arc::new(
+        MockGeocoder::new().with_forward(Ok(Some(london_result()))),
+    ));
+
+    // Timeless open Home: "I live at Old Road" (no valid_from).
+    normalize_and_insert(
+        &kg,
+        vec![home_fact(Some("Old Road"), None, None, None)],
+        Provenance::chat(ExtractionMethod::LlmExtraction),
+    )
+    .await
+    .unwrap();
+
+    // Correction: "actually I live at New Road now" with no scope -> `now`.
+    let mut correction = home_fact(Some("New Road"), None, None, None);
+    correction.is_correction = true;
+    correction.correction_scope = None;
+    let outcome = normalize_and_insert(
+        &kg,
+        vec![correction],
+        Provenance::chat(ExtractionMethod::LlmExtraction),
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.inserted.len(), 1);
+    let now = outcome.inserted[0].valid_from;
+    assert!(now.is_some(), "correction fact should be dated at `now`");
+
+    let locs = subject_locations(&kg, outcome.inserted[0].subject_id).await;
+    assert_eq!(locs.len(), 2, "both rows should coexist");
+    let old = locs
+        .iter()
+        .find(|l| l.address.as_deref() == Some("Old Road"))
+        .unwrap();
+    let new = locs
+        .iter()
+        .find(|l| l.address.as_deref() == Some("New Road"))
+        .unwrap();
+    assert_eq!(
+        old.valid_until, now,
+        "prior open Home closed at the correction"
+    );
+    assert_eq!(new.valid_from, now, "new Home dated at the correction");
+    assert!(new.valid_until.is_none(), "new location is open-ended");
+}
+
+/// A "where" correction with a datetime scope: the inserted fact's
+/// `valid_from` becomes that datetime, and the overlay inherits it (not the
+/// pre-correction `None`).
+#[tokio::test]
+async fn correction_overlay_with_datetime_scope_uses_scope_bounds() {
+    let (mut kg, _dir) = fresh_kg().await;
+    kg.set_geocoder(Arc::new(
+        MockGeocoder::new().with_forward(Ok(Some(london_result()))),
+    ));
+
+    normalize_and_insert(
+        &kg,
+        vec![home_fact(Some("Old Road"), None, None, None)],
+        Provenance::chat(ExtractionMethod::LlmExtraction),
+    )
+    .await
+    .unwrap();
+
+    let scope = parse_dt("2024-01-01T00:00:00Z");
+    let mut correction = home_fact(Some("New Road"), None, None, None);
+    correction.is_correction = true;
+    correction.correction_scope = Some(scope.to_rfc3339());
+    let outcome = normalize_and_insert(
+        &kg,
+        vec![correction],
+        Provenance::chat(ExtractionMethod::LlmExtraction),
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.inserted.len(), 1);
+    assert_eq!(outcome.inserted[0].valid_from, Some(scope));
+
+    let locs = subject_locations(&kg, outcome.inserted[0].subject_id).await;
+    assert_eq!(locs.len(), 2);
+    let old = locs
+        .iter()
+        .find(|l| l.address.as_deref() == Some("Old Road"))
+        .unwrap();
+    let new = locs
+        .iter()
+        .find(|l| l.address.as_deref() == Some("New Road"))
+        .unwrap();
+    assert_eq!(old.valid_until, Some(scope));
+    assert_eq!(new.valid_from, Some(scope));
+}
+
 #[tokio::test]
 async fn connector_location_overlay_persists() {
     let (mut kg, _dir) = fresh_kg().await;
@@ -293,6 +397,54 @@ async fn connector_location_overlay_persists() {
     assert_eq!(locs.len(), 1);
     assert_eq!(locs[0].source_fact_id, Some(outcome.inserted[0].id));
     assert!((locs[0].latitude.unwrap() - 51.5074).abs() < 1e-6);
+}
+
+/// A batch of location facts is enqueued to the background worker and all
+/// overlays are persisted after a single flush (regression guard for the
+/// fire-and-forget worker that un-gates ingestion from the geocoder rate
+/// limit).
+#[tokio::test]
+async fn batch_of_location_facts_persisted_after_flush() {
+    let (mut kg, _dir) = fresh_kg().await;
+    kg.set_geocoder(Arc::new(
+        MockGeocoder::new().with_forward(Ok(Some(london_result()))),
+    ));
+
+    let facts: Vec<NormalizedFact> = (0..5)
+        .map(|i| {
+            let mut f = home_fact(
+                Some(&format!("Address {i}")),
+                None,
+                None,
+                Some(parse_dt(&format!("202{i}-01-01T00:00:00Z"))),
+            );
+            // Distinct subjects so each is a standalone Visited-style fix;
+            // use a per-fact subject so rows don't supersede each other.
+            f.subject = format!("Person {i}");
+            f.location.as_mut().unwrap().location_type = LocationType::Visited;
+            f
+        })
+        .collect();
+
+    let outcome = normalize_and_insert(
+        &kg,
+        facts,
+        Provenance::chat(ExtractionMethod::LlmExtraction),
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.inserted.len(), 5);
+
+    kg.flush_location_overlays().await;
+    for fact in &outcome.inserted {
+        let locs = kg.get_locations(fact.subject_id).await.unwrap();
+        assert_eq!(locs.len(), 1, "one location per subject");
+        assert_eq!(locs[0].source_fact_id, Some(fact.id));
+        assert!(
+            locs[0].latitude.is_some(),
+            "forward-geocoded coords present"
+        );
+    }
 }
 
 #[tokio::test]

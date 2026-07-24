@@ -22,6 +22,7 @@
 //! `kb audit`. Rust can only narrow the flag, never widen it.
 
 use chrono::{DateTime, Utc};
+use mimir_core::geocoder::Geocoder;
 use serde::{Deserialize, Serialize};
 
 use crate::models::audit_log::{ChangeType, ChangedBy};
@@ -486,9 +487,28 @@ async fn process_normalized_fact(
 
     // Entity-locations overlay (Phase 3 S3 / #193): a "where" fact carries a
     // typed location that is geocoded (filling the missing half) and upserted
-    // for the subject entity with this fact's temporal bounds.
+    // for the subject entity with the *inserted fact's* temporal bounds. The
+    // bounds are read from `fact` (not the pre-correction `valid_from`/
+    // `valid_until` bindings) because `handle_correction` may have mutated
+    // `new_fact.valid_from` before the insert (a correction scope of `None`
+    // becomes `now`, a datetime scope becomes that datetime); using the
+    // original bindings would make the `entity_locations` row diverge from its
+    // source fact and skip prior-location supersession.
+    //
+    // The geocode + upsert is offloaded to a single background worker (see
+    // [`OverlayJob`]) so a connector batch emitting many location facts is not
+    // gated on the geocoder's rate limit (~1 req/sec for Nominatim). The job
+    // carries a clone of the geocoder read at submit time and is processed in
+    // submission order, preserving move/supersession ordering across batches.
     if let Some(loc) = location {
-        apply_location_overlay(kg, subject.id, loc, valid_from, valid_until, fact.id).await;
+        let _ = kg.location_overlay_tx().send(OverlayJob::Apply {
+            geocoder: kg.geocoder().cloned(),
+            entity_id: subject.id,
+            location: loc,
+            valid_from: fact.valid_from,
+            valid_until: fact.valid_until,
+            fact_id: fact.id,
+        });
     }
 
     Ok(ProcessResult::Inserted(fact))
@@ -501,7 +521,7 @@ async fn process_normalized_fact(
 /// Derive and persist an `entity_locations` row from a [`NormalizedLocation`]
 /// overlay on a freshly-inserted fact (Phase 3 S3 / #193).
 ///
-/// Fills the missing geo half via the injected
+/// Fills the missing geo half via the supplied
 /// [`Geocoder`](mimir_core::geocoder::Geocoder) when only one side is known
 /// (address -> coords via forward, coords -> address via reverse), then upserts
 /// the location for the subject entity with the fact's temporal bounds and
@@ -510,10 +530,14 @@ async fn process_normalized_fact(
 /// pipeline never aborts on a geocode failure. A location with neither address
 /// nor coords is a no-op.
 ///
-/// Only the non-sensitive (inserted) path applies the overlay today; wiring
-/// the pending-confirmation path is tracked as follow-up work.
+/// This runs on the background [`location_overlay_worker`] (not the ingestion
+/// caller's task) so a connector batch of location facts is not gated on the
+/// geocoder's rate limit. Only the non-sensitive (inserted) path enqueues an
+/// overlay today; wiring the pending-confirmation path is tracked as follow-up
+/// work.
 async fn apply_location_overlay(
-    kg: &KnowledgeGraph,
+    pool: &sqlx::SqlitePool,
+    geocoder: Option<&std::sync::Arc<dyn Geocoder>>,
     entity_id: i32,
     mut location: NormalizedLocation,
     valid_from: Option<DateTime<Utc>>,
@@ -527,7 +551,7 @@ async fn apply_location_overlay(
     let has_coords = location.latitude.is_some() && location.longitude.is_some();
 
     if location.address.is_some() && !has_coords {
-        if let Some(geocoder) = kg.geocoder() {
+        if let Some(geocoder) = geocoder {
             let query = location.address.as_deref().unwrap_or("");
             match geocoder.forward(query).await {
                 Ok(Some(result)) => {
@@ -544,7 +568,7 @@ async fn apply_location_overlay(
             }
         }
     } else if location.address.is_none() && has_coords {
-        if let Some(geocoder) = kg.geocoder() {
+        if let Some(geocoder) = geocoder {
             let lat = location.latitude.unwrap();
             let lng = location.longitude.unwrap();
             match geocoder.reverse(lat, lng).await {
@@ -559,21 +583,97 @@ async fn apply_location_overlay(
         }
     }
 
-    if let Err(error) = kg
-        .upsert_location(
-            entity_id,
-            location.location_type,
-            location.address.as_deref(),
-            location.latitude,
-            location.longitude,
-            location.timezone.as_deref(),
-            valid_from,
-            valid_until,
-            Some(fact_id),
-        )
-        .await
+    if let Err(error) = queries::entity::upsert_location(
+        pool,
+        entity_id,
+        location.location_type as i16,
+        location.address.as_deref(),
+        location.latitude,
+        location.longitude,
+        location.timezone.as_deref(),
+        valid_from,
+        valid_until,
+        Some(fact_id),
+    )
+    .await
     {
         tracing::warn!("failed to persist location overlay for fact {fact_id}: {error}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Entity-locations background worker
+// ---------------------------------------------------------------------------
+
+/// A unit of work for the location-overlay background worker.
+///
+/// `Apply` carries everything the worker needs to geocode + upsert a location
+/// without touching the [`KnowledgeGraph`] (a geocoder clone read at submit
+/// time, an owned [`NormalizedLocation`], and the *inserted fact's* temporal
+/// bounds). `Flush` is a barrier the worker signals once every prior `Apply`
+/// job has completed, used by [`KnowledgeGraph::flush_location_overlays`] for
+/// deterministic shutdown / tests.
+pub(crate) enum OverlayJob {
+    Apply {
+        geocoder: Option<std::sync::Arc<dyn Geocoder>>,
+        entity_id: i32,
+        location: NormalizedLocation,
+        valid_from: Option<DateTime<Utc>>,
+        valid_until: Option<DateTime<Utc>>,
+        fact_id: i32,
+    },
+    Flush(tokio::sync::oneshot::Sender<()>),
+}
+
+/// Spawn the single location-overlay background worker and return the sender
+/// used to enqueue [`OverlayJob`]s.
+///
+/// The worker owns a clone of the pool and processes jobs strictly in
+/// submission order (an unbounded FIFO channel), which preserves move /
+/// supersession ordering both within a batch and across separate
+/// [`normalize_and_insert`] calls. A single worker loses no geocode throughput
+/// versus parallelism: the default Nominatim backend is rate-limited to
+/// ~1 req/sec regardless, so serial processing is already on the throughput
+/// floor. The returned sender is stored on [`KnowledgeGraph`]; dropping it
+/// closes the channel and the worker exits cleanly.
+pub(crate) fn start_location_overlay_worker(
+    pool: sqlx::SqlitePool,
+) -> tokio::sync::mpsc::UnboundedSender<OverlayJob> {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(location_overlay_worker(rx, pool));
+    tx
+}
+
+/// Drain [`OverlayJob`]s in FIFO order, geocoding + upserting each location.
+async fn location_overlay_worker(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<OverlayJob>,
+    pool: sqlx::SqlitePool,
+) {
+    while let Some(job) = rx.recv().await {
+        match job {
+            OverlayJob::Apply {
+                geocoder,
+                entity_id,
+                location,
+                valid_from,
+                valid_until,
+                fact_id,
+            } => {
+                apply_location_overlay(
+                    &pool,
+                    geocoder.as_ref(),
+                    entity_id,
+                    location,
+                    valid_from,
+                    valid_until,
+                    fact_id,
+                )
+                .await;
+            }
+            OverlayJob::Flush(tx) => {
+                let _ = tx.send(());
+            }
+        }
     }
 }
 

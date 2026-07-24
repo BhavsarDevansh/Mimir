@@ -1,5 +1,38 @@
 # Changelog
 
+# Changelog
+
+## [0.78.1] — 2026-07-24
+
+### Entity-locations write path fixes (Phase 3 S3 / #193)
+
+Two correctness/performance fixes to the entity-locations overlay landed in
+0.78.0, surfaced by code review:
+
+- **Overlay now uses the inserted fact's temporal bounds.** `process_normalized_fact`
+  destructured `valid_from`/`valid_until` once from the extracted fact and never
+  updated them, but `handle_correction` mutates `new_fact.valid_from` before the
+  insert (a correction scope of `None` becomes `now`, a datetime scope becomes
+  that datetime). The location overlay now reads `fact.valid_from`/
+  `fact.valid_until` from the *inserted* fact, so the derived `entity_locations`
+  row matches its source fact and prior-location supersession fires correctly
+  for corrections (e.g. "actually I live at Y now" closes the prior open Home
+  instead of inserting a timeless row alongside it).
+- **Location overlays are offloaded to a background worker.** `apply_location_overlay`
+  was awaited inline inside `normalize_and_insert`'s serial batch loop, so a
+  connector batch of location facts was gated on the geocoder's rate limit
+  (~1 req/sec for Nominatim). The geocode + upsert is now enqueued to a single
+  background worker (FIFO `mpsc` channel) so the ingestion pipeline returns
+  immediately and is not stalled by geocoding; the worker processes jobs in
+  submission order, preserving move/supersession semantics both within a batch
+  and across batches. A single worker loses no geocode throughput versus
+  parallelism because the Nominatim backend is already rate-limited to ~1
+  req/sec. `KnowledgeGraph::flush_location_overlays` awaits every overlay
+  enqueued before the call for deterministic shutdown / tests.
+- **DRY.** The pool-based supersession upsert is extracted into
+  `queries::entity::upsert_location`, shared by the `KnowledgeGraph::upsert_location`
+  facade and the background worker.
+
 ## [0.78.0] — 2026-07-23
 
 ### Entity-locations write path (Phase 3 S3 / #193)

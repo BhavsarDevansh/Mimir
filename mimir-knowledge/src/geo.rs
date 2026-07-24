@@ -49,8 +49,11 @@ pub fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 /// poles. Over-inclusion is corrected exactly by the Haversine post-filter, so
 /// correctness is preserved while the SQL `BETWEEN` stays a cheap range scan.
 /// If the longitude span would cross the ±180° antimeridian, the full
-/// `[-180, 180]` longitude range is returned (over-inclusive but correct;
-/// see the implementation note).
+/// `[-180, 180]` longitude range is returned (over-inclusive but correct).
+/// The same full-span fallback applies when the latitude band is clamped at a
+/// pole: a radius disk that reaches a pole can contain any longitude, so the
+/// `lon ± dlon` band (computed from `cos(center)`) would otherwise drop
+/// in-radius points on the far side of the pole.
 ///
 /// The four bounds are returned as `(min_lat, max_lat, min_lon, max_lon)`.
 pub fn bounding_box(lat: f64, lon: f64, radius_km: f64) -> (f64, f64, f64, f64) {
@@ -68,15 +71,19 @@ pub fn bounding_box(lat: f64, lon: f64, radius_km: f64) -> (f64, f64, f64, f64) 
     let km_per_deg_lon = KM_PER_DEG_LAT * cos_lat.max(1e-12);
     let dlon = radius_km / km_per_deg_lon;
 
-    // Longitude wraps at ±180; a SQL `BETWEEN` cannot express a wrap-around
-    // box. If either edge would cross the antimeridian, fall back to the full
-    // longitude span `[-180, 180]`. This is over-inclusive (it scans every
-    // longitude in the latitude band) but *correct* — the exact Haversine
-    // post-filter is the final arbiter — and only triggers near the antimeridian
-    // or at the poles, where personal-scale data is effectively absent. A
-    // narrower wrap-aware two-range query is deferred (it would complicate the
-    // SQL for no practical gain at this scale).
-    let (min_lon, max_lon) = if lon - dlon < -180.0 || lon + dlon > 180.0 {
+    // Two cases force the full `[-180, 180]` longitude span (both are
+    // over-inclusive but *correct* — the exact Haversine post-filter is the
+    // final arbiter, and both only arise outside personal-scale use):
+    //   1. the `lon ± dlon` band would cross the ±180° antimeridian (a SQL
+    //      `BETWEEN` cannot express a wrap-around box); or
+    //   2. the latitude band is clamped at a pole — a radius disk that reaches
+    //      a pole wraps around it and can contain *any* longitude, so the
+    //      `cos(center)`-derived band would otherwise drop in-radius points on
+    //      the far side of the pole.
+    // A narrower wrap-aware / pole-aware two-range query is deferred (it would
+    // complicate the SQL for no practical gain at this scale).
+    let pole_reached = max_lat >= 90.0 || min_lat <= -90.0;
+    let (min_lon, max_lon) = if pole_reached || lon - dlon < -180.0 || lon + dlon > 180.0 {
         (-180.0, 180.0)
     } else {
         (lon - dlon, lon + dlon)
@@ -153,5 +160,25 @@ mod tests {
         let (_, _, min_lon, max_lon) = bounding_box(0.0, 179.5, 200.0);
         assert_eq!(min_lon, -180.0);
         assert_eq!(max_lon, 180.0);
+    }
+
+    #[test]
+    fn bounding_box_full_longitude_when_band_reaches_pole() {
+        // Reviewer scenario: (85, 0, 1000) reaches the north pole
+        // (1000 >= (90-85)*111.32 ~= 556 km), so the radius disk wraps around
+        // the pole and can contain any longitude. `dlon` (~103 deg) does not
+        // cross the antimeridian from lon 0, so without the pole fallback a
+        // point at (89.9, 180) -- ~567 km away, in radius -- would be dropped.
+        let (_, max_lat, min_lon, max_lon) = bounding_box(85.0, 0.0, 1000.0);
+        assert_eq!(max_lat, 90.0, "band is clamped at the pole");
+        assert_eq!(
+            min_lon, -180.0,
+            "full longitude span once a pole is reached"
+        );
+        assert_eq!(max_lon, 180.0);
+        // The symmetric case at the south pole.
+        let (min_lat, _, min_lon, max_lon) = bounding_box(-85.0, 0.0, 1000.0);
+        assert_eq!(min_lat, -90.0);
+        assert_eq!((min_lon, max_lon), (-180.0, 180.0));
     }
 }

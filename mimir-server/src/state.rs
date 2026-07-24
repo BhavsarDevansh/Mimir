@@ -503,12 +503,17 @@ impl AppState {
 
     /// Gracefully shut down all long-lived resources.
     ///
-    /// 1. Close the SQLite pool (flushes WAL).
-    /// 2. Shut down the LLM worker pool and drop HTTP clients.
-    /// 3. Signal completion.
+    /// 1. Stop the background scheduler (no new ingestion enqueues overlays).
+    /// 2. Drain pending location-overlay jobs so queued `entity_locations`
+    ///    upserts complete before resources are torn down.
+    /// 3. Shut down the LLM worker pool and drop HTTP clients.
+    /// 4. Signal completion.
     pub async fn shutdown(&self) {
         tracing::info!("Shutting down scheduler...");
         self.scheduler.shutdown();
+
+        tracing::info!("Draining pending location-overlay jobs...");
+        self.knowledge_graph.flush_location_overlays().await;
 
         tracing::info!("Shutting down ContextManager...");
         self.context_manager.close().await;

@@ -1,6 +1,17 @@
 # Changelog
 
-# Changelog
+## [0.78.2] — 2026-07-24
+
+### Review fixes (PR #225)
+
+- **Shutdown now drains pending location-overlay jobs.** `AppState::shutdown`
+  calls `KnowledgeGraph::flush_location_overlays().await` after stopping the
+  background scheduler, so queued `entity_locations` upserts complete before
+  resources are torn down (previously a shutdown with queued overlays could
+  drop the worker before upserting while the source fact remained).
+- Docs: removed duplicate `# Changelog` heading (markdownlint MD024); scoped
+  the single-worker throughput claim to the default Nominatim backend; fixed
+  grammar in the entity-locations wiki.
 
 ## [0.78.1] — 2026-07-24
 
@@ -26,8 +37,10 @@ Two correctness/performance fixes to the entity-locations overlay landed in
   immediately and is not stalled by geocoding; the worker processes jobs in
   submission order, preserving move/supersession semantics both within a batch
   and across batches. A single worker loses no geocode throughput versus
-  parallelism because the Nominatim backend is already rate-limited to ~1
-  req/sec. `KnowledgeGraph::flush_location_overlays` awaits every overlay
+  parallelism with the default Nominatim backend, which is already
+  rate-limited to ~1 req/sec; a custom or self-hosted `Geocoder` with higher
+  throughput could make the single FIFO worker a bottleneck.
+  `KnowledgeGraph::flush_location_overlays` awaits every overlay
   enqueued before the call for deterministic shutdown / tests.
 - **DRY.** The pool-based supersession upsert is extracted into
   `queries::entity::upsert_location`, shared by the `KnowledgeGraph::upsert_location`

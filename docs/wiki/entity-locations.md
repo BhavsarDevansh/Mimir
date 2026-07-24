@@ -41,15 +41,16 @@ honours forgetting (forgetting the fact keeps the address but unlinks it).
 ## Use cases
 
 - Remembering home / work addresses and past moves.
-- Capturing visited places (from photos GPS, calendar event locations, shipping
-  addresses) once connectors come online.
+- Capturing visited places (from photo GPS data, calendar event locations,
+  shipping addresses) once connectors come online.
 - Future proximity queries ("find places near my home").
 
 ## Notes / limits (v0.78.0)
 
 - The background overlay worker uses an unbounded queue, so a very large burst
   of location facts (thousands) is held in memory while the geocoder catches up
-  at ~1 lookup/sec; shutdown should call `flush_location_overlays` to drain it.
+  at ~1 lookup/sec; graceful shutdown calls `flush_location_overlays` to drain
+  queued jobs before tearing down resources.
 - Locations don't carry their own confidence score yet — provenance is via the
   source fact.
 - A *sensitive* "where" fact is held for confirmation like any sensitive fact;

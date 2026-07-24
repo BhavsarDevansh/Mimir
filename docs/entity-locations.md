@@ -72,8 +72,10 @@ not gated on the geocoder's rate limit (~1 req/sec for Nominatim). The worker
 processes jobs strictly in FIFO submission order, which preserves move /
 supersession semantics within a batch and across separate
 `normalize_and_insert` calls; a single worker loses no geocode throughput
-versus parallelism because the Nominatim backend is already rate-limited to
-~1 req/sec. Each job carries a clone of the geocoder read at submit time and
+versus parallelism with the default Nominatim backend, which is already
+rate-limited to ~1 req/sec; a custom or self-hosted `Geocoder` with higher
+throughput could make the single FIFO worker a bottleneck. Each job carries a
+clone of the geocoder read at submit time and
 the inserted fact's temporal bounds. Per job:
 
 1. **Fill the missing half** via the job's `Geocoder`
@@ -94,6 +96,8 @@ the inserted fact's temporal bounds. Per job:
 `KnowledgeGraph::flush_location_overlays` is a barrier that awaits every
 overlay enqueued before the call, for deterministic graceful shutdown / tests.
 Jobs enqueued concurrently with a flush are not guaranteed to have completed.
+`AppState::shutdown` calls it after stopping the background scheduler, so
+queued `entity_locations` upserts complete before resources are torn down.
 
 The `Geocoder` trait lives in `mimir-core` (so `mimir-knowledge` can name it
 without depending on `mimir-connectors`); the Nominatim default backend lives

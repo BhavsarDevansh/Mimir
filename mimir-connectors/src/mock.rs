@@ -54,7 +54,7 @@ use mimir_knowledge::models::enums::{
     ConnectorAuthState, ConnectorType, RECURRENCE_TYPES, RecurrenceType,
 };
 use mimir_knowledge::models::source::SourceType;
-use mimir_knowledge::normalize::NormalizedFact;
+use mimir_knowledge::normalize::{NormalizedFact, NormalizedLocation};
 
 // ---------------------------------------------------------------------------
 // Default constants (preserve the legacy no-op identity)
@@ -141,6 +141,11 @@ pub struct MockFactConfig {
     /// `None` the mock generates one.
     #[serde(default)]
     pub raw_reference: Option<String>,
+    /// Optional structured location overlay (Phase 3 S3 / #193). When set,
+    /// the fact carries a [`NormalizedLocation`] that the pipeline turns into
+    /// an `entity_locations` row for the subject entity.
+    #[serde(default)]
+    pub location: Option<NormalizedLocation>,
 }
 
 fn default_subject_type() -> EntityType {
@@ -176,6 +181,7 @@ impl MockFactConfig {
             recurrence: self.recurrence,
             requires_user_action: self.requires_user_action,
             raw_reference: Some(raw_reference),
+            location: self.location.clone(),
         }
     }
 }

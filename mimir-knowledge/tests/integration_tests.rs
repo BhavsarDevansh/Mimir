@@ -889,6 +889,9 @@ async fn test_auto_merge_migrates_dates_locations_and_cleans_preferences_queue()
         Some(40.0),
         Some(-74.0),
         Some("America/New_York"),
+        None,
+        None,
+        None,
     )
     .await
     .unwrap();
@@ -1050,6 +1053,9 @@ async fn test_entity_location_stub_roundtrip() {
             Some(40.7128),
             Some(-74.0060),
             Some("America/New_York"),
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();

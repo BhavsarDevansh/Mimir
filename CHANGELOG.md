@@ -1,5 +1,99 @@
 # Changelog
 
+## [0.78.2] — 2026-07-24
+
+### Review fixes (PR #225)
+
+- **Shutdown now drains pending location-overlay jobs.** `AppState::shutdown`
+  calls `KnowledgeGraph::flush_location_overlays().await` after stopping the
+  background scheduler, so queued `entity_locations` upserts complete before
+  resources are torn down (previously a shutdown with queued overlays could
+  drop the worker before upserting while the source fact remained).
+- Docs: removed duplicate `# Changelog` heading (markdownlint MD024); scoped
+  the single-worker throughput claim to the default Nominatim backend; fixed
+  grammar in the entity-locations wiki.
+
+## [0.78.1] — 2026-07-24
+
+### Entity-locations write path fixes (Phase 3 S3 / #193)
+
+Two correctness/performance fixes to the entity-locations overlay landed in
+0.78.0, surfaced by code review:
+
+- **Overlay now uses the inserted fact's temporal bounds.** `process_normalized_fact`
+  destructured `valid_from`/`valid_until` once from the extracted fact and never
+  updated them, but `handle_correction` mutates `new_fact.valid_from` before the
+  insert (a correction scope of `None` becomes `now`, a datetime scope becomes
+  that datetime). The location overlay now reads `fact.valid_from`/
+  `fact.valid_until` from the *inserted* fact, so the derived `entity_locations`
+  row matches its source fact and prior-location supersession fires correctly
+  for corrections (e.g. "actually I live at Y now" closes the prior open Home
+  instead of inserting a timeless row alongside it).
+- **Location overlays are offloaded to a background worker.** `apply_location_overlay`
+  was awaited inline inside `normalize_and_insert`'s serial batch loop, so a
+  connector batch of location facts was gated on the geocoder's rate limit
+  (~1 req/sec for Nominatim). The geocode + upsert is now enqueued to a single
+  background worker (FIFO `mpsc` channel) so the ingestion pipeline returns
+  immediately and is not stalled by geocoding; the worker processes jobs in
+  submission order, preserving move/supersession semantics both within a batch
+  and across batches. A single worker loses no geocode throughput versus
+  parallelism with the default Nominatim backend, which is already
+  rate-limited to ~1 req/sec; a custom or self-hosted `Geocoder` with higher
+  throughput could make the single FIFO worker a bottleneck.
+  `KnowledgeGraph::flush_location_overlays` awaits every overlay
+  enqueued before the call for deterministic shutdown / tests.
+- **DRY.** The pool-based supersession upsert is extracted into
+  `queries::entity::upsert_location`, shared by the `KnowledgeGraph::upsert_location`
+  facade and the background worker.
+
+## [0.78.0] — 2026-07-23
+
+### Entity-locations write path (Phase 3 S3 / #193)
+
+Persist structured locations (address + lat/lng + timezone) for an entity with
+temporal validity windows, wired into the shared `normalize_and_insert`
+extraction pipeline. Supersedes the write-path half of #65; proximity queries
+(`find_nearby`) remain a separate issue (#196).
+
+- **Typed location overlay.** A "where" fact carries an optional
+  `NormalizedLocation` (`location_type`, `address`, `latitude`, `longitude`,
+  `timezone`) on `NormalizedFact`. After a non-sensitive fact is inserted,
+  `apply_location_overlay` derives an `entity_locations` row for the resolved
+  subject entity, using the fact's `valid_from`/`valid_until` as the location's
+  bounds. Both the conversational `remember` path and connectors fill the same
+  field. `NormalizedFact` is `PartialEq`-only now (`f64` coords are not `Eq`).
+- **Geocode the missing half.** Via the injected `Geocoder` (stored on
+  `KnowledgeGraph` as `Option<Arc<dyn Geocoder>>`): address-only → forward
+  geocode to coords; coords-only → reverse geocode to a place name; both
+  present → stored as-is. Geocoder errors/no-match are logged and tolerated;
+  the pipeline never aborts on a geocode failure.
+- **Moves / supersession.** `KnowledgeGraph::upsert_location` closes any
+  still-open location of the same `entity_id` + `location_type` whose
+  `valid_from` precedes the new `valid_from` (sets `valid_until`), then inserts
+  the new row — modelling "home 2020–2023, home 2023–present". Atomic in one
+  transaction.
+- **Provenance link.** Migration `044` adds a nullable
+  `entity_locations.source_fact_id INTEGER REFERENCES facts(id) ON DELETE SET
+  NULL`, mirroring `events.fact_id`, so a location row traces to its
+  originating fact and survives the fact being forgotten (FK → `NULL`).
+- **Daemon wiring.** `AppState::from_config_with_llm` injects the default
+  `NominatimGeocoder` into the `KnowledgeGraph` at startup (cheap; no network
+  work until a location fact is processed); construction failure disables
+  geocoding rather than aborting start.
+- **LLM schema.** The `remember` tool schema gained an optional `location`
+  object (`location_type` enum Home/Work/Visited/Origin/Current, address,
+  latitude, longitude, timezone); `extract.rs` validates it into the overlay.
+- **Mock connector.** `MockFactConfig` gained an optional `location` field so
+  the connector → location path is exercisable.
+- **No `confidence` column.** Locations do not carry their own confidence in
+  V1; provenance is via `source_fact_id` and the source fact's confidence.
+- **Pending path deferred.** Sensitive "where" facts land as
+  `pending_confirmation`; the overlay is not applied until confirmation
+  (follow-up).
+- **Docs.** `docs/entity-locations.md` (technical), `docs/wiki/entity-locations.md`
+  (user-facing), updated `docs/knowledge-graph-schema.md`, `docs/wiki/what-works-now.md`,
+  and `README.md`.
+
 ## [0.77.0] — 2026-07-23
 
 ### Geocoder service (Phase 3 S1 / #191)

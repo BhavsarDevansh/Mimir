@@ -2655,6 +2655,7 @@ mod tests {
                 categories: vec![],
                 recurrence: None,
                 requires_user_action: None,
+                location: None,
             }],
         };
         let extraction_msg = Message {
@@ -2851,6 +2852,7 @@ mod tests {
                     categories: vec!["230".to_string()],
                     recurrence: None,
                     requires_user_action: None,
+                    location: None,
                 }],
             },
         )

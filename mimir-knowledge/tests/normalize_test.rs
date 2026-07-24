@@ -49,6 +49,7 @@ fn rome_event(raw_ref: &str, valid_until: Option<DateTime<Utc>>) -> NormalizedFa
         recurrence: RecurrenceType::None,
         requires_user_action: false,
         raw_reference: Some(raw_ref.to_string()),
+        location: None,
     }
 }
 
@@ -220,6 +221,7 @@ async fn chat_provenance_inserts_with_interaction_confidence() {
         recurrence: RecurrenceType::None,
         requires_user_action: false,
         raw_reference: None,
+        location: None,
     };
 
     // Chat casual learning: no connector, LLM extraction method.
@@ -303,6 +305,7 @@ async fn sensitive_fact_persists_its_catalogue_categories() {
         recurrence: RecurrenceType::None,
         requires_user_action: false,
         raw_reference: Some("gmail-msg-42".to_string()),
+        location: None,
     };
 
     let outcome = normalize_and_insert(
@@ -362,6 +365,7 @@ fn subject_fact(subject: &str, subject_type: EntityType, object: &str) -> Normal
         recurrence: RecurrenceType::None,
         requires_user_action: false,
         raw_reference: None,
+        location: None,
     }
 }
 

@@ -141,7 +141,27 @@ impl AppState {
 
         // Initialise knowledge graph.
         let kg_db_path = mimir_core::paths::knowledge_db_path()?;
-        let knowledge_graph = Arc::new(mimir_knowledge::KnowledgeGraph::init(&kg_db_path).await?);
+        let mut knowledge_graph = mimir_knowledge::KnowledgeGraph::init(&kg_db_path).await?;
+
+        // Inject the default OSM Nominatim geocoder so the entity-locations
+        // write path (Phase 3 S3 / #193) can fill the missing half of a
+        // location (address -> coords or coords -> address). The backend does
+        // no network work until a location fact is actually processed, so this
+        // is cheap at startup. A config toggle / self-hosted endpoint can
+        // follow; for now the policy-compliant public-instance defaults apply.
+        // Construction only fails if the HTTP client or rate limiter cannot be
+        // built, in which case geocoding is disabled (locations still persist
+        // with whatever data the producer supplied) rather than aborting start.
+        match mimir_connectors::NominatimGeocoder::with_defaults() {
+            Ok(geocoder) => {
+                knowledge_graph.set_geocoder(std::sync::Arc::new(geocoder));
+                tracing::info!("Nominatim geocoder enabled for entity-locations write path");
+            }
+            Err(error) => tracing::warn!(
+                "failed to initialise Nominatim geocoder; location geocoding disabled: {error}"
+            ),
+        }
+        let knowledge_graph = Arc::new(knowledge_graph);
 
         // Resolve user entity from config identity.
         let user_entity_id = if cfg.identity.name.trim().is_empty() {
@@ -483,12 +503,17 @@ impl AppState {
 
     /// Gracefully shut down all long-lived resources.
     ///
-    /// 1. Close the SQLite pool (flushes WAL).
-    /// 2. Shut down the LLM worker pool and drop HTTP clients.
-    /// 3. Signal completion.
+    /// 1. Stop the background scheduler (no new ingestion enqueues overlays).
+    /// 2. Drain pending location-overlay jobs so queued `entity_locations`
+    ///    upserts complete before resources are torn down.
+    /// 3. Shut down the LLM worker pool and drop HTTP clients.
+    /// 4. Signal completion.
     pub async fn shutdown(&self) {
         tracing::info!("Shutting down scheduler...");
         self.scheduler.shutdown();
+
+        tracing::info!("Draining pending location-overlay jobs...");
+        self.knowledge_graph.flush_location_overlays().await;
 
         tracing::info!("Shutting down ContextManager...");
         self.context_manager.close().await;

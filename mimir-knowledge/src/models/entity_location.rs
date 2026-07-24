@@ -22,3 +22,20 @@ pub struct EntityLocation {
     pub source_fact_id: Option<i32>,
     pub created_at: DateTime<Utc>,
 }
+
+/// A location plus its great-circle distance from a query point
+/// (Phase 3 S4 / issue #194).
+///
+/// Returned by [`crate::KnowledgeGraph::find_nearby`]: the SQL layer performs a
+/// coarse bounding-box pre-filter, then this distance is computed exactly in
+/// Rust (Haversine) and used to drop edge-of-box points outside the radius and
+/// to sort the survivors nearest-first. Exposing `distance_km` (rather than
+/// only the sort order of `EntityLocation`) makes the result directly
+/// testable and useful to callers without re-deriving the distance.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NearbyLocation {
+    /// The location row.
+    pub location: EntityLocation,
+    /// Exact great-circle distance from the query point, in kilometres.
+    pub distance_km: f64,
+}

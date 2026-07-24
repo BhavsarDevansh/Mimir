@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.79.0] — 2026-07-24
+
+### Entity-locations proximity query (Phase 3 S4 / #194)
+
+- **`KnowledgeGraph::find_nearby(lat, lon, radius_km, at)`** returns every
+  `entity_location` within a radius of a point, sorted nearest-first, as
+  `Vec<NearbyLocation>` (each entry carries the row and its exact
+  great-circle `distance_km`). Closes the query half of #65 (write half in
+  #193).
+- **Two-stage query:** a coarse SQLite bounding-box pre-filter
+  (`latitude`/`longitude BETWEEN ? AND ?`, now backed by a composite
+  `idx_entity_locations_coords(latitude, longitude)` index — migration `045`)
+  is followed by an exact Haversine post-filter computed in pure Rust that
+  drops edge-of-box over-inclusions and sorts the survivors. NULL-coordinate
+  (address-only) locations are skipped.
+- **Temporal scoping:** `at: Option<DateTime<Utc>>` restricts to locations
+  whose `valid_from`/`valid_until` window contains the instant; `None` is a
+  pure spatial query over all locations.
+- **Pure helpers:** `mimir-knowledge::geo` adds `haversine_km` and
+  `bounding_box` (sphere model, mean radius 6371.0088 km, `unsafe`-free,
+  allocation-free, unit-tested and benchmarked). No external `geo` crate —
+  the formula is small and a heavy dependency for one function would violate
+  the minimal-dependency stance.
+- Docs: updated `docs/entity-locations.md`, `docs/wiki/entity-locations.md`,
+  `docs/wiki/what-works-now.md`, and `README.md`.
+
 ## [0.78.2] — 2026-07-24
 
 ### Review fixes (PR #225)

@@ -643,11 +643,18 @@ impl PhotosConnector {
         })
     }
 
-    /// Start the debounced watcher (idempotent). Subsequent calls are no-ops.
-    /// The watcher is held alive in `self.watcher` for the connector's
-    /// lifetime; events land on the internal tokio channel awaited by `sync`.
+    /// Start the debounced watcher (idempotent). Subsequent calls are no-ops
+    /// once a watcher is installed.
+    ///
+    /// `started` is only flipped *after* the debouncer is created and the
+    /// recursive watch is registered, so a failed init (e.g. inotify watch
+    /// limits, or the watch dir vanishing before the first `sync`) leaves
+    /// `started == false`. The supervisor's retry then re-runs setup instead
+    /// of no-op'ing and busy-looping on the construction-time (closed) event
+    /// channel. The connector is driven by a single runner task, so the
+    /// load/store pair is race-free.
     async fn start_watcher(&self) -> Result<(), ConnectorError> {
-        if self.started.swap(true, Ordering::SeqCst) {
+        if self.started.load(Ordering::SeqCst) {
             return Ok(());
         }
         let (tx, rx) = unbounded_channel::<DebounceEventResult>();
@@ -668,8 +675,10 @@ impl PhotosConnector {
                     self.watch_dir.display()
                 ))
             })?;
+        // Fully installed before flipping the flag.
         *self.events.lock().await = rx;
         *self.watcher.lock().await = Some(debouncer);
+        self.started.store(true, Ordering::SeqCst);
         Ok(())
     }
 
@@ -920,10 +929,19 @@ impl Connector for PhotosConnector {
 
         // The first cycle runs an initial recursive scan (catching changes
         // made while the daemon was down) before the connector starts blocking
-        // on watch events. `swap` consumes the flag so it runs once per run.
+        // on watch events. The flag is only consumed on success: if the scan
+        // fails (e.g. the watch root became unreadable between construction
+        // and the first cycle) it is restored so the supervisor's retry
+        // re-runs the scan instead of skipping it and missing every
+        // pre-existing file until a restart.
         if self.first_cycle.swap(false, Ordering::SeqCst) {
-            let result = self.initial_scan(options).await?;
-            return Ok(self.outcome(result).await);
+            match self.initial_scan(options).await {
+                Ok(result) => return Ok(self.outcome(result).await),
+                Err(error) => {
+                    self.first_cycle.store(true, Ordering::SeqCst);
+                    return Err(error);
+                }
+            }
         }
 
         // Push wait: block for the next debounced event batch, then process it.
@@ -1262,5 +1280,64 @@ mod tests {
         // taken_at falls back to the file mtime carried in the signature.
         let expected = DateTime::<Utc>::from_timestamp_millis(sig.mtime_ms).unwrap();
         assert_eq!(raw.taken_at, expected);
+    }
+
+    // -- watcher init / first-scan failure recovery (PR #232 review) --
+
+    /// A failed `start_watcher` (watch dir vanishes before the first `sync`)
+    /// must leave `started == false` so the supervisor's retry re-runs setup
+    /// instead of no-op'ing and busy-looping on the closed event channel.
+    #[tokio::test]
+    async fn start_watcher_failure_leaves_started_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let watch_dir = dir.path().to_path_buf();
+        let config = serde_json::json!({ "watch_dir": watch_dir.to_string_lossy() });
+        let connector = PhotosConnector::from_config(config).unwrap();
+
+        // Watch dir vanishes between construction and the first `sync`.
+        fs::remove_dir_all(&watch_dir).unwrap();
+        assert!(connector.start_watcher().await.is_err());
+        assert!(!connector.started.load(Ordering::SeqCst));
+
+        // A second attempt must not short-circuit on a stale `started` flag.
+        assert!(connector.start_watcher().await.is_err());
+        assert!(!connector.started.load(Ordering::SeqCst));
+
+        // Once the dir reappears, setup succeeds and the flag is flipped.
+        fs::create_dir_all(&watch_dir).unwrap();
+        assert!(connector.start_watcher().await.is_ok());
+        assert!(connector.started.load(Ordering::SeqCst));
+    }
+
+    /// A failed first `initial_scan` must restore `first_cycle` so the
+    /// supervisor's retry re-runs the initial recursive scan instead of
+    /// skipping it and missing every pre-existing file until a restart.
+    #[tokio::test]
+    async fn failed_initial_scan_restores_first_cycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let watch_dir = dir.path().to_path_buf();
+        // Seed one image so a successful scan stages exactly one file.
+        fs::copy(fixture("exif.jpg"), watch_dir.join("exif.jpg")).unwrap();
+
+        let config = serde_json::json!({ "watch_dir": watch_dir.to_string_lossy() });
+        let connector = PhotosConnector::from_config(config).unwrap();
+
+        // Install the watcher up front so `sync`'s `start_watcher` is a
+        // no-op; the only thing that can fail is the initial scan.
+        assert!(connector.start_watcher().await.is_ok());
+        assert!(connector.first_cycle.load(Ordering::SeqCst));
+
+        // Root becomes unreadable between construction and the first cycle.
+        fs::remove_dir_all(&watch_dir).unwrap();
+        assert!(connector.sync(SyncOptions::default()).await.is_err());
+
+        // The flag was restored, so the retry re-runs the scan.
+        assert!(connector.first_cycle.load(Ordering::SeqCst));
+
+        // Root reappears with the pre-existing image; the retry must ingest it.
+        fs::create_dir_all(&watch_dir).unwrap();
+        fs::copy(fixture("exif.jpg"), watch_dir.join("exif.jpg")).unwrap();
+        let outcome = connector.sync(SyncOptions::default()).await.unwrap();
+        assert_eq!(outcome.fetched, 1);
     }
 }

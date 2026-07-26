@@ -38,7 +38,8 @@ stays on your device — there is no cloud intermediary.
 - **`mimir-knowledge`** — the SQLite knowledge graph: entities, facts, temporal
   reasoning, live memory condensation, events/reminders, and proximity queries.
 - **`mimir-connectors`** — the pluggable service-ingestion framework and its
-  backends (the geocoder today; email/calendar/photos sync to come).
+  backends: the OSM Nominatim geocoder and the local-filesystem Photos
+  connector (EXIF + file watcher) today; email/calendar sync to come.
 - **`mimir-api-types` / `mimir-client`** — shared wire types and the daemon HTTP
   client used by the CLI.
 
@@ -65,7 +66,10 @@ stays on your device — there is no cloud intermediary.
   backoff, circuit breaker, auth-expiry pausing, graceful shutdown), a
   type-filtered entity-resolution chain (exact name → alias → FTS5 fuzzy →
   create new), and a pluggable `Geocoder` trait with an OSM Nominatim default
-  backend. Email/calendar/photos backends land in later Phase 3 issues.
+  backend. The first concrete backend — a read-only local-filesystem Photos
+  connector (`notify` file watcher + `kamadak-exif` GPS/datetime extraction +
+  a per-file mtime/inode incremental cursor) — is in; calendar/email backends
+  land in later Phase 3 issues.
 - **Entity locations** — a "where" fact becomes a typed `entity_locations` row
   with geocoding of the missing half (address → coords or coords → place) and
   temporal bounds that model moves (home 2020–2023, home 2023–present).

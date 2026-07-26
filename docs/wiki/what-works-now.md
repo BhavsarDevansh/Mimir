@@ -1,7 +1,7 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-07-24
-> **Version:** 0.79.0
+> **Last updated:** 2026-07-26
+> **Version:** 0.80.0
 > **Release summary:** Phase 2 knowledge-graph work is live — core relationship ontology seeded category-first (Issue #135): predicate aliases for verb canonicalization plus `category_aliases` and category-subtree retrieval for grouping/multi-tag precision; relationship type aliases are the single source of truth for predicate resolution (Issue #133), Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system, Agentic Pre-Response Context Retrieval (#128), the Librarian Agent (#130), LLM-orchestrated learning via the `remember` tool (#137), a hardened system prompt that enforces the agentic contract — `retrieve_context` dispatch, no fact invention, and `remember` encouragement (#138), and a redesigned Librarian extraction prompt that injects the same core-facts block as the core agent and learns only from user-labelled messages (#139), and the full pending sensitive-fact confirmation lifecycle — HTTP routes, CLI commands, and a daily auto-cleanup job (#141). v0.57.0 adds the events & reminders subsystem — a lifecycle + recurrence overlay on facts that surfaces upcoming birthdays, appointments, deadlines, and tasks in the Upcoming memory section, with a deterministic scan job and the deprecation of `entity_dates` (#74).
 
 > v0.78.0 adds the entity-locations write path (Phase 3 S3 / #193): a "where" fact (e.g. "I live at 10 Downing St") carries a typed `NormalizedLocation` overlay that `normalize_and_insert` turns into an `entity_locations` row for the resolved subject entity. The missing geo half is filled via the injected `Geocoder` — address-only is forward-geocoded to coords, coords-only is reverse-geocoded to a place name — and a move (home 2020–2023, home 2023–present) closes the prior open-ended location of the same type at the new start date. Rows link back to their source fact via a new nullable `source_fact_id` FK (migration `044`). The `Geocoder` is stored on `KnowledgeGraph` and injected by the daemon (Nominatim default); geocoder failures are logged and tolerated. The conversational `remember` tool schema gained an optional `location` object; connectors fill the same overlay field. Proximity queries (`find_nearby`) and the sensitive-fact confirmation path are follow-ups.
@@ -15,6 +15,20 @@
 > scopes results to locations valid at that time. This closes the query half of
 > #65 (the write half landed in #193). Locations without coordinates are
 > skipped; edge-of-box over-inclusions are dropped by the exact distance.
+
+> v0.80.0 adds the first concrete connector backend — the local-filesystem
+> Photos connector (Phase 3 C1 / #195): a read-only, push-mode, no-network
+> connector in `mimir-connectors` (feature `photos`) that watches a configured
+> directory recursively with `notify` (debounced ~2s), extracts EXIF GPS +
+> datetime with `kamadak-exif` (JPEG/TIFF/HEIF/PNG/WebP), and emits one
+> `took_photo` fact per photo through the shared `normalize_and_insert`
+> pipeline. The GPS becomes a `Visited` `entity_locations` row for the owner
+> (C2 / #196 will reverse-geocode the coordinates into a place name). A
+> per-file mtime/inode incremental cursor persists across restarts so unchanged
+> photos are never re-scanned; the supervisor now injects the persisted
+> `sync_cursor` into a connector's `config_json` as `__cursor` so incremental
+> connectors can read their prior progress. This is a library component; the
+> daemon `AppState` wiring and `mimir connector …` CLI land in A1–A3.
 
 > v0.77.0 adds the geocoder service (Phase 3 S1 / #191): a pluggable `Geocoder` trait (forward address → coords, reverse lat/lon → place) with an OSM Nominatim default backend. The trait and `GeocodeResult`/`GeocodeError` types live in `mimir-core` (so the Location Search tool #98 — a `mimir-core` tool — can name it; `mimir-core` cannot depend on `mimir-connectors`), and the `NominatimGeocoder` backend lives in `mimir-connectors`. Throttling reuses the F12 `RateLimiter` (`RateLimitConfig::nominatim`, ≤ 1 req/s) and transient 429/502/503/504 + transport failures retry via `retry_with_backoff` honouring a `Retry-After`; quota exhaustion is non-retryable. The endpoint, descriptive `User-Agent` (Nominatim policy), optional contact email, rate-limit policy, and retry budget are all configurable (self-hosted Nominatim is supported for heavy use). A successful "no match" yields `Ok(None)`; transport/decode failures yield `Err(GeocodeError)` and are logged — they never panic. Results carry lat/lon/country/`country_code`/alternative names. This is a library component with `wiremock`-backed integration tests; wiring into the Photos connector (C2), the entity-locations write path (S3/#65), and the Location Search tool (#98) lands in later Phase 3 issues.
 

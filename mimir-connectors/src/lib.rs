@@ -69,6 +69,11 @@ pub mod registry;
 pub mod secrets;
 pub mod supervisor;
 
+/// Local-filesystem Photos connector (Phase 3 C1 / #195), gated by the
+/// `photos` feature.
+#[cfg(feature = "photos")]
+pub mod photos;
+
 pub use connector::{
     ActionResult, Connector, ConnectorAction, ConnectorError, ConnectorFactory, ConnectorMode,
     HealthStatus, SyncOptions, SyncOutcome,
@@ -82,6 +87,8 @@ pub use supervisor::{
     ConnectorSupervisor, SupervisorConfig, SupervisorError, TriggerError, TriggerOutcome,
 };
 
+#[cfg(feature = "photos")]
+pub use photos::{PhotosConnector, PhotosConnectorFactory, PhotosCursor};
 pub use rate_limit::{
     BackoffStrategy, QuotaSnapshot, RateLimitConfig, RateLimitError, RateLimiter, RetryError,
     RetryHint, Retryable, is_retryable_status, retry_with_backoff,

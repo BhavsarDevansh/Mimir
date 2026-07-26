@@ -1,7 +1,7 @@
 # Connectors Framework (mimir-connectors)
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). Runtime `Connector` trait + data types landed (issue #183 / F6). `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). **Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10).** The daemon wiring, optional OS-keyring backend (#188), and concrete backends remain to be built.
+> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). Runtime `Connector` trait + data types landed (issue #183 / F6). `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10). Rate limiter + retry/backoff landed (issue #189 / F12). Mock connector test harness landed (issue #190 / F13). Geocoder service + Nominatim backend landed (issue #191 / S1). Entity-locations write path + geocode wiring landed (issue #193 / S3). Entity-locations proximity query landed (issue #194 / S4). **First concrete backend landed: Photos local-filesystem connector (issue #195 / C1).** The supervisor now injects the persisted `sync_cursor` into connector `config_json` as `__cursor` so incremental connectors (Photos) can skip already-processed files across restarts. The daemon `AppState` wiring, `connector` CLI (A1–A3), optional OS-keyring backend (#188), and the remaining concrete backends (Calendar C3–C4, Email C5–C7; Photos GPS→place enrichment is C2 / #196) remain to be built.
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -258,11 +258,15 @@ auto-spawned). Rows whose `(type, backend)` has no registered factory, or whose
 aborts startup. Returns the number of tasks spawned.
 
 Before handing each row's `config_json` to the factory, the supervisor injects
-`__slug`, `__ctype`, and `__instance_id` so the connector instance knows which
-row it represents. This is the V1 mechanism for passing instance identity
-through the minimal `create(config)` factory signature (the LLM/SecretStore
-construction context is deferred to F10 / the first real backend — decision
-#2).
+`__slug`, `__ctype`, `__instance_id`, and `__cursor` so the connector instance
+knows which row it represents and can seed its incremental sync cursor. This is
+the V1 mechanism for passing instance identity and progress through the
+minimal `create(config)` factory signature (the LLM/SecretStore construction
+context is deferred to F10 / the first real backend — decision #2). The
+`__cursor` injection (C1 / #195) is the read side that complements
+`KnowledgeGraph::update_sync_cursor` (the write side): it lets an incremental
+connector — e.g. the Photos file watcher — skip already-processed files across
+restarts. A `None` cursor is injected as JSON `null` (a full first scan).
 
 ### Per-connector runner loop
 
@@ -392,6 +396,7 @@ HTTP route are separate Phase 3 issues (A2 action routes / A3 CLI) that call
 | `registry` | `ConnectorRegistry` + multi-backend factory dispatch: `(connector_type, backend)` → `ConnectorFactory`, plus the closure-backed `FnConnectorFactory` | F7 — done (#184) |
 | `supervisor` | `ConnectorSupervisor` + `SupervisorConfig` + `SupervisorError` + `TriggerOutcome` + `TriggerError`: supervised per-connector task lifecycle (spawn / restart / backoff / circuit-breaker / startup-restore / graceful-shutdown / cursor-persistence), and manual sync triggering (`trigger_sync` / `trigger_sync_by_slug` — per-connector semaphore + request channel; preempts the polling interval) | F8 — done (#185), F9 — done (#186) |
 | `mock` | `MockConnector` + `MockConnectorFactory` + `MockFactConfig` + `MockSyncRecorder` (configurable, always-compiled test harness: emits canned `NormalizedFact`s in `Polling`/`Push` modes with health/auth/failure/panic injection and sync-options observation) | F13 — done (#190) |
+| `photos` *(feature `photos`)* | `PhotosConnector` + `PhotosConnectorFactory` + `PhotosCursor`: read-only local-filesystem push connector — `notify` recursive watcher + `kamadak-exif` GPS/datetime extraction + per-file mtime/inode incremental cursor | C1 — done (#195) |
 
 Provenance types that connectors reference (`ConnectorType`, `SourceType`)
 live in `mimir-knowledge` and are re-used, not duplicated (DRY).
@@ -401,7 +406,7 @@ live in `mimir-knowledge` and are re-used, not duplicated (DRY).
 ```toml
 [features]
 default = ["photos", "calendar", "gmail"]
-photos = []   # Google/Apple/local photo ingestion (C1–C2)
+photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"] # local photo ingestion (C1 done; C2 pending)
 calendar = [] # CalDAV calendar ingestion (C3–C4)
 gmail = []    # IMAP email ingestion (C5–C7)
 ```
@@ -409,9 +414,10 @@ gmail = []    # IMAP email ingestion (C5–C7)
 The framework core and the mock connector are **always built**. Running
 `cargo build -p mimir-connectors --no-default-features` therefore still
 compiles a working framework + mock harness — the gated backends are simply
-absent. The feature flags are declared in F1 but currently gate no code; the
-gated dependencies (`kamadak-exif`, `icalendar`, `async-imap`, `mail-parser`,
-`oauth2`, `notify`, `keyring`) and backend modules land with C1–C7 / F10.
+absent. The `photos` feature gates the `notify` / `notify-debouncer-full` /
+`kamadak-exif` dependencies and the `photos` module (C1 / #195); the `calendar`
+and `gmail` features gate no code yet (their deps and modules land with
+C3–C7 / F10).
 
 ## Workspace wiring
 

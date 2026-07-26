@@ -1,7 +1,7 @@
 # Connectors
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). **Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10). Shared rate-limit + retry/backoff primitives landed (issue #189 / F12). Configurable, always-compiled mock connector test harness landed (issue #190 / F13) — it emits canned facts in polling/push modes and is the T1 sync→extract→insert→query vehicle.** No real connector syncs data yet — backends arrive in later Phase 3 issues.
+> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10). Shared rate-limit + retry/backoff primitives landed (issue #189 / F12). Configurable, always-compiled mock connector test harness landed (issue #190 / F13). **The first concrete backend landed: the local-filesystem Photos connector (issue #195 / C1) — a read-only `notify` file watcher with EXIF GPS/datetime extraction and a per-file mtime/inode incremental cursor; the supervisor injects the persisted cursor as `__cursor` so it skips unchanged photos across restarts.** Calendar/email backends arrive in later Phase 3 issues.
 
 ## What connectors are
 
@@ -34,8 +34,10 @@ sensitivity gating as facts you tell Mimir directly.
   `get_connector_by_slug`, `upsert_connector`, `update_sync_cursor`,
   `touch_last_sync`, `set_connector_status`, and `set_auth_state`.
 
-There is no working backend yet — no calendar sync, no email fetch, no photo
-watcher. The `Connector` **trait and its data types are now defined**
+The first real backend is in: the **Photos** local-filesystem connector
+(issue #195 / C1) — a read-only `notify` file watcher that extracts EXIF GPS +
+datetime and emits a `took_photo` fact per photo (see [Photos Connector](photos-connector.md)).
+Calendar/email backends are not yet implemented. The `Connector` **trait and its data types are defined**
 (issue #183 / F6): every connector implements an async `Connector` interface
 with `sync` (fetch raw items) → `extract` (produce `NormalizedFact`s), plus
 `authenticate`, `health`, optional `act` write-back, and `forget`.
@@ -146,8 +148,7 @@ store already supports deletion.)
 
 ## What is planned
 
-- **Photos** — local photo library watching, EXIF/GPS extraction, place-fact
-  derivation.
+- **Photos** — local photo library watching + EXIF/GPS extraction landed (C1 / #195); remaining work is GPS → place-name reverse-geocoding + `entity_locations` enrichment (C2 / #196).
 - **Calendar** — CalDAV read/sync, event → fact extraction, event-subsystem
   integration.
 - **Email** — IMAP ingestion with IDLE, structured and LLM-based fact

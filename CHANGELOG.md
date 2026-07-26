@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.80.0] — 2026-07-26
+
+### Connectors (Phase 3 C1 / #195)
+
+- **First concrete connector backend:** the local-filesystem **Photos**
+  connector in `mimir-connectors` (feature `photos`). A read-only, push-mode,
+  no-network connector that watches a configured directory recursively with
+  `notify` (debounced ~2s), extracts EXIF GPS + datetime with `kamadak-exif`
+  (JPEG/TIFF/HEIF/PNG/WebP), and emits one `took_photo` fact per photo through
+  the shared `normalize_and_insert` pipeline. GPS becomes a `Visited`
+  `entity_locations` row for the owner; a per-file mtime/inode incremental
+  cursor skips unchanged photos across restarts. Files without GPS still record
+  a timestamped fact; files without EXIF fall back to the file mtime. C2
+  (#196) will reverse-geocode the coordinates into a place name.
+- **Supervisor:** inject the persisted `sync_cursor` into a connector's
+  `config_json` as `__cursor` so incremental connectors can read their prior
+  progress (the read side that complements `KnowledgeGraph::update_sync_cursor`).
+- **Dependencies:** `notify` 8.2, `notify-debouncer-full` 0.7,
+  `kamadak-exif` 0.6 — all optional, gated by the `photos` feature.
+- **Tests:** 17 unit tests (cursor diffing, EXIF parsing against committed
+  fixtures, fact conversion, config) + 9 integration tests (initial scan, the
+  live `notify` push watcher, incremental restart skip, the full supervisor →
+  knowledge-graph path with a `Visited` GPS location row).
+- **Docs:** `docs/photos-connector.md` + `docs/wiki/photos-connector.md`; updated
+  `docs/connectors-framework.md`, `docs/wiki/connectors.md`,
+  `docs/wiki/what-works-now.md`, `README.md`, and `Mimir-Implementation-Context.md`.
+
 ## [0.79.2] — 2026-07-26
 
 ### Docs

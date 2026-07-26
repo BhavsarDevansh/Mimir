@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.79.1] — 2026-07-26
+
+### Review fixes (PR #229)
+
+- **`docs/entity-locations.md`:** add a stable `#proximity-query` anchor so the
+  facade-API link resolves to the (Phase-3-suffixed) section heading.
+- **`docs/wiki/entity-locations.md`:** drop the obsolete "later release" wording
+  for proximity queries (now available in v0.79.0) and document the required `at`
+  parameter in the `find_nearby` signature.
+- **Migration `045` (`mimir-knowledge`):** correct the NULL-indexing rationale — a
+  regular SQLite b-tree index includes NULLs — and switch the composite coordinate
+  index to a partial index (`WHERE latitude IS NOT NULL AND longitude IS NOT NULL`)
+  so it covers only the geocoded rows `find_nearby` can match and stays smaller.
+
+
 ## [0.79.0] — 2026-07-24
 
 ### Entity-locations proximity query (Phase 3 S4 / #194)

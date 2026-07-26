@@ -137,6 +137,7 @@ overlay; a batch of location facts persisted after a flush; correction overlays
 (no-scope and datetime-scope) using the inserted fact's bounds to supersede a
 prior open location; and the facade upsert directly.
 
+<a id="proximity-query"></a>
 ## Proximity query (Phase 3 S4 / #194)
 
 `KnowledgeGraph::find_nearby(latitude, longitude, radius_km, at)` returns

@@ -9,8 +9,8 @@ Mimir can remember **where** an entity is or was — your home, workplace, a
 place you visited, your origin, or your current location — as structured
 address + GPS data with a time window. This lets it model moves over time
 ("home 2020–2023, home 2023–present") and lays the groundwork for
-location-aware features such as "what's near my home" (proximity queries land
-in a later release).
+location-aware features such as "what's near my home" (proximity queries are
+available in v0.79.0; see below).
 
 ## How it works
 
@@ -48,7 +48,7 @@ honours forgetting (forgetting the fact keeps the address but unlinks it).
 
 ## Proximity queries (v0.79.0)
 
-`find_nearby(latitude, longitude, radius_km)` returns every remembered location
+`find_nearby(latitude, longitude, radius_km, at)` returns every remembered location
 within a given radius of a point, sorted by distance (nearest first). Each
 result includes the exact distance in kilometres.
 

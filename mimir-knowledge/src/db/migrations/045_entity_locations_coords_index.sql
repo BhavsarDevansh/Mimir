@@ -7,10 +7,13 @@
 -- two-sided latitude range (the leading, selective column) and then refine on
 -- longitude within each matched latitude band.
 --
--- Additive `CREATE INDEX`; no data changes, no table rebuild. Locations with
--- NULL coordinates are simply not indexed (SQLite does not index NULLs by
--- default for b-tree indexes), which is exactly the set `find_nearby` must
--- skip anyway.
+-- Additive `CREATE INDEX`; no data changes, no table rebuild. A regular SQLite
+-- b-tree index includes every row (NULLs included); only a partial index with a
+-- `WHERE` clause can omit rows. The `WHERE latitude IS NOT NULL AND longitude IS
+-- NOT NULL` clause here keeps the index limited to the geocoded rows that
+-- `find_nearby`'s `BETWEEN` pre-filter can actually match, skipping the
+-- un-geocoded set while shrinking the index.
 
 CREATE INDEX idx_entity_locations_coords
-    ON entity_locations(latitude, longitude);
+    ON entity_locations(latitude, longitude)
+    WHERE latitude IS NOT NULL AND longitude IS NOT NULL;

@@ -1,8 +1,10 @@
 # Entity Locations — Write Path (Phase 3 S3 / #193)
 
-> **Status:** Implemented (v0.78.0). Supersedes the write-path half of #65.
+> **Status:** Implemented. Write path in v0.78.0 (#193, write half of #65);
+> proximity query in v0.79.0 (#194, query half of #65 — closes #65).
 > **Depends on:** Geocoder service (#191), `normalize_and_insert` DRY boundary (#181),
-> connectors table (#179). Proximity queries (`find_nearby`) are a separate issue (#196).
+> connectors table (#179). Proximity queries (`find_nearby`) are implemented
+> in v0.79.0 (Phase 3 S4 / #194).
 
 ## Purpose
 
@@ -123,6 +125,8 @@ the overlay into `confirm_fact` is tracked as follow-up work (see Issues).
   read the geocoder backend.
 - `KnowledgeGraph::flush_location_overlays()` — await every overlay enqueued
   before the call (deterministic shutdown / tests).
+- `KnowledgeGraph::find_nearby(lat, lon, radius_km, at)` — proximity query
+  (Phase 3 S4 / #194); see [Proximity query](#proximity-query).
 
 ## Tests
 
@@ -132,3 +136,55 @@ address-only; geocoder-error tolerance; move supersession; connector-provenance
 overlay; a batch of location facts persisted after a flush; correction overlays
 (no-scope and datetime-scope) using the inserted fact's bounds to supersede a
 prior open location; and the facade upsert directly.
+
+<a id="proximity-query"></a>
+## Proximity query (Phase 3 S4 / #194)
+
+`KnowledgeGraph::find_nearby(latitude, longitude, radius_km, at)` returns
+every `entity_location` within `radius_km` of the query point, sorted
+nearest-first, as `Vec<NearbyLocation>` — each entry carries the `EntityLocation`
+row and its exact great-circle `distance_km`.
+
+### Two-stage strategy
+
+1. **Bounding-box pre-filter (SQL, approximate).** `geo::bounding_box` computes
+   an over-inclusive lat/lon box around the query point (latitude span
+   `radius / 111.32` deg per side; longitude divided by `cos(lat)`, clamped at
+   the poles). SQLite scans `entity_locations` with
+   `WHERE latitude IS NOT NULL AND longitude IS NOT NULL AND latitude BETWEEN
+   ? AND ? AND longitude BETWEEN ? AND ?`, using the composite index
+   `idx_entity_locations_coords(latitude, longitude)` (migration `045`). NULL
+   coordinates (address-only locations) are skipped entirely.
+2. **Haversine post-filter (Rust, exact).** For each candidate the exact
+   great-circle distance `geo::haversine_km` is computed; points beyond
+   `radius_km` (edge-of-box over-inclusions) are dropped and the survivors are
+   sorted ascending by distance. Sorting in Rust (not SQL) keeps the distance
+   computation single-source and avoids a redundant SQLite sort over the small
+   survivor set.
+
+### Temporal scoping
+
+`at: Option<DateTime<Utc>>` optionally restricts to locations whose validity
+window contains the instant: `valid_from IS NULL OR valid_from <= t` **and**
+`valid_until IS NULL OR valid_until >= t`. `None` is a pure spatial query over
+all locations (including historical `Visited`/`Origin` overlays); `Some(t)`
+answers "where was X located at time t".
+
+### Pure helpers
+
+`geo::haversine_km` (great-circle distance) and `geo::bounding_box` live in
+`mimir-knowledge::geo` — pure, `unsafe`-free, allocation-free, unit-tested and
+benchmarked (`benches/pure_helpers.rs`). No external `geo` crate is used: the
+Haversine formula is a few lines and a heavy dependency for one function would
+violate the minimal-dependency stance. The spherical Earth model (mean radius
+`6371.0088` km) is accurate to ~0.5%, ample for personal-scale proximity.
+
+### Tests
+
+`mimir-knowledge/tests/find_nearby_test.rs` covers: within-radius sorted
+nearest-first; an edge-of-box point outside the radius excluded by the exact
+post-filter; NULL-coordinate locations skipped; temporal scoping (open-ended
+current home vs. closed previous home) with and without an `at` instant; and an
+out-of-range query returning nothing. `mimir-knowledge/src/geo.rs` unit-tests
+the Haversine (London–Paris, coincident, symmetric, antipodal) and bounding-box
+(pole clamping, equator widening) helpers.

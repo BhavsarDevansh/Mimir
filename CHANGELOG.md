@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.79.2] — 2026-07-26
+
+### Docs
+
+- **README:** rework the Architecture section. The connectors entry had grown
+  into a single ~4000-character run-on paragraph packed with issue references;
+  split it into a crate list and a grouped key-subsystems list (knowledge graph,
+  learning, retrieval agent, events & reminders, connectors, entity locations)
+  so the page is scannable. Also tidy the Acknowledgments spacing.
+
+
+## [0.79.1] — 2026-07-26
+
+### Review fixes (PR #229)
+
+- **`docs/entity-locations.md`:** add a stable `#proximity-query` anchor so the
+  facade-API link resolves to the (Phase-3-suffixed) section heading.
+- **`docs/wiki/entity-locations.md`:** drop the obsolete "later release" wording
+  for proximity queries (now available in v0.79.0) and document the required `at`
+  parameter in the `find_nearby` signature.
+- **Migration `045` (`mimir-knowledge`):** correct the NULL-indexing rationale — a
+  regular SQLite b-tree index includes NULLs — and switch the composite coordinate
+  index to a partial index (`WHERE latitude IS NOT NULL AND longitude IS NOT NULL`)
+  so it covers only the geocoded rows `find_nearby` can match and stays smaller.
+
+
+## [0.79.0] — 2026-07-24
+
+### Entity-locations proximity query (Phase 3 S4 / #194)
+
+- **`KnowledgeGraph::find_nearby(lat, lon, radius_km, at)`** returns every
+  `entity_location` within a radius of a point, sorted nearest-first, as
+  `Vec<NearbyLocation>` (each entry carries the row and its exact
+  great-circle `distance_km`). Closes the query half of #65 (write half in
+  #193).
+- **Two-stage query:** a coarse SQLite bounding-box pre-filter
+  (`latitude`/`longitude BETWEEN ? AND ?`, now backed by a composite
+  `idx_entity_locations_coords(latitude, longitude)` index — migration `045`)
+  is followed by an exact Haversine post-filter computed in pure Rust that
+  drops edge-of-box over-inclusions and sorts the survivors. NULL-coordinate
+  (address-only) locations are skipped.
+- **Temporal scoping:** `at: Option<DateTime<Utc>>` restricts to locations
+  whose `valid_from`/`valid_until` window contains the instant; `None` is a
+  pure spatial query over all locations.
+- **Pure helpers:** `mimir-knowledge::geo` adds `haversine_km` and
+  `bounding_box` (sphere model, mean radius 6371.0088 km, `unsafe`-free,
+  allocation-free, unit-tested and benchmarked). No external `geo` crate —
+  the formula is small and a heavy dependency for one function would violate
+  the minimal-dependency stance.
+- Docs: updated `docs/entity-locations.md`, `docs/wiki/entity-locations.md`,
+  `docs/wiki/what-works-now.md`, and `README.md`.
+
 ## [0.78.2] — 2026-07-24
 
 ### Review fixes (PR #225)

@@ -1,6 +1,7 @@
 # Entity Locations
 
-> **Since:** v0.78.0 (Phase 3 S3 / #193)
+> **Since:** v0.78.0 (Phase 3 S3 / #193); proximity query added v0.79.0
+> (Phase 3 S4 / #194).
 
 ## What it is
 
@@ -8,8 +9,8 @@ Mimir can remember **where** an entity is or was — your home, workplace, a
 place you visited, your origin, or your current location — as structured
 address + GPS data with a time window. This lets it model moves over time
 ("home 2020–2023, home 2023–present") and lays the groundwork for
-location-aware features such as "what's near my home" (proximity queries land
-in a later release).
+location-aware features such as "what's near my home" (proximity queries are
+available in v0.79.0; see below).
 
 ## How it works
 
@@ -43,7 +44,26 @@ honours forgetting (forgetting the fact keeps the address but unlinks it).
 - Remembering home / work addresses and past moves.
 - Capturing visited places (from photo GPS data, calendar event locations,
   shipping addresses) once connectors come online.
-- Future proximity queries ("find places near my home").
+- Proximity queries — "find places near my home" (v0.79.0, see below).
+
+## Proximity queries (v0.79.0)
+
+`find_nearby(latitude, longitude, radius_km, at)` returns every remembered location
+within a given radius of a point, sorted by distance (nearest first). Each
+result includes the exact distance in kilometres.
+
+**How it works:** Mimir does a fast coarse filter in SQLite — draw a box
+around the point and grab only the locations inside it (using a coordinate
+index) — then computes the exact distance for each of those few candidates and
+keeps only the ones truly within the radius. This is fast even with many
+locations and always correct (the box is deliberately a little generous, the
+exact distance is the final arbiter).
+
+**Time scoping:** you can ask "where was this near, *as of* June 2024?" by
+passing a date. Without one, all locations are searched, including past visits.
+
+Locations stored without coordinates (an address Mimir couldn't geocode) are
+skipped by proximity searches — they have no point to measure distance from.
 
 ## Notes / limits (v0.78.0)
 

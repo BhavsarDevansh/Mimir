@@ -6,7 +6,7 @@
 use chrono::{TimeZone, Utc};
 use criterion::{Criterion, criterion_group, criterion_main};
 use mimir_knowledge::{
-    confidence,
+    confidence, geo,
     models::{
         enums::{ConnectorType, RecurrenceType},
         memory::{MemoryBucket, MemoryPriority, MemorySchema, RankedFact},
@@ -186,6 +186,17 @@ fn bench_memory_schema_all_facts(c: &mut Criterion) {
     });
 }
 
+fn bench_haversine(c: &mut Criterion) {
+    // London <-> Paris (~346 km) and a short hop (~1.3 km): cover the long- and
+    // short-distance paths of the Haversine inner loop.
+    c.bench_function("haversine_km", |b| {
+        b.iter(|| {
+            black_box(geo::haversine_km(51.5074, -0.1278, 48.8566, 2.3522));
+            black_box(geo::haversine_km(51.5074, -0.1278, 51.5190, -0.1278));
+        })
+    });
+}
+
 criterion_group!(
     pure_helpers,
     bench_confidence_initial,
@@ -196,5 +207,6 @@ criterion_group!(
     bench_retrieval_fact_same_identity,
     bench_next_occurrence,
     bench_memory_schema_all_facts,
+    bench_haversine,
 );
 criterion_main!(pure_helpers);

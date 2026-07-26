@@ -11,6 +11,7 @@ pub mod db;
 pub mod events;
 pub mod extract;
 pub mod forget;
+pub mod geo;
 pub mod inference;
 pub mod librarian;
 pub mod models;
@@ -1106,6 +1107,27 @@ impl KnowledgeGraph {
     ) -> Result<models::entity_location::EntityLocation, KnowledgeError> {
         queries::entity::update_location(&self.pool, id, address, latitude, longitude, timezone)
             .await
+    }
+
+    /// Find entity locations within `radius_km` of `(latitude, longitude)`,
+    /// sorted nearest-first (Phase 3 S4 / issue #194).
+    ///
+    /// Coarse SQLite bounding-box pre-filter + exact Haversine post-filter in
+    /// Rust (see [`queries::entity::find_nearby`]). Each result carries its
+    /// exact great-circle `distance_km`.
+    ///
+    /// Pass `Some(t)` to restrict to locations whose `valid_from`/`valid_until`
+    /// bounds contain `t` (e.g. "where was I living on 2024-06-01"); `None`
+    /// for a pure spatial query over all locations, including historical
+    /// `Visited`/`Origin` overlays.
+    pub async fn find_nearby(
+        &self,
+        latitude: f64,
+        longitude: f64,
+        radius_km: f64,
+        at: Option<DateTime<Utc>>,
+    ) -> Result<Vec<models::entity_location::NearbyLocation>, KnowledgeError> {
+        queries::entity::find_nearby(&self.pool, latitude, longitude, radius_km, at).await
     }
 
     // ------------------------------------------------------------------

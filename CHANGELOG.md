@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.81.0] — 2026-07-26
+
+### Connectors (Phase 3 C2 / #196)
+
+- **Photos GPS → place extraction:** the local-filesystem Photos connector now
+  reverse-geocodes each photo's EXIF GPS into a locality-level place name via
+  the shared `Geocoder`, emitting `owner took_photo_at <place>` facts whose
+  place is a `Place` object entity. Photos at the same place corroborate into
+  one open-ended fact (+0.05/source, capped 0.95; base confidence 0.80), so the
+  knowledge graph grows with distinct places visited, not photo count. A
+  coord-dedup cache (~111 m buckets) bounds geocode calls to one per shooting
+  spot; transient network errors aren't cached. When no place resolves (no
+  geocoder / no match / transient error), the photo degrades to the C1
+  coords-only `took_photo <rel_path>` shape so no data is lost.
+- **Geocoder injection:** a new `ConnectorContext` (shared-services struct) is
+  threaded factory → registry → supervisor. `ConnectorFactory::create` now
+  receives `&ConnectorContext`; `ConnectorRegistry::create_with_context`
+  forwards it; `ConnectorSupervisor::with_geocoder` sets the context's geocoder.
+  No new dependencies (reuses the S1 `Geocoder`).
+- **Place-coordinate anchoring:** two `entity_locations` rows per place fact —
+  the owner's `Visited` row (coords + place name) and a new idempotent
+  `Geographic` row (`LocationType::Geographic = 6`, migration `046`) anchoring
+  the place entity's own coordinates, so `find_nearby` resolves places by where
+  they are. The overlay worker derives `place_anchor` when a fact's object is a
+  `Place` entity.
+- **Geocoder:** `GeocodeResult` gained a `short_name` field (the most specific
+  locality: city → town → village → hamlet → municipality → county → state →
+  region, else the first `display_name` segment). The `Geocoder` trait now
+  requires `Debug` (so `ConnectorContext` can derive `Debug`).
+- **Refactor:** the location-overlay worker's `OverlayJob::Apply` payload moved
+  into a `LocationOverlayApply` struct (fixes a clippy `too_many_arguments`
+  lint introduced by the `place_anchor` field; keeps the worker function's
+  argument list small).
+- **Tests:** geocoder `short_name` unit + Nominatim integration tests; Photos
+  `resolve_place` unit tests (mock geocoder place fact, no-geocoder fallback,
+  cache hit + miss-then-hit, transient-error-not-cached) + `place_fact` /
+  `coords_only_fact` shape tests; integration
+  `supervisor_ingests_photo_as_took_photo_at_place_fact`; normalize
+  `photos_at_same_place_corroborate_and_anchor_place_coords`; updated
+  `lookup_sync_test`, `enum_roundtrip_test`, `migrations_test`,
+  `entity_locations_test` for the new enum/count.
+- **Docs:** `docs/photos-connector.md` (C2 rewrite), `docs/entity-locations.md`,
+  `docs/geocoder.md`, `docs/wiki/photos-connector.md`,
+  `docs/wiki/entity-locations.md`, `docs/wiki/geocoding.md`,
+  `docs/wiki/what-works-now.md`, `README.md`, `Mimir-Implementation-Context.md`,
+  and the `photos.rs` module header.
+
 ## [0.80.0] — 2026-07-26
 
 ### Connectors (Phase 3 C1 / #195)

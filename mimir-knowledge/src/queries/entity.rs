@@ -8,7 +8,7 @@ use crate::KnowledgeError;
 use crate::geo;
 use crate::models::entity::{Entity, EntityType};
 use crate::models::entity_location::{EntityLocation, NearbyLocation};
-use crate::models::enums::MergeWorkflowStatus;
+use crate::models::enums::{LocationType, MergeWorkflowStatus};
 
 // ---------------------------------------------------------------------------
 // Alias search
@@ -541,6 +541,65 @@ pub async fn upsert_location(
     .await?;
     tx.commit().await?;
     Ok(record)
+}
+
+/// Idempotently anchor a `Place` entity's geographic coordinates
+/// (Phase 3 C2 / #196).
+///
+/// A place's coordinates are timeless — a place does not "move" — so the
+/// move/supersession semantics of [`upsert_location`] are the wrong model:
+/// repeated photos at the same place must not pile up closed `Geographic`
+/// rows (which would also pollute `find_nearby`'s validity-agnostic spatial
+/// scan). This therefore keeps a single `Geographic` row per place: if one
+/// already exists its coordinates (and source fact) are updated in place,
+/// otherwise a new timeless row is inserted. The single location-overlay
+/// worker drains its queue serially, so the read-then-write is race-free
+/// without a unique constraint. `address` is left `NULL` — the place's name
+/// lives on the entity, not the location row.
+pub async fn ensure_place_coordinates(
+    pool: &SqlitePool,
+    place_entity_id: i32,
+    latitude: f64,
+    longitude: f64,
+    source_fact_id: Option<i32>,
+) -> Result<(), KnowledgeError> {
+    let location_type_id = LocationType::Geographic as i16;
+    let existing: Option<(i32,)> = sqlx::query_as(
+        "SELECT id FROM entity_locations WHERE entity_id = ? AND location_type_id = ? LIMIT 1",
+    )
+    .bind(place_entity_id)
+    .bind(location_type_id)
+    .fetch_optional(pool)
+    .await?;
+    match existing {
+        Some((id,)) => {
+            sqlx::query(
+                "UPDATE entity_locations SET latitude = ?, longitude = ?, source_fact_id = ? WHERE id = ?",
+            )
+            .bind(latitude)
+            .bind(longitude)
+            .bind(source_fact_id)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        }
+        None => {
+            insert_location(
+                pool,
+                place_entity_id,
+                location_type_id,
+                None,
+                Some(latitude),
+                Some(longitude),
+                None,
+                None,
+                None,
+                source_fact_id,
+            )
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 /// Get all locations for an entity.

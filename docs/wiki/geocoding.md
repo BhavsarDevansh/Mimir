@@ -27,7 +27,10 @@ Mimir at a self-hosted Nominatim instance for heavier use.
 ## Use cases
 
 - **Photos:** a photo's GPS coordinates resolve to a place name and become a
-  location fact (coming with the Photos connector).
+  location fact — done as of v0.81.0 (#196). The place name is the city/town
+  (locality), so photos at different spots in the same city corroborate into
+  one fact. The specific restaurant/landmark isn't stored as an entity yet —
+  that level of detail is reserved for a future on-demand photo search.
 - **Entity locations:** an address extracted from email/calendar is geocoded to
   coordinates so proximity queries ("find places near X") work.
 - **Location search tool:** ask Mimir "where is London?" and get candidates
@@ -45,6 +48,6 @@ Mimir at a self-hosted Nominatim instance for heavier use.
 ## Status
 
 The geocoder abstraction and Nominatim backend are in place as a library
-component. Wiring it into the Photos connector, the entity-locations write
-path, and the conversational location-search tool lands in subsequent Phase 3
-issues.
+component. The Photos connector (C2 / #196, v0.81.0) and the entity-locations
+write path (S3 / #193) are wired in; the conversational location-search tool
+(#98) lands in a subsequent Phase 3 issue.

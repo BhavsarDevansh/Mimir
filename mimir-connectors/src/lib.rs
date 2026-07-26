@@ -75,8 +75,8 @@ pub mod supervisor;
 pub mod photos;
 
 pub use connector::{
-    ActionResult, Connector, ConnectorAction, ConnectorError, ConnectorFactory, ConnectorMode,
-    HealthStatus, SyncOptions, SyncOutcome,
+    ActionResult, Connector, ConnectorAction, ConnectorContext, ConnectorError, ConnectorFactory,
+    ConnectorMode, HealthStatus, SyncOptions, SyncOutcome,
 };
 pub use geocoder::{DEFAULT_NOMINATIM_ENDPOINT, NominatimConfig, NominatimGeocoder};
 pub use mock::{

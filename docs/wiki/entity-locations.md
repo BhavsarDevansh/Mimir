@@ -37,7 +37,14 @@ honours forgetting (forgetting the fact keeps the address but unlinks it).
 
 ## Location types
 
-`Home`, `Work`, `Visited`, `Origin`, `Current`.
+`Home`, `Work`, `Visited`, `Origin`, `Current`, and `Geographic`.
+
+`Geographic` is special: it anchors a **place** entity's own coordinates
+(e.g. the city "Rome" is at this lat/lon), rather than where a person is. The
+Photos connector uses it so proximity queries can find places by where they
+are, not just by where you've been. A place's coordinates are timeless — a
+place doesn't move — so Mimir keeps a single `Geographic` row per place even
+if you take many photos there.
 
 ## Use cases
 
@@ -45,6 +52,10 @@ honours forgetting (forgetting the fact keeps the address but unlinks it).
 - Capturing visited places (from photo GPS data, calendar event locations,
   shipping addresses) once connectors come online.
 - Proximity queries — "find places near my home" (v0.79.0, see below).
+- **Place anchoring from photos** — when the Photos connector reverse-geocodes
+  a photo's GPS to a place, that place's coordinates are anchored as a
+  `Geographic` row (v0.81.0, #196), so "what places are near this point" works
+  for the places themselves.
 
 ## Proximity queries (v0.79.0)
 

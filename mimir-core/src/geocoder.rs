@@ -44,6 +44,17 @@ pub struct GeocodeResult {
     /// Backend's full, human-readable place label (e.g. Nominatim
     /// `display_name`).
     pub display_name: String,
+    /// Canonical short name for the place — the locality-level label suitable
+    /// for use as a knowledge-graph `Place` entity name (e.g. "Rome", not
+    /// "Rome, Metropolitan City of Rome, Italy"). Backends derive this from
+    /// the most specific locality field available (city / town / village /
+    /// municipality / county / …), falling back to the first segment of
+    /// [`display_name`](Self::display_name). `None` only when the backend
+    /// reports neither a locality nor a display name. The Photos connector
+    /// (Phase 3 C2 / #196) uses this as the object of a `took_photo_at` fact
+    /// so photos taken at different spots in the same city resolve to one
+    /// place entity and corroborate, instead of fragmenting per POI.
+    pub short_name: Option<String>,
     /// Country name in the backend's language, when available.
     pub country: Option<String>,
     /// ISO 3166-1 alpha-2 country code (lowercased), when available.
@@ -84,7 +95,7 @@ pub enum GeocodeError {
 /// shared across the Photos connector (C2), the entity-locations write path
 /// (S3), and the Location Search tool (#98).
 #[async_trait]
-pub trait Geocoder: Send + Sync {
+pub trait Geocoder: Send + Sync + std::fmt::Debug {
     /// Forward geocode: resolve `query` (an address or place name) to
     /// coordinates. Returns `Ok(None)` when the backend finds no match.
     async fn forward(&self, query: &str) -> Result<Option<GeocodeResult>, GeocodeError>;
@@ -184,6 +195,7 @@ mod tests {
             latitude: 51.5074,
             longitude: -0.1278,
             display_name: "London, Greater London, England, United Kingdom".to_string(),
+            short_name: Some("London".to_string()),
             country: Some("United Kingdom".to_string()),
             country_code: Some("gb".to_string()),
             alternative_names: vec!["Londres".to_string(), "Londra".to_string()],

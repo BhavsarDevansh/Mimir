@@ -75,7 +75,7 @@ async fn lookup_tables_seeded_correctly() {
         ("SELECT COUNT(*) FROM event_statuses", 5),
         ("SELECT COUNT(*) FROM auto_complete_policies", 3),
         ("SELECT COUNT(*) FROM recurrence_types", 5),
-        ("SELECT COUNT(*) FROM location_types", 5),
+        ("SELECT COUNT(*) FROM location_types", 6),
         ("SELECT COUNT(*) FROM fact_statuses", 6),
         ("SELECT COUNT(*) FROM relation_types", 4),
         ("SELECT COUNT(*) FROM source_types", 6),

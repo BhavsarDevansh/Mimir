@@ -39,8 +39,46 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use mimir_core::geocoder::Geocoder;
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType};
 use mimir_knowledge::normalize::NormalizedFact;
+
+/// Shared services injected into a connector at construction (Phase 3 C2 /
+/// issue #196).
+///
+/// Decision D′ of the Phase 3 plan anticipated extending the factory
+/// signature to a construction context once connectors needed shared
+/// dependencies beyond their `config_json`. The Photos connector (C2) is the
+/// first: it reverse-geocodes EXIF GPS into a place name at extraction time,
+/// so it needs the shared [`Geocoder`]. Future fields (the shared
+/// `Arc<dyn LlmBackend>`, the `SecretStore`) will be added here as the
+/// backends that need them land.
+///
+/// The context is passed by shared reference to [`ConnectorFactory::create`];
+/// factories clone out whatever `Arc` they need (`Option<Arc<_>>::clone` is
+/// cheap), so no connector takes ownership of a shared service.
+#[derive(Debug, Default, Clone)]
+pub struct ConnectorContext {
+    /// Pluggable geocoder shared across the Photos connector (C2), the
+    /// entity-locations write path (S3), and the Location Search tool (#98).
+    /// `None` when no geocoder is configured (the daemon initialises a
+    /// Nominatim backend in `mimir-server`; tests inject a mock).
+    pub geocoder: Option<std::sync::Arc<dyn Geocoder>>,
+}
+
+impl ConnectorContext {
+    /// Build a context carrying the supplied geocoder.
+    pub fn new(geocoder: Option<std::sync::Arc<dyn Geocoder>>) -> Self {
+        Self { geocoder }
+    }
+
+    /// An empty context with no shared services (used by the registry's
+    /// config-only [`ConnectorRegistry::create`] shortcut and by connectors
+    /// that need no injected dependencies).
+    pub fn empty() -> Self {
+        Self::default()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -336,9 +374,12 @@ pub trait ConnectorFactory: Send + Sync {
     /// `config` is the deserialised `config_json` column of the
     /// `connectors` row. Construction must be cheap and synchronous: network
     /// handshakes happen later via [`Connector::authenticate`], and data
-    /// fetches via [`Connector::sync`].
+    /// fetches via [`Connector::sync`]. `ctx` carries shared services the
+    /// backend may need at construction (e.g. the [`Geocoder`] for the Photos
+    /// connector, Phase 3 C2 / #196); backends that need none ignore it.
     fn create(
         &self,
         config: serde_json::Value,
+        ctx: &ConnectorContext,
     ) -> Result<std::sync::Arc<dyn Connector>, ConnectorError>;
 }

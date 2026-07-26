@@ -208,6 +208,7 @@ async fn location_type_roundtrips() {
             LocationType::Visited,
             LocationType::Origin,
             LocationType::Current,
+            LocationType::Geographic,
         ],
     )
     .await;

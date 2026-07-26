@@ -141,6 +141,12 @@ pub enum LocationType {
     Visited = 3,
     Origin = 4,
     Current = 5,
+    /// A `Place` entity's own geographic coordinates (Phase 3 C2 / #196).
+    /// Distinct from the person-location types above: a place does not
+    /// "visit" a location, it *is* one. Used by the location-overlay worker
+    /// to anchor a place entity created from a photo's GPS so `find_nearby`
+    /// can resolve places by coordinates.
+    Geographic = 6,
 }
 
 /// Workflow status of a dedup queue entry.

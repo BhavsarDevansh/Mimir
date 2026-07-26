@@ -1,8 +1,8 @@
 # Geocoder Service (Phase 3 S1 / Issue #191)
 
 > **Status:** Implemented (v0.77.0). Library-only; daemon wiring lands with the
-> Photos connector (C2), entity-locations write path (S3), and the Location
-> Search tool (#98).
+> Photos connector (C2, wired in v0.81.0 / #196), entity-locations write path
+> (S3), and the Location Search tool (#98).
 
 ## Summary
 
@@ -38,7 +38,25 @@ pub trait Geocoder: Send + Sync {
 ```
 
 `GeocodeResult` carries `latitude`, `longitude`, `display_name`, `country`,
-`country_code` (lowercased ISO 3166-1 alpha-2), and `alternative_names`.
+`country_code` (lowercased ISO 3166-1 alpha-2), `alternative_names`, and
+`short_name` (added v0.81.0 / #196).
+
+### `short_name` (v0.81.0 / #196)
+
+`short_name` is the locality-level label suitable for use as a knowledge-graph
+`Place` entity name (e.g. "Rome", not "Rome, Metropolitan City of Rome,
+Italy"). The Nominatim backend derives it from the most specific populated
+locality field in the `address` block, in descending specificity:
+`city` → `town` → `village` → `hamlet` → `municipality` → `county` →
+`state` → `region`, falling back to the first comma-separated segment of
+`display_name` (trimmed) when no locality is present. `None` only when the
+backend reports neither a locality nor a usable display name.
+
+Using the locality — not the POI `name` — is what lets the Photos connector
+(C2) resolve photos taken at different spots in the same city to one `Place`
+entity so corroboration fires across them, instead of fragmenting into one
+entity per restaurant/landmark. POI-level detail remains available via
+`display_name` and `alternative_names` for future vision-tracking queries.
 
 ### Result vs `Option`
 

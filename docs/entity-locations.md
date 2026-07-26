@@ -1,7 +1,8 @@
 # Entity Locations — Write Path (Phase 3 S3 / #193)
 
 > **Status:** Implemented. Write path in v0.78.0 (#193, write half of #65);
-> proximity query in v0.79.0 (#194, query half of #65 — closes #65).
+> proximity query in v0.79.0 (#194, query half of #65 — closes #65); place
+> coordinate anchoring (`Geographic` type) in v0.81.0 (#196, Phase 3 C2).
 > **Depends on:** Geocoder service (#191), `normalize_and_insert` DRY boundary (#181),
 > connectors table (#179). Proximity queries (`find_nearby`) are implemented
 > in v0.79.0 (Phase 3 S4 / #194).
@@ -28,9 +29,20 @@ Columns: `id`, `entity_id`, `location_type_id`, `address`, `latitude`,
 `created_at`.
 
 `location_types` (migration `001`) is `Home(1)`, `Work(2)`, `Visited(3)`,
-`Origin(4)`, `Current(5)`, mirrored by `models::enums::LocationType`. (The
-issue text that named `Previous/Frequent/EventLocation` predates Phase 2 and
-is stale; the actual enum is the source of truth.)
+`Origin(4)`, `Current(5)`, `Geographic(6)` (added in migration `046` for
+Phase 3 C2 / #196), mirrored by `models::enums::LocationType`. (The issue text
+that named `Previous/Frequent/EventLocation` predates Phase 2 and is stale; the
+actual enum is the source of truth.)
+
+`Geographic` is distinct from the person-location types above: a `Place`
+entity does not "visit" a location, it *is* one. The Photos connector (C2)
+anchors each place entity created from a photo's GPS with a coordinate row
+typed `Geographic`, so `find_nearby` can resolve places by coordinates rather
+than only by where the owner has been. A place's coordinates are timeless — a
+place does not move — so the `Geographic` row uses the idempotent
+`ensure_place_coordinates` (a check-then-upsert that keeps a single row per
+place) instead of `upsert_location`'s move/supersession semantics; repeated
+photos at the same place must not pile up closed move-history rows.
 
 > **No `confidence` column.** Locations do not carry their own confidence score
 > in V1; provenance/traceability is via `source_fact_id` and the source fact's
@@ -127,6 +139,10 @@ the overlay into `confirm_fact` is tracked as follow-up work (see Issues).
   before the call (deterministic shutdown / tests).
 - `KnowledgeGraph::find_nearby(lat, lon, radius_km, at)` — proximity query
   (Phase 3 S4 / #194); see [Proximity query](#proximity-query).
+- `queries::entity::ensure_place_coordinates(place_id, lat, lon, source_fact_id)`
+  — idempotent anchor for a `Place` entity's `Geographic` coordinates (Phase 3
+  C2 / #196). Not (yet) on the `KnowledgeGraph` facade; called by the
+  location-overlay worker.
 
 ## Tests
 

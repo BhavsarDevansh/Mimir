@@ -38,6 +38,7 @@ fn london_result() -> GeocodeResult {
         latitude: 51.5074,
         longitude: -0.1278,
         display_name: "London, Greater London, England, United Kingdom".to_string(),
+        short_name: Some("London".to_string()),
         country: Some("United Kingdom".to_string()),
         country_code: Some("gb".to_string()),
         alternative_names: vec![],

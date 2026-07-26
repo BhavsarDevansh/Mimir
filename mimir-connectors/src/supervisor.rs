@@ -69,9 +69,11 @@ use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorStatus, Connec
 use mimir_knowledge::models::source::ExtractionMethod;
 use mimir_knowledge::normalize::{Provenance, normalize_and_insert};
 
+use crate::connector::ConnectorContext;
 use crate::connector::ConnectorMode;
 use crate::connector::{Connector, ConnectorError, HealthStatus, SyncOptions, SyncOutcome};
 use crate::registry::ConnectorRegistry;
+use mimir_core::geocoder::Geocoder;
 
 /// Tunable parameters for a [`ConnectorSupervisor`].
 ///
@@ -232,6 +234,10 @@ pub struct ConnectorSupervisor {
     kg: Arc<KnowledgeGraph>,
     config: SupervisorConfig,
     shutdown: watch::Receiver<bool>,
+    /// Shared services injected into every connector at construction (Phase 3
+    /// C2 / #196). Built from [`with_geocoder`](Self::with_geocoder); empty
+    /// by default so connectors that need no injected services are unaffected.
+    context: ConnectorContext,
     handles: Mutex<HashMap<i32, ConnectorHandle>>,
 }
 
@@ -249,8 +255,23 @@ impl ConnectorSupervisor {
             kg,
             config,
             shutdown,
+            context: ConnectorContext::empty(),
             handles: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Inject a shared geocoder made available to every connector this
+    /// supervisor constructs (Phase 3 C2 / #196).
+    ///
+    /// The Photos connector reverse-geocodes EXIF GPS into a place name at
+    /// extraction time; the geocoder is cloned out of the context by the
+    /// factory at construction. Must be called before [`restore`] so already
+    /// spawned runners receive it. Other connectors ignore the geocoder.
+    ///
+    /// [`restore`]: Self::restore
+    pub fn with_geocoder(mut self, geocoder: Arc<dyn Geocoder>) -> Self {
+        self.context.geocoder = Some(geocoder);
+        self
     }
 
     /// Spawn a runner task for every `Active` connector row.
@@ -460,7 +481,12 @@ impl ConnectorSupervisor {
                 serde_json::to_value(&row.sync_cursor)?,
             );
         }
-        Ok(self.registry.create(connector_type, &row.backend, config)?)
+        Ok(self.registry.create_with_context(
+            connector_type,
+            &row.backend,
+            config,
+            &self.context,
+        )?)
     }
 }
 
@@ -914,7 +940,7 @@ mod tests {
             .register(
                 ConnectorType::Photos,
                 "local".to_string(),
-                FnConnectorFactory::new(move |config| {
+                FnConnectorFactory::new(move |config, _ctx| {
                     *capture.lock().unwrap() = Some(config.clone());
                     Ok(Arc::new(crate::MockConnector::default()) as Arc<dyn Connector>)
                 }),
@@ -959,7 +985,7 @@ mod tests {
             .register(
                 ConnectorType::Photos,
                 "local".to_string(),
-                FnConnectorFactory::new(move |config| {
+                FnConnectorFactory::new(move |config, _ctx| {
                     *capture.lock().unwrap() = Some(config.clone());
                     Ok(Arc::new(crate::MockConnector::default()) as Arc<dyn Connector>)
                 }),

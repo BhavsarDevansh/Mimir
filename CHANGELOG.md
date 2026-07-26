@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.79.2] — 2026-07-26
+
+### Docs
+
+- **README:** rework the Architecture section. The connectors entry had grown
+  into a single ~4000-character run-on paragraph packed with issue references;
+  split it into a crate list and a grouped key-subsystems list (knowledge graph,
+  learning, retrieval agent, events & reminders, connectors, entity locations)
+  so the page is scannable. Also tidy the Acknowledgments spacing.
+
+
 ## [0.79.1] — 2026-07-26
 
 ### Review fixes (PR #229)

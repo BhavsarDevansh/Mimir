@@ -53,6 +53,20 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # new download; declared directly so the geocoder does not rely on transitive
 # availability. Replaces a hand-rolled encoder (PR #221 review).
 percent-encoding = "2.3"
+# C1 (issue #195): Photos local-filesystem connector. `notify` (8.2.0, the
+# latest stable on the 8.x line; 9.x is pre-release) provides the cross-platform
+# `RecommendedWatcher` filesystem watcher. Debouncing lives in the separate
+# `notify-debouncer-full` crate (0.7.0, depends on `notify ^8.2.0`); it carries
+# the `FileIdMap`/`RecommendedCache` that coalesces noisy rename/modify bursts.
+# Neither crate ships a tokio feature in its 0.7/8.2 stable line, so the photos
+# module implements `DebounceEventHandler` on a newtype wrapping a
+# `tokio::sync::mpsc::UnboundedSender` (a synchronous `send`) — no forwarder
+# thread and no extra async runtime dep. `kamadak-exif` (0.6.1) is a pure-Rust
+# EXIF reader covering JPEG/TIFF/HEIF/PNG/WebP containers ("across camera
+# formats"). All three are optional, gated by the `photos` feature.
+notify = { version = "8.2", optional = true }
+notify-debouncer-full = { version = "0.7", optional = true }
+kamadak-exif = { version = "0.6", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
@@ -62,7 +76,7 @@ wiremock = "0.6"
 [features]
 default = ["photos", "calendar", "gmail"]
 ## Google Photos / Apple Photos / local photo library ingestion (C1–C2).
-photos = []
+photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"]
 ## CalDAV calendar ingestion: read/sync + event fact extraction (C3–C4).
 calendar = []
 ## IMAP email ingestion, Gmail and other providers (C5–C7).

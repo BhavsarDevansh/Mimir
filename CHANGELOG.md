@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.81.2] — 2026-07-26
+
+### Connectors / Knowledge (Phase 3 C2 / #196 review follow-up)
+
+- **Stability:** `PhotosConnector::extract` now bounds geocode retries to one
+  attempt per GPS bucket per `extract()` cycle via a per-cycle failed-key set.
+  A sustained geocoder outage previously re-ran the geocoder's internal
+  retry/backoff once per photo (not per distinct spot), stalling sync at
+  ~1 req/s; now it degrades quickly to the coords-only fallback. The set is
+  local to one cycle, so the next sync retries afresh — only success/no-match
+  outcomes persist in the long-lived coord-dedup cache. New unit test
+  `extract_bounds_geocode_retries_to_one_per_spot_per_cycle`.
+- **Data integrity:** the single-`Geographic`-row-per-place invariant is now
+  enforced at the schema level by a partial unique index
+  (`idx_entity_locations_geographic_unique`, migration `047`) on `entity_id`
+  scoped to `location_type_id = 6`. `ensure_place_coordinates` is a single
+  atomic `INSERT ... ON CONFLICT DO UPDATE` against the index, so the
+  read-then-write no longer relies solely on the serial overlay-worker
+  convention. The index is deliberately partial — `Visited`/`Home`/`Work`/
+  `Origin`/`Current` rows are not unique per `(entity_id, location_type_id)`.
+  New integration test `ensure_place_coordinates_keeps_single_geographic_row`
+  (sequential + concurrent). A `const_assert` locks `LocationType::Geographic
+  == 6` since the SQL hardcodes the literal.
+- **Observability:** `normalize_and_insert` now logs (debug) when a place is
+  created but not anchored because no coordinates resolved, instead of silently
+  no-op'ing.
+- **Docs:** MD022 blank lines around anchored headings in
+  `docs/photos-connector.md`; renamed the stale "What's next" heading in
+  `docs/wiki/photos-connector.md` to "Location enrichment"; documented the
+  per-cycle retry bound and the schema-level place-anchor invariant in
+  `docs/photos-connector.md` and `docs/entity-locations.md`.
+
 ## [0.81.1] — 2026-07-26
 
 ### Connectors (Phase 3 C2 follow-up / #196)

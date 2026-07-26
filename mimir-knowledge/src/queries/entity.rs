@@ -8,7 +8,7 @@ use crate::KnowledgeError;
 use crate::geo;
 use crate::models::entity::{Entity, EntityType};
 use crate::models::entity_location::{EntityLocation, NearbyLocation};
-use crate::models::enums::{LocationType, MergeWorkflowStatus};
+use crate::models::enums::MergeWorkflowStatus;
 
 // ---------------------------------------------------------------------------
 // Alias search
@@ -550,11 +550,15 @@ pub async fn upsert_location(
 /// move/supersession semantics of [`upsert_location`] are the wrong model:
 /// repeated photos at the same place must not pile up closed `Geographic`
 /// rows (which would also pollute `find_nearby`'s validity-agnostic spatial
-/// scan). This therefore keeps a single `Geographic` row per place: if one
-/// already exists its coordinates (and source fact) are updated in place,
-/// otherwise a new timeless row is inserted. The single location-overlay
-/// worker drains its queue serially, so the read-then-write is race-free
-/// without a unique constraint. `address` is left `NULL` — the place's name
+/// scan). This therefore keeps a single `Geographic` row per place, updated in
+/// place when it already exists. The single-row invariant is enforced at the
+/// schema level by a partial unique index
+/// (`idx_entity_locations_geographic_unique`, migration `047`) on
+/// `entity_id` scoped to `location_type_id = Geographic`, and this upsert is a
+/// single `INSERT ... ON CONFLICT DO UPDATE` against that index, so it is
+/// atomic and race-free even if the overlay worker is later parallelised —
+/// the serial-worker convention becomes a performance optimisation, not a
+/// correctness requirement. `address` is left `NULL` — the place's name
 /// lives on the entity, not the location row.
 pub async fn ensure_place_coordinates(
     pool: &SqlitePool,
@@ -563,42 +567,21 @@ pub async fn ensure_place_coordinates(
     longitude: f64,
     source_fact_id: Option<i32>,
 ) -> Result<(), KnowledgeError> {
-    let location_type_id = LocationType::Geographic as i16;
-    let existing: Option<(i32,)> = sqlx::query_as(
-        "SELECT id FROM entity_locations WHERE entity_id = ? AND location_type_id = ? LIMIT 1",
-    )
-    .bind(place_entity_id)
-    .bind(location_type_id)
-    .fetch_optional(pool)
-    .await?;
-    match existing {
-        Some((id,)) => {
-            sqlx::query(
-                "UPDATE entity_locations SET latitude = ?, longitude = ?, source_fact_id = ? WHERE id = ?",
-            )
-            .bind(latitude)
-            .bind(longitude)
-            .bind(source_fact_id)
-            .bind(id)
-            .execute(pool)
-            .await?;
-        }
-        None => {
-            insert_location(
-                pool,
-                place_entity_id,
-                location_type_id,
-                None,
-                Some(latitude),
-                Some(longitude),
-                None,
-                None,
-                None,
-                source_fact_id,
-            )
-            .await?;
-        }
-    }
+    // The `location_type_id` literal (`6` = `LocationType::Geographic`,
+    // locked by a `const_assert` in `models/enums.rs`) is hardcoded in the
+    // SQL rather than bound, because SQLite requires the `ON CONFLICT`
+    // partial-index target `WHERE location_type_id = 6` to match the partial
+    // unique index's own `WHERE` clause verbatim — a bound parameter is not
+    // permitted there. Keeping the SQL a static literal also satisfies sqlx's
+    // `SqlSafeStr` injection guard.
+    let upsert = "INSERT INTO entity_locations             (entity_id, location_type_id, latitude, longitude, source_fact_id)             VALUES (?, 6, ?, ?, ?)             ON CONFLICT(entity_id) WHERE location_type_id = 6             DO UPDATE SET                 latitude = excluded.latitude,                 longitude = excluded.longitude,                 source_fact_id = excluded.source_fact_id";
+    sqlx::query(upsert)
+        .bind(place_entity_id)
+        .bind(latitude)
+        .bind(longitude)
+        .bind(source_fact_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

@@ -65,7 +65,7 @@
 //! [`std::os::unix::fs::MetadataExt::ino`] under `#[cfg(unix)]`, which is a
 //! safe accessor.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -1118,6 +1118,15 @@ impl Connector for PhotosConnector {
             let mut buffer = self.buffer.lock().await;
             std::mem::take(&mut *buffer)
         };
+        // Per-extract() set of GPS buckets that already errored this cycle.
+        // The geocoder retries 429/5xx/transport failures internally with
+        // backoff before returning `Err`, so without this guard a sustained
+        // outage would re-run the full retry sequence for *every photo*
+        // (not every distinct spot), stalling the whole sync at ~1 req/s.
+        // The set is local to one `extract()` call, so the next sync cycle
+        // retries the bucket — only the long-lived success/no-match cache
+        // (`geocode_cache`) persists across cycles.
+        let mut failed_this_cycle: HashSet<GeoKey> = HashSet::new();
         let mut facts = Vec::with_capacity(raws.len());
         for raw in raws {
             // Reverse-geocode each photo's GPS into a place name (with the
@@ -1125,7 +1134,9 @@ impl Connector for PhotosConnector {
             // are tolerated per-photo — a photo whose GPS cannot be resolved
             // degrades to the C1 coords-only `took_photo` shape rather than
             // failing the whole extraction.
-            let place = self.resolve_place(raw.latitude, raw.longitude).await;
+            let place = self
+                .resolve_place(raw.latitude, raw.longitude, &mut failed_this_cycle)
+                .await;
             facts.push(raw.to_fact(&owner, place));
         }
         Ok(facts)
@@ -1153,10 +1164,23 @@ impl PhotosConnector {
     /// / #196), using the coord-dedup cache to avoid re-geocoding the same
     /// spot. Returns `None` when there is no geocoder, no GPS, no match, or a
     /// transient geocode error — the caller then builds the C1 fallback fact.
-    async fn resolve_place(&self, latitude: Option<f64>, longitude: Option<f64>) -> Option<String> {
+    async fn resolve_place(
+        &self,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+        failed_this_cycle: &mut HashSet<GeoKey>,
+    ) -> Option<String> {
         let geocoder = self.geocoder.clone()?;
         let (lat, lng) = (latitude?, longitude?);
         let key = geo_key(lat, lng);
+
+        // Skip a bucket that already errored during this `extract()` cycle so
+        // a sustained outage degrades quickly to the coords-only fallback
+        // instead of re-running the geocoder's internal retry backoff once
+        // per photo. The set is per-cycle, so the next sync retries afresh.
+        if failed_this_cycle.contains(&key) {
+            return None;
+        }
 
         // Cache hit: clone the cached value out and release the lock before
         // any await (never hold the cache mutex across the geocode call).
@@ -1166,7 +1190,9 @@ impl PhotosConnector {
 
         // Cache miss: reverse-geocode without holding the lock. Genuine
         // no-matches are cached; transient errors are not (so a network blip
-        // does not poison the bucket for subsequent photos at the same spot).
+        // does not poison the bucket for subsequent photos at the same spot)
+        // — but the per-cycle `failed_this_cycle` set still bounds a sustained
+        // outage to one attempt per spot per `extract()` call.
         let (value, cacheable) = match geocoder.reverse(lat, lng).await {
             Ok(Some(result)) => (result.short_name, true),
             Ok(None) => {
@@ -1175,6 +1201,7 @@ impl PhotosConnector {
             }
             Err(error) => {
                 tracing::warn!("reverse geocode failed for photo GPS ({lat}, {lng}): {error}");
+                failed_this_cycle.insert(key);
                 (None, false)
             }
         };
@@ -1319,6 +1346,88 @@ mod tests {
         assert!(fact.location.is_some());
         // A genuine no-match is cached so the same spot is not re-queried.
         assert_eq!(connector.geocode_cache.lock().await.len(), 1);
+    }
+
+    /// A `Geocoder` that always errors on `reverse`, counting calls so the
+    /// per-cycle failed-key short-circuit can be asserted (Phase 3 C2 / #196
+    /// review fix: a sustained outage must not retry per photo).
+    #[derive(Debug)]
+    struct FailingGeocoder {
+        reverse_calls: Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    impl FailingGeocoder {
+        fn new(counter: Arc<std::sync::atomic::AtomicU64>) -> Self {
+            Self {
+                reverse_calls: counter,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl mimir_core::geocoder::Geocoder for FailingGeocoder {
+        async fn forward(
+            &self,
+            _query: &str,
+        ) -> Result<Option<GeocodeResult>, mimir_core::geocoder::GeocodeError> {
+            Ok(None)
+        }
+        async fn reverse(
+            &self,
+            _latitude: f64,
+            _longitude: f64,
+        ) -> Result<Option<GeocodeResult>, mimir_core::geocoder::GeocodeError> {
+            self.reverse_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(mimir_core::geocoder::GeocodeError::Network(
+                "simulated outage".to_string(),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn extract_bounds_geocode_retries_to_one_per_spot_per_cycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = serde_json::json!({
+            "watch_dir": dir.path().to_string_lossy(),
+            "owner_name": "Devansh",
+        });
+        let counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let geocoder: Arc<dyn mimir_core::geocoder::Geocoder> =
+            Arc::new(FailingGeocoder::new(counter.clone()));
+        let connector = PhotosConnector::from_config_with_geocoder(config, Some(geocoder)).unwrap();
+        // Three photos at the same ~100 m bucket, plus one at a different spot.
+        connector.buffer.lock().await.extend([
+            gps_raw("a.jpg", 46.5001, 7.5001),
+            gps_raw("b.jpg", 46.5002, 7.5002),
+            gps_raw("c.jpg", 46.5003, 7.5003),
+            gps_raw("d.jpg", 1.0, 1.0),
+        ]);
+        let facts = connector.extract().await.unwrap();
+        // All four photos degrade to the C1 coords-only fallback; no data lost.
+        assert_eq!(facts.len(), 4);
+        for fact in &facts {
+            assert_eq!(fact.relationship_type, "took_photo");
+            assert!(!fact.object_is_entity);
+        }
+        // One geocode attempt per distinct bucket (2), not per photo (4): the
+        // per-cycle failed-key set short-circuits repeat attempts for the spot
+        // that already errored. Transient errors are not cached long-lived, so
+        // the geocode_cache stays empty.
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(connector.geocode_cache.lock().await.len(), 0);
+        // A fresh extract() cycle retries the failed buckets (per-cycle scope).
+        connector.buffer.lock().await.extend([
+            gps_raw("e.jpg", 46.5001, 7.5001),
+            gps_raw("f.jpg", 1.0, 1.0),
+        ]);
+        let before = counter.load(std::sync::atomic::Ordering::SeqCst);
+        connector.extract().await.unwrap();
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            before + 2,
+            "next cycle should retry the two buckets"
+        );
     }
 
     #[tokio::test]

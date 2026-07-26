@@ -493,3 +493,59 @@ async fn upsert_location_facade_supersedes_directly() {
         .unwrap();
     assert_eq!(old.valid_until, Some(from_2023));
 }
+
+/// A `Place` entity gets exactly one `Geographic` coordinate row, even when
+/// `ensure_place_coordinates` is called repeatedly (and concurrently) for the
+/// same place — the partial unique index (migration 047) backs the
+/// single-row invariant at the schema level (Phase 3 C2 / #196 review fix).
+#[tokio::test]
+async fn ensure_place_coordinates_keeps_single_geographic_row() {
+    use mimir_knowledge::queries::entity::ensure_place_coordinates;
+
+    let (kg, _dir) = fresh_kg().await;
+    let place = kg
+        .create_entity("London", EntityType::Place, &[])
+        .await
+        .unwrap();
+
+    // Two sequential anchors at slightly different coordinates update in place.
+    ensure_place_coordinates(kg.pool(), place.id, 51.5074, -0.1278, None)
+        .await
+        .unwrap();
+    ensure_place_coordinates(kg.pool(), place.id, 51.5075, -0.1279, None)
+        .await
+        .unwrap();
+
+    // Two concurrent anchors for the same place must not duplicate the row —
+    // the ON CONFLICT upsert is atomic against the partial unique index.
+    // Each task owns its own pool clone and borrows it for the call.
+    let pool = kg.pool().clone();
+    let pool_a = pool.clone();
+    let a = tokio::spawn(async move {
+        ensure_place_coordinates(&pool_a, place.id, 51.51, -0.13, None).await
+    });
+    let pool_b = pool.clone();
+    let b = tokio::spawn(async move {
+        ensure_place_coordinates(&pool_b, place.id, 51.52, -0.14, None).await
+    });
+    a.await.unwrap().unwrap();
+    b.await.unwrap().unwrap();
+
+    let locs = kg.get_locations(place.id).await.unwrap();
+    let geographic: Vec<_> = locs
+        .iter()
+        .filter(|l| l.location_type_id == LocationType::Geographic as i16)
+        .collect();
+    assert_eq!(
+        geographic.len(),
+        1,
+        "place should have exactly one Geographic row; got {geographic:?}"
+    );
+    // The last writer wins (both concurrent calls complete; exact final coords
+    // are nondeterministic, so only assert the row is one of the two writes).
+    let row = geographic[0];
+    assert!(
+        (row.latitude.unwrap() - 51.5).abs() < 0.1,
+        "coords should be near the anchored values; got {row:?}"
+    );
+}

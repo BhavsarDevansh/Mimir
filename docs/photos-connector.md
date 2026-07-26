@@ -162,6 +162,7 @@ entity in C2; it remains available via the geocoder's `display_name` for a
 future query-time reverse geocode (tracked as a follow-up).
 
 <a id="geocoder-injection"></a>
+
 ## Geocoder injection (C2 / #196)
 
 The reverse geocode reuses the shared `Geocoder` (Phase 3 S1 / #191) rather
@@ -193,7 +194,18 @@ Likewise, the staged-photo buffer mutex is held only for the in-memory
 `std::mem::take` drain (no `await` while locked); the geocode loop runs after
 the guard drops, so the buffer is not blocked for the ~N-second scan.
 
+Because the geocoder already retries 429/5xx/transport failures internally
+with backoff before returning `Err`, a sustained outage would otherwise
+re-run that full retry sequence once *per photo* (not per spot), stalling the
+whole `extract()`/sync cycle at ~1 req/s. `extract` therefore also keeps a
+**per-cycle** failed-key set: once a bucket errors during one `extract()` call,
+later photos in the *same* batch at that spot skip straight to the coords-only
+fallback. The set is local to one cycle (not the long-lived cache), so the
+next sync retries the bucket afresh — only success/no-match outcomes persist
+across cycles.
+
 <a id="place-coordinate-anchoring"></a>
+
 ## Place-coordinate anchoring (C2 / #196)
 
 Two `entity_locations` rows are written per place fact:
@@ -210,8 +222,15 @@ Two `entity_locations` rows are written per place fact:
   (S4) can resolve places by coordinates, not only by where the owner has
   been.
 
-The anchoring runs on the same serial location-overlay worker as the owner
-row, so the read-then-write is race-free without a unique constraint.
+The single-`Geographic`-row-per-place invariant is enforced at the schema
+level by a partial unique index on `entity_id` scoped to
+`location_type_id = 6` (`idx_entity_locations_geographic_unique`, migration
+`047`); `ensure_place_coordinates` is a single atomic
+`INSERT ... ON CONFLICT DO UPDATE` against that index. The index is partial
+on purpose — `Visited`/`Home`/`Work`/`Origin`/`Current` rows are *not* unique
+per `(entity_id, location_type_id)` (a person legitimately has many `Visited`
+rows), so a full unique index would break them. The serial overlay worker
+remains a performance optimisation, not a correctness requirement.
 
 ## Configuration (`config_json`)
 

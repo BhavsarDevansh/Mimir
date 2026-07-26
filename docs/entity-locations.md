@@ -40,9 +40,17 @@ anchors each place entity created from a photo's GPS with a coordinate row
 typed `Geographic`, so `find_nearby` can resolve places by coordinates rather
 than only by where the owner has been. A place's coordinates are timeless — a
 place does not move — so the `Geographic` row uses the idempotent
-`ensure_place_coordinates` (a check-then-upsert that keeps a single row per
-place) instead of `upsert_location`'s move/supersession semantics; repeated
-photos at the same place must not pile up closed move-history rows.
+`ensure_place_coordinates` instead of `upsert_location`'s move/supersession
+semantics; repeated photos at the same place must not pile up closed
+move-history rows. The single-row-per-place invariant is enforced at the schema
+level by a partial unique index on `entity_id` scoped to
+`location_type_id = 6` (`idx_entity_locations_geographic_unique`, migration
+`047`); `ensure_place_coordinates` is a single atomic
+`INSERT ... ON CONFLICT DO UPDATE` against that index, so it is race-free even
+if the overlay worker is later parallelised. The index is deliberately partial
+— `Visited`/`Home`/`Work`/`Origin`/`Current` rows are not unique per
+`(entity_id, location_type_id)` (a person has many `Visited` rows), so a full
+unique index would break them.
 
 > **No `confidence` column.** Locations do not carry their own confidence score
 > in V1; provenance/traceability is via `source_fact_id` and the source fact's

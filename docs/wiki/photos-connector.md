@@ -75,14 +75,14 @@ object like:
 `watch_dir` is required and must exist; the other fields are optional. The
 default extensions cover JPEG, TIFF, HEIF/HEIC, PNG, and WebP.
 
-## What's next (C2 / #196)
+## Location enrichment (C2 / #196)
 
 C2 is now implemented (#196): GPS coordinates are reverse-geocoded into a
 place name, photos at the same place corroborate, and the place's coordinates
-are anchored so proximity queries ("places near this point") resolve places by
+are anchored, so proximity queries ("places near this point") resolve places by
 where they are, not just by where you've been. If a place can't be resolved
 (no geocoder, no match, or a transient network error), the photo still records
-a coordinates-only "took a photo" fact so no data is lost.
+a coordinates-only "took a photo" fact, so no data is lost.
 
 ### Photos as facts, not entities
 

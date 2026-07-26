@@ -629,6 +629,15 @@ async fn apply_location_overlay(pool: &sqlx::SqlitePool, apply: LocationOverlayA
                     "failed to anchor place {place_id} coordinates (fact {fact_id}): {error}"
                 );
             }
+        } else {
+            // No resolved coordinates to anchor (e.g. a future address-only
+            // caller with no configured geocoder): the `Place` entity is still
+            // created, but gets no `Geographic` row. Log so this skip is
+            // traceable rather than silently no-op'ing like the geocode
+            // branches above do on every "no data"/error outcome.
+            tracing::debug!(
+                "place {place_id} not anchored: no resolved coordinates for fact {fact_id}"
+            );
         }
     }
 }

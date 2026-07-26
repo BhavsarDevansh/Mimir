@@ -350,7 +350,12 @@ fn parse_exif_latitude(exif: &exif::Exif) -> Option<f64> {
         ascii_first_byte(exif, exif::Tag::GPSLatitudeRef),
         Some(b'S')
     );
-    Some(if negative { -decimal } else { decimal })
+    let signed = if negative { -decimal } else { decimal };
+    // Reject malformed EXIF (zero-denominator rationals → `NaN`, or a corrupt
+    // DMS triple outside the valid range) so garbage never reaches the
+    // location overlay / proximity queries. The `took_photo` fact is still
+    // emitted; only the location is dropped.
+    (signed.is_finite() && (-90.0..=90.0).contains(&signed)).then_some(signed)
 }
 
 fn parse_exif_longitude(exif: &exif::Exif) -> Option<f64> {
@@ -360,7 +365,8 @@ fn parse_exif_longitude(exif: &exif::Exif) -> Option<f64> {
         ascii_first_byte(exif, exif::Tag::GPSLongitudeRef),
         Some(b'W')
     );
-    Some(if negative { -decimal } else { decimal })
+    let signed = if negative { -decimal } else { decimal };
+    (signed.is_finite() && (-180.0..=180.0).contains(&signed)).then_some(signed)
 }
 
 /// Extract the first ASCII value of a field as a borrowed `&str` (NUL-trimmed
@@ -595,7 +601,10 @@ impl PhotosConnector {
             })
             .unwrap_or_else(|| DEFAULT_EXTENSIONS.iter().map(|e| e.to_string()).collect());
 
-        let (_tx, _rx) = unbounded_channel::<DebounceEventResult>();
+        // `_tx` is dropped immediately: the receiver is stored so the first
+        // `sync()` can block on it until `start_watcher()` installs the real
+        // debouncer-backed channel.
+        let (_tx, rx) = unbounded_channel::<DebounceEventResult>();
 
         Ok(Self {
             slug,
@@ -607,7 +616,7 @@ impl PhotosConnector {
             cursor: Mutex::new(cursor),
             buffer: Mutex::new(Vec::new()),
             watcher: Mutex::new(None),
-            events: Mutex::new(_rx),
+            events: Mutex::new(rx),
             first_cycle: AtomicBool::new(true),
             started: AtomicBool::new(false),
         })
@@ -687,48 +696,65 @@ impl PhotosConnector {
     /// files staged and the live-path set (for pruning). Honours
     /// `options.full` (clears the cursor first → re-ingests everything).
     async fn initial_scan(&self, options: SyncOptions) -> Result<ScanResult, ConnectorError> {
-        let mut cursor = self.cursor.lock().await;
-        let mut changed = options.full;
-        if options.full {
-            *cursor = PhotosCursor::default();
-        }
+        // Reset the cursor for a full re-ingest under a brief lock, then
+        // snapshot it. The filesystem walk + per-file EXIF parse are blocking
+        // I/O that can touch thousands of files, so they run off the tokio
+        // worker thread via `spawn_blocking`; the cursor is written back only
+        // after a successful scan (a failed scan leaves the prior cursor
+        // intact so the supervisor's retry starts from the last good state).
+        let mut cursor = {
+            let mut guard = self.cursor.lock().await;
+            if options.full {
+                *guard = PhotosCursor::default();
+            }
+            guard.clone()
+        };
 
-        let mut staged = Vec::new();
-        let mut live: HashMap<String, ()> = HashMap::new();
-        scan_dir(
-            &self.watch_dir,
-            &self.watch_dir,
-            &self.extensions,
-            &mut |path| {
-                let Some(sig) = file_signature(path) else {
-                    return;
-                };
-                let Some(rel) = relative_key(&self.watch_dir, path) else {
-                    return;
-                };
-                live.insert(rel.clone(), ());
-                if cursor.classify(&rel, sig) == Change::NewOrChanged {
-                    match stage_file(path, &rel, sig) {
-                        Ok(raw) => {
+        let watch_dir = self.watch_dir.clone();
+        let extensions = self.extensions.clone();
+        let (cursor, staged, changed) =
+            tokio::task::spawn_blocking(move || -> Result<_, ConnectorError> {
+                let mut live: HashMap<String, ()> = HashMap::new();
+                let mut staged = Vec::new();
+                let mut changed = options.full;
+                scan_dir(
+                    &watch_dir,
+                    &watch_dir,
+                    &extensions,
+                    &mut |path| {
+                        let Some(sig) = file_signature(path) else {
+                            return;
+                        };
+                        let Some(rel) = relative_key(&watch_dir, path) else {
+                            return;
+                        };
+                        live.insert(rel.clone(), ());
+                        if cursor.classify(&rel, sig) == Change::NewOrChanged {
+                            match stage_file(path, &rel, sig) {
+                                Ok(raw) => {
+                                    changed |= cursor.upsert(rel, sig);
+                                    staged.push(raw);
+                                }
+                                Err(error) => {
+                                    // A single unreadable/unparseable file must
+                                    // not abort the scan; record its signature so
+                                    // it is not retried every cycle, and log.
+                                    warn!(path = %path.display(), error = %error, "skipping photo file");
+                                    changed |= cursor.upsert(rel, sig);
+                                }
+                            }
+                        } else {
                             changed |= cursor.upsert(rel, sig);
-                            staged.push(raw);
                         }
-                        Err(error) => {
-                            // A single unreadable/unparseable file must not abort
-                            // the scan; record its signature so it is not retried
-                            // every cycle, and log.
-                            warn!(path = %path.display(), error = %error, "skipping photo file");
-                            changed |= cursor.upsert(rel, sig);
-                        }
-                    }
-                } else {
-                    changed |= cursor.upsert(rel, sig);
-                }
-            },
-        )?;
-
-        changed |= cursor.prune_missing(&live);
+                    },
+                )?;
+                changed |= cursor.prune_missing(&live);
+                Ok((cursor, staged, changed))
+            })
+            .await
+            .map_err(|join| ConnectorError::Other(format!("photo scan task failed: {join}")))??;
         let count = staged.len();
+        *self.cursor.lock().await = cursor;
         self.buffer.lock().await.extend(staged);
         Ok(ScanResult {
             fetched: count,
@@ -948,10 +974,17 @@ impl Connector for PhotosConnector {
         let event = self.events.lock().await.recv().await;
         let result = match event {
             Some(events) => self.process_events(&events).await?,
-            None => ScanResult {
-                fetched: 0,
-                cursor_changed: false,
-            }, // channel closed (connector dropped).
+            None => {
+                // The debouncer's sender is gone (its thread stopped/panicked)
+                // while `started` is still `true`. Returning `Ok` here would
+                // make `sync` complete instantly and the supervisor would
+                // re-call it in a tight 100%-CPU loop. Surface it as a sync
+                // failure so the supervisor's backoff + circuit breaker engage
+                // instead of hot-spinning.
+                return Err(ConnectorError::Other(
+                    "photos watcher event channel closed unexpectedly".to_string(),
+                ));
+            }
         };
         Ok(self.outcome(result).await)
     }

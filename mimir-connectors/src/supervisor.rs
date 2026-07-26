@@ -930,7 +930,12 @@ mod tests {
         let config = captured.lock().unwrap().take().expect("config captured");
         let map = config.as_object().expect("config is an object");
         assert_eq!(map.get("__slug").and_then(|v| v.as_str()), Some("photos"));
-        assert_eq!(map.get("__ctype").and_then(|v| v.as_i64()), Some(3));
+        // Derive the expected discriminant from the enum so the assertion
+        // stays correct if `ConnectorType` ever changes its repr.
+        assert_eq!(
+            map.get("__ctype").and_then(|v| v.as_i64()),
+            Some(ConnectorType::Photos as i64)
+        );
         assert_eq!(map.get("__instance_id").and_then(|v| v.as_i64()), Some(7));
         assert_eq!(
             map.get("__cursor").and_then(|v| v.as_str()),
@@ -964,7 +969,12 @@ mod tests {
         let supervisor =
             ConnectorSupervisor::new(Arc::new(registry), kg, SupervisorConfig::default(), rx);
 
-        let _ = supervisor.instantiate(&row_with_cursor(None), ConnectorType::Photos);
+        // Assert the result instead of discarding it, so a construction
+        // regression surfaces directly rather than failing later on the
+        // opaque `expect("config captured")`.
+        supervisor
+            .instantiate(&row_with_cursor(None), ConnectorType::Photos)
+            .expect("instantiate succeeds");
         let config = captured.lock().unwrap().take().expect("config captured");
         let map = config.as_object().expect("config is an object");
         assert!(

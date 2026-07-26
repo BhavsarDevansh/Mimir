@@ -1,7 +1,7 @@
 # Connectors
 
 > **Phase:** 3 — Connectors
-> **Status:** Scaffolded (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10). Shared rate-limit + retry/backoff primitives landed (issue #189 / F12). Configurable, always-compiled mock connector test harness landed (issue #190 / F13). **The first concrete backend landed: the local-filesystem Photos connector (issue #195 / C1) — a read-only `notify` file watcher with EXIF GPS/datetime extraction and a per-file mtime/inode incremental cursor; the supervisor injects the persisted cursor as `__cursor` so it skips unchanged photos across restarts.** Calendar/email backends arrive in later Phase 3 issues.
+> **Status:** In progress (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10). Shared rate-limit + retry/backoff primitives landed (issue #189 / F12). Configurable, always-compiled mock connector test harness landed (issue #190 / F13). **The first concrete backend landed: the local-filesystem Photos connector (issue #195 / C1) — a read-only `notify` file watcher with EXIF GPS/datetime extraction and a per-file mtime/inode incremental cursor; the supervisor injects the persisted cursor as `__cursor` so it skips unchanged photos across restarts, and it is the first connector that actually syncs data.** Calendar/email backends arrive in later Phase 3 issues.
 
 ## What connectors are
 
@@ -17,7 +17,7 @@ sensitivity gating as facts you tell Mimir directly.
 
 ## What works right now
 
-**No sync yet, but the registry is in place.** As of this version:
+**The Photos connector syncs data; Calendar/email are not yet implemented.** As of this version:
 
 - The `mimir-connectors` crate exists and is wired into the workspace.
 - The feature flags for the three core connector types (`photos`, `calendar`,
@@ -64,7 +64,7 @@ and persistence of each connector's sync cursor, so a restart resumes from where
 the last completed sync left off. `Paused`, `Error`, and `Setup` connectors are
 not auto-started. The supervisor is a library component; daemon and CLI wiring
 arrive in later Phase 3 issues (so `mimir stop` does not yet drive the
-supervisor), and no connector syncs data yet.
+supervisor).
 
 **Manual sync triggering is in place (issue #186 / F9).** The supervisor can be
 asked to sync a connector immediately, instead of waiting for its next polling

@@ -1104,15 +1104,27 @@ impl Connector for PhotosConnector {
     }
 
     async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError> {
-        let mut buffer = self.buffer.lock().await;
         let owner = self.owner_name.clone();
-        // Reverse-geocode each photo's GPS into a place name (with the
-        // coord-dedup cache) before building the fact. Geocode failures are
-        // tolerated per-photo — a photo whose GPS cannot be resolved degrades
-        // to the C1 coords-only `took_photo` shape rather than failing the
-        // whole extraction.
-        let mut facts = Vec::with_capacity(buffer.len());
-        for raw in std::mem::take(&mut *buffer) {
+        // Drain the buffer into a local Vec and drop the guard *before* the
+        // per-photo reverse-geocode loop. `resolve_place` awaits
+        // `geocoder.reverse()` — a rate-limited (~1 req/s for Nominatim)
+        // network call — once per distinct shooting spot, so holding the
+        // buffer mutex across it would block `forget`/`reset` or a concurrent
+        // admin-triggered sync for the full scan duration (~N seconds). The
+        // `std::mem::take` swap replaces the buffer's contents in place while
+        // we still hold the lock, and the guard is released at the end of the
+        // block, restoring the C1 hold-time (in-memory map only).
+        let raws = {
+            let mut buffer = self.buffer.lock().await;
+            std::mem::take(&mut *buffer)
+        };
+        let mut facts = Vec::with_capacity(raws.len());
+        for raw in raws {
+            // Reverse-geocode each photo's GPS into a place name (with the
+            // coord-dedup cache) before building the fact. Geocode failures
+            // are tolerated per-photo — a photo whose GPS cannot be resolved
+            // degrades to the C1 coords-only `took_photo` shape rather than
+            // failing the whole extraction.
             let place = self.resolve_place(raw.latitude, raw.longitude).await;
             facts.push(raw.to_fact(&owner, place));
         }

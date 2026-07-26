@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.81.1] — 2026-07-26
+
+### Connectors (Phase 3 C2 follow-up / #196)
+
+- **Fix:** `PhotosConnector::extract` no longer holds the staged-photo buffer
+  mutex across the per-photo reverse-geocode network awaits. The buffer is
+  `std::mem::take`-drained into a local `Vec` under the lock and the guard is
+  dropped before the geocode loop, restoring the C1 lock hold-time
+  (in-memory map only) so `forget`/`reset` or a concurrent admin-triggered sync
+  is not blocked for the ~N-second scan duration. No semantic change; existing
+  unit and integration tests pass unchanged.
+
 ## [0.81.0] — 2026-07-26
 
 ### Connectors (Phase 3 C2 / #196)

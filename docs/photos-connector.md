@@ -58,6 +58,9 @@ The connector runs in `ConnectorMode::Push`:
    files. The supervisor loops immediately after a successful push cycle, so
    `sync()` is the "wait for events" blocking point.
 3. `extract()` drains the staged raw photos into typed `NormalizedFact`s.
+   The buffer guard is released *before* the per-photo reverse-geocode loop
+   (the buffer is `std::mem::take`-drained into a local `Vec` under the lock),
+   so the buffer mutex is never held across `geocoder.reverse()` awaits.
 
 Because the connector never touches the database, it stays `sqlx`-free and is
 unit-testable without a live knowledge graph (see `tests/photos_connector.rs`).
@@ -186,6 +189,9 @@ makes at most as many geocode calls as distinct shooting spots. Genuine
 no-matches are cached (`None`); **transient network errors are not**, so a
 blip does not poison a bucket for subsequent photos at the same spot. The
 cache mutex is never held across an `await`. `forget` clears it.
+Likewise, the staged-photo buffer mutex is held only for the in-memory
+`std::mem::take` drain (no `await` while locked); the geocode loop runs after
+the guard drops, so the buffer is not blocked for the ~N-second scan.
 
 <a id="place-coordinate-anchoring"></a>
 ## Place-coordinate anchoring (C2 / #196)

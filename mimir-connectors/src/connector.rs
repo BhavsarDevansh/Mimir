@@ -39,6 +39,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::secrets::SecretStore;
 use mimir_core::geocoder::Geocoder;
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType};
 use mimir_knowledge::normalize::NormalizedFact;
@@ -64,12 +65,23 @@ pub struct ConnectorContext {
     /// `None` when no geocoder is configured (the daemon initialises a
     /// Nominatim backend in `mimir-server`; tests inject a mock).
     pub geocoder: Option<std::sync::Arc<dyn Geocoder>>,
+
+    /// Pluggable credential store shared across connectors that need secrets
+    /// at construction/sync time (Calendar C3 / #197, Email C5). `None` when
+    /// no store is configured (the daemon initialises a `FileSecretStore` in
+    /// `mimir-server`; tests inject an `InMemorySecretStore`). Connectors
+    /// load their [`SecretBundle`](crate::secrets::SecretBundle) by slug
+    /// (the `__slug` injected by the supervisor).
+    pub secret_store: Option<std::sync::Arc<dyn SecretStore>>,
 }
 
 impl ConnectorContext {
-    /// Build a context carrying the supplied geocoder.
+    /// Build a context carrying the supplied geocoder and no secret store.
     pub fn new(geocoder: Option<std::sync::Arc<dyn Geocoder>>) -> Self {
-        Self { geocoder }
+        Self {
+            geocoder,
+            secret_store: None,
+        }
     }
 
     /// An empty context with no shared services (used by the registry's
@@ -77,6 +89,24 @@ impl ConnectorContext {
     /// that need no injected dependencies).
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// Attach a shared [`SecretStore`] to this context (builder).
+    ///
+    /// Connectors that need credentials (Calendar C3 / #197, Email C5) clone
+    /// the `Arc<dyn SecretStore>` out of the context and load their bundle by
+    /// slug. Connectors that need no secrets ignore this. Consumes and returns
+    /// `self` so it chains with [`with_geocoder`](Self::with_geocoder).
+    pub fn with_secret_store(mut self, store: std::sync::Arc<dyn SecretStore>) -> Self {
+        self.secret_store = Some(store);
+        self
+    }
+
+    /// Attach a shared [`Geocoder`] to this context (builder), mirroring
+    /// [`ConnectorSupervisor::with_geocoder`].
+    pub fn with_geocoder(mut self, geocoder: std::sync::Arc<dyn Geocoder>) -> Self {
+        self.geocoder = Some(geocoder);
+        self
     }
 }
 
@@ -382,4 +412,60 @@ pub trait ConnectorFactory: Send + Sync {
         config: serde_json::Value,
         ctx: &ConnectorContext,
     ) -> Result<std::sync::Arc<dyn Connector>, ConnectorError>;
+}
+
+// ---------------------------------------------------------------------------
+// Tests (ConnectorContext secret-store wiring, Phase 3 C3 / #197)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::secrets::{InMemorySecretStore, SecretBundle};
+    use std::sync::Arc;
+
+    #[test]
+    fn context_with_secret_store_carries_store() {
+        let store: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
+        let ctx = ConnectorContext::empty().with_secret_store(Arc::clone(&store));
+        assert!(ctx.secret_store.is_some(), "secret_store should be set");
+        assert!(ctx.geocoder.is_none(), "geocoder untouched");
+        // The stored Arc is the same instance.
+        assert!(Arc::ptr_eq(ctx.secret_store.as_ref().unwrap(), &store));
+    }
+
+    #[test]
+    fn context_empty_has_no_secret_store() {
+        let ctx = ConnectorContext::empty();
+        assert!(ctx.secret_store.is_none());
+    }
+
+    #[tokio::test]
+    async fn context_secret_store_is_usable() {
+        let store = Arc::new(InMemorySecretStore::new());
+        let ctx =
+            ConnectorContext::empty().with_secret_store(store.clone() as Arc<dyn SecretStore>);
+        store
+            .store(
+                "calendar-personal",
+                &SecretBundle::AppPassword {
+                    password: "hunter2".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let loaded = ctx
+            .secret_store
+            .as_ref()
+            .unwrap()
+            .load("calendar-personal")
+            .await
+            .unwrap();
+        assert_eq!(
+            loaded,
+            Some(SecretBundle::AppPassword {
+                password: "hunter2".into()
+            })
+        );
+    }
 }

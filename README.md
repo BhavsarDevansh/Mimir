@@ -38,8 +38,9 @@ stays on your device — there is no cloud intermediary.
 - **`mimir-knowledge`** — the SQLite knowledge graph: entities, facts, temporal
   reasoning, live memory condensation, events/reminders, and proximity queries.
 - **`mimir-connectors`** — the pluggable service-ingestion framework and its
-  backends: the OSM Nominatim geocoder and the local-filesystem Photos
-  connector (EXIF + file watcher) today; email/calendar sync to come.
+  backends: the OSM Nominatim geocoder, the local-filesystem Photos connector
+  (EXIF + file watcher), and the CalDAV Calendar connector (sync-token
+  incremental sync) today; email sync to come.
 - **`mimir-api-types` / `mimir-client`** — shared wire types and the daemon HTTP
   client used by the CLI.
 
@@ -73,8 +74,14 @@ stays on your device — there is no cloud intermediary.
   to a locality-level place name via the shared geocoder, photos at the same
   place corroborate into one open-ended fact, and the place's coordinates are
   anchored so proximity queries resolve places by where they are. The
-  knowledge graph grows with distinct places visited, not photo count.
-  Calendar/email backends land in later Phase 3 issues.
+  knowledge graph grows with distinct places visited, not photo count. The
+  second backend — a CalDAV Calendar connector (#197) — is in: it speaks
+  CalDAV (PROPFIND + sync-collection REPORT) over the shared HTTP client with
+  sync-token incremental sync and `icalendar` VEVENT parsing, authenticating
+  via an app password or a refreshed OAuth token loaded from the secret store.
+  It is transport-only for now; event → knowledge-graph extraction,
+  events-subsystem integration, and write-back are C4 (#198). Email backends
+  land in later Phase 3 issues.
 - **Entity locations** — a "where" fact becomes a typed `entity_locations` row
   with geocoding of the missing half (address → coords or coords → place) and
   temporal bounds that model moves (home 2020–2023, home 2023–present).

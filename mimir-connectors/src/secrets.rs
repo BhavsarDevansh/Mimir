@@ -156,7 +156,7 @@ pub enum SecretBundle {
 /// without a breaking change, and so it composes cleanly with the async
 /// [`crate::Connector`] pipeline.
 #[async_trait]
-pub trait SecretStore: Send + Sync {
+pub trait SecretStore: Send + Sync + std::fmt::Debug {
     /// Load the credentials for `slug`, or `Ok(None)` if none are stored.
     async fn load(&self, slug: &str) -> Result<Option<SecretBundle>, SecretError>;
 

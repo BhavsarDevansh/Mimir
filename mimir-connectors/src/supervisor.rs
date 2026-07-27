@@ -73,6 +73,7 @@ use crate::connector::ConnectorContext;
 use crate::connector::ConnectorMode;
 use crate::connector::{Connector, ConnectorError, HealthStatus, SyncOptions, SyncOutcome};
 use crate::registry::ConnectorRegistry;
+use crate::secrets::SecretStore;
 use mimir_core::geocoder::Geocoder;
 
 /// Tunable parameters for a [`ConnectorSupervisor`].
@@ -235,8 +236,10 @@ pub struct ConnectorSupervisor {
     config: SupervisorConfig,
     shutdown: watch::Receiver<bool>,
     /// Shared services injected into every connector at construction (Phase 3
-    /// C2 / #196). Built from [`with_geocoder`](Self::with_geocoder); empty
-    /// by default so connectors that need no injected services are unaffected.
+    /// C2 / #196 for the geocoder, C3 / #197 for the secret store). Built from
+    /// [`with_geocoder`](Self::with_geocoder) and
+    /// [`with_secret_store`](Self::with_secret_store); empty by default so
+    /// connectors that need no injected services are unaffected.
     context: ConnectorContext,
     handles: Mutex<HashMap<i32, ConnectorHandle>>,
 }
@@ -271,6 +274,22 @@ impl ConnectorSupervisor {
     /// [`restore`]: Self::restore
     pub fn with_geocoder(mut self, geocoder: Arc<dyn Geocoder>) -> Self {
         self.context.geocoder = Some(geocoder);
+        self
+    }
+
+    /// Inject a shared [`SecretStore`] made available to every connector this
+    /// supervisor constructs (Phase 3 C3 / #197).
+    ///
+    /// Connectors that need credentials (Calendar, Email) clone the
+    /// `Arc<dyn SecretStore>` out of the context at construction and load
+    /// their [`SecretBundle`](crate::secrets::SecretBundle) by slug (the
+    /// `__slug` injected into `config_json` by [`instantiate`](Self::instantiate)).
+    /// Must be called before [`restore`] so already-spawned runners receive
+    /// it. Connectors that need no secrets ignore it.
+    ///
+    /// [`restore`]: Self::restore
+    pub fn with_secret_store(mut self, store: Arc<dyn SecretStore>) -> Self {
+        self.context.secret_store = Some(store);
         self
     }
 
@@ -1006,6 +1025,59 @@ mod tests {
         assert!(
             map.get("__cursor").map(|v| v.is_null()).unwrap_or(false),
             "absent cursor must be injected as JSON null, not omitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn with_secret_store_propagates_into_factory_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("kg.db"))
+                .await
+                .unwrap(),
+        );
+        // Capture whether the factory received a context carrying the store.
+        let saw_store = Arc::new(std::sync::Mutex::new(false));
+        let saw_store_cap = saw_store.clone();
+        let registry = ConnectorRegistry::new();
+        registry
+            .register(
+                ConnectorType::Calendar,
+                "caldav".to_string(),
+                FnConnectorFactory::new(move |_config, ctx| {
+                    *saw_store_cap.lock().unwrap() = ctx.secret_store.is_some();
+                    Ok(Arc::new(crate::MockConnector::default()) as Arc<dyn Connector>)
+                }),
+            )
+            .unwrap();
+        let (_tx, rx) = watch::channel(false);
+        let store: Arc<dyn crate::secrets::SecretStore> =
+            Arc::new(crate::InMemorySecretStore::new());
+        let supervisor =
+            ConnectorSupervisor::new(Arc::new(registry), kg, SupervisorConfig::default(), rx)
+                .with_secret_store(store);
+
+        let cal_row = ConnectorRow {
+            id: 9,
+            connector_type_id: ConnectorType::Calendar as i16,
+            slug: "calendar-personal".to_string(),
+            backend: "caldav".to_string(),
+            display_name: "Calendar".to_string(),
+            config_json: "{}".to_string(),
+            status_id: ConnectorStatus::Active as i16,
+            auth_state_id: ConnectorAuthState::Authenticated as i16,
+            sync_cursor: None,
+            last_sync_at: None,
+            last_error: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        supervisor
+            .instantiate(&cal_row, ConnectorType::Calendar)
+            .expect("instantiate succeeds");
+        assert!(
+            *saw_store.lock().unwrap(),
+            "with_secret_store must thread the store into the factory context"
         );
     }
 }

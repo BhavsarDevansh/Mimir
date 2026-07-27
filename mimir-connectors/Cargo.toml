@@ -47,7 +47,7 @@ humantime = "2.4"
 # (see `percent_encode_query` in `src/geocoder.rs`), so the `query` feature is
 # not required. `mimir-core` re-exports the `Geocoder` trait the backend
 # implements.
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "rustls-native-certs"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls", "rustls-native-certs"] }
 # `percent-encoding` percent-encodes the `/search` query value. It is already a
 # transitive dependency (via `reqwest`/`url`, resolved at 2.3.2) so this adds no
 # new download; declared directly so the geocoder does not rely on transitive
@@ -68,6 +68,32 @@ notify = { version = "8.2", optional = true }
 notify-debouncer-full = { version = "0.7", optional = true }
 kamadak-exif = { version = "0.6", optional = true }
 
+# C3 (issue #197): CalDAV calendar connector. `icalendar` (0.17.x; latest
+# 0.17.12) is the strongly-typed RFC 5545 parser/builder used to parse CalDAV
+# VEVENT payloads. Its default features already include `parser` (nom-backed),
+# so no extra feature flag is required for parsing. License MIT/Apache-2.0
+# (GPL-3-compatible). Gated by the `calendar` feature. The `oauth2` crate is
+# deliberately NOT pulled in here: oauth2 5.0.0 depends on reqwest 0.12, which
+# would duplicate the workspace's reqwest 0.13 HTTP/TLS stack. #197 only needs
+# OAuth *token refresh* (the interactive PKCE login is A4 / #206), and a refresh
+# is a single form-encoded HTTPS POST returning JSON — hand-rolled on the
+# existing reqwest 0.13 (see `CalendarConnector::refresh_oauth`). The `oauth2`
+# crate is deferred to A4, where the PKCE authorization-code flow justifies it;
+# see the follow-up issue tracking the deps-ledger / reqwest-0.13 reconciliation.
+icalendar = { version = "0.17", optional = true }
+# `roxmltree` is a small, pure-Rust, read-only DOM XML parser used to walk
+# CalDAV WebDAV multistatus responses (sync-collection REPORT + PROPFIND).
+# A DOM parser is far simpler + more robust than a hand-rolled pull-parser for
+# the nested `response`/`propstat`/`prop` structure, and matches element local
+# names so the varied namespace prefixes servers use (`D:`/`d:`/`cal:`/`C:`)
+# are tolerated. License MIT/Apache-2.0 (GPL-3-compatible). Gated by `calendar`.
+# No new download vs quick-xml-style alternatives; roxmltree pulls only `memchr`.
+roxmltree = { version = "0.21", optional = true }
+# `url` is declared directly (it is already a transitive dependency via
+# `reqwest`, so this adds no new download) so the CalDAV client can build/append
+# hrefs and query strings safely. Mirrors the `percent-encoding` precedent.
+url = "2.3"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tempfile = "3"
@@ -78,6 +104,6 @@ default = ["photos", "calendar", "gmail"]
 ## Google Photos / Apple Photos / local photo library ingestion (C1–C2).
 photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"]
 ## CalDAV calendar ingestion: read/sync + event fact extraction (C3–C4).
-calendar = []
+calendar = ["dep:icalendar", "dep:roxmltree"]
 ## IMAP email ingestion, Gmail and other providers (C5–C7).
 gmail = []

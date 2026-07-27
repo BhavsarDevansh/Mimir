@@ -1,6 +1,53 @@
 # Changelog
 
+## [0.82.0] — 2026-07-27
+
+### Connectors (Phase 3 C3 / #197)
+
+- **New backend — CalDAV Calendar connector** (`mimir-connectors`, feature
+  `calendar`, `Polling` mode): the second concrete connector backend. A
+  `CalDavClient` speaks CalDAV over the existing `reqwest` 0.13 — PROPFIND
+  (Depth 0 `resourcetype`) for calendar/health verification and a
+  `sync-collection` REPORT (RFC 6578) for event sync, requesting
+  `<cal:calendar-data/>` inline so changed VEVENTs and a new `sync-token`
+  arrive in one round trip. Omitting the sync-token does a full sync and yields
+  the initial token; including it does an incremental sync (no full re-fetch),
+  so the persisted sync-token is the connector's incremental cursor.
+  `icalendar` parses each VEVENT (UID/summary/DTSTART/DTEND/location/status/
+  RRULE) into a staged `RawCalDavEvent`; `roxmltree` parses the WebDAV XML by
+  local tag name (namespace-prefix tolerant).
+- **Auth:** app password (HTTP Basic — iCloud/Fastmail/Nextcloud) or an OAuth
+  bearer token (Google) that the connector **refreshes** when expired (within a
+  60 s skew) and persists back to the `SecretStore`. The interactive PKCE login
+  that *obtains* the first OAuth token is deferred to A4 / #206; #197 only
+  consumes + refreshes a stored token.
+- **Framework:** this is the first backend that needs credentials, so
+  `ConnectorContext` gained a `secret_store: Option<Arc<dyn SecretStore>>`
+  field and `ConnectorSupervisor::with_secret_store(store)` (a breaking
+  internal construction-context change, allowed by the project's
+  breaking-changes policy). `ConnectorContext::with_secret_store` /
+  `with_geocoder` builders added; `SecretStore` gained a `Debug` superbound
+  (consistent with `Geocoder`).
+- **Boundary:** `extract()` returns no facts yet — C3 is transport-only. C4 /
+  #198 implements event → KB fact extraction + events-subsystem (#74)
+  integration + write-back (`act`). Write-back is intentionally not in #197.
+- **Dependencies:** `icalendar = "0.17"` (resolves to 0.17.6 under the workspace
+  MSRV 1.85; 0.17.12 requires Rust 1.88 — see follow-up issue) + `roxmltree =
+  "0.21"`, both gated by `calendar`. The `form` feature was added to the
+  workspace `reqwest` for the OAuth refresh token POST. The `oauth2` crate is
+  **deliberately not** pulled in (it depends on `reqwest` 0.12, duplicating the
+  stack, and #197 only needs the refresh grant) — deferred to A4 / #206.
+- **Tests:** unit tests for the CalDAV transport (sync-collection full/
+  incremental parse, 401 handling, PROPFIND resourcetype detection, icalendar
+  field extraction + recurrence, invalid-payload resilience) against a
+  `wiremock` mock server, plus integration tests (app-password sync,
+  incremental sync-token, `full`-sync cursor reset, OAuth refresh-on-expiry +
+  bundle persistence, health states, factory construction, config round-trip,
+  and a full `ConnectorSupervisor` round-trip asserting the cursor is
+  persisted). No `unsafe`.
+
 ## [0.81.2] — 2026-07-26
+
 
 ### Connectors / Knowledge (Phase 3 C2 / #196 review follow-up)
 

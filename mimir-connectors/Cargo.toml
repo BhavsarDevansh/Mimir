@@ -89,10 +89,6 @@ icalendar = { version = "0.17", optional = true }
 # are tolerated. License MIT/Apache-2.0 (GPL-3-compatible). Gated by `calendar`.
 # No new download vs quick-xml-style alternatives; roxmltree pulls only `memchr`.
 roxmltree = { version = "0.21", optional = true }
-# `url` is declared directly (it is already a transitive dependency via
-# `reqwest`, so this adds no new download) so the CalDAV client can build/append
-# hrefs and query strings safely. Mirrors the `percent-encoding` precedent.
-url = "2.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

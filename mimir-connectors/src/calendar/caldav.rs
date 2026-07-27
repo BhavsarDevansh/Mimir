@@ -165,9 +165,9 @@ impl CalDavClient {
         };
         let body = format!(
             "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
-<cal:sync-collection xmlns:d=\"DAV:\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\">\n  \
+<d:sync-collection xmlns:d=\"DAV:\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\">\n  \
 {token_element}\n  <d:prop>\n    <d:getetag/>\n    <cal:calendar-data/>\n  </d:prop>\n\
-</cal:sync-collection>"
+</d:sync-collection>"
         );
         let resp = self
             .authed(self.http.request(report_method(), calendar_url))
@@ -524,6 +524,42 @@ END:VCALENDAR";
             .await
             .unwrap_err();
         assert!(matches!(err, ConnectorError::NotAuthenticated), "{err:?}");
+    }
+
+    /// Regression guard: the `sync-collection` REPORT root element must be in
+    /// the `DAV:` namespace (`<d:sync-collection>`), per RFC 6578 §3.1 — not the
+    /// CalDAV namespace. Namespace-strict servers (sabre/dav: Nextcloud, ownCloud,
+    /// Baïkal; Google/Apple/Fastmail) reject `{caldav}sync-collection`. The mock
+    /// only matches a body containing `<d:sync-collection`, so a regression to
+    /// `<cal:sync-collection>` would not match and the request would error.
+    #[tokio::test]
+    async fn sync_collection_request_root_is_in_dav_namespace() {
+        let server = MockServer::start().await;
+        Mock::given(method("REPORT"))
+            .and(body_string_contains("<d:sync-collection"))
+            .respond_with(
+                ResponseTemplate::new(207)
+                    .insert_header("content-type", "application/xml; charset=utf-8")
+                    .set_body_string(sync_body(
+                        "tok",
+                        &[("/cal/a.ics", ICAL_EVENT, Some("\"e1\""))],
+                        &[],
+                    )),
+            )
+            .mount(&server)
+            .await;
+        let client = CalDavClient::new(
+            http_client(),
+            CalDavAuth::Basic {
+                username: "u".into(),
+                password: "p".into(),
+            },
+        );
+        let res = client
+            .sync_collection(&format!("{}/cal/personal/", server.uri()), None)
+            .await
+            .expect("REPORT must use the DAV: namespace for the sync-collection root");
+        assert_eq!(res.changed.len(), 1);
     }
 
     #[tokio::test]

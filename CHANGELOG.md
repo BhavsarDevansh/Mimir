@@ -8,7 +8,9 @@
   `calendar`, `Polling` mode): the second concrete connector backend. A
   `CalDavClient` speaks CalDAV over the existing `reqwest` 0.13 — PROPFIND
   (Depth 0 `resourcetype`) for calendar/health verification and a
-  `sync-collection` REPORT (RFC 6578) for event sync, requesting
+  `sync-collection` REPORT (RFC 6578; root element in the `DAV:`
+  namespace per §3.1, `calendar-data` in the CalDAV namespace) for event sync,
+  requesting
   `<cal:calendar-data/>` inline so changed VEVENTs and a new `sync-token`
   arrive in one round trip. Omitting the sync-token does a full sync and yields
   the initial token; including it does an incremental sync (no full re-fetch),

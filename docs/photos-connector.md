@@ -12,13 +12,18 @@
 The Photos connector is the first concrete connector backend built on the
 F6–F13 framework. It watches a configured local directory recursively for
 image files, extracts EXIF GPS + datetime metadata with `kamadak-exif`, and
-emits one `took_photo` fact per photo through the shared
-`normalize_and_insert` pipeline (the supervisor owns the insert). It is
-read-only, push-mode, no-network, and needs no authentication.
+emits one fact per photo through the shared `normalize_and_insert` pipeline
+(the supervisor owns the insert). It is read-only, push-mode, no-network, and
+needs no authentication.
 
-This is the C1 deliverable. C2 (#196) reverse-geocodes the persisted GPS
-coordinates into a place name and enriches the `entity_locations` row's
-`address`.
+C1 (#195) emitted a coords-only `took_photo <rel_path>` literal-object fact.
+C2 (#196) reverse-geocodes the EXIF GPS into a locality-level place name so
+the fact becomes `owner took_photo_at <place>` (the place is a `Place` object
+entity). This enables entity resolution and cross-photo corroboration: photos
+taken at different spots in the same city resolve to one place entity and
+merge into a single corroborated fact rather than fragmenting per photo. The
+connector makes no network calls itself — the reverse geocode reuses the
+shared `Geocoder` injected via the [`ConnectorContext`](#geocoder-injection).
 
 ## Dependencies
 
@@ -53,6 +58,9 @@ The connector runs in `ConnectorMode::Push`:
    files. The supervisor loops immediately after a successful push cycle, so
    `sync()` is the "wait for events" blocking point.
 3. `extract()` drains the staged raw photos into typed `NormalizedFact`s.
+   The buffer guard is released *before* the per-photo reverse-geocode loop
+   (the buffer is `std::mem::take`-drained into a local `Vec` under the lock),
+   so the buffer mutex is never held across `geocoder.reverse()` awaits.
 
 Because the connector never touches the database, it stays `sqlx`-free and is
 unit-testable without a live knowledge graph (see `tests/photos_connector.rs`).
@@ -92,27 +100,137 @@ complements `KnowledgeGraph::update_sync_cursor` (the write side).
 
 ## Fact shape
 
-Each photo becomes one fact:
+Each photo becomes one fact. The shape depends on whether a place could be
+resolved from the GPS:
+
+### Place fact (C2, GPS resolved)
+
+When the reverse geocode yields a locality-level place name:
 
 - **Subject** — the configured owner display name (`Person`); defaults to the
   connector slug. `owner_name` is a `config_json` field.
-- **Predicate** — `took_photo` (canonicalised by the pipeline).
-- **Object** — the photo's watch-dir-relative path (literal).
-- **Temporal** — the EXIF `DateTimeOriginal` (with `OffsetTime*` if present,
-  otherwise interpreted as UTC); falls back to the file mtime when EXIF has no
-  datetime.
-- **Location overlay** — when GPS is present, a `NormalizedLocation {
-  location_type: Visited, address: None, latitude, longitude, timezone: None }`
-  so the pipeline writes an `entity_locations` row for the owner carrying the
-  raw coordinates. **C2** reverse-geocodes the `address` later.
+- **Predicate** — `took_photo_at`.
+- **Object** — the resolved place short name (a `Place` object entity; the
+  pipeline resolves or creates it via the full entity-resolution chain).
+- **Temporal** — `valid_from` = the EXIF `DateTimeOriginal` (with `OffsetTime*`
+  if present, otherwise interpreted as UTC); falls back to the file mtime when
+  EXIF has no datetime. `valid_until` = `None` (open-ended), so a second photo
+  at the same place temporally overlaps and corroborates the first instead of
+  creating a new fact row.
+- **Location overlay** — `NormalizedLocation { location_type: Visited,
+  address: <place name>, latitude, longitude, timezone: None }`. The pipeline
+  writes a `Visited` `entity_locations` row for the **owner** (carrying the
+  coords and the place name as its address) and, because the object is a
+  `Place`, anchors the **place entity's own** coordinates in a `Geographic`
+  row (see [Place-coordinate anchoring](#place-coordinate-anchoring)).
 - **Provenance** — `SourceType::Connector`, `ConnectorType::Photos`,
   `ExtractionMethod::StructuredParse` (set by the supervisor),
-  `raw_reference` = the relative path.
+  `raw_reference` = the photo's watch-dir-relative path.
 
-Files with no GPS still produce a fact (no location overlay); files with no
-EXIF use the file mtime. Non-image files are skipped at the extension filter
+### Coords-only fallback (C1 shape)
+
+When there is no geocoder, no GPS, a genuine no-match, or a transient geocode
+error, the fact degrades to the C1 shape so no data is lost:
+
+- **Predicate** — `took_photo`.
+- **Object** — the photo's watch-dir-relative path (literal).
+- **Location overlay** — `NormalizedLocation { location_type: Visited,
+  address: None, latitude, longitude, timezone: None }` (coords only).
+- Everything else (subject, temporal, provenance) as above.
+
+Files with no GPS produce a fact with no location overlay; files with no EXIF
+use the file mtime. Non-image files are skipped at the extension filter
 (default `.jpg .jpeg .tif .tiff .png .heif .heic .webp`; configurable). RAW
 formats (CR2/ARW/NEF) are deferred (they need a dedicated raw-EXIF reader).
+
+### Corroboration and scale
+
+A photo is a **fact**, not an entity. The only entities created are the owner
+(`Person`) and one `Place` per distinct locality Mimir sees. Because the
+place fact is open-ended, the shared corroboration path (the same one chat
+facts use) detects a second photo at the same place as the same claim
+(same subject + predicate + object, temporally overlapping) and **merges it
+into the existing fact** — adding a `source` row (one per photo, carrying its
+`raw_reference` path) and boosting confidence +0.05, capped at 0.95. Photos
+base confidence is 0.80; two photos at the same place → one fact at 0.85.
+
+So knowledge-graph growth is O(distinct places), not O(photos). The only
+per-photo storage is the lightweight `source` provenance row — the trail a
+future on-demand photo search walks to reach the actual file. POI-level
+detail (the specific restaurant/landmark) is deliberately not stored as an
+entity in C2; it remains available via the geocoder's `display_name` for a
+future query-time reverse geocode (tracked as a follow-up).
+
+<a id="geocoder-injection"></a>
+
+## Geocoder injection (C2 / #196)
+
+The reverse geocode reuses the shared `Geocoder` (Phase 3 S1 / #191) rather
+than the connector holding its own HTTP client. The geocoder is injected at
+construction through a new `ConnectorContext` — a small shared-services struct
+threaded factory → registry → supervisor:
+
+1. `ConnectorFactory::create(config, ctx)` now receives a `&ConnectorContext`.
+   `ConnectorRegistry::create_with_context` forwards it; the config-only
+   `create` shortcut delegates with an empty context.
+2. `ConnectorSupervisor::with_geocoder(Arc<dyn Geocoder>)` sets the context's
+   geocoder; `instantiate` calls `create_with_context` so every connector the
+   supervisor spawns can read it. The daemon will set this from
+   `KnowledgeGraph::geocoder()` once the server wires a supervisor (A1).
+3. `PhotosConnector::from_config_with_geocoder(config, geocoder)` stores the
+   `Option<Arc<dyn Geocoder>>`; the factory reads it off the context. `None`
+   keeps the C1 coords-only fallback shape.
+
+### Coord-dedup cache
+
+`extract` reverse-geocodes per photo, but a coord-dedup cache avoids
+re-geocoding the same spot: GPS is rounded to three decimal places (~111 m)
+and scaled to an `i64` key (`GeoKey`), so an initial library scan of N photos
+makes at most as many geocode calls as distinct shooting spots. Genuine
+no-matches are cached (`None`); **transient network errors are not**, so a
+blip does not poison a bucket for subsequent photos at the same spot. The
+cache mutex is never held across an `await`. `forget` clears it.
+Likewise, the staged-photo buffer mutex is held only for the in-memory
+`std::mem::take` drain (no `await` while locked); the geocode loop runs after
+the guard drops, so the buffer is not blocked for the ~N-second scan.
+
+Because the geocoder already retries 429/5xx/transport failures internally
+with backoff before returning `Err`, a sustained outage would otherwise
+re-run that full retry sequence once *per photo* (not per spot), stalling the
+whole `extract()`/sync cycle at ~1 req/s. `extract` therefore also keeps a
+**per-cycle** failed-key set: once a bucket errors during one `extract()` call,
+later photos in the *same* batch at that spot skip straight to the coords-only
+fallback. The set is local to one cycle (not the long-lived cache), so the
+next sync retries the bucket afresh — only success/no-match outcomes persist
+across cycles.
+
+<a id="place-coordinate-anchoring"></a>
+
+## Place-coordinate anchoring (C2 / #196)
+
+Two `entity_locations` rows are written per place fact:
+
+- **Owner `Visited` row** (existing S3 path) — the owner was at the place,
+  with the coords and the place name as its `address`, bounded by the fact's
+  temporal window.
+- **Place `Geographic` row** (new) — the place entity's own coordinates. A
+  place does not "move", so this uses a new `LocationType::Geographic` (id 6,
+  migration `046`) and the idempotent `queries::entity::ensure_place_coordinates`:
+  if a `Geographic` row for the place already exists its coords are updated in
+  place, otherwise a timeless row is inserted. This keeps a single row per
+  place (repeated photos don't pile up move-history rows) so `find_nearby`
+  (S4) can resolve places by coordinates, not only by where the owner has
+  been.
+
+The single-`Geographic`-row-per-place invariant is enforced at the schema
+level by a partial unique index on `entity_id` scoped to
+`location_type_id = 6` (`idx_entity_locations_geographic_unique`, migration
+`047`); `ensure_place_coordinates` is a single atomic
+`INSERT ... ON CONFLICT DO UPDATE` against that index. The index is partial
+on purpose — `Visited`/`Home`/`Work`/`Origin`/`Current` rows are *not* unique
+per `(entity_id, location_type_id)` (a person legitimately has many `Visited`
+rows), so a full unique index would break them. The serial overlay worker
+remains a performance optimisation, not a correctness requirement.
 
 ## Configuration (`config_json`)
 
@@ -146,6 +264,22 @@ impl PhotosCursor {
 
 `PhotosConnectorFactory` registers under `(ConnectorType::Photos, "local")`.
 
+C2 additions:
+
+```rust
+pub struct ConnectorContext { pub geocoder: Option<Arc<dyn Geocoder>> }
+impl PhotosConnector {
+    pub fn from_config_with_geocoder(config, Option<Arc<dyn Geocoder>>) -> Result<Self, ConnectorError>;
+    async fn resolve_place(Option<f64>, Option<f64>) -> Option<String>; // reverse geocode + cache
+}
+impl ConnectorSupervisor {
+    pub fn with_geocoder(Arc<dyn Geocoder>) -> Self;
+}
+impl ConnectorRegistry {
+    pub fn create_with_context(type, &backend, config, &ConnectorContext) -> Result<Arc<dyn Connector>, ConnectorError>;
+}
+```
+
 ## Testing
 
 - Unit tests (`src/photos.rs`): cursor diffing/pruning/round-trip, path
@@ -158,7 +292,17 @@ impl PhotosCursor {
   restart, changed-file reprocessing, `--full` resync, the live `notify` push
   watcher (new file + modified file), and the full supervisor →
   `KnowledgeGraph` path (fact + connector provenance + a `Visited`
-  `entity_locations` row with the GPS coordinates).
+  `entity_locations` row with the GPS coordinates). C2 adds: `resolve_place`
+  unit tests (mock geocoder place fact, no-geocoder fallback, cache hit +
+  cache-miss-then-hit, transient-error-not-cached), the `place_fact` /
+  `coords_only_fact` shape tests, the geocoder `short_name` unit tests
+  (`mimir-connectors/src/geocoder.rs`), and the integration test
+  `supervisor_ingests_photo_as_took_photo_at_place_fact` (a GPS photo ingested
+  through the supervisor with a mock geocoder produces a `took_photo_at`
+  place fact). `mimir-knowledge/tests/normalize_test.rs` adds
+  `photos_at_same_place_corroborate_and_anchor_place_coords` (two photos at
+  the same place corroborate to one 0.85-confidence fact and the place's
+  `Geographic` coordinates are anchored).
 
 ## Safety
 

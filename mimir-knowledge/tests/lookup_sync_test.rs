@@ -192,6 +192,7 @@ async fn location_types_sync() {
             (3, "Visited", LocationType::Visited),
             (4, "Origin", LocationType::Origin),
             (5, "Current", LocationType::Current),
+            (6, "Geographic", LocationType::Geographic),
         ],
     )
     .await;

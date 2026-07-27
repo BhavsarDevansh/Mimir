@@ -11,9 +11,11 @@ use chrono::{DateTime, Utc};
 use mimir_knowledge::confidence;
 use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::entity::EntityType;
-use mimir_knowledge::models::enums::{ConnectorType, RecurrenceType};
+use mimir_knowledge::models::enums::{ConnectorType, LocationType, RecurrenceType};
 use mimir_knowledge::models::source::{ExtractionMethod, SourceType};
-use mimir_knowledge::normalize::{NormalizedFact, Provenance, normalize_and_insert};
+use mimir_knowledge::normalize::{
+    NormalizedFact, NormalizedLocation, Provenance, normalize_and_insert,
+};
 use mimir_knowledge::{KnowledgeError, KnowledgeGraph};
 
 /// Fresh KnowledgeGraph in a temp dir.
@@ -510,4 +512,138 @@ async fn cross_type_fuzzy_match_creates_new_entity() {
     let concept = kg.get_entity(concept_id).await.unwrap().unwrap();
     assert_eq!(concept.name, "Apple");
     assert_eq!(concept.entity_type_id, EntityType::Concept as i16);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 C2 / #196: Photos connector GPS → place fact + corroboration
+// ---------------------------------------------------------------------------
+
+/// A `took_photo_at <place>` Photos connector fact with a GPS location overlay
+/// (Phase 3 C2 / #196). `raw_ref` is the photo's file path (the native source
+/// id); `place` is the reverse-geocoded locality that becomes the `Place`
+/// object entity.
+fn took_photo_at_fact(raw_ref: &str, place: &str, lat: f64, lng: f64) -> NormalizedFact {
+    NormalizedFact {
+        source_type: SourceType::Connector,
+        subject: "Devansh".to_string(),
+        subject_type: EntityType::Person,
+        relationship_type: "took_photo_at".to_string(),
+        object: place.to_string(),
+        object_is_entity: true,
+        object_type: Some(EntityType::Place),
+        valid_from: Some(parse_dt("2024-05-15T14:30:00Z")),
+        valid_until: None,
+        is_sensitive: false,
+        is_correction: false,
+        correction_scope: None,
+        category_ids: Vec::new(),
+        recurrence: RecurrenceType::None,
+        requires_user_action: false,
+        raw_reference: Some(raw_ref.to_string()),
+        location: Some(NormalizedLocation {
+            location_type: LocationType::Visited,
+            address: Some(place.to_string()),
+            latitude: Some(lat),
+            longitude: Some(lng),
+            timezone: None,
+        }),
+    }
+}
+
+/// Two photos at the same place corroborate into one `took_photo_at` fact with
+/// two sources, a boosted confidence, and a `Geographic` coordinate row
+/// anchoring the place entity (Phase 3 C2 / #196 acceptance).
+#[tokio::test]
+async fn photos_at_same_place_corroborate_and_anchor_place_coords() {
+    let (kg, _dir) = fresh_kg().await;
+    let photos_instance = upsert(&kg, ConnectorType::Photos, "photos-1").await;
+
+    // Two photos at the same GPS/timestamp — only their file paths differ, so
+    // they are independent sources for the same "Devansh took a photo at Rome"
+    // claim. They are ingested in separate `normalize_and_insert` calls (two
+    // connector syncs) with the overlay worker flushed between them, so the
+    // background overlay writes never contend with a concurrent fact insert
+    // (SQLite "database is locked").
+    let first = normalize_and_insert(
+        &kg,
+        vec![took_photo_at_fact("IMG_001.jpg", "Rome", 46.5, 7.5)],
+        Provenance::connector(
+            photos_instance,
+            ConnectorType::Photos,
+            ExtractionMethod::StructuredParse,
+        ),
+    )
+    .await
+    .expect("photos insert should succeed");
+    assert!(first.errors.is_empty(), "errors: {:?}", first.errors);
+    assert_eq!(first.inserted.len(), 1);
+    let fact_id = first.inserted[0].id;
+    // Drain the first photo's overlay before the corroborating insert.
+    kg.flush_location_overlays().await;
+
+    // Second photo: same place/time, different file → corroborates the first.
+    let second = normalize_and_insert(
+        &kg,
+        vec![took_photo_at_fact("IMG_002.jpg", "Rome", 46.5, 7.5)],
+        Provenance::connector(
+            photos_instance,
+            ConnectorType::Photos,
+            ExtractionMethod::StructuredParse,
+        ),
+    )
+    .await
+    .expect("photos corroboration should succeed");
+    assert!(second.errors.is_empty(), "errors: {:?}", second.errors);
+    // Corroboration returns the existing fact, not a new row.
+    assert_eq!(second.inserted.len(), 1);
+    assert_eq!(
+        second.inserted[0].id, fact_id,
+        "corroboration must return the existing fact, not create a new one"
+    );
+
+    // Drain the second photo's overlay (an idempotent place re-anchor).
+    kg.flush_location_overlays().await;
+
+    // Two independent photo sources back the single fact.
+    let sources = kg.get_sources_for_fact(fact_id).await.unwrap();
+    assert_eq!(sources.len(), 2, "both photo sources should be recorded");
+    let raw_refs: std::collections::HashSet<String> = sources
+        .iter()
+        .filter_map(|s| s.raw_reference.clone())
+        .collect();
+    assert!(raw_refs.contains("IMG_001.jpg"));
+    assert!(raw_refs.contains("IMG_002.jpg"));
+
+    // Photos base 0.80 + one independent corroborating source (+0.05) = 0.85.
+    let corroborated = kg.get_fact(fact_id).await.unwrap().unwrap();
+    assert!(
+        (corroborated.confidence - 0.85).abs() < 1e-5,
+        "corroborated confidence should be 0.85, got {}",
+        corroborated.confidence
+    );
+
+    // The place entity was created and is the fact's object.
+    let place = kg
+        .search_entities("Rome", 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.entity.name == "Rome" && r.entity.entity_type_id == EntityType::Place as i16)
+        .map(|r| r.entity.id)
+        .expect("Rome place entity should be created");
+    assert_eq!(corroborated.object_id, Some(place));
+
+    // Flush the overlay worker: the place is anchored with Geographic coords,
+    // and the owner has a Visited row carrying the place name + coords.
+    kg.flush_location_overlays().await;
+    let place_locs = kg.get_locations(place).await.unwrap();
+    assert!(
+        place_locs.iter().any(|loc| {
+            loc.location_type_id == LocationType::Geographic as i16
+                && (loc.latitude.unwrap() - 46.5).abs() < 1e-6
+                && (loc.longitude.unwrap() - 7.5).abs() < 1e-6
+                && loc.source_fact_id == Some(fact_id)
+        }),
+        "place should be anchored with a Geographic coordinate row; got {place_locs:?}"
+    );
 }

@@ -38,7 +38,7 @@ use std::sync::{Arc, RwLock};
 
 use mimir_knowledge::models::enums::ConnectorType;
 
-use crate::connector::{Connector, ConnectorError, ConnectorFactory};
+use crate::connector::{Connector, ConnectorContext, ConnectorError, ConnectorFactory};
 
 /// Registry mapping `(connector_type, backend)` pairs to their
 /// [`ConnectorFactory`] (Phase 3 F7 / issue #184).
@@ -208,6 +208,24 @@ impl ConnectorRegistry {
         backend: &str,
         config: serde_json::Value,
     ) -> Result<Arc<dyn Connector>, ConnectorError> {
+        self.create_with_context(connector_type, backend, config, &ConnectorContext::empty())
+    }
+
+    /// Construct a connector instance for `(type, backend)` from its config
+    /// and a shared-services [`ConnectorContext`].
+    ///
+    /// Like [`create`](Self::create) but forwards `ctx` to the factory so
+    /// backends that need injected dependencies (the Photos connector's
+    /// geocoder, Phase 3 C2 / #196) receive them. The supervisor (F8) calls
+    /// this with the daemon-wide context; the config-only [`create`] is the
+    /// convenience path for callers with no services to inject.
+    pub fn create_with_context(
+        &self,
+        connector_type: ConnectorType,
+        backend: &str,
+        config: serde_json::Value,
+        ctx: &ConnectorContext,
+    ) -> Result<Arc<dyn Connector>, ConnectorError> {
         // One read-lock acquisition and one key allocation for the lookup.
         let backend = backend.to_string();
         let key = (connector_type, backend.clone());
@@ -219,13 +237,16 @@ impl ConnectorRegistry {
                 connector_type,
                 backend,
             })?;
-        factory.create(config)
+        factory.create(config, ctx)
     }
 }
 
 /// Type of the closure stored inside [`FnConnectorFactory`].
-type FactoryFn =
-    Arc<dyn Fn(serde_json::Value) -> Result<Arc<dyn Connector>, ConnectorError> + Send + Sync>;
+type FactoryFn = Arc<
+    dyn Fn(serde_json::Value, &ConnectorContext) -> Result<Arc<dyn Connector>, ConnectorError>
+        + Send
+        + Sync,
+>;
 
 /// A [`ConnectorFactory`] backed by an `Fn(serde_json::Value) -> Result<…>`
 /// closure.
@@ -241,7 +262,7 @@ impl FnConnectorFactory {
     /// Wrap a closure as a [`ConnectorFactory`].
     pub fn new<F>(f: F) -> Self
     where
-        F: Fn(serde_json::Value) -> Result<Arc<dyn Connector>, ConnectorError>
+        F: Fn(serde_json::Value, &ConnectorContext) -> Result<Arc<dyn Connector>, ConnectorError>
             + Send
             + Sync
             + 'static,
@@ -251,8 +272,12 @@ impl FnConnectorFactory {
 }
 
 impl ConnectorFactory for FnConnectorFactory {
-    fn create(&self, config: serde_json::Value) -> Result<Arc<dyn Connector>, ConnectorError> {
-        (self.f)(config)
+    fn create(
+        &self,
+        config: serde_json::Value,
+        ctx: &ConnectorContext,
+    ) -> Result<Arc<dyn Connector>, ConnectorError> {
+        (self.f)(config, ctx)
     }
 }
 

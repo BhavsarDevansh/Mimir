@@ -21,14 +21,25 @@
 > connector in `mimir-connectors` (feature `photos`) that watches a configured
 > directory recursively with `notify` (debounced ~2s), extracts EXIF GPS +
 > datetime with `kamadak-exif` (JPEG/TIFF/HEIF/PNG/WebP), and emits one
-> `took_photo` fact per photo through the shared `normalize_and_insert`
-> pipeline. The GPS becomes a `Visited` `entity_locations` row for the owner
-> (C2 / #196 will reverse-geocode the coordinates into a place name). A
-> per-file mtime/inode incremental cursor persists across restarts so unchanged
-> photos are never re-scanned; the supervisor now injects the persisted
-> `sync_cursor` into a connector's `config_json` as `__cursor` so incremental
-> connectors can read their prior progress. This is a library component; the
+> `took_photo` fact per photo (C1) / `took_photo_at <place>` fact (C2 / #196,
+> v0.81.0) through the shared `normalize_and_insert` pipeline. C2
+> reverse-geocodes the EXIF GPS into a locality-level place name (reusing the
+> shared `Geocoder` injected via a new `ConnectorContext` threaded factory →
+> registry → supervisor) so the place is a `Place` object entity and photos at
+> the same spot corroborate into one open-ended fact (+0.05/source, capped
+> 0.95; base 0.80). A coord-dedup cache (~111 m buckets) bounds geocode calls
+> to one per shooting spot, and transient errors aren't cached. Two
+> `entity_locations` rows are written: the owner's `Visited` row (coords +
+> place name) and a new idempotent `Geographic` row (migration `046`) anchoring
+> the place entity's own coordinates, so `find_nearby` resolves places by
+> where they are. When no place resolves, the photo degrades to the C1
+> coords-only `took_photo` shape so no data is lost. A per-file mtime/inode
+> incremental cursor persists across restarts so unchanged photos are never
+> re-scanned; the supervisor injects the persisted `sync_cursor` into a
+> connector's `config_json` as `__cursor`. This is a library component; the
 > daemon `AppState` wiring and `mimir connector …` CLI land in A1–A3.
+> v0.81.0 adds Photos connector GPS → place extraction (Phase 3 C2 / #196): the local-filesystem Photos connector (C1 / #195) now reverse-geocodes each photo's EXIF GPS into a locality-level place name via the shared `Geocoder` (injected through a new `ConnectorContext` threaded factory → registry → supervisor), emitting `owner took_photo_at <place>` facts whose place is a `Place` object entity. Photos at the same place corroborate into one open-ended fact (+0.05/source, capped 0.95; base confidence 0.80), so the knowledge graph grows with distinct places visited, not photo count. A coord-dedup cache (~111 m buckets) bounds geocode calls to one per shooting spot; transient errors aren't cached. Two `entity_locations` rows are written per place fact: the owner's `Visited` row (coords + place name) and a new idempotent `Geographic` row (migration `046`, `LocationType::Geographic = 6`) anchoring the place entity's own coordinates, so `find_nearby` resolves places by where they are. `GeocodeResult` gained a `short_name` field (the most specific locality: city → town → village → … → first display-name segment). When no place resolves (no geocoder / no match / transient error), the photo degrades to the C1 coords-only `took_photo <rel_path>` shape so no data is lost. This is a library component with unit + integration tests; the daemon `AppState` wiring (A1) and `mimir connector …` CLI (A3) land in later Phase 3 issues.
+> 
 
 > v0.77.0 adds the geocoder service (Phase 3 S1 / #191): a pluggable `Geocoder` trait (forward address → coords, reverse lat/lon → place) with an OSM Nominatim default backend. The trait and `GeocodeResult`/`GeocodeError` types live in `mimir-core` (so the Location Search tool #98 — a `mimir-core` tool — can name it; `mimir-core` cannot depend on `mimir-connectors`), and the `NominatimGeocoder` backend lives in `mimir-connectors`. Throttling reuses the F12 `RateLimiter` (`RateLimitConfig::nominatim`, ≤ 1 req/s) and transient 429/502/503/504 + transport failures retry via `retry_with_backoff` honouring a `Retry-After`; quota exhaustion is non-retryable. The endpoint, descriptive `User-Agent` (Nominatim policy), optional contact email, rate-limit policy, and retry budget are all configurable (self-hosted Nominatim is supported for heavy use). A successful "no match" yields `Ok(None)`; transport/decode failures yield `Err(GeocodeError)` and are logged — they never panic. Results carry lat/lon/country/`country_code`/alternative names. This is a library component with `wiremock`-backed integration tests; wiring into the Photos connector (C2), the entity-locations write path (S3/#65), and the Location Search tool (#98) lands in later Phase 3 issues.
 

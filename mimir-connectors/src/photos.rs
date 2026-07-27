@@ -1,5 +1,11 @@
 //! Local-filesystem Photos connector (Phase 3 C1 / issue #195).
 //!
+//! C1 (#195) emits a coords-only `took_photo <rel_path>` fact per photo. C2
+//! (#196) reverse-geocodes the EXIF GPS into a locality-level place name and
+//! emits `owner took_photo_at <place>` — the place is a `Place` object entity
+//! so photos at the same spot corroborate into one open-ended fact. See
+//! [`PhotosConnector::resolve_place`] and [`RawPhoto::to_fact`].
+//!
 //! A read-only, no-network connector that watches a configured directory
 //! recursively for image files, extracts EXIF GPS + datetime metadata with
 //! [`kamadak-exif`], and emits one [`NormalizedFact`] per photo through the
@@ -41,11 +47,16 @@
 //!
 //! C1 persists the parsed GPS as a structured [`NormalizedLocation`] overlay
 //! (`location_type = Visited`, `address = None`, raw `latitude`/`longitude`),
-//! so `entity_locations` rows are created with coordinates immediately. C2
-//! (#196) reverse-geocodes those coordinates into a place name (enriches the
-//! `address`) and wires the "took a photo at `<place>`" fact. The fact
-//! predicate is `took_photo` with the photo's relative path as the literal
-//! object; the location overlay carries the coordinates.
+//! so `entity_locations` rows are created with coordinates immediately.
+//!
+//! C2 is implemented: when a place name resolves, the fact is
+//! `owner took_photo_at <place>` (object entity, `Place`) with an open-ended
+//! `valid_until = None` so corroboration merges same-place photos, and the
+//! location overlay carries the coords + the place name as `address`. The
+//! pipeline writes the owner's `Visited` row *and* anchors the place entity's
+//! own coordinates in a `Geographic` `entity_locations` row. When no place
+//! resolves (no geocoder / no match / transient error), the fact degrades to
+//! the C1 `took_photo <rel_path>` coords-only shape so no data is lost.
 //!
 //! # No `unsafe`
 //!
@@ -54,7 +65,7 @@
 //! [`std::os::unix::fs::MetadataExt::ino`] under `#[cfg(unix)]`, which is a
 //! safe accessor.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -71,6 +82,7 @@ use crate::connector::{
     Connector, ConnectorError, ConnectorFactory, ConnectorMode, HealthStatus, SyncOptions,
     SyncOutcome,
 };
+use mimir_core::geocoder::Geocoder;
 use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType, LocationType};
 use mimir_knowledge::models::source::SourceType;
@@ -451,11 +463,53 @@ struct RawPhoto {
 }
 
 impl RawPhoto {
-    /// Build a [`NormalizedFact`] for this photo. `owner` is the subject
-    /// (`Person`); the photo's relative path is the literal object; the GPS
-    /// coordinates become a [`NormalizedLocation`] overlay so the shared
-    /// pipeline writes an `entity_locations` row for the owner.
-    fn to_fact(&self, owner: &str) -> NormalizedFact {
+    /// Build a [`NormalizedFact`] for this photo (Phase 3 C2 / #196).
+    ///
+    /// `owner` is the subject (`Person`). When `place` is the resolved
+    /// locality name, the fact is `owner took_photo_at <place>` with the place
+    /// as a `Place` object entity and a [`NormalizedLocation`] overlay carrying
+    /// the coords *and* the place name as its address — the shared pipeline
+    /// writes a `Visited` `entity_locations` row for the owner and anchors the
+    /// place entity's coordinates. When `place` is `None` (no geocoder, no
+    /// match, or a transient geocode error), the fact degrades to the C1
+    /// coords-only `took_photo <rel_path>` shape so no data is lost. In both
+    /// cases `raw_reference` is the photo's relative path (the native source
+    /// id) and `valid_from` is the EXIF timestamp.
+    fn to_fact(&self, owner: &str, place: Option<String>) -> NormalizedFact {
+        match place {
+            Some(name) => self.place_fact(owner, name),
+            None => self.coords_only_fact(owner),
+        }
+    }
+
+    /// The C2 "took a photo at `<place>`" fact: the place is a `Place` object
+    /// entity, and the location overlay carries coords + the place name.
+    fn place_fact(&self, owner: &str, place: String) -> NormalizedFact {
+        NormalizedFact {
+            source_type: SourceType::Connector,
+            subject: owner.to_string(),
+            subject_type: EntityType::Person,
+            relationship_type: "took_photo_at".to_string(),
+            object: place.clone(),
+            object_is_entity: true,
+            object_type: Some(EntityType::Place),
+            valid_from: Some(self.taken_at),
+            valid_until: None,
+            is_sensitive: false,
+            is_correction: false,
+            correction_scope: None,
+            category_ids: Vec::new(),
+            recurrence: mimir_knowledge::models::enums::RecurrenceType::None,
+            requires_user_action: false,
+            raw_reference: Some(self.rel_path.clone()),
+            location: self.location_overlay_with_address(place),
+        }
+    }
+
+    /// The C1 fallback: a `took_photo <rel_path>` literal-object fact with a
+    /// coords-only location overlay. Used when no geocoder is configured or a
+    /// geocode yields no place name, so a photo's GPS is never dropped.
+    fn coords_only_fact(&self, owner: &str) -> NormalizedFact {
         NormalizedFact {
             source_type: SourceType::Connector,
             subject: owner.to_string(),
@@ -473,11 +527,26 @@ impl RawPhoto {
             recurrence: mimir_knowledge::models::enums::RecurrenceType::None,
             requires_user_action: false,
             raw_reference: Some(self.rel_path.clone()),
-            location: self.location_overlay(),
+            location: self.coords_only_overlay(),
         }
     }
 
-    fn location_overlay(&self) -> Option<NormalizedLocation> {
+    /// Location overlay for the place fact: coords + the resolved place name
+    /// as the address (the shared pipeline upserts a `Visited` row for the
+    /// owner with both halves already filled).
+    fn location_overlay_with_address(&self, place: String) -> Option<NormalizedLocation> {
+        let (latitude, longitude) = (self.latitude?, self.longitude?);
+        Some(NormalizedLocation {
+            location_type: LocationType::Visited,
+            address: Some(place),
+            latitude: Some(latitude),
+            longitude: Some(longitude),
+            timezone: None,
+        })
+    }
+
+    /// Coords-only location overlay (C1 fallback).
+    fn coords_only_overlay(&self) -> Option<NormalizedLocation> {
         let (latitude, longitude) = (self.latitude?, self.longitude?);
         Some(NormalizedLocation {
             location_type: LocationType::Visited,
@@ -532,10 +601,37 @@ pub struct PhotosConnector {
     buffer: Mutex<Vec<RawPhoto>>,
     watcher: Mutex<Option<PhotosDebouncer>>,
     events: Mutex<UnboundedReceiver<DebounceEventResult>>,
+    /// Shared geocoder used to reverse-geocode EXIF GPS into a place name
+    /// during `extract` (Phase 3 C2 / #196). `None` when no geocoder is
+    /// configured; photos with GPS then fall back to the C1 coords-only
+    /// `took_photo` shape so no data is lost.
+    geocoder: Option<std::sync::Arc<dyn Geocoder>>,
+    /// Coord-dedup cache for reverse geocoding (Phase 3 C2 / #196): rounded
+    /// GPS → resolved place short name. Bounds Nominatim calls to one per
+    /// ~100 m bucket rather than one per photo, so an initial library scan of
+    /// N photos makes at most as many geocode calls as distinct shooting
+    /// spots. `None` entries (a genuine no-match) are cached; transient
+    /// network errors are not, so a blip does not poison the bucket.
+    geocode_cache: Mutex<HashMap<GeoKey, Option<String>>>,
     /// `true` until the first `sync()` completes its initial scan. Drives the
     /// once-per-run full scan before the connector blocks on watch events.
     first_cycle: AtomicBool,
     started: AtomicBool,
+}
+
+/// Rounded coordinate key for the reverse-geocode cache. Three decimal
+/// places (~111 m at the equator) group photos taken at the same spot while
+/// keeping distinct neighbourhoods separate. Stored as scaled integers so the
+/// map is `Eq`/`Hash` (raw `f64` is not).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct GeoKey(i64, i64);
+
+/// Round a coordinate to three decimal places and scale to an integer key.
+fn geo_key(latitude: f64, longitude: f64) -> GeoKey {
+    GeoKey(
+        (latitude * 1000.0).round() as i64,
+        (longitude * 1000.0).round() as i64,
+    )
 }
 
 impl std::fmt::Debug for PhotosConnector {
@@ -559,6 +655,22 @@ impl PhotosConnector {
     /// error rather than a construction-time panic, and no watcher thread runs
     /// before the supervisor drives the connector).
     pub fn from_config(config: serde_json::Value) -> Result<Self, ConnectorError> {
+        Self::from_config_with_geocoder(config, None)
+    }
+
+    /// Build a Photos connector from its merged `config_json` value plus a
+    /// shared geocoder injected via the [`ConnectorContext`](crate::connector::ConnectorContext)
+    /// (Phase 3 C2 / #196).
+    ///
+    /// The geocoder is used in `extract` to reverse-geocode EXIF GPS into a
+    /// locality-level place name that becomes the object of a
+    /// `took_photo_at` fact. `None` keeps the C1 coords-only `took_photo`
+    /// fallback shape. Construction stays cheap and synchronous; the watcher
+    /// is started lazily on the first `sync()`.
+    pub fn from_config_with_geocoder(
+        config: serde_json::Value,
+        geocoder: Option<std::sync::Arc<dyn Geocoder>>,
+    ) -> Result<Self, ConnectorError> {
         let slug = config
             .get("__slug")
             .and_then(|v| v.as_str())
@@ -617,6 +729,8 @@ impl PhotosConnector {
             buffer: Mutex::new(Vec::new()),
             watcher: Mutex::new(None),
             events: Mutex::new(rx),
+            geocoder,
+            geocode_cache: Mutex::new(HashMap::new()),
             first_cycle: AtomicBool::new(true),
             started: AtomicBool::new(false),
         })
@@ -990,12 +1104,41 @@ impl Connector for PhotosConnector {
     }
 
     async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError> {
-        let mut buffer = self.buffer.lock().await;
         let owner = self.owner_name.clone();
-        let facts: Vec<NormalizedFact> = std::mem::take(&mut *buffer)
-            .into_iter()
-            .map(|raw| raw.to_fact(&owner))
-            .collect();
+        // Drain the buffer into a local Vec and drop the guard *before* the
+        // per-photo reverse-geocode loop. `resolve_place` awaits
+        // `geocoder.reverse()` — a rate-limited (~1 req/s for Nominatim)
+        // network call — once per distinct shooting spot, so holding the
+        // buffer mutex across it would block `forget`/`reset` or a concurrent
+        // admin-triggered sync for the full scan duration (~N seconds). The
+        // `std::mem::take` swap replaces the buffer's contents in place while
+        // we still hold the lock, and the guard is released at the end of the
+        // block, restoring the C1 hold-time (in-memory map only).
+        let raws = {
+            let mut buffer = self.buffer.lock().await;
+            std::mem::take(&mut *buffer)
+        };
+        // Per-extract() set of GPS buckets that already errored this cycle.
+        // The geocoder retries 429/5xx/transport failures internally with
+        // backoff before returning `Err`, so without this guard a sustained
+        // outage would re-run the full retry sequence for *every photo*
+        // (not every distinct spot), stalling the whole sync at ~1 req/s.
+        // The set is local to one `extract()` call, so the next sync cycle
+        // retries the bucket — only the long-lived success/no-match cache
+        // (`geocode_cache`) persists across cycles.
+        let mut failed_this_cycle: HashSet<GeoKey> = HashSet::new();
+        let mut facts = Vec::with_capacity(raws.len());
+        for raw in raws {
+            // Reverse-geocode each photo's GPS into a place name (with the
+            // coord-dedup cache) before building the fact. Geocode failures
+            // are tolerated per-photo — a photo whose GPS cannot be resolved
+            // degrades to the C1 coords-only `took_photo` shape rather than
+            // failing the whole extraction.
+            let place = self
+                .resolve_place(raw.latitude, raw.longitude, &mut failed_this_cycle)
+                .await;
+            facts.push(raw.to_fact(&owner, place));
+        }
         Ok(facts)
     }
 
@@ -1006,12 +1149,66 @@ impl Connector for PhotosConnector {
         // initial scan and restarts its watcher.
         *self.cursor.lock().await = PhotosCursor::default();
         self.buffer.lock().await.clear();
+        self.geocode_cache.lock().await.clear();
         if let Some(watcher) = self.watcher.lock().await.take() {
             watcher.stop();
         }
         self.started.store(false, Ordering::SeqCst);
         self.first_cycle.store(true, Ordering::SeqCst);
         Ok(())
+    }
+}
+
+impl PhotosConnector {
+    /// Resolve a photo's GPS to a locality-level place short name (Phase 3 C2
+    /// / #196), using the coord-dedup cache to avoid re-geocoding the same
+    /// spot. Returns `None` when there is no geocoder, no GPS, no match, or a
+    /// transient geocode error — the caller then builds the C1 fallback fact.
+    async fn resolve_place(
+        &self,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+        failed_this_cycle: &mut HashSet<GeoKey>,
+    ) -> Option<String> {
+        let geocoder = self.geocoder.clone()?;
+        let (lat, lng) = (latitude?, longitude?);
+        let key = geo_key(lat, lng);
+
+        // Skip a bucket that already errored during this `extract()` cycle so
+        // a sustained outage degrades quickly to the coords-only fallback
+        // instead of re-running the geocoder's internal retry backoff once
+        // per photo. The set is per-cycle, so the next sync retries afresh.
+        if failed_this_cycle.contains(&key) {
+            return None;
+        }
+
+        // Cache hit: clone the cached value out and release the lock before
+        // any await (never hold the cache mutex across the geocode call).
+        if let Some(cached) = self.geocode_cache.lock().await.get(&key).cloned() {
+            return cached;
+        }
+
+        // Cache miss: reverse-geocode without holding the lock. Genuine
+        // no-matches are cached; transient errors are not (so a network blip
+        // does not poison the bucket for subsequent photos at the same spot)
+        // — but the per-cycle `failed_this_cycle` set still bounds a sustained
+        // outage to one attempt per spot per `extract()` call.
+        let (value, cacheable) = match geocoder.reverse(lat, lng).await {
+            Ok(Some(result)) => (result.short_name, true),
+            Ok(None) => {
+                tracing::debug!("no place found for photo GPS ({lat}, {lng})");
+                (None, true)
+            }
+            Err(error) => {
+                tracing::warn!("reverse geocode failed for photo GPS ({lat}, {lng}): {error}");
+                failed_this_cycle.insert(key);
+                (None, false)
+            }
+        };
+        if cacheable {
+            self.geocode_cache.lock().await.insert(key, value.clone());
+        }
+        value
     }
 }
 
@@ -1048,8 +1245,9 @@ impl ConnectorFactory for PhotosConnectorFactory {
     fn create(
         &self,
         config: serde_json::Value,
+        ctx: &crate::connector::ConnectorContext,
     ) -> Result<std::sync::Arc<dyn Connector>, ConnectorError> {
-        let connector = PhotosConnector::from_config(config)?;
+        let connector = PhotosConnector::from_config_with_geocoder(config, ctx.geocoder.clone())?;
         Ok(std::sync::Arc::new(connector) as std::sync::Arc<dyn Connector>)
     }
 }
@@ -1062,6 +1260,193 @@ mod tests {
 
     use super::*;
     use std::fs;
+    use std::sync::Arc;
+
+    use mimir_core::geocoder::{GeocodeResult, MockGeocoder};
+
+    /// A `MockGeocoder` reverse result for (46.5, 7.5) → "Rome".
+    fn rome_geocoder() -> MockGeocoder {
+        MockGeocoder::new().with_reverse(Ok(Some(GeocodeResult {
+            latitude: 46.5,
+            longitude: 7.5,
+            display_name: "Rome, Metropolitan City of Rome, Italy".to_string(),
+            short_name: Some("Rome".to_string()),
+            country: Some("Italy".to_string()),
+            country_code: Some("it".to_string()),
+            alternative_names: vec![],
+        })))
+    }
+
+    fn gps_raw(rel_path: &str, lat: f64, lng: f64) -> RawPhoto {
+        RawPhoto {
+            rel_path: rel_path.to_string(),
+            taken_at: DateTime::<Utc>::from_timestamp(1_715_000_000, 0).unwrap(),
+            latitude: Some(lat),
+            longitude: Some(lng),
+        }
+    }
+
+    #[tokio::test]
+    async fn extract_reverse_geocodes_gps_into_took_photo_at_fact() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = serde_json::json!({
+            "watch_dir": dir.path().to_string_lossy(),
+            "owner_name": "Devansh",
+        });
+        let connector = PhotosConnector::from_config_with_geocoder(
+            config,
+            Some(Arc::new(rome_geocoder()) as Arc<dyn mimir_core::geocoder::Geocoder>),
+        )
+        .unwrap();
+        // Stage two photos at the same spot to exercise the coord-dedup cache.
+        connector
+            .buffer
+            .lock()
+            .await
+            .extend([gps_raw("a.jpg", 46.5, 7.5), gps_raw("b.jpg", 46.5, 7.5)]);
+        let facts = connector.extract().await.unwrap();
+        assert_eq!(facts.len(), 2);
+        for fact in &facts {
+            assert_eq!(fact.relationship_type, "took_photo_at");
+            assert_eq!(fact.object, "Rome");
+            assert!(fact.object_is_entity);
+            assert_eq!(fact.object_type, Some(EntityType::Place));
+            assert_eq!(
+                fact.location.as_ref().unwrap().address.as_deref(),
+                Some("Rome")
+            );
+        }
+        // One cache entry for the shared ~100 m bucket, not one per photo.
+        assert_eq!(connector.geocode_cache.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn extract_falls_back_when_geocoder_finds_no_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = serde_json::json!({
+            "watch_dir": dir.path().to_string_lossy(),
+            "owner_name": "Devansh",
+        });
+        let geocoder = MockGeocoder::new().with_reverse(Ok(None));
+        let connector = PhotosConnector::from_config_with_geocoder(
+            config,
+            Some(Arc::new(geocoder) as Arc<dyn mimir_core::geocoder::Geocoder>),
+        )
+        .unwrap();
+        connector
+            .buffer
+            .lock()
+            .await
+            .push(gps_raw("a.jpg", 0.0, 0.0));
+        let fact = connector.extract().await.unwrap().pop().unwrap();
+        // No place → C1 coords-only `took_photo` fallback; data is not lost.
+        assert_eq!(fact.relationship_type, "took_photo");
+        assert_eq!(fact.object, "a.jpg");
+        assert!(!fact.object_is_entity);
+        assert!(fact.location.is_some());
+        // A genuine no-match is cached so the same spot is not re-queried.
+        assert_eq!(connector.geocode_cache.lock().await.len(), 1);
+    }
+
+    /// A `Geocoder` that always errors on `reverse`, counting calls so the
+    /// per-cycle failed-key short-circuit can be asserted (Phase 3 C2 / #196
+    /// review fix: a sustained outage must not retry per photo).
+    #[derive(Debug)]
+    struct FailingGeocoder {
+        reverse_calls: Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    impl FailingGeocoder {
+        fn new(counter: Arc<std::sync::atomic::AtomicU64>) -> Self {
+            Self {
+                reverse_calls: counter,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl mimir_core::geocoder::Geocoder for FailingGeocoder {
+        async fn forward(
+            &self,
+            _query: &str,
+        ) -> Result<Option<GeocodeResult>, mimir_core::geocoder::GeocodeError> {
+            Ok(None)
+        }
+        async fn reverse(
+            &self,
+            _latitude: f64,
+            _longitude: f64,
+        ) -> Result<Option<GeocodeResult>, mimir_core::geocoder::GeocodeError> {
+            self.reverse_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(mimir_core::geocoder::GeocodeError::Network(
+                "simulated outage".to_string(),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn extract_bounds_geocode_retries_to_one_per_spot_per_cycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = serde_json::json!({
+            "watch_dir": dir.path().to_string_lossy(),
+            "owner_name": "Devansh",
+        });
+        let counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let geocoder: Arc<dyn mimir_core::geocoder::Geocoder> =
+            Arc::new(FailingGeocoder::new(counter.clone()));
+        let connector = PhotosConnector::from_config_with_geocoder(config, Some(geocoder)).unwrap();
+        // Three photos at the same ~100 m bucket, plus one at a different spot.
+        connector.buffer.lock().await.extend([
+            gps_raw("a.jpg", 46.5001, 7.5001),
+            gps_raw("b.jpg", 46.5002, 7.5002),
+            gps_raw("c.jpg", 46.5003, 7.5003),
+            gps_raw("d.jpg", 1.0, 1.0),
+        ]);
+        let facts = connector.extract().await.unwrap();
+        // All four photos degrade to the C1 coords-only fallback; no data lost.
+        assert_eq!(facts.len(), 4);
+        for fact in &facts {
+            assert_eq!(fact.relationship_type, "took_photo");
+            assert!(!fact.object_is_entity);
+        }
+        // One geocode attempt per distinct bucket (2), not per photo (4): the
+        // per-cycle failed-key set short-circuits repeat attempts for the spot
+        // that already errored. Transient errors are not cached long-lived, so
+        // the geocode_cache stays empty.
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(connector.geocode_cache.lock().await.len(), 0);
+        // A fresh extract() cycle retries the failed buckets (per-cycle scope).
+        connector.buffer.lock().await.extend([
+            gps_raw("e.jpg", 46.5001, 7.5001),
+            gps_raw("f.jpg", 1.0, 1.0),
+        ]);
+        let before = counter.load(std::sync::atomic::Ordering::SeqCst);
+        connector.extract().await.unwrap();
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            before + 2,
+            "next cycle should retry the two buckets"
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_falls_back_without_geocoder() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = serde_json::json!({
+            "watch_dir": dir.path().to_string_lossy(),
+            "owner_name": "Devansh",
+        });
+        let connector = PhotosConnector::from_config(config).unwrap();
+        connector
+            .buffer
+            .lock()
+            .await
+            .push(gps_raw("a.jpg", 46.5, 7.5));
+        let fact = connector.extract().await.unwrap().pop().unwrap();
+        assert_eq!(fact.relationship_type, "took_photo");
+        assert_eq!(fact.object, "a.jpg");
+    }
 
     fn fixture(name: &str) -> PathBuf {
         let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -1212,14 +1597,15 @@ mod tests {
     // -- fact conversion --
 
     #[test]
-    fn raw_photo_with_gps_emits_location_overlay() {
+    fn raw_photo_with_gps_falls_back_to_coords_only_without_place() {
         let raw = RawPhoto {
             rel_path: "2024/IMG_001.jpg".to_string(),
             taken_at: DateTime::<Utc>::from_timestamp(1_715_000_000, 0).unwrap(),
             latitude: Some(46.5),
             longitude: Some(7.5),
         };
-        let fact = raw.to_fact("Devansh");
+        // No resolved place → C1 coords-only `took_photo` fallback shape.
+        let fact = raw.to_fact("Devansh", None);
         assert_eq!(fact.subject, "Devansh");
         assert_eq!(fact.subject_type, EntityType::Person);
         assert_eq!(fact.relationship_type, "took_photo");
@@ -1234,6 +1620,31 @@ mod tests {
     }
 
     #[test]
+    fn raw_photo_with_resolved_place_emits_took_photo_at_fact() {
+        let raw = RawPhoto {
+            rel_path: "2024/IMG_001.jpg".to_string(),
+            taken_at: DateTime::<Utc>::from_timestamp(1_715_000_000, 0).unwrap(),
+            latitude: Some(46.5),
+            longitude: Some(7.5),
+        };
+        // A resolved locality name → `took_photo_at <place>` with the place as
+        // a Place object entity and a location overlay carrying coords + the
+        // place name (Phase 3 C2 / #196).
+        let fact = raw.to_fact("Devansh", Some("Rome".to_string()));
+        assert_eq!(fact.relationship_type, "took_photo_at");
+        assert_eq!(fact.object, "Rome");
+        assert!(fact.object_is_entity);
+        assert_eq!(fact.object_type, Some(EntityType::Place));
+        // The photo's file path is preserved as the native source id.
+        assert_eq!(fact.raw_reference.as_deref(), Some("2024/IMG_001.jpg"));
+        let loc = fact.location.expect("location overlay");
+        assert_eq!(loc.location_type, LocationType::Visited);
+        assert_eq!(loc.address.as_deref(), Some("Rome"));
+        assert!((loc.latitude.unwrap() - 46.5).abs() < 1e-9);
+        assert!((loc.longitude.unwrap() - 7.5).abs() < 1e-9);
+    }
+
+    #[test]
     fn raw_photo_without_gps_has_no_location_overlay() {
         let raw = RawPhoto {
             rel_path: "no_gps.jpg".to_string(),
@@ -1241,7 +1652,7 @@ mod tests {
             latitude: None,
             longitude: None,
         };
-        let fact = raw.to_fact("Devansh");
+        let fact = raw.to_fact("Devansh", None);
         assert!(fact.location.is_none());
     }
 

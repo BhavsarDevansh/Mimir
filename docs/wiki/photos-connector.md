@@ -1,9 +1,8 @@
 # Photos Connector
 
 > **Phase:** 3 — Connectors
-> **Status:** Done (library) — issue #195 / C1. Daemon wiring and the
-> `mimir connector …` CLI come in later Phase 3 issues; GPS → place naming is
-> #196 (C2).
+> **Status:** Done (library) — C1 (#195) + C2 (#196). Daemon wiring and the
+> `mimir connector …` CLI come in later Phase 3 issues (A1–A3).
 
 ## What it is
 
@@ -23,9 +22,12 @@ It is read-only. Mimir never modifies or deletes your photos.
   burst of file events into one update.
 - It reads the photo's **EXIF** metadata (the same data cameras and phones
   embed) using a pure-Rust parser that handles JPEG, TIFF, HEIF, PNG, and WebP.
-- Each photo becomes a `took_photo` fact for you (the owner), with the photo's
-  timestamp and — if the photo has GPS — a location pin. Locations show up as
-  "you were here around this time."
+- Each photo becomes a fact for you (the owner). When the photo has GPS,
+  Mimir reverse-geocodes the coordinates into a place name (using the built-in
+  geocoder) and records **"you took a photo at <place>"** — e.g. "you took a
+  photo at Rome" — with the timestamp. The place becomes a searchable entity
+  in your knowledge graph, and multiple photos at the same place corroborate
+  into one stronger fact instead of cluttering the graph.
 - It remembers which files it has already processed, so unchanged photos are
   **never re-scanned** — even after you restart Mimir. New and modified photos
   are picked up; deleted photos are dropped from the record on the next full
@@ -73,8 +75,24 @@ object like:
 `watch_dir` is required and must exist; the other fields are optional. The
 default extensions cover JPEG, TIFF, HEIF/HEIC, PNG, and WebP.
 
-## What's next (C2 / #196)
+## Location enrichment (C2 / #196)
 
-C1 persists the raw GPS coordinates as a location pin. C2 will
-**reverse-geocode** those coordinates into a human place name ("Paris", "10
-Downing St") so locations are searchable by name, not just by coordinates.
+C2 is now implemented (#196): GPS coordinates are reverse-geocoded into a
+place name, photos at the same place corroborate, and the place's coordinates
+are anchored, so proximity queries ("places near this point") resolve places by
+where they are, not just by where you've been. If a place can't be resolved
+(no geocoder, no match, or a transient network error), the photo still records
+a coordinates-only "took a photo" fact, so no data is lost.
+
+### Photos as facts, not entities
+
+A photo is stored as a **fact**, not a knowledge-graph entity. The only
+entities created are you (the owner) and one `Place` per distinct locality
+Mimir sees. The geocoder resolves the most specific populated locality field
+available — `city`, `town`, `village`, `hamlet`, `municipality`, `county`,
+`state`, or `region` — so a photo in a hamlet and a photo in a city both
+anchor to the appropriate locality-level `Place`, not just city/town names.
+So your knowledge graph grows with the *places you visit*, not with the number
+of photos you take — thousands of photos across a handful of localities stay
+a handful of place facts. Each photo's file path is kept as
+provenance, which is the trail a future "find that photo" search will walk.

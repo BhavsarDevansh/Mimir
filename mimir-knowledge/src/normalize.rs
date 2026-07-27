@@ -501,14 +501,25 @@ async fn process_normalized_fact(
     // carries a clone of the geocoder read at submit time and is processed in
     // submission order, preserving move/supersession ordering across batches.
     if let Some(loc) = location {
-        let _ = kg.location_overlay_tx().send(OverlayJob::Apply {
-            geocoder: kg.geocoder().cloned(),
-            entity_id: subject.id,
-            location: loc,
-            valid_from: fact.valid_from,
-            valid_until: fact.valid_until,
-            fact_id: fact.id,
-        });
+        // When the fact's object is a Place entity (e.g. a `took_photo_at
+        // <place>` connector fact, Phase 3 C2 / #196), anchor the place's own
+        // coordinates alongside the subject's Visited row.
+        let place_anchor = if object_is_entity && object_type == Some(EntityType::Place) {
+            object_id
+        } else {
+            None
+        };
+        let _ = kg
+            .location_overlay_tx()
+            .send(OverlayJob::Apply(LocationOverlayApply {
+                geocoder: kg.geocoder().cloned(),
+                entity_id: subject.id,
+                location: loc,
+                valid_from: fact.valid_from,
+                valid_until: fact.valid_until,
+                fact_id: fact.id,
+                place_anchor,
+            }));
     }
 
     Ok(ProcessResult::Inserted(fact))
@@ -535,15 +546,16 @@ async fn process_normalized_fact(
 /// geocoder's rate limit. Only the non-sensitive (inserted) path enqueues an
 /// overlay today; wiring the pending-confirmation path is tracked as follow-up
 /// work.
-async fn apply_location_overlay(
-    pool: &sqlx::SqlitePool,
-    geocoder: Option<&std::sync::Arc<dyn Geocoder>>,
-    entity_id: i32,
-    mut location: NormalizedLocation,
-    valid_from: Option<DateTime<Utc>>,
-    valid_until: Option<DateTime<Utc>>,
-    fact_id: i32,
-) {
+async fn apply_location_overlay(pool: &sqlx::SqlitePool, apply: LocationOverlayApply) {
+    let LocationOverlayApply {
+        geocoder,
+        entity_id,
+        mut location,
+        valid_from,
+        valid_until,
+        fact_id,
+        place_anchor,
+    } = apply;
     if !location.has_geo_data() {
         return;
     }
@@ -599,6 +611,35 @@ async fn apply_location_overlay(
     {
         tracing::warn!("failed to persist location overlay for fact {fact_id}: {error}");
     }
+
+    // Anchor the place entity's own coordinates (Phase 3 C2 / #196). Only for
+    // facts whose object is a Place (e.g. a `took_photo_at <place>` connector
+    // fact). The coords are read from the now-fully-populated overlay (the
+    // geocode step above fills the missing half), so a place is anchored with
+    // its resolved coordinates even when the producer supplied only one half.
+    // Idempotent — repeated photos at the same place keep a single
+    // `Geographic` row instead of accumulating move-history rows.
+    if let Some(place_id) = place_anchor {
+        if let (Some(lat), Some(lng)) = (location.latitude, location.longitude) {
+            if let Err(error) =
+                queries::entity::ensure_place_coordinates(pool, place_id, lat, lng, Some(fact_id))
+                    .await
+            {
+                tracing::warn!(
+                    "failed to anchor place {place_id} coordinates (fact {fact_id}): {error}"
+                );
+            }
+        } else {
+            // No resolved coordinates to anchor (e.g. a future address-only
+            // caller with no configured geocoder): the `Place` entity is still
+            // created, but gets no `Geographic` row. Log so this skip is
+            // traceable rather than silently no-op'ing like the geocode
+            // branches above do on every "no data"/error outcome.
+            tracing::debug!(
+                "place {place_id} not anchored: no resolved coordinates for fact {fact_id}"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -614,15 +655,31 @@ async fn apply_location_overlay(
 /// job has completed, used by [`KnowledgeGraph::flush_location_overlays`] for
 /// deterministic shutdown / tests.
 pub(crate) enum OverlayJob {
-    Apply {
-        geocoder: Option<std::sync::Arc<dyn Geocoder>>,
-        entity_id: i32,
-        location: NormalizedLocation,
-        valid_from: Option<DateTime<Utc>>,
-        valid_until: Option<DateTime<Utc>>,
-        fact_id: i32,
-    },
+    Apply(LocationOverlayApply),
     Flush(tokio::sync::oneshot::Sender<()>),
+}
+
+/// Parameters for an [`OverlayJob::Apply`] — everything the worker needs to
+/// geocode + upsert a location without touching the [`KnowledgeGraph`] (Phase
+/// 3 S3 / #193; `place_anchor` added Phase 3 C2 / #196). Bundling these into a
+/// struct keeps the worker function's argument list small.
+pub(crate) struct LocationOverlayApply {
+    /// Geocoder clone read at submit time.
+    pub geocoder: Option<std::sync::Arc<dyn Geocoder>>,
+    /// Subject entity whose location is being recorded.
+    pub entity_id: i32,
+    /// The location overlay from the inserted fact.
+    pub location: NormalizedLocation,
+    /// Inserted fact's `valid_from`.
+    pub valid_from: Option<DateTime<Utc>>,
+    /// Inserted fact's `valid_until`.
+    pub valid_until: Option<DateTime<Utc>>,
+    /// Inserted fact's id (links the `entity_locations` row back to it).
+    pub fact_id: i32,
+    /// When the fact's object is a `Place` entity, its id — so the worker can
+    /// anchor the place's own coordinates (Phase 3 C2 / #196). `None` for
+    /// non-place facts (the owner-only overlay path).
+    pub place_anchor: Option<i32>,
 }
 
 /// Spawn the single location-overlay background worker and return the sender
@@ -651,24 +708,8 @@ async fn location_overlay_worker(
 ) {
     while let Some(job) = rx.recv().await {
         match job {
-            OverlayJob::Apply {
-                geocoder,
-                entity_id,
-                location,
-                valid_from,
-                valid_until,
-                fact_id,
-            } => {
-                apply_location_overlay(
-                    &pool,
-                    geocoder.as_ref(),
-                    entity_id,
-                    location,
-                    valid_from,
-                    valid_until,
-                    fact_id,
-                )
-                .await;
+            OverlayJob::Apply(apply) => {
+                apply_location_overlay(&pool, apply).await;
             }
             OverlayJob::Flush(tx) => {
                 let _ = tx.send(());

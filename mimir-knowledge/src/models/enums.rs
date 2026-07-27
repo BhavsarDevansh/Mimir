@@ -141,6 +141,12 @@ pub enum LocationType {
     Visited = 3,
     Origin = 4,
     Current = 5,
+    /// A `Place` entity's own geographic coordinates (Phase 3 C2 / #196).
+    /// Distinct from the person-location types above: a place does not
+    /// "visit" a location, it *is* one. Used by the location-overlay worker
+    /// to anchor a place entity created from a photo's GPS so `find_nearby`
+    /// can resolve places by coordinates.
+    Geographic = 6,
 }
 
 /// Workflow status of a dedup queue entry.
@@ -180,6 +186,10 @@ const_assert!((EventStatus::Active as i16) != 0);
 const_assert!((AutoCompletePolicy::AutoCompleteOnDate as i16) != 0);
 const_assert!((RecurrenceType::None as i16) != 0);
 const_assert!((LocationType::Home as i16) != 0);
+// Lock the `Geographic` discriminant: the partial unique index and the
+// `ON CONFLICT ... WHERE location_type_id = 6` upsert in `ensure_place_coordinates`
+// hardcode `6` in SQL, so a drift here would silently break place anchoring.
+const_assert!((LocationType::Geographic as i16) == 6);
 const_assert!((DedupStatus::Pending as i16) != 0);
 const_assert!((MergeWorkflowStatus::Pending as i16) != 0);
 const_assert!((MergeResolution::Merged as i16) != 0);

@@ -68,8 +68,13 @@ stays on your device — there is no cloud intermediary.
   create new), and a pluggable `Geocoder` trait with an OSM Nominatim default
   backend. The first concrete backend — a read-only local-filesystem Photos
   connector (`notify` file watcher + `kamadak-exif` GPS/datetime extraction +
-  a per-file mtime/inode incremental cursor) — is in; calendar/email backends
-  land in later Phase 3 issues.
+  a per-file mtime/inode incremental cursor) — is in. Photos are stored as
+  facts (`took_photo_at <place>`), not entities: EXIF GPS is reverse-geocoded
+  to a locality-level place name via the shared geocoder, photos at the same
+  place corroborate into one open-ended fact, and the place's coordinates are
+  anchored so proximity queries resolve places by where they are. The
+  knowledge graph grows with distinct places visited, not photo count.
+  Calendar/email backends land in later Phase 3 issues.
 - **Entity locations** — a "where" fact becomes a typed `entity_locations` row
   with geocoding of the missing half (address → coords or coords → place) and
   temporal bounds that model moves (home 2020–2023, home 2023–present).

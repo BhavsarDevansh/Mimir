@@ -20,10 +20,13 @@ use mimir_connectors::{
 };
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::connector::UpsertConnectorInput;
+use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::enums::{
     ConnectorAuthState, ConnectorStatus, ConnectorType, LocationType,
 };
 use mimir_knowledge::models::source::SourceType;
+
+use mimir_core::geocoder::{GeocodeResult, Geocoder, MockGeocoder};
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -388,4 +391,174 @@ async fn mimir_search_entity(kg: &KnowledgeGraph, name: &str) -> Option<i32> {
         .into_iter()
         .find(|r| r.entity.name == name)
         .map(|r| r.entity.id)
+}
+
+/// A mock geocoder that reverse-resolves any coordinate to "Rome" (the
+/// fixture's GPS is 46.5, 7.5). The short name is the locality, so photos at
+/// different spots in the city resolve to one `Rome` place entity.
+fn rome_geocoder() -> Arc<dyn Geocoder> {
+    Arc::new(MockGeocoder::new().with_reverse(Ok(Some(GeocodeResult {
+        latitude: 46.5,
+        longitude: 7.5,
+        display_name: "Rome, Metropolitan City of Rome, Italy".to_string(),
+        short_name: Some("Rome".to_string()),
+        country: Some("Italy".to_string()),
+        country_code: Some("it".to_string()),
+        alternative_names: vec![],
+    }))))
+}
+
+/// Find a `Place` entity by exact name (C2 / #196).
+async fn find_place(kg: &KnowledgeGraph, name: &str) -> Option<i32> {
+    kg.search_entities(name, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.entity.name == name && r.entity.entity_type_id == EntityType::Place as i16)
+        .map(|r| r.entity.id)
+}
+
+/// Register the Photos factory and spawn a supervisor that injects `geocoder`
+/// into every connector it constructs (Phase 3 C2 / #196). Returns the
+/// supervisor, the shared knowledge graph, the connector row id, and the
+/// shutdown `watch` sender. The caller must hold the sender alive until
+/// `supervisor.shutdown()` is called — dropping it first makes the runner
+/// exit before it can ingest (the watch reports "all senders gone" as a
+/// shutdown signal).
+async fn setup_photos_supervisor(
+    kg: KnowledgeGraph,
+    watch_dir: &std::path::Path,
+    owner: &str,
+    geocoder: Arc<dyn Geocoder>,
+) -> (
+    ConnectorSupervisor,
+    Arc<KnowledgeGraph>,
+    i32,
+    tokio::sync::watch::Sender<bool>,
+) {
+    let config = serde_json::to_string(&json!({
+        "watch_dir": watch_dir.to_string_lossy(),
+        "owner_name": owner,
+        "debounce_ms": 80,
+    }))
+    .unwrap();
+    let row = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Photos,
+            slug: "photos".to_string(),
+            backend: "local".to_string(),
+            display_name: "Photos".to_string(),
+            config_json: config,
+            status: Some(ConnectorStatus::Active),
+            auth_state: Some(ConnectorAuthState::Authenticated),
+        })
+        .await
+        .unwrap();
+    let kg = Arc::new(kg);
+    let registry = ConnectorRegistry::new();
+    registry
+        .register(ConnectorType::Photos, "local", PhotosConnectorFactory)
+        .unwrap();
+    let (shutdown_tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = ConnectorSupervisor::new(Arc::new(registry), kg.clone(), fast_config(), rx)
+        .with_geocoder(geocoder);
+    assert_eq!(supervisor.restore().await.unwrap(), 1);
+    (supervisor, kg, row.id, shutdown_tx)
+}
+
+/// A photo with GPS produces a `took_photo_at <place>` fact, a `Visited`
+/// `entity_locations` row for the owner (coords + place name), and a
+/// `Geographic` coordinate row anchoring the place entity (Phase 3 C2 / #196).
+#[tokio::test]
+async fn supervisor_ingests_photo_as_took_photo_at_place_fact() {
+    let watch = tempfile::tempdir().unwrap();
+    fs::copy(fixture("exif.jpg"), watch.path().join("IMG_001.jpg")).unwrap();
+
+    let (kg, _db_dir) = init_kg().await;
+    let (supervisor, kg, row_id, _shutdown_tx) =
+        setup_photos_supervisor(kg, watch.path(), "Devansh", rome_geocoder()).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    let (owner, place, fact) = loop {
+        // The predicate is created on first ingestion (ensure_relationship_type),
+        // so poll until the supervisor's first cycle registers it.
+        let Some(took_photo_at) = kg.relationship_type_id("took_photo_at").await else {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "took_photo_at predicate never registered"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            continue;
+        };
+        let Some(owner) = mimir_search_entity(&kg, "Devansh").await else {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "owner entity never created"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            continue;
+        };
+        let Some(place) = find_place(&kg, "Rome").await else {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Rome place entity never created"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            continue;
+        };
+        let facts = kg
+            .get_facts_by_subject_and_predicate(owner, took_photo_at)
+            .await
+            .unwrap();
+        if let Some(fact) = facts.iter().find(|f| f.object_id == Some(place)) {
+            break (owner, place, fact.clone());
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "took_photo_at Rome fact never landed"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+
+    // The place is the fact's object entity (no literal object).
+    assert_eq!(fact.object_id, Some(place));
+    assert!(fact.object_literal.is_none());
+
+    // Connector provenance carries the photo's file path as the raw reference.
+    let sources = kg.get_sources_for_fact(fact.id).await.unwrap();
+    assert!(sources.iter().any(|s| {
+        s.source_type_id == SourceType::Connector as i16
+            && s.connector_instance_id == Some(row_id)
+            && s.connector_type_id == Some(ConnectorType::Photos as i16)
+            && s.raw_reference.as_deref() == Some("IMG_001.jpg")
+    }));
+
+    // Flush the async overlay worker, then assert both location rows.
+    kg.flush_location_overlays().await;
+
+    // Owner: a Visited row with the GPS coords and the place name as address.
+    let owner_locs = kg.get_locations(owner).await.unwrap();
+    assert!(
+        owner_locs.iter().any(|loc| {
+            loc.location_type_id == LocationType::Visited as i16
+                && loc.address.as_deref() == Some("Rome")
+                && (loc.latitude.unwrap() - 46.5).abs() < 1e-6
+                && (loc.longitude.unwrap() - 7.5).abs() < 1e-6
+        }),
+        "no Visited owner location row with place name; got {owner_locs:?}"
+    );
+
+    // Place: a Geographic coordinate row anchoring Rome (Phase 3 C2 / #196).
+    let place_locs = kg.get_locations(place).await.unwrap();
+    assert!(
+        place_locs.iter().any(|loc| {
+            loc.location_type_id == LocationType::Geographic as i16
+                && (loc.latitude.unwrap() - 46.5).abs() < 1e-6
+                && (loc.longitude.unwrap() - 7.5).abs() < 1e-6
+                && loc.source_fact_id == Some(fact.id)
+        }),
+        "no Geographic place anchor row; got {place_locs:?}"
+    );
+
+    supervisor.shutdown().await;
 }

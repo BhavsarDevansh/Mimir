@@ -22,7 +22,8 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use mimir_connectors::{
-    Connector, ConnectorError, ConnectorFactory, ConnectorRegistry, FnConnectorFactory, SyncOptions,
+    Connector, ConnectorContext, ConnectorError, ConnectorFactory, ConnectorRegistry,
+    FnConnectorFactory, SyncOptions,
 };
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType};
 
@@ -84,7 +85,7 @@ impl Connector for FakeConnector {
 /// Build a factory that produces a `FakeConnector` whose `id()` is
 /// `<backend_tag>:<config.slug>`, proving both dispatch and config passthrough.
 fn fake_factory(backend_tag: &'static str, ct: ConnectorType) -> FnConnectorFactory {
-    FnConnectorFactory::new(move |config: serde_json::Value| {
+    FnConnectorFactory::new(move |config: serde_json::Value, _ctx: &ConnectorContext| {
         let slug = config
             .get("slug")
             .and_then(serde_json::Value::as_str)

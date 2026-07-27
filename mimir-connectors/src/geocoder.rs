@@ -348,12 +348,35 @@ fn map_rate_err(error: RateLimitError) -> GeocodeError {
 // ---------------------------------------------------------------------------
 
 /// Nominatim `address` object subset (classic JSON format).
-#[derive(Debug, Deserialize)]
+///
+/// The locality fields (`city` / `town` / `village` / `hamlet` / `municipality`
+/// / `county` / `state` / `region`) drive [`GeocodeResult::short_name`]: the
+/// most specific populated locality becomes the canonical place name so a
+/// photo's GPS resolves to a city-level `Place` entity (enabling cross-photo
+/// corroboration) rather than fragmenting per POI. `#[serde(default)]` makes
+/// every field optional — Nominatim omits whichever do not apply.
+#[derive(Debug, Default, Deserialize)]
 struct NominatimAddress {
     #[serde(default)]
     country: Option<String>,
     #[serde(default)]
     country_code: Option<String>,
+    #[serde(default)]
+    city: Option<String>,
+    #[serde(default)]
+    town: Option<String>,
+    #[serde(default)]
+    village: Option<String>,
+    #[serde(default)]
+    hamlet: Option<String>,
+    #[serde(default)]
+    municipality: Option<String>,
+    #[serde(default)]
+    county: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    region: Option<String>,
 }
 
 /// A Nominatim place (forward `/search` element). `lat`/`lon` are strings.
@@ -417,15 +440,59 @@ fn place_to_result(
         ),
         None => (None, None),
     };
+    let short_name = locality_short_name(address, &display_name);
     let alternative_names = collect_alternative_names(namedetails, &display_name);
     GeocodeResult {
         latitude,
         longitude,
         display_name,
+        short_name,
         country,
         country_code,
         alternative_names,
     }
+}
+
+/// Derive a canonical, locality-level short name for a reverse-/forward-
+/// geocoded place (Phase 3 C2 / #196).
+///
+/// Returns the most specific populated locality field from the Nominatim
+/// `address` block, in descending specificity:
+/// `city` → `town` → `village` → `hamlet` → `municipality` → `county` →
+/// `state` → `region`. When no locality field is present (e.g. a remote POI
+/// with only a country), falls back to the first comma-separated segment of
+/// `display_name`, trimmed. `None` only when neither a locality nor a usable
+/// display name is reported.
+///
+/// Using the locality — not the POI `name` — keeps photos taken at different
+/// spots in the same city resolving to one `Place` entity so corroboration
+/// fires across them, instead of fragmenting into one entity per restaurant
+/// / landmark. POI-level detail remains available via `display_name` and
+/// `alternative_names` for future vision-tracking queries.
+fn locality_short_name(address: Option<&NominatimAddress>, display_name: &str) -> Option<String> {
+    let locality = address.and_then(|addr| {
+        addr.city
+            .clone()
+            .or_else(|| addr.town.clone())
+            .or_else(|| addr.village.clone())
+            .or_else(|| addr.hamlet.clone())
+            .or_else(|| addr.municipality.clone())
+            .or_else(|| addr.county.clone())
+            .or_else(|| addr.state.clone())
+            .or_else(|| addr.region.clone())
+    });
+    if let Some(name) = locality {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    display_name
+        .split(',')
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// Parse a Nominatim coordinate string (`lat`/`lon`) into `f64`, mapping a
@@ -479,6 +546,8 @@ mod tests {
         let addr = NominatimAddress {
             country: Some("United Kingdom".to_string()),
             country_code: Some("GB".to_string()),
+            city: Some("London".to_string()),
+            ..Default::default()
         };
         let namedetails = serde_json::json!({
             "name": "London",
@@ -496,7 +565,67 @@ mod tests {
         assert_eq!(result.longitude, -0.1278);
         assert_eq!(result.country.as_deref(), Some("United Kingdom"));
         assert_eq!(result.country_code.as_deref(), Some("gb"));
+        // Locality (city) wins over the display_name first segment.
+        assert_eq!(result.short_name.as_deref(), Some("London"));
         assert!(result.alternative_names.contains(&"Londres".to_string()));
+    }
+
+    #[test]
+    fn locality_short_name_prefers_city_over_town() {
+        let addr = NominatimAddress {
+            city: Some("Rome".to_string()),
+            town: Some("Ignored".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            locality_short_name(Some(&addr), "Rome, Italy"),
+            Some("Rome".to_string())
+        );
+    }
+
+    #[test]
+    fn locality_short_name_falls_through_specificity_chain() {
+        // No city/town/village/hamlet/municipality/county -> state wins.
+        let addr = NominatimAddress {
+            state: Some("Texas".to_string()),
+            region: Some("Ignored".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            locality_short_name(Some(&addr), "Somewhere, Texas, USA"),
+            Some("Texas".to_string())
+        );
+    }
+
+    #[test]
+    fn locality_short_name_falls_back_to_display_name_segment() {
+        // POI with no locality field: use the first display_name segment.
+        let addr = NominatimAddress {
+            country: Some("Italy".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            locality_short_name(Some(&addr), "Trattoria Luzzi, Rome, Italy"),
+            Some("Trattoria Luzzi".to_string())
+        );
+    }
+
+    #[test]
+    fn locality_short_name_none_when_display_name_empty() {
+        assert_eq!(locality_short_name(None, ""), None);
+    }
+
+    #[test]
+    fn locality_short_name_trims_and_skips_blank_locality() {
+        // A whitespace-only locality is ignored; fall back to display_name.
+        let addr = NominatimAddress {
+            city: Some("   ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            locality_short_name(Some(&addr), "Rome, Italy"),
+            Some("Rome".to_string())
+        );
     }
 
     #[test]

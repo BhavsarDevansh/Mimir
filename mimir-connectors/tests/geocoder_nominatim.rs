@@ -99,6 +99,8 @@ async fn forward_geocode_parses_first_result() {
     // "London" equals the namedetails `name` but differs from display_name, so
     // it is kept; "Londres" is the alternative name we care about.
     assert!(result.alternative_names.contains(&"Londres".to_string()));
+    // The address `city` locality becomes the canonical short name (C2 / #196).
+    assert_eq!(result.short_name.as_deref(), Some("London"));
 }
 
 #[tokio::test]
@@ -136,6 +138,8 @@ async fn reverse_geocode_parses_single_place() {
     assert_eq!(result.longitude, -0.1276474);
     assert_eq!(result.country.as_deref(), Some("United Kingdom"));
     assert_eq!(result.country_code.as_deref(), Some("gb"));
+    // Reverse geocoding also derives the locality short name (C2 / #196).
+    assert_eq!(result.short_name.as_deref(), Some("London"));
 }
 
 #[tokio::test]

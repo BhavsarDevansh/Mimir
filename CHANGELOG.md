@@ -1,5 +1,96 @@
 # Changelog
 
+## [0.81.2] — 2026-07-26
+
+### Connectors / Knowledge (Phase 3 C2 / #196 review follow-up)
+
+- **Stability:** `PhotosConnector::extract` now bounds geocode retries to one
+  attempt per GPS bucket per `extract()` cycle via a per-cycle failed-key set.
+  A sustained geocoder outage previously re-ran the geocoder's internal
+  retry/backoff once per photo (not per distinct spot), stalling sync at
+  ~1 req/s; now it degrades quickly to the coords-only fallback. The set is
+  local to one cycle, so the next sync retries afresh — only success/no-match
+  outcomes persist in the long-lived coord-dedup cache. New unit test
+  `extract_bounds_geocode_retries_to_one_per_spot_per_cycle`.
+- **Data integrity:** the single-`Geographic`-row-per-place invariant is now
+  enforced at the schema level by a partial unique index
+  (`idx_entity_locations_geographic_unique`, migration `047`) on `entity_id`
+  scoped to `location_type_id = 6`. `ensure_place_coordinates` is a single
+  atomic `INSERT ... ON CONFLICT DO UPDATE` against the index, so the
+  read-then-write no longer relies solely on the serial overlay-worker
+  convention. The index is deliberately partial — `Visited`/`Home`/`Work`/
+  `Origin`/`Current` rows are not unique per `(entity_id, location_type_id)`.
+  New integration test `ensure_place_coordinates_keeps_single_geographic_row`
+  (sequential + concurrent). A `const_assert` locks `LocationType::Geographic
+  == 6` since the SQL hardcodes the literal.
+- **Observability:** `normalize_and_insert` now logs (debug) when a place is
+  created but not anchored because no coordinates resolved, instead of silently
+  no-op'ing.
+- **Docs:** MD022 blank lines around anchored headings in
+  `docs/photos-connector.md`; renamed the stale "What's next" heading in
+  `docs/wiki/photos-connector.md` to "Location enrichment"; documented the
+  per-cycle retry bound and the schema-level place-anchor invariant in
+  `docs/photos-connector.md` and `docs/entity-locations.md`.
+
+## [0.81.1] — 2026-07-26
+
+### Connectors (Phase 3 C2 follow-up / #196)
+
+- **Fix:** `PhotosConnector::extract` no longer holds the staged-photo buffer
+  mutex across the per-photo reverse-geocode network awaits. The buffer is
+  `std::mem::take`-drained into a local `Vec` under the lock and the guard is
+  dropped before the geocode loop, restoring the C1 lock hold-time
+  (in-memory map only) so `forget`/`reset` or a concurrent admin-triggered sync
+  is not blocked for the ~N-second scan duration. No semantic change; existing
+  unit and integration tests pass unchanged.
+
+## [0.81.0] — 2026-07-26
+
+### Connectors (Phase 3 C2 / #196)
+
+- **Photos GPS → place extraction:** the local-filesystem Photos connector now
+  reverse-geocodes each photo's EXIF GPS into a locality-level place name via
+  the shared `Geocoder`, emitting `owner took_photo_at <place>` facts whose
+  place is a `Place` object entity. Photos at the same place corroborate into
+  one open-ended fact (+0.05/source, capped 0.95; base confidence 0.80), so the
+  knowledge graph grows with distinct places visited, not photo count. A
+  coord-dedup cache (~111 m buckets) bounds geocode calls to one per shooting
+  spot; transient network errors aren't cached. When no place resolves (no
+  geocoder / no match / transient error), the photo degrades to the C1
+  coords-only `took_photo <rel_path>` shape so no data is lost.
+- **Geocoder injection:** a new `ConnectorContext` (shared-services struct) is
+  threaded factory → registry → supervisor. `ConnectorFactory::create` now
+  receives `&ConnectorContext`; `ConnectorRegistry::create_with_context`
+  forwards it; `ConnectorSupervisor::with_geocoder` sets the context's geocoder.
+  No new dependencies (reuses the S1 `Geocoder`).
+- **Place-coordinate anchoring:** two `entity_locations` rows per place fact —
+  the owner's `Visited` row (coords + place name) and a new idempotent
+  `Geographic` row (`LocationType::Geographic = 6`, migration `046`) anchoring
+  the place entity's own coordinates, so `find_nearby` resolves places by where
+  they are. The overlay worker derives `place_anchor` when a fact's object is a
+  `Place` entity.
+- **Geocoder:** `GeocodeResult` gained a `short_name` field (the most specific
+  locality: city → town → village → hamlet → municipality → county → state →
+  region, else the first `display_name` segment). The `Geocoder` trait now
+  requires `Debug` (so `ConnectorContext` can derive `Debug`).
+- **Refactor:** the location-overlay worker's `OverlayJob::Apply` payload moved
+  into a `LocationOverlayApply` struct (fixes a clippy `too_many_arguments`
+  lint introduced by the `place_anchor` field; keeps the worker function's
+  argument list small).
+- **Tests:** geocoder `short_name` unit + Nominatim integration tests; Photos
+  `resolve_place` unit tests (mock geocoder place fact, no-geocoder fallback,
+  cache hit + miss-then-hit, transient-error-not-cached) + `place_fact` /
+  `coords_only_fact` shape tests; integration
+  `supervisor_ingests_photo_as_took_photo_at_place_fact`; normalize
+  `photos_at_same_place_corroborate_and_anchor_place_coords`; updated
+  `lookup_sync_test`, `enum_roundtrip_test`, `migrations_test`,
+  `entity_locations_test` for the new enum/count.
+- **Docs:** `docs/photos-connector.md` (C2 rewrite), `docs/entity-locations.md`,
+  `docs/geocoder.md`, `docs/wiki/photos-connector.md`,
+  `docs/wiki/entity-locations.md`, `docs/wiki/geocoding.md`,
+  `docs/wiki/what-works-now.md`, `README.md`, `Mimir-Implementation-Context.md`,
+  and the `photos.rs` module header.
+
 ## [0.80.0] — 2026-07-26
 
 ### Connectors (Phase 3 C1 / #195)

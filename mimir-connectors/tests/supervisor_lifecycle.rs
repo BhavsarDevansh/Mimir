@@ -131,7 +131,7 @@ fn recording_registry(recorder: Arc<MockSyncRecorder>) -> Arc<ConnectorRegistry>
     ] {
         let rec = recorder.clone();
         let factory = FnConnectorFactory::new(
-            move |config| -> Result<Arc<dyn Connector>, ConnectorError> {
+            move |config, _ctx| -> Result<Arc<dyn Connector>, ConnectorError> {
                 Ok(
                     Arc::new(MockConnector::from_config(config)?.with_recorder(rec.clone()))
                         as Arc<dyn Connector>,

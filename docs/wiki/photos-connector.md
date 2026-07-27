@@ -87,8 +87,12 @@ a coordinates-only "took a photo" fact, so no data is lost.
 ### Photos as facts, not entities
 
 A photo is stored as a **fact**, not a knowledge-graph entity. The only
-entities created are you (the owner) and one `Place` per distinct city/town
-Mimir sees. So your knowledge graph grows with the *places you visit*, not
-with the number of photos you take — thousands of photos across a handful of
-cities stay a handful of place facts. Each photo's file path is kept as
+entities created are you (the owner) and one `Place` per distinct locality
+Mimir sees. The geocoder resolves the most specific populated locality field
+available — `city`, `town`, `village`, `hamlet`, `municipality`, `county`,
+`state`, or `region` — so a photo in a hamlet and a photo in a city both
+anchor to the appropriate locality-level `Place`, not just city/town names.
+So your knowledge graph grows with the *places you visit*, not with the number
+of photos you take — thousands of photos across a handful of localities stay
+a handful of place facts. Each photo's file path is kept as
 provenance, which is the trail a future "find that photo" search will walk.

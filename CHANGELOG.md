@@ -43,6 +43,10 @@
   polling incremental / no-op / full sync, and UIDVALIDITY reset. All deps
   already in the tree via reqwest/async-imap — no new downloads.
 
+### Process
+
+- **PR/commit message formatting rule:** `AGENTS.md` (Finishing Work) now requires flowing single-line prose in PR descriptions and commit messages — no manual hard-wrapping with newlines inside paragraphs or list items (single newlines render as soft breaks and make raw text and diffs hard to read).
+
 ## [0.82.1] — 2026-07-28 — 2026-07-28
 
 ### Docs

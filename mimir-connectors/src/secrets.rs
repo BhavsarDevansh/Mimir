@@ -105,7 +105,7 @@ pub enum SecretError {
 /// Struct variants are used (rather than newtype variants like `ApiToken(String)`)
 /// because serde's internally-tagged representation requires map-typed variant
 /// payloads; the named fields also make the on-disk JSON self-describing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SecretBundle {
     /// OAuth 2.0 access token with optional refresh token and expiry.
@@ -139,6 +139,42 @@ pub enum SecretBundle {
     },
 }
 
+impl std::fmt::Debug for SecretBundle {
+    /// Redacted `Debug`: variant discriminant and non-secret fields only.
+    ///
+    /// The secret values (`access_token`, `refresh_token`, `token`,
+    /// `password`) are replaced with `"<redacted>"` so that
+    /// `Debug`-formatting a [`SecretStore`] (e.g. via [`ConnectorContext`]),
+    /// a `tracing` field, or a persisted error string never emits plaintext
+    /// credentials. The `expires_at` timestamp and the *presence* (not value)
+    /// of a refresh token are preserved as useful, non-secret context.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OAuth {
+                access_token: _,
+                refresh_token,
+                expires_at,
+            } => f
+                .debug_struct("SecretBundle::OAuth")
+                .field("access_token", &"<redacted>")
+                .field(
+                    "refresh_token",
+                    &refresh_token.as_ref().map(|_| "<redacted>"),
+                )
+                .field("expires_at", expires_at)
+                .finish(),
+            Self::ApiToken { token: _ } => f
+                .debug_struct("SecretBundle::ApiToken")
+                .field("token", &"<redacted>")
+                .finish(),
+            Self::AppPassword { password: _ } => f
+                .debug_struct("SecretBundle::AppPassword")
+                .field("password", &"<redacted>")
+                .finish(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SecretStore trait
 // ---------------------------------------------------------------------------
@@ -156,7 +192,7 @@ pub enum SecretBundle {
 /// without a breaking change, and so it composes cleanly with the async
 /// [`crate::Connector`] pipeline.
 #[async_trait]
-pub trait SecretStore: Send + Sync {
+pub trait SecretStore: Send + Sync + std::fmt::Debug {
     /// Load the credentials for `slug`, or `Ok(None)` if none are stored.
     async fn load(&self, slug: &str) -> Result<Option<SecretBundle>, SecretError>;
 
@@ -499,5 +535,87 @@ mod tests {
         assert!(validate_slug(&s).is_err());
         let ok = "a".repeat(MAX_SLUG_LEN);
         assert!(validate_slug(&ok).is_ok());
+    }
+
+    #[test]
+    fn secret_bundle_debug_redacts_all_secret_values() {
+        let bundles = [
+            SecretBundle::OAuth {
+                access_token: "super-secret-access".into(),
+                refresh_token: Some("super-secret-refresh".into()),
+                expires_at: None,
+            },
+            SecretBundle::OAuth {
+                access_token: "a".into(),
+                refresh_token: None,
+                expires_at: None,
+            },
+            SecretBundle::ApiToken {
+                token: "super-secret-token".into(),
+            },
+            SecretBundle::AppPassword {
+                password: "super-secret-password".into(),
+            },
+        ];
+        for bundle in &bundles {
+            let dbg = format!("{bundle:?}");
+            assert!(
+                !dbg.contains("super-secret"),
+                "Debug leaked a secret value: {dbg}"
+            );
+            // The discriminant is preserved (useful, non-secret context).
+            assert!(
+                dbg.contains("SecretBundle::"),
+                "missing discriminant: {dbg}"
+            );
+        }
+        // The presence of a refresh token is shown without its value.
+        let with_rt = format!(
+            "{:?}",
+            SecretBundle::OAuth {
+                access_token: "a".into(),
+                refresh_token: Some("rt".into()),
+                expires_at: None,
+            }
+        );
+        assert!(
+            with_rt.contains("<redacted>"),
+            "must redact refresh_token: {with_rt}"
+        );
+        let without_rt = format!(
+            "{:?}",
+            SecretBundle::OAuth {
+                access_token: "a".into(),
+                refresh_token: None,
+                expires_at: None,
+            }
+        );
+        assert!(
+            without_rt.contains("None"),
+            "must show refresh_token absence: {without_rt}"
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_store_debug_redacts_bundled_secrets() {
+        let store = InMemorySecretStore::new();
+        store
+            .store(
+                "cal-google",
+                &SecretBundle::ApiToken {
+                    token: "super-secret-token".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let dbg = format!("{store:?}");
+        assert!(
+            !dbg.contains("super-secret"),
+            "store Debug leaked a secret: {dbg}"
+        );
+        assert!(
+            dbg.contains("SecretBundle::ApiToken"),
+            "must keep discriminant: {dbg}"
+        );
     }
 }

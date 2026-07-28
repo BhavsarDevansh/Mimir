@@ -74,6 +74,13 @@ pub mod supervisor;
 #[cfg(feature = "photos")]
 pub mod photos;
 
+/// CalDAV calendar connector (Phase 3 C3 / #197), gated by the `calendar`
+/// feature. A `CalDavClient` (PROPFIND + sync-collection REPORT, sync-token
+/// incremental sync, icalendar VEVENT parsing) backs a `CalendarConnector`
+/// implementing the two-step ingestion model in `Polling` mode.
+#[cfg(feature = "calendar")]
+pub mod calendar;
+
 pub use connector::{
     ActionResult, Connector, ConnectorAction, ConnectorContext, ConnectorError, ConnectorFactory,
     ConnectorMode, HealthStatus, SyncOptions, SyncOutcome,
@@ -89,6 +96,11 @@ pub use supervisor::{
 
 #[cfg(feature = "photos")]
 pub use photos::{PhotosConnector, PhotosConnectorFactory, PhotosCursor};
+
+#[cfg(feature = "calendar")]
+pub use calendar::{
+    CalendarAuthMethod, CalendarConfigDto, CalendarConnector, CalendarConnectorFactory,
+};
 pub use rate_limit::{
     BackoffStrategy, QuotaSnapshot, RateLimitConfig, RateLimitError, RateLimiter, RetryError,
     RetryHint, Retryable, is_retryable_status, retry_with_backoff,

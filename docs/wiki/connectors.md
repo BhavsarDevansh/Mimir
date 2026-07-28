@@ -1,7 +1,7 @@
 # Connectors
 
 > **Phase:** 3 — Connectors
-> **Status:** In progress (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10). Shared rate-limit + retry/backoff primitives landed (issue #189 / F12). Configurable, always-compiled mock connector test harness landed (issue #190 / F13). **The first concrete backend landed: the local-filesystem Photos connector (issue #195 / C1) — a read-only `notify` file watcher with EXIF GPS/datetime extraction and a per-file mtime/inode incremental cursor; the supervisor injects the persisted cursor as `__cursor` so it skips unchanged photos across restarts, and it is the first connector that actually syncs data.** Calendar/email backends arrive in later Phase 3 issues.
+> **Status:** In progress (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10). Shared rate-limit + retry/backoff primitives landed (issue #189 / F12). Configurable, always-compiled mock connector test harness landed (issue #190 / F13). **Two concrete backends have landed. The local-filesystem Photos connector (issue #195 / C1, enriched in C2 / #196) — a `notify` file watcher with EXIF GPS/datetime extraction and a per-file mtime/inode incremental cursor — and the CalDAV Calendar connector (issue #197 / C3) — a `Polling` CalDAV client (PROPFIND + sync-collection REPORT, sync-token incremental sync) with app-password and OAuth-refresh auth via the secret store, parsing VEVENTs with `icalendar`. The calendar connector is transport-only: it fetches and stages events; event → knowledge-graph fact extraction + reminders integration + write-back are C4 (#198).** Email backends arrive in later Phase 3 issues.
 
 ## What connectors are
 
@@ -17,7 +17,7 @@ sensitivity gating as facts you tell Mimir directly.
 
 ## What works right now
 
-**The Photos connector syncs data; Calendar/email are not yet implemented.** As of this version:
+**The Photos and Calendar connectors sync data; email is not yet implemented.** As of this version:
 
 - The `mimir-connectors` crate exists and is wired into the workspace.
 - The feature flags for the three core connector types (`photos`, `calendar`,
@@ -37,7 +37,7 @@ sensitivity gating as facts you tell Mimir directly.
 The first real backend is in: the **Photos** local-filesystem connector
 (issue #195 / C1) — a read-only `notify` file watcher that extracts EXIF GPS +
 datetime and emits a `took_photo` fact per photo (see [Photos Connector](photos-connector.md)).
-Calendar/email backends are not yet implemented. The `Connector` **trait and its data types are defined**
+The **Calendar** connector (see [Calendar Connector](calendar-connector.md)) speaks CalDAV and syncs events with an incremental sync-token cursor; its current `extract()` is transport-only and emits no `NormalizedFact`s yet (C4 / #198 does event → fact extraction). The `Connector` **trait and its data types are defined**
 (issue #183 / F6): every connector implements an async `Connector` interface
 with `sync` (fetch raw items) → `extract` (produce `NormalizedFact`s), plus
 `authenticate`, `health`, optional `act` write-back, and `forget`.
@@ -148,9 +148,8 @@ store already supports deletion.)
 
 ## What is planned
 
-- **Photos** — local photo library watching + EXIF/GPS extraction landed (C1 / #195); remaining work is GPS → place-name reverse-geocoding + `entity_locations` enrichment (C2 / #196).
-- **Calendar** — CalDAV read/sync, event → fact extraction, event-subsystem
-  integration.
+- **Photos** — local photo library watching + EXIF/GPS extraction + GPS → place reverse-geocoding landed (C1 / #195 + C2 / #196).
+- **Calendar** — CalDAV transport (PROPFIND + sync-token sync + icalendar parse + app-password/OAuth-refresh auth) landed (C3 / #197); remaining work is event → KB fact extraction, events-subsystem (#74) integration, and write-back (C4 / #198).
 - **Email** — IMAP ingestion with IDLE, structured and LLM-based fact
   extraction (flights, bookings, contacts).
 

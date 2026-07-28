@@ -32,6 +32,8 @@
 
 use std::time::Duration;
 
+use tracing::warn;
+
 use crate::connector::ConnectorError;
 
 // ---------------------------------------------------------------------------
@@ -82,6 +84,12 @@ pub struct SyncCollectionResult {
     pub changed: Vec<CalDavResource>,
     /// Hrefs the server reports as deleted since the prior token.
     pub deleted: Vec<String>,
+    /// Whether the server signalled a truncated (RFC 6578 §6.5) response —
+    /// an HTTP 507 `Insufficient Storage` status on a `<response>`. When
+    /// `true`, `new_sync_token` is the partial cursor and the caller must
+    /// re-request with it to page through the remaining changes until the
+    /// collection is drained (a `false` value completes the sync).
+    pub truncated: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +174,7 @@ impl CalDavClient {
         let body = format!(
             "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
 <d:sync-collection xmlns:d=\"DAV:\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\">\n  \
-{token_element}\n  <d:prop>\n    <d:getetag/>\n    <cal:calendar-data/>\n  </d:prop>\n\
+{token_element}\n  <d:sync-level>1</d:sync-level>\n  <d:prop>\n    <d:getetag/>\n    <cal:calendar-data/>\n  </d:prop>\n\
 </d:sync-collection>"
         );
         let resp = self
@@ -184,7 +192,11 @@ impl CalDavClient {
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(ConnectorError::NotAuthenticated);
         }
-        if !status.is_success() && status.as_u16() != 207 {
+        // RFC 6578 §6.5: a truncated result set is signalled with HTTP 507
+        // (Insufficient Storage) carrying a partial multistatus body plus an
+        // advancing `sync-token`; accept it alongside 207 and parse the body
+        // so the caller can page with the new token.
+        if !status.is_success() && status.as_u16() != 207 && status.as_u16() != 507 {
             return Err(ConnectorError::Other(format!(
                 "sync-collection REPORT failed: HTTP {status}"
             )));
@@ -230,6 +242,7 @@ fn parse_sync_collection(xml: &str) -> Result<SyncCollectionResult, ConnectorErr
         new_sync_token: None,
         changed: Vec::new(),
         deleted: Vec::new(),
+        truncated: false,
     };
     // The sync-token is a direct child of multistatus (there is exactly one).
     if let Some(tok) = doc.descendants().find(|n| n.has_tag_name("sync-token")) {
@@ -239,21 +252,46 @@ fn parse_sync_collection(xml: &str) -> Result<SyncCollectionResult, ConnectorErr
         let Some(href) = first_child_text(&resp, "href") else {
             continue;
         };
-        // We requested `<cal:calendar-data/>` inline, so its presence marks a
-        // live (changed/new) resource and its absence marks a deleted one. The
-        // `<status>` line is intentionally not the classifier — some servers
-        // omit it on 200 responses, and a deleted resource has no body anyway.
+        // RFC 6578 §6.5: a 507 status on a `<response>` marks a truncated
+        // result set — the server still returns a valid, advancing
+        // `sync-token` and the partial changes so far. Record truncation and
+        // keep paging; the 507 `<response>` itself carries no item to stage.
+        let status_code = response_status_code(&resp);
+        if status_code == Some(507) {
+            result.truncated = true;
+            continue;
+        }
         // Collection hrefs (trailing `/`) and empty hrefs are skipped: only
         // item hrefs are staged or tombstoned.
+        if !href_is_resource(&href) {
+            continue;
+        }
+        // We requested `<cal:calendar-data/>` inline, so its presence marks a
+        // live (changed/new) resource. Its absence is a deletion *only* when
+        // the server explicitly reports 404/410 — a 403 (permission denied),
+        // 423 (locked), or any other error has no `calendar-data` either, and
+        // tombstoning on it would purge a live event once C4 wires deletions
+        // to fact lifecycle. Unexpected statuses are logged and skipped.
         let caldata = first_child_text(&resp, "calendar-data");
-        if caldata.is_some() && href_is_resource(&href) {
+        if let Some(caldata) = caldata {
             result.changed.push(CalDavResource {
                 href,
                 etag: first_child_text(&resp, "getetag"),
-                calendar_data: caldata,
+                calendar_data: Some(caldata),
             });
-        } else if caldata.is_none() && href_is_resource(&href) {
-            result.deleted.push(href);
+        } else {
+            match status_code {
+                Some(404) | Some(410) => result.deleted.push(href),
+                Some(code) => warn!(
+                    href = %href,
+                    status = code,
+                    "CalDAV response carried no calendar-data with an unexpected status; not tombstoning"
+                ),
+                None => warn!(
+                    href = %href,
+                    "CalDAV response carried no calendar-data and no status; not tombstoning"
+                ),
+            }
         }
     }
     Ok(result)
@@ -262,11 +300,32 @@ fn parse_sync_collection(xml: &str) -> Result<SyncCollectionResult, ConnectorErr
 /// First descendant element of `node` matching a local tag name, returning its
 /// trimmed text content (if any). Used for the leaf `<href>`/`<getetag>`/
 /// `<calendar-data>`/`<status>` children of a `<response>`.
+///
+/// `roxmltree::Node::text()` returns only the *first* text child, so a
+/// `calendar-data`/`summary`/`calendar-name` element whose text is split across
+/// multiple text/CDATA segments would be silently truncated. All direct text
+/// children are concatenated and trimmed instead, matching the documented
+/// behaviour and avoiding lossy parsing of server responses.
 fn first_child_text(node: &roxmltree::Node, tag: &str) -> Option<String> {
     node.descendants()
         .find(|n| n.has_tag_name(tag))
-        .and_then(|n| n.text())
-        .map(|t| t.to_string())
+        .map(|n| {
+            n.children()
+                .filter(|c| c.is_text())
+                .map(|c| c.text().unwrap_or_default())
+                .collect::<String>()
+        })
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
+/// Parse the HTTP status code from a `<response>`'s `<status>` child (e.g.
+/// `HTTP/1.1 404 Not Found` → `404`). Returns `None` when there is no
+/// `<status>` element or the second token is not a parseable code.
+fn response_status_code(node: &roxmltree::Node) -> Option<u16> {
+    first_child_text(node, "status")
+        .and_then(|s| s.split_whitespace().nth(1).map(str::to_string))
+        .and_then(|code| code.parse().ok())
 }
 
 /// A href is a "changed resource" candidate iff it does not end with `/`
@@ -631,5 +690,94 @@ END:VCALENDAR";
     fn parse_icalendar_invalid_payload_returns_empty() {
         assert!(parse_icalendar("not ical at all", "/x.ics", None).is_empty());
         assert!(parse_icalendar("", "/x.ics", None).is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Review-driven guards (PR #242): sync-level, tombstone gating, truncated
+    // responses, and split-text-node concatenation.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn sync_collection_request_includes_sync_level_element() {
+        let server = MockServer::start().await;
+        let url = format!("{}/cal/personal/", server.uri());
+        Mock::given(method("REPORT"))
+            .and(body_string_contains("<d:sync-level>1</d:sync-level>"))
+            .respond_with(
+                ResponseTemplate::new(207)
+                    .insert_header("content-type", "application/xml; charset=utf-8")
+                    .set_body_string(sync_body("tok", &[], &[])),
+            )
+            .mount(&server)
+            .await;
+        let client = CalDavClient::new(
+            http_client(),
+            CalDavAuth::Basic {
+                username: "u".into(),
+                password: "p".into(),
+            },
+        );
+        let res = client.sync_collection(&url, None).await.expect("sync ok");
+        assert!(!res.truncated);
+    }
+
+    #[test]
+    fn parse_sync_collection_tombstones_only_on_explicit_404_or_410() {
+        let body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<d:multistatus xmlns:d=\"DAV:\">
+<d:sync-token>t</d:sync-token>
+<d:response><d:href>/cal/perm-denied.ics</d:href><d:propstat><d:prop/><d:status>HTTP/1.1 403 Forbidden</d:status></d:propstat></d:response>
+<d:response><d:href>/cal/locked.ics</d:href><d:propstat><d:prop/><d:status>HTTP/1.1 423 Locked</d:status></d:propstat></d:response>
+<d:response><d:href>/cal/gone.ics</d:href><d:propstat><d:prop/><d:status>HTTP/1.1 410 Gone</d:status></d:propstat></d:response>
+<d:response><d:href>/cal/notfound.ics</d:href><d:propstat><d:prop/><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response>
+</d:multistatus>"
+            .to_string();
+        let res = parse_sync_collection(&body).expect("parse ok");
+        // Only 404/410 become tombstones; 403/423 are skipped (not purged).
+        let mut deleted = res.deleted.clone();
+        deleted.sort();
+        assert_eq!(
+            deleted,
+            vec!["/cal/gone.ics".to_string(), "/cal/notfound.ics".to_string()]
+        );
+        assert!(res.changed.is_empty());
+        assert!(!res.truncated);
+    }
+
+    #[test]
+    fn parse_sync_collection_marks_truncated_on_507() {
+        let body = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<d:multistatus xmlns:d=\"DAV:\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\">
+<d:sync-token>partial</d:sync-token>
+<d:response><d:href>/cal/personal/</d:href><d:propstat><d:prop/><d:status>HTTP/1.1 507 Insufficient Storage</d:status></d:propstat></d:response>
+<d:response><d:href>/cal/first.ics</d:href><d:propstat><d:prop><cal:calendar-data><![CDATA[{ICAL_EVENT}]]></cal:calendar-data></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+</d:multistatus>"
+        );
+        let res = parse_sync_collection(&body).expect("parse ok");
+        assert!(res.truncated, "507 must set truncated");
+        assert_eq!(res.new_sync_token.as_deref(), Some("partial"));
+        // The partial changed set is still returned for paging.
+        assert_eq!(res.changed.len(), 1);
+        assert!(res.deleted.is_empty());
+    }
+
+    #[test]
+    fn first_child_text_concatenates_split_text_nodes() {
+        // Two text segments separated by a comment inside <calendar-data>; the
+        // first-text-only behaviour of `Node::text()` would lose the second.
+        let xml = "<?xml version=\"1.0\"?>
+<d:response xmlns:d=\"DAV:\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\">
+<d:calendar-data>part-1<!-- c --><cal:extra/>part-2</d:calendar-data>
+</d:response>";
+        let doc = roxmltree::Document::parse(xml).unwrap();
+        let resp = doc
+            .descendants()
+            .find(|n| n.has_tag_name("response"))
+            .unwrap();
+        // Only the *direct* text children are joined; the nested <cal:extra/>
+        // element's text is not pulled in, but both direct text segments are.
+        let text = first_child_text(&resp, "calendar-data").expect("some text");
+        assert_eq!(text, "part-1part-2");
     }
 }

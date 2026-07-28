@@ -36,28 +36,56 @@ Two credential kinds, mirroring [`SecretBundle`](connector-secret-store.md):
   config (`token_endpoint`, `client_id`, optional `client_secret`/`scopes`)
   lives in `config_json`. The connector **refreshes** an expired access token
   (within a 60 s skew) before every sync/authenticate/health call and persists
-  the refreshed bundle back to the store.
+  the refreshed bundle back to the store. An **unknown** expiry
+  (`expires_at: None`) does *not* force a refresh on every cycle — the token
+  is reused and refreshed only once it is actually expired (avoiding triple
+  POSTs to the token endpoint and rate-limit risk). When a refresh response
+  omits `refresh_token` (RFC 6749 §6 allows this), the connector **retains**
+  the prior refresh token so OAuth does not break after the first refresh.
 
-The interactive PKCE login that *obtains* the first OAuth token is **A4 /
-#206**, out of scope here. #197 only consumes + refreshes a stored token.
+The token-endpoint error path reports only the HTTP status and the parsed
+`error`/`error_description` fields — the raw response body is never surfaced
+to `ConnectorError` strings (which the supervisor persists to `last_error`
+and logs), because provider error payloads can echo the `client_secret` or
+`refresh_token`. Auth-method/secret-kind mismatch errors use the auth-kind
+discriminant only, never a `Debug` of the OAuth config.
+
+The interactive PKCE login that *obtains* the first OAuth token is
+**A4 / `#206`**, out of scope here. `#197` only consumes + refreshes a stored token.
 
 ## Sync protocol
 
-One round trip per cycle, via the [`CalDavClient`](#caldavclient):
+One round trip per cycle (paged when truncated), via the
+[`CalDavClient`](#caldavclient):
 
-1. `sync-collection` REPORT (RFC 6578) on the configured `calendar_url`,
-   requesting `<d:getetag/>` + `<cal:calendar-data/>` inline so changed
-   VEVENTs and a new `sync-token` arrive together (no follow-up multiget).
+1. `sync-collection` REPORT (RFC 6578) on the configured `calendar_url`. The
+   request body carries the required `<d:sync-level>1</d:sync-level>` element
+   (RFC 6578 §6.3), the `<d:sync-token>` (omitted for a full sync), and
+   `<d:prop>` requesting `<d:getetag/>` + `<cal:calendar-data/>` inline so
+   changed VEVENTs and a new `sync-token` arrive together (no follow-up
+   multiget).
 2. Omitting `<sync-token>` performs a **full** sync and yields the initial
    token; including it performs an **incremental** sync (no re-fetch).
 3. The returned `sync-token` is the connector's incremental cursor: kept
    in memory for the next in-process cycle and returned in `SyncOutcome` for
    the supervisor to persist via `KnowledgeGraph::update_sync_cursor`.
 4. Each changed resource's `calendar-data` is parsed with `icalendar` into a
-   `RawCalDavEvent` and staged; 404 responses are deleted hrefs (C4 / #198 owns
-   fact lifecycle for deletions).
+   `RawCalDavEvent` and staged. A `<response>` with no `calendar-data` is a
+   tombstone **only** when its `<status>` is an explicit `404`/`410`; other
+   statuses (`403` permission denied, `423` locked, `507` truncated, …) are
+   logged and skipped so a transient server error never purges a live event
+   (C4 / #198 owns fact lifecycle for deletions).
+5. A truncated result set (RFC 6578 §6.5) is signalled with HTTP `507`
+   (Insufficient Storage) carrying a partial multistatus body plus an
+   advancing `sync-token`. The connector pages with the new token — re-issuing
+   `sync-collection` and accumulating the partial changes — until a
+   non-truncated response completes the sync.
 
 `SyncOptions::full` ignores the persisted cursor (re-fetch everything).
+
+The `roxmltree` XML helper concatenates *all* direct text/CDATA children of a
+leaf element (not just the first), so `calendar-data`/`summary`/`calendar-name`
+text split across multiple segments is not silently truncated.
 
 ## `CalDavClient`
 

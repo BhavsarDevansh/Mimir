@@ -37,7 +37,7 @@ sensitivity gating as facts you tell Mimir directly.
 The first real backend is in: the **Photos** local-filesystem connector
 (issue #195 / C1) — a read-only `notify` file watcher that extracts EXIF GPS +
 datetime and emits a `took_photo` fact per photo (see [Photos Connector](photos-connector.md)).
-The **Calendar** connector (see [Calendar Connector](calendar-connector.md)) speaks CalDAV and syncs events with an incremental sync-token cursor. The `Connector` **trait and its data types are defined**
+The **Calendar** connector (see [Calendar Connector](calendar-connector.md)) speaks CalDAV and syncs events with an incremental sync-token cursor; its current `extract()` is transport-only and emits no `NormalizedFact`s yet (C4 / #198 does event → fact extraction). The `Connector` **trait and its data types are defined**
 (issue #183 / F6): every connector implements an async `Connector` interface
 with `sync` (fetch raw items) → `extract` (produce `NormalizedFact`s), plus
 `authenticate`, `health`, optional `act` write-back, and `forget`.
@@ -150,8 +150,6 @@ store already supports deletion.)
 
 - **Photos** — local photo library watching + EXIF/GPS extraction + GPS → place reverse-geocoding landed (C1 / #195 + C2 / #196).
 - **Calendar** — CalDAV transport (PROPFIND + sync-token sync + icalendar parse + app-password/OAuth-refresh auth) landed (C3 / #197); remaining work is event → KB fact extraction, events-subsystem (#74) integration, and write-back (C4 / #198).
-- **Calendar** — CalDAV read/sync, event → fact extraction, event-subsystem
-  integration.
 - **Email** — IMAP ingestion with IDLE, structured and LLM-based fact
   extraction (flights, bookings, contacts).
 

@@ -318,6 +318,91 @@ async fn oauth_refreshes_expired_token_then_syncs() {
     assert!(expires_at.is_some(), "expiry derived from expires_in");
 }
 
+#[tokio::test]
+async fn oauth_refresh_without_refresh_token_in_response_retains_prior() {
+    let server = MockServer::start().await;
+    let cal_url = format!("{}/cal/google/", server.uri());
+    let token_url = format!("{}/oauth/token", server.uri());
+
+    // Token endpoint returns a fresh access token but omits refresh_token —
+    // the connector must retain the prior refresh token (PR #242 review #14).
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "fresh-token",
+            "expires_in": 3600,
+            "token_type": "Bearer",
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("REPORT"))
+        .and(path("/cal/google/"))
+        .and(header("authorization", "Bearer fresh-token"))
+        .respond_with(
+            ResponseTemplate::new(207)
+                .insert_header("content-type", "application/xml; charset=utf-8")
+                .set_body_string(sync_body("gtoken-1", &[("/cal/g.ics", ICAL_EVENT)], &[])),
+        )
+        .mount(&server)
+        .await;
+
+    let store = store_with_expired_oauth("rt-1").await;
+    let connector = make_connector(oauth_config(&cal_url, &token_url), store.clone(), None);
+    connector.sync(SyncOptions::default()).await.unwrap();
+
+    // The persisted bundle must still carry the original refresh token.
+    let bundle = store.load("calendar-google").await.unwrap().unwrap();
+    let SecretBundle::OAuth { refresh_token, .. } = bundle else {
+        panic!("expected OAuth bundle, got {bundle:?}");
+    };
+    assert_eq!(
+        refresh_token.as_deref(),
+        Some("rt-1"),
+        "prior refresh token must be retained when the response omits one"
+    );
+}
+
+#[tokio::test]
+async fn oauth_unknown_expiry_does_not_force_refresh_on_every_cycle() {
+    let server = MockServer::start().await;
+    let cal_url = format!("{}/cal/google/", server.uri());
+    let token_url = format!("{}/oauth/token", server.uri());
+
+    // A valid (non-expired) access token with an *unknown* expiry must be
+    // reused as-is — no refresh POST should reach the token endpoint
+    // (PR #242 review #11). The mock server mounts no POST handler, so a
+    // refresh attempt would fail with a wiremock "no matching mock" error.
+    let store = Arc::new(InMemorySecretStore::new());
+    store
+        .store(
+            "calendar-google",
+            &SecretBundle::OAuth {
+                access_token: "live-token".into(),
+                refresh_token: Some("rt-1".into()),
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    Mock::given(method("REPORT"))
+        .and(path("/cal/google/"))
+        .and(header("authorization", "Bearer live-token"))
+        .respond_with(
+            ResponseTemplate::new(207)
+                .insert_header("content-type", "application/xml; charset=utf-8")
+                .set_body_string(sync_body("gtoken-1", &[("/cal/g.ics", ICAL_EVENT)], &[])),
+        )
+        .mount(&server)
+        .await;
+
+    let connector = make_connector(oauth_config(&cal_url, &token_url), store.clone(), None);
+    let outcome = connector.sync(SyncOptions::default()).await.unwrap();
+    assert_eq!(outcome.fetched, 1);
+    assert_eq!(outcome.new_cursor.as_deref(), Some("gtoken-1"));
+}
+
 // ---------------------------------------------------------------------------
 // Health
 // ---------------------------------------------------------------------------

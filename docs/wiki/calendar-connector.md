@@ -8,10 +8,10 @@
 ## What it is
 
 The Calendar connector reads your CalDAV calendar (Apple iCloud, Nextcloud,
-Fastmail, and similar) into Mimir so your knowledge graph knows **what events
-you have, where, and when**. It speaks CalDAV — the open calendar protocol
-your calendar server already supports — so it works with any compliant server,
-no vendor lock-in.
+Fastmail, and similar) into Mimir, **staging** your events so that (once C4
+lands) the knowledge graph can answer **what events you have, where, and
+when**. It speaks CalDAV — the open calendar protocol your calendar server
+already supports — so it works with any compliant server, no vendor lock-in.
 
 It is a background sync worker: it periodically pulls new/changed events
 using CalDAV's **sync-token** protocol (only the deltas since the last sync,
@@ -21,8 +21,9 @@ not the whole calendar every time) and stages them for the knowledge graph.
 
 - You point it at a calendar URL and give it either an **app-specific
   password** (iCloud/Fastmail/Nextcloud) or an **OAuth** token (Google). The
-  secret lives in Mimir's encrypted-permission secret store (`0600`), never in
-  plain config.
+  secret lives in Mimir's permission-checked secret store (`0600`); the
+  current backend stores credentials in plaintext at rest, never in plain
+  config.
 - Each sync issues one CalDAV `sync-collection` request. The first time it
   fetches everything and gets a **sync-token**; every later sync sends that
   token back and receives only what changed (new/updated/deleted events) plus a
@@ -31,7 +32,8 @@ not the whole calendar every time) and stages them for the knowledge graph.
   recurrence rule) is parsed and held in an in-memory buffer ready for the
   knowledge graph.
 - The connector keeps the sync-token as its progress marker: across restarts
-  it resumes from where it left off, never re-fetching the whole calendar.
+  it normally resumes from where it left off; a requested full sync or an
+  invalidated cursor can require a complete refetch.
 
 > **C3 vs C4:** This first cut (#197) does the *transport* — it fetches and
 > parses your events. Turning those events into knowledge-graph facts (with
@@ -56,7 +58,8 @@ created, modified, or deleted). Write-back lands in C4 (#198).
 ## Use cases
 
 - "What do I have on Thursday?" — your calendar events become queryable
-  knowledge, cross-referenced with everything else Mimir knows.
+  knowledge, cross-referenced with everything else Mimir knows (once C4 turns
+  staged events into facts).
 - Recurring events (birthdays, standups) sync once and advance automatically
   via the events & reminders subsystem (once C4 lands).
 - Travel: a calendar event "Trip to Rome" can corroborate a flight email and

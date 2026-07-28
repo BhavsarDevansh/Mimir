@@ -112,6 +112,13 @@ in `Arc` to share across tasks.
 - **Non-Unix targets:** file-mode enforcement is skipped (no portable mode
   concept). V1 targets Linux primarily; this is a documented limitation, not
   a hole — the store still refuses to deserialize corrupt/unknown bundles.
+- **Redacted `Debug`:** `SecretBundle` implements `std::fmt::Debug` manually
+  so the variant discriminant (and non-secret fields like `expires_at`) print
+  while the secret values (`access_token`, `refresh_token`, `token`,
+  `password`) are replaced with `"<redacted>"`. This keeps `Debug`-formatting a
+  `SecretStore` (via `ConnectorContext`), a `tracing` field, or a persisted
+  error string from ever emitting plaintext credentials — the derived `Debug`
+  would otherwise leak them through the `InMemorySecretStore` map.
 
 ## Design notes
 

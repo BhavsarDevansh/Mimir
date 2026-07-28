@@ -47,6 +47,19 @@
   bundle persistence, health states, factory construction, config round-trip,
   and a full `ConnectorSupervisor` round-trip asserting the cursor is
   persisted). No `unsafe`.
+- **Review-driven hardening (PR #242):** the `sync-collection` request now
+  carries the required `<d:sync-level>1</d:sync-level>` element (RFC 6578
+  §6.3) and handles truncated (`507`) responses by paging with the advancing
+  sync-token. A `<response>` with no `calendar-data` is tombstoned **only** on
+  an explicit `404`/`410`; `403`/`423`/`507`/… are logged and skipped so a
+  transient error never purges a live event. The XML helper concatenates all
+  direct text/CDATA children (not just the first). OAuth hardening: an unknown
+  `expires_at` no longer forces a refresh every cycle; `into_bundle` retains
+  the prior refresh token when the response omits one; token-endpoint error
+  bodies and the OAuth `client_secret` are never surfaced into persisted/logged
+  `ConnectorError` strings (parsed `error`/`error_description` only; auth-kind
+  discriminant used instead of `Debug`). `SecretBundle` gains a redacted
+  `Debug` impl so printing a store/context never emits plaintext credentials.
 
 ## [0.81.2] — 2026-07-26
 

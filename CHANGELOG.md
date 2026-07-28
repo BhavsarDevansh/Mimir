@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.82.1] — 2026-07-28
+
+### Docs
+
+- **Review follow-up (PR #242):** fixed two documentation punctuation/clarity
+  nits flagged by CodeRabbit review. `docs/calendar-connector.md`: added the
+  missing comma before "so" and removed the unnecessary comma before "because"
+  in the OAuth error-handling paragraph. `docs/wiki/what-works-now.md`:
+  capitalised the sentence boundary ("The connector secret store …") in the
+  Phase 3 roadmap summary. No code or behaviour change.
+
 ## [0.82.0] — 2026-07-27
 
 ### Connectors (Phase 3 C3 / #197)

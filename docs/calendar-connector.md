@@ -41,12 +41,12 @@ Two credential kinds, mirroring [`SecretBundle`](connector-secret-store.md):
   is reused and refreshed only once it is actually expired (avoiding triple
   POSTs to the token endpoint and rate-limit risk). When a refresh response
   omits `refresh_token` (RFC 6749 §6 allows this), the connector **retains**
-  the prior refresh token so OAuth does not break after the first refresh.
+  the prior refresh token, so OAuth does not break after the first refresh.
 
 The token-endpoint error path reports only the HTTP status and the parsed
 `error`/`error_description` fields — the raw response body is never surfaced
 to `ConnectorError` strings (which the supervisor persists to `last_error`
-and logs), because provider error payloads can echo the `client_secret` or
+ and logs) because provider error payloads can echo the `client_secret` or
 `refresh_token`. Auth-method/secret-kind mismatch errors use the auth-kind
 discriminant only, never a `Debug` of the OAuth config.
 

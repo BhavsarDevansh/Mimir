@@ -42,6 +42,7 @@
 //!   F12 / #189): token-bucket throttling (governor GCRA), optional rolling 24h
 //!   daily quota, and uniform 429/503 retry with jitter. Connector LLM calls are
 //!   exempt (decision D′); this governs HTTP/IMAP/CalDAV API calls only.
+//! - [`oauth`] — shared OAuth 2.0 token-refresh helpers (DRY, used by the Calendar (C3 / #197) and Email (C5 / #199) OAuth connectors): a hand-rolled `refresh_token` POST on the existing `reqwest` 0.13, with secret-safe error reporting.
 //! - [`secrets`] — [`SecretStore`] trait + [`SecretBundle`] enum +
 //!   [`FileSecretStore`] / [`InMemorySecretStore`] (F10 / #187): per-connector
 //!   credential storage, one store for all auth kinds (OAuth / API token / app
@@ -64,6 +65,7 @@
 pub mod connector;
 pub mod geocoder;
 pub mod mock;
+mod oauth;
 pub mod rate_limit;
 pub mod registry;
 pub mod secrets;
@@ -80,6 +82,13 @@ pub mod photos;
 /// implementing the two-step ingestion model in `Polling` mode.
 #[cfg(feature = "calendar")]
 pub mod calendar;
+
+/// IMAP email connector (Phase 3 C5 / #199), gated by the `gmail` feature. An
+/// [`email::imap`] transport (IMAP `LOGIN` / `AUTHENTICATE XOAUTH2`, `UID
+/// FETCH` incremental sync, `IDLE` push) backs an [`EmailConnector`] running
+/// in `Push` (IDLE) or `Polling` (fallback) mode.
+#[cfg(feature = "gmail")]
+pub mod email;
 
 pub use connector::{
     ActionResult, Connector, ConnectorAction, ConnectorContext, ConnectorError, ConnectorFactory,
@@ -100,6 +109,11 @@ pub use photos::{PhotosConnector, PhotosConnectorFactory, PhotosCursor};
 #[cfg(feature = "calendar")]
 pub use calendar::{
     CalendarAuthMethod, CalendarConfigDto, CalendarConnector, CalendarConnectorFactory,
+};
+
+#[cfg(feature = "gmail")]
+pub use email::{
+    EmailAuthMethod, EmailConfigDto, EmailConnector, EmailConnectorFactory, EmailSyncMode,
 };
 pub use rate_limit::{
     BackoffStrategy, QuotaSnapshot, RateLimitConfig, RateLimitError, RateLimiter, RetryError,

@@ -304,14 +304,16 @@ impl CalendarConnector {
 
     /// Refresh an OAuth access token via the configured token endpoint.
     ///
-    /// `oauth2` 5.0.0 depends on reqwest 0.12, which would duplicate the
-    /// workspace's reqwest 0.13 stack; a refresh is a single form-encoded HTTPS
-    /// POST returning JSON, so it is hand-rolled on the existing reqwest 0.13.
-    /// The `oauth2` crate (for the PKCE login flow) is deferred to A4 / #206.
+    /// Delegates to the shared [`crate::oauth::refresh_token`] helper so the
+    /// Calendar and Email connectors share one refresh implementation (DRY).
+    /// The `oauth2` crate is avoided: it depends on reqwest 0.12, which would
+    /// duplicate the workspace's reqwest 0.13 stack; a refresh is a single
+    /// form-encoded HTTPS POST returning JSON. The interactive PKCE login
+    /// that *obtains* the first token is A4 / #206.
     async fn refresh_oauth(
         &self,
         refresh_token: &str,
-    ) -> Result<RefreshTokenResponse, ConnectorError> {
+    ) -> Result<crate::oauth::RefreshTokenResponse, ConnectorError> {
         let CalendarAuthMethod::OAuth {
             token_endpoint,
             client_id,
@@ -323,42 +325,15 @@ impl CalendarConnector {
                 "refresh_oauth called for a non-OAuth connector".into(),
             ));
         };
-        let mut form = vec![
-            ("grant_type", "refresh_token".to_string()),
-            ("refresh_token", refresh_token.to_string()),
-            ("client_id", client_id.clone()),
-        ];
-        if let Some(secret) = client_secret {
-            form.push(("client_secret", secret.clone()));
-        }
-        if let Some(scopes) = scopes {
-            form.push(("scope", scopes.join(" ")));
-        }
-        let resp = self
-            .http
-            .post(token_endpoint)
-            .form(&form)
-            .send()
-            .await
-            .map_err(|e| ConnectorError::Network(format!("token refresh failed: {e}")))?;
-        let status = resp.status();
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| ConnectorError::Network(format!("token refresh body read failed: {e}")))?;
-        if !status.is_success() {
-            // The raw body is intentionally not surfaced: provider error
-            // payloads routinely echo request parameters, so the refresh
-            // token or client secret could reach the persisted `last_error`
-            // string and logs. Only the parsed `error`/`error_description`
-            // fields are reported alongside the HTTP status.
-            return Err(ConnectorError::Authentication(token_error_message(
-                status, &body,
-            )));
-        }
-        let parsed: RefreshTokenResponse = serde_json::from_str(&body)
-            .map_err(|e| ConnectorError::Parse(format!("token refresh JSON parse failed: {e}")))?;
-        Ok(parsed)
+        crate::oauth::refresh_token(
+            &self.http,
+            token_endpoint,
+            client_id,
+            client_secret.as_deref(),
+            scopes.as_deref(),
+            refresh_token,
+        )
+        .await
     }
 
     /// Persist a refreshed OAuth bundle back to the secret store.
@@ -608,148 +583,10 @@ impl ConnectorFactory for CalendarConnectorFactory {
 }
 
 // ---------------------------------------------------------------------------
-// OAuth refresh token response
-// ---------------------------------------------------------------------------
-
-/// The `error`/`error_description` fields of an OAuth 2.0 token-error
-/// response (RFC 6749 §5.2). Only these fields are surfaced to error strings
-/// — the raw body is never logged or persisted, because providers may echo
-/// the request's `client_secret` or `refresh_token` in error payloads.
-#[derive(Deserialize)]
-struct TokenErrorResponse {
-    error: Option<String>,
-    error_description: Option<String>,
-}
-
-/// Build a safe, persisted-error-friendly message for a failed token refresh.
-///
-/// Reports only the HTTP status and the parsed `error`/`error_description`
-/// fields — never the raw response body, which can contain echoed request
-/// parameters (the refresh token or client secret).
-fn token_error_message(status: reqwest::StatusCode, body: &str) -> String {
-    match serde_json::from_str::<TokenErrorResponse>(body) {
-        Ok(TokenErrorResponse {
-            error,
-            error_description,
-        }) => match (error, error_description) {
-            (Some(err), Some(desc)) => {
-                format!("token refresh failed (HTTP {status}): {err}: {desc}")
-            }
-            (Some(err), None) => format!("token refresh failed (HTTP {status}): {err}"),
-            (None, Some(desc)) => format!("token refresh failed (HTTP {status}): {desc}"),
-            (None, None) => format!("token refresh failed (HTTP {status})"),
-        },
-        Err(_) => format!("token refresh failed (HTTP {status})"),
-    }
-}
-
-/// Raw JSON of an OAuth 2.0 token-refresh response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RefreshTokenResponse {
-    access_token: Option<String>,
-    /// Some providers rotate the refresh token; keep it if present, else
-    /// retain the prior one.
-    refresh_token: Option<String>,
-    /// Seconds until `access_token` expires.
-    expires_in: Option<i64>,
-    token_type: Option<String>,
-    scope: Option<String>,
-}
-
-impl RefreshTokenResponse {
-    /// Build a [`SecretBundle::OAuth`] from the refresh response, retaining
-    /// the prior refresh token when the response omits one.
-    fn into_bundle(self, prior_refresh_token: Option<String>) -> SecretBundle {
-        let expires_at = self
-            .expires_in
-            .map(|secs| Utc::now() + chrono::Duration::seconds(secs));
-        SecretBundle::OAuth {
-            access_token: self.access_token.unwrap_or_default(),
-            // Some providers rotate the refresh token; prefer a newly
-            // returned one and retain the prior token only when the response
-            // omits one (RFC 6749 §6 says a refresh_token MAY be omitted).
-            refresh_token: self.refresh_token.or(prior_refresh_token),
-            expires_at,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn into_bundle_retains_prior_refresh_token_when_response_omits_one() {
-        let resp = RefreshTokenResponse {
-            access_token: Some("fresh".into()),
-            refresh_token: None,
-            expires_in: Some(3600),
-            token_type: None,
-            scope: None,
-        };
-        let bundle = resp.into_bundle(Some("prior-rt".into()));
-        let SecretBundle::OAuth {
-            access_token,
-            refresh_token,
-            expires_at,
-        } = bundle
-        else {
-            panic!("expected OAuth bundle, got {bundle:?}");
-        };
-        assert_eq!(access_token, "fresh");
-        assert_eq!(refresh_token.as_deref(), Some("prior-rt"));
-        assert!(expires_at.is_some());
-    }
-
-    #[test]
-    fn into_bundle_prefers_returned_refresh_token_over_prior() {
-        let resp = RefreshTokenResponse {
-            access_token: Some("fresh".into()),
-            refresh_token: Some("rotated-rt".into()),
-            expires_in: None,
-            token_type: None,
-            scope: None,
-        };
-        let bundle = resp.into_bundle(Some("prior-rt".into()));
-        let SecretBundle::OAuth {
-            refresh_token,
-            expires_at,
-            ..
-        } = bundle
-        else {
-            panic!("expected OAuth bundle, got {bundle:?}");
-        };
-        assert_eq!(refresh_token.as_deref(), Some("rotated-rt"));
-        assert!(expires_at.is_none());
-    }
-
-    #[test]
-    fn token_error_message_reports_status_and_parsed_fields_only() {
-        let body =
-            r#"{"error":"invalid_grant","error_description":"the refresh token is rt-leak"}"#;
-        let msg = token_error_message(reqwest::StatusCode::BAD_REQUEST, body);
-        assert!(msg.contains("400"), "must mention HTTP status: {msg}");
-        assert!(msg.contains("invalid_grant"), "must include error: {msg}");
-        assert!(
-            msg.contains("the refresh token is rt-leak"),
-            "must include error_description: {msg}"
-        );
-        // The raw body marker that would echo secrets must not appear verbatim.
-        assert!(!msg.contains("BAD_REQUEST"));
-    }
-
-    #[test]
-    fn token_error_message_never_echoes_raw_body_when_unparseable() {
-        // A body that is not JSON (and could contain echoed secrets) must not
-        // be surfaced — only the HTTP status is reported.
-        let body = "client_secret=leaked&refresh_token=rt-leak";
-        let msg = token_error_message(reqwest::StatusCode::INTERNAL_SERVER_ERROR, body);
-        assert!(msg.contains("500"), "must mention HTTP status: {msg}");
-        assert!(!msg.contains("leaked"), "raw body must not leak: {msg}");
-        assert!(!msg.contains("rt-leak"), "raw body must not leak: {msg}");
-    }
-}
+// The OAuth refresh / token-error unit tests that lived here were extracted
+// into the shared `crate::oauth` module (Phase 3 DRY refactor) and now live in
+// `src/oauth.rs`; calendar-specific behaviour is covered by the integration
+// test in `tests/calendar_connector.rs`.

@@ -1,6 +1,49 @@
 # Changelog
 
-## [0.82.1] — 2026-07-28
+## [0.83.0] — 2026-07-28
+
+### Connectors (Phase 3 C5 / #199)
+
+- **New backend — IMAP Email connector** (`mimir-connectors`, feature `gmail`):
+  the third concrete connector backend (after Photos and Calendar). An
+  `async-imap` 0.11.3 client (built `default-features = false, runtime-tokio`
+  to avoid pulling `async-std`) speaks IMAP over a hand-rolled TCP +
+  `tokio-rustls` handshake — the workspace keeps a single rustls TLS stack
+  instead of async-imap's `connect()` / `async-native-tls`. Login is
+  `LOGIN` (app password) or `AUTHENTICATE XOAUTH2` (Google / Microsoft OAuth,
+  with the SASL initial response
+  `base64("user=<u>\x01auth=Bearer <t>\x01\x01")`).
+- **Push + polling:** runs in `Push` (IMAP IDLE) mode when the server
+  advertises `IDLE`, falling back to `Polling` otherwise — auto-detected via a
+  `CAPABILITY` probe in `authenticate`/`health` (so `Connector::mode` returns
+  the right value, called by the supervisor after `authenticate`). The `mode`
+  config (`auto` | `idle` | `poll`, default `auto`) can force one.
+- **Incremental sync:** `UID FETCH <last+1>:* (UID INTERNALDATE BODY.PEEK[])`
+  with a UIDVALIDITY-safe `<uid_validity>:<last_uid>` cursor — a UIDVALIDITY
+  mismatch on `EXAMINE` (mailbox recreated) triggers a full re-fetch, so a
+  bare last-UID never silently gaps or duplicates. `BODY.PEEK[]` keeps mail
+  unread. The cursor persists across restarts via the supervisor's
+  `update_sync_cursor`.
+- **Transport-only:** `extract()` stages raw RFC 822 messages and returns no
+  `NormalizedFact`s yet. Mail parsing + structured fact extraction
+  (headers/dates/contacts) is C6 (#200); LLM extraction (flights/bookings) is
+  C7 (#201).
+- **DRY OAuth refresh:** the Calendar connector's hand-rolled OAuth
+  token-refresh + secret-safe error reporting moved into a shared
+  `mimir-connectors::oauth` module; both the Calendar and Email OAuth
+  connectors now share one implementation (avoids the reqwest-0.12-duplicating
+  `oauth2` crate). No behaviour change to the Calendar connector; its
+  refresh/error unit tests moved with the code.
+- **Spec corrections vs. issue #199:** `async-imap 0.11.3` (not 0.11.2);
+  rustls (not async-native-tls); UIDVALIDITY-encoded cursor (not bare last-UID).
+  See `docs/email-connector.md`.
+- **Tests:** unit tests for config/cursor/mode/auth resolution plus a fake-IMAP
+  integration suite over a `tokio::io::duplex` pair (no TLS, no live account)
+  covering app-password + XOAUTH2 login, IDLE push → fetch, IDLE timeout,
+  polling incremental / no-op / full sync, and UIDVALIDITY reset. All deps
+  already in the tree via reqwest/async-imap — no new downloads.
+
+## [0.82.1] — 2026-07-28 — 2026-07-28
 
 ### Docs
 

@@ -39,8 +39,9 @@ stays on your device — there is no cloud intermediary.
   reasoning, live memory condensation, events/reminders, and proximity queries.
 - **`mimir-connectors`** — the pluggable service-ingestion framework and its
   backends: the OSM Nominatim geocoder, the local-filesystem Photos connector
-  (EXIF + file watcher), and the CalDAV Calendar connector (sync-token
-  incremental sync) today; email sync to come.
+  (EXIF + file watcher), the CalDAV Calendar connector (sync-token
+  incremental sync), and the IMAP Email connector (IDLE push + UID
+  incremental sync) today; email → knowledge-graph extraction is C6/C7.
 - **`mimir-api-types` / `mimir-client`** — shared wire types and the daemon HTTP
   client used by the CLI.
 
@@ -80,8 +81,15 @@ stays on your device — there is no cloud intermediary.
   sync-token incremental sync and `icalendar` VEVENT parsing, authenticating
   via an app password or a refreshed OAuth token loaded from the secret store.
   It is transport-only for now; event → knowledge-graph extraction,
-  events-subsystem integration, and write-back are C4 (#198). Email backends
-  land in later Phase 3 issues.
+  events-subsystem integration, and write-back are C4 (#198). The third
+  backend — an IMAP Email connector (#199) — is in: it speaks IMAP over a
+  hand-rolled TCP+rustls handshake (`LOGIN` / `AUTHENTICATE XOAUTH2`, `IDLE`
+  push with a polling fallback auto-detected via CAPABILITY, `UID FETCH`
+  incremental sync with a UIDVALIDITY-safe cursor, `BODY.PEEK[]` so mail stays
+  unread), authenticating via an app password or a refreshed OAuth token. It
+  is transport-only for now; mail → knowledge-graph extraction (headers,
+  dates, contacts) is C6 (#200) and LLM extraction (flights/bookings) is C7
+  (#201).
 - **Entity locations** — a "where" fact becomes a typed `entity_locations` row
   with geocoding of the missing half (address → coords or coords → place) and
   temporal bounds that model moves (home 2020–2023, home 2023–present).

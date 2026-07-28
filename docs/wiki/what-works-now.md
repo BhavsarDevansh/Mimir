@@ -1,8 +1,35 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-07-27
-> **Version:** 0.82.0
+> **Last updated:** 2026-07-28
+> **Version:** 0.83.0
 > **Release summary:** Phase 2 knowledge-graph work is live — core relationship ontology seeded category-first (Issue #135): predicate aliases for verb canonicalization plus `category_aliases` and category-subtree retrieval for grouping/multi-tag precision; relationship type aliases are the single source of truth for predicate resolution (Issue #133), Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system, Agentic Pre-Response Context Retrieval (#128), the Librarian Agent (#130), LLM-orchestrated learning via the `remember` tool (#137), a hardened system prompt that enforces the agentic contract — `retrieve_context` dispatch, no fact invention, and `remember` encouragement (#138), and a redesigned Librarian extraction prompt that injects the same core-facts block as the core agent and learns only from user-labelled messages (#139), and the full pending sensitive-fact confirmation lifecycle — HTTP routes, CLI commands, and a daily auto-cleanup job (#141). v0.57.0 adds the events & reminders subsystem — a lifecycle + recurrence overlay on facts that surfaces upcoming birthdays, appointments, deadlines, and tasks in the Upcoming memory section, with a deterministic scan job and the deprecation of `entity_dates` (#74).
+> v0.83.0 adds the IMAP email connector (Phase 3 C5 / #199): the third
+> concrete connector backend (after Photos and Calendar), in
+> `mimir-connectors` (feature `gmail`). An `async-imap` 0.11.3 client
+>(built `runtime-tokio`, no default `async-std`) speaks IMAP over a
+> hand-rolled TCP + `tokio-rustls` handshake (the workspace keeps a
+> single rustls TLS stack instead of async-imap's `connect()` /
+> `async-native-tls`): `LOGIN` (app password) and `AUTHENTICATE
+> XOAUTH2` (Google / Microsoft OAuth, with the access token refreshed
+> via a shared hand-rolled token-endpoint POST — DRY with the Calendar
+> connector, avoiding the reqwest-0.12-duplicating `oauth2` crate).
+> It runs in `Push` (IMAP IDLE) mode when the server advertises IDLE and
+> falls back to `Polling` otherwise — auto-detected via a CAPABILITY
+> probe in `authenticate`/`health`. Incremental sync is by UID with a
+> UIDVALIDITY-safe `<uid_validity>:<last_uid>` cursor (a mismatch on
+> `EXAMINE` triggers a full re-fetch, so a recreated mailbox never
+> silently gaps/duplicates), using `BODY.PEEK[]` so mail is not marked
+> seen. The connector is transport-only: it logs in, watches for new
+> mail, and stages raw RFC 822 messages; `extract()` returns no facts
+> yet. Mail parsing + structured fact extraction (headers/dates/
+> contacts) is C6 / #200; LLM extraction (flights/bookings) is C7 /
+> #201. The interactive OAuth PKCE login is A4 / #206; daemon
+> `AppState` wiring and the `mimir connector …` CLI are A1–A3. This is
+> a library component in `mimir-connectors` with unit tests plus a
+> fake-IMAP integration suite (login, XOAUTH2 SASL, IDLE push, polling,
+> incremental/no-op/full sync, UIDVALIDITY reset) over a `duplex` pair
+> — no TLS, no live account. No new downloads (all deps already in the
+> tree via reqwest/async-imap).
 > v0.82.0 adds the CalDAV calendar connector (Phase 3 C3 / #197): the
 > second concrete connector backend (after Photos), in `mimir-connectors`
 > (feature `calendar`). A `CalDavClient` speaks CalDAV over the existing

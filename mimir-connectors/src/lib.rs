@@ -42,7 +42,7 @@
 //!   F12 / #189): token-bucket throttling (governor GCRA), optional rolling 24h
 //!   daily quota, and uniform 429/503 retry with jitter. Connector LLM calls are
 //!   exempt (decision D′); this governs HTTP/IMAP/CalDAV API calls only.
-//! - [`oauth`] — shared OAuth 2.0 token-refresh helpers (DRY, used by the Calendar (C3 / #197) and Email (C5 / #199) OAuth connectors): a hand-rolled `refresh_token` POST on the existing `reqwest` 0.13, with secret-safe error reporting.
+//! - `oauth` — shared OAuth 2.0 token-refresh helpers (DRY, used by the Calendar (C3 / #197) and Email (C5 / #199) OAuth connectors): a hand-rolled `refresh_token` POST on the existing `reqwest` 0.13, with secret-safe error reporting. (Private module: linked here as a code span to avoid `private_intra_doc_links`.)
 //! - [`secrets`] — [`SecretStore`] trait + [`SecretBundle`] enum +
 //!   [`FileSecretStore`] / [`InMemorySecretStore`] (F10 / #187): per-connector
 //!   credential storage, one store for all auth kinds (OAuth / API token / app

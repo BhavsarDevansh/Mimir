@@ -1,10 +1,7 @@
 # Email Connector
 
 > **Phase:** 3 — Connectors
-> **Status:** Library done — C5 (#199). Mail → knowledge-graph extraction
-> (flights, bookings, contacts, dates) comes in C6 (#200) and C7 (#201).
-> Daemon wiring and the `mimir connector …` CLI come in later Phase 3 issues
-> (A1–A3).
+> **Status:** Library done — C5 (#199). Mail → knowledge-graph extraction (flights, bookings, contacts, dates) comes in C6 (#200) and C7 (#201). Daemon wiring and the `mimir connector …` CLI come in later Phase 3 issues (A1–A3).
 
 ## What it is
 
@@ -22,10 +19,7 @@ It is a background sync worker that runs in two modes automatically:
 - If your mailbox is ever recreated (a rare event Mimir detects via a server value called `UIDVALIDITY`), the connector notices and does one full re-fetch — no silent gaps or duplicates.
 - Each message's raw contents (headers, body) are held in an in-memory buffer ready for the knowledge graph.
 
-> **C5 vs C6/C7:** This first cut (#199) does the *transport* — it logs in,
-> watches for new mail, and fetches messages. Turning those messages into
-> knowledge-graph facts (flight confirmations, hotel bookings, contacts,
-> dates) is C6 (#200) for structured parsing and C7 (#201) for LLM extraction.
+> **C5 vs C6/C7:** This first cut (#199) does the *transport* — it logs in, watches for new mail, and fetches messages. Turning those messages into knowledge-graph facts (flight confirmations, hotel bookings, contacts, dates) is C6 (#200) for structured parsing and C7 (#201) for LLM extraction.
 
 ## Authentication
 
@@ -36,7 +30,7 @@ It is a background sync worker that runs in two modes automatically:
 
 - Mimir only **reads** mail — it never sends, deletes, or marks messages. It uses `BODY.PEEK[]` so your unread mail stays unread.
 - All data is fetched and stored locally; no cloud intermediary.
-- "Forget everything from Gmail" is a supported operation (the connector wipes its cursor, buffer, and stored secret).
+- "Forget everything from Gmail" is a library-level capability (the connector's `forget()` wipes its cursor, buffer, and stored secret) — it is not yet exposed through a `mimir connector …` command until the daemon wiring (A1–A3 / #202–#204) lands.
 
 ## Config example
 

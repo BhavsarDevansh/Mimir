@@ -133,7 +133,7 @@ impl Authenticator for Xoauth2Authenticator {
 
 /// Authenticate an unauthenticated [`async_imap::Client`] into an
 /// [`ImapSession`], choosing `LOGIN` or `AUTHENTICATE XOAUTH2` per the
-/// resolved [`ImmapAuth`] kind. On failure the underlying client is returned
+/// resolved [`ImapAuth`] kind. On failure the underlying client is returned
 /// by async-imap alongside the error; we surface the error (the client is not
 /// reusable after a broken handshake, so dropping it is correct).
 pub(crate) async fn imap_login<S: ImapStream>(
@@ -258,9 +258,12 @@ impl<S: ImapStream> ImapSession<S> {
             .examine(mailbox)
             .await
             .map_err(map_imap_error)?;
-        Ok(MailboxInfo {
-            uid_validity: mbox.uid_validity.unwrap_or(0),
-        })
+        let uid_validity = mbox.uid_validity.ok_or_else(|| {
+            ConnectorError::Parse(format!(
+                "IMAP EXAMINE for `{mailbox}` returned no UIDVALIDITY"
+            ))
+        })?;
+        Ok(MailboxInfo { uid_validity })
     }
 
     /// Probe the server `CAPABILITY` response; `true` if `IDLE` is advertised.

@@ -31,11 +31,34 @@ pub(crate) struct TokenErrorResponse {
     pub(crate) error_description: Option<String>,
 }
 
+/// Maximum length (bytes) of a provider-supplied `error_description` surfaced
+/// in error strings. Provider payloads are unbounded and end up in logs and
+/// the persisted `last_error`; truncating keeps the secret-hygiene promise
+/// ("only parsed `error_description`, never the raw body") bounded in size.
+const MAX_ERROR_DESCRIPTION_LEN: usize = 256;
+
+/// Truncate a provider-supplied `error_description` to
+/// [`MAX_ERROR_DESCRIPTION_LEN`], cutting on a UTF-8 char boundary and marking
+/// the truncation with an ellipsis so a truncated value is distinguishable from
+/// a complete one.
+fn truncate_description(desc: &str) -> String {
+    if desc.len() <= MAX_ERROR_DESCRIPTION_LEN {
+        return desc.to_string();
+    }
+    // Walk back to the nearest UTF-8 char boundary at or below the byte limit.
+    let mut end = MAX_ERROR_DESCRIPTION_LEN;
+    while end > 0 && !desc.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &desc[..end])
+}
+
 /// Build a safe, persisted-error-friendly message for a failed token refresh.
 ///
 /// Reports only the HTTP status and the parsed `error`/`error_description`
 /// fields — never the raw response body, which can contain echoed request
-/// parameters (the refresh token or client secret).
+/// parameters (the refresh token or client secret). A provider-supplied
+/// `error_description` is bounded via [`truncate_description`].
 pub(crate) fn token_error_message(status: reqwest::StatusCode, body: &str) -> String {
     match serde_json::from_str::<TokenErrorResponse>(body) {
         Ok(TokenErrorResponse {
@@ -43,10 +66,18 @@ pub(crate) fn token_error_message(status: reqwest::StatusCode, body: &str) -> St
             error_description,
         }) => match (error, error_description) {
             (Some(err), Some(desc)) => {
-                format!("token refresh failed (HTTP {status}): {err}: {desc}")
+                format!(
+                    "token refresh failed (HTTP {status}): {err}: {}",
+                    truncate_description(&desc)
+                )
             }
             (Some(err), None) => format!("token refresh failed (HTTP {status}): {err}"),
-            (None, Some(desc)) => format!("token refresh failed (HTTP {status}): {desc}"),
+            (None, Some(desc)) => {
+                format!(
+                    "token refresh failed (HTTP {status}): {}",
+                    truncate_description(&desc)
+                )
+            }
             (None, None) => format!("token refresh failed (HTTP {status})"),
         },
         Err(_) => format!("token refresh failed (HTTP {status})"),
@@ -100,6 +131,34 @@ pub(crate) async fn refresh_token(
     scopes: Option<&[String]>,
     refresh_token: &str,
 ) -> Result<RefreshTokenResponse, ConnectorError> {
+    // Reject non-HTTPS token endpoints before posting credentials. The refresh
+    // request carries the `refresh_token` (and `client_secret`); a `http://`
+    // (or otherwise typo'd) remote endpoint would leak them over an unencrypted
+    // hop. Loopback HTTP (`127.0.0.1` / `::1` / `localhost`) is permitted: it is
+    // Mimir's local trust boundary (same as the home-directory trust model) and
+    // the credentials never traverse a network. `token_endpoint` is non-secret
+    // config, but the URL parse error is surfaced as `Config` rather than
+    // echoing the raw string.
+    let parsed = reqwest::Url::parse(token_endpoint)
+        .map_err(|e| ConnectorError::Config(format!("token endpoint is not a valid URL: {e}")))?;
+    let scheme = parsed.scheme();
+    // Loopback = the local trust boundary: `localhost`, or any `127.0.0.0/8`
+    // IPv4 / `::1` IPv6 (parsed as a real IP, so a look-alike host such as
+    // `127.0.0.1.evil.com` is *not* treated as loopback). Credentials never
+    // traverse a network over a loopback link.
+    let loopback = match parsed.host_str() {
+        Some("localhost") => true,
+        Some(host) => host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback()),
+        None => false,
+    };
+    if scheme != "https" && !(scheme == "http" && loopback) {
+        return Err(ConnectorError::Config(format!(
+            "token endpoint must use HTTPS (scheme `{scheme}` rejected); refusing to post refresh credentials over a non-loopback link"
+        )));
+    }
+
     let mut form = vec![
         ("grant_type", "refresh_token".to_string()),
         ("refresh_token", refresh_token.to_string()),
@@ -202,5 +261,110 @@ mod tests {
         assert!(msg.contains("500"), "must mention HTTP status: {msg}");
         assert!(!msg.contains("leaked"), "raw body must not leak: {msg}");
         assert!(!msg.contains("rt-leak"), "raw body must not leak: {msg}");
+    }
+
+    #[test]
+    fn truncate_description_leaves_short_text_unchanged() {
+        let desc = "the refresh token is invalid";
+        assert_eq!(truncate_description(desc), desc);
+    }
+
+    #[test]
+    fn truncate_description_bounds_provider_supplied_text() {
+        // A provider-controlled description longer than the cap is truncated to
+        // <= MAX_ERROR_DESCRIPTION_LEN bytes + the ellipsis marker, on a UTF-8
+        // boundary, and never leaks the full unbounded payload.
+        let long = "X".repeat(MAX_ERROR_DESCRIPTION_LEN * 4);
+        let truncated = truncate_description(&long);
+        assert!(
+            truncated.len() <= MAX_ERROR_DESCRIPTION_LEN + "…".len(),
+            "truncated length {} exceeds cap + ellipsis",
+            truncated.len()
+        );
+        assert!(
+            truncated.ends_with('…'),
+            "must mark truncation: {truncated}"
+        );
+        // The full unbounded string must not appear verbatim.
+        assert_ne!(truncated, long);
+    }
+
+    #[test]
+    fn truncate_description_cuts_on_a_char_boundary() {
+        // Multibyte payload: the cut must land on a UTF-8 boundary (no panic, valid String).
+        let desc = "é".repeat(MAX_ERROR_DESCRIPTION_LEN + 10);
+        let truncated = truncate_description(&desc);
+        assert!(truncated.ends_with('…'));
+    }
+
+    #[test]
+    fn token_error_message_truncates_a_long_error_description() {
+        let long_desc = "d".repeat(1000);
+        let body = format!(r#"{{"error":"invalid_grant","error_description":"{long_desc}"}}"#);
+        let msg = token_error_message(reqwest::StatusCode::BAD_REQUEST, &body);
+        assert!(msg.contains("invalid_grant"));
+        assert!(msg.contains("400"));
+        // The full 1000-char provider description must not survive into the message.
+        assert!(!msg.contains(&long_desc));
+        assert!(msg.ends_with('…'));
+    }
+
+    #[tokio::test]
+    async fn refresh_token_rejects_non_https_endpoint() {
+        // An http:// endpoint must be rejected before any credential is posted.
+        let http = reqwest::Client::new();
+        let err = refresh_token(
+            &http,
+            "http://provider.example.com/token",
+            "client-id",
+            None,
+            None,
+            "super-secret-refresh-token",
+        )
+        .await
+        .expect_err("non-HTTPS token endpoint must be rejected");
+        assert!(
+            matches!(err, ConnectorError::Config(_)),
+            "expected Config error, got {err:?}"
+        );
+        // The error must not echo the refresh token.
+        let msg = format!("{err}");
+        assert!(
+            !msg.contains("super-secret-refresh-token"),
+            "refresh token must not leak into the error: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_token_rejects_unparseable_endpoint() {
+        let http = reqwest::Client::new();
+        let err = refresh_token(&http, "not a url at all", "client-id", None, None, "rt")
+            .await
+            .expect_err("unparseable token endpoint must be rejected");
+        assert!(matches!(err, ConnectorError::Config(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn refresh_token_rejects_lookalike_loopback_host() {
+        // `127.0.0.1.evil.com` starts with `127.` but is a real DNS name that
+        // resolves off-host; it must NOT be treated as loopback (a naive
+        // prefix check would let it through and post the refresh token to a
+        // remote server over plain HTTP).
+        let http = reqwest::Client::new();
+        let err = refresh_token(
+            &http,
+            "http://127.0.0.1.evil.com/token",
+            "client-id",
+            None,
+            None,
+            "super-secret-refresh-token",
+        )
+        .await
+        .expect_err("look-alike loopback host must be rejected");
+        assert!(matches!(err, ConnectorError::Config(_)), "got {err:?}");
+        assert!(
+            !format!("{err}").contains("super-secret-refresh-token"),
+            "refresh token must not leak: {err}"
+        );
     }
 }

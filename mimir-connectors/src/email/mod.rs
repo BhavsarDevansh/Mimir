@@ -25,7 +25,7 @@
 //!
 //! # Cursor — UIDVALIDITY-safe last-UID
 //!
-//! The persisted cursor encodes `UIDVALIDITY:last_uid` (e.g. `"17/42"`). On
+//! The persisted cursor encodes `UIDVALIDITY:last_uid` (e.g. `"17:42"`). On
 //! `SELECT`, if the mailbox's `UIDVALIDITY` differs from the cursor's, every
 //! prior UID is stale (the mailbox was recreated) and the connector performs
 //! a full re-fetch — UIDs alone are not a safe cursor (a plain last-UID would
@@ -296,14 +296,28 @@ impl EmailConnector {
     }
 
     /// Decide whether this cycle uses IDLE (Push) or polling (Polling).
-    /// `true` → IDLE. Honours the explicit config mode, falling back to the
-    /// cached capability for `auto`. Synchronous (a `std::sync::Mutex` guard
-    /// never held across an `await`).
-    fn use_idle(&self) -> bool {
+    /// `Ok(true)` → IDLE. Honours the explicit config mode, falling back to
+    /// the cached capability for `auto`. `Idle` mode errors if the server is
+    /// known to lack `IDLE`, matching the documented contract. Synchronous
+    /// (a `std::sync::Mutex` guard never held across an `await`).
+    fn use_idle(&self) -> Result<bool, ConnectorError> {
         match self.config.mode {
-            EmailSyncMode::Idle => true,
-            EmailSyncMode::Poll => false,
-            EmailSyncMode::Auto => self.supports_idle.lock().unwrap().unwrap_or(false),
+            // Forced IDLE: error if the capability probe confirmed the server
+            // does not advertise `IDLE`. An unprobed (`None`) cache lets the
+            // IDLE attempt proceed; the server's BAD response surfaces the
+            // mismatch on the next cycle.
+            EmailSyncMode::Idle => match *self.supports_idle.lock().unwrap() {
+                Some(false) => Err(ConnectorError::Config(
+                    "idle mode requested but the server does not advertise IDLE".into(),
+                )),
+                _ => Ok(true),
+            },
+            EmailSyncMode::Poll => Ok(false),
+            // `Auto` defaults to Push when unprobed, matching `mode()` (which
+            // reports `ConnectorMode::Push` for `None`); otherwise follows the
+            // cached capability so `mode()` and `use_idle()` never disagree
+            // (a mismatch would let the supervisor's push loop busy-spin).
+            EmailSyncMode::Auto => Ok(self.supports_idle.lock().unwrap().unwrap_or(true)),
         }
     }
 
@@ -363,15 +377,11 @@ impl EmailConnector {
                         )
                     })?;
                     let refreshed = self.refresh_oauth(&refresh_token).await?;
-                    let token = refreshed.access_token.clone().unwrap_or_else(|| {
-                        // No access_token is a hard error surfaced as Authentication.
-                        String::new()
-                    });
-                    if token.is_empty() {
-                        return Err(ConnectorError::Authentication(
+                    let token = refreshed.access_token.clone().ok_or_else(|| {
+                        ConnectorError::Authentication(
                             "token endpoint returned no access_token".into(),
-                        ));
-                    }
+                        )
+                    })?;
                     let bundle = refreshed.into_bundle(Some(refresh_token));
                     let auth = ImapAuth::Xoauth2 {
                         username: self.oauth_username().to_string(),
@@ -465,7 +475,7 @@ impl EmailConnector {
         mut session: ImapSession<S>,
         options: SyncOptions,
     ) -> Result<SyncOutcome, ConnectorError> {
-        let idle = self.use_idle();
+        let idle = self.use_idle()?;
         let info = session.examine(self.mailbox()).await?;
         let uid_validity = info.uid_validity;
 
@@ -901,6 +911,9 @@ mod imap_integration {
         /// Second UIDVALIDITY returned on a *second* `SELECT` (UIDVALIDITY
         /// reset test). `None` → always returns `uid_validity`.
         second_uid_validity: Option<u32>,
+        /// Omit the `UIDVALIDITY` response code on SELECT/EXAMINE to exercise
+        /// the missing-UIDVALIDITY error path. `false` by default.
+        omit_uid_validity: bool,
     }
 
     impl Default for FakeCfg {
@@ -911,6 +924,7 @@ mod imap_integration {
                 messages: Vec::new(),
                 idle_push_exists: None,
                 second_uid_validity: None,
+                omit_uid_validity: false,
             }
         }
     }
@@ -992,10 +1006,15 @@ mod imap_integration {
                     };
                     let exists = cfg.messages.len() as u32;
                     let next = cfg.messages.iter().map(|(u, _)| *u).max().unwrap_or(0) + 1;
+                    let uidvalidity_line = if cfg.omit_uid_validity {
+                        String::new()
+                    } else {
+                        format!("* OK [UIDVALIDITY {uv}]\r\n")
+                    };
                     writer
                         .write_all(
                             format!(
-                                "* FLAGS (\\Seen)\r\n* {exists} EXISTS\r\n* OK [UIDVALIDITY {uv}]\r\n* OK [UIDNEXT {next}]\r\n{tag} OK [READ-WRITE] SELECT completed\r\n",
+                                "* FLAGS (\\Seen)\r\n* {exists} EXISTS\r\n{uidvalidity_line}* OK [UIDNEXT {next}]\r\n{tag} OK [READ-WRITE] SELECT completed\r\n",
                             )
                             .as_bytes(),
                         )
@@ -1282,5 +1301,67 @@ mod imap_integration {
             b"user=devansh@example.com\x01auth=Bearer ya29.token\x01\x01".to_vec(),
             "XOAUTH2 SASL initial response must match the spec format"
         );
+    }
+
+    #[tokio::test]
+    async fn missing_uidvalidity_is_an_error_not_zero() {
+        // RFC 3501 mandates the UIDVALIDITY response code. A server that omits
+        // it must not collapse to epoch 0 (which collides with a persisted
+        // `0:<uid>` cursor and would silently skip mail) — it must error.
+        let cfg = FakeCfg {
+            omit_uid_validity: true,
+            messages: vec![(1u32, b"fresh-1".to_vec())],
+            ..Default::default()
+        };
+        let (connector, session) = harness(cfg).await;
+        let err = connector
+            .run_sync(session, SyncOptions::default())
+            .await
+            .expect_err("missing UIDVALIDITY must error");
+        assert!(
+            matches!(err, ConnectorError::Parse(_)),
+            "expected Parse error, got {err:?}"
+        );
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("UIDVALIDITY"),
+            "error must name UIDVALIDITY: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn forced_idle_errors_when_server_lacks_idle() {
+        // `Idle` mode documents "error if the server lacks the capability".
+        // With the capability probe cached as Some(false), `use_idle()` must
+        // return a Config error instead of silently polling.
+        let mut config = super::tests::app_config();
+        config["mode"] = serde_json::json!("idle");
+        let connector = EmailConnector::from_config(config, None, None).expect("config");
+        *connector.supports_idle.lock().unwrap() = Some(false);
+        let err = connector
+            .use_idle()
+            .expect_err("forced IDLE on an IDLE-less server must error");
+        assert!(
+            matches!(err, ConnectorError::Config(_)),
+            "expected Config error, got {err:?}"
+        );
+        assert!(
+            format!("{err}").contains("IDLE"),
+            "error must mention IDLE: {err}"
+        );
+    }
+
+    #[test]
+    fn auto_mode_defaults_to_push_when_unprobed_matching_mode() {
+        // Before the first capability probe `supports_idle` is `None`.
+        // `mode()` reports Push for Auto+None, so `use_idle()` must also opt
+        // into IDLE (true) — a mismatch would let the supervisor's push loop
+        // busy-spin on immediate polling returns.
+        let mut config = super::tests::app_config();
+        // Default mode is `auto`; confirm explicitly.
+        config["mode"] = serde_json::json!("auto");
+        let connector = EmailConnector::from_config(config, None, None).expect("config");
+        assert!(connector.use_idle().expect("auto+None should be Push"));
+        assert!(matches!(connector.mode(), ConnectorMode::Push));
     }
 }

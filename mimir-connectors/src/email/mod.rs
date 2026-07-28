@@ -225,8 +225,6 @@ pub struct EmailConnector {
     /// by [`sync`](Connector::sync) via `update_sync_cursor`.
     last_uid: Mutex<Option<(u32, u32)>>,
     /// Cached `IDLE` capability, set by [`authenticate`](Connector::authenticate).
-    /// `None` until the first successful capability probe.
-    /// Cached `IDLE` capability, set by [`authenticate`](Connector::authenticate).
     /// `None` until the first successful capability probe. A
     /// `std::sync::Mutex` (never held across an `await`) so the
     /// sync [`mode`](Connector::mode) can read it without `try_lock`.

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.83.1] — 2026-07-28
+
+### Docs
+
+- Remove duplicated doc-comment block on `EmailConnector::supports_idle` field (`mimir-connectors/src/email/mod.rs`). Code-review finding: the field comment contained a stale copy of its own first two lines, which has been collapsed into a single, accurate comment.
+
 ## [0.83.0] — 2026-07-28
 
 ### Connectors (Phase 3 C5 / #199)

@@ -117,6 +117,30 @@ impl RefreshTokenResponse {
     }
 }
 
+/// Whether the host of `url` is a loopback address: `localhost`, any
+/// `127.0.0.0/8` IPv4 address, or `::1` IPv6.
+///
+/// The host is parsed as a real [`std::net::IpAddr`] so a look-alike DNS name
+/// such as `127.0.0.1.evil.com` is *not* treated as loopback. `Url::host_str`
+/// serialises IPv6 hosts in `[...]` bracket form (e.g. `"[::1]"`), so the
+/// surrounding brackets are stripped before parsing — without this, an
+/// `http://[::1]:<port>/token` loopback endpoint would be wrongly rejected.
+fn is_loopback_url(url: &reqwest::Url) -> bool {
+    match url.host_str() {
+        Some("localhost") => true,
+        Some(host) => {
+            let stripped = host
+                .strip_prefix('[')
+                .and_then(|rest| rest.strip_suffix(']'))
+                .unwrap_or(host);
+            stripped
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+        }
+        None => false,
+    }
+}
+
 /// Refresh an OAuth access token via a token endpoint.
 ///
 /// `scopes`, when present, is space-joined into the request. Returns the
@@ -142,17 +166,7 @@ pub(crate) async fn refresh_token(
     let parsed = reqwest::Url::parse(token_endpoint)
         .map_err(|e| ConnectorError::Config(format!("token endpoint is not a valid URL: {e}")))?;
     let scheme = parsed.scheme();
-    // Loopback = the local trust boundary: `localhost`, or any `127.0.0.0/8`
-    // IPv4 / `::1` IPv6 (parsed as a real IP, so a look-alike host such as
-    // `127.0.0.1.evil.com` is *not* treated as loopback). Credentials never
-    // traverse a network over a loopback link.
-    let loopback = match parsed.host_str() {
-        Some("localhost") => true,
-        Some(host) => host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback()),
-        None => false,
-    };
+    let loopback = is_loopback_url(&parsed);
     if scheme != "https" && !(scheme == "http" && loopback) {
         return Err(ConnectorError::Config(format!(
             "token endpoint must use HTTPS (scheme `{scheme}` rejected); refusing to post refresh credentials over a non-loopback link"
@@ -342,6 +356,63 @@ mod tests {
             .await
             .expect_err("unparseable token endpoint must be rejected");
         assert!(matches!(err, ConnectorError::Config(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn is_loopback_url_accepts_ipv6_loopback() {
+        // `Url::host_str` serialises IPv6 hosts in bracket form (`"[::1]"`);
+        // the brackets must be stripped before parsing or `::1` is rejected
+        // even though it is a loopback address.
+        assert!(is_loopback_url(
+            &reqwest::Url::parse("http://[::1]:8123/token").unwrap()
+        ));
+        // Other loopback forms still accepted.
+        assert!(is_loopback_url(
+            &reqwest::Url::parse("http://127.0.0.1/token").unwrap()
+        ));
+        assert!(is_loopback_url(
+            &reqwest::Url::parse("http://localhost/token").unwrap()
+        ));
+    }
+
+    #[test]
+    fn is_loopback_url_rejects_lookalike_and_remote_hosts() {
+        // `127.0.0.1.evil.com` is a real DNS name, not an IP, so it must not
+        // be treated as loopback even though it starts with `127.`.
+        assert!(!is_loopback_url(
+            &reqwest::Url::parse("http://127.0.0.1.evil.com/token").unwrap()
+        ));
+        // A remote host over plain HTTP is not loopback.
+        assert!(!is_loopback_url(
+            &reqwest::Url::parse("http://provider.example.com/token").unwrap()
+        ));
+        // A non-loopback IPv6 address is not loopback.
+        assert!(!is_loopback_url(
+            &reqwest::Url::parse("http://[2001:db8::1]/token").unwrap()
+        ));
+    }
+
+    #[tokio::test]
+    async fn refresh_token_accepts_ipv6_loopback_endpoint() {
+        // An `http://[::1]` token endpoint is a loopback link and must pass
+        // the scheme check (it is not a `Config` HTTPS-rejection). Nothing
+        // listens on the port, so the request fails with a `Network` error
+        // after the loopback gate — proving the endpoint was accepted.
+        let http = reqwest::Client::new();
+        let err = refresh_token(
+            &http,
+            "http://[::1]:1/token",
+            "client-id",
+            None,
+            None,
+            "super-secret-refresh-token",
+        )
+        .await
+        .expect_err("expected a network error, not success");
+        assert!(
+            !matches!(err, ConnectorError::Config(_)),
+            "IPv6 loopback endpoint must be accepted, got Config error: {err:?}"
+        );
     }
 
     #[tokio::test]

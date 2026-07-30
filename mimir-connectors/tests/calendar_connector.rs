@@ -707,6 +707,9 @@ async fn extract_emits_event_location_attendee_facts_with_identity() {
     assert_eq!(loc.object, "Office");
     assert_eq!(loc.object_type, Some(EntityType::Place));
     assert_eq!(loc.event_type, None);
+    // Secondary facts carry no temporal bounds, so they spawn no overlay.
+    assert_eq!(loc.valid_from, None);
+    assert_eq!(loc.valid_until, None);
 
     // Attendees: <person> attending <event> — one per attendee, by name/mail.
     let attendees: Vec<&_> = facts
@@ -720,6 +723,8 @@ async fn extract_emits_event_location_attendee_facts_with_identity() {
     for a in &attendees {
         assert_eq!(a.object, "Standup");
         assert_eq!(a.object_type, Some(EntityType::Event));
+        assert_eq!(a.valid_from, None);
+        assert_eq!(a.valid_until, None);
     }
 
     // No double-counting: exactly 1 primary + 1 location + 2 attendees.
@@ -995,6 +1000,22 @@ DTSTART:{start_ical}\nLOCATION:London\nEND:VEVENT\nEND:VCALENDAR"
         .unwrap()
         .expect("overlay");
     assert_eq!(event.event_type(), Some(EventType::Appointment));
+
+    // Secondary facts (location/attendance) must not spawn their own
+    // events-subsystem overlays — only the primary `has_event` fact drives
+    // one (#198 review). The `located_in` fact (Event → Place) is the only
+    // fact whose subject is the Conference event entity, so assert none of
+    // its facts carry an overlay.
+    let conference = entity_id(&kg, "Conference")
+        .await
+        .expect("Conference entity");
+    for fact in kg.get_facts_by_subject(conference, 100).await.unwrap() {
+        assert!(
+            kg.get_event_by_fact(fact.id).await.unwrap().is_none(),
+            "secondary fact {} must not spawn an event overlay",
+            fact.id,
+        );
+    }
 
     supervisor.shutdown().await;
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.84.1] — 2026-07-30
+
+### Connectors — Calendar secondary-fact overlay fix (review follow-up, #198)
+
+- **Data quality:** `CalendarConnector::event_to_facts` (`mimir-connectors/src/calendar/mod.rs`) no longer sets `valid_from`/`valid_until` on the secondary `located_in` and `attending` facts. Previously these inherited the event's `DTSTART`/`DTEND`, so for a future-dated event `event_from_extraction` (`mimir-knowledge/src/normalize.rs`) spawned a spurious `Reminder` events-subsystem overlay keyed on each secondary fact's id — a location/attendance relationship is not an event, and the module doc states only the primary `has_event` fact should drive the overlay. The secondary facts now carry no temporal bounds, so they spawn no overlay; the primary `has_event` fact (typed `EventType::Appointment`) remains the sole overlay source. `calendar_fact` now takes `valid_from: Option<DateTime<Utc>>` to express this. New assertions in `calendar_sync_surfaces_upcoming_event_for_user` (no overlay on the `located_in` fact) and `extract_emits_event_location_attendee_facts_with_identity` (secondary facts have `valid_from`/`valid_until = None`) lock in the behaviour.
+
 ## [0.84.0] — 2026-07-30
 
 ### Connectors — Calendar event extraction + write-back (Phase 3 C4 / #198)

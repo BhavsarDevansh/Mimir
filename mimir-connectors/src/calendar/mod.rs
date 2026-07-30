@@ -406,9 +406,11 @@ impl CalendarConnector {
     /// 2. `<event> located_in <place>` — the `LOCATION` resolves to a
     ///    `Place` entity via the full F5 chain (no `entity_locations` overlay;
     ///    a calendar venue is a property of the event, not the user's
-    ///    location history, so it does not bloat `Visited` rows).
+    ///    location history, so it does not bloat `Visited` rows). Carries no
+    ///    temporal bounds, so it spawns no events-subsystem overlay.
     /// 3. `<attendee> attending <event>` — each `ATTENDEE` resolves to a
-    ///    `Person` entity via F5.
+    ///    `Person` entity via F5. Like the location fact it carries no
+    ///    temporal bounds and spawns no overlay.
     fn event_to_facts(&self, event: &RawCalDavEvent) -> Vec<NormalizedFact> {
         let Some(start) = event.starts_at else {
             debug!(href = %event.href, "skipping event with no parseable DTSTART");
@@ -441,7 +443,7 @@ impl CalendarConnector {
                 "has_event",
                 event_name.clone(),
                 Some(EntityType::Event),
-                start,
+                Some(start),
                 valid_until,
                 recurrence,
                 Some(EventType::Appointment),
@@ -449,7 +451,9 @@ impl CalendarConnector {
             ));
         }
 
-        // 2. Location → Place entity (resolved via F5).
+        // 2. Location → Place entity (resolved via F5). Carries no temporal
+        //    bounds: a venue is a property of the event, not a trigger, so it
+        //    must not spawn its own events-subsystem overlay (#198 review).
         if let Some(loc) = non_empty(event.location.as_deref()) {
             facts.push(calendar_fact(
                 event_name.clone(),
@@ -457,15 +461,17 @@ impl CalendarConnector {
                 "located_in",
                 loc.to_string(),
                 Some(EntityType::Place),
-                start,
-                valid_until,
+                None,
+                None,
                 RecurrenceType::None,
                 None,
                 &raw_ref,
             ));
         }
 
-        // 3. Attendees → Person entities (resolved via F5).
+        // 3. Attendees → Person entities (resolved via F5). Like the location
+        //    fact, attendance is a relationship, not a trigger, so it carries
+        //    no temporal bounds and spawns no overlay (#198 review).
         for attendee in &event.attendees {
             facts.push(calendar_fact(
                 attendee.clone(),
@@ -473,8 +479,8 @@ impl CalendarConnector {
                 "attending",
                 event_name.clone(),
                 Some(EntityType::Event),
-                start,
-                valid_until,
+                None,
+                None,
                 RecurrenceType::None,
                 None,
                 &raw_ref,
@@ -797,7 +803,7 @@ fn calendar_fact(
     relationship_type: &str,
     object: String,
     object_type: Option<EntityType>,
-    start: DateTime<Utc>,
+    valid_from: Option<DateTime<Utc>>,
     valid_until: Option<DateTime<Utc>>,
     recurrence: RecurrenceType,
     event_type: Option<EventType>,
@@ -811,7 +817,7 @@ fn calendar_fact(
         object,
         object_is_entity: true,
         object_type,
-        valid_from: Some(start),
+        valid_from,
         valid_until,
         is_sensitive: false,
         is_correction: false,

@@ -23,6 +23,13 @@ date and attaches an **event** to it. There are three kinds of behaviour:
 - **Tasks / deadlines** — stay active past their date and show up as
   **overdue** until you mark them done or dismiss them.
 
+Events also arrive from **connectors**: the CalDAV Calendar connector (#198)
+turns your synced events into `Appointment`-typed facts (a future-dated
+appointment auto-completes when it passes; a recurring one rolls forward), so
+calendar and conversational events share the same Upcoming view. The event
+kind is a typed hint carried with the fact — chat-derived events stay the
+`Task`/`Reminder` defaults above.
+
 A background scan runs a couple of times a day (by default 06:00 and 18:00) to
 discover new upcoming facts, auto-complete past reminders, and advance
 recurring events to their next date.

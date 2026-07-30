@@ -1,9 +1,11 @@
 # Calendar Connector
 
 > **Phase:** 3 — Connectors
-> **Status:** Library done — C3 (#197). Event → knowledge-graph extraction,
-> event reminders, and write-back come in C4 (#198). Daemon wiring and the
-> `mimir connector …` CLI come in later Phase 3 issues (A1–A3).
+> **Status:** Library done — C3 (#197) transport + read/sync, C4 (#198)
+> event → knowledge-graph extraction, events-subsystem integration, and
+> write-back. Daemon wiring and the `mimir connector …` CLI come in later
+> Phase 3 issues (A1–A3). Server-side deletion → KB fact lifecycle is a
+> follow-up.
 
 ## What it is
 
@@ -35,11 +37,31 @@ not the whole calendar every time) and stages them for the knowledge graph.
   it normally resumes from where it left off; a requested full sync or an
   invalidated cursor can require a complete refetch.
 
-> **C3 vs C4:** This first cut (#197) does the *transport* — it fetches and
-> parses your events. Turning those events into knowledge-graph facts (with
-> locations and attendees resolved to entities, recurring events advanced by
-> the events & reminders subsystem, and write-back to create/update/delete
-> remote events) is C4 (#198).
+> **C3 vs C4:** #197 did the *transport* — fetching and parsing your
+> events. #198 turns those events into knowledge-graph facts (with locations
+> and attendees resolved to entities, recurring events advanced by the
+> events & reminders subsystem) and adds write-back to create/update/delete
+> remote events.
+
+## How events become knowledge (C4 / #198)
+
+When the connector extracts your staged events, each one becomes a small cluster of facts in the knowledge graph:
+
+- **The event itself** — `you have_event <event>` (e.g. "Devansh has_event Trip to Rome"). The event is an entity named by its title; the fact carries the start/end times and recurrence. Future-dated and recurring events then surface in your **Upcoming** section, so "what do I have this week?" works across calendar and conversational events alike.
+- **The location** — `<event> located_in <place>`; the venue resolves to a `Place` entity, so events are searchable by where they happen.
+- **The attendees** — `<attendee> attending <event>`; each attendee resolves to a `Person` entity, growing your contact graph from your calendar.
+
+The connector authors these facts as your canonical identity (the `[identity] name` in your config), so calendar events line up with the same "you" the rest of Mimir uses. Recurring events (a weekly standup, a yearly birthday) advance automatically via the events & reminders subsystem — only the `RRULE` frequency maps (daily/weekly/monthly/yearly); richer recurrence rules are a future enhancement. Dates are normalised to UTC, including time-zone-qualified ones.
+
+## Write-back (C4 / #198)
+
+The Calendar connector is the only connector that can write back to its source. Three actions are supported (wired to the daemon/CLI in A1–A3):
+
+- **create_event** — builds a new VEVENT and `PUT`s it to the calendar (`If-None-Match: *` so a stray overwrite fails instead of clobbering).
+- **update_event** — `PUT`s with `If-Match: <etag>` to a known event href.
+- **delete_event** — `DELETE`s an event (idempotent — a 404 is treated as success).
+
+A delete on the server does not yet remove the corresponding KB fact automatically; that lifecycle is a follow-up.
 
 ## Authentication
 
@@ -52,8 +74,9 @@ not the whole calendar every time) and stages them for the knowledge graph.
   expires. The initial sign-in (the OAuth PKCE dance) is added in a later
   issue (A4 / #206); for now you supply the first token.
 
-Mimir is read-only against your calendar in this release (no events are
-created, modified, or deleted). Write-back lands in C4 (#198).
+Mimir can also write back to your calendar: creating, updating, or deleting
+remote events via CalDAV `PUT`/`DELETE` (added in C4 / #198). This is the
+only connector with write support.
 
 ## Use cases
 

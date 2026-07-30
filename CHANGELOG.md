@@ -1,6 +1,20 @@
 # Changelog
 
+## [0.84.0] — 2026-07-30
+
+### Connectors — Calendar event extraction + write-back (Phase 3 C4 / #198)
+
+- **Event → KB fact extraction:** `CalendarConnector::extract` (`mimir-connectors/src/calendar/mod.rs`) now drains staged VEVENTs into a cluster of `NormalizedFact`s through the shared `normalize_and_insert` pipeline. Per VEVENT it emits a primary `user has_event <event>` (typed `EventType::Appointment`, recurrence mapped from `RRULE` `FREQ`), `<event> located_in <place>`, and `<attendee> attending <event>`; every subject/object resolves to an entity via the full F5 chain (exact → alias → FTS5 fuzzy → create), and future-dated/recurring events surface in the user's "Upcoming" memory section (#74). The event entity is named by the `SUMMARY` (fallback `UID`); locations resolve to `Place` entities and attendees to `Person` entities (the `CN` parameter, else the `mailto:` value).
+- **User identity injection:** `ConnectorContext` gains a `user_identity: Option<String>` field (`with_user_identity` builder) and `ConnectorSupervisor::with_user_identity` injects the canonical `config.toml` `[identity] name` so the connector authors `user has_event <event>` against the same entity the daemon resolves as `user_entity_id` (and the event surfaces in the user-scoped Upcoming section). When no identity is configured the primary fact is skipped; location/attendee facts are still emitted. This supersedes the Photos connector's disconnected per-instance `owner_name` (aligning it is tracked as a follow-up).
+- **`event_type` hint on `NormalizedFact`:** `mimir-knowledge::normalize::NormalizedFact` gains `event_type: Option<EventType>`; `event_from_extraction` honours it when present, falling back to the existing `Task`/`Reminder` derivation for chat (behaviour unchanged). The Calendar connector sets `Appointment`.
+- **iCalendar date + recurrence parsing:** `parse_icalendar` (`mimir-connectors/src/calendar/caldav.rs`) now parses `DTSTART`/`DTEND` to UTC at staging time — UTC (`…Z`), floating local, date-only, and `TZID`-qualified values (resolved via the new `chrono-tz` 0.10 dependency; an unknown zone falls back to the naive value as UTC so a bad `TZID` never drops the event) — and captures attendees/organizer. A new `rrule_to_recurrence` maps `RRULE` `FREQ` to the coarse `RecurrenceType` (full RFC 5545 `COUNT`/`UNTIL`/`INTERVAL`/`BYxxx` out of scope). `RawCalDavEvent` is reshaped: typed `starts_at`/`ends_at: Option<DateTime<Utc>>` replace the raw `dtstart`/`dtend` strings, plus `attendees: Vec<String>` and `organizer: Option<String>`. The now-unused `raw_ical` payload field is dropped (C4's extractor works from the parsed fields, so retaining the full calendar text per staged event was dead weight).
+- **CalDAV write-back:** `CalDavClient` gains `put_event` (RFC 4791 §5.5, `If-None-Match: *` for create / `If-Match: <etag>` for update) and `delete_event` (§5.6, idempotent on 404). `CalendarConnector::act` implements `create_event` / `update_event` / `delete_event`, building VEVENTs with the `icalendar` builder and a `uuid`-generated `UID`. This is the only connector with write support.
+- **Dependencies:** `chrono-tz` 0.10 and `uuid` 1 (`v4`) added to `mimir-connectors` under the `calendar` feature. `uuid` is already in the tree transitively; `chrono-tz` is a new download.
+- **Tests:** new caldav unit tests (iCalendar datetime UTC/date-only/floating/TZID-DST resolution, attendee/organizer extraction) and integration tests (extraction fact shape with/without identity, recurrence mapping, write-back create/update/delete against a mock CalDAV server, idempotent 404 delete, unsupported-action error, and a full sync → `normalize_and_insert` → "Upcoming" round-trip proving the `Appointment` overlay). Existing C3 tests updated for the reshaped `RawCalDavEvent`.
+- **Docs:** `docs/calendar-connector.md`, `docs/wiki/calendar-connector.md`, `docs/wiki/what-works-now.md`, `docs/wiki/events-and-reminders.md`, `README.md`, and `Mimir-Implementation-Context.md` updated for C4.
+
 ## [0.83.3] — 2026-07-30
+
 
 ### Connectors (review follow-up, PR #244)
 

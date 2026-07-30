@@ -51,6 +51,7 @@ fn rome_event(raw_ref: &str, valid_until: Option<DateTime<Utc>>) -> NormalizedFa
         recurrence: RecurrenceType::None,
         requires_user_action: false,
         raw_reference: Some(raw_ref.to_string()),
+        event_type: None,
         location: None,
     }
 }
@@ -223,6 +224,7 @@ async fn chat_provenance_inserts_with_interaction_confidence() {
         recurrence: RecurrenceType::None,
         requires_user_action: false,
         raw_reference: None,
+        event_type: None,
         location: None,
     };
 
@@ -307,6 +309,7 @@ async fn sensitive_fact_persists_its_catalogue_categories() {
         recurrence: RecurrenceType::None,
         requires_user_action: false,
         raw_reference: Some("gmail-msg-42".to_string()),
+        event_type: None,
         location: None,
     };
 
@@ -367,6 +370,7 @@ fn subject_fact(subject: &str, subject_type: EntityType, object: &str) -> Normal
         recurrence: RecurrenceType::None,
         requires_user_action: false,
         raw_reference: None,
+        event_type: None,
         location: None,
     }
 }
@@ -540,6 +544,7 @@ fn took_photo_at_fact(raw_ref: &str, place: &str, lat: f64, lng: f64) -> Normali
         recurrence: RecurrenceType::None,
         requires_user_action: false,
         raw_reference: Some(raw_ref.to_string()),
+        event_type: None,
         location: Some(NormalizedLocation {
             location_type: LocationType::Visited,
             address: Some(place.to_string()),

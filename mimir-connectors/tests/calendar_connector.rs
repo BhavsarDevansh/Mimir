@@ -10,19 +10,23 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::{Duration as ChronoDuration, TimeZone, Utc};
 use serde_json::json;
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use mimir_connectors::{
     CalendarAuthMethod, CalendarConfigDto, CalendarConnector, CalendarConnectorFactory, Connector,
-    ConnectorContext, ConnectorFactory, ConnectorRegistry, ConnectorSupervisor,
-    InMemorySecretStore, SecretBundle, SecretStore, SupervisorConfig, SyncOptions,
+    ConnectorAction, ConnectorContext, ConnectorError, ConnectorFactory, ConnectorRegistry,
+    ConnectorSupervisor, InMemorySecretStore, SecretBundle, SecretStore, SupervisorConfig,
+    SyncOptions,
 };
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::connector::UpsertConnectorInput;
-use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorStatus, ConnectorType};
+use mimir_knowledge::models::entity::EntityType;
+use mimir_knowledge::models::enums::{
+    ConnectorAuthState, ConnectorStatus, ConnectorType, EventType, RecurrenceType,
+};
 
 // ---------------------------------------------------------------------------
 // Fixtures + helpers
@@ -153,8 +157,29 @@ fn make_connector(
     cursor: Option<String>,
 ) -> Arc<CalendarConnector> {
     Arc::new(
-        CalendarConnector::from_config_with_http(config, Some(store), cursor, None)
+        CalendarConnector::from_config_with_http(config, Some(store), None, cursor, None)
             .expect("connector constructs"),
+    )
+}
+
+/// Like [`make_connector`] but injects a canonical user identity so the
+/// extractor authors `user has_event <event>` (and the event surfaces in the
+/// user's "Upcoming" section).
+fn make_connector_as(
+    config: serde_json::Value,
+    store: Arc<dyn SecretStore>,
+    cursor: Option<String>,
+    user_identity: &str,
+) -> Arc<CalendarConnector> {
+    Arc::new(
+        CalendarConnector::from_config_with_http(
+            config,
+            Some(store),
+            Some(user_identity.to_string()),
+            cursor,
+            None,
+        )
+        .expect("connector constructs"),
     )
 }
 
@@ -182,9 +207,14 @@ async fn app_password_sync_stages_events_and_returns_cursor() {
     let outcome = connector.sync(SyncOptions::default()).await.unwrap();
     assert_eq!(outcome.fetched, 1, "one VEVENT staged");
     assert_eq!(outcome.new_cursor.as_deref(), Some("token-2"));
-    // extract drains the buffer and (C3) emits no facts yet.
+    // extract drains the buffer into C4 facts. Without a user identity the
+    // primary `has_event` fact is skipped, so only the event→location fact
+    // is emitted (ICAL_EVENT has a LOCATION, no attendees).
     let facts = connector.extract().await.unwrap();
-    assert!(facts.is_empty(), "C3 emits no facts; C4 / #198 will");
+    assert_eq!(facts.len(), 1, "one location fact for the staged event");
+    assert_eq!(facts[0].relationship_type, "located_in");
+    assert_eq!(facts[0].subject, "Trip to Rome");
+    assert_eq!(facts[0].object, "Rome");
 }
 
 // ---------------------------------------------------------------------------
@@ -572,7 +602,7 @@ async fn supervisor_round_trips_and_persists_cursor() {
             slug: "calendar-personal".to_string(),
             backend: "caldav".to_string(),
             display_name: "Calendar".to_string(),
-            config_json: config,
+            config_json: config.to_string(),
             status: Some(ConnectorStatus::Active),
             auth_state: Some(ConnectorAuthState::Authenticated),
         })
@@ -605,4 +635,371 @@ async fn supervisor_round_trips_and_persists_cursor() {
 
     supervisor.shutdown().await;
     drop(shutdown_tx);
+}
+
+// ---------------------------------------------------------------------------
+// C4 / #198: event → KB fact extraction + write-back
+// ---------------------------------------------------------------------------
+
+const ICAL_FULL: &str = "BEGIN:VCALENDAR\n\
+VERSION:2.0\n\
+PRODID:-//Mimir//Test//EN\n\
+BEGIN:VEVENT\n\
+UID:meet-1@test\n\
+SUMMARY:Standup\n\
+DTSTART;TZID=Europe/London:20250703T090000\n\
+DTEND;TZID=Europe/London:20250703T093000\n\
+LOCATION:Office\n\
+ORGANIZER;CN=Devansh Bhavsar:mailto:devansh@example.com\n\
+ATTENDEE;CN=Alice:mailto:alice@example.com\n\
+ATTENDEE:mailto:bob@example.com\n\
+RRULE:FREQ=WEEKLY\n\
+STATUS:CONFIRMED\n\
+END:VEVENT\n\
+END:VCALENDAR";
+
+#[tokio::test]
+async fn extract_emits_event_location_attendee_facts_with_identity() {
+    let server = MockServer::start().await;
+    let url = format!("{}/cal/personal/", server.uri());
+    mount_sync(
+        &server,
+        "/cal/personal/",
+        None,
+        sync_body("t1", &[("/cal/meet-1.ics", ICAL_FULL)], &[]),
+    )
+    .await;
+
+    let connector = make_connector_as(
+        app_password_config(&url),
+        store_with_app_password().await,
+        None,
+        "Devansh",
+    );
+    connector.sync(SyncOptions::default()).await.unwrap();
+    let facts = connector.extract().await.unwrap();
+
+    // Primary: user has_event <event> (Appointment, WEEKLY recurrence).
+    let primary = facts
+        .iter()
+        .find(|f| f.relationship_type == "has_event")
+        .expect("primary has_event fact");
+    assert_eq!(primary.subject, "Devansh");
+    assert_eq!(primary.subject_type, EntityType::Person);
+    assert_eq!(primary.object, "Standup");
+    assert_eq!(primary.object_type, Some(EntityType::Event));
+    assert_eq!(primary.recurrence, RecurrenceType::Weekly);
+    assert_eq!(primary.event_type, Some(EventType::Appointment));
+    assert_eq!(primary.raw_reference.as_deref(), Some("meet-1@test"));
+    // TZID Europe/London on 2025-07-03 09:00 BST → 08:00 UTC.
+    assert_eq!(
+        primary.valid_from,
+        Some(Utc.with_ymd_and_hms(2025, 7, 3, 8, 0, 0).unwrap())
+    );
+
+    // Location: <event> located_in <place>.
+    let loc = facts
+        .iter()
+        .find(|f| f.relationship_type == "located_in")
+        .expect("location fact");
+    assert_eq!(loc.subject, "Standup");
+    assert_eq!(loc.subject_type, EntityType::Event);
+    assert_eq!(loc.object, "Office");
+    assert_eq!(loc.object_type, Some(EntityType::Place));
+    assert_eq!(loc.event_type, None);
+
+    // Attendees: <person> attending <event> — one per attendee, by name/mail.
+    let attendees: Vec<&_> = facts
+        .iter()
+        .filter(|f| f.relationship_type == "attending")
+        .collect();
+    assert_eq!(attendees.len(), 2, "two attendee facts");
+    let attendee_subjects: Vec<&str> = attendees.iter().map(|f| f.subject.as_str()).collect();
+    assert!(attendee_subjects.contains(&"Alice"));
+    assert!(attendee_subjects.contains(&"bob@example.com"));
+    for a in &attendees {
+        assert_eq!(a.object, "Standup");
+        assert_eq!(a.object_type, Some(EntityType::Event));
+    }
+
+    // No double-counting: exactly 1 primary + 1 location + 2 attendees.
+    assert_eq!(facts.len(), 4);
+}
+
+#[tokio::test]
+async fn extract_without_identity_skips_primary_but_keeps_location_attendees() {
+    let server = MockServer::start().await;
+    let url = format!("{}/cal/personal/", server.uri());
+    mount_sync(
+        &server,
+        "/cal/personal/",
+        None,
+        sync_body("t1", &[("/cal/meet-1.ics", ICAL_FULL)], &[]),
+    )
+    .await;
+
+    // No user identity injected.
+    let connector = make_connector(
+        app_password_config(&url),
+        store_with_app_password().await,
+        None,
+    );
+    connector.sync(SyncOptions::default()).await.unwrap();
+    let facts = connector.extract().await.unwrap();
+    assert!(facts.iter().all(|f| f.relationship_type != "has_event"));
+    assert_eq!(facts.len(), 3, "location + 2 attendee facts only");
+}
+
+#[tokio::test]
+async fn write_back_creates_updates_and_deletes_events() {
+    use wiremock::matchers::{body_string_contains, header, method, path};
+
+    let server = MockServer::start().await;
+    let url = format!("{}/cal/personal/", server.uri());
+
+    // create_event: PUT with If-None-Match: *, respond 201 + ETag.
+    Mock::given(method("PUT"))
+        .and(path("/cal/personal/new-1.ics"))
+        .and(header("if-none-match", "*"))
+        .and(body_string_contains("SUMMARY:Dentist"))
+        .and(body_string_contains("DTSTART:20250901T090000Z"))
+        .and(body_string_contains("ATTENDEE:mailto:alice@example.com"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("etag", "\"v1\"")
+                .set_body_string(""),
+        )
+        .mount(&server)
+        .await;
+    // update_event: PUT with If-Match: "v1", respond 200 + new ETag.
+    Mock::given(method("PUT"))
+        .and(path("/cal/personal/new-1.ics"))
+        .and(header("if-match", "\"v1\""))
+        .and(body_string_contains("SUMMARY:Dentist (moved)"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("etag", "\"v2\"")
+                .set_body_string(""),
+        )
+        .mount(&server)
+        .await;
+    // delete_event: DELETE with If-Match: "v2", respond 204.
+    Mock::given(method("DELETE"))
+        .and(path("/cal/personal/new-1.ics"))
+        .and(header("if-match", "\"v2\""))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let connector = make_connector(
+        app_password_config(&url),
+        store_with_app_password().await,
+        None,
+    );
+
+    let created = connector
+        .act(ConnectorAction {
+            kind: "create_event".to_string(),
+            payload: json!({
+                "uid": "new-1",
+                "href": format!("{url}new-1.ics"),
+                "summary": "Dentist",
+                "start": "2025-09-01T09:00:00Z",
+                "end": "2025-09-01T09:30:00Z",
+                "location": "Surgery",
+                "attendees": ["alice@example.com"],
+            }),
+        })
+        .await
+        .unwrap();
+    assert!(created.success);
+    assert_eq!(created.message.as_deref(), Some("\"v1\""));
+
+    let updated = connector
+        .act(ConnectorAction {
+            kind: "update_event".to_string(),
+            payload: json!({
+                "uid": "new-1",
+                "href": format!("{url}new-1.ics"),
+                "etag": "\"v1\"",
+                "summary": "Dentist (moved)",
+                "start": "2025-09-01T10:00:00Z",
+                "end": "2025-09-01T10:30:00Z",
+            }),
+        })
+        .await
+        .unwrap();
+    assert!(updated.success);
+    assert_eq!(updated.message.as_deref(), Some("\"v2\""));
+
+    let deleted = connector
+        .act(ConnectorAction {
+            kind: "delete_event".to_string(),
+            payload: json!({
+                "href": format!("{url}new-1.ics"),
+                "etag": "\"v2\"",
+            }),
+        })
+        .await
+        .unwrap();
+    assert!(deleted.success);
+}
+
+#[tokio::test]
+async fn write_back_delete_is_idempotent_on_404() {
+    use wiremock::matchers::{method, path};
+
+    let server = MockServer::start().await;
+    let url = format!("{}/cal/personal/", server.uri());
+    Mock::given(method("DELETE"))
+        .and(path("/cal/personal/gone.ics"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let connector = make_connector(
+        app_password_config(&url),
+        store_with_app_password().await,
+        None,
+    );
+    let res = connector
+        .act(ConnectorAction {
+            kind: "delete_event".to_string(),
+            payload: json!({ "href": format!("{url}gone.ics") }),
+        })
+        .await
+        .unwrap();
+    assert!(res.success, "a 404 delete is idempotent success");
+}
+
+#[tokio::test]
+async fn write_back_unsupported_action_errors() {
+    let server = MockServer::start().await;
+    let url = format!("{}/cal/personal/", server.uri());
+    let connector = make_connector(
+        app_password_config(&url),
+        store_with_app_password().await,
+        None,
+    );
+    let err = connector
+        .act(ConnectorAction {
+            kind: "bogus".to_string(),
+            payload: json!({}),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ConnectorError::UnsupportedAction(_)));
+}
+
+// ---------------------------------------------------------------------------
+// C4 / #198: end-to-end sync → KB → events-subsystem "Upcoming"
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn calendar_sync_surfaces_upcoming_event_for_user() {
+    let (kg, _dir) = init_kg().await;
+    let server = MockServer::start().await;
+    let cal_url = format!("{}/cal/personal/", server.uri());
+
+    // Health probe (Online) — PROPFIND resourcetype for every cycle.
+    Mock::given(wiremock::matchers::method("PROPFIND"))
+        .and(wiremock::matchers::path("/cal/personal/"))
+        .respond_with(
+            ResponseTemplate::new(207).set_body_string(
+                "<?xml version=\"1.0\"?><d:multistatus xmlns:d=\"DAV:\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\">\
+<d:response><d:href>/cal/personal/</d:href><d:propstat><d:prop>\
+<d:resourcetype><d:collection/><cal:calendar/></d:resourcetype></d:prop>\
+<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>",
+            ),
+        )
+        .mount(&server)
+        .await;
+
+    // A future-dated one-time event (now + 5 days) so it lands inside the
+    // 30-day Upcoming horizon.
+    let start = Utc::now() + ChronoDuration::days(5);
+    let start_ical = start.format("%Y%m%dT%H%M%SZ").to_string();
+    let ical = format!(
+        "BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\n\
+UID:future-1@test\nSUMMARY:Conference\n\
+DTSTART:{start_ical}\nLOCATION:London\nEND:VEVENT\nEND:VCALENDAR"
+    );
+    mount_sync(
+        &server,
+        "/cal/personal/",
+        None,
+        sync_body("upc-1", &[("/cal/future-1.ics", &ical)], &[]),
+    )
+    .await;
+
+    let config = app_password_config(&cal_url);
+    let _row = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Calendar,
+            slug: "calendar-personal".to_string(),
+            backend: "caldav".to_string(),
+            display_name: "Calendar".to_string(),
+            config_json: config.to_string(),
+            status: Some(ConnectorStatus::Active),
+            auth_state: Some(ConnectorAuthState::Authenticated),
+        })
+        .await
+        .unwrap();
+    let kg = Arc::new(kg);
+
+    let registry = ConnectorRegistry::new();
+    registry
+        .register(ConnectorType::Calendar, "caldav", CalendarConnectorFactory)
+        .unwrap();
+    let (_shutdown_tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = ConnectorSupervisor::new(Arc::new(registry), kg.clone(), fast_config(), rx)
+        .with_secret_store(store_with_app_password().await)
+        .with_user_identity("Devansh");
+
+    assert_eq!(supervisor.restore().await.unwrap(), 1);
+
+    // Wait for the user entity + its `has_event` fact to land.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let devansh = entity_id(&kg, "Devansh").await;
+        if let Some(uid) = devansh {
+            if !kg.get_facts_by_subject(uid, 100).await.unwrap().is_empty() {
+                break;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "event fact never landed"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let devansh = entity_id(&kg, "Devansh").await.expect("Devansh entity");
+    let upcoming = kg.render_upcoming_section(devansh, 30, 10).await.unwrap();
+    assert!(
+        upcoming.contains("Conference"),
+        "future event surfaces in Upcoming: {upcoming}"
+    );
+
+    // The event overlay is an Appointment (not a Reminder/Task).
+    let fact = kg
+        .get_facts_by_subject(devansh, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|f| f.object_literal.is_none())
+        .expect("has_event fact");
+    let event = kg
+        .get_event_by_fact(fact.id)
+        .await
+        .unwrap()
+        .expect("overlay");
+    assert_eq!(event.event_type(), Some(EventType::Appointment));
+
+    supervisor.shutdown().await;
+}
+
+async fn entity_id(kg: &KnowledgeGraph, name: &str) -> Option<i32> {
+    let results = kg.search_entities(name, 10).await.unwrap();
+    results.into_iter().next().map(|r| r.entity.id)
 }

@@ -181,6 +181,7 @@ impl MockFactConfig {
             recurrence: self.recurrence,
             requires_user_action: self.requires_user_action,
             raw_reference: Some(raw_reference),
+            event_type: None,
             location: self.location.clone(),
         }
     }

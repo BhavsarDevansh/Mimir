@@ -502,6 +502,7 @@ impl RawPhoto {
             recurrence: mimir_knowledge::models::enums::RecurrenceType::None,
             requires_user_action: false,
             raw_reference: Some(self.rel_path.clone()),
+            event_type: None,
             location: self.location_overlay_with_address(place),
         }
     }
@@ -527,6 +528,7 @@ impl RawPhoto {
             recurrence: mimir_knowledge::models::enums::RecurrenceType::None,
             requires_user_action: false,
             raw_reference: Some(self.rel_path.clone()),
+            event_type: None,
             location: self.coords_only_overlay(),
         }
     }

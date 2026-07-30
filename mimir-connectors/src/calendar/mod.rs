@@ -11,10 +11,18 @@
 //! # C3 / C4 boundary
 //!
 //! C3 (#197) delivers the *transport* + `sync` that stages parsed VEVENTs in
-//! an internal buffer; [`CalendarConnector::extract`] drains the buffer and
-//! returns an empty `Vec<NormalizedFact>` for now. C4 / #198 implements the
-//! event → KB fact extraction + events-subsystem (#74) integration +
-//! write-back (`act`).
+//! an internal buffer. C4 / #198 (this module's extractor + write-back)
+//! converts those events into a cluster of [`NormalizedFact`]s — a primary
+//! `user has_event <event>` (typed [`EventType::Appointment`], recurrence
+//! from `RRULE` `FREQ`), `<event> located_in <place>`, and `<attendee>
+//! attending <event>` — so the shared `normalize_and_insert` pipeline
+//! resolves every entity via F5 and the events-subsystem (#74) surfaces
+//! future-dated / recurring events in the user's "Upcoming" section. C4
+//! also adds the only connector write-back: `act()` creates/updates/deletes
+//! remote events via CalDAV `PUT`/`DELETE`. Server-side deletions
+//! (tombstones) are logged but not yet propagated to the KB (tracked as a
+//! follow-up); the daemon `AppState` wiring + `mimir connector …` CLI land
+//! in A1–A3 (#202–#204).
 //!
 //! # Credentials
 //!
@@ -32,7 +40,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
@@ -41,11 +49,16 @@ use crate::calendar::caldav::{
     CalDavAuth, CalDavClient, RawCalDavEvent, SyncCollectionResult, parse_icalendar,
 };
 use crate::connector::{
-    Connector, ConnectorContext, ConnectorError, ConnectorFactory, ConnectorMode, HealthStatus,
-    SyncOptions, SyncOutcome,
+    ActionResult, Connector, ConnectorAction, ConnectorContext, ConnectorError, ConnectorFactory,
+    ConnectorMode, HealthStatus, SyncOptions, SyncOutcome,
 };
 use crate::secrets::{SecretBundle, SecretStore};
-use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType};
+use mimir_knowledge::models::entity::EntityType;
+use mimir_knowledge::models::enums::{
+    ConnectorAuthState, ConnectorType, EventType, RecurrenceType,
+};
+use mimir_knowledge::models::source::SourceType;
+use mimir_knowledge::normalize::NormalizedFact;
 
 // ---------------------------------------------------------------------------
 // Defaults
@@ -150,6 +163,12 @@ pub struct CalendarConnector {
     slug: String,
     display_name: String,
     config: CalendarConfigDto,
+    /// Canonical user identity name (the `[identity] name`), injected via
+    /// [`ConnectorContext::user_identity`]. When present, the extractor
+    /// authors `user has_event <event>` (and the event surfaces in the
+    /// user's "Upcoming" memory section); when `None`, it falls back to an
+    /// Event-centric subject so the data is still captured.
+    user_identity: Option<String>,
     /// Shared credential store (loaded by slug); `None` means the daemon did
     /// not wire one in (sync/authenticate then fail `NotAuthenticated`).
     secret_store: Option<Arc<dyn SecretStore>>,
@@ -171,7 +190,7 @@ impl CalendarConnector {
         secret_store: Option<Arc<dyn SecretStore>>,
         cursor: Option<String>,
     ) -> Result<Self, ConnectorError> {
-        Self::from_config_with_http(config, secret_store, cursor, None)
+        Self::from_config_with_http(config, secret_store, None, cursor, None)
     }
 
     /// Build a connector, allowing an injected `http` client (tests inject a
@@ -180,6 +199,7 @@ impl CalendarConnector {
     pub fn from_config_with_http(
         config: serde_json::Value,
         secret_store: Option<Arc<dyn SecretStore>>,
+        user_identity: Option<String>,
         cursor: Option<String>,
         http: Option<reqwest::Client>,
     ) -> Result<Self, ConnectorError> {
@@ -207,6 +227,7 @@ impl CalendarConnector {
                 .clone()
                 .unwrap_or_else(|| DEFAULT_DISPLAY_NAME.to_string()),
             config: dto,
+            user_identity: user_identity.filter(|n| !n.trim().is_empty()),
             secret_store,
             http,
             sync_token: Mutex::new(cursor.filter(|c| !c.is_empty())),
@@ -363,9 +384,104 @@ impl CalendarConnector {
             }
         }
         for href in &result.deleted {
-            debug!(href = %href, "CalDAV reports deleted event (C4 / #198 will handle fact lifecycle)");
+            // Server-side deletions (tombstones) are logged but not yet
+            // propagated to the KB: surfacing a deletion needs a way for the
+            // connector to report removals (extract only yields facts), so
+            // trashing the corresponding facts is tracked as a follow-up.
+            debug!(href = %href, "CalDAV reports deleted event; fact lifecycle deferred");
         }
         Ok(count)
+    }
+
+    /// Convert one staged VEVENT into its cluster of [`NormalizedFact`]s.
+    ///
+    /// Emits up to three fact shapes, all resolved by `normalize_and_insert`:
+    /// 1. `user has_event <event>` — the primary appointment, carrying the
+    ///    temporal bounds, the recurrence (`RRULE` `FREQ`), and an
+    ///    [`EventType::Appointment`] hint so the events-subsystem overlay is
+    ///    typed correctly. Authored only when a user identity is injected
+    ///    (so the event surfaces in the user's "Upcoming" section); without
+    ///    one the primary fact is skipped and the event is captured via its
+    ///    location/attendee facts instead.
+    /// 2. `<event> located_in <place>` — the `LOCATION` resolves to a
+    ///    `Place` entity via the full F5 chain (no `entity_locations` overlay;
+    ///    a calendar venue is a property of the event, not the user's
+    ///    location history, so it does not bloat `Visited` rows).
+    /// 3. `<attendee> attending <event>` — each `ATTENDEE` resolves to a
+    ///    `Person` entity via F5.
+    fn event_to_facts(&self, event: &RawCalDavEvent) -> Vec<NormalizedFact> {
+        let Some(start) = event.starts_at else {
+            debug!(href = %event.href, "skipping event with no parseable DTSTART");
+            return Vec::new();
+        };
+        // The event entity is named by its SUMMARY (falling back to the UID)
+        // so the primary, location, and attendee facts all resolve to the
+        // same `Event` entity.
+        let event_name = match non_empty(event.summary.as_deref()) {
+            Some(name) => name.to_string(),
+            None => match non_empty(event.uid.as_deref()) {
+                Some(uid) => uid.to_string(),
+                None => {
+                    debug!(href = %event.href, "skipping event with no summary or uid");
+                    return Vec::new();
+                }
+            },
+        };
+        let raw_ref = event.uid.clone().unwrap_or_else(|| event.href.clone());
+        let valid_until = event.ends_at;
+        let recurrence = rrule_to_recurrence(event.recurrence_rule.as_deref());
+
+        let mut facts = Vec::new();
+
+        // 1. Primary appointment fact (user-scoped when an identity is set).
+        if let Some(user) = self.user_identity.as_deref() {
+            facts.push(calendar_fact(
+                user.to_string(),
+                EntityType::Person,
+                "has_event",
+                event_name.clone(),
+                Some(EntityType::Event),
+                start,
+                valid_until,
+                recurrence,
+                Some(EventType::Appointment),
+                &raw_ref,
+            ));
+        }
+
+        // 2. Location → Place entity (resolved via F5).
+        if let Some(loc) = non_empty(event.location.as_deref()) {
+            facts.push(calendar_fact(
+                event_name.clone(),
+                EntityType::Event,
+                "located_in",
+                loc.to_string(),
+                Some(EntityType::Place),
+                start,
+                valid_until,
+                RecurrenceType::None,
+                None,
+                &raw_ref,
+            ));
+        }
+
+        // 3. Attendees → Person entities (resolved via F5).
+        for attendee in &event.attendees {
+            facts.push(calendar_fact(
+                attendee.clone(),
+                EntityType::Person,
+                "attending",
+                event_name.clone(),
+                Some(EntityType::Event),
+                start,
+                valid_until,
+                RecurrenceType::None,
+                None,
+                &raw_ref,
+            ));
+        }
+
+        facts
     }
 }
 
@@ -520,15 +636,95 @@ impl Connector for CalendarConnector {
         })
     }
 
-    async fn extract(
-        &self,
-    ) -> Result<Vec<mimir_knowledge::normalize::NormalizedFact>, ConnectorError> {
-        // C3 / #197: transport-only. Drains the staged buffer; C4 / #198 will
-        // convert RawCalDavEvents into NormalizedFacts with full
-        // temporal/recurrence resolution + events-subsystem integration.
+    async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError> {
+        // C4 / #198: drain the staged VEVENTs and convert each into a small
+        // cluster of `NormalizedFact`s. The shared `normalize_and_insert`
+        // pipeline (run by the supervisor) resolves every subject/object
+        // entity via the full F5 chain, assigns connector confidence, and —
+        // for the primary `user has_event <event>` fact — derives the
+        // events-subsystem (#74) overlay so future-dated and recurring
+        // events surface in the user's "Upcoming" memory section.
         let mut buffer = self.buffer.lock().await;
-        let _staged: Vec<RawCalDavEvent> = std::mem::take(&mut *buffer);
-        Ok(Vec::new())
+        let staged: Vec<RawCalDavEvent> = std::mem::take(&mut *buffer);
+        let mut facts = Vec::new();
+        for event in &staged {
+            facts.extend(self.event_to_facts(event));
+        }
+        Ok(facts)
+    }
+
+    /// CalDAV write-back (C4 / #198): the only connector with write support.
+    ///
+    /// Three action kinds, each authenticated via the same credential path
+    /// as `sync` (OAuth refresh included):
+    /// - `create_event` — builds a VEVENT from the payload, generates a `UID`
+    ///   (unless supplied), and `PUT`s it to `<calendar>/<uid>.ics` with
+    ///   `If-None-Match: *`.
+    /// - `update_event` — requires the target `href` (and optional `etag`),
+    ///   `PUT`s with `If-Match: <etag>`.
+    /// - `delete_event` — requires the target `href` (and optional `etag`),
+    ///   `DELETE`s it (idempotent on 404).
+    async fn act(&self, action: ConnectorAction) -> Result<ActionResult, ConnectorError> {
+        let (client, refreshed) = self.client_from_credentials().await?;
+        if let Some(b) = refreshed {
+            self.persist_refreshed(&b).await?;
+        }
+        match action.kind.as_str() {
+            "create_event" => {
+                let p: WriteEventPayload = serde_json::from_value(action.payload)
+                    .map_err(|e| ConnectorError::Config(format!("create_event payload: {e}")))?;
+                let uid = p
+                    .uid
+                    .clone()
+                    .unwrap_or_else(|| format!("{}", uuid::Uuid::new_v4()));
+                let href = p.href.clone().unwrap_or_else(|| {
+                    format!(
+                        "{}/{uid}.ics",
+                        self.config.calendar_url.trim_end_matches('/')
+                    )
+                });
+                let ical = build_vevent(&p, &uid)?;
+                let res = client.put_event(&href, &ical, None).await?;
+                Ok(ActionResult {
+                    success: true,
+                    native_id: Some(res.href),
+                    message: res.etag,
+                })
+            }
+            "update_event" => {
+                let p: WriteEventPayload = serde_json::from_value(action.payload)
+                    .map_err(|e| ConnectorError::Config(format!("update_event payload: {e}")))?;
+                let href = p
+                    .href
+                    .clone()
+                    .ok_or_else(|| ConnectorError::Config("update_event requires `href`".into()))?;
+                let uid = p.uid.clone().unwrap_or_else(|| {
+                    href.rsplit('/')
+                        .next()
+                        .map(|s| s.trim_end_matches(".ics").to_string())
+                        .unwrap_or_default()
+                });
+                let ical = build_vevent(&p, &uid)?;
+                let res = client.put_event(&href, &ical, p.etag.as_deref()).await?;
+                Ok(ActionResult {
+                    success: true,
+                    native_id: Some(res.href),
+                    message: res.etag,
+                })
+            }
+            "delete_event" => {
+                let p: DeleteEventPayload = serde_json::from_value(action.payload)
+                    .map_err(|e| ConnectorError::Config(format!("delete_event payload: {e}")))?;
+                let href = p.href.clone();
+                client.delete_event(&href, p.etag.as_deref()).await?;
+                Ok(ActionResult {
+                    success: true,
+                    native_id: Some(href),
+                    message: None,
+                })
+            }
+            other => Err(ConnectorError::UnsupportedAction(other.to_string())),
+        }
     }
 
     async fn forget(&self) -> Result<(), ConnectorError> {
@@ -550,10 +746,184 @@ impl Connector for CalendarConnector {
 /// `config_json` + the shared [`SecretStore`] (Phase 3 C3 / #197).
 pub struct CalendarConnectorFactory;
 
+/// Map an iCalendar `RRULE` to the coarse [`RecurrenceType`] the
+/// events-subsystem (#74) advances.
+///
+/// Only the `FREQ` part maps: the existing recurrence engine is a per-`FREQ`
+/// next-occurrence model, so `COUNT`, `UNTIL`, `INTERVAL`, and `BYxxx` parts
+/// are out of scope (a calendar `RRULE` is far richer than the KB's
+/// recurrence axis). An absent or unparseable `RRULE` (and an unknown `FREQ`)
+/// yield [`RecurrenceType::None`] — the event is treated as one-time, which
+/// the events-subsystem auto-completes once its date passes.
+fn rrule_to_recurrence(rrule: Option<&str>) -> RecurrenceType {
+    let Some(rule) = rrule else {
+        return RecurrenceType::None;
+    };
+    for part in rule.split(';') {
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        if key.eq_ignore_ascii_case("FREQ") {
+            return match value.trim().to_ascii_uppercase().as_str() {
+                "DAILY" => RecurrenceType::Daily,
+                "WEEKLY" => RecurrenceType::Weekly,
+                "MONTHLY" => RecurrenceType::Monthly,
+                "YEARLY" => RecurrenceType::Yearly,
+                _ => RecurrenceType::None,
+            };
+        }
+    }
+    RecurrenceType::None
+}
+
+/// Trim a string and return it only when non-empty (after trimming).
+fn non_empty(s: Option<&str>) -> Option<&str> {
+    s.map(str::trim).filter(|t| !t.is_empty())
+}
+
+/// Build a calendar-connector [`NormalizedFact`] with the shared connector
+/// defaults filled in: connector source type, non-sensitive, non-correction,
+/// no category ids, no location overlay, and a point-in-time `valid_from`.
+///
+/// All three calendar fact shapes (`has_event` / `located_in` / `attending`)
+/// share these defaults; the per-shape fields (subject, relationship, object,
+/// recurrence, event-type hint) are the arguments. Collapsing the struct
+/// literals here keeps the extractor readable and ensures the connector-level
+/// invariants (source type, sensitivity, raw reference) stay in one place.
+#[allow(clippy::too_many_arguments)] // constructor helper: every arg maps to a `NormalizedFact` field
+fn calendar_fact(
+    subject: String,
+    subject_type: EntityType,
+    relationship_type: &str,
+    object: String,
+    object_type: Option<EntityType>,
+    start: DateTime<Utc>,
+    valid_until: Option<DateTime<Utc>>,
+    recurrence: RecurrenceType,
+    event_type: Option<EventType>,
+    raw_ref: &str,
+) -> NormalizedFact {
+    NormalizedFact {
+        source_type: SourceType::Connector,
+        subject,
+        subject_type,
+        relationship_type: relationship_type.to_string(),
+        object,
+        object_is_entity: true,
+        object_type,
+        valid_from: Some(start),
+        valid_until,
+        is_sensitive: false,
+        is_correction: false,
+        correction_scope: None,
+        category_ids: Vec::new(),
+        recurrence,
+        requires_user_action: false,
+        raw_reference: Some(raw_ref.to_string()),
+        event_type,
+        location: None,
+    }
+}
+
 impl CalendarConnectorFactory {
     pub fn new() -> Self {
         Self
     }
+}
+
+// ---------------------------------------------------------------------------
+// Write-back payloads + builder (C4 / #198)
+// ---------------------------------------------------------------------------
+
+/// Payload for a `create_event` / `update_event` write-back action.
+///
+/// `start`/`end` are RFC-3339 datetimes. `attendees` are bare addresses
+/// (an optional `mailto:` prefix is normalised). `uid`/`href`/`etag` apply to
+/// `update_event` (and may be supplied to `create_event` to pin the id).
+#[derive(Debug, Deserialize)]
+struct WriteEventPayload {
+    summary: String,
+    start: String,
+    #[serde(default)]
+    end: Option<String>,
+    #[serde(default)]
+    location: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    attendees: Vec<String>,
+    #[serde(default)]
+    uid: Option<String>,
+    #[serde(default)]
+    href: Option<String>,
+    #[serde(default)]
+    etag: Option<String>,
+}
+
+/// Payload for a `delete_event` write-back action.
+#[derive(Debug, Deserialize)]
+struct DeleteEventPayload {
+    href: String,
+    #[serde(default)]
+    etag: Option<String>,
+}
+
+/// Parse an RFC-3339 datetime into UTC, returning `None` on failure.
+fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+/// Build a `VCALENDAR`/`VEVENT` payload for a write-back `PUT`.
+///
+/// `uid` is the stable CalDAV item id (the href is `<calendar>/<uid>.ics`).
+/// Empty optional fields are omitted so the emitted iCalendar stays minimal.
+fn build_vevent(payload: &WriteEventPayload, uid: &str) -> Result<String, ConnectorError> {
+    use icalendar::{Calendar, Component, Event, EventLike};
+    let start = parse_rfc3339(&payload.start).ok_or_else(|| {
+        ConnectorError::Config(format!("invalid `start` datetime: {}", payload.start))
+    })?;
+    let mut event = Event::new();
+    event
+        .summary(payload.summary.trim())
+        .uid(uid)
+        .timestamp(Utc::now())
+        .starts(start);
+    if let Some(end_s) = payload.end.as_deref() {
+        let end = parse_rfc3339(end_s)
+            .ok_or_else(|| ConnectorError::Config(format!("invalid `end` datetime: {end_s}")))?;
+        event.ends(end);
+    }
+    if let Some(loc) = payload
+        .location
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        event.location(loc);
+    }
+    if let Some(desc) = payload
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        event.description(desc);
+    }
+    for attendee in &payload.attendees {
+        let mail = attendee.trim();
+        if mail.is_empty() {
+            continue;
+        }
+        let mail = mail.strip_prefix("mailto:").unwrap_or(mail);
+        event.add_multi_property("ATTENDEE", &format!("mailto:{mail}"));
+    }
+    let event = event.done();
+    let mut calendar = Calendar::new();
+    calendar.push(event);
+    let calendar = calendar.done();
+    Ok(calendar.to_string())
 }
 
 impl Default for CalendarConnectorFactory {
@@ -575,6 +945,7 @@ impl ConnectorFactory for CalendarConnectorFactory {
         let connector = CalendarConnector::from_config_with_http(
             config,
             ctx.secret_store.clone(),
+            ctx.user_identity.clone(),
             cursor,
             None,
         )?;

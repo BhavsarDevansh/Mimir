@@ -166,8 +166,9 @@ pub struct CalendarConnector {
     /// Canonical user identity name (the `[identity] name`), injected via
     /// [`ConnectorContext::user_identity`]. When present, the extractor
     /// authors `user has_event <event>` (and the event surfaces in the
-    /// user's "Upcoming" memory section); when `None`, it falls back to an
-    /// Event-centric subject so the data is still captured.
+    /// user's "Upcoming" memory section); when `None`, the primary
+    /// `has_event` fact is skipped and only the location/attendee facts
+    /// are emitted (so the event does not surface in Upcoming).
     user_identity: Option<String>,
     /// Shared credential store (loaded by slug); `None` means the daemon did
     /// not wire one in (sync/authenticate then fail `NotAuthenticated`).
@@ -227,7 +228,9 @@ impl CalendarConnector {
                 .clone()
                 .unwrap_or_else(|| DEFAULT_DISPLAY_NAME.to_string()),
             config: dto,
-            user_identity: user_identity.filter(|n| !n.trim().is_empty()),
+            user_identity: user_identity
+                .filter(|n| !n.trim().is_empty())
+                .map(|n| n.trim().to_string()),
             secret_store,
             http,
             sync_token: Mutex::new(cursor.filter(|c| !c.is_empty())),
@@ -430,8 +433,14 @@ impl CalendarConnector {
             },
         };
         let raw_ref = event.uid.clone().unwrap_or_else(|| event.href.clone());
-        let valid_until = event.ends_at;
         let recurrence = rrule_to_recurrence(event.recurrence_rule.as_deref());
+        // A recurring event keeps surfacing on every occurrence, so its fact
+        // must not expire after the first instance's `DTEND`. Leaving
+        // `valid_until` unset keeps the fact live for current-facts reads and
+        // supersession; a one-time event still carries its `DTEND` bound.
+        let valid_until = (recurrence == RecurrenceType::None)
+            .then_some(event.ends_at)
+            .flatten();
 
         let mut facts = Vec::new();
 
@@ -488,6 +497,37 @@ impl CalendarConnector {
         }
 
         facts
+    }
+
+    /// Reject an event `href` that points outside the configured calendar
+    /// collection, so a caller-supplied URL cannot redirect the stored
+    /// credentials (Basic/Bearer auth, attached by `CalDavClient`) to another
+    /// host or an unrelated resource. The check is origin-aware: the scheme,
+    /// host, and port must match the configured `calendar_url`, and the path
+    /// must lie under the calendar collection.
+    fn ensure_in_calendar(&self, href: &str) -> Result<(), ConnectorError> {
+        let base = reqwest::Url::parse(self.config.calendar_url.trim_end_matches('/'))
+            .map_err(|e| ConnectorError::Config(format!("invalid calendar_url: {e}")))?;
+        let target = reqwest::Url::parse(href)
+            .map_err(|e| ConnectorError::Config(format!("invalid event href `{href}`: {e}")))?;
+        let same_origin = base.scheme() == target.scheme()
+            && base.host_str() == target.host_str()
+            && base.port() == target.port();
+        if !same_origin {
+            return Err(ConnectorError::Config(format!(
+                "href `{href}` is outside the configured calendar origin"
+            )));
+        }
+        let base_path = base.path().trim_end_matches('/');
+        let under = base_path.is_empty()
+            || target.path() == base_path
+            || target.path().starts_with(&format!("{base_path}/"));
+        if !under {
+            return Err(ConnectorError::Config(format!(
+                "href `{href}` is outside the configured calendar collection"
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -689,6 +729,7 @@ impl Connector for CalendarConnector {
                         self.config.calendar_url.trim_end_matches('/')
                     )
                 });
+                self.ensure_in_calendar(&href)?;
                 let ical = build_vevent(&p, &uid)?;
                 let res = client.put_event(&href, &ical, None).await?;
                 Ok(ActionResult {
@@ -704,6 +745,7 @@ impl Connector for CalendarConnector {
                     .href
                     .clone()
                     .ok_or_else(|| ConnectorError::Config("update_event requires `href`".into()))?;
+                self.ensure_in_calendar(&href)?;
                 let uid = p.uid.clone().unwrap_or_else(|| {
                     href.rsplit('/')
                         .next()
@@ -722,6 +764,7 @@ impl Connector for CalendarConnector {
                 let p: DeleteEventPayload = serde_json::from_value(action.payload)
                     .map_err(|e| ConnectorError::Config(format!("delete_event payload: {e}")))?;
                 let href = p.href.clone();
+                self.ensure_in_calendar(&href)?;
                 client.delete_event(&href, p.etag.as_deref()).await?;
                 Ok(ActionResult {
                     success: true,

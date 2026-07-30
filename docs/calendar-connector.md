@@ -112,7 +112,7 @@ low-level parser (`icalendar::parser::read_calendar`) — the high-level
 
 ## Event → KB fact extraction (C4 / #198)
 
-`CalendarConnector::extract` drains the staged VEVENTs into a cluster of `NormalizedFact`s, which the supervisor hands to the shared `normalize_and_insert` pipeline (entity resolution via F5, connector confidence, sensitivity gate, corroboration/supersession inherited). Per VEVENT it emits up to three facts:
+`CalendarConnector::extract` drains the staged VEVENTs into a cluster of `NormalizedFact`s, which the supervisor hands to the shared `normalize_and_insert` pipeline (entity resolution via F5, connector confidence, sensitivity gate, corroboration/supersession inherited). Per VEVENT it emits one primary fact, optionally one location fact, and one fact per attendee:
 
 - **`user has_event <event>`** — the primary appointment. The subject is the canonical user identity (the `config.toml` `[identity] name`, injected via `ConnectorContext::user_identity` / `ConnectorSupervisor::with_user_identity`) so the event surfaces in the user's "Upcoming" memory section, which is scoped to the user entity. The object is an `Event` entity named by the `SUMMARY` (falling back to the `UID`). It carries the temporal bounds (`DTSTART`/`DTEND`), the recurrence (mapped from `RRULE` `FREQ`), and an `EventType::Appointment` hint so the events-subsystem (#74) overlay is typed correctly rather than defaulting to `Reminder`. When no user identity is configured the primary fact is skipped (the event is still captured via its location/attendee facts, but it will not appear in Upcoming).
 - **`<event> located_in <place>`** — the `LOCATION` resolves to a `Place` entity via F5. The venue is a property of the event, not the user's location history, so this fact carries no `entity_locations` overlay (a calendar full of meetings would otherwise bloat `Visited` rows). It also carries no temporal bounds (`valid_from`/`valid_until`), so it spawns no events-subsystem overlay — only the primary `has_event` fact drives one.
@@ -133,6 +133,7 @@ Server-side deletions (tombstones) are logged during `sync` but not yet propagat
 - `delete_event` — requires the target `href` (and optional `etag`); `DELETE`s it (idempotent on 404).
 
 The `start`/`end` payload fields are RFC-3339 datetimes. `attendees` are bare addresses (an optional `mailto:` prefix is normalised). The returned `ActionResult::native_id` is the resource href; `message` carries the new `ETag` when the server supplies one.
+Every action `href` is validated against the configured `calendar_url` origin before the request is issued, so a caller-supplied URL cannot redirect the connector's stored credentials to another host.
 
 ## Secret-store injection
 

@@ -582,11 +582,21 @@ fn parse_ical_datetime(value: &str, tzid: Option<&str>) -> Option<DateTime<Utc>>
     if let Some(tz) = tzid {
         if let Ok(naive) = NaiveDateTime::parse_from_str(value, NAIVE_FMT) {
             if let Ok(zone) = tz.parse::<chrono_tz::Tz>() {
-                if let Some(local) = zone.from_local_datetime(&naive).single() {
+                // An ambiguous autumn-fold local time resolves to a single
+                // instant when unambiguous; otherwise prefer the earliest
+                // offset (keeping the value within an hour of the wall clock)
+                // before falling back to naive-as-UTC. A spring-forward gap
+                // (`None` from both) still hits the fallback below.
+                let local = zone
+                    .from_local_datetime(&naive)
+                    .single()
+                    .or_else(|| zone.from_local_datetime(&naive).earliest());
+                if let Some(local) = local {
                     return Some(local.with_timezone(&Utc));
                 }
             }
-            // Unknown zone or ambiguous local time: read the naive value as UTC.
+            // Unknown zone or genuinely ambiguous/unrepresentable local time:
+            // read the naive value as UTC so a bad `TZID` never drops the event.
             return Some(naive.and_utc());
         }
     }
@@ -945,6 +955,18 @@ END:VCALENDAR";
         assert_eq!(
             parse_ical_datetime("20250103T090000", Some("Mars/Olympus")),
             Some(Utc.with_ymd_and_hms(2025, 1, 3, 9, 0, 0).unwrap())
+        );
+    }
+    #[test]
+    fn parse_ical_datetime_tzid_autumn_fold_prefers_earliest_offset() {
+        // The Europe/London clocks-back fold on 2025-10-26 makes 01:30 local
+        // ambiguous: it occurs once under BST (+01:00 → 00:30 UTC) and again
+        // under GMT (+00:00 → 01:30 UTC). The earliest offset is preferred so
+        // the event stays within an hour of the wall clock rather than
+        // shifting by the full zone offset via the naive-as-UTC fallback.
+        assert_eq!(
+            parse_ical_datetime("20251026T013000", Some("Europe/London")),
+            Some(Utc.with_ymd_and_hms(2025, 10, 26, 0, 30, 0).unwrap())
         );
     }
 

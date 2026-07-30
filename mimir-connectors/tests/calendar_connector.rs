@@ -696,6 +696,9 @@ async fn extract_emits_event_location_attendee_facts_with_identity() {
         primary.valid_from,
         Some(Utc.with_ymd_and_hms(2025, 7, 3, 8, 0, 0).unwrap())
     );
+    // Recurring (WEEKLY): the fact must not expire after the first instance's
+    // DTEND, so valid_until is left unset (#248 review).
+    assert_eq!(primary.valid_until, None);
 
     // Location: <event> located_in <place>.
     let loc = facts
@@ -729,6 +732,75 @@ async fn extract_emits_event_location_attendee_facts_with_identity() {
 
     // No double-counting: exactly 1 primary + 1 location + 2 attendees.
     assert_eq!(facts.len(), 4);
+}
+
+#[tokio::test]
+async fn extract_one_time_event_carries_dtend_as_valid_until() {
+    // A non-recurring event keeps its DTEND as valid_until (the fact is a
+    // bounded appointment), in contrast to recurring facts which leave it
+    // unset (#248 review).
+    let server = MockServer::start().await;
+    let url = format!("{}/cal/personal/", server.uri());
+    mount_sync(
+        &server,
+        "/cal/personal/",
+        None,
+        sync_body("t1", &[("/cal/rome-1.ics", ICAL_EVENT)], &[]),
+    )
+    .await;
+
+    let connector = make_connector_as(
+        app_password_config(&url),
+        store_with_app_password().await,
+        None,
+        "Devansh",
+    );
+    connector.sync(SyncOptions::default()).await.unwrap();
+    let facts = connector.extract().await.unwrap();
+
+    let primary = facts
+        .iter()
+        .find(|f| f.relationship_type == "has_event")
+        .expect("primary has_event fact");
+    assert_eq!(primary.recurrence, RecurrenceType::None);
+    assert_eq!(
+        primary.valid_from,
+        Some(Utc.with_ymd_and_hms(2025, 5, 3, 9, 0, 0).unwrap())
+    );
+    assert_eq!(
+        primary.valid_until,
+        Some(Utc.with_ymd_and_hms(2025, 5, 7, 18, 0, 0).unwrap())
+    );
+}
+
+#[tokio::test]
+async fn extract_trims_padded_user_identity() {
+    // A padded `[identity] name` is normalised to its trimmed value, so the
+    // primary fact is authored against the canonical entity rather than a
+    // duplicate "  Devansh  " person (#248 review).
+    let server = MockServer::start().await;
+    let url = format!("{}/cal/personal/", server.uri());
+    mount_sync(
+        &server,
+        "/cal/personal/",
+        None,
+        sync_body("t1", &[("/cal/meet-1.ics", ICAL_FULL)], &[]),
+    )
+    .await;
+
+    let connector = make_connector_as(
+        app_password_config(&url),
+        store_with_app_password().await,
+        None,
+        "  Devansh  ",
+    );
+    connector.sync(SyncOptions::default()).await.unwrap();
+    let facts = connector.extract().await.unwrap();
+    let primary = facts
+        .iter()
+        .find(|f| f.relationship_type == "has_event")
+        .expect("primary has_event fact");
+    assert_eq!(primary.subject, "Devansh");
 }
 
 #[tokio::test]
@@ -899,6 +971,49 @@ async fn write_back_unsupported_action_errors() {
 // ---------------------------------------------------------------------------
 // C4 / #198: end-to-end sync → KB → events-subsystem "Upcoming"
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn write_back_rejects_href_outside_calendar_origin() {
+    // A caller-supplied href pointing at another host must be rejected
+    // before any request is issued, so the stored credentials are never
+    // sent there (#248 review).
+    let server = MockServer::start().await;
+    let url = format!("{}/cal/personal/", server.uri());
+    let connector = make_connector(
+        app_password_config(&url),
+        store_with_app_password().await,
+        None,
+    );
+
+    let err = connector
+        .act(ConnectorAction {
+            kind: "delete_event".to_string(),
+            payload: json!({ "href": "http://evil.example.com/cal/personal/x.ics" }),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ConnectorError::Config(_)), "got {err:?}");
+}
+
+#[tokio::test]
+async fn write_back_rejects_href_with_wrong_path_on_same_origin() {
+    let server = MockServer::start().await;
+    let url = format!("{}/cal/personal/", server.uri());
+    let connector = make_connector(
+        app_password_config(&url),
+        store_with_app_password().await,
+        None,
+    );
+
+    let err = connector
+        .act(ConnectorAction {
+            kind: "delete_event".to_string(),
+            payload: json!({ "href": format!("{}../other/x.ics", url) }),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ConnectorError::Config(_)), "got {err:?}");
+}
 
 #[tokio::test]
 async fn calendar_sync_surfaces_upcoming_event_for_user() {

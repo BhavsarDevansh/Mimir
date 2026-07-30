@@ -78,9 +78,10 @@ pub struct ConnectorContext {
     /// injected by the daemon (A1) so connectors author user-scoped facts
     /// against the same entity the daemon resolves as `user_entity_id`.
     /// `None` when no identity is configured; the Calendar connector (C4)
-    /// then falls back to an Event-centric subject so the data is still
-    /// captured (though it will not surface in the user's "Upcoming" memory
-    /// section, which is scoped to the user entity).
+    /// then omits the primary `has_event` fact and emits only the
+    /// location/attendee facts (so the event will not surface in the
+    /// user's "Upcoming" memory section, which is scoped to the user
+    /// entity).
     pub user_identity: Option<String>,
 }
 
@@ -127,12 +128,8 @@ impl ConnectorContext {
     /// treated as "no identity" so a misconfigured `[identity]` does not emit
     /// facts authored by an empty-string entity.
     pub fn with_user_identity(mut self, name: impl Into<String>) -> Self {
-        let name = name.into();
-        self.user_identity = if name.trim().is_empty() {
-            None
-        } else {
-            Some(name)
-        };
+        let name = name.into().trim().to_string();
+        self.user_identity = if name.is_empty() { None } else { Some(name) };
         self
     }
 }
@@ -508,6 +505,14 @@ mod tests {
         assert!(ctx.user_identity.is_none(), "blank identity is no identity");
         let ctx = ConnectorContext::empty().with_user_identity("");
         assert!(ctx.user_identity.is_none());
+    }
+
+    #[test]
+    fn context_with_user_identity_trims_surrounding_whitespace() {
+        // A padded `[identity] name` is stored trimmed, not verbatim, so it
+        // resolves to the same entity instead of a duplicate person (#248).
+        let ctx = ConnectorContext::empty().with_user_identity("  Devansh  ");
+        assert_eq!(ctx.user_identity.as_deref(), Some("Devansh"));
     }
 
     #[test]

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.84.2] — 2026-07-30
+
+### Connectors — Calendar review follow-up (PR #248, #198)
+
+- **Data integrity (recurring facts):** `CalendarConnector::event_to_facts` (`mimir-connectors/src/calendar/mod.rs`) no longer sets `valid_until = DTEND` on a recurring `has_event` fact. A `RRULE:FREQ=WEEKLY` standup previously got a validity window of minutes (the first instance's `DTSTART`→`DTEND`), so current-facts reads and supersession keyed on `valid_until` treated it as long expired even though the events-subsystem overlay kept recurring. `valid_until` is now left unset when `RRULE` `FREQ` is present; a one-time event still carries its `DTEND` bound. New tests lock in both branches (`extract_one_time_event_carries_dtend_as_valid_until`, recurring `valid_until == None`).
+- **Security (write-back href guard):** `CalendarConnector::act` now validates every `create_event` / `update_event` / `delete_event` `href` against the configured `calendar_url` origin (scheme + host + port + collection path) before issuing the CalDAV request, so a caller-supplied URL cannot redirect the stored Basic/Bearer credentials to another host (or an unrelated resource on the same host). An out-of-bounds `href` returns `ConnectorError::Config` with no request sent. Tests: `write_back_rejects_href_outside_calendar_origin`, `write_back_rejects_href_with_wrong_path_on_same_origin`.
+- **Correctness (DST fold):** `parse_ical_datetime` (`mimir-connectors/src/calendar/caldav.rs`) now prefers the earliest offset for an ambiguous autumn-fold local time (`zone.from_local_datetime(&naive).earliest()`) before the naive-as-UTC fallback, keeping the event within an hour of the wall clock instead of shifting it by the full zone offset. A spring-forward gap still hits the fallback. Test: `parse_ical_datetime_tzid_autumn_fold_prefers_earliest_offset`.
+- **Data integrity (identity trimming):** the canonical user identity is now stored trimmed at every injection site (`ConnectorContext::with_user_identity`, `ConnectorSupervisor::with_user_identity`, and the Calendar connector constructor), so a padded `[identity] name` flows through as the canonical name rather than creating a duplicate person entity. Tests: `context_with_user_identity_trims_surrounding_whitespace`, `extract_trims_padded_user_identity`.
+- **Docs:** corrected the per-VEVENT fact cardinality in `docs/calendar-connector.md` (one primary + optional location + one per attendee, not "up to three"); removed stale pre-C4 status statements in `docs/wiki/calendar-connector.md`; documented the write-back href guard; aligned `docs/wiki/what-works-now.md` to 0.84.2 with 0.84.1/0.84.2 release notes; and reworded the `user_identity` doc blocks to match the actual no-identity behaviour (the primary fact is skipped, not an "Event-centric fallback").
+
 ## [0.84.1] — 2026-07-30
 
 ### Connectors — Calendar secondary-fact overlay fix (review follow-up, #198)

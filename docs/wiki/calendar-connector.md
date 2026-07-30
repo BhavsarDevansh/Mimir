@@ -10,9 +10,10 @@
 ## What it is
 
 The Calendar connector reads your CalDAV calendar (Apple iCloud, Nextcloud,
-Fastmail, and similar) into Mimir, **staging** your events so that (once C4
-lands) the knowledge graph can answer **what events you have, where, and
-when**. It speaks CalDAV — the open calendar protocol your calendar server
+Fastmail, and similar) into Mimir, **staging** your events so the knowledge
+graph can answer **what events you have, where, and when** — C4 (#198) turns
+those staged events into facts (with locations and attendees resolved to
+entities) and can write events back to the calendar. It speaks CalDAV — the open calendar protocol your calendar server
 already supports — so it works with any compliant server, no vendor lock-in.
 
 It is a background sync worker: it periodically pulls new/changed events
@@ -95,5 +96,6 @@ only connector with write support.
   handling is a follow-on.
 - The interactive OAuth login (PKCE) is not yet wired — supply the first token
   manually until A4 (#206).
-- No event → knowledge-graph extraction yet (#197 only fetches/parses); that is
-  C4 (#198).
+- Event → knowledge-graph extraction and write-back are live (C4 / #198);
+  richer `RRULE` recurrence rules and server-side deletion → KB fact lifecycle
+  are follow-ups.

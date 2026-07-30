@@ -301,8 +301,8 @@ impl ConnectorSupervisor {
     /// daemon's `user_entity_id` resolution. An empty/whitespace name is
     /// ignored (treated as "no identity"). Must be called before [`restore`].
     pub fn with_user_identity(mut self, name: impl Into<String>) -> Self {
-        let name = name.into();
-        if !name.trim().is_empty() {
+        let name = name.into().trim().to_string();
+        if !name.is_empty() {
             self.context.user_identity = Some(name);
         }
         self

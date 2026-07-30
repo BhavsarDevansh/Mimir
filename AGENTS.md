@@ -70,6 +70,7 @@ After implementation is complete and all tests pass:
    - The PR description should contain a closing statement such as:  
      `Closes #2` or `Fixes #5`
    - Summarise the key changes and reference any updated documentation.
+   - **Markdown prose formatting (all repo `.md` files AND PR/commit messages):** write prose as flowing single-line paragraphs and single-line list items. Do **not** hard-wrap lines with manual newlines inside a paragraph or list item — single newlines render as soft breaks and make the raw text and diffs hard to read. Keep blank lines only between blocks (headers, paragraphs, list items). Applies to `README.md`, `CHANGELOG.md`, `docs/`, `docs/wiki/`, `Mimir-Implementation-Context.md`, and every other `.md` file in the repo.
 6. Do not merge the PR yourself unless explicitly asked.
 
 ## Semantic Versioning

@@ -1,0 +1,47 @@
+# Email Connector
+
+> **Phase:** 3 — Connectors
+> **Status:** Library done — C5 (#199). Mail → knowledge-graph extraction (flights, bookings, contacts, dates) comes in C6 (#200) and C7 (#201). Daemon wiring and the `mimir connector …` CLI come in later Phase 3 issues (A1–A3).
+
+## What it is
+
+The Email connector reads your mailbox (Gmail, Outlook/Hotmail, iCloud Mail — any IMAP server) into Mimir, **staging** your emails so that (once C6/C7 land) the knowledge graph can answer questions like **what trips do I have, what bookings came in, who emailed me and when**. It speaks IMAP — the open mail protocol your provider already supports — so it works with any compliant server, no vendor lock-in.
+
+It is a background sync worker that runs in two modes automatically:
+
+- **Push (IMAP IDLE)** — when your server supports it (Gmail, Outlook, and iCloud all do), the connector stays connected and is notified the instant a new email arrives, then fetches just that message. Near-real-time, and very cheap.
+- **Polling (fallback)** — for servers without IDLE, the connector checks for new mail every few minutes. The connector detects which mode to use on its own.
+
+## How it works
+
+- You point it at your IMAP server and give it either an **app-specific password** or an **OAuth** token (Google/Microsoft). The secret lives in Mimir's permission-checked secret store (`0600`); the username and server config live in the connector config.
+- Each sync fetches only what's new. Mimir tracks the last message it saw by **UID** (a stable, server-assigned message id), so it never re-downloads the same email. Your progress is saved across restarts.
+- If your mailbox is ever recreated (a rare event Mimir detects via a server value called `UIDVALIDITY`), the connector notices and does one full re-fetch — no silent gaps or duplicates.
+- Each message's raw contents (headers, body) are held in an in-memory buffer ready for the knowledge graph.
+
+> **C5 vs C6/C7:** This first cut (#199) does the *transport* — it logs in, watches for new mail, and fetches messages. Turning those messages into knowledge-graph facts (flight confirmations, hotel bookings, contacts, dates) is C6 (#200) for structured parsing and C7 (#201) for LLM extraction.
+
+## Authentication
+
+- **App password** — best for most providers. Generate an app-specific password in your provider's security settings (Gmail calls them "app passwords"); Mimir uses standard IMAP `LOGIN`. Your username is in the connector config; the password is stored securely.
+- **OAuth (Google / Microsoft)** — the connector stores your access + refresh token and refreshes the access token automatically before it expires, so you stay connected without re-authorising. The first token is obtained via an interactive sign-in flow that arrives in a later issue (#206).
+
+## Privacy
+
+- Mimir only **reads** mail — it never sends, deletes, or marks messages. It uses `BODY.PEEK[]` so your unread mail stays unread.
+- All data is fetched and stored locally; no cloud intermediary.
+- "Forget everything from Gmail" is a library-level capability (the connector's `forget()` wipes its cursor, buffer, and stored secret) — it is not yet exposed through a `mimir connector …` command until the daemon wiring (A1–A3 / #202–#204) lands.
+
+## Config example
+
+```json
+{
+  "host": "imap.gmail.com",
+  "port": 993,
+  "mailbox": "INBOX",
+  "auth": { "kind": "app_password", "username": "you@gmail.com" },
+  "mode": "auto"
+}
+```
+
+`mode` can be `"auto"` (default — IDLE if supported, else polling), `"idle"`, or `"poll"`. V1 syncs a single mailbox (`INBOX` by default, configurable).

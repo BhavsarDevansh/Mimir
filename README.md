@@ -24,70 +24,25 @@ Mimir is not a chatbot. It is a stateful, ever-learning companion that:
 
 ## Architecture
 
-Mimir is a **Rust workspace** with a modular, local-first design. Your data
-stays on your device — there is no cloud intermediary.
+Mimir is a **Rust workspace** with a modular, local-first design. Your data stays on your device — there is no cloud intermediary.
 
 ### Crates
 
-- **`mimir`** — the single binary: the daemon plus the `mimir` CLI (`start`,
-  `chat`, `ask`, `status`, `memory`, `kb`, `stop`).
-- **`mimir-server`** — Axum HTTP server with SSE streaming, sessions, and
-  graceful shutdown; exposes an OpenAI-compatible chat endpoint.
-- **`mimir-core`** — LLM client, configuration, context, tools, skills, and the
-  personality system.
-- **`mimir-knowledge`** — the SQLite knowledge graph: entities, facts, temporal
-  reasoning, live memory condensation, events/reminders, and proximity queries.
-- **`mimir-connectors`** — the pluggable service-ingestion framework and its
-  backends: the OSM Nominatim geocoder, the local-filesystem Photos connector
-  (EXIF + file watcher), and the CalDAV Calendar connector (sync-token
-  incremental sync) today; email sync to come.
-- **`mimir-api-types` / `mimir-client`** — shared wire types and the daemon HTTP
-  client used by the CLI.
+- **`mimir`** — the single binary: the daemon plus the `mimir` CLI (`start`, `chat`, `ask`, `status`, `memory`, `kb`, `stop`).
+- **`mimir-server`** — Axum HTTP server with SSE streaming, sessions, and graceful shutdown; exposes an OpenAI-compatible chat endpoint.
+- **`mimir-core`** — LLM client, configuration, context, tools, skills, and the personality system.
+- **`mimir-knowledge`** — the SQLite knowledge graph: entities, facts, temporal reasoning, live memory condensation, events/reminders, and proximity queries.
+- **`mimir-connectors`** — the pluggable service-ingestion framework and its backends: the OSM Nominatim geocoder, the local-filesystem Photos connector (EXIF + file watcher), the CalDAV Calendar connector (sync-token incremental sync), and the IMAP Email connector (IDLE push + UID incremental sync) today; email → knowledge-graph extraction is C6/C7.
+- **`mimir-api-types` / `mimir-client`** — shared wire types and the daemon HTTP client used by the CLI.
 
 ### Key subsystems
 
-- **Knowledge graph** — entities, versioned facts, temporal reasoning, and live
-  memory condensation, organised by a category-first ontology (predicate
-  aliases for verb canonicalisation + Dewey categories with subtree retrieval).
-  Regenerated on a schedule by the unified background scheduler.
-- **Learning** — the LLM calls the `remember` tool during conversation; facts
-  flow through a deterministic Rust pipeline (`normalize_and_insert`) that
-  enforces confidence, overwrite, and sensitive-fact policy. An on-demand
-  Librarian extraction API is also available.
-- **Retrieval agent** — ephemeral research agents that investigate the
-  knowledge graph and conversation history on behalf of the main agent before
-  answering complex questions.
-- **Events & reminders** — a lifecycle + recurrence overlay on facts that
-  surfaces upcoming birthdays, appointments, deadlines, and tasks, with a
-  deterministic scan job for auto-completion and recurring advancement.
-- **Connectors (Phase 3, in progress)** — pluggable workers that sync external
-  services into the graph as connector-provenanced facts. The framework is in
-  place: an object-safe `Connector` trait with two-step ingestion, a
-  multi-backend `ConnectorRegistry`, a supervised lifecycle (restart with
-  backoff, circuit breaker, auth-expiry pausing, graceful shutdown), a
-  type-filtered entity-resolution chain (exact name → alias → FTS5 fuzzy →
-  create new), and a pluggable `Geocoder` trait with an OSM Nominatim default
-  backend. The first concrete backend — a read-only local-filesystem Photos
-  connector (`notify` file watcher + `kamadak-exif` GPS/datetime extraction +
-  a per-file mtime/inode incremental cursor) — is in. Photos are stored as
-  facts (`took_photo_at <place>`), not entities: EXIF GPS is reverse-geocoded
-  to a locality-level place name via the shared geocoder, photos at the same
-  place corroborate into one open-ended fact, and the place's coordinates are
-  anchored so proximity queries resolve places by where they are. The
-  knowledge graph grows with distinct places visited, not photo count. The
-  second backend — a CalDAV Calendar connector (#197) — is in: it speaks
-  CalDAV (PROPFIND + sync-collection REPORT) over the shared HTTP client with
-  sync-token incremental sync and `icalendar` VEVENT parsing, authenticating
-  via an app password or a refreshed OAuth token loaded from the secret store.
-  It is transport-only for now; event → knowledge-graph extraction,
-  events-subsystem integration, and write-back are C4 (#198). Email backends
-  land in later Phase 3 issues.
-- **Entity locations** — a "where" fact becomes a typed `entity_locations` row
-  with geocoding of the missing half (address → coords or coords → place) and
-  temporal bounds that model moves (home 2020–2023, home 2023–present).
-  Proximity queries (`find_nearby`) use a SQLite bounding-box pre-filter backed
-  by a composite coordinate index, then an exact Haversine post-filter in pure
-  Rust, with optional temporal scoping.
+- **Knowledge graph** — entities, versioned facts, temporal reasoning, and live memory condensation, organised by a category-first ontology (predicate aliases for verb canonicalisation + Dewey categories with subtree retrieval). Regenerated on a schedule by the unified background scheduler.
+- **Learning** — the LLM calls the `remember` tool during conversation; facts flow through a deterministic Rust pipeline (`normalize_and_insert`) that enforces confidence, overwrite, and sensitive-fact policy. An on-demand Librarian extraction API is also available.
+- **Retrieval agent** — ephemeral research agents that investigate the knowledge graph and conversation history on behalf of the main agent before answering complex questions.
+- **Events & reminders** — a lifecycle + recurrence overlay on facts that surfaces upcoming birthdays, appointments, deadlines, and tasks, with a deterministic scan job for auto-completion and recurring advancement.
+- **Connectors (Phase 3, in progress)** — pluggable workers that sync external services into the graph as connector-provenanced facts. The framework is in place: an object-safe `Connector` trait with two-step ingestion, a multi-backend `ConnectorRegistry`, a supervised lifecycle (restart with backoff, circuit breaker, auth-expiry pausing, graceful shutdown), a type-filtered entity-resolution chain (exact name → alias → FTS5 fuzzy → create new), and a pluggable `Geocoder` trait with an OSM Nominatim default backend. The first concrete backend — a read-only local-filesystem Photos connector (`notify` file watcher + `kamadak-exif` GPS/datetime extraction + a per-file mtime/inode incremental cursor) — is in. Photos are stored as facts (`took_photo_at <place>`), not entities: EXIF GPS is reverse-geocoded to a locality-level place name via the shared geocoder, photos at the same place corroborate into one open-ended fact, and the place's coordinates are anchored so proximity queries resolve places by where they are. The knowledge graph grows with distinct places visited, not photo count. The second backend — a CalDAV Calendar connector (#197) — is in: it speaks CalDAV (PROPFIND + sync-collection REPORT) over the shared HTTP client with sync-token incremental sync and `icalendar` VEVENT parsing, authenticating via an app password or a refreshed OAuth token loaded from the secret store. It is transport-only for now; event → knowledge-graph extraction, events-subsystem integration, and write-back are C4 (#198). The third backend — an IMAP Email connector (#199) — is in: it speaks IMAP over a hand-rolled TCP+rustls handshake (`LOGIN` / `AUTHENTICATE XOAUTH2`, `IDLE` push with a polling fallback auto-detected via CAPABILITY, `UID FETCH` incremental sync with a UIDVALIDITY-safe cursor, `BODY.PEEK[]` so mail stays unread), authenticating via an app password or a refreshed OAuth token. It is transport-only for now; mail → knowledge-graph extraction (headers, dates, contacts) is C6 (#200) and LLM extraction (flights/bookings) is C7 (#201).
+- **Entity locations** — a "where" fact becomes a typed `entity_locations` row with geocoding of the missing half (address → coords or coords → place) and temporal bounds that model moves (home 2020–2023, home 2023–present). Proximity queries (`find_nearby`) use a SQLite bounding-box pre-filter backed by a composite coordinate index, then an exact Haversine post-filter in pure Rust, with optional temporal scoping.
 
 ## Installation
 

@@ -26,7 +26,7 @@ async-trait = "0.1"
 # exponential backoff and observes a watch-channel shutdown signal. `rt`,
 # `sync` (watch/mutex), `time` (backoff sleeps), and `macros` (select!) are
 # required; `rt-multi-thread` is added by the dev-dependency for tests.
-tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "io-util"] }
 tracing = "0.1"
 
 # F12 (issue #189): shared rate-limit + retry/backoff primitives. `governor`
@@ -90,6 +90,34 @@ icalendar = { version = "0.17", optional = true }
 # No new download vs quick-xml-style alternatives; roxmltree pulls only `memchr`.
 roxmltree = { version = "0.21", optional = true }
 
+# C5 (issue #199): IMAP email connector. `async-imap` (0.11.3, latest stable;
+# the issue spec's 0.11.2 is one patch behind) provides the async IMAP client
+# (Session, uid_fetch, idle). `default-features = false` + `runtime-tokio`
+# avoids pulling `async-std` into the tokio-only workspace (the default feature
+# is `runtime-async-std`). async-imap ships no TLS; we supply a rustls TLS
+# stream to `Client::new` (see below) instead of its `connect()` helper
+# (async-native-tls / OpenSSL), keeping the workspace on a single rustls TLS
+# stack. Gated by the `gmail` feature.
+async-imap = { version = "0.11.3", default-features = false, features = ["runtime-tokio"], optional = true }
+# `base64` builds the XOAUTH2 SASL initial client response
+# (`base64("user=<u>\x01auth=Bearer <t>\x01\x01")`). Already in the tree at
+# 0.22.1 (async-imap's own dep), so this adds no new download. Gated by `gmail`.
+base64 = { version = "0.22", optional = true }
+# Raw IMAP runs over implicit-TLS (imaps:993). We hand-roll the TCP+rustls
+# handshake rather than use async-imap's `connect()` (which pulls
+# async-native-tls) to keep a single rustls TLS stack. `tokio-rustls` (0.26,
+# already in the tree via reqwest) wraps the tokio TCP stream; `rustls` (0.23)
+# builds the `ClientConfig`; `rustls-native-certs` (0.8) loads the system trust
+# store, matching reqwest's `rustls-native-certs` feature. The `aws-lc-rs`
+# crypto provider matches the one reqwest's `rustls` feature already compiles,
+# so no second crypto provider enters the tree. All gated by `gmail`.
+tokio-rustls = { version = "0.26", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["std", "aws-lc-rs", "tls12"], optional = true }
+rustls-native-certs = { version = "0.8", optional = true }
+# `futures` streams the `uid_fetch` response (async-imap returns an impl
+# `Stream`). Already in the tree at 0.3.x, so no new download. Gated by `gmail`.
+futures = { version = "0.3", optional = true }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tempfile = "3"
@@ -102,4 +130,4 @@ photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"]
 ## CalDAV calendar ingestion: read/sync + event fact extraction (C3–C4).
 calendar = ["dep:icalendar", "dep:roxmltree"]
 ## IMAP email ingestion, Gmail and other providers (C5–C7).
-gmail = []
+gmail = ["dep:async-imap", "dep:base64", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures"]

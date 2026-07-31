@@ -73,6 +73,16 @@ pub struct ConnectorContext {
     /// load their [`SecretBundle`](crate::secrets::SecretBundle) by slug
     /// (the `__slug` injected by the supervisor).
     pub secret_store: Option<std::sync::Arc<dyn SecretStore>>,
+
+    /// Canonical user identity name (the `config.toml` `[identity] name`),
+    /// injected by the daemon (A1) so connectors author user-scoped facts
+    /// against the same entity the daemon resolves as `user_entity_id`.
+    /// `None` when no identity is configured; the Calendar connector (C4)
+    /// then omits the primary `has_event` fact and emits only the
+    /// location/attendee facts (so the event will not surface in the
+    /// user's "Upcoming" memory section, which is scoped to the user
+    /// entity).
+    pub user_identity: Option<String>,
 }
 
 impl ConnectorContext {
@@ -81,6 +91,7 @@ impl ConnectorContext {
         Self {
             geocoder,
             secret_store: None,
+            user_identity: None,
         }
     }
 
@@ -106,6 +117,19 @@ impl ConnectorContext {
     /// [`ConnectorSupervisor::with_geocoder`].
     pub fn with_geocoder(mut self, geocoder: std::sync::Arc<dyn Geocoder>) -> Self {
         self.geocoder = Some(geocoder);
+        self
+    }
+
+    /// Attach the canonical user identity name to this context (builder).
+    ///
+    /// The daemon populates this from `config.toml`'s `[identity] name` (the
+    /// same value it resolves to `user_entity_id`); connectors that author
+    /// user-scoped facts read it at construction. An empty/whitespace name is
+    /// treated as "no identity" so a misconfigured `[identity]` does not emit
+    /// facts authored by an empty-string entity.
+    pub fn with_user_identity(mut self, name: impl Into<String>) -> Self {
+        let name = name.into().trim().to_string();
+        self.user_identity = if name.is_empty() { None } else { Some(name) };
         self
     }
 }
@@ -467,5 +491,32 @@ mod tests {
                 password: "hunter2".into()
             })
         );
+    }
+
+    #[test]
+    fn context_with_user_identity_carries_name() {
+        let ctx = ConnectorContext::empty().with_user_identity("Devansh");
+        assert_eq!(ctx.user_identity.as_deref(), Some("Devansh"));
+    }
+
+    #[test]
+    fn context_with_user_identity_ignores_blank() {
+        let ctx = ConnectorContext::empty().with_user_identity("   ");
+        assert!(ctx.user_identity.is_none(), "blank identity is no identity");
+        let ctx = ConnectorContext::empty().with_user_identity("");
+        assert!(ctx.user_identity.is_none());
+    }
+
+    #[test]
+    fn context_with_user_identity_trims_surrounding_whitespace() {
+        // A padded `[identity] name` is stored trimmed, not verbatim, so it
+        // resolves to the same entity instead of a duplicate person (#248).
+        let ctx = ConnectorContext::empty().with_user_identity("  Devansh  ");
+        assert_eq!(ctx.user_identity.as_deref(), Some("Devansh"));
+    }
+
+    #[test]
+    fn context_empty_has_no_user_identity() {
+        assert!(ConnectorContext::empty().user_identity.is_none());
     }
 }

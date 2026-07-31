@@ -188,6 +188,17 @@ pub struct NormalizedFact {
     /// Native id of the source item (e.g. an email UID, a calendar event id).
     /// Required when [`Provenance::connector_instance_id`] is set.
     pub raw_reference: Option<String>,
+    /// Optional event-type hint for the events-subsystem overlay (#74).
+    ///
+    /// `None` (the default for conversational facts) lets
+    /// [`event_from_extraction`] derive the type from `requires_user_action`
+    /// (`Task` vs `Reminder`). A producer that knows the kind — e.g. the
+    /// Calendar connector setting [`EventType::Appointment`] — supplies it
+    /// so the overlay is typed correctly without overloading
+    /// `requires_user_action`. The hint only narrows the derived type when
+    /// the fact also qualifies for an overlay (future-dated, recurring, or
+    /// requires action); it never forces an overlay on its own.
+    pub event_type: Option<EventType>,
     /// Optional structured location overlay. When present, the resolved
     /// subject entity gets an `entity_locations` row derived from this and the
     /// fact's temporal bounds (Phase 3 S3 / #193).
@@ -288,6 +299,7 @@ async fn process_normalized_fact(
         recurrence,
         requires_user_action,
         ref raw_reference,
+        event_type,
         location,
     } = extracted;
 
@@ -447,6 +459,7 @@ async fn process_normalized_fact(
             fact.id,
             valid_from,
             now,
+            event_type,
         ) {
             if let Err(e) =
                 queries::event::insert_pending_event_meta(kg.pool(), fact.id, &new_event).await
@@ -479,6 +492,7 @@ async fn process_normalized_fact(
         fact.id,
         valid_from,
         now,
+        event_type,
     ) {
         if let Err(e) = kg.insert_event_if_absent(new_event).await {
             tracing::warn!("failed to create event overlay for fact {}: {}", fact.id, e);
@@ -800,6 +814,7 @@ fn event_from_extraction(
     fact_id: i32,
     valid_from: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
+    event_type_hint: Option<EventType>,
 ) -> Option<NewEvent> {
     let trigger_date = valid_from?;
 
@@ -815,11 +830,15 @@ fn event_from_extraction(
     } else {
         AutoCompletePolicy::AutoCompleteOnDate
     };
-    let event_type = if requires_user_action {
+    // The producer may hint the event kind (e.g. a Calendar connector sets
+    // `Appointment`). When present the hint wins; without one the original
+    // conversational derivation applies (`Task` for an action item,
+    // `Reminder` otherwise), so chat behaviour is unchanged.
+    let event_type = event_type_hint.unwrap_or(if requires_user_action {
         EventType::Task
     } else {
         EventType::Reminder
-    };
+    });
 
     Some(NewEvent {
         fact_id,

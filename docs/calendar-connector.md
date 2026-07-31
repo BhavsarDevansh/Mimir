@@ -1,11 +1,13 @@
 # Calendar Connector (CalDAV) — `mimir-connectors::calendar`
 
-> **Phase:** 3 — Connectors (C3 / issue #197)
+> **Phase:** 3 — Connectors (C3 / issue #197, C4 / issue #198)
 > **Feature flag:** `calendar` (default). Framework + mock stay built without it.
-> **Status:** Implemented (library only). Event → KB fact extraction, the
-> events-subsystem (#74) integration, and write-back (`act`) are C4 / #198; the
-> daemon `AppState` wiring + `mimir connector …` CLI land in A1–A3 (#202–#204);
-> the interactive OAuth PKCE login is A4 / #206.
+> **Status:** Implemented (library only). C3 (#197) delivers transport +
+> read/sync; C4 (#198) adds event → KB fact extraction, events-subsystem (#74)
+> integration, and CalDAV write-back (`act`). The daemon `AppState` wiring +
+> `mimir connector …` CLI land in A1–A3 (#202–#204); the interactive OAuth
+> PKCE login is A4 / #206. Server-side deletion → KB fact lifecycle is
+> tracked as a follow-up (the extractor only yields facts).
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -95,6 +97,11 @@ text split across multiple segments is not silently truncated.
 - `sync_collection(url, sync_token)` → `SyncCollectionResult { new_sync_token, changed, deleted }`.
 - `is_calendar(url)` → PROPFIND Depth 0 `resourcetype`; used by `health` and
   `authenticate` to verify the URL is a CalDAV calendar collection.
+- `put_event(href, ical, etag)` → CalDAV `PUT` (RFC 4791 §5.5) for create
+  (`etag = None` sends `If-None-Match: *`) or update (`etag = Some(t)` sends
+  `If-Match: t`); returns the new `ETag`.
+- `delete_event(href, etag)` → CalDAV `DELETE` (RFC 4791 §5.6); idempotent on
+  `404`, `If-Match: t` when an etag is known.
 
 WebDAV XML is parsed with `roxmltree` (a read-only DOM parser) matching element
 **local** names, so the varied namespace prefixes servers use (`D:`/`d:`/
@@ -102,6 +109,31 @@ WebDAV XML is parsed with `roxmltree` (a read-only DOM parser) matching element
 low-level parser (`icalendar::parser::read_calendar`) — the high-level
 `icalendar::Calendar` is builder-oriented with no parse-from-str path in
 0.17.x.
+
+## Event → KB fact extraction (C4 / #198)
+
+`CalendarConnector::extract` drains the staged VEVENTs into a cluster of `NormalizedFact`s, which the supervisor hands to the shared `normalize_and_insert` pipeline (entity resolution via F5, connector confidence, sensitivity gate, corroboration/supersession inherited). Per VEVENT it emits one primary fact, optionally one location fact, and one fact per attendee:
+
+- **`user has_event <event>`** — the primary appointment. The subject is the canonical user identity (the `config.toml` `[identity] name`, injected via `ConnectorContext::user_identity` / `ConnectorSupervisor::with_user_identity`) so the event surfaces in the user's "Upcoming" memory section, which is scoped to the user entity. The object is an `Event` entity named by the `SUMMARY` (falling back to the `UID`). It carries the temporal bounds (`DTSTART`/`DTEND`), the recurrence (mapped from `RRULE` `FREQ`), and an `EventType::Appointment` hint so the events-subsystem (#74) overlay is typed correctly rather than defaulting to `Reminder`. When no user identity is configured the primary fact is skipped (the event is still captured via its location/attendee facts, but it will not appear in Upcoming).
+- **`<event> located_in <place>`** — the `LOCATION` resolves to a `Place` entity via F5. The venue is a property of the event, not the user's location history, so this fact carries no `entity_locations` overlay (a calendar full of meetings would otherwise bloat `Visited` rows). It also carries no temporal bounds (`valid_from`/`valid_until`), so it spawns no events-subsystem overlay — only the primary `has_event` fact drives one.
+- **`<attendee> attending <event>`** — each `ATTENDEE` resolves to a `Person` entity via F5 (the `CN` parameter, else the `mailto:` value). Like the location fact it carries no temporal bounds and spawns no events-subsystem overlay.
+
+Dates are parsed to UTC at staging time: `DTSTART`/`DTEND` may be UTC (`…Z`), floating local, date-only, or `TZID`-qualified; the latter is resolved via `chrono-tz` (an unknown zone falls back to the naive value read as UTC so a bad `TZID` never drops the event). Only `RRULE` `FREQ` maps to the KB's coarse `RecurrenceType` (Daily/Weekly/Monthly/Yearly); `COUNT`, `UNTIL`, `INTERVAL`, and `BYxxx` are out of scope (the events-subsystem is a per-`FREQ` next-occurrence model, not a full RFC 5545 expander).
+
+The `event_type: Option<EventType>` hint added to `NormalizedFact` is the mechanism: connectors that know the event kind supply it; chat leaves it `None` so the existing `Task`/`Reminder` derivation is unchanged.
+
+Server-side deletions (tombstones) are logged during `sync` but not yet propagated to the KB — surfacing a deletion needs a way for the connector to report removals (`extract` only yields facts), so trashing the corresponding facts is tracked as a follow-up.
+
+## Write-back (C4 / #198)
+
+`CalendarConnector::act` is the only connector with write support. Three action kinds, each authenticated via the same credential path as `sync` (OAuth refresh included):
+
+- `create_event` — builds a VEVENT from the payload (the `icalendar` builder), generates a `UID` (unless supplied), and `PUT`s it to `<calendar>/<uid>.ics` with `If-None-Match: *`.
+- `update_event` — requires the target `href` (and optional `etag`); `PUT`s with `If-Match: <etag>`.
+- `delete_event` — requires the target `href` (and optional `etag`); `DELETE`s it (idempotent on 404).
+
+The `start`/`end` payload fields are RFC-3339 datetimes. `attendees` are bare addresses (an optional `mailto:` prefix is normalised). The returned `ActionResult::native_id` is the resource href; `message` carries the new `ETag` when the server supplies one.
+Every action `href` is validated against the configured `calendar_url` before the request is issued: the scheme, host, and port must match the configured origin and the path must lie under the calendar collection, so a caller-supplied URL cannot redirect the connector's stored credentials to another host or an unrelated resource on the same host.
 
 ## Secret-store injection
 
@@ -114,6 +146,14 @@ out of the context at construction; the connector loads its bundle by slug
 change to an internal construction-context API, which the project's
 breaking-changes policy explicitly allows.
 
+C4 (#198) extends the same context with the canonical **user identity name**
+(`ConnectorContext::user_identity` / `ConnectorSupervisor::with_user_identity`)
+so the connector authors `user has_event <event>` against the same entity the
+daemon resolves as `user_entity_id` (and the event surfaces in the user's
+"Upcoming" section). The Photos connector predates this and carries its own
+disconnected `owner_name` config field — aligning it with the shared identity
+is tracked as a follow-up.
+
 ## Dependencies
 
 All optional, gated by the `calendar` feature:
@@ -123,6 +163,8 @@ All optional, gated by the `calendar` feature:
 | `icalendar` | 0.17.x | Strongly-typed RFC 5545 iCalendar parser (default `parser` feature). **Resolves to 0.17.6 under the workspace MSRV (1.85); 0.17.12 requires Rust 1.88** — see the follow-up issue tracking the deps-ledger / MSRV reconciliation. |
 | `roxmltree` | 0.21 | Pure-Rust read-only DOM XML parser for WebDAV multistatus responses. |
 | `reqwest` | 0.13 (in tree) | HTTP; the `form` feature was added for the OAuth refresh token POST. |
+| `chrono-tz` | 0.10 | IANA timezone database for `chrono`; resolves `TZID`-qualified `DTSTART`/`DTEND` to UTC. New in C4. |
+| `uuid` | 1 (in tree) | `v4` UID generation for new write-back events. New in C4. |
 
 The `oauth2` crate is **deliberately not** pulled in: `oauth2` 5.0.0 depends on
 `reqwest` 0.12, which would duplicate the workspace's reqwest 0.13 HTTP/TLS

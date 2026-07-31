@@ -293,6 +293,21 @@ impl ConnectorSupervisor {
         self
     }
 
+    /// Inject the canonical user identity name (the `config.toml`
+    /// `[identity] name`) into the shared [`ConnectorContext`] so connectors
+    /// that author user-scoped facts — the Calendar connector (C4 / #198),
+    /// which emits `user has_event <event>` so the event surfaces in the
+    /// user's "Upcoming" memory section — share one source of truth with the
+    /// daemon's `user_entity_id` resolution. An empty/whitespace name is
+    /// ignored (treated as "no identity"). Must be called before [`restore`].
+    pub fn with_user_identity(mut self, name: impl Into<String>) -> Self {
+        let name = name.into().trim().to_string();
+        if !name.is_empty() {
+            self.context.user_identity = Some(name);
+        }
+        self
+    }
+
     /// Spawn a runner task for every `Active` connector row.
     ///
     /// `Paused` / `Error` / `Setup` rows are not auto-spawned. Rows whose

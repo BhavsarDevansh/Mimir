@@ -89,6 +89,21 @@ icalendar = { version = "0.17", optional = true }
 # are tolerated. License MIT/Apache-2.0 (GPL-3-compatible). Gated by `calendar`.
 # No new download vs quick-xml-style alternatives; roxmltree pulls only `memchr`.
 roxmltree = { version = "0.21", optional = true }
+# C4 (issue #198): CalDAV event → KB fact extraction. `DTSTART`/`DTEND` may be
+# `TZID`-qualified (`DTSTART;TZID=Europe/London:20250503T090000`); `icalendar`
+# 0.17 stores the tzid but cannot convert it to UTC without its own
+# `chrono-tz` feature (not exposed in this line), so the calendar module does
+# the resolution itself. `chrono-tz` (0.10.4, latest; built on chrono 0.4 and
+# the IANA tz database) parses an IANA zone name and converts a local naive
+# datetime to UTC, DST-correct. License MIT/Apache-2.0 (GPL-3-compatible).
+# Gated by the `calendar` feature.
+chrono-tz = { version = "0.10", optional = true }
+# C4 (issue #198): CalDAV write-back generates a stable `UID` for new events
+# (the CalDAV item href is `<calendar>/<uid>.ics`, so the UID must be known
+# before the PUT). `uuid` v1 is already in the tree (transitive via
+# `icalendar`); the `v4` feature enables random generation with no new
+# download. License MIT/Apache-2.0 (GPL-3-compatible). Gated by `calendar`.
+uuid = { version = "1", features = ["v4"], optional = true }
 
 # C5 (issue #199): IMAP email connector. `async-imap` (0.11.3, latest stable;
 # the issue spec's 0.11.2 is one patch behind) provides the async IMAP client
@@ -128,6 +143,6 @@ default = ["photos", "calendar", "gmail"]
 ## Google Photos / Apple Photos / local photo library ingestion (C1–C2).
 photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"]
 ## CalDAV calendar ingestion: read/sync + event fact extraction (C3–C4).
-calendar = ["dep:icalendar", "dep:roxmltree"]
+calendar = ["dep:icalendar", "dep:roxmltree", "dep:chrono-tz", "dep:uuid"]
 ## IMAP email ingestion, Gmail and other providers (C5–C7).
 gmail = ["dep:async-imap", "dep:base64", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures"]

@@ -686,6 +686,8 @@ fn parse_extracted_fact(extracted: &ExtractedFact) -> Result<NormalizedFact, Kno
         requires_user_action,
         // Conversational facts have no native source item id.
         raw_reference: None,
+        // Chat never hints the event kind; the overlay derives it.
+        event_type: None,
         location,
     })
 }

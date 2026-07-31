@@ -133,7 +133,7 @@ Server-side deletions (tombstones) are logged during `sync` but not yet propagat
 - `delete_event` — requires the target `href` (and optional `etag`); `DELETE`s it (idempotent on 404).
 
 The `start`/`end` payload fields are RFC-3339 datetimes. `attendees` are bare addresses (an optional `mailto:` prefix is normalised). The returned `ActionResult::native_id` is the resource href; `message` carries the new `ETag` when the server supplies one.
-Every action `href` is validated against the configured `calendar_url` origin before the request is issued, so a caller-supplied URL cannot redirect the connector's stored credentials to another host.
+Every action `href` is validated against the configured `calendar_url` before the request is issued: the scheme, host, and port must match the configured origin and the path must lie under the calendar collection, so a caller-supplied URL cannot redirect the connector's stored credentials to another host or an unrelated resource on the same host.
 
 ## Secret-store injection
 

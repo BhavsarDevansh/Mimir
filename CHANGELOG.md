@@ -1,6 +1,17 @@
 # Changelog
 
-## [0.84.2] — 2026-07-30
+## [0.85.0] — 2026-07-31
+
+### Connectors — Email structured extraction (C6 / #200)
+
+- **Structured extraction cascade:** `EmailConnector::extract()` (`mimir-connectors/src/email/mod.rs`) now drains staged RFC 822 messages and runs a deterministic extraction cascade over each. Today the cascade has one layer — iMIP calendar invites: a MIME attachment with `Content-Type: text/calendar; method=REQUEST|REPLY` is parsed with `mail-parser` and the embedded VEVENT is turned into the same appointment fact cluster the Calendar connector emits (`user has_event <event>` typed `EventType::Appointment`, recurrence from `RRULE` `FREQ`, temporal bounds from `DTSTART`/`DTEND`, plus `<event> located_in <place>` and `<attendee> attending <event>`). `method=PUBLISH` (often marketing webinars) and `CANCEL` (deletion lifecycle, tracked in #247) are skipped. A plain prose email with no `text/calendar` part produces no facts.
+- **Email is provenance, not the fact:** no per-email communication facts (`received_email_from` / `sent_email_to`) are emitted and no `Person` entities are auto-created from `From`/`To` headers, so marketing/spam produces no junk. The email's IMAP UID rides on every fact as the `raw_reference`; facts carry `source_type = Connector`, `connector_type = Gmail`, `extraction_method = StructuredParse`.
+- **DRY — shared `ical` module:** the VEVENT parsing + fact cluster is extracted into a new `mimir-connectors/src/ical.rs` (`parse_ical_to_vevents`, `vevent_to_facts`, `RawVEvent`), gated `any(feature = "calendar", feature = "gmail")`. The Calendar connector (`caldav.rs` `RawCalDavEvent` now wraps a `RawVEvent`; `calendar/mod.rs` `event_to_facts` delegates) reuses it, eliminating the duplicated VEVENT parsing + `rrule_to_recurrence` + `calendar_fact` helpers.
+- **User identity:** the Email connector now authors user-scoped facts against the injected `ConnectorContext::user_identity` (the `config.toml` `[identity] name`), matching the Calendar connector; `from_config_with_http` gains a `user_identity` parameter and the factory passes `ctx.user_identity`. Without an identity the primary `has_event` fact is skipped; location/attendee facts still emit.
+- **Dependencies:** `mail-parser 0.11.5` added to `mimir-connectors` under the `gmail` feature; `icalendar` 0.17 and `chrono-tz` 0.10 are now shared with the `calendar` feature (DRY) so the `gmail` feature can parse iMIP VEVENTs.
+- **Tests:** unit tests for iMIP `REQUEST`/`REPLY`/`PUBLISH`/`CANCEL` gating, the no-identity path, and plain/marketing email → no facts; a knowledge-graph integration test staging an invite through `extract()` → `normalize_and_insert` asserting F5 entity resolution (user / event / place / attendees), the `Appointment` events-subsystem overlay, secondary facts carrying no overlay, and connector provenance; a fake-IMAP → `extract()` round-trip proving the transport and extraction compose. Calendar tests updated for the shared `RawVEvent` (`.vevent.` field access) and remain green.
+- **Follow-ups:** deterministic `schema.org` JSON-LD extraction for transactional email is #249; LLM extraction for free-text prose (flights/bookings/confirmations) is C7 / #201; the Photos coords-only `took_photo` provenance-as-fact fallback is #250.
+- **Docs:** `docs/email-connector.md`, `docs/wiki/email-connector.md`, `README.md`, `docs/wiki/what-works-now.md`, and `Mimir-Implementation-Context.md` updated for C6.
 
 ### Connectors — Calendar review follow-up (PR #248, #198)
 

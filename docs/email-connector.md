@@ -2,14 +2,14 @@
 
 > **Phase:** 3 — Connectors (C5 / issue #199)
 > **Feature flag:** `gmail` (default). Framework + mock stay built without it.
-> **Status:** Implemented (library only). Mail parsing + structured fact extraction (headers/dates/contacts) is C6 / #200; LLM extraction for flights/bookings is C7 / #201; the daemon `AppState` wiring + `mimir connector …` CLI land in A1–A3 (#202–#204); the interactive OAuth PKCE login is A4 / #206.
+> **Status:** Implemented (library only). C5 transport (#199) + C6 structured extraction (#200, iMIP calendar invites) are done. LLM extraction for flights/bookings/prose is C7 / #201; deterministic `schema.org` JSON-LD extraction is #249; the daemon `AppState` wiring + `mimir connector …` CLI land in A1–A3 (#202–#204); the interactive OAuth PKCE login is A4 / #206.
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
 
 The Email connector is the third concrete connector backend (after Photos and Calendar). It syncs an IMAP mailbox into Mimir and stages raw RFC 822 messages for the knowledge-graph pipeline. It targets Gmail, Outlook.com / Hotmail, and Apple iCloud Mail — any IMAP4rev1 server — and runs in **`Push`** (IMAP IDLE) mode when the server advertises `IDLE`, falling back to **`Polling`** otherwise.
 
-C5 (#199) delivers the **transport**: an `async-imap`-backed client (`LOGIN` / `AUTHENTICATE XOAUTH2`, `EXAMINE`, `UID FETCH` incremental sync, `IDLE` push), OAuth token **refresh** + app-password auth, a UIDVALIDITY-safe last-UID cursor, and a hand-rolled TCP+rustls TLS handshake. It stages raw messages in an internal buffer; **`extract()` returns no facts yet**. C6 / #200 parses those messages into `NormalizedFact`s (headers/dates/contacts); C7 / #201 adds LLM extraction (flights/bookings).
+C5 (#199) delivers the **transport**: an `async-imap`-backed client (`LOGIN` / `AUTHENTICATE XOAUTH2`, `EXAMINE`, `UID FETCH` incremental sync, `IDLE` push), OAuth token **refresh** + app-password auth, a UIDVALIDITY-safe last-UID cursor, and a hand-rolled TCP+rustls TLS handshake. It stages raw messages in an internal buffer. C6 / #200 (`extract()`) runs a **deterministic extraction cascade** over those messages; C7 / #201 adds the LLM layer.
 
 ## Spec corrections (issue #199 vs. implementation)
 
@@ -47,6 +47,20 @@ Incremental `UID FETCH <last+1>:* (UID INTERNALDATE BODY.PEEK[])`:
 
 Each cycle is one connection; the connector never holds a long-lived IMAP session across awaits (IDLE is contained within a single `sync`).
 
+## C6 / #200 — Structured extraction (iMIP invites)
+
+`extract()` drains the staged RFC 822 messages and runs a **deterministic (structured-parse) extraction cascade** over each. The email is treated as **provenance, not the fact**: the fact is about the real-world thing the email conveys (an appointment), and the email's IMAP UID rides on every fact as the `raw_reference`. Today the cascade has one layer — **iMIP calendar invites**:
+
+- A MIME attachment with `Content-Type: text/calendar; method=REQUEST | REPLY` is parsed with `mail-parser`, then the embedded `VEVENT` is parsed with the shared `mimir-connectors::ical` module (the same one the Calendar connector uses — DRY) and turned into the same appointment fact cluster the Calendar connector emits: a primary `user has_event <event>` (typed `EventType::Appointment`, recurrence from `RRULE` `FREQ`, temporal bounds from `DTSTART`/`DTEND`), `<event> located_in <place>`, and `<attendee> attending <event>`. Entities resolve via the full F5 chain in `normalize_and_insert`; facts carry `source_type = Connector`, `connector_type = Gmail`, `extraction_method = StructuredParse`.
+- `method = PUBLISH` (often marketing webinars) and `CANCEL` (deletion lifecycle) are **skipped** for now — `CANCEL` → KB fact lifecycle is tracked in #247.
+- **No per-email communication facts are emitted** (`received_email_from` / `sent_email_to`), and **no `Person` entities are auto-created from `From`/`To` headers**, so marketing/spam produces no junk facts. A plain prose email with no `text/calendar` part produces nothing in C6.
+
+The `user has_event` primary fact is authored against the injected canonical user identity (`ConnectorContext::user_identity`, the `config.toml` `[identity] name`), so an invite surfaces in the user's "Upcoming" memory section and resolves to the same entity the daemon treats as `user_entity_id`. Without an identity the primary fact is skipped; the event is still captured via its location/attendee facts. The email connector factory now consumes `ctx.user_identity` (matching the Calendar connector).
+
+### What C6 does *not* do (and why)
+
+A dentist's free-text "see you Tuesday 3pm" confirmation, a flight boarding pass in prose, a bank statement, a job offer — none of these carry structured `text/calendar`, so C6 emits nothing for them. Those are read by the **LLM layer (C7 / #201)**, which reads the body under a strict tool schema and funnels through the *same* `normalize_and_insert` pipeline with `extraction_method = LlmExtraction`. Transactional emails that embed machine-readable `schema.org` JSON-LD (`Order`, `FlightReservation`, `Ticket`, …) are a *deterministic* layer that will be added in #249, between invites and the LLM. The cascade is built so those layers slot in without restructuring `extract()`. Duplicate/re-sent invites dedupe via the existing `normalize_and_insert` corroboration/supersession.
+
 ## Config (`config_json`)
 
 ```json
@@ -69,6 +83,8 @@ OAuth auth block: `{ "kind": "oauth", "username": "you@gmail.com", "token_endpoi
 
 The transport is exercised against a minimal scripted IMAP server speaking the protocol over a `tokio::io::duplex` pair — no TLS, no live account. `async_imap::Client::new` accepts any tokio async stream, so the same `imap_login` / `ImapSession` / `run_sync` code paths the daemon runs against a rustls socket run against the fake server. Covered: app-password login, XOAUTH2 SASL initial response, incremental + no-op + full sync, UIDVALIDITY reset full re-sync, IDLE push → fetch, and IDLE timeout → zero.
 
+C6 extraction is unit-tested with fixture `.eml` bytes: the iMIP `REQUEST`/`REPLY` cluster (`has_event` + `located_in` + `attending`, `Appointment` type, temporal bounds), `PUBLISH`/`CANCEL` skipped, plain/marketing email → no facts, and the no-identity path. A knowledge-graph integration test stages an invite, runs `extract()` → `normalize_and_insert`, and asserts F5 entity resolution (user / event / place / attendees), the `Appointment` events-subsystem overlay, secondary facts carrying no overlay, and connector provenance (`Connector` / `Gmail` / `StructuredParse` / `raw_reference` = the IMAP UID). A fake-IMAP → `extract()` round-trip proves the transport and extraction compose end-to-end.
+
 ## Dependencies
 
-`async-imap 0.11.3` (`runtime-tokio`), `base64 0.22`, `tokio-rustls 0.26`, `rustls 0.23` (`aws-lc-rs`), `rustls-native-certs 0.8`, `futures 0.3` — all already in the dependency tree (via reqwest/async-imap) or pinned to the workspace's versions. Gated by the `gmail` feature.
+Transport: `async-imap 0.11.3` (`runtime-tokio`), `base64 0.22`, `tokio-rustls 0.26`, `rustls 0.23` (`aws-lc-rs`), `rustls-native-certs 0.8`, `futures 0.3`. Extraction (C6 / #200): `mail-parser 0.11.5` (RFC 5322 / MIME parsing) and, shared with the Calendar connector (DRY), `icalendar 0.17` + `chrono-tz 0.10` for `VEVENT` parsing + `TZID` resolution. All gated by the `gmail` feature; the shared `ical` module is built under `any(feature = "calendar", feature = "gmail")`.

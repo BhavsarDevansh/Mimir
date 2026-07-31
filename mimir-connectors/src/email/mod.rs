@@ -45,6 +45,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use mail_parser::{MessageParser, MimeHeaders};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex as StdMutex;
 use tokio::sync::Mutex;
@@ -231,6 +232,14 @@ pub struct EmailConnector {
     supports_idle: StdMutex<Option<bool>>,
     /// Staged raw RFC 822 messages awaiting extraction (drained by `extract`).
     buffer: Mutex<Vec<imap::RawEmail>>,
+    /// Canonical user identity name (the `config.toml` `[identity] name`),
+    /// injected via [`ConnectorContext::user_identity`] so connector-sourced
+    /// facts that are user-scoped — iMIP invite extraction's
+    /// `user has_event <event>` (C6 / #200) — author against the same entity
+    /// the daemon treats as `user_entity_id`. `None` when no identity is
+    /// configured (the primary `has_event` fact is then skipped, matching the
+    /// Calendar connector's behaviour).
+    user_identity: Option<String>,
 }
 
 impl EmailConnector {
@@ -241,7 +250,7 @@ impl EmailConnector {
         secret_store: Option<Arc<dyn SecretStore>>,
         cursor: Option<String>,
     ) -> Result<Self, ConnectorError> {
-        Self::from_config_with_http(config, secret_store, cursor, None)
+        Self::from_config_with_http(config, secret_store, None, cursor, None)
     }
 
     /// Build a connector, allowing an injected `http` client (tests inject a
@@ -250,6 +259,7 @@ impl EmailConnector {
     pub fn from_config_with_http(
         config: serde_json::Value,
         secret_store: Option<Arc<dyn SecretStore>>,
+        user_identity: Option<String>,
         cursor: Option<String>,
         http: Option<reqwest::Client>,
     ) -> Result<Self, ConnectorError> {
@@ -282,6 +292,9 @@ impl EmailConnector {
             last_uid: Mutex::new(cursor.as_deref().and_then(parse_cursor)),
             supports_idle: StdMutex::new(None),
             buffer: Mutex::new(Vec::new()),
+            user_identity: user_identity
+                .filter(|n| !n.trim().is_empty())
+                .map(|n| n.trim().to_string()),
         })
     }
 
@@ -565,6 +578,58 @@ impl EmailConnector {
         *self.supports_idle.lock().unwrap() = Some(supports);
         Ok(supports)
     }
+
+    /// Layer 1 of the extraction cascade (C6 / #200): iMIP calendar invites.
+    ///
+    /// Walks the message's MIME attachments for `text/calendar` parts whose
+    /// iMIP `METHOD` is `REQUEST` (a meeting request) or `REPLY` (an attendee
+    /// response), parses each embedded VEVENT via the shared
+    /// [`crate::ical::parse_ical_to_vevents`], and turns it into the appointment
+    /// fact cluster via [`crate::ical::vevent_to_facts`]. `PUBLISH` (often
+    /// marketing webinars) and `CANCEL` (deletion lifecycle) are skipped for
+    /// now — `CANCEL` → KB fact lifecycle is tracked separately. Every fact
+    /// is provenanced with `raw_ref` (the email's IMAP UID) and authored
+    /// against the injected [`user_identity`](Self::user_identity) when set.
+    fn extract_invites(
+        &self,
+        message: &mail_parser::Message<'_>,
+        raw_ref: &str,
+    ) -> Vec<mimir_knowledge::normalize::NormalizedFact> {
+        let mut facts = Vec::new();
+        for part in message.attachments() {
+            if !part.is_content_type("text", "calendar") {
+                continue;
+            }
+            let Some(ct) = part.content_type() else {
+                continue;
+            };
+            let method = ct
+                .attribute("method")
+                .map(|m| m.trim().to_ascii_uppercase());
+            match method.as_deref() {
+                Some("REQUEST") | Some("REPLY") => {}
+                other => {
+                    debug!(raw_ref, method = ?other, "skipping text/calendar part: unsupported/absent METHOD");
+                    continue;
+                }
+            }
+            let Some(ical) = part.text_contents() else {
+                debug!(
+                    raw_ref,
+                    "text/calendar part had no decodable text contents; skipping"
+                );
+                continue;
+            };
+            for vevent in crate::ical::parse_ical_to_vevents(ical) {
+                facts.extend(crate::ical::vevent_to_facts(
+                    self.user_identity.as_deref(),
+                    &vevent,
+                    raw_ref,
+                ));
+            }
+        }
+        facts
+    }
 }
 
 #[async_trait]
@@ -670,12 +735,31 @@ impl Connector for EmailConnector {
     async fn extract(
         &self,
     ) -> Result<Vec<mimir_knowledge::normalize::NormalizedFact>, ConnectorError> {
-        // C5 / #199: transport-only. Drains the staged buffer; C6 / #200 will
-        // convert RawEmails into NormalizedFacts (headers/dates/contacts) and
-        // C7 / #201 adds LLM extraction (flights/bookings).
+        // C6 / #200: drain the staged RFC 822 messages and run a deterministic
+        // (structured-parse) extraction *cascade* over each. Today the cascade
+        // has one layer — iMIP calendar invites (`text/calendar; method=REQUEST
+        // | REPLY`) parsed into the same VEVENT fact cluster the Calendar
+        // connector emits, via the shared [`crate::ical`] module. Plain prose
+        // emails (no `text/calendar` part) produce no facts: the email is
+        // *provenance*, not the fact — the fact is about the real-world thing
+        // the email conveys (an appointment), and prose confirmations, flights,
+        // bookings, and bank statements are read by the LLM layer in C7 / #201
+        // (and, for machine-readable `schema.org` JSON-LD, by #249). No
+        // per-email communication facts are emitted and no `Person` entities
+        // are auto-created from `From`/`To` headers, so marketing/spam produces
+        // no junk facts.
         let mut buffer = self.buffer.lock().await;
-        let _staged: Vec<imap::RawEmail> = std::mem::take(&mut *buffer);
-        Ok(Vec::new())
+        let staged: Vec<imap::RawEmail> = std::mem::take(&mut *buffer);
+        let mut facts = Vec::new();
+        for mail in &staged {
+            let raw_ref = mail.uid.to_string();
+            if let Some(message) = MessageParser::default().parse(&mail.raw) {
+                facts.extend(self.extract_invites(&message, &raw_ref));
+            } else {
+                debug!(uid = mail.uid, "could not parse RFC 822 message; skipping");
+            }
+        }
+        Ok(facts)
     }
 
     async fn forget(&self) -> Result<(), ConnectorError> {
@@ -720,8 +804,13 @@ impl ConnectorFactory for EmailConnectorFactory {
             .get("__cursor")
             .and_then(|v| v.as_str())
             .map(str::to_string);
-        let connector =
-            EmailConnector::from_config_with_http(config, ctx.secret_store.clone(), cursor, None)?;
+        let connector = EmailConnector::from_config_with_http(
+            config,
+            ctx.secret_store.clone(),
+            ctx.user_identity.clone(),
+            cursor,
+            None,
+        )?;
         Ok(Arc::new(connector) as Arc<dyn Connector>)
     }
 }
@@ -877,6 +966,396 @@ mod tests {
                 assert_eq!(access_token, "ya29.access");
             }
             other => panic!("expected Xoauth2, got {other:?}"),
+        }
+    }
+
+    // --- C6 / #200: iMIP invite extraction (cascade layer 1) -----------------
+
+    use mimir_knowledge::models::entity::EntityType;
+    use mimir_knowledge::models::enums::EventType;
+    use mimir_knowledge::normalize::NormalizedFact;
+
+    fn connector_with_identity(name: Option<&str>) -> EmailConnector {
+        EmailConnector::from_config_with_http(
+            app_config(),
+            None,
+            name.map(|n| n.to_string()),
+            None,
+            None,
+        )
+        .expect("config")
+    }
+
+    /// Build a minimal RFC 822 email carrying one `text/calendar; method=<m>`
+    /// attachment whose body is a single VEVENT (a dentist appointment with a
+    /// location and two attendees). The plain-text body is included so the
+    /// calendar part is a real attachment, not the message body.
+    pub(super) fn invite_email(method: &str) -> Vec<u8> {
+        format!(
+            r#"From: dentist@example.com
+To: devansh@example.com
+Subject: Dentist appointment
+Date: Sat, 20 Nov 2025 14:22:01 -0800
+Message-ID: <invite-1@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="bnd"
+
+--bnd
+Content-Type: text/plain; charset="utf-8"
+
+You are invited.
+--bnd
+Content-Type: text/calendar; method={method}; charset="utf-8"
+Content-Disposition: attachment; filename="invite.ics"
+
+BEGIN:VCALENDAR
+VERSION:2.0
+METHOD:{method}
+BEGIN:VEVENT
+UID:dentist-1@example.com
+SUMMARY:Dentist appointment
+DTSTART:20991120T140000Z
+DTEND:20991120T150000Z
+LOCATION:123 Main St
+ATTENDEE;CN=Devansh:mailto:devansh@example.com
+ATTENDEE;CN=Dr Smith:mailto:smith@dental.com
+END:VEVENT
+END:VCALENDAR
+--bnd--
+"#,
+            method = method
+        )
+        .into_bytes()
+    }
+
+    pub(super) fn plain_email() -> Vec<u8> {
+        b"From: marketing@retailer.com\r\n\
+To: devansh@example.com\r\n\
+Subject: 20% off everything\r\n\
+Date: Sat, 20 Nov 2025 14:22:01 -0800\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+\r\n\
+Sale! Sale! Sale!\r\n"
+            .to_vec()
+    }
+
+    fn parse(bytes: &[u8]) -> mail_parser::Message<'_> {
+        mail_parser::MessageParser::default()
+            .parse(bytes)
+            .expect("fixture must parse")
+    }
+
+    #[test]
+    fn extract_invites_emits_appointment_cluster_for_request_method() {
+        let connector = connector_with_identity(Some("Devansh"));
+        let bytes = invite_email("REQUEST");
+        let message = parse(&bytes);
+        let facts = connector.extract_invites(&message, "42");
+        // 1 primary (has_event) + 1 location + 2 attendees = 4.
+        assert_eq!(facts.len(), 4);
+        let primary = facts
+            .iter()
+            .find(|f| f.relationship_type == "has_event")
+            .unwrap();
+        assert_eq!(primary.subject, "Devansh");
+        assert_eq!(primary.subject_type, EntityType::Person);
+        assert_eq!(primary.object, "Dentist appointment");
+        assert_eq!(primary.object_type, Some(EntityType::Event));
+        assert!(primary.valid_from.is_some());
+        assert!(primary.valid_until.is_some());
+        assert_eq!(primary.event_type, Some(EventType::Appointment));
+        assert_eq!(primary.raw_reference.as_deref(), Some("42"));
+        // Location fact carries no temporal bounds.
+        let loc = facts
+            .iter()
+            .find(|f| f.relationship_type == "located_in")
+            .unwrap();
+        assert_eq!(loc.object, "123 Main St");
+        assert_eq!(loc.object_type, Some(EntityType::Place));
+        assert!(loc.valid_from.is_none());
+        assert!(loc.valid_until.is_none());
+        // Two attendee facts, no temporal bounds.
+        let attendees: Vec<&NormalizedFact> = facts
+            .iter()
+            .filter(|f| f.relationship_type == "attending")
+            .collect();
+        assert_eq!(attendees.len(), 2);
+        assert!(attendees.iter().all(|a| a.valid_from.is_none()));
+        assert_eq!(attendees[0].subject, "Devansh");
+        assert_eq!(attendees[1].subject, "Dr Smith");
+    }
+
+    #[test]
+    fn extract_invites_emits_facts_for_reply_method() {
+        let connector = connector_with_identity(Some("Devansh"));
+        let bytes = invite_email("REPLY");
+        let message = parse(&bytes);
+        let facts = connector.extract_invites(&message, "7");
+        // Same cluster shape as REQUEST.
+        assert!(facts.iter().any(|f| f.relationship_type == "has_event"));
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|f| f.relationship_type == "attending")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn extract_invites_skips_publish_method() {
+        let connector = connector_with_identity(Some("Devansh"));
+        let bytes = invite_email("PUBLISH");
+        let message = parse(&bytes);
+        assert!(
+            connector.extract_invites(&message, "9").is_empty(),
+            "PUBLISH (often marketing webinars) is skipped for now"
+        );
+    }
+
+    #[test]
+    fn extract_invites_skips_cancel_method() {
+        let connector = connector_with_identity(Some("Devansh"));
+        let bytes = invite_email("CANCEL");
+        let message = parse(&bytes);
+        assert!(
+            connector.extract_invites(&message, "9").is_empty(),
+            "CANCEL lifecycle is tracked separately; no facts here"
+        );
+    }
+
+    #[test]
+    fn extract_invites_skips_plain_email() {
+        let connector = connector_with_identity(Some("Devansh"));
+        let bytes = plain_email();
+        let message = parse(&bytes);
+        // No text/calendar part → no facts. A marketing email produces nothing.
+        assert!(connector.extract_invites(&message, "1").is_empty());
+    }
+
+    #[test]
+    fn extract_invites_skips_primary_when_no_user_identity() {
+        let connector = connector_with_identity(None);
+        let bytes = invite_email("REQUEST");
+        let message = parse(&bytes);
+        let facts = connector.extract_invites(&message, "42");
+        // No user identity → no primary has_event; the event is still captured
+        // via its location + attendee facts.
+        assert!(facts.iter().all(|f| f.relationship_type != "has_event"));
+        assert!(facts.iter().any(|f| f.relationship_type == "located_in"));
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|f| f.relationship_type == "attending")
+                .count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_drains_buffer_and_returns_invite_facts() {
+        let connector = connector_with_identity(Some("Devansh"));
+        // Stage a raw invite email in the buffer (as a sync cycle would).
+        connector.buffer.lock().await.push(imap::RawEmail {
+            uid: 42,
+            internal_date: None,
+            raw: invite_email("REQUEST"),
+        });
+        let facts = connector.extract().await.expect("extract");
+        // The cascade produced the appointment cluster; the buffer is drained.
+        assert!(facts.iter().any(|f| f.relationship_type == "has_event"));
+        assert!(
+            connector.buffer.lock().await.is_empty(),
+            "buffer must be drained"
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_with_no_invite_emails_yields_no_facts() {
+        let connector = connector_with_identity(Some("Devansh"));
+        connector.buffer.lock().await.push(imap::RawEmail {
+            uid: 1,
+            internal_date: None,
+            raw: plain_email(),
+        });
+        let facts = connector.extract().await.expect("extract");
+        assert!(facts.is_empty(), "plain/marketing email → no facts");
+    }
+
+    // --- C6 / #200: KB integration (F5 resolution, temporal bounds, provenance)
+
+    use mimir_knowledge::KnowledgeGraph;
+    use mimir_knowledge::models::connector::UpsertConnectorInput;
+    use mimir_knowledge::models::enums::ConnectorStatus;
+    use mimir_knowledge::models::source::ExtractionMethod;
+    use mimir_knowledge::normalize::Provenance;
+    use mimir_knowledge::normalize::normalize_and_insert;
+
+    async fn init_kg() -> (KnowledgeGraph, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+            .await
+            .unwrap();
+        (kg, dir)
+    }
+
+    async fn entity_named(kg: &KnowledgeGraph, name: &str) -> Option<i32> {
+        kg.search_entities(name, 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.entity.name == name)
+            .map(|r| r.entity.id)
+    }
+
+    #[tokio::test]
+    async fn extract_funnels_into_kb_with_resolution_and_provenance() {
+        let (kg, _dir) = init_kg().await;
+        // Register a Gmail connector instance so connector provenance has a
+        // valid `connector_instance_id` FK.
+        let row = kg
+            .upsert_connector(UpsertConnectorInput {
+                connector_type: ConnectorType::Gmail,
+                slug: "gmail-personal".to_string(),
+                backend: "imap".to_string(),
+                display_name: "Gmail".to_string(),
+                config_json: "{}".to_string(),
+                status: Some(ConnectorStatus::Active),
+                auth_state: Some(ConnectorAuthState::Authenticated),
+            })
+            .await
+            .unwrap();
+        let instance_id = row.id;
+
+        let connector = connector_with_identity(Some("Devansh"));
+        connector.buffer.lock().await.push(imap::RawEmail {
+            uid: 42,
+            internal_date: None,
+            raw: invite_email("REQUEST"),
+        });
+        let facts = connector.extract().await.expect("extract");
+        assert_eq!(facts.len(), 4);
+
+        let outcome = normalize_and_insert(
+            &kg,
+            facts,
+            Provenance::connector(
+                instance_id,
+                ConnectorType::Gmail,
+                ExtractionMethod::StructuredParse,
+            ),
+        )
+        .await
+        .expect("normalize_and_insert");
+        assert!(
+            outcome.pending_confirmation.is_empty(),
+            "no sensitive facts"
+        );
+        assert_eq!(outcome.inserted.len(), 4, "all four facts inserted");
+
+        // F5: the user, the event, the place, and both attendees resolved to
+        // entities (the user identity + attendees → Person; the venue → Place;
+        // the SUMMARY → Event).
+        let devansh = entity_named(&kg, "Devansh").await.expect("Devansh entity");
+        let event = entity_named(&kg, "Dentist appointment")
+            .await
+            .expect("event entity");
+        let place = entity_named(&kg, "123 Main St")
+            .await
+            .expect("place entity");
+        let dr_smith = entity_named(&kg, "Dr Smith")
+            .await
+            .expect("Dr Smith entity");
+        // The `located_in` fact resolved the venue to the Place entity.
+        let mut located_in = None;
+        for f in &outcome.inserted {
+            if kg
+                .relationship_type_name(f.relationship_type_id)
+                .await
+                .as_deref()
+                == Some("located_in")
+            {
+                located_in = Some(f);
+            }
+        }
+        let located_in = located_in.expect("located_in fact");
+        assert_eq!(located_in.object_id, Some(place));
+
+        // Locate the primary `has_event` fact and assert its temporal bounds +
+        // Appointment overlay.
+        let mut has_event = None;
+        for f in &outcome.inserted {
+            if kg
+                .relationship_type_name(f.relationship_type_id)
+                .await
+                .as_deref()
+                == Some("has_event")
+            {
+                has_event = Some(f);
+            }
+        }
+        let has_event = has_event.expect("has_event fact");
+        assert_eq!(has_event.subject_id, devansh);
+        assert_eq!(has_event.object_id, Some(event));
+        assert!(
+            has_event.valid_from.is_some(),
+            "DTSTART carried as valid_from"
+        );
+        assert!(
+            has_event.valid_until.is_some(),
+            "DTEND carried as valid_until"
+        );
+        let overlay = kg
+            .get_event_by_fact(has_event.id)
+            .await
+            .unwrap()
+            .expect("events-subsystem overlay");
+        assert_eq!(overlay.event_type(), Some(EventType::Appointment));
+
+        // Secondary facts carry no temporal bounds (no overlay) — guard against
+        // the PR #248 regression where secondary facts inherited DTSTART/DTEND.
+        for f in &outcome.inserted {
+            let name = kg.relationship_type_name(f.relationship_type_id).await;
+            if matches!(name.as_deref(), Some("located_in") | Some("attending")) {
+                assert!(
+                    f.valid_from.is_none(),
+                    "secondary fact {} has valid_from",
+                    f.id
+                );
+                assert!(
+                    f.valid_until.is_none(),
+                    "secondary fact {} has valid_until",
+                    f.id
+                );
+                assert!(
+                    kg.get_event_by_fact(f.id).await.unwrap().is_none(),
+                    "secondary fact {} must not spawn an overlay",
+                    f.id
+                );
+            }
+        }
+        // The attendee facts resolved both the user and Dr Smith to Person
+        // entities (the user is also an attendee of their own appointment).
+        assert!(dr_smith > 0);
+
+        // Provenance: every fact has one Connector source tied to the instance,
+        // with the email UID as `raw_reference` and StructuredParse method.
+        for f in &outcome.inserted {
+            let sources = kg.get_sources_for_fact(f.id).await.unwrap();
+            assert!(
+                sources.iter().any(|s| {
+                    s.source_type_id
+                        == mimir_knowledge::models::source::SourceType::Connector as i16
+                        && s.connector_instance_id == Some(instance_id)
+                        && s.connector_type_id == Some(ConnectorType::Gmail as i16)
+                        && s.raw_reference.as_deref() == Some("42")
+                        && s.extraction_method_id == Some(ExtractionMethod::StructuredParse as i16)
+                }),
+                "missing connector provenance on fact {}: {:?}",
+                f.id,
+                sources
+            );
         }
     }
 }
@@ -1363,5 +1842,58 @@ mod imap_integration {
         let connector = EmailConnector::from_config(config, None, None).expect("config");
         assert!(connector.use_idle().expect("auto+None should be Push"));
         assert!(matches!(connector.mode(), ConnectorMode::Push));
+    }
+
+    #[tokio::test]
+    async fn imap_sync_then_extract_yields_invite_facts() {
+        // End-to-end over the fake IMAP transport: a real RFC 822 invite
+        // fetched via `UID FETCH ... BODY.PEEK[]` is staged, then `extract()`
+        // turns it into the appointment fact cluster. Proves the C5 transport
+        // and C6 extraction compose without a live account.
+        let invite = super::tests::invite_email("REQUEST");
+        let cfg = FakeCfg {
+            messages: vec![(42u32, invite)],
+            ..Default::default()
+        };
+        let (client, server) = tokio::io::duplex(8 * 1024);
+        let select_count = Arc::new(Mutex::new(0u32));
+        tokio::spawn(run_fake(server, cfg, None, Arc::clone(&select_count)));
+        let mut config = super::tests::app_config();
+        config["mode"] = serde_json::json!("poll");
+        let connector =
+            EmailConnector::from_config_with_http(config, None, Some("Devansh".into()), None, None)
+                .expect("config");
+        let session = imap_login(Client::new(client), app_password_auth())
+            .await
+            .expect("login");
+        let outcome = connector
+            .run_sync(session, SyncOptions::default())
+            .await
+            .expect("sync");
+        assert_eq!(outcome.fetched, 1);
+
+        let facts = connector.extract().await.expect("extract");
+        assert!(
+            facts.iter().any(|f| f.relationship_type == "has_event"),
+            "invite extracted into a has_event fact: {facts:?}"
+        );
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|f| f.relationship_type == "attending")
+                .count(),
+            2
+        );
+        // Provenance `raw_reference` is the IMAP UID of the staged message.
+        assert!(
+            facts
+                .iter()
+                .all(|f| f.raw_reference.as_deref() == Some("42")),
+            "raw_reference must be the IMAP UID: {facts:?}"
+        );
+        assert!(
+            connector.buffer.lock().await.is_empty(),
+            "extract drains the staged buffer"
+        );
     }
 }

@@ -1,11 +1,11 @@
 # Email Connector
 
 > **Phase:** 3 — Connectors
-> **Status:** Library done — C5 (#199). Mail → knowledge-graph extraction (flights, bookings, contacts, dates) comes in C6 (#200) and C7 (#201). Daemon wiring and the `mimir connector …` CLI come in later Phase 3 issues (A1–A3).
+> **Status:** Library done — C5 transport (#199) + C6 structured extraction (#200, calendar invites). LLM extraction for flights/bookings/prose is C7 (#201); deterministic `schema.org` JSON-LD extraction is #249; daemon wiring and the `mimir connector …` CLI come in later Phase 3 issues (A1–A3).
 
 ## What it is
 
-The Email connector reads your mailbox (Gmail, Outlook/Hotmail, iCloud Mail — any IMAP server) into Mimir, **staging** your emails so that (once C6/C7 land) the knowledge graph can answer questions like **what trips do I have, what bookings came in, who emailed me and when**. It speaks IMAP — the open mail protocol your provider already supports — so it works with any compliant server, no vendor lock-in.
+The Email connector reads your mailbox (Gmail, Outlook/Hotmail, iCloud Mail — any IMAP server) into Mimir and turns your mail into knowledge-graph facts. It speaks IMAP — the open mail protocol your provider already supports, so it works with any compliant server, no vendor lock-in.
 
 It is a background sync worker that runs in two modes automatically:
 
@@ -19,7 +19,11 @@ It is a background sync worker that runs in two modes automatically:
 - If your mailbox is ever recreated (a rare event Mimir detects via a server value called `UIDVALIDITY`), the connector notices and does one full re-fetch — no silent gaps or duplicates.
 - Each message's raw contents (headers, body) are held in an in-memory buffer ready for the knowledge graph.
 
-> **C5 vs C6/C7:** This first cut (#199) does the *transport* — it logs in, watches for new mail, and fetches messages. Turning those messages into knowledge-graph facts (flight confirmations, hotel bookings, contacts, dates) is C6 (#200) for structured parsing and C7 (#201) for LLM extraction.
+> **What's done so far:** The transport (#199) logs in, watches for new mail, and fetches messages. C6 (#200) then turns the structured subset — **calendar invites** (emails with a `text/calendar` attachment) — into knowledge-graph facts: a dentist, airline, or colleague sending a real invite creates an appointment in your "Upcoming" section, with the time, location, and attendees. Free-text confirmations, flight boarding passes, bookings, and bank statements (emails with no calendar invite) are read by the LLM layer in C7 (#201); transactional emails that embed machine-readable `schema.org` data will be a future deterministic layer (#249).
+
+### The email is the evidence, not the fact
+
+Mimir does **not** record "I received an email from the dentist" — that is just evidence. It records the real-world thing the email conveys (an appointment, with a date and a place). It also does **not** turn every sender or recipient into a contact: marketing and spam emails produce no facts at all, so your knowledge graph isn't filled with junk. The email's message id is kept as the provenance so you can always trace a fact back to the email it came from.
 
 ## Authentication
 

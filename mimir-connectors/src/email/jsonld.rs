@@ -120,21 +120,25 @@ pub(crate) fn extract_jsonld_blocks(html: &str) -> Vec<&str> {
         let tag_end = after_tag_name + greater_rel;
         let tag_inner = &html[after_tag_name..tag_end];
 
-        if !has_jsonld_type(tag_inner) {
-            pos = tag_end + 1;
-            continue;
-        }
-
         // Content starts after `>`.
         let content_start = tag_end + 1;
 
-        // Find the closing `</script>` (case-insensitive).
+        // Find the closing `</script>` (case-insensitive). Every `<script>`
+        // element has a closing `</script>` — we must skip past it *regardless*
+        // of whether this is a JSON-LD script, so JavaScript content
+        // containing `<script` string literals (common in templating/tracking
+        // snippets) is not re-scanned for JSON-LD blocks. HTML5 §12.1.2: a
+        // script element's text content terminates at the first `</script>`
+        // end tag.
         let Some(close_rel) = lower[content_start..].find("</script>") else {
             break;
         };
         let content_end = content_start + close_rel;
 
-        blocks.push(html[content_start..content_end].trim());
+        if has_jsonld_type(tag_inner) {
+            blocks.push(html[content_start..content_end].trim());
+        }
+
         pos = content_end + close_tag_len;
     }
     blocks
@@ -924,6 +928,29 @@ mod tests {
         // `data-type` is not `type` — must not match.
         let html = r#"<script data-type="application/ld+json">{"@type":"Order"}</script>"#;
         assert!(extract_jsonld_blocks(html).is_empty());
+    }
+
+    #[test]
+    fn extract_jsonld_blocks_skips_js_with_embedded_jsonld_string() {
+        // A JavaScript script whose body contains a string literal that looks
+        // like a JSON-LD block must NOT produce a false positive. The scanner
+        // must skip past the JS script's closing </script> before resuming the
+        // search, so the embedded `<script type="application/ld+json">` inside
+        // the JS string is never seen as a real tag.
+        let html = r#"<script type="text/javascript">
+  var x = '<script type="application/ld+json">{"@type":"Order","orderNumber":"FAKE"}</script>';
+</script>
+<script type="application/ld+json">{"@type":"Order","orderNumber":"REAL"}</script>"#;
+        let blocks = extract_jsonld_blocks(html);
+        assert_eq!(
+            blocks.len(),
+            1,
+            "only the real JSON-LD block should be extracted"
+        );
+        assert!(
+            blocks[0].contains("REAL"),
+            "must extract the real block, not the JS string"
+        );
     }
 
     #[test]

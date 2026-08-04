@@ -1356,8 +1356,7 @@ END:VCALENDAR
     /// `FlightReservation`. The plain-text alternative is included so the
     /// HTML part is a real alternative body part, not the sole body.
     pub(super) fn jsonld_flight_email() -> Vec<u8> {
-        format!(
-            r#"From: noreply@airline.com
+        r#"From: noreply@airline.com
 To: devansh@example.com
 Subject: Flight confirmation BA123
 Date: Mon, 04 Aug 2025 10:00:00 +0000
@@ -1374,25 +1373,24 @@ Content-Type: text/html; charset="utf-8"
 
 <html><body>
 <h1>Flight confirmation</h1>
-<script type="application/ld+json">{{
+<script type="application/ld+json">{
   "@context": "https://schema.org",
   "@type": "FlightReservation",
   "reservationId": "ABC123",
   "passengerName": "Devansh Bhavsar",
-  "reservationFor": {{
+  "reservationFor": {
     "@type": "Flight",
     "flightNumber": "123",
-    "airline": {{ "@type": "Airline", "name": "British Airways" }},
-    "departureAirport": {{ "@type": "Airport", "name": "Heathrow Airport", "iataCode": "LHR" }},
+    "airline": { "@type": "Airline", "name": "British Airways" },
+    "departureAirport": { "@type": "Airport", "name": "Heathrow Airport", "iataCode": "LHR" },
     "departureTime": "2099-08-15T10:00:00+01:00",
-    "arrivalAirport": {{ "@type": "Airport", "name": "Fiumicino Airport", "iataCode": "FCO" }},
+    "arrivalAirport": { "@type": "Airport", "name": "Fiumicino Airport", "iataCode": "FCO" },
     "arrivalTime": "2099-08-15T13:30:00+02:00"
-  }}
-}}</script>
+  }
+}</script>
 </body></html>
 --bnd--
 "#
-        )
         .replace('\n', "\r\n")
         .into_bytes()
     }
@@ -1400,8 +1398,7 @@ Content-Type: text/html; charset="utf-8"
     /// An email with an HTML body containing an unrecognised JSON-LD type
     /// (`Person`) — should produce no facts.
     pub(super) fn jsonld_unrecognised_email() -> Vec<u8> {
-        format!(
-            r#"From: noreply@example.com
+        r#"From: noreply@example.com
 To: devansh@example.com
 Subject: Hello
 Date: Mon, 04 Aug 2025 10:00:00 +0000
@@ -1416,11 +1413,10 @@ Hello.
 Content-Type: text/html; charset="utf-8"
 
 <html><body>
-<script type="application/ld+json">{{ "@type": "Person", "name": "Someone" }}</script>
+<script type="application/ld+json">{ "@type": "Person", "name": "Someone" }</script>
 </body></html>
 --bnd--
 "#
-        )
         .replace('\n', "\r\n")
         .into_bytes()
     }
@@ -1471,8 +1467,7 @@ Content-Type: text/html; charset="utf-8"
     async fn extract_cascade_runs_both_imip_and_jsonld_layers() {
         // An email with both a text/calendar invite AND a JSON-LD
         // EventReservation in the HTML body — both layers should produce facts.
-        let combined = format!(
-            r#"From: noreply@example.com
+        let combined = r#"From: noreply@example.com
 To: devansh@example.com
 Subject: Event + invite
 Date: Mon, 04 Aug 2025 10:00:00 +0000
@@ -1483,7 +1478,7 @@ Content-Type: multipart/mixed; boundary="outer"
 Content-Type: text/html; charset="utf-8"
 
 <html><body>
-<script type="application/ld+json">{{ "@type": "EventReservation", "reservationFor": {{ "@type": "Event", "name": "JSON-LD Event", "startDate": "2025-09-10T19:30:00Z" }} }}</script>
+<script type="application/ld+json">{ "@type": "EventReservation", "reservationFor": { "@type": "Event", "name": "JSON-LD Event", "startDate": "2025-09-10T19:30:00Z" } }</script>
 </body></html>
 --outer
 Content-Type: text/calendar; method=REQUEST; charset="utf-8"
@@ -1501,7 +1496,6 @@ END:VEVENT
 END:VCALENDAR
 --outer--
 "#
-        )
         .replace('\n', "\r\n")
         .into_bytes();
 

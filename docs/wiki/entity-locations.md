@@ -81,7 +81,10 @@ skipped by proximity searches — they have no point to measure distance from.
 - The background overlay worker uses an unbounded queue, so a very large burst
   of location facts (thousands) is held in memory while the geocoder catches up
   at ~1 lookup/sec; graceful shutdown calls `flush_location_overlays` to drain
-  queued jobs before tearing down resources.
+  queued jobs before tearing down resources. The worker's database writes are
+  serialised with the ingestion caller's writes via an internal lock so the two
+  never commit at the same time — this avoids spurious "database is locked"
+  failures when many locations are remembered at once.
 - Locations don't carry their own confidence score yet — provenance is via the
   source fact.
 - A *sensitive* "where" fact is held for confirmation like any sensitive fact;

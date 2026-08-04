@@ -88,6 +88,20 @@ pub fn jobs_db_path() -> Result<PathBuf, PathsError> {
     data_dir().map(|p| p.join("jobs.db"))
 }
 
+/// Resolve a database path from an optional config override, falling back to
+/// a default resolver when unset. Used by `AppState` to honour the
+/// `context.db_path` / `knowledge.db_path` / `scheduler.db_path` overrides
+/// while preserving the error from the default resolver (issue #233).
+pub fn resolve_db_path(
+    override_path: Option<PathBuf>,
+    default: impl FnOnce() -> Result<PathBuf, PathsError>,
+) -> Result<PathBuf, PathsError> {
+    match override_path {
+        Some(p) => Ok(p),
+        None => default(),
+    }
+}
+
 /// Returns the path to the connector secrets directory inside the data
 /// directory (`~/.local/share/mimir/secrets` on Linux).
 ///

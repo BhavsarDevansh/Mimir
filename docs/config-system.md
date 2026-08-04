@@ -123,6 +123,19 @@ Controls the daemon's HTTP and Unix socket listeners.
 | `MIMIR_SERVER_SOCKET_PATH` | `server.socket_path` | `String` |
 
 When `socket_path` is `None` (default), only the TCP listener is active. On Unix platforms, the recommended default is `~/.local/share/mimir/mimir.sock`, which provides instant daemon detection and filesystem-level access control. See issue #25 for full Unix socket implementation details.
+
+## Database Paths
+
+The daemon opens three SQLite databases. Each path defaults to the shared Mimir data directory (`<data_dir>/context.db`, `<data_dir>/knowledge.db`, `<data_dir>/jobs.db`) but can be overridden independently, mirroring the `context.db_path` pattern. This lets tests isolate every database inside a tempdir and lets multi-instance / dev setups point a single database at an alternate location (issue #233).
+
+| Database | Config field | Env override | Default | Consumer |
+|---------|-------------|-------------|---------|---------|
+| Context (conversation history) | `context.db_path` | `MIMIR_CONTEXT_DB_PATH` | `<data_dir>/context.db` | `ContextManager` |
+| Knowledge graph | `knowledge.db_path` | `MIMIR_KNOWLEDGE_DB_PATH` | `<data_dir>/knowledge.db` | `KnowledgeGraph` |
+| Job queue | `scheduler.db_path` | `MIMIR_JOBS_DB_PATH` | `<data_dir>/jobs.db` | `JobQueue` |
+
+When a path is unset the daemon falls back to the corresponding `paths::*_db_path()` resolver. Knowledge-graph backups (`<knowledge_db_path parent>/backups`) are written alongside the knowledge DB so an overridden `knowledge.db_path` keeps backups in the same isolated directory.
+
 ## Extending the Configuration
 
 1. Add the new field to the appropriate struct (`LlmConfig`, `AgentConfig`, or `MemoryConfig`).

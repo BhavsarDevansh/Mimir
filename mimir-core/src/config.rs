@@ -198,6 +198,12 @@ pub struct SchedulerConfig {
     pub debounce_seconds: u8,
     /// Seconds to wait after last user activity before dispatching.
     pub cooldown_seconds: u16,
+    /// Optional override for the job-queue SQLite database path. When unset,
+    /// the daemon resolves the default (`<data_dir>/jobs.db`) via
+    /// [`paths::jobs_db_path`]. Mirrors `context.db_path` so tests and
+    /// multi-instance setups can isolate the jobs DB from the shared data
+    /// directory (issue #233).
+    pub db_path: Option<PathBuf>,
 }
 
 /// User identity settings.
@@ -215,6 +221,12 @@ pub struct KnowledgeConfig {
     pub optimization: KnowledgeOptimizationConfig,
     pub pending_cleanup: PendingCleanupConfig,
     pub events: EventsConfig,
+    /// Optional override for the knowledge-graph SQLite database path.
+    /// When unset, the daemon resolves the default (`<data_dir>/knowledge.db`)
+    /// via [`paths::knowledge_db_path`]. Mirrors `context.db_path` so tests
+    /// and multi-instance setups can isolate the knowledge DB from the
+    /// shared data directory (issue #233).
+    pub db_path: Option<PathBuf>,
 }
 
 /// Knowledge graph nightly optimization settings.
@@ -385,6 +397,7 @@ impl Default for SchedulerConfig {
         Self {
             debounce_seconds: 5,
             cooldown_seconds: 60,
+            db_path: None,
         }
     }
 }
@@ -558,12 +571,18 @@ condensation_top_n = 500
 [scheduler]
 debounce_seconds = 5
 cooldown_seconds = 60
+# db_path is resolved automatically; override only if needed.
+# db_path = "${USER_DATA_DIR}/mimir/jobs.db"
 
 [context]
 max_turns = 20
 # db_path is resolved automatically; override only if needed.
 # db_path = "${USER_DATA_DIR}/mimir/context.db"
 # max_tokens = 4096  # Optional: token budget for conversation history
+
+[knowledge]
+# db_path is resolved automatically; override only if needed.
+# db_path = "${USER_DATA_DIR}/mimir/knowledge.db"
 
 [personality]
 preset = "transparent"
@@ -658,6 +677,12 @@ horizon_days = 30
         set_from_env!("MIMIR_CONTEXT_MAX_TURNS", self.context.max_turns, u16);
         if let Some(v) = getenv("MIMIR_CONTEXT_DB_PATH") {
             self.context.db_path = Some(PathBuf::from(v));
+        }
+        if let Some(v) = getenv("MIMIR_KNOWLEDGE_DB_PATH") {
+            self.knowledge.db_path = Some(PathBuf::from(v));
+        }
+        if let Some(v) = getenv("MIMIR_JOBS_DB_PATH") {
+            self.scheduler.db_path = Some(PathBuf::from(v));
         }
         set_from_env!("MIMIR_PERSONALITY_PRESET", self.personality.preset);
         set_from_env!("MIMIR_SERVER_BIND_ADDR", self.server.bind_addr);
@@ -878,6 +903,24 @@ mod tests {
         assert_eq!(
             config.context.db_path,
             Some(PathBuf::from("/tmp/mimir/context.db"))
+        );
+    }
+
+    #[test]
+    fn test_env_override_db_paths() {
+        let mut config = Config::default();
+        config.apply_env_overrides_with(|key| match key {
+            "MIMIR_KNOWLEDGE_DB_PATH" => Some("/tmp/mimir/knowledge.db".to_string()),
+            "MIMIR_JOBS_DB_PATH" => Some("/tmp/mimir/jobs.db".to_string()),
+            _ => None,
+        });
+        assert_eq!(
+            config.knowledge.db_path,
+            Some(PathBuf::from("/tmp/mimir/knowledge.db"))
+        );
+        assert_eq!(
+            config.scheduler.db_path,
+            Some(PathBuf::from("/tmp/mimir/jobs.db"))
         );
     }
 

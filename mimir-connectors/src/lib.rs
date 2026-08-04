@@ -64,6 +64,11 @@
 
 pub mod connector;
 pub mod geocoder;
+/// Shared iCalendar VEVENT parsing + fact extraction (Phase 3 C4 / #198
+/// and C6 / #200). Needed by both the Calendar and Email backends that
+/// consume iCalendar data; gated by `any(feature = "calendar", feature = "gmail")`.
+#[cfg(any(feature = "calendar", feature = "gmail"))]
+pub mod ical;
 pub mod mock;
 mod oauth;
 pub mod rate_limit;

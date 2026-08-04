@@ -132,6 +132,13 @@ rustls-native-certs = { version = "0.8", optional = true }
 # `futures` streams the `uid_fetch` response (async-imap returns an impl
 # `Stream`). Already in the tree at 0.3.x, so no new download. Gated by `gmail`.
 futures = { version = "0.3", optional = true }
+# C6 (issue #200): email mail parsing. `mail-parser` (0.11.5, latest stable;
+# the issue spec's 0.11.4 is one patch behind) is the RFC 5322 / MIME parser
+# that turns the staged RFC 822 bytes into a structured `Message` (headers,
+# addresses, MIME parts). It decodes charsets / transfer encodings and exposes
+# the `text/calendar` iMIP parts this issue extracts. License MIT/Apache-2.0
+# (GPL-3-compatible). Gated by the `gmail` feature.
+mail-parser = { version = "0.11.5", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
@@ -145,4 +152,4 @@ photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"]
 ## CalDAV calendar ingestion: read/sync + event fact extraction (C3–C4).
 calendar = ["dep:icalendar", "dep:roxmltree", "dep:chrono-tz", "dep:uuid"]
 ## IMAP email ingestion, Gmail and other providers (C5–C7).
-gmail = ["dep:async-imap", "dep:base64", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures"]
+gmail = ["dep:async-imap", "dep:base64", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures", "dep:icalendar", "dep:chrono-tz", "dep:mail-parser"]

@@ -40,7 +40,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
@@ -53,11 +53,7 @@ use crate::connector::{
     ConnectorMode, HealthStatus, SyncOptions, SyncOutcome,
 };
 use crate::secrets::{SecretBundle, SecretStore};
-use mimir_knowledge::models::entity::EntityType;
-use mimir_knowledge::models::enums::{
-    ConnectorAuthState, ConnectorType, EventType, RecurrenceType,
-};
-use mimir_knowledge::models::source::SourceType;
+use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType};
 use mimir_knowledge::normalize::NormalizedFact;
 
 // ---------------------------------------------------------------------------
@@ -415,88 +411,19 @@ impl CalendarConnector {
     ///    `Person` entity via F5. Like the location fact it carries no
     ///    temporal bounds and spawns no overlay.
     fn event_to_facts(&self, event: &RawCalDavEvent) -> Vec<NormalizedFact> {
-        let Some(start) = event.starts_at else {
-            debug!(href = %event.href, "skipping event with no parseable DTSTART");
-            return Vec::new();
-        };
-        // The event entity is named by its SUMMARY (falling back to the UID)
-        // so the primary, location, and attendee facts all resolve to the
-        // same `Event` entity.
-        let event_name = match non_empty(event.summary.as_deref()) {
-            Some(name) => name.to_string(),
-            None => match non_empty(event.uid.as_deref()) {
-                Some(uid) => uid.to_string(),
-                None => {
-                    debug!(href = %event.href, "skipping event with no summary or uid");
-                    return Vec::new();
-                }
-            },
-        };
-        let raw_ref = event.uid.clone().unwrap_or_else(|| event.href.clone());
-        let recurrence = rrule_to_recurrence(event.recurrence_rule.as_deref());
-        // A recurring event keeps surfacing on every occurrence, so its fact
-        // must not expire after the first instance's `DTEND`. Leaving
-        // `valid_until` unset keeps the fact live for current-facts reads and
-        // supersession; a one-time event still carries its `DTEND` bound.
-        let valid_until = (recurrence == RecurrenceType::None)
-            .then_some(event.ends_at)
-            .flatten();
-
-        let mut facts = Vec::new();
-
-        // 1. Primary appointment fact (user-scoped when an identity is set).
-        if let Some(user) = self.user_identity.as_deref() {
-            facts.push(calendar_fact(
-                user.to_string(),
-                EntityType::Person,
-                "has_event",
-                event_name.clone(),
-                Some(EntityType::Event),
-                Some(start),
-                valid_until,
-                recurrence,
-                Some(EventType::Appointment),
-                &raw_ref,
-            ));
-        }
-
-        // 2. Location → Place entity (resolved via F5). Carries no temporal
-        //    bounds: a venue is a property of the event, not a trigger, so it
-        //    must not spawn its own events-subsystem overlay (#198 review).
-        if let Some(loc) = non_empty(event.location.as_deref()) {
-            facts.push(calendar_fact(
-                event_name.clone(),
-                EntityType::Event,
-                "located_in",
-                loc.to_string(),
-                Some(EntityType::Place),
-                None,
-                None,
-                RecurrenceType::None,
-                None,
-                &raw_ref,
-            ));
-        }
-
-        // 3. Attendees → Person entities (resolved via F5). Like the location
-        //    fact, attendance is a relationship, not a trigger, so it carries
-        //    no temporal bounds and spawns no overlay (#198 review).
-        for attendee in &event.attendees {
-            facts.push(calendar_fact(
-                attendee.clone(),
-                EntityType::Person,
-                "attending",
-                event_name.clone(),
-                Some(EntityType::Event),
-                None,
-                None,
-                RecurrenceType::None,
-                None,
-                &raw_ref,
-            ));
-        }
-
-        facts
+        // The VEVENT → fact cluster (`has_event` / `located_in` / `attending`)
+        // is shared with the Email iMIP extraction in
+        // [`crate::ical::vevent_to_facts`] (DRY). The CalDAV connector supplies
+        // the user identity and the provenance `raw_reference` (the VEVENT UID,
+        // falling back to the resource href) and delegates; entity resolution,
+        // confidence, and the events-subsystem overlay run in the shared
+        // `normalize_and_insert` pipeline.
+        let raw_ref = event
+            .vevent
+            .uid
+            .clone()
+            .unwrap_or_else(|| event.href.clone());
+        crate::ical::vevent_to_facts(self.user_identity.as_deref(), &event.vevent, &raw_ref)
     }
 
     /// Reject an event `href` that points outside the configured calendar
@@ -794,85 +721,6 @@ impl Connector for CalendarConnector {
 /// Constructs [`CalendarConnector`] instances from their persisted
 /// `config_json` + the shared [`SecretStore`] (Phase 3 C3 / #197).
 pub struct CalendarConnectorFactory;
-
-/// Map an iCalendar `RRULE` to the coarse [`RecurrenceType`] the
-/// events-subsystem (#74) advances.
-///
-/// Only the `FREQ` part maps: the existing recurrence engine is a per-`FREQ`
-/// next-occurrence model, so `COUNT`, `UNTIL`, `INTERVAL`, and `BYxxx` parts
-/// are out of scope (a calendar `RRULE` is far richer than the KB's
-/// recurrence axis). An absent or unparseable `RRULE` (and an unknown `FREQ`)
-/// yield [`RecurrenceType::None`] — the event is treated as one-time, which
-/// the events-subsystem auto-completes once its date passes.
-fn rrule_to_recurrence(rrule: Option<&str>) -> RecurrenceType {
-    let Some(rule) = rrule else {
-        return RecurrenceType::None;
-    };
-    for part in rule.split(';') {
-        let Some((key, value)) = part.split_once('=') else {
-            continue;
-        };
-        if key.eq_ignore_ascii_case("FREQ") {
-            return match value.trim().to_ascii_uppercase().as_str() {
-                "DAILY" => RecurrenceType::Daily,
-                "WEEKLY" => RecurrenceType::Weekly,
-                "MONTHLY" => RecurrenceType::Monthly,
-                "YEARLY" => RecurrenceType::Yearly,
-                _ => RecurrenceType::None,
-            };
-        }
-    }
-    RecurrenceType::None
-}
-
-/// Trim a string and return it only when non-empty (after trimming).
-fn non_empty(s: Option<&str>) -> Option<&str> {
-    s.map(str::trim).filter(|t| !t.is_empty())
-}
-
-/// Build a calendar-connector [`NormalizedFact`] with the shared connector
-/// defaults filled in: connector source type, non-sensitive, non-correction,
-/// no category ids, no location overlay, and a point-in-time `valid_from`.
-///
-/// All three calendar fact shapes (`has_event` / `located_in` / `attending`)
-/// share these defaults; the per-shape fields (subject, relationship, object,
-/// recurrence, event-type hint) are the arguments. Collapsing the struct
-/// literals here keeps the extractor readable and ensures the connector-level
-/// invariants (source type, sensitivity, raw reference) stay in one place.
-#[allow(clippy::too_many_arguments)] // constructor helper: every arg maps to a `NormalizedFact` field
-fn calendar_fact(
-    subject: String,
-    subject_type: EntityType,
-    relationship_type: &str,
-    object: String,
-    object_type: Option<EntityType>,
-    valid_from: Option<DateTime<Utc>>,
-    valid_until: Option<DateTime<Utc>>,
-    recurrence: RecurrenceType,
-    event_type: Option<EventType>,
-    raw_ref: &str,
-) -> NormalizedFact {
-    NormalizedFact {
-        source_type: SourceType::Connector,
-        subject,
-        subject_type,
-        relationship_type: relationship_type.to_string(),
-        object,
-        object_is_entity: true,
-        object_type,
-        valid_from,
-        valid_until,
-        is_sensitive: false,
-        is_correction: false,
-        correction_scope: None,
-        category_ids: Vec::new(),
-        recurrence,
-        requires_user_action: false,
-        raw_reference: Some(raw_ref.to_string()),
-        event_type,
-        location: None,
-    }
-}
 
 impl CalendarConnectorFactory {
     pub fn new() -> Self {

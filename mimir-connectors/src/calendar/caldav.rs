@@ -36,8 +36,6 @@ use tracing::warn;
 
 use crate::connector::ConnectorError;
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone as _, Utc};
-
 // ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
@@ -448,192 +446,40 @@ fn xml_escape(s: &str) -> String {
 // iCalendar parsing -> RawCalDavEvent
 // ---------------------------------------------------------------------------
 
-/// A parsed VEVENT staged in the connector's buffer (Phase 3 C3 / #197).
+/// A parsed CalDAV VEVENT staged in the connector's buffer (Phase 3 C3 / #197).
 ///
-/// Dates are parsed to UTC at staging time (C4 / #198): `DTSTART`/`DTEND` may
-/// be UTC (`...Z`), floating local, date-only, or `TZID`-qualified; the latter
-/// is resolved via `chrono-tz`. `attendees`/`organizer` carry resolved display
-/// names (the `CN` parameter, else the `mailto:` value) so the extractor can
-/// resolve them to `Person` entities via the full F5 chain. `recurrence_rule`
-/// stays a raw `RRULE` string; the extractor maps `FREQ` to
-/// [`RecurrenceType`](mimir_knowledge::models::enums::RecurrenceType) so the
-/// existing events-subsystem recurrence logic advances recurring events.
+/// Wraps the shared intrinsic [`crate::ical::RawVEvent`] with the
+/// CalDAV-specific provenance the connector needs: the resource `href` (the
+/// item id) and the `etag` (for conditional write-back). The intrinsic VEVENT
+/// fields and UTC-resolved dates live in [`RawVEvent`], shared with the Email
+/// iMIP extraction (C6 / #200); the VEVENT parsing + fact-extraction logic
+/// lives in [`crate::ical`] (DRY).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawCalDavEvent {
+    /// The shared intrinsic VEVENT fields (UID, SUMMARY, dates, location,
+    /// description, status, attendees, organiser, RRULE).
+    pub vevent: crate::ical::RawVEvent,
     /// The CalDAV resource href (the item id).
     pub href: String,
     /// ETag, if known.
     pub etag: Option<String>,
-    /// `UID` property.
-    pub uid: Option<String>,
-    /// `SUMMARY` property.
-    pub summary: Option<String>,
-    /// Parsed `DTSTART` resolved to UTC. `None` when the value is absent or
-    /// unparseable (the extractor skips events without a start).
-    pub starts_at: Option<DateTime<Utc>>,
-    /// Parsed `DTEND` resolved to UTC. `None` when absent (an all-day or
-    /// unbounded event); the extractor treats the event as point-in-time.
-    pub ends_at: Option<DateTime<Utc>>,
-    /// `LOCATION` property.
-    pub location: Option<String>,
-    /// `DESCRIPTION` property.
-    pub description: Option<String>,
-    /// `STATUS` property.
-    pub status: Option<String>,
-    /// `RRULE` property (recurrence; C4 / events-subsystem #74 owns this).
-    pub recurrence_rule: Option<String>,
-    /// Resolved display names of every `ATTENDEE` (the `CN` parameter, else
-    /// the `mailto:` value), in document order.
-    pub attendees: Vec<String>,
-    /// Resolved display name of the `ORGANIZER`, if present.
-    pub organizer: Option<String>,
 }
 
-/// Parse an iCalendar payload into the VEVENTs it contains.
+/// Parse an iCalendar payload into the CalDAV resources it contains.
 ///
-/// Returns one [`RawCalDavEvent`] per `VEVENT`. An empty/invalid payload yields
-/// an empty vec (the connector logs and skips rather than failing the sync),
-/// so one malformed event never aborts a whole sync.
+/// Returns one [`RawCalDavEvent`] per `VEVENT`, wrapping the shared
+/// [`crate::ical::RawVEvent`] with the CalDAV `href`/`etag`. An empty/invalid
+/// payload yields an empty vec (the connector logs and skips rather than
+/// failing the sync), so one malformed event never aborts a whole sync.
 pub fn parse_icalendar(ical: &str, href: &str, etag: Option<&str>) -> Vec<RawCalDavEvent> {
-    // The low-level parser (`icalendar::parser`) yields a zero-copy
-    // `Calendar` whose top-level `components` are the VEVENT/VTODO/VTIMEZONE
-    // entries. We walk the low-level representation directly (the high-level
-    // `icalendar::Calendar` is builder-oriented and has no parse-from-str
-    // path in 0.17.x). `find_prop` + `ParseString::as_str` give owned copies
-    // so the staged events outlive the borrowed input; `params` expose the
-    // `TZID`/`CN` parameters C4 needs for UTC resolution and attendee names.
-    use icalendar::parser::read_calendar;
-    let Ok(calendar) = read_calendar(ical) else {
-        return Vec::new();
-    };
-    calendar
-        .components
-        .iter()
-        .filter(|c| c.name.as_str() == "VEVENT")
-        .map(|event| {
-            let prop_str = |key: &str| event.find_prop(key).map(|p| p.val.as_str().to_string());
-            // Read a property's `TZID` parameter (case-insensitive key).
-            let tzid_of = |key: &str| {
-                event.find_prop(key).and_then(|p| {
-                    p.params
-                        .iter()
-                        .find(|q| q.key.as_ref().eq_ignore_ascii_case("TZID"))
-                        .and_then(|q| q.val.as_ref().map(|v| v.as_str().to_string()))
-                })
-            };
-            let starts_at = event
-                .find_prop("DTSTART")
-                .and_then(|p| parse_ical_datetime(p.val.as_str(), tzid_of("DTSTART").as_deref()));
-            let ends_at = event
-                .find_prop("DTEND")
-                .and_then(|p| parse_ical_datetime(p.val.as_str(), tzid_of("DTEND").as_deref()));
-            let attendees = event
-                .properties
-                .iter()
-                .filter(|p| p.name.as_ref().eq_ignore_ascii_case("ATTENDEE"))
-                .filter_map(|p| participant_display(p))
-                .collect();
-            let organizer = event
-                .find_prop("ORGANIZER")
-                .and_then(|p| participant_display(p));
-            RawCalDavEvent {
-                href: href.to_string(),
-                etag: etag.map(str::to_string),
-                uid: prop_str("UID"),
-                summary: prop_str("SUMMARY"),
-                starts_at,
-                ends_at,
-                location: prop_str("LOCATION"),
-                description: prop_str("DESCRIPTION"),
-                status: prop_str("STATUS"),
-                recurrence_rule: prop_str("RRULE"),
-                attendees,
-                organizer,
-            }
+    crate::ical::parse_ical_to_vevents(ical)
+        .into_iter()
+        .map(|vevent| RawCalDavEvent {
+            vevent,
+            href: href.to_string(),
+            etag: etag.map(str::to_string),
         })
         .collect()
-}
-
-// ---------------------------------------------------------------------------
-// iCalendar value helpers (C4 / #198)
-// ---------------------------------------------------------------------------
-
-/// Parse an iCalendar `DATE-TIME` / `DATE` value into UTC.
-///
-/// Forms handled (RFC 5545 §3.3.5): UTC (`20250503T090000Z`), floating local
-/// time (treated as UTC — the "FORM #1" red-flag case, rare in real exports),
-/// date-only (`20250503` → midnight UTC), and `TZID`-qualified local
-/// (`DTSTART;TZID=Europe/London:20250503T090000`). The latter is resolved via
-/// `chrono-tz`; an *unknown* zone or an ambiguous local time (rare DST fold)
-/// falls back to the naive value read as UTC so a bad `TZID` never silently
-/// drops the event. Returns `None` only when the value cannot be parsed at all.
-fn parse_ical_datetime(value: &str, tzid: Option<&str>) -> Option<DateTime<Utc>> {
-    const NAIVE_FMT: &str = "%Y%m%dT%H%M%S";
-    const DATE_FMT: &str = "%Y%m%d";
-
-    // UTC form (`20250503T090000Z`): strip the trailing `Z`, parse the naive
-    // datetime, and label it UTC. Avoids the deprecated
-    // `TimeZone::datetime_from_str`.
-    if let Some(rest) = value.strip_suffix('Z') {
-        if let Ok(naive) = NaiveDateTime::parse_from_str(rest, NAIVE_FMT) {
-            return Some(naive.and_utc());
-        }
-    }
-    if let Some(tz) = tzid {
-        if let Ok(naive) = NaiveDateTime::parse_from_str(value, NAIVE_FMT) {
-            if let Ok(zone) = tz.parse::<chrono_tz::Tz>() {
-                // An ambiguous autumn-fold local time resolves to a single
-                // instant when unambiguous; otherwise prefer the earliest
-                // offset (keeping the value within an hour of the wall clock)
-                // before falling back to naive-as-UTC. A spring-forward gap
-                // (`None` from both) still hits the fallback below.
-                let local = zone
-                    .from_local_datetime(&naive)
-                    .single()
-                    .or_else(|| zone.from_local_datetime(&naive).earliest());
-                if let Some(local) = local {
-                    return Some(local.with_timezone(&Utc));
-                }
-            }
-            // Unknown zone or genuinely ambiguous/unrepresentable local time:
-            // read the naive value as UTC so a bad `TZID` never drops the event.
-            return Some(naive.and_utc());
-        }
-    }
-    if let Ok(naive) = NaiveDateTime::parse_from_str(value, NAIVE_FMT) {
-        return Some(naive.and_utc());
-    }
-    if let Ok(date) = NaiveDate::parse_from_str(value, DATE_FMT) {
-        let naive = date.and_hms_opt(0, 0, 0)?;
-        return Utc.from_local_datetime(&naive).single();
-    }
-    None
-}
-
-/// Extract a human display name from an `ATTENDEE`/`ORGANIZER` property.
-///
-/// Prefers the `CN` ("common name") parameter (surrounding quotes stripped);
-/// otherwise strips a `mailto:` scheme from the value. Returns `None` for an
-/// empty result so it is naturally filtered out of the attendees list.
-fn participant_display(prop: &icalendar::parser::Property<'_>) -> Option<String> {
-    let cn = prop
-        .params
-        .iter()
-        .find(|p| p.key.as_ref().eq_ignore_ascii_case("CN"))
-        .and_then(|p| p.val.as_ref().map(|v| v.as_str().to_string()))
-        .map(|s| s.trim_matches('"').to_string())
-        .filter(|s| !s.is_empty());
-    if let Some(name) = cn {
-        return Some(name);
-    }
-    let val = prop.val.as_str();
-    let name = val.strip_prefix("mailto:").unwrap_or(val).trim();
-    let name = name.trim_matches('"');
-    if name.is_empty() {
-        None
-    } else {
-        Some(name.to_string())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -643,6 +489,7 @@ fn participant_display(prop: &icalendar::parser::Property<'_>) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{TimeZone as _, Utc};
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -892,82 +739,34 @@ END:VCALENDAR";
         let events = parse_icalendar(ICAL_EVENT, "/cal/uid-1.ics", Some("\"e1\""));
         assert_eq!(events.len(), 1);
         let e = &events[0];
-        assert_eq!(e.uid.as_deref(), Some("uid-1@test"));
-        assert_eq!(e.summary.as_deref(), Some("Trip to Rome"));
+        assert_eq!(e.vevent.uid.as_deref(), Some("uid-1@test"));
+        assert_eq!(e.vevent.summary.as_deref(), Some("Trip to Rome"));
         assert_eq!(
-            e.starts_at,
+            e.vevent.starts_at,
             Some(Utc.with_ymd_and_hms(2025, 5, 3, 9, 0, 0).unwrap())
         );
         assert_eq!(
-            e.ends_at,
+            e.vevent.ends_at,
             Some(Utc.with_ymd_and_hms(2025, 5, 7, 18, 0, 0).unwrap())
         );
-        assert!(e.attendees.is_empty());
-        assert!(e.organizer.is_none());
-        assert_eq!(e.location.as_deref(), Some("Rome"));
-        assert_eq!(e.status.as_deref(), Some("CONFIRMED"));
-        assert!(e.recurrence_rule.is_none());
+        assert!(e.vevent.attendees.is_empty());
+        assert!(e.vevent.organizer.is_none());
+        assert_eq!(e.vevent.location.as_deref(), Some("Rome"));
+        assert_eq!(e.vevent.status.as_deref(), Some("CONFIRMED"));
+        assert!(e.vevent.recurrence_rule.is_none());
 
         let rec = parse_icalendar(ICAL_RECURRING, "/cal/b.ics", None);
         assert_eq!(rec.len(), 1);
-        assert_eq!(rec[0].recurrence_rule.as_deref(), Some("FREQ=YEARLY"));
+        assert_eq!(
+            rec[0].vevent.recurrence_rule.as_deref(),
+            Some("FREQ=YEARLY")
+        );
     }
 
     #[test]
     fn parse_icalendar_invalid_payload_returns_empty() {
         assert!(parse_icalendar("not ical at all", "/x.ics", None).is_empty());
         assert!(parse_icalendar("", "/x.ics", None).is_empty());
-    }
-
-    #[test]
-    fn parse_ical_datetime_utc_date_only_and_floating() {
-        assert_eq!(
-            parse_ical_datetime("20250503T090000Z", None),
-            Some(Utc.with_ymd_and_hms(2025, 5, 3, 9, 0, 0).unwrap())
-        );
-        // Date-only → midnight UTC.
-        assert_eq!(
-            parse_ical_datetime("20250503", None),
-            Some(Utc.with_ymd_and_hms(2025, 5, 3, 0, 0, 0).unwrap())
-        );
-        // Floating local (no Z, no TZID) is read as UTC.
-        assert_eq!(
-            parse_ical_datetime("20250503T090000", None),
-            Some(Utc.with_ymd_and_hms(2025, 5, 3, 9, 0, 0).unwrap())
-        );
-        assert!(parse_ical_datetime("not-a-date", None).is_none());
-    }
-
-    #[test]
-    fn parse_ical_datetime_tzid_resolves_with_dst() {
-        // 09:00 Europe/London on 2025-07-03 is BST (+01:00) → 08:00 UTC.
-        assert_eq!(
-            parse_ical_datetime("20250703T090000", Some("Europe/London")),
-            Some(Utc.with_ymd_and_hms(2025, 7, 3, 8, 0, 0).unwrap())
-        );
-        // Winter: 09:00 GMT → 09:00 UTC.
-        assert_eq!(
-            parse_ical_datetime("20250103T090000", Some("Europe/London")),
-            Some(Utc.with_ymd_and_hms(2025, 1, 3, 9, 0, 0).unwrap())
-        );
-        // An unknown TZID falls back to the naive value read as UTC (event
-        // is not silently dropped).
-        assert_eq!(
-            parse_ical_datetime("20250103T090000", Some("Mars/Olympus")),
-            Some(Utc.with_ymd_and_hms(2025, 1, 3, 9, 0, 0).unwrap())
-        );
-    }
-    #[test]
-    fn parse_ical_datetime_tzid_autumn_fold_prefers_earliest_offset() {
-        // The Europe/London clocks-back fold on 2025-10-26 makes 01:30 local
-        // ambiguous: it occurs once under BST (+01:00 → 00:30 UTC) and again
-        // under GMT (+00:00 → 01:30 UTC). The earliest offset is preferred so
-        // the event stays within an hour of the wall clock rather than
-        // shifting by the full zone offset via the naive-as-UTC fallback.
-        assert_eq!(
-            parse_ical_datetime("20251026T013000", Some("Europe/London")),
-            Some(Utc.with_ymd_and_hms(2025, 10, 26, 0, 30, 0).unwrap())
-        );
     }
 
     #[test]
@@ -989,17 +788,17 @@ END:VCALENDAR";
         assert_eq!(events.len(), 1);
         let e = &events[0];
         assert_eq!(
-            e.starts_at,
+            e.vevent.starts_at,
             Some(Utc.with_ymd_and_hms(2025, 7, 3, 8, 0, 0).unwrap())
         );
         assert_eq!(
-            e.ends_at,
+            e.vevent.ends_at,
             Some(Utc.with_ymd_and_hms(2025, 7, 3, 8, 30, 0).unwrap())
         );
-        assert_eq!(e.organizer.as_deref(), Some("Devansh Bhavsar"));
+        assert_eq!(e.vevent.organizer.as_deref(), Some("Devansh Bhavsar"));
         // CN present → name; no CN → mailto value; empty CN → mailto value.
         assert_eq!(
-            e.attendees,
+            e.vevent.attendees,
             vec!["Alice", "bob@example.com", "empty@example.com"]
         );
     }

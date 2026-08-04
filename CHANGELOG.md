@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.86.1] — 2026-08-04
+
+### Connectors — Email JSON-LD extraction review follow-up (PR #257, #249)
+
+- **Data integrity (reservation start-time gating):** the primary `Appointment`-typed JSON-LD reservation facts (`FlightReservation` `has_flight`, `LodgingReservation` `has_booking`, `EventReservation` `has_event`) now require a parseable start time (`departureTime` / `checkinDate` / `startDate`) before emission, matching the iMIP layer's `DTSTART` requirement so the events subsystem cannot create an appointment overlay without a `valid_from`. Secondary facts (airports, airlines, venues) are still always emitted.
+- **Data integrity (self-referential `located_in`):** `LodgingReservation` no longer emits a `located_in` fact when the resolved location equals the booking name (e.g. `Grand Hotel located_in Grand Hotel`); a distinct address is required.
+- **Functional correctness (numeric identifiers):** `string_or_name_field` and the `iataCode` / `flightNumber` lookups now accept JSON numbers (producers commonly emit `orderNumber` / `trackingNumber` / `ticketNumber` as numbers) and trim array-wrapped string values, via a new shared `scalar_string` helper. Numeric `orderNumber`, `trackingNumber`, `ticketNumber`, `flightNumber`, and `iataCode` no longer drop their fact cluster.
+- **Functional correctness (datetime parsing):** `parse_datetime` now accepts naive datetimes with fractional seconds (`...T10:00:00.500`) and minute-only precision (`...T10:00`) in addition to RFC 3339, second-precision naive, and date-only inputs.
+- **HTML scanner (spec compliance):** `<script type="...">` attribute values are now trimmed before the `application/ld+json` comparison, matching the HTML5 rule that browsers strip ASCII whitespace from the `type` attribute.
+- **Encapsulation:** `mimir-connectors/src/email/mod.rs` narrows `pub mod jsonld;` to `pub(crate) mod jsonld;` (the module has no out-of-crate references).
+- **Docs:** `docs/email-connector.md` and `README.md` updated (cascade layer count corrected; C7 / #201 marked as still open; emission rules and numeric/datetime handling documented). A known limitation — iMIP + JSON-LD both firing on one email can produce duplicate `Event` entities — is now documented inline in `extract()`.
+- **Tests:** new unit tests cover the start-time gating (flight/lodging/event), the self-referential `located_in` skip, numeric identifiers (order/tracking/ticket/flight/iata), trimmed array values, padded `type` attribute, and the fractional/minute-only datetime shapes.
+
 ## [0.86.0] — 2026-08-04
 
 ### Connectors — Email schema.org JSON-LD deterministic extraction (#249)

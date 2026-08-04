@@ -148,7 +148,9 @@ pub(crate) fn extract_jsonld_blocks(html: &str) -> Vec<&str> {
 /// `type="application/ld+json"` (case-insensitive).
 fn has_jsonld_type(tag_inner: &str) -> bool {
     for (name, value) in parse_html_attributes(tag_inner) {
-        if name.eq_ignore_ascii_case("type") && value.eq_ignore_ascii_case("application/ld+json") {
+        if name.eq_ignore_ascii_case("type")
+            && value.trim().eq_ignore_ascii_case("application/ld+json")
+        {
             return true;
         }
     }
@@ -346,7 +348,9 @@ fn jsonld_fact(
 ///
 /// Emits:
 /// 1. `user has_flight <flight>` (Event, `Appointment`, temporal =
-///    departure → arrival) — only when `user_identity` is set.
+///    departure → arrival) — only when `user_identity` is set **and** a
+///    parseable `departureTime` is present (an `Appointment` overlay needs a
+///    `valid_from`, matching the iMIP layer's `DTSTART` requirement).
 /// 2. `<flight> departs_from <airport>` (Place) — always.
 /// 3. `<flight> arrives_at <airport>` (Place) — always.
 /// 4. `<flight> operated_by <airline>` (Organization) — always.
@@ -377,14 +381,14 @@ fn flight_reservation_facts(
 
     let mut facts = Vec::new();
 
-    if let Some(user) = user {
+    if let (Some(user), Some(departure)) = (user, departure) {
         facts.push(jsonld_fact(
             user.to_string(),
             EntityType::Person,
             "has_flight",
             flight_name.clone(),
             Some(EntityType::Event),
-            departure,
+            Some(departure),
             arrival,
             Some(EventType::Appointment),
             raw_ref,
@@ -437,8 +441,10 @@ fn flight_reservation_facts(
 ///
 /// Emits:
 /// 1. `user has_booking <hotel>` (Event, `Appointment`, temporal = checkin →
-///    checkout) — only when `user_identity` is set.
-/// 2. `<booking> located_in <hotel>` (Place) — always.
+///    checkout) — only when `user_identity` is set **and** a parseable
+///    `checkinDate` is present (an `Appointment` overlay needs a `valid_from`).
+/// 2. `<booking> located_in <place>` (Place) — always, when a location
+///    distinct from the booking name is available.
 fn lodging_reservation_facts(
     user: Option<&str>,
     node: &serde_json::Map<String, Value>,
@@ -457,14 +463,14 @@ fn lodging_reservation_facts(
 
     let mut facts = Vec::new();
 
-    if let Some(user) = user {
+    if let (Some(user), Some(checkin)) = (user, checkin) {
         facts.push(jsonld_fact(
             user.to_string(),
             EntityType::Person,
             "has_booking",
             hotel_name.clone(),
             Some(EntityType::Event),
-            checkin,
+            Some(checkin),
             checkout,
             Some(EventType::Appointment),
             raw_ref,
@@ -472,23 +478,27 @@ fn lodging_reservation_facts(
     }
 
     // Location: prefer the lodging business address, fall back to the name.
+    // A location identical to the booking name carries no information, so it
+    // is skipped rather than emitted as a self-referential `located_in` fact.
     let loc_name = lodging
         .and_then(|l| l.get("address"))
         .and_then(|a| string_or_name_field(a.as_object()?, "streetAddress"))
         .or_else(|| lodging.and_then(|l| string_or_name_field(l, "name")))
-        .unwrap_or(hotel_name.clone());
+        .filter(|loc| loc != &hotel_name);
 
-    facts.push(jsonld_fact(
-        hotel_name,
-        EntityType::Event,
-        "located_in",
-        loc_name,
-        Some(EntityType::Place),
-        None,
-        None,
-        None,
-        raw_ref,
-    ));
+    if let Some(loc_name) = loc_name {
+        facts.push(jsonld_fact(
+            hotel_name,
+            EntityType::Event,
+            "located_in",
+            loc_name,
+            Some(EntityType::Place),
+            None,
+            None,
+            None,
+            raw_ref,
+        ));
+    }
     facts
 }
 
@@ -496,7 +506,8 @@ fn lodging_reservation_facts(
 ///
 /// Emits:
 /// 1. `user has_event <event>` (Event, `Appointment`, temporal = start → end)
-///    — only when `user_identity` is set.
+///    — only when `user_identity` is set **and** a parseable `startDate` is
+///    present (an `Appointment` overlay needs a `valid_from`).
 /// 2. `<event> located_in <venue>` (Place) — always, when a venue is present.
 fn event_reservation_facts(
     user: Option<&str>,
@@ -516,14 +527,14 @@ fn event_reservation_facts(
 
     let mut facts = Vec::new();
 
-    if let Some(user) = user {
+    if let (Some(user), Some(start)) = (user, start) {
         facts.push(jsonld_fact(
             user.to_string(),
             EntityType::Person,
             "has_event",
             event_name.clone(),
             Some(EntityType::Event),
-            start,
+            Some(start),
             end,
             Some(EventType::Appointment),
             raw_ref,
@@ -761,16 +772,29 @@ fn reservation_package_facts(
 // JSON-LD field helpers
 // ---------------------------------------------------------------------------
 
+/// Coerce a JSON scalar (`String` or `Number`) to a trimmed, non-empty
+/// string. schema.org types many identifier fields (`orderNumber`,
+/// `trackingNumber`, `ticketNumber`, `flightNumber`, `iataCode`) as `Text`,
+/// but producers frequently emit them as JSON numbers, so numbers are
+/// stringified rather than dropped.
+fn scalar_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(s) => {
+            let trimmed = s.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
 /// Extract a human-readable string from a value that may be a plain string
 /// or an object with a `name` field (the common `string-or-object` JSON-LD
 /// pattern).
 fn string_or_name(value: Option<&Value>) -> Option<String> {
     let value = value?;
     match value {
-        Value::String(s) => {
-            let trimmed = s.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        }
+        Value::String(_) => scalar_string(value),
         Value::Object(map) => string_or_name_field(map, "name"),
         _ => None,
     }
@@ -781,17 +805,13 @@ fn string_or_name(value: Option<&Value>) -> Option<String> {
 fn string_or_name_field(map: &serde_json::Map<String, Value>, field: &str) -> Option<String> {
     let val = map.get(field)?;
     match val {
-        Value::String(s) => {
-            let trimmed = s.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        }
         Value::Array(arr) => {
             // Some producers wrap a single value in an array.
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .find(|s| !s.trim().is_empty())
+            arr.iter().filter_map(scalar_string).next()
         }
-        _ => None,
+        // Strings and numbers are coerced by `scalar_string`; objects,
+        // booleans, and null are not name-like and yield `None`.
+        _ => scalar_string(val),
     }
 }
 
@@ -804,11 +824,7 @@ fn airport_name(value: Option<&Value>) -> Option<String> {
         if let Some(name) = string_or_name_field(obj, "name") {
             return Some(name);
         }
-        return obj
-            .get("iataCode")
-            .and_then(|v| v.as_str())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        return obj.get("iataCode").and_then(scalar_string);
     }
     // Bare string (e.g. "LHR").
     value
@@ -822,11 +838,7 @@ fn airport_name(value: Option<&Value>) -> Option<String> {
 /// or IATA codes.
 fn flight_name(flight: &serde_json::Map<String, Value>) -> Option<String> {
     let airline = string_or_name(flight.get("airline"));
-    let flight_num = flight
-        .get("flightNumber")
-        .and_then(|v| v.as_str())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let flight_num = flight.get("flightNumber").and_then(scalar_string);
 
     if let (Some(a), Some(n)) = (&airline, &flight_num) {
         return Some(format!("{a} {n}"));
@@ -842,14 +854,22 @@ fn flight_name(flight: &serde_json::Map<String, Value>) -> Option<String> {
 /// Parse an ISO 8601 / RFC 3339 datetime or date-only string into UTC.
 ///
 /// Handles full RFC 3339 (with timezone offset), naive datetime (treated as
-/// UTC), and date-only (`YYYY-MM-DD` → midnight UTC). Returns `None` for
-/// unparseable values so a bad date never drops the entire fact cluster.
+/// UTC), naive datetime (treated as UTC, with or without fractional seconds
+/// and with or without a seconds field), and date-only (`YYYY-MM-DD` →
+/// midnight UTC). Returns `None` for unparseable values so a bad date never
+/// drops the entire fact cluster.
 fn parse_datetime(value: &Value) -> Option<DateTime<Utc>> {
     let s = value.as_str()?;
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Some(dt.with_timezone(&Utc));
     }
     if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+        return Some(dt.and_utc());
+    }
+    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
+        return Some(dt.and_utc());
+    }
+    if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M") {
         return Some(dt.and_utc());
     }
     if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
@@ -913,6 +933,15 @@ mod tests {
     #[test]
     fn extract_jsonld_blocks_case_insensitive() {
         let html = r#"<SCRIPT TYPE="application/ld+json">{"@type":"Order"}</SCRIPT>"#;
+        let blocks = extract_jsonld_blocks(html);
+        assert_eq!(blocks.len(), 1);
+    }
+
+    #[test]
+    fn extract_jsonld_blocks_trims_whitespace_in_type_attribute() {
+        // HTML5 strips ASCII whitespace from the `type` attribute value before
+        // comparing it, so padded values must still match.
+        let html = r#"<script type=" application/ld+json ">{"@type":"Order"}</script>"#;
         let blocks = extract_jsonld_blocks(html);
         assert_eq!(blocks.len(), 1);
     }
@@ -1132,6 +1161,19 @@ mod tests {
         assert!(extract_node_facts(Some("Devansh"), nodes[0], "1:1").is_empty());
     }
 
+    #[test]
+    fn flight_reservation_without_departure_time_skips_primary() {
+        // An `Appointment` needs a `valid_from`; with no `departureTime` the
+        // primary `has_flight` fact is skipped, but secondary facts still fire.
+        let json = r#"{"@type":"FlightReservation","reservationFor":{"@type":"Flight","flightNumber":"123","airline":{"@type":"Airline","name":"BA"},"departureAirport":{"name":"LHR"},"arrivalAirport":{"name":"JFK"},"arrivalTime":"2025-08-15T14:00:00Z"}}"#;
+        let v: Value = serde_json::from_str(json).unwrap();
+        let nodes = flatten_nodes(&v);
+        let facts = extract_node_facts(Some("Devansh"), nodes[0], "1:1");
+        assert!(facts.iter().all(|f| f.relationship_type != "has_flight"));
+        // departs_from + arrives_at + operated_by
+        assert_eq!(facts.len(), 3);
+    }
+
     // --- LodgingReservation ----------------------------------------------
 
     #[test]
@@ -1158,10 +1200,38 @@ mod tests {
 
     #[test]
     fn lodging_reservation_without_identity_emits_location() {
+        // A distinct address is emitted as a secondary fact even without a
+        // canonical user identity.
+        let json = r#"{"@type":"LodgingReservation","checkinDate":"2025-08-20","checkoutDate":"2025-08-25","reservationFor":{"@type":"LodgingBusiness","name":"Grand Hotel","address":{"@type":"PostalAddress","streetAddress":"123 Via Roma"}}}"#;
+        let v: Value = serde_json::from_str(json).unwrap();
+        let nodes = flatten_nodes(&v);
+        let facts = extract_node_facts(None, nodes[0], "1:1");
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].relationship_type, "located_in");
+        assert_eq!(facts[0].object, "123 Via Roma");
+    }
+
+    #[test]
+    fn lodging_reservation_without_address_skips_self_referential_location() {
+        // No structured address: falling back to the booking name would emit
+        // `Grand Hotel located_in Grand Hotel`, so the fact is skipped.
         let json = r#"{"@type":"LodgingReservation","checkinDate":"2025-08-20","checkoutDate":"2025-08-25","reservationFor":{"@type":"LodgingBusiness","name":"Grand Hotel"}}"#;
         let v: Value = serde_json::from_str(json).unwrap();
         let nodes = flatten_nodes(&v);
         let facts = extract_node_facts(None, nodes[0], "1:1");
+        assert!(facts.is_empty());
+    }
+
+    #[test]
+    fn lodging_reservation_without_checkin_skips_primary() {
+        // No `checkinDate` → no `valid_from` → the primary `has_booking`
+        // `Appointment` fact is skipped. A distinct address still emits a
+        // secondary `located_in` fact.
+        let json = r#"{"@type":"LodgingReservation","checkoutDate":"2025-08-25","reservationFor":{"@type":"LodgingBusiness","name":"Grand Hotel","address":{"@type":"PostalAddress","streetAddress":"123 Via Roma"}}}"#;
+        let v: Value = serde_json::from_str(json).unwrap();
+        let nodes = flatten_nodes(&v);
+        let facts = extract_node_facts(Some("Devansh"), nodes[0], "1:1");
+        assert!(facts.iter().all(|f| f.relationship_type != "has_booking"));
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0].relationship_type, "located_in");
     }
@@ -1185,6 +1255,19 @@ mod tests {
         let loc = &facts[1];
         assert_eq!(loc.relationship_type, "located_in");
         assert_eq!(loc.object, "Royal Albert Hall");
+    }
+
+    #[test]
+    fn event_reservation_without_start_date_skips_primary() {
+        // No `startDate` → no `valid_from` → the primary `has_event`
+        // `Appointment` fact is skipped; the venue `located_in` still fires.
+        let json = r#"{"@type":"EventReservation","reservationFor":{"@type":"Event","name":"Symphony Concert","endDate":"2025-09-10T21:00:00+02:00","location":{"@type":"Place","name":"Royal Albert Hall"}}}"#;
+        let v: Value = serde_json::from_str(json).unwrap();
+        let nodes = flatten_nodes(&v);
+        let facts = extract_node_facts(Some("Devansh"), nodes[0], "1:1");
+        assert!(facts.iter().all(|f| f.relationship_type != "has_event"));
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].relationship_type, "located_in");
     }
 
     // --- Order ------------------------------------------------------------
@@ -1308,6 +1391,73 @@ mod tests {
         assert_eq!(string_or_name(Some(&Value::String("  ".into()))), None);
     }
 
+    // --- scalar identifiers (numbers, arrays) ----------------------------
+
+    #[test]
+    fn string_or_name_field_accepts_number() {
+        let v: Value = serde_json::from_str(r#"{"orderNumber":12345}"#).unwrap();
+        let map = v.as_object().unwrap();
+        assert_eq!(
+            string_or_name_field(map, "orderNumber"),
+            Some("12345".into())
+        );
+    }
+
+    #[test]
+    fn string_or_name_field_trims_array_entries() {
+        let v: Value = serde_json::from_str(r#"{"name":["  Acme  "]}"#).unwrap();
+        let map = v.as_object().unwrap();
+        assert_eq!(string_or_name_field(map, "name"), Some("Acme".into()));
+    }
+
+    #[test]
+    fn string_or_name_field_array_with_number() {
+        let v: Value = serde_json::from_str(r#"{"trackingNumber":[98765]}"#).unwrap();
+        let map = v.as_object().unwrap();
+        assert_eq!(
+            string_or_name_field(map, "trackingNumber"),
+            Some("98765".into())
+        );
+    }
+
+    #[test]
+    fn airport_name_accepts_numeric_iata_code() {
+        let v: Value = serde_json::from_str(r#"{"iataCode":123}"#).unwrap();
+        assert_eq!(airport_name(Some(&v)), Some("123".into()));
+    }
+
+    #[test]
+    fn flight_name_accepts_numeric_flight_number() {
+        let json = r#"{"@type":"FlightReservation","reservationFor":{"@type":"Flight","flightNumber":123,"airline":{"@type":"Airline","name":"BA"},"departureAirport":{"name":"LHR"},"arrivalAirport":{"name":"JFK"},"departureTime":"2025-08-15T10:00:00Z","arrivalTime":"2025-08-15T14:00:00Z"}}"#;
+        let v: Value = serde_json::from_str(json).unwrap();
+        let nodes = flatten_nodes(&v);
+        let facts = extract_node_facts(Some("Devansh"), nodes[0], "1:1");
+        let primary = &facts[0];
+        assert_eq!(primary.object, "BA 123");
+    }
+
+    #[test]
+    fn order_facts_accept_numeric_order_number() {
+        let json = r#"{"@type":"Order","orderNumber":12345,"merchant":{"@type":"Organization","name":"Acme Corp"}}"#;
+        let v: Value = serde_json::from_str(json).unwrap();
+        let nodes = flatten_nodes(&v);
+        let facts = extract_node_facts(Some("Devansh"), nodes[0], "1:1");
+        let primary = &facts[0];
+        assert_eq!(primary.relationship_type, "has_order");
+        assert_eq!(primary.object, "12345");
+    }
+
+    #[test]
+    fn parcel_delivery_facts_accept_numeric_tracking_number() {
+        let json = r#"{"@type":"ParcelDelivery","trackingNumber":987654321,"expectedArrivalFrom":"2025-08-05","expectedArrivalUntil":"2025-08-07","carrier":{"@type":"Organization","name":"DHL"}}"#;
+        let v: Value = serde_json::from_str(json).unwrap();
+        let nodes = flatten_nodes(&v);
+        let facts = extract_node_facts(Some("Devansh"), nodes[0], "1:1");
+        let primary = &facts[0];
+        assert_eq!(primary.relationship_type, "has_delivery");
+        assert_eq!(primary.object, "987654321");
+    }
+
     #[test]
     fn parse_datetime_rfc3339() {
         let v = Value::String("2025-08-15T10:00:00+01:00".into());
@@ -1333,6 +1483,27 @@ mod tests {
     #[test]
     fn parse_datetime_naive_treated_as_utc() {
         let v = Value::String("2025-08-15T10:00:00".into());
+        let dt = parse_datetime(&v).unwrap();
+        assert_eq!(
+            dt,
+            chrono::Utc.with_ymd_and_hms(2025, 8, 15, 10, 0, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_datetime_naive_with_fractional_seconds() {
+        let v = Value::String("2025-08-15T10:00:00.500".into());
+        let dt = parse_datetime(&v).unwrap();
+        assert_eq!(
+            dt,
+            chrono::Utc.with_ymd_and_hms(2025, 8, 15, 10, 0, 0).unwrap()
+                + chrono::Duration::milliseconds(500)
+        );
+    }
+
+    #[test]
+    fn parse_datetime_naive_minute_only() {
+        let v = Value::String("2025-08-15T10:00".into());
         let dt = parse_datetime(&v).unwrap();
         assert_eq!(
             dt,

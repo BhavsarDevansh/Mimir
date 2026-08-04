@@ -41,7 +41,7 @@
 //! [`SecretStore`](crate::secrets::SecretStore) under the connector slug.
 
 pub mod imap;
-pub mod jsonld;
+pub(crate) mod jsonld;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -811,6 +811,15 @@ impl Connector for EmailConnector {
                 // (Order, ParcelDelivery, FlightReservation, …). No LLM —
                 // pure Rust parsing. Runs on the same parsed Message as the
                 // iMIP layer (layer 1) so there is no second MIME parse.
+                //
+                // Known limitation: when a single email carries both an iMIP
+                // invite and an equivalent JSON-LD `EventReservation` for the
+                // same booking, both layers fire and the graph gains two
+                // `Event` entities / appointment overlays (the layers derive
+                // the event name from different fields, so
+                // `normalize_and_insert` does not dedupe them). Reconciling
+                // overlapping facts across cascade layers is tracked as
+                // follow-up work.
                 facts.extend(jsonld::extract_facts_from_message(
                     self.user_identity.as_deref(),
                     &message,

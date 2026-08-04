@@ -12,8 +12,10 @@
 //! C5 (#199) delivers the *transport* + `sync` that stages raw RFC 822
 //! messages in an internal buffer; [`EmailConnector::extract`] drains the
 //! buffer and returns an empty `Vec<NormalizedFact>` for now. C6 / #200
-//! implements the mail parsing + structured fact extraction
-//! (headers/dates/contacts, then LLM extraction for flights/bookings in C7).
+//! implements the mail parsing + iMIP calendar-invite extraction (layer 1 of
+//! the extraction cascade). #249 adds `schema.org` JSON-LD deterministic
+//! extraction (layer 2). C7 / #201 will add LLM extraction for unstructured
+//! prose (layer 3).
 //!
 //! # Mode — IDLE vs polling
 //!
@@ -39,6 +41,7 @@
 //! [`SecretStore`](crate::secrets::SecretStore) under the connector slug.
 
 pub mod imap;
+pub(crate) mod jsonld;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -769,16 +772,21 @@ impl Connector for EmailConnector {
     async fn extract(
         &self,
     ) -> Result<Vec<mimir_knowledge::normalize::NormalizedFact>, ConnectorError> {
-        // C6 / #200: drain the staged RFC 822 messages and run a deterministic
-        // (structured-parse) extraction *cascade* over each. Today the cascade
-        // has one layer — iMIP calendar invites (`text/calendar; method=REQUEST
-        // | REPLY`) parsed into the same VEVENT fact cluster the Calendar
-        // connector emits, via the shared [`crate::ical`] module. Plain prose
-        // emails (no `text/calendar` part) produce no facts: the email is
-        // *provenance*, not the fact — the fact is about the real-world thing
-        // the email conveys (an appointment), and prose confirmations, flights,
-        // bookings, and bank statements are read by the LLM layer in C7 / #201
-        // (and, for machine-readable `schema.org` JSON-LD, by #249). No
+        // C6 / #200 + #249: drain the staged RFC 822 messages and run a
+        // deterministic (structured-parse) extraction *cascade* over each. The
+        // cascade has two layers today:
+        //   1. iMIP calendar invites (`text/calendar; method=REQUEST | REPLY`)
+        //      parsed into the same VEVENT fact cluster the Calendar connector
+        //      emits, via the shared [`crate::ical`] module (C6 / #200).
+        //   2. schema.org JSON-LD (`<script type="application/ld+json">` in
+        //      HTML parts) parsed into typed fact clusters for Order,
+        //      ParcelDelivery, FlightReservation, LodgingReservation,
+        //      EventReservation, Ticket, and ReservationPackage (#249).
+        // Plain prose emails (no `text/calendar` part and no JSON-LD) produce
+        // no facts: the email is *provenance*, not the fact — the fact is about
+        // the real-world thing the email conveys, and unstructured prose
+        // confirmations, flights, and bank statements that carry no
+        // machine-readable JSON-LD are read by the LLM layer in C7 / #201. No
         // per-email communication facts are emitted and no `Person` entities
         // are auto-created from `From`/`To` headers, so marketing/spam produces
         // no junk facts.
@@ -797,6 +805,26 @@ impl Connector for EmailConnector {
             let raw_ref = format!("{}:{}", mail.uid_validity, mail.uid);
             if let Some(message) = MessageParser::default().parse(&mail.raw) {
                 facts.extend(self.extract_invites(&message, &raw_ref));
+                // Layer 2: schema.org JSON-LD deterministic extraction
+                // (#249). Scans HTML parts for <script type="application/ld+json">
+                // and emits typed facts for recognised schema.org types
+                // (Order, ParcelDelivery, FlightReservation, …). No LLM —
+                // pure Rust parsing. Runs on the same parsed Message as the
+                // iMIP layer (layer 1) so there is no second MIME parse.
+                //
+                // Known limitation: when a single email carries both an iMIP
+                // invite and an equivalent JSON-LD `EventReservation` for the
+                // same booking, both layers fire and the graph gains two
+                // `Event` entities / appointment overlays (the layers derive
+                // the event name from different fields, so
+                // `normalize_and_insert` does not dedupe them). Reconciling
+                // overlapping facts across cascade layers is tracked as
+                // follow-up work.
+                facts.extend(jsonld::extract_facts_from_message(
+                    self.user_identity.as_deref(),
+                    &message,
+                    &raw_ref,
+                ));
             } else {
                 debug!(uid = mail.uid, "could not parse RFC 822 message; skipping");
             }
@@ -1330,6 +1358,185 @@ END:VCALENDAR
         assert!(facts.is_empty(), "plain/marketing email → no facts");
     }
 
+    // --- #249: schema.org JSON-LD extraction (cascade layer 2) ---------------
+
+    /// Build a minimal RFC 822 email carrying an HTML body with one
+    /// `<script type="application/ld+json">` block containing a
+    /// `FlightReservation`. The plain-text alternative is included so the
+    /// HTML part is a real alternative body part, not the sole body.
+    pub(super) fn jsonld_flight_email() -> Vec<u8> {
+        r#"From: noreply@airline.com
+To: devansh@example.com
+Subject: Flight confirmation BA123
+Date: Mon, 04 Aug 2025 10:00:00 +0000
+Message-ID: <flight-1@airline.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="bnd"
+
+--bnd
+Content-Type: text/plain; charset="utf-8"
+
+Your flight is confirmed.
+--bnd
+Content-Type: text/html; charset="utf-8"
+
+<html><body>
+<h1>Flight confirmation</h1>
+<script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "FlightReservation",
+  "reservationId": "ABC123",
+  "passengerName": "Devansh Bhavsar",
+  "reservationFor": {
+    "@type": "Flight",
+    "flightNumber": "123",
+    "airline": { "@type": "Airline", "name": "British Airways" },
+    "departureAirport": { "@type": "Airport", "name": "Heathrow Airport", "iataCode": "LHR" },
+    "departureTime": "2099-08-15T10:00:00+01:00",
+    "arrivalAirport": { "@type": "Airport", "name": "Fiumicino Airport", "iataCode": "FCO" },
+    "arrivalTime": "2099-08-15T13:30:00+02:00"
+  }
+}</script>
+</body></html>
+--bnd--
+"#
+        .replace('\n', "\r\n")
+        .into_bytes()
+    }
+
+    /// An email with an HTML body containing an unrecognised JSON-LD type
+    /// (`Person`) — should produce no facts.
+    pub(super) fn jsonld_unrecognised_email() -> Vec<u8> {
+        r#"From: noreply@example.com
+To: devansh@example.com
+Subject: Hello
+Date: Mon, 04 Aug 2025 10:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="bnd"
+
+--bnd
+Content-Type: text/plain; charset="utf-8"
+
+Hello.
+--bnd
+Content-Type: text/html; charset="utf-8"
+
+<html><body>
+<script type="application/ld+json">{ "@type": "Person", "name": "Someone" }</script>
+</body></html>
+--bnd--
+"#
+        .replace('\n', "\r\n")
+        .into_bytes()
+    }
+
+    #[tokio::test]
+    async fn extract_jsonld_email_produces_flight_facts() {
+        let connector = connector_with_identity(Some("Devansh"));
+        connector.buffer.lock().await.push(imap::RawEmail {
+            uid: 99,
+            uid_validity: 17,
+            internal_date: None,
+            raw: jsonld_flight_email(),
+        });
+        let facts = connector.extract().await.expect("extract");
+        // 1 has_flight + 1 departs_from + 1 arrives_at + 1 operated_by = 4
+        assert!(
+            facts.iter().any(|f| f.relationship_type == "has_flight"),
+            "JSON-LD flight facts extracted: {:?}",
+            facts
+        );
+        assert_eq!(facts.len(), 4);
+        // Provenance: raw_reference is the UIDVALIDITY-qualified UID.
+        assert!(
+            facts
+                .iter()
+                .all(|f| f.raw_reference.as_deref() == Some("17:99")),
+            "raw_reference must be UIDVALIDITY-qualified UID: {:?}",
+            facts
+        );
+        // Buffer is drained.
+        assert!(connector.buffer.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn extract_jsonld_unrecognised_type_produces_no_facts() {
+        let connector = connector_with_identity(Some("Devansh"));
+        connector.buffer.lock().await.push(imap::RawEmail {
+            uid: 1,
+            uid_validity: 1,
+            internal_date: None,
+            raw: jsonld_unrecognised_email(),
+        });
+        let facts = connector.extract().await.expect("extract");
+        assert!(facts.is_empty(), "unrecognised JSON-LD type → no facts");
+    }
+
+    #[tokio::test]
+    async fn extract_cascade_runs_both_imip_and_jsonld_layers() {
+        // An email with both a text/calendar invite AND a JSON-LD
+        // EventReservation in the HTML body — both layers should produce facts.
+        let combined = r#"From: noreply@example.com
+To: devansh@example.com
+Subject: Event + invite
+Date: Mon, 04 Aug 2025 10:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer"
+
+--outer
+Content-Type: text/html; charset="utf-8"
+
+<html><body>
+<script type="application/ld+json">{ "@type": "EventReservation", "reservationFor": { "@type": "Event", "name": "JSON-LD Event", "startDate": "2025-09-10T19:30:00Z" } }</script>
+</body></html>
+--outer
+Content-Type: text/calendar; method=REQUEST; charset="utf-8"
+Content-Disposition: attachment; filename="invite.ics"
+
+BEGIN:VCALENDAR
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+UID:ical-1@example.com
+SUMMARY:iMIP Event
+DTSTART:20991120T140000Z
+DTEND:20991120T150000Z
+END:VEVENT
+END:VCALENDAR
+--outer--
+"#
+        .replace('\n', "\r\n")
+        .into_bytes();
+
+        let connector = connector_with_identity(Some("Devansh"));
+        connector.buffer.lock().await.push(imap::RawEmail {
+            uid: 50,
+            uid_validity: 3,
+            internal_date: None,
+            raw: combined,
+        });
+        let facts = connector.extract().await.expect("extract");
+        // Layer 1 (iMIP): 1 has_event for "iMIP Event"
+        // Layer 2 (JSON-LD): 1 has_event for "JSON-LD Event" + 0 location (none in fixture)
+        let has_event_count = facts
+            .iter()
+            .filter(|f| f.relationship_type == "has_event")
+            .count();
+        assert_eq!(
+            has_event_count, 2,
+            "both cascade layers should emit has_event: {:?}",
+            facts
+        );
+        assert!(
+            facts.iter().any(|f| f.object == "iMIP Event"),
+            "layer 1 iMIP fact present"
+        );
+        assert!(
+            facts.iter().any(|f| f.object == "JSON-LD Event"),
+            "layer 2 JSON-LD fact present"
+        );
+    }
+
     // --- C6 / #200: KB integration (F5 resolution, temporal bounds, provenance)
 
     use mimir_knowledge::KnowledgeGraph;
@@ -1518,6 +1725,100 @@ END:VCALENDAR
                         && s.extraction_method_id == Some(ExtractionMethod::StructuredParse as i16)
                 }),
                 "missing connector provenance on fact {}: {:?}",
+                f.id,
+                sources
+            );
+        }
+    }
+    #[tokio::test]
+    async fn extract_jsonld_funnels_into_kb_with_provenance() {
+        let (kg, _dir) = init_kg().await;
+        let row = kg
+            .upsert_connector(UpsertConnectorInput {
+                connector_type: ConnectorType::Gmail,
+                slug: "gmail-personal".to_string(),
+                backend: "imap".to_string(),
+                display_name: "Gmail".to_string(),
+                config_json: "{}".to_string(),
+                status: Some(ConnectorStatus::Active),
+                auth_state: Some(ConnectorAuthState::Authenticated),
+            })
+            .await
+            .unwrap();
+        let instance_id = row.id;
+
+        let connector = connector_with_identity(Some("Devansh"));
+        connector.buffer.lock().await.push(imap::RawEmail {
+            uid: 99,
+            uid_validity: 17,
+            internal_date: None,
+            raw: jsonld_flight_email(),
+        });
+        let facts = connector.extract().await.expect("extract");
+        assert_eq!(facts.len(), 4);
+
+        let outcome = normalize_and_insert(
+            &kg,
+            facts,
+            Provenance::connector(
+                instance_id,
+                ConnectorType::Gmail,
+                ExtractionMethod::StructuredParse,
+            ),
+        )
+        .await
+        .expect("normalize_and_insert");
+        assert!(outcome.pending_confirmation.is_empty());
+        assert_eq!(outcome.inserted.len(), 4);
+
+        // The user and the flight resolve to entities.
+        let devansh = entity_named(&kg, "Devansh").await.expect("Devansh entity");
+        let flight = entity_named(&kg, "British Airways 123")
+            .await
+            .expect("flight entity");
+
+        // Primary has_flight fact links user → flight event.
+        let mut has_flight = None;
+        for f in &outcome.inserted {
+            if kg
+                .relationship_type_name(f.relationship_type_id)
+                .await
+                .as_deref()
+                == Some("has_flight")
+            {
+                has_flight = Some(f);
+                break;
+            }
+        }
+        let has_flight = has_flight.expect("has_flight fact");
+        assert_eq!(has_flight.subject_id, devansh);
+        assert_eq!(has_flight.object_id, Some(flight));
+        assert!(has_flight.valid_from.is_some());
+        assert!(has_flight.valid_until.is_some());
+
+        // Events-subsystem overlay typed as Appointment (a flight is a
+        // time-bound event the user attends).
+        let overlay = kg
+            .get_event_by_fact(has_flight.id)
+            .await
+            .unwrap()
+            .expect("events-subsystem overlay for flight");
+        assert_eq!(overlay.event_type(), Some(EventType::Appointment));
+
+        // Provenance: every fact has a Connector source with the
+        // UIDVALIDITY-qualified UID and StructuredParse method.
+        for f in &outcome.inserted {
+            let sources = kg.get_sources_for_fact(f.id).await.unwrap();
+            assert!(
+                sources.iter().any(|s| {
+                    s.source_type_id
+                        == mimir_knowledge::models::source::SourceType::Connector as i16
+                        && s.connector_instance_id == Some(instance_id)
+                        && s.connector_type_id == Some(ConnectorType::Gmail as i16)
+                        && s.raw_reference.as_deref() == Some("17:99")
+                        && s.extraction_method_id == Some(ExtractionMethod::StructuredParse as i16)
+                }),
+                "missing connector provenance on JSON-LD fact {}: {:?}",
                 f.id,
                 sources
             );

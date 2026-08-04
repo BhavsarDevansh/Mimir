@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.86.2] — 2026-08-04
+
+### Connectors — Email JSON-LD extraction review follow-up (PR #257)
+
+- **Functional correctness (textual lodging addresses):** `LodgingReservation` location extraction now accepts a scalar textual `address` value (schema.org permits `address` as plain `Text` in addition to a `PostalAddress` object). Previously `a.as_object()?` dropped scalar addresses so the lodging-name fallback discarded a valid `located_in` fact. Scalar addresses are now coerced via `scalar_string` before the `streetAddress` lookup, while structured `PostalAddress` handling and the self-referential `located_in` skip are preserved. A regression test covering a textual address that produces the expected `located_in` fact is added.
+
+## [0.86.1] — 2026-08-04
+
+### Connectors — Email JSON-LD extraction review follow-up (PR #257, #249)
+
+- **Data integrity (reservation start-time gating):** the primary `Appointment`-typed JSON-LD reservation facts (`FlightReservation` `has_flight`, `LodgingReservation` `has_booking`, `EventReservation` `has_event`) now require a parseable start time (`departureTime` / `checkinDate` / `startDate`) before emission, matching the iMIP layer's `DTSTART` requirement so the events subsystem cannot create an appointment overlay without a `valid_from`. Secondary facts (airports, airlines, venues) are still always emitted.
+- **Data integrity (self-referential `located_in`):** `LodgingReservation` no longer emits a `located_in` fact when the resolved location equals the booking name (e.g. `Grand Hotel located_in Grand Hotel`); a distinct address is required.
+- **Functional correctness (numeric identifiers):** `string_or_name_field` and the `iataCode` / `flightNumber` lookups now accept JSON numbers (producers commonly emit `orderNumber` / `trackingNumber` / `ticketNumber` as numbers) and trim array-wrapped string values, via a new shared `scalar_string` helper. Numeric `orderNumber`, `trackingNumber`, `ticketNumber`, `flightNumber`, and `iataCode` no longer drop their fact cluster.
+- **Functional correctness (datetime parsing):** `parse_datetime` now accepts naive datetimes with fractional seconds (`...T10:00:00.500`) and minute-only precision (`...T10:00`) in addition to RFC 3339, second-precision naive, and date-only inputs.
+- **HTML scanner (spec compliance):** `<script type="...">` attribute values are now trimmed before the `application/ld+json` comparison, matching the HTML5 rule that browsers strip ASCII whitespace from the `type` attribute.
+- **Encapsulation:** `mimir-connectors/src/email/mod.rs` narrows `pub mod jsonld;` to `pub(crate) mod jsonld;` (the module has no out-of-crate references).
+- **Docs:** `docs/email-connector.md` and `README.md` updated (cascade layer count corrected; C7 / #201 marked as still open; emission rules and numeric/datetime handling documented). A known limitation — iMIP + JSON-LD both firing on one email can produce duplicate `Event` entities — is now documented inline in `extract()`.
+- **Tests:** new unit tests cover the start-time gating (flight/lodging/event), the self-referential `located_in` skip, numeric identifiers (order/tracking/ticket/flight/iata), trimmed array values, padded `type` attribute, and the fractional/minute-only datetime shapes.
+
+## [0.86.0] — 2026-08-04
+
+### Connectors — Email schema.org JSON-LD deterministic extraction (#249)
+
+- **New extraction layer:** `EmailConnector::extract()` gains a second deterministic (structured-parse) layer that scans `text/html` MIME parts for `<script type="application/ld+json">` blocks and extracts typed fact clusters for recognised `schema.org` types. This sits as layer 2 of the extraction cascade, between the iMIP calendar-invite layer (layer 1, #200) and the C7 LLM layer (#201, still open). No LLM — pure Rust parsing per the project rule "logic in Rust, not prompts".
+- **Recognised types:** `FlightReservation` (`user has_flight <flight>` typed `EventType::Appointment`, plus `departs_from` / `arrives_at` / `operated_by`), `LodgingReservation` (`has_booking`, `Appointment`, `located_in`), `EventReservation` (`has_event`, `Appointment`, `located_in`), `Order` (`has_order`, plus `purchased_from`), `ParcelDelivery` (`has_delivery` typed `Reminder`, plus `shipped_by` / `delivered_to`), `Ticket` (`has_ticket`, plus `issued_by`), and `ReservationPackage` (flattens `subReservation` for multi-leg flights). Unrecognised `@type` values are logged at `debug` level and skipped — never guessed.
+- **Provenance and user identity:** facts carry `source_type = Connector`, `extraction_method = StructuredParse`, and the email's `UIDVALIDITY`-qualified IMAP UID as `raw_reference` (matching the iMIP layer). The primary user-scoped fact is only emitted when a canonical user identity is configured (`ConnectorContext::user_identity`); secondary facts (airports, airlines, venues, carriers, merchants) are always emitted. Duplicate/re-sent transactional emails dedupe via the existing `normalize_and_insert` corroboration/supersession.
+- **New module:** `mimir-connectors/src/email/jsonld.rs` (gated by the `gmail` feature). The HTML `<script>` scanner is hand-rolled (spec-correct: HTML5 script content terminates at the first `</script>` end tag) — no new HTML parser dependency. The shared `vevent_fact` helper in `ical.rs` is made `pub(crate)` for DRY reuse (JSON-LD facts delegate to it with `RecurrenceType::None`).
+- **No new dependencies:** the module reuses the existing `serde_json`, `mail-parser`, and `chrono` crates.
+- **Tests:** unit tests for each recognised type, the HTML `<script>` scanner (standard, single-quoted, multi-attribute, case-insensitive, JavaScript-skipping, `data-type`-not-`type`), JSON-LD structural normalization (`@graph`, arrays, context wrappers), a cascade integration test (iMIP + JSON-LD from one email), and a KB integration test (flight fact entity resolution + `Appointment` events-subsystem overlay + connector provenance).
+- **Docs:** `docs/email-connector.md`, `docs/wiki/email-connector.md`, `docs/wiki/what-works-now.md`, and `README.md` updated.
+
 ## [0.85.2] — 2026-08-04
 
 ### Connectors — Email iMIP extraction review follow-up 2 (PR #253, #200)

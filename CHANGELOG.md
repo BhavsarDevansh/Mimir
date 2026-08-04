@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.86.2] — 2026-08-04
+
+### Connectors — Email JSON-LD extraction review follow-up (PR #257)
+
+- **Functional correctness (textual lodging addresses):** `LodgingReservation` location extraction now accepts a scalar textual `address` value (schema.org permits `address` as plain `Text` in addition to a `PostalAddress` object). Previously `a.as_object()?` dropped scalar addresses so the lodging-name fallback discarded a valid `located_in` fact. Scalar addresses are now coerced via `scalar_string` before the `streetAddress` lookup, while structured `PostalAddress` handling and the self-referential `located_in` skip are preserved. A regression test covering a textual address that produces the expected `located_in` fact is added.
+
 ## [0.86.1] — 2026-08-04
 
 ### Connectors — Email JSON-LD extraction review follow-up (PR #257, #249)

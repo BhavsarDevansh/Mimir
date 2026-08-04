@@ -482,7 +482,12 @@ fn lodging_reservation_facts(
     // is skipped rather than emitted as a self-referential `located_in` fact.
     let loc_name = lodging
         .and_then(|l| l.get("address"))
-        .and_then(|a| string_or_name_field(a.as_object()?, "streetAddress"))
+        .and_then(|a| match a {
+            // Structured `PostalAddress`: prefer the granular street field.
+            Value::Object(map) => string_or_name_field(map, "streetAddress"),
+            // schema.org permits `address` as plain text; use it directly.
+            _ => scalar_string(a),
+        })
         .or_else(|| lodging.and_then(|l| string_or_name_field(l, "name")))
         .filter(|loc| loc != &hotel_name);
 
@@ -1209,6 +1214,21 @@ mod tests {
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0].relationship_type, "located_in");
         assert_eq!(facts[0].object, "123 Via Roma");
+    }
+
+    #[test]
+    fn lodging_reservation_textual_address_emits_location() {
+        // schema.org permits `address` as a plain text string. The scalar
+        // address must be used directly as the `located_in` object rather
+        // than dropped by an `as_object()` guard.
+        let json = r#"{"@type":"LodgingReservation","checkinDate":"2025-08-20","checkoutDate":"2025-08-25","reservationFor":{"@type":"LodgingBusiness","name":"Grand Hotel","address":"123 Via Roma, Florence"}}"#;
+        let v: Value = serde_json::from_str(json).unwrap();
+        let nodes = flatten_nodes(&v);
+        let facts = extract_node_facts(None, nodes[0], "1:1");
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].relationship_type, "located_in");
+        assert_eq!(facts[0].object, "123 Via Roma, Florence");
+        assert_eq!(facts[0].object_type, Some(EntityType::Place));
     }
 
     #[test]

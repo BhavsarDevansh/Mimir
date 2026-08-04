@@ -1,7 +1,7 @@
 # Email Connector
 
 > **Phase:** 3 — Connectors
-> **Status:** Library done — C5 transport (#199) + C6 structured extraction (#200, calendar invites). LLM extraction for flights/bookings/prose is C7 (#201); deterministic `schema.org` JSON-LD extraction is #249; daemon wiring and the `mimir connector …` CLI come in later Phase 3 issues (A1–A3).
+> **Status:** Library done — C5 transport (#199) + C6 structured extraction (#200, calendar invites) + #249 (schema.org JSON-LD deterministic extraction). LLM extraction for flights/bookings/prose is C7 (#201); daemon wiring and the `mimir connector …` CLI come in later Phase 3 issues (A1–A3).
 
 ## What it is
 
@@ -23,6 +23,20 @@ It is a background sync worker that runs in two modes automatically:
 ### The email is the evidence, not the fact
 
 Mimir does **not** record "I received an email from the dentist" — that is just evidence. It records the real-world thing the email conveys (an appointment, with a date and a place), surfacing it in your "Upcoming" section only when a canonical user identity is configured (`ConnectorContext::user_identity`). It also does **not** turn every sender or recipient into a contact: a message without a supported iMIP `REQUEST`/`REPLY` part produces no facts at all, so your knowledge graph isn't filled with junk — a supported invitation produces facts regardless of who sent it. The email's UIDVALIDITY-qualified IMAP UID is kept as the provenance so you can always trace a fact back to the email it came from.
+
+### Transactional email with schema.org JSON-LD (#249)
+
+Many transactional emails — flight confirmations, hotel bookings, e-commerce orders, delivery tracking, event tickets — embed machine-readable `schema.org` JSON-LD in `<script type="application/ld+json">` tags within their HTML body. Mimir scans for these blocks and extracts deterministic, typed facts with no LLM involved:
+
+- **Flights** (`FlightReservation`): "I have a flight British Airways 123" with departure and arrival times, origin and destination airports, and the airline.
+- **Hotel stays** (`LodgingReservation`): "I have a booking at Grand Hotel" with check-in and check-out dates and the hotel address.
+- **Events** (`EventReservation`): "I have an event Symphony Concert" with start/end times and the venue.
+- **Orders** (`Order`): "I have an order ORD-99" with the order date and the merchant.
+- **Deliveries** (`ParcelDelivery`): "I have a delivery TRK123" with the expected arrival window, carrier, and delivery address.
+- **Tickets** (`Ticket`): "I have a ticket TKT-7" with the issue date and issuer.
+- **Multi-leg flights** (`ReservationPackage`): each leg is extracted as its own flight fact cluster.
+
+Unrecognised JSON-LD types are skipped (never guessed). The primary "I have a…" fact is only emitted when a user identity is configured; the secondary facts (airports, airlines, venues, carriers) are always captured. All facts carry the email's IMAP UID as provenance and are deduplicated automatically if the same confirmation email arrives twice.
 
 ## Authentication
 

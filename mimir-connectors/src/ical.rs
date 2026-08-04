@@ -394,7 +394,7 @@ fn non_empty(s: Option<&str>) -> Option<&str> {
 /// literals here keeps the extractor readable and ensures the connector-level
 /// invariants (source type, sensitivity, raw reference) stay in one place.
 #[allow(clippy::too_many_arguments)] // constructor helper: every arg maps to a `NormalizedFact` field
-fn vevent_fact(
+pub(crate) fn vevent_fact(
     subject: String,
     subject_type: EntityType,
     relationship_type: &str,

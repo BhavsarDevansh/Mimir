@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.86.0] — 2026-08-04
+
+### Connectors — Email schema.org JSON-LD deterministic extraction (#249)
+
+- **New extraction layer:** `EmailConnector::extract()` gains a second deterministic (structured-parse) layer that scans `text/html` MIME parts for `<script type="application/ld+json">` blocks and extracts typed fact clusters for recognised `schema.org` types. This sits as layer 2 of the extraction cascade, between the iMIP calendar-invite layer (layer 1, #200) and the C7 LLM layer (#201, still open). No LLM — pure Rust parsing per the project rule "logic in Rust, not prompts".
+- **Recognised types:** `FlightReservation` (`user has_flight <flight>` typed `EventType::Appointment`, plus `departs_from` / `arrives_at` / `operated_by`), `LodgingReservation` (`has_booking`, `Appointment`, `located_in`), `EventReservation` (`has_event`, `Appointment`, `located_in`), `Order` (`has_order`, plus `purchased_from`), `ParcelDelivery` (`has_delivery` typed `Reminder`, plus `shipped_by` / `delivered_to`), `Ticket` (`has_ticket`, plus `issued_by`), and `ReservationPackage` (flattens `subReservation` for multi-leg flights). Unrecognised `@type` values are logged at `debug` level and skipped — never guessed.
+- **Provenance and user identity:** facts carry `source_type = Connector`, `extraction_method = StructuredParse`, and the email's `UIDVALIDITY`-qualified IMAP UID as `raw_reference` (matching the iMIP layer). The primary user-scoped fact is only emitted when a canonical user identity is configured (`ConnectorContext::user_identity`); secondary facts (airports, airlines, venues, carriers, merchants) are always emitted. Duplicate/re-sent transactional emails dedupe via the existing `normalize_and_insert` corroboration/supersession.
+- **New module:** `mimir-connectors/src/email/jsonld.rs` (gated by the `gmail` feature). The HTML `<script>` scanner is hand-rolled (spec-correct: HTML5 script content terminates at the first `</script>` end tag) — no new HTML parser dependency. The shared `vevent_fact` helper in `ical.rs` is made `pub(crate)` for DRY reuse (JSON-LD facts delegate to it with `RecurrenceType::None`).
+- **No new dependencies:** the module reuses the existing `serde_json`, `mail-parser`, and `chrono` crates.
+- **Tests:** unit tests for each recognised type, the HTML `<script>` scanner (standard, single-quoted, multi-attribute, case-insensitive, JavaScript-skipping, `data-type`-not-`type`), JSON-LD structural normalization (`@graph`, arrays, context wrappers), a cascade integration test (iMIP + JSON-LD from one email), and a KB integration test (flight fact entity resolution + `Appointment` events-subsystem overlay + connector provenance).
+- **Docs:** `docs/email-connector.md`, `docs/wiki/email-connector.md`, `docs/wiki/what-works-now.md`, and `README.md` updated.
+
 ## [0.85.2] — 2026-08-04
 
 ### Connectors — Email iMIP extraction review follow-up 2 (PR #253, #200)

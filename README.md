@@ -32,7 +32,7 @@ Mimir is a **Rust workspace** with a modular, local-first design. Your data stay
 - **`mimir-server`** — Axum HTTP server with SSE streaming, sessions, and graceful shutdown; exposes an OpenAI-compatible chat endpoint.
 - **`mimir-core`** — LLM client, configuration, context, tools, skills, and the personality system.
 - **`mimir-knowledge`** — the SQLite knowledge graph: entities, facts, temporal reasoning, live memory condensation, events/reminders, and proximity queries.
-- **`mimir-connectors`** — the pluggable service-ingestion framework and its backends: the OSM Nominatim geocoder, the local-filesystem Photos connector (EXIF + file watcher), the CalDAV Calendar connector (sync-token incremental sync), and the IMAP Email connector (IDLE push + UID incremental sync + iMIP calendar-invite extraction) today; further email extraction (schema.org JSON-LD, LLM flights/bookings) is #249 / C7.
+- **`mimir-connectors`** — the pluggable service-ingestion framework and its backends: the OSM Nominatim geocoder, the local-filesystem Photos connector (EXIF + file watcher), the CalDAV Calendar connector (sync-token incremental sync), and the IMAP Email connector (IDLE push + UID incremental sync + iMIP calendar-invite extraction) today; further email extraction includes schema.org JSON-LD (#249) and LLM flights/bookings (C7 / #201).
 - **`mimir-api-types` / `mimir-client`** — shared wire types and the daemon HTTP client used by the CLI.
 
 ### Key subsystems

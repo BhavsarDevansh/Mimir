@@ -207,6 +207,11 @@ fn map_login_error(err: async_imap::error::Error) -> ConnectorError {
 pub(crate) struct RawEmail {
     /// The message's unique id within the current `UIDVALIDITY` epoch.
     pub uid: u32,
+    /// `UIDVALIDITY` of the mailbox the message was fetched from. An IMAP UID
+    /// is unique only within one mailbox and one `UIDVALIDITY` epoch, so the
+    /// provenance `raw_reference` is built as `{uid_validity}:{uid}` (matching
+    /// the persisted cursor format) to stay globally unique across epochs.
+    pub uid_validity: u32,
     /// Server-side receive timestamp (`INTERNALDATE`).
     pub internal_date: Option<DateTime<FixedOffset>>,
     /// Full RFC 822 message bytes (`BODY.PEEK[]`): headers + body.
@@ -283,6 +288,7 @@ impl<S: ImapStream> ImapSession<S> {
     pub(crate) async fn fetch_since(
         &mut self,
         since: Option<u32>,
+        uid_validity: u32,
     ) -> Result<FetchResult, ConnectorError> {
         let range = match since {
             Some(uid) => format!("{}:*", uid.saturating_add(1)),
@@ -314,6 +320,7 @@ impl<S: ImapStream> ImapSession<S> {
             let raw = fetch.body().map(<[u8]>::to_vec).unwrap_or_default();
             messages.push(RawEmail {
                 uid,
+                uid_validity,
                 internal_date: fetch.internal_date(),
                 raw,
             });

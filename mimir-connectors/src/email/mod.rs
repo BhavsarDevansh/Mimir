@@ -523,7 +523,7 @@ impl EmailConnector {
             session
         };
 
-        let FetchResult { messages, max_uid } = session.fetch_since(last_uid).await?;
+        let FetchResult { messages, max_uid } = session.fetch_since(last_uid, uid_validity).await?;
         session.logout().await;
 
         let fetched = u32::try_from(messages.len()).unwrap_or(u32::MAX);
@@ -581,38 +581,32 @@ impl EmailConnector {
 
     /// Layer 1 of the extraction cascade (C6 / #200): iMIP calendar invites.
     ///
-    /// Walks the message's MIME attachments for `text/calendar` parts whose
+    /// Walks every MIME part of the message for `text/calendar` parts whose
     /// iMIP `METHOD` is `REQUEST` (a meeting request) or `REPLY` (an attendee
     /// response), parses each embedded VEVENT via the shared
     /// [`crate::ical::parse_ical_to_vevents`], and turns it into the appointment
-    /// fact cluster via [`crate::ical::vevent_to_facts`]. `PUBLISH` (often
-    /// marketing webinars) and `CANCEL` (deletion lifecycle) are skipped for
-    /// now — `CANCEL` → KB fact lifecycle is tracked separately. Every fact
-    /// is provenanced with `raw_ref` (the email's IMAP UID) and authored
-    /// against the injected [`user_identity`](Self::user_identity) when set.
+    /// fact cluster via [`crate::ical::vevent_to_facts`]. The full `parts` walk
+    /// (not only `attachments()`) catches a `text/calendar` part nested inside
+    /// `multipart/alternative` that carries no `Content-Disposition: attachment`
+    /// header and is therefore classified as a body part by `mail-parser`.
+    /// `PUBLISH` (often marketing webinars) and `CANCEL` (deletion lifecycle)
+    /// are skipped for now — `CANCEL` → KB fact lifecycle is tracked
+    /// separately. Every fact is provenanced with `raw_ref` (the email's
+    /// `UIDVALIDITY`-qualified IMAP UID) and authored against the injected
+    /// [`user_identity`](Self::user_identity) when set.
     fn extract_invites(
         &self,
         message: &mail_parser::Message<'_>,
         raw_ref: &str,
     ) -> Vec<mimir_knowledge::normalize::NormalizedFact> {
         let mut facts = Vec::new();
-        for part in message.attachments() {
+        for part in &message.parts {
             if !part.is_content_type("text", "calendar") {
                 continue;
             }
             let Some(ct) = part.content_type() else {
                 continue;
             };
-            let method = ct
-                .attribute("method")
-                .map(|m| m.trim().to_ascii_uppercase());
-            match method.as_deref() {
-                Some("REQUEST") | Some("REPLY") => {}
-                other => {
-                    debug!(raw_ref, method = ?other, "skipping text/calendar part: unsupported/absent METHOD");
-                    continue;
-                }
-            }
             let Some(ical) = part.text_contents() else {
                 debug!(
                     raw_ref,
@@ -620,6 +614,30 @@ impl EmailConnector {
                 );
                 continue;
             };
+            // RFC 6047 §2.4: the MIME `method` parameter is optional. Prefer it
+            // when present (it must agree with the body), otherwise fall back to
+            // the iCalendar `METHOD` property in the body. Property names are
+            // case-insensitive (RFC 5545).
+            let method = ct
+                .attribute("method")
+                .map(|m| m.trim().to_ascii_uppercase())
+                .or_else(|| {
+                    ical.lines()
+                        .find_map(|l| {
+                            let l = l.trim();
+                            l.get(..7)
+                                .filter(|p| p.eq_ignore_ascii_case("METHOD:"))
+                                .map(|_| l[7..].trim())
+                        })
+                        .map(str::to_ascii_uppercase)
+                });
+            match method.as_deref() {
+                Some("REQUEST") | Some("REPLY") => {}
+                other => {
+                    debug!(raw_ref, method = ?other, "skipping text/calendar part: unsupported/absent METHOD");
+                    continue;
+                }
+            }
             for vevent in crate::ical::parse_ical_to_vevents(ical) {
                 facts.extend(crate::ical::vevent_to_facts(
                     self.user_identity.as_deref(),
@@ -748,11 +766,19 @@ impl Connector for EmailConnector {
         // per-email communication facts are emitted and no `Person` entities
         // are auto-created from `From`/`To` headers, so marketing/spam produces
         // no junk facts.
-        let mut buffer = self.buffer.lock().await;
-        let staged: Vec<imap::RawEmail> = std::mem::take(&mut *buffer);
+        // Drain the staged buffer and release the mutex guard before the
+        // CPU-bound MIME parse loop: holding the lock across parsing would block
+        // a concurrent `sync()` cycle from staging new mail for the whole parse.
+        let staged: Vec<imap::RawEmail> = {
+            let mut buffer = self.buffer.lock().await;
+            std::mem::take(&mut *buffer)
+        };
         let mut facts = Vec::new();
         for mail in &staged {
-            let raw_ref = mail.uid.to_string();
+            // An IMAP UID is unique only within one mailbox + `UIDVALIDITY`
+            // epoch, so qualify the provenance reference as `{uid_validity}:{uid}`
+            // (matching the persisted cursor format) to stay globally unique.
+            let raw_ref = format!("{}:{}", mail.uid_validity, mail.uid);
             if let Some(message) = MessageParser::default().parse(&mail.raw) {
                 facts.extend(self.extract_invites(&message, &raw_ref));
             } else {
@@ -1025,6 +1051,10 @@ END:VCALENDAR
 "#,
             method = method
         )
+        // RFC 5322/MIME require CRLF line endings and an IMAP `BODY.PEEK[]`
+        // fetch returns CRLF, so normalise the bare-LF raw string to CRLF
+        // rather than relying on the parser's leniency.
+        .replace('\n', "\r\n")
         .into_bytes()
     }
 
@@ -1159,6 +1189,7 @@ Sale! Sale! Sale!\r\n"
         // Stage a raw invite email in the buffer (as a sync cycle would).
         connector.buffer.lock().await.push(imap::RawEmail {
             uid: 42,
+            uid_validity: 1,
             internal_date: None,
             raw: invite_email("REQUEST"),
         });
@@ -1176,6 +1207,7 @@ Sale! Sale! Sale!\r\n"
         let connector = connector_with_identity(Some("Devansh"));
         connector.buffer.lock().await.push(imap::RawEmail {
             uid: 1,
+            uid_validity: 1,
             internal_date: None,
             raw: plain_email(),
         });
@@ -1231,6 +1263,7 @@ Sale! Sale! Sale!\r\n"
         let connector = connector_with_identity(Some("Devansh"));
         connector.buffer.lock().await.push(imap::RawEmail {
             uid: 42,
+            uid_validity: 123,
             internal_date: None,
             raw: invite_email("REQUEST"),
         });
@@ -1337,10 +1370,27 @@ Sale! Sale! Sale!\r\n"
         }
         // The attendee facts resolved both the user and Dr Smith to Person
         // entities (the user is also an attendee of their own appointment).
-        assert!(dr_smith > 0);
+        // The `attending` fact whose subject is Dr Smith must have resolved to
+        // the Dr Smith Person entity and point at the appointment Event.
+        let mut dr_smith_attending = None;
+        for f in &outcome.inserted {
+            if kg
+                .relationship_type_name(f.relationship_type_id)
+                .await
+                .as_deref()
+                == Some("attending")
+                && f.subject_id == dr_smith
+            {
+                dr_smith_attending = Some(f);
+                break;
+            }
+        }
+        let dr_smith_attending = dr_smith_attending.expect("Dr Smith attending fact");
+        assert_eq!(dr_smith_attending.object_id, Some(event));
 
         // Provenance: every fact has one Connector source tied to the instance,
-        // with the email UID as `raw_reference` and StructuredParse method.
+        // with the `UIDVALIDITY`-qualified UID as `raw_reference` and
+        // StructuredParse method.
         for f in &outcome.inserted {
             let sources = kg.get_sources_for_fact(f.id).await.unwrap();
             assert!(
@@ -1349,7 +1399,7 @@ Sale! Sale! Sale!\r\n"
                         == mimir_knowledge::models::source::SourceType::Connector as i16
                         && s.connector_instance_id == Some(instance_id)
                         && s.connector_type_id == Some(ConnectorType::Gmail as i16)
-                        && s.raw_reference.as_deref() == Some("42")
+                        && s.raw_reference.as_deref() == Some("123:42")
                         && s.extraction_method_id == Some(ExtractionMethod::StructuredParse as i16)
                 }),
                 "missing connector provenance on fact {}: {:?}",
@@ -1884,12 +1934,13 @@ mod imap_integration {
                 .count(),
             2
         );
-        // Provenance `raw_reference` is the IMAP UID of the staged message.
+        // Provenance `raw_reference` is the `UIDVALIDITY`-qualified UID
+        // (`{uidvalidity}:{uid}`) of the staged message.
         assert!(
             facts
                 .iter()
-                .all(|f| f.raw_reference.as_deref() == Some("42")),
-            "raw_reference must be the IMAP UID: {facts:?}"
+                .all(|f| f.raw_reference.as_deref() == Some("17:42")),
+            "raw_reference must be the UIDVALIDITY-qualified UID: {facts:?}"
         );
         assert!(
             connector.buffer.lock().await.is_empty(),

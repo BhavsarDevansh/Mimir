@@ -19,11 +19,10 @@ It is a background sync worker that runs in two modes automatically:
 - If your mailbox is ever recreated (a rare event Mimir detects via a server value called `UIDVALIDITY`), the connector notices and does one full re-fetch — no silent gaps or duplicates.
 - Each message's raw contents (headers, body) are held in an in-memory buffer ready for the knowledge graph.
 
-> **What's done so far:** The transport (#199) logs in, watches for new mail, and fetches messages. C6 (#200) then turns the structured subset — **calendar invites** (emails with a `text/calendar` attachment) — into knowledge-graph facts: a dentist, airline, or colleague sending a real invite creates an appointment in your "Upcoming" section, with the time, location, and attendees. Free-text confirmations, flight boarding passes, bookings, and bank statements (emails with no calendar invite) are read by the LLM layer in C7 (#201); transactional emails that embed machine-readable `schema.org` data will be a future deterministic layer (#249).
 
 ### The email is the evidence, not the fact
 
-Mimir does **not** record "I received an email from the dentist" — that is just evidence. It records the real-world thing the email conveys (an appointment, with a date and a place). It also does **not** turn every sender or recipient into a contact: marketing and spam emails produce no facts at all, so your knowledge graph isn't filled with junk. The email's message id is kept as the provenance so you can always trace a fact back to the email it came from.
+Mimir does **not** record "I received an email from the dentist" — that is just evidence. It records the real-world thing the email conveys (an appointment, with a date and a place). It also does **not** turn every sender or recipient into a contact: messages without a supported iMIP `REQUEST`/`REPLY` part produce no facts at all, so your knowledge graph isn't filled with junk. The email's IMAP UID is kept as the provenance so you can always trace a fact back to the email it came from.
 
 ## Authentication
 

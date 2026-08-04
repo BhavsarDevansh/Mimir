@@ -87,10 +87,12 @@ pub fn parse_ical_to_vevents(ical: &str) -> Vec<RawVEvent> {
     // `Calendar` whose top-level `components` are the VEVENT/VTODO/VTIMEZONE
     // entries. We walk the low-level representation directly (the high-level
     // `icalendar::Calendar` is builder-oriented and has no parse-from-str
-    // path in 0.17.x). `find_prop` + `ParseString::as_str` give owned copies
-    // so the staged events outlive the borrowed input; `params` expose the
-    // `TZID`/`CN` parameters the extractors need for UTC resolution and
-    // attendee names.
+    // path in 0.17.x). We walk the low-level `Component::properties` directly
+    // with a case-insensitive lookup (`Component::find_prop` matches names
+    // case-sensitively in 0.17.x, but RFC 5545 names are case-insensitive) and
+    // `ParseString::as_str` gives owned copies so the staged events outlive
+    // the borrowed input; `params` expose the `TZID`/`CN` parameters the
+    // extractors need for UTC resolution and attendee names.
     use icalendar::parser::read_calendar;
     let Ok(calendar) = read_calendar(ical) else {
         return Vec::new();
@@ -98,23 +100,30 @@ pub fn parse_ical_to_vevents(ical: &str) -> Vec<RawVEvent> {
     calendar
         .components
         .iter()
-        .filter(|c| c.name.as_str() == "VEVENT")
+        .filter(|c| c.name.as_str().eq_ignore_ascii_case("VEVENT"))
         .map(|event| {
-            let prop_str = |key: &str| event.find_prop(key).map(|p| p.val.as_str().to_string());
+            // RFC 5545 property names are case-insensitive; `find_prop` in
+            // `icalendar` 0.17.x matches case-sensitively, so look the property
+            // up by a case-insensitive name over `Component::properties`.
+            let find_prop_ci = |key: &str| {
+                event
+                    .properties
+                    .iter()
+                    .find(|p| p.name.as_ref().eq_ignore_ascii_case(key))
+            };
+            let prop_str = |key: &str| find_prop_ci(key).map(|p| p.val.as_str().to_string());
             // Read a property's `TZID` parameter (case-insensitive key).
             let tzid_of = |key: &str| {
-                event.find_prop(key).and_then(|p| {
+                find_prop_ci(key).and_then(|p| {
                     p.params
                         .iter()
                         .find(|q| q.key.as_ref().eq_ignore_ascii_case("TZID"))
                         .and_then(|q| q.val.as_ref().map(|v| v.as_str().to_string()))
                 })
             };
-            let starts_at = event
-                .find_prop("DTSTART")
+            let starts_at = find_prop_ci("DTSTART")
                 .and_then(|p| parse_ical_datetime(p.val.as_str(), tzid_of("DTSTART").as_deref()));
-            let ends_at = event
-                .find_prop("DTEND")
+            let ends_at = find_prop_ci("DTEND")
                 .and_then(|p| parse_ical_datetime(p.val.as_str(), tzid_of("DTEND").as_deref()));
             let attendees = event
                 .properties
@@ -122,7 +131,7 @@ pub fn parse_ical_to_vevents(ical: &str) -> Vec<RawVEvent> {
                 .filter(|p| p.name.as_ref().eq_ignore_ascii_case("ATTENDEE"))
                 .filter_map(participant_display)
                 .collect();
-            let organizer = event.find_prop("ORGANIZER").and_then(participant_display);
+            let organizer = find_prop_ci("ORGANIZER").and_then(participant_display);
             RawVEvent {
                 uid: prop_str("UID"),
                 summary: prop_str("SUMMARY"),
@@ -326,7 +335,12 @@ fn participant_display(prop: &icalendar::parser::Property<'_>) -> Option<String>
         return Some(name);
     }
     let val = prop.val.as_str();
-    let name = val.strip_prefix("mailto:").unwrap_or(val).trim();
+    // RFC 3986: the scheme is case-insensitive (`MAILTO:` occurs in the wild).
+    let name = val
+        .get(..7)
+        .filter(|p| p.eq_ignore_ascii_case("mailto:"))
+        .map_or(val, |_| &val[7..])
+        .trim();
     let name = name.trim_matches('"');
     if name.is_empty() {
         None

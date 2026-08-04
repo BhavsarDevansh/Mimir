@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.85.1] — 2026-08-04
+
+### Connectors — Email iMIP extraction review follow-up (PR #253, #200)
+
+- **Functional correctness (iMIP MIME walk):** `EmailConnector::extract_invites` (`mimir-connectors/src/email/mod.rs`) now walks every MIME part (`message.parts`) instead of `attachments()`, so a `text/calendar` part nested in `multipart/alternative` with no `Content-Disposition: attachment` header (classified as a body part by `mail-parser`) is no longer missed.
+- **Functional correctness (METHOD fallback):** the iMIP `METHOD` is now resolved from the MIME `Content-Type` `method` parameter when present, falling back to the iCalendar body `METHOD` property (RFC 6047 §2.4 makes the parameter optional). Only `REQUEST`/`REPLY` are extracted; `PUBLISH`/`CANCEL` are still skipped.
+- **Data integrity (globally-unique provenance):** the email provenance `raw_reference` is now `{uid_validity}:{uid}` (matching the persisted cursor format), not a bare IMAP UID that is unique only within one mailbox + `UIDVALIDITY` epoch. `imap::RawEmail` gains a `uid_validity` field populated by `fetch_since`.
+- **Performance (buffer lock):** `EmailConnector::extract()` now drains the staged buffer and releases the mutex guard before the CPU-bound MIME parse loop, so a concurrent `sync()` cycle is not blocked from staging new mail during parsing.
+- **Data integrity (iCalendar name matching):** `parse_ical_to_vevents` (`mimir-connectors/src/ical.rs`) now looks up VEVENT properties case-insensitively (`icalendar` 0.17.x `find_prop` matches case-sensitively, but RFC 5545 names are case-insensitive), and the `VEVENT` component match is case-insensitive. `participant_display` strips the `mailto:` scheme case-insensitively (`MAILTO:` occurs in the wild, per RFC 3986).
+- **Tests:** the iMIP invite fixture now uses CRLF line endings (RFC 5322/MIME + IMAP `BODY.PEEK[]` wire format); the tautological `assert!(dr_smith > 0)` is replaced by a real check that the Dr Smith `attending` fact resolved to the right Person entity and points at the appointment Event; the fake-IMAP → `extract()` provenance assertion updated for the `UIDVALIDITY`-qualified `raw_reference`.
+- **Docs:** `docs/email-connector.md`, `docs/wiki/email-connector.md`, and `README.md` corrected — `mail-parser` is Gmail-specific while `icalendar`/`chrono-tz` are shared with `calendar`; the wiki states the `has_event` primary fact depends on a configured `user_identity`, that only supported iMIP `REQUEST`/`REPLY` parts produce facts, and that provenance is the IMAP UID; the README splits future-work references (`schema.org` JSON-LD = #249, LLM free-text extraction = C7 / #201).
+
 ## [0.85.0] — 2026-07-31
 
 ### Connectors — Email structured extraction (C6 / #200)

@@ -618,19 +618,35 @@ impl EmailConnector {
             // when present (it must agree with the body), otherwise fall back to
             // the iCalendar `METHOD` property in the body. Property names are
             // case-insensitive (RFC 5545).
-            let method = ct
+            // If both are present and disagree, the part is rejected — a
+            // conflicting `METHOD` is not a valid iMIP object (RFC 6047 §2.4
+            // requires the parameter and body to match when both are supplied).
+            let mime_method = ct
                 .attribute("method")
-                .map(|m| m.trim().to_ascii_uppercase())
-                .or_else(|| {
-                    ical.lines()
-                        .find_map(|l| {
-                            let l = l.trim();
-                            l.get(..7)
-                                .filter(|p| p.eq_ignore_ascii_case("METHOD:"))
-                                .map(|_| l[7..].trim())
-                        })
-                        .map(str::to_ascii_uppercase)
-                });
+                .map(|m| m.trim().to_ascii_uppercase());
+            let calendar_method = ical
+                .lines()
+                .find_map(|l| {
+                    let l = l.trim();
+                    l.get(..7)
+                        .filter(|p| p.eq_ignore_ascii_case("METHOD:"))
+                        .map(|_| l[7..].trim())
+                })
+                .map(str::to_ascii_uppercase);
+            let method = match (mime_method, calendar_method) {
+                (Some(mime), Some(calendar)) if mime != calendar => {
+                    debug!(
+                        raw_ref,
+                        mime_method = %mime,
+                        calendar_method = %calendar,
+                        "skipping text/calendar part: conflicting METHOD values"
+                    );
+                    continue;
+                }
+                (Some(mime), _) => Some(mime),
+                (None, Some(calendar)) => Some(calendar),
+                (None, None) => None,
+            };
             match method.as_deref() {
                 Some("REQUEST") | Some("REPLY") => {}
                 other => {
@@ -1152,6 +1168,105 @@ Sale! Sale! Sale!\r\n"
         assert!(
             connector.extract_invites(&message, "9").is_empty(),
             "CANCEL lifecycle is tracked separately; no facts here"
+        );
+    }
+
+    /// Like [`invite_email`] but lets the MIME `method` parameter and the
+    /// iCalendar body `METHOD` property diverge, so conflicting and
+    /// single-source combinations can be exercised independently.
+    fn invite_email_split_method(mime_method: Option<&str>, body_method: Option<&str>) -> Vec<u8> {
+        let ct = match mime_method {
+            Some(m) => format!("text/calendar; method={m}; charset=\"utf-8\""),
+            None => "text/calendar; charset=\"utf-8\"".to_string(),
+        };
+        let cal_method_line = body_method
+            .map(|m| format!("METHOD:{m}\r\n"))
+            .unwrap_or_default();
+        format!(
+            r#"From: dentist@example.com
+To: devansh@example.com
+Subject: Dentist appointment
+Date: Sat, 20 Nov 2025 14:22:01 -0800
+Message-ID: <invite-1@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="bnd"
+
+--bnd
+Content-Type: text/plain; charset="utf-8"
+
+You are invited.
+--bnd
+Content-Type: {ct}
+Content-Disposition: attachment; filename="invite.ics"
+
+BEGIN:VCALENDAR
+VERSION:2.0
+{cal_method_line}BEGIN:VEVENT
+UID:dentist-1@example.com
+SUMMARY:Dentist appointment
+DTSTART:20991120T140000Z
+DTEND:20991120T150000Z
+LOCATION:123 Main St
+ATTENDEE;CN=Devansh:mailto:devansh@example.com
+ATTENDEE;CN=Dr Smith:mailto:smith@dental.com
+END:VEVENT
+END:VCALENDAR
+--bnd--
+"#,
+            ct = ct,
+            cal_method_line = cal_method_line
+        )
+        .replace('\n', "\r\n")
+        .into_bytes()
+    }
+
+    #[test]
+    fn extract_invites_skips_conflicting_mime_and_body_method() {
+        let connector = connector_with_identity(Some("Devansh"));
+        // MIME says REQUEST, body says CANCEL — must be rejected, not silently
+        // honoured as REQUEST (which would create appointment facts).
+        let bytes = invite_email_split_method(Some("REQUEST"), Some("CANCEL"));
+        let message = parse(&bytes);
+        assert!(
+            connector.extract_invites(&message, "9").is_empty(),
+            "a part whose MIME `method` and body `METHOD` disagree is not a valid iMIP object"
+        );
+    }
+
+    #[test]
+    fn extract_invites_skips_conflicting_supported_and_unsupported_method() {
+        let connector = connector_with_identity(Some("Devansh"));
+        // MIME says REPLY (supported), body says PUBLISH (unsupported) — the
+        // conflict is rejected before the supported/unsupported filter runs.
+        let bytes = invite_email_split_method(Some("REPLY"), Some("PUBLISH"));
+        let message = parse(&bytes);
+        assert!(
+            connector.extract_invites(&message, "9").is_empty(),
+            "conflicting METHOD values are rejected regardless of which side is supported"
+        );
+    }
+
+    #[test]
+    fn extract_invites_falls_back_to_body_method_when_mime_absent() {
+        let connector = connector_with_identity(Some("Devansh"));
+        // No MIME `method` parameter; the body `METHOD:REQUEST` is the source.
+        let bytes = invite_email_split_method(None, Some("REQUEST"));
+        let message = parse(&bytes);
+        let facts = connector.extract_invites(&message, "7");
+        assert!(
+            facts.iter().any(|f| f.relationship_type == "has_event"),
+            "the iCalendar body `METHOD` property is used when the MIME parameter is absent"
+        );
+    }
+
+    #[test]
+    fn extract_invites_skips_when_neither_method_source_present() {
+        let connector = connector_with_identity(Some("Devansh"));
+        let bytes = invite_email_split_method(None, None);
+        let message = parse(&bytes);
+        assert!(
+            connector.extract_invites(&message, "9").is_empty(),
+            "no METHOD from either source → unsupported/absent → skipped"
         );
     }
 

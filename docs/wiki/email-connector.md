@@ -22,7 +22,7 @@ It is a background sync worker that runs in two modes automatically:
 
 ### The email is the evidence, not the fact
 
-Mimir does **not** record "I received an email from the dentist" — that is just evidence. It records the real-world thing the email conveys (an appointment, with a date and a place). It also does **not** turn every sender or recipient into a contact: messages without a supported iMIP `REQUEST`/`REPLY` part produce no facts at all, so your knowledge graph isn't filled with junk. The email's IMAP UID is kept as the provenance so you can always trace a fact back to the email it came from.
+Mimir does **not** record "I received an email from the dentist" — that is just evidence. It records the real-world thing the email conveys (an appointment, with a date and a place), surfacing it in your "Upcoming" section only when a canonical user identity is configured (`ConnectorContext::user_identity`). It also does **not** turn every sender or recipient into a contact: a message without a supported iMIP `REQUEST`/`REPLY` part produces no facts at all, so your knowledge graph isn't filled with junk — a supported invitation produces facts regardless of who sent it. The email's UIDVALIDITY-qualified IMAP UID is kept as the provenance so you can always trace a fact back to the email it came from.
 
 ## Authentication
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.85.2] — 2026-08-04
+
+### Connectors — Email iMIP extraction review follow-up 2 (PR #253, #200)
+
+- **Data integrity (iMIP `METHOD` conflict):** `EmailConnector::extract_invites` (`mimir-connectors/src/email/mod.rs`) now normalises the MIME `Content-Type` `method` parameter and the iCalendar body `METHOD` property independently, and rejects (skips) a `text/calendar` part when both are present and disagree instead of silently preferring the MIME value. This prevents appointment facts being created from a part whose body says `METHOD:CANCEL`/`METHOD:PUBLISH` while the MIME header claims `REQUEST`/`REPLY` (RFC 6047 §2.4 requires the two to match when both are supplied). Matching values and single-source values keep their existing behaviour; `PUBLISH` and `CANCEL` remain skipped. New regression tests cover conflicting supported/unsupported pairs, the body-only fallback, and the no-source case.
+- **Docs:** `docs/email-connector.md`, `docs/wiki/email-connector.md`, and `README.md` updated to match the extraction contract — eligible parts are any `text/calendar` MIME part (not just attachments), `METHOD` is resolved from the MIME parameter or the calendar body, the `has_event` primary fact depends on a configured `ConnectorContext::user_identity`, supported `REQUEST`/`REPLY` invitations produce facts regardless of sender, and provenance is the `UIDVALIDITY`-qualified IMAP UID.
+
 ## [0.85.1] — 2026-08-04
 
 ### Connectors — Email iMIP extraction review follow-up (PR #253, #200)

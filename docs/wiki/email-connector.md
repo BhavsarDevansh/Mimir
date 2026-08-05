@@ -1,7 +1,7 @@
 # Email Connector
 
 > **Phase:** 3 — Connectors
-> **Status:** Library done — C5 transport (#199) + C6 structured extraction (#200, calendar invites) + #249 (schema.org JSON-LD deterministic extraction). LLM extraction for flights/bookings/prose is C7 (#201); daemon wiring and the `mimir connector …` CLI come in later Phase 3 issues (A1–A3).
+> **Status:** Library done — C5 transport (#199) + C6 structured extraction (#200, calendar invites) + #249 (schema.org JSON-LD deterministic extraction) + C7 LLM extraction (#201, unstructured prose). Daemon wiring and the `mimir connector …` CLI come in later Phase 3 issues (A1–A3).
 
 ## What it is
 
@@ -37,6 +37,18 @@ Many transactional emails — flight confirmations, hotel bookings, e-commerce o
 - **Multi-leg flights** (`ReservationPackage`): each leg is extracted as its own flight fact cluster.
 
 Unrecognised JSON-LD types are skipped (never guessed). The primary "I have a…" fact is only emitted when a user identity is configured; the secondary facts (airports, airlines, venues, carriers) are always captured. All facts carry the email's IMAP UID as provenance and are deduplicated automatically if the same confirmation email arrives twice.
+
+### Unstructured prose with the LLM layer (C7 / #201)
+
+Not every email is machine-readable. A dentist's "see you Tuesday 3pm" with no calendar attachment, a flight confirmation written in plain prose, a bank statement, a job offer — these carry no `text/calendar` part and no `schema.org` JSON-LD. For those, Mimir has a third, last-resort layer that reads the body with the LLM:
+
+- It only runs on emails the deterministic layers (iMIP invites, JSON-LD) produced **no** facts for, so a machine-readable email is never re-processed by the LLM (no duplicates, bounded cost).
+- The LLM must call a strict `extract_email_facts` tool with a closed schema. Mimir **validates** every field in Rust against its typed enums before turning the output into a fact — entity types, dates, the event kind (`Appointment`/`Deadline`/`Task`/…), recurrence, and any location. An unrecognised value is dropped, never trusted.
+- Obvious bulk-marketing mail (sent from pure marketing platforms like Mailchimp and HubSpot, or any mail carrying a `List-Unsubscribe` header) is skipped **before** any LLM call by a deterministic Rust filter, so marketing mail never costs an API call and never becomes junk facts. Transactional receipts and bookings routed through general-purpose ESPs (SendGrid, Mailgun, Postmark, Amazon SES) still reach the LLM. For everything else, the LLM simply returns an empty fact list when there is nothing to extract.
+- The LLM call runs on Mimir's shared LLM **system queue** — at lower priority than your chat — so a connector call waiting in the queue never delays a queued chat, and a chat you send mid-extraction jumps ahead of any connector call that has not started yet. This is what the C7 acceptance criterion ("a queued chat preempts a waiting connector call") guarantees: pre-emption applies to connector calls waiting in the pool, not to a provider request already in flight.
+- User-scoped facts ("I have a flight…", "I have an appointment…") are authored against your canonical identity so they resolve to you and surface in your "Upcoming" section.
+
+This is a library component today (in `mimir-connectors`); the daemon wiring that turns it on for a running `mimir` daemon lands with #202.
 
 ## Authentication
 

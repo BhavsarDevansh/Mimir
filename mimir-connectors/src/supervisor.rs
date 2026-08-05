@@ -75,6 +75,7 @@ use crate::connector::{Connector, ConnectorError, HealthStatus, SyncOptions, Syn
 use crate::registry::ConnectorRegistry;
 use crate::secrets::SecretStore;
 use mimir_core::geocoder::Geocoder;
+use mimir_core::llm::LlmBackend;
 
 /// Tunable parameters for a [`ConnectorSupervisor`].
 ///
@@ -305,6 +306,23 @@ impl ConnectorSupervisor {
         if !name.is_empty() {
             self.context.user_identity = Some(name);
         }
+        self
+    }
+
+    /// Inject the shared [`LlmBackend`] made available to every connector
+    /// this supervisor constructs (Phase 3 C7 / #201).
+    ///
+    /// The Email connector's prose-extraction layer routes its LLM calls
+    /// through [`LlmBackend::system_chat_message`] so they sit on the
+    /// shared `LlmWorkerPool`'s system queue (below user-chat priority): a
+    /// one-call-at-a-time provider is never starved by a background
+    /// extraction burst, and a queued user chat preempts a waiting connector
+    /// call. Must be called before [`restore`] so already-spawned runners
+    /// receive it. Connectors that need no LLM ignore it.
+    ///
+    /// [`restore`]: Self::restore
+    pub fn with_llm_backend(mut self, backend: Arc<dyn LlmBackend>) -> Self {
+        self.context.llm_backend = Some(backend);
         self
     }
 

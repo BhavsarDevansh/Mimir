@@ -27,7 +27,7 @@
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::enums::{EventType, RecurrenceType};
-use mimir_knowledge::models::source::SourceType;
+use mimir_knowledge::models::source::{ExtractionMethod, SourceType};
 use mimir_knowledge::normalize::NormalizedFact;
 use tracing::debug;
 
@@ -423,6 +423,7 @@ pub(crate) fn vevent_fact(
         recurrence,
         requires_user_action: false,
         raw_reference: Some(raw_ref.to_string()),
+        extraction_method: Some(ExtractionMethod::StructuredParse),
         event_type,
         location: None,
     }

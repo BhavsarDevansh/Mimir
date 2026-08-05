@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.88.0] — 2026-08-05
+
+### Connectors — Email LLM extraction (C7 / #201)
+
+- **Email connector LLM extraction layer (cascade layer 3):** the IMAP Email connector's `extract()` cascade gains a third, last-resort layer for unstructured prose that deterministic layers cannot read — a dentist's "see you Tuesday 3pm" with no `.ics`, a flight confirmation in prose, a bank statement, a job offer. Layer 3 runs only for messages that layers 1 (iMIP invites / #200) and 2 (`schema.org` JSON-LD / #249) produced no facts for, so a deterministic layer that already read the email is never re-processed by the LLM (avoids duplicate extraction and bounds LLM cost). When no `LlmBackend` is injected (daemon wiring is #202), layer 3 is skipped, leaving deterministic extraction unchanged.
+- **"Logic in Rust, not prompts" enforced for connector LLM data:** the LLM must call a strict `extract_email_facts` tool (a closed JSON Schema) and Rust validates the tool-call name (rejecting an unexpected function or a multi-call completion) and every field against the typed enums before building `NormalizedFact`s — entity types, temporal bounds, an `event_type` hint (mapped against the `EventType` enum, dropped if unrecognised, never trusted raw), recurrence, and the location overlay — reusing the shared `mimir-knowledge::extract` parsing helpers (DRY with the conversational `remember` path). User-scoped subjects are canonicalised to the injected `user_identity` so they resolve to the canonical user entity (matching the C4/#198 and #249 layers). All facts carry `source_type = Connector`, `extraction_method = LlmExtraction`, and the email's `UIDVALIDITY`-qualified IMAP UID as `raw_reference`. The body sent to the LLM is the first `text/plain` part (or HTML stripped of markup), capped at 8 KiB.
+- **Deterministic spam pre-filter:** obvious bulk-marketing mail is skipped before any LLM call by a Rust `is_likely_spam` gate: a message is skipped when it carries a `List-Unsubscribe` header (the universal bulk-mail signal) or is sent from a pure marketing platform domain (mailchimp/hubspot/mailerlite/etc.). General-purpose ESPs that also deliver transactional mail (sendgrid/mailgun/postmark/amazonses) are skipped only with the unsubscribe signal, so statements, bookings, and offers routed through them still reach the LLM. The LLM only does fact extraction and returns an empty `facts` array for no-fact prose.
+- **Retryable LLM-failure handling:** a queue-full, network, provider, or parse failure during prose extraction is propagated as a `ConnectorError` (via a new `From<LlmError> for ConnectorError`) and the affected raw email is re-staged in the connector buffer for the next extraction cycle, rather than being silently converted into an empty (successful) extraction that would lose the message forever (the buffer was drained and the IMAP cursor advanced). Deterministic facts already collected this cycle are kept, so a transient LLM error never blocks them; a durable terminal-failure policy is follow-up work.
+
+### LLM backend — system-queue tool-calling (#201 acceptance)
+
+- **`LlmBackend::system_chat_message` / `system_chat` trait methods:** every connector LLM call routes through the shared `LlmWorkerPool`'s **system queue** (priority below user chat), so a one-call-at-a-time provider is never starved by an extraction burst and a queued user chat preempts a waiting connector call. The default implementation delegates to the user-queue `chat_message` for backends without a pool (mocks, model-override clones, direct test clients). `LlmClient` overrides it to enqueue on the system queue. The system-queue enqueue methods (`enqueue_system_chat_message` / `enqueue_system_chat` / `enqueue_system_chat_stream`) now accept a `tools` argument — previously the system queue hardcoded `tools: None`, so connector tool-calling could not use the system queue. `MockLlmClient` records `system_chat_message` calls separately from user-queue `chat_message` calls so tests assert the routing directly.
+
+### Knowledge graph — per-fact `ExtractionMethod` (#234)
+
+- **`NormalizedFact::extraction_method` per-fact override:** `ExtractionMethod` moves onto `NormalizedFact` as an `Option<ExtractionMethod>` that defaults to (inherits) the batch `Provenance`'s method when unset. This lets a single mixed-method `extract()` batch record the right method per fact in `sources.extraction_method_id`, fixing the `ConnectorSupervisor::run_cycle` hardcoded `ExtractionMethod::StructuredParse` (#234 / #254) that would have mislabelled C7's LLM-extracted facts as structured-parsed. The email cascade tags its facts per layer: layers 1–2 set `StructuredParse`, layer 3 sets `LlmExtraction`. The conversational `remember` path tags its facts `LlmExtraction`. Existing producers are unchanged (inherit the provenance default).
+
+### Connectors — shared LLM backend injection
+
+- **`ConnectorContext::llm_backend` + `ConnectorSupervisor::with_llm_backend`:** the shared `Arc<dyn LlmBackend>` is injected into connectors at construction (mirroring the existing `with_geocoder` / `with_secret_store` / `with_user_identity` builders), and the Email connector clones it at construction. Daemon wiring that calls `with_llm_backend` lands with #202. No new dependencies: the LLM layer reuses `mimir-core::llm` and `mimir-knowledge::extract`; tests use `mimir-core`'s `mock-llm` feature (now a `mimir-connectors` dev-dependency).
+
+### Docs
+
+- `docs/email-connector.md`, `docs/wiki/email-connector.md`, `docs/wiki/what-works-now.md`, `README.md`, and `Mimir-Implementation-Context.md` updated for the C7 layer, the system-queue tool-calling, and the per-fact `ExtractionMethod`.
+
 ## [0.87.0] — 2026-08-04
 
 ### Bug fixes

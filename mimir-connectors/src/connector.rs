@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::secrets::SecretStore;
 use mimir_core::geocoder::Geocoder;
+use mimir_core::llm::LlmBackend;
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType};
 use mimir_knowledge::normalize::NormalizedFact;
 
@@ -83,6 +84,18 @@ pub struct ConnectorContext {
     /// user's "Upcoming" memory section, which is scoped to the user
     /// entity).
     pub user_identity: Option<String>,
+
+    /// Shared LLM backend for connector background work (C7 / #201).
+    ///
+    /// Connectors that need LLM extraction (the Email connector's prose
+    /// layer) clone this `Arc<dyn LlmBackend>` at construction and call
+    /// [`LlmBackend::system_chat_message`] so their calls route through
+    /// the shared `LlmWorkerPool`'s **system queue** — below user-chat
+    /// priority, so a one-call-at-a-time provider is never starved by a
+    /// background extraction burst. `None` when no backend is configured
+    /// (the daemon injects the shared `LlmClient`; tests inject a
+    /// `MockLlmClient`). Connectors that need no LLM ignore it.
+    pub llm_backend: Option<std::sync::Arc<dyn LlmBackend>>,
 }
 
 impl ConnectorContext {
@@ -92,6 +105,7 @@ impl ConnectorContext {
             geocoder,
             secret_store: None,
             user_identity: None,
+            llm_backend: None,
         }
     }
 
@@ -130,6 +144,15 @@ impl ConnectorContext {
     pub fn with_user_identity(mut self, name: impl Into<String>) -> Self {
         let name = name.into().trim().to_string();
         self.user_identity = if name.is_empty() { None } else { Some(name) };
+        self
+    }
+
+    /// Attach a shared [`LlmBackend`] to this context (builder), mirroring
+    /// [`ConnectorSupervisor::with_llm_backend`]. Connectors that perform LLM
+    /// extraction (Email C7 / #201) clone the `Arc<dyn LlmBackend>` out of
+    /// the context and route calls through [`LlmBackend::system_chat_message`].
+    pub fn with_llm_backend(mut self, backend: std::sync::Arc<dyn LlmBackend>) -> Self {
+        self.llm_backend = Some(backend);
         self
     }
 }
@@ -200,6 +223,19 @@ pub enum ConnectorError {
     /// Any other connector-specific failure not covered above.
     #[error("{0}")]
     Other(String),
+}
+
+/// Map an LLM-backend failure onto a connector error so the supervisor's
+/// retry loop can surface it. Network-level failures keep their category;
+/// every other provider/parse/queue failure becomes a generic connector
+/// failure (retryable, but not network-specific).
+impl From<mimir_core::llm::LlmError> for ConnectorError {
+    fn from(error: mimir_core::llm::LlmError) -> Self {
+        match error {
+            mimir_core::llm::LlmError::Network(err) => ConnectorError::Network(err.to_string()),
+            other => ConnectorError::Other(other.to_string()),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

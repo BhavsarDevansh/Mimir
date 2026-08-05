@@ -399,7 +399,7 @@ fn source_type_for(classification: Classification) -> SourceType {
 // ---------------------------------------------------------------------------
 
 /// Parse an entity type string into the Rust enum.
-fn parse_entity_type(s: &str) -> Result<EntityType, KnowledgeError> {
+pub fn parse_entity_type(s: &str) -> Result<EntityType, KnowledgeError> {
     match s {
         "Person" => Ok(EntityType::Person),
         "Place" => Ok(EntityType::Place),
@@ -686,6 +686,9 @@ fn parse_extracted_fact(extracted: &ExtractedFact) -> Result<NormalizedFact, Kno
         requires_user_action,
         // Conversational facts have no native source item id.
         raw_reference: None,
+        // Conversational facts are LLM-extracted; carry that on the fact so
+        // the value survives even if a future caller mixes methods in a batch.
+        extraction_method: Some(ExtractionMethod::LlmExtraction),
         // Chat never hints the event kind; the overlay derives it.
         event_type: None,
         location,
@@ -694,7 +697,7 @@ fn parse_extracted_fact(extracted: &ExtractedFact) -> Result<NormalizedFact, Kno
 
 /// Parse an RFC-3339 temporal bound, warning and dropping it on failure so a
 /// malformed bound never aborts the whole fact (matches the legacy behaviour).
-fn parse_temporal_bound(s: Option<&str>) -> Option<DateTime<Utc>> {
+pub fn parse_temporal_bound(s: Option<&str>) -> Option<DateTime<Utc>> {
     let s = s?;
     match DateTime::parse_from_rfc3339(s) {
         Ok(dt) => Some(dt.with_timezone::<Utc>(&Utc)),
@@ -710,7 +713,7 @@ fn parse_temporal_bound(s: Option<&str>) -> Option<DateTime<Utc>> {
 }
 
 /// Map an LLM-emitted recurrence string to a `RecurrenceType`.
-fn parse_recurrence(value: &str) -> Option<RecurrenceType> {
+pub fn parse_recurrence(value: &str) -> Option<RecurrenceType> {
     match value.to_ascii_lowercase().as_str() {
         "none" => Some(RecurrenceType::None),
         "daily" => Some(RecurrenceType::Daily),
@@ -721,8 +724,26 @@ fn parse_recurrence(value: &str) -> Option<RecurrenceType> {
     }
 }
 
+/// Map an LLM-emitted event-type string to an [`EventType`].
+///
+/// Connector LLM extraction (Email C7 / #201) includes an optional event
+/// hint in its tool output; Rust validates it against the enum rather
+/// than trusting the raw string, returning `None` for an unrecognised
+/// value so the events-subsystem overlay falls back to derivation.
+pub fn parse_event_type(value: &str) -> Option<EventType> {
+    match value.trim() {
+        "Birthday" => Some(EventType::Birthday),
+        "Appointment" => Some(EventType::Appointment),
+        "Deadline" => Some(EventType::Deadline),
+        "Task" => Some(EventType::Task),
+        "Reminder" => Some(EventType::Reminder),
+        "Custom" => Some(EventType::Custom),
+        _ => None,
+    }
+}
+
 /// Map an LLM-emitted location-type string to a [`LocationType`].
-fn parse_location_type(value: &str) -> Result<LocationType, KnowledgeError> {
+pub fn parse_location_type(value: &str) -> Result<LocationType, KnowledgeError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "home" => Ok(LocationType::Home),
         "work" => Ok(LocationType::Work),
@@ -740,7 +761,7 @@ fn parse_location_type(value: &str) -> Result<LocationType, KnowledgeError> {
 /// `location_type` is required (it classifies the row); the geo half
 /// (address / coords) is optional and filled by the geocoder later when only
 /// one side is known.
-fn parse_location(loc: &ExtractedLocation) -> Result<NormalizedLocation, KnowledgeError> {
+pub fn parse_location(loc: &ExtractedLocation) -> Result<NormalizedLocation, KnowledgeError> {
     let location_type = match loc.location_type.as_deref() {
         Some(s) => parse_location_type(s)?,
         None => {

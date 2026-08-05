@@ -39,6 +39,39 @@ pub trait LlmBackend: Send + Sync + Debug {
         Ok((msg.content, usage))
     }
 
+    /// Send a non-streaming chat completion request on the **system queue**.
+    ///
+    /// System-queue calls run at a lower priority than user chat: a pooled
+    /// backend drains the user queue before servicing a system job, so a
+    /// queued user chat preempts a waiting connector call. Background work —
+    /// connector LLM extraction (#201), condensation, inference — routes here
+    /// so one-call-at-a-time providers never block interactive chat.
+    ///
+    /// The default implementation delegates to [`Self::chat_message`] so
+    /// backends without a separate system queue (mocks, direct test clients,
+    /// model-override clones) run synchronously. Pool-backed backends
+    /// (`LlmClient`) override this to enqueue on the system queue.
+    async fn system_chat_message(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(Message, Usage), LlmError> {
+        self.chat_message(messages, tools).await
+    }
+
+    /// Send a non-streaming chat completion request on the **system queue**.
+    ///
+    /// Default implementation delegates to [`Self::system_chat_message`] and
+    /// extracts the text content.
+    async fn system_chat(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(String, Usage), LlmError> {
+        let (msg, usage) = self.system_chat_message(messages, tools).await?;
+        Ok((msg.content, usage))
+    }
+
     /// Send a streaming chat completion request that includes token usage.
     async fn chat_stream_with_usage(
         &self,

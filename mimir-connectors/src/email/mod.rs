@@ -42,6 +42,7 @@
 
 pub mod imap;
 pub(crate) mod jsonld;
+pub(crate) mod llm;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -61,6 +62,7 @@ use crate::connector::{
 use crate::email::imap::{FetchResult, ImapAuth, ImapSession, connect_tls, imap_login};
 use crate::oauth;
 use crate::secrets::{SecretBundle, SecretStore};
+use mimir_core::llm::LlmBackend;
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType};
 
 // ---------------------------------------------------------------------------
@@ -243,6 +245,12 @@ pub struct EmailConnector {
     /// configured (the primary `has_event` fact is then skipped, matching the
     /// Calendar connector's behaviour).
     user_identity: Option<String>,
+    /// Shared LLM backend for the prose-extraction layer (C7 / #201).
+    /// `None` when the daemon injected no backend; the LLM layer is
+    /// then skipped (deterministic layers 1-2 still run). Calls route
+    /// through [`LlmBackend::system_chat_message`] so they sit on the
+    /// shared pool's system queue, below user-chat priority.
+    llm_backend: Option<Arc<dyn LlmBackend>>,
 }
 
 impl EmailConnector {
@@ -253,7 +261,7 @@ impl EmailConnector {
         secret_store: Option<Arc<dyn SecretStore>>,
         cursor: Option<String>,
     ) -> Result<Self, ConnectorError> {
-        Self::from_config_with_http(config, secret_store, None, cursor, None)
+        Self::from_config_with_http(config, secret_store, None, cursor, None, None)
     }
 
     /// Build a connector, allowing an injected `http` client (tests inject a
@@ -265,6 +273,7 @@ impl EmailConnector {
         user_identity: Option<String>,
         cursor: Option<String>,
         http: Option<reqwest::Client>,
+        llm_backend: Option<Arc<dyn LlmBackend>>,
     ) -> Result<Self, ConnectorError> {
         // Recover the supervisor-injected slug before parsing the DTO: serde
         // ignores unknown fields (the DTO has no `deny_unknown_fields`), so
@@ -298,6 +307,7 @@ impl EmailConnector {
             user_identity: user_identity
                 .filter(|n| !n.trim().is_empty())
                 .map(|n| n.trim().to_string()),
+            llm_backend,
         })
     }
 
@@ -804,13 +814,17 @@ impl Connector for EmailConnector {
             // (matching the persisted cursor format) to stay globally unique.
             let raw_ref = format!("{}:{}", mail.uid_validity, mail.uid);
             if let Some(message) = MessageParser::default().parse(&mail.raw) {
+                // Layers 1-2: deterministic extraction (structured parse). Both
+                // run on the same parsed Message so there is no second MIME
+                // parse, and both tag their facts with
+                // `extraction_method = StructuredParse`.
+                let before = facts.len();
                 facts.extend(self.extract_invites(&message, &raw_ref));
                 // Layer 2: schema.org JSON-LD deterministic extraction
                 // (#249). Scans HTML parts for <script type="application/ld+json">
                 // and emits typed facts for recognised schema.org types
                 // (Order, ParcelDelivery, FlightReservation, …). No LLM —
-                // pure Rust parsing. Runs on the same parsed Message as the
-                // iMIP layer (layer 1) so there is no second MIME parse.
+                // pure Rust parsing.
                 //
                 // Known limitation: when a single email carries both an iMIP
                 // invite and an equivalent JSON-LD `EventReservation` for the
@@ -825,6 +839,44 @@ impl Connector for EmailConnector {
                     &message,
                     &raw_ref,
                 ));
+
+                // Layer 3: LLM extraction (C7 / #201) — the last-resort layer
+                // for unstructured prose a deterministic layer cannot read.
+                // Only run it when layers 1-2 produced *no* facts for this
+                // message, so a deterministic layer already read the email
+                // (machine-readable invite / JSON-LD) is never re-processed by
+                // the LLM (avoids duplicate extraction and bounds LLM cost).
+                // When no backend is injected the layer is skipped, leaving
+                // deterministic extraction unchanged.
+                if facts.len() == before {
+                    if let Some(backend) = &self.llm_backend {
+                        match llm::extract_prose_facts(
+                            backend,
+                            self.user_identity.as_deref(),
+                            &message,
+                            &raw_ref,
+                        )
+                        .await
+                        {
+                            Ok(prose_facts) => facts.extend(prose_facts),
+                            // A retryable LLM failure must not become a
+                            // silent empty extraction: the buffer was drained
+                            // and the IMAP cursor advanced, so re-staging the
+                            // raw email keeps it for the next extraction cycle
+                            // (until extraction succeeds or a durable retry /
+                            // terminal-failure policy lands). Deterministic
+                            // facts already collected this cycle are kept, so
+                            // a transient LLM error never blocks them.
+                            Err(error) => {
+                                warn!(
+                                    raw_ref,
+                                    "LLM email extraction failed; re-staging raw email for retry: {error}"
+                                );
+                                self.buffer.lock().await.push(mail.clone());
+                            }
+                        }
+                    }
+                }
             } else {
                 debug!(uid = mail.uid, "could not parse RFC 822 message; skipping");
             }
@@ -880,6 +932,7 @@ impl ConnectorFactory for EmailConnectorFactory {
             ctx.user_identity.clone(),
             cursor,
             None,
+            ctx.llm_backend.clone(),
         )?;
         Ok(Arc::new(connector) as Arc<dyn Connector>)
     }
@@ -1050,6 +1103,7 @@ mod tests {
             app_config(),
             None,
             name.map(|n| n.to_string()),
+            None,
             None,
             None,
         )
@@ -1824,6 +1878,172 @@ END:VCALENDAR
             );
         }
     }
+
+    // --- C7 / #201: LLM prose-extraction cascade layer 3 ---------------------
+
+    use mimir_core::llm::MockLlmClient;
+
+    /// Construct a connector with an injected LLM backend (and the user
+    /// identity) so the layer-3 prose path is exercised end-to-end through
+    /// `extract()`.
+    fn connector_with_llm(
+        name: Option<&str>,
+        backend: Option<Arc<dyn LlmBackend>>,
+    ) -> EmailConnector {
+        EmailConnector::from_config_with_http(
+            app_config(),
+            None,
+            name.map(|n| n.to_string()),
+            None,
+            None,
+            backend,
+        )
+        .expect("config")
+    }
+
+    fn llm_tool_response(json: &str) -> Arc<MockLlmClient> {
+        let tool_call = mimir_core::llm::ToolCall {
+            index: 0,
+            id: "call_1".into(),
+            call_type: "function".into(),
+            function: mimir_core::llm::FunctionCall {
+                name: "extract_email_facts".into(),
+                arguments: json.into(),
+            },
+        };
+        let message = mimir_core::llm::Message {
+            role: "assistant".into(),
+            content: String::new(),
+            tool_calls: Some(vec![tool_call]),
+            tool_call_id: None,
+        };
+        Arc::new(
+            MockLlmClient::builder()
+                .push_chat_message(message, Default::default())
+                .build(),
+        )
+    }
+
+    async fn stage(connector: &EmailConnector, raw: Vec<u8>) {
+        connector.buffer.lock().await.push(imap::RawEmail {
+            uid: 42,
+            uid_validity: 17,
+            internal_date: None,
+            raw,
+        });
+    }
+
+    #[tokio::test]
+    async fn llm_layer_skipped_when_no_backend_configured() {
+        // With no backend, a plain-prose email produces no facts: the
+        // deterministic layers read nothing and layer 3 is disabled.
+        let connector = connector_with_llm(Some("Devansh"), None);
+        stage(&connector, plain_email()).await;
+        let facts = connector.extract().await.expect("extract");
+        assert!(facts.is_empty(), "no backend -> no LLM facts");
+    }
+
+    #[tokio::test]
+    async fn llm_layer_not_invoked_when_deterministic_layer_already_read_the_email() {
+        // An iMIP invite yields deterministic facts, so layer 3 must NOT run
+        // even when a backend is configured (cascade gate avoids duplicate
+        // extraction and an unnecessary LLM call).
+        let mock = llm_tool_response(r#"{"facts": []}"#);
+        let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
+        stage(&connector, invite_email("REQUEST")).await;
+        let facts = connector.extract().await.expect("extract");
+        assert!(
+            facts.iter().any(|f| f.relationship_type == "has_event"),
+            "deterministic invite facts still extracted: {facts:?}"
+        );
+        assert!(
+            mock.system_chat_calls().is_empty(),
+            "LLM must not run when a deterministic layer already produced facts"
+        );
+    }
+
+    #[tokio::test]
+    async fn llm_layer_extracts_prose_when_no_deterministic_facts() {
+        // A plain-prose appointment email yields nothing from layers 1-2, so
+        // layer 3 runs and the LLM's validated facts are appended with
+        // `extraction_method = LlmExtraction`.
+        let mock = llm_tool_response(
+            r#"{"facts": [{
+                "subject": "the user",
+                "subject_type": "Person",
+                "relationship_type": "has_appointment",
+                "object": "Dentist check-up",
+                "object_is_entity": true,
+                "object_type": "Event",
+                "temporal": {"valid_from": "2026-08-11T14:00:00Z"},
+                "event_type": "Appointment"
+            }]}"#,
+        );
+        let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
+        let prose: Vec<u8> = b"From: reception@dentalclinic.com\r\n\
+Subject: Your appointment\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+\r\n\
+See you Tuesday 3pm. Please arrive 10 minutes early.\r\n"
+            .to_vec();
+        stage(&connector, prose).await;
+        let facts = connector.extract().await.expect("extract");
+        assert_eq!(facts.len(), 1, "{facts:?}");
+        assert_eq!(facts[0].relationship_type, "has_appointment");
+        assert_eq!(facts[0].subject, "Devansh");
+        assert_eq!(
+            facts[0].extraction_method,
+            Some(mimir_knowledge::models::source::ExtractionMethod::LlmExtraction)
+        );
+        assert_eq!(facts[0].raw_reference.as_deref(), Some("17:42"));
+        assert_eq!(mock.system_chat_calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn llm_layer_spam_email_skips_call_and_yields_no_facts() {
+        // An obvious bulk-marketing email is skipped by the Rust pre-filter
+        // before any LLM call: no facts, no system-queue call.
+        let mock = llm_tool_response(r#"{"facts": []}"#);
+        let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
+        let spam: Vec<u8> = b"From: promo@mailchimp.com\r\n\
+Subject: 50% off everything\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+\r\n\
+Sale ends Sunday!\r\n"
+            .to_vec();
+        stage(&connector, spam).await;
+        let facts = connector.extract().await.expect("extract");
+        assert!(facts.is_empty());
+        assert!(mock.system_chat_calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn llm_failure_re_stages_raw_email_for_retry() {
+        // A retryable LLM failure must not become a silent empty extraction:
+        // the raw email is re-staged in the buffer so the next extraction
+        // cycle retries it, and the deterministic layers' facts (here none)
+        // are returned without aborting the batch.
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_chat_error(mimir_core::llm::LlmError::QueueFull)
+                .build(),
+        );
+        let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
+        let prose: Vec<u8> = b"From: reception@dentalclinic.com\r\n\
+Subject: Your appointment\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+\r\n\
+See you Tuesday 3pm.\r\n"
+            .to_vec();
+        stage(&connector, prose).await;
+        let facts = connector.extract().await.expect("extract");
+        assert!(facts.is_empty(), "no deterministic facts for a prose email");
+        assert_eq!(mock.system_chat_calls().len(), 1, "LLM was attempted once");
+        assert!(
+            !connector.buffer.lock().await.is_empty(),
+            "failed raw email must be re-staged for retry"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2326,9 +2546,15 @@ mod imap_integration {
         tokio::spawn(run_fake(server, cfg, None, Arc::clone(&select_count)));
         let mut config = super::tests::app_config();
         config["mode"] = serde_json::json!("poll");
-        let connector =
-            EmailConnector::from_config_with_http(config, None, Some("Devansh".into()), None, None)
-                .expect("config");
+        let connector = EmailConnector::from_config_with_http(
+            config,
+            None,
+            Some("Devansh".into()),
+            None,
+            None,
+            None,
+        )
+        .expect("config");
         let session = imap_login(Client::new(client), app_password_auth())
             .await
             .expect("login");

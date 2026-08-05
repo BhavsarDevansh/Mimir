@@ -121,6 +121,25 @@ Jobs enqueued concurrently with a flush are not guaranteed to have completed.
 `AppState::shutdown` calls it after stopping the background scheduler, so
 queued `entity_locations` upserts complete before resources are torn down.
 
+### Write serialisation (issue #236)
+
+Both the ingestion caller (`normalize_and_insert`) and the background overlay
+worker write to the same SQLite database. In WAL mode a *deferred* transaction
+that reads (entity resolution, temporal-overlap check), then has another
+connection commit, then writes is rejected with an immediate, un-retriable
+`SQLITE_BUSY` — the read snapshot is stale, so `busy_timeout` cannot wait it
+out. This surfaced as flaky `entity_locations` tests (a location overlay
+silently dropped, or an `insert_fact` failing) and could fail a real ingestion
+under heavy connector load.
+
+The fix is a shared `KnowledgeGraph::write_lock` (`tokio::sync::Mutex`):
+`normalize_and_insert` holds it per-fact across its read-then-write
+transaction, and the overlay worker holds it across the `upsert_location` +
+`ensure_place_coordinates` DB writes (but **not** the geocode network call,
+which stays off-thread). The two writers can therefore never commit
+concurrently, eliminating the stale-snapshot `SQLITE_BUSY`. Reads stay fully
+concurrent (the lock is held only across write transactions).
+
 The `Geocoder` trait lives in `mimir-core` (so `mimir-knowledge` can name it
 without depending on `mimir-connectors`); the Nominatim default backend lives
 in `mimir-connectors` and is injected by the server at startup

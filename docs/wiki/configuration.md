@@ -112,6 +112,9 @@ mimir ask "Hello"
 | `MIMIR_SERVER_SOCKET_PATH` | Unix domain socket path for local CLI | (disabled by default) |
 | `MIMIR_KNOWLEDGE_EVENTS_SCHEDULE_TIMES` | Comma-separated daily scan times (HH:MM) for the events job | `07:30,19:45` |
 | `MIMIR_KNOWLEDGE_EVENTS_HORIZON_DAYS` | How many days ahead the events scan looks for upcoming facts | `30` |
+| `MIMIR_CONTEXT_DB_PATH` | Override the conversation-history database path | `/tmp/mimir/context.db` |
+| `MIMIR_KNOWLEDGE_DB_PATH` | Override the knowledge-graph database path | `/tmp/mimir/knowledge.db` |
+| `MIMIR_JOBS_DB_PATH` | Override the job-queue database path | `/tmp/mimir/jobs.db` |
 
 ## Proactivity Levels
 

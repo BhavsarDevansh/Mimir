@@ -20,6 +20,8 @@ fn e2e_ask_no_stream_round_trip() {
     // and the CLI subcommands receive env vars via Command::env().
 
     let db_path = data_dir.join("mimir").join("context.db");
+    let kg_db_path = data_dir.join("mimir").join("knowledge.db");
+    let jobs_db_path = data_dir.join("mimir").join("jobs.db");
 
     let config_toml = format!(
         r#"
@@ -37,9 +39,17 @@ bind_addr = "127.0.0.1:0"
 char_limit = 10000
 
 [context]
-db_path = "{}"
+db_path = "{context_db}"
+
+[knowledge]
+db_path = "{kg_db}"
+
+[scheduler]
+db_path = "{jobs_db}"
 "#,
-        db_path.display(),
+        context_db = db_path.display(),
+        kg_db = kg_db_path.display(),
+        jobs_db = jobs_db_path.display(),
     );
 
     std::fs::write(config_dir.join("mimir").join("config.toml"), config_toml).unwrap();
@@ -67,6 +77,8 @@ db_path = "{}"
     config.llm.temperature = 0.0;
     config.server.bind_addr = format!("127.0.0.1:{}", port);
     config.context.db_path = Some(db_path.clone());
+    config.knowledge.db_path = Some(kg_db_path.clone());
+    config.scheduler.db_path = Some(jobs_db_path.clone());
 
     // Start the daemon in-process.
     let config = Arc::new(ReloadableConfig::new(
@@ -192,6 +204,8 @@ fn e2e_sigterm_exits_promptly() {
     drop(listener);
 
     let db_path = data_dir.join("mimir").join("context.db");
+    let kg_db_path = data_dir.join("mimir").join("knowledge.db");
+    let jobs_db_path = data_dir.join("mimir").join("jobs.db");
     let config_toml = format!(
         r#"
 [llm]
@@ -205,9 +219,17 @@ bind_addr = "127.0.0.1:{port}"
 
 [context]
 db_path = "{db}"
+
+[knowledge]
+db_path = "{kg_db}"
+
+[scheduler]
+db_path = "{jobs_db}"
 "#,
         port = port,
         db = db_path.display(),
+        kg_db = kg_db_path.display(),
+        jobs_db = jobs_db_path.display(),
     );
     std::fs::write(config_dir.join("mimir").join("config.toml"), config_toml).unwrap();
 

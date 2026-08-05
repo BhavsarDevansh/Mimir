@@ -234,6 +234,15 @@ pub async fn normalize_and_insert(
     let mut outcome = ExtractionOutcome::default();
 
     for mut fact in facts {
+        // Serialise this fact's writes with the background overlay worker
+        // (issue #236). Without the lock, the worker could commit a location
+        // upsert between this caller's read (entity resolution / overlap
+        // check) and its `insert_fact` write, staling the deferred WAL
+        // transaction with an immediate, un-retriable `SQLITE_BUSY`. The
+        // guard is per-fact so the worker can drain overlays between facts
+        // and reads stay concurrent.
+        let _write_guard = kg.write_lock().lock().await;
+
         // Canonicalise the predicate: `ensure_relationship_type` normalises,
         // consults the alias table (single source of truth), and auto-creates
         // a canonical type + self-alias on a miss. The id threads through to
@@ -560,7 +569,11 @@ async fn process_normalized_fact(
 /// geocoder's rate limit. Only the non-sensitive (inserted) path enqueues an
 /// overlay today; wiring the pending-confirmation path is tracked as follow-up
 /// work.
-async fn apply_location_overlay(pool: &sqlx::SqlitePool, apply: LocationOverlayApply) {
+async fn apply_location_overlay(
+    pool: &sqlx::SqlitePool,
+    write_lock: &std::sync::Arc<tokio::sync::Mutex<()>>,
+    apply: LocationOverlayApply,
+) {
     let LocationOverlayApply {
         geocoder,
         entity_id,
@@ -608,6 +621,14 @@ async fn apply_location_overlay(pool: &sqlx::SqlitePool, apply: LocationOverlayA
             }
         }
     }
+
+    // Serialise the DB writes with ingestion callers (issue #236): hold the
+    // knowledge-graph write lock across the upsert + place-anchor so the
+    // worker cannot commit between an ingestion caller's read-then-write
+    // transaction (which would stale-snapshot it with an immediate,
+    // un-retriable `SQLITE_BUSY`). Geocoding above stays outside the lock so
+    // the rate-limited network call does not block ingestion.
+    let _write_guard = write_lock.lock().await;
 
     if let Err(error) = queries::entity::upsert_location(
         pool,
@@ -709,21 +730,28 @@ pub(crate) struct LocationOverlayApply {
 /// closes the channel and the worker exits cleanly.
 pub(crate) fn start_location_overlay_worker(
     pool: sqlx::SqlitePool,
+    write_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
 ) -> tokio::sync::mpsc::UnboundedSender<OverlayJob> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    tokio::spawn(location_overlay_worker(rx, pool));
+    tokio::spawn(location_overlay_worker(rx, pool, write_lock));
     tx
 }
 
 /// Drain [`OverlayJob`]s in FIFO order, geocoding + upserting each location.
+///
+/// The DB-write half of each `Apply` job is performed under the shared
+/// [`KnowledgeGraph::write_lock`] (issue #236) so it cannot interleave with
+/// an ingestion caller's write transaction; the geocode half stays unlocked
+/// to preserve off-thread throughput.
 async fn location_overlay_worker(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<OverlayJob>,
     pool: sqlx::SqlitePool,
+    write_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
 ) {
     while let Some(job) = rx.recv().await {
         match job {
             OverlayJob::Apply(apply) => {
-                apply_location_overlay(&pool, apply).await;
+                apply_location_overlay(&pool, &write_lock, apply).await;
             }
             OverlayJob::Flush(tx) => {
                 let _ = tx.send(());

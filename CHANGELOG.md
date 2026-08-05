@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.87.0] — 2026-08-04
+
+### Bug fixes
+
+- **Configurable knowledge-graph + job-queue database paths (#233):** `knowledge.db_path` and `scheduler.db_path` are now configurable (and overridable via `MIMIR_KNOWLEDGE_DB_PATH` / `MIMIR_JOBS_DB_PATH`), mirroring the existing `context.db_path`. Previously `AppState::from_config_with_llm` hardcoded the knowledge-graph and job-queue databases to the shared Mimir data directory, ignoring any config override, so the in-process e2e daemon opened the developer's real `~/.local/share/mimir/knowledge.db`. Knowledge-graph backups are now written alongside the (possibly overridden) knowledge DB instead of always escaping to the shared data dir.
+- **E2E tests isolate every database to the tempdir (#251, #256, #237):** `mimir/tests/e2e.rs` now points the in-process daemon at tempdir paths for `context.db`, `knowledge.db`, and `jobs.db`. The suite no longer touches or migrates the developer's real knowledge/job databases, eliminating the `migration 45 was previously applied but has been modified` checksum-mismatch failure that made `e2e_ask_no_stream_round_trip` always fail on machines that had run `mimir start` before.
+- **Fix flaky `entity_locations` "database is locked" (#236):** the background location-overlay worker and the ingestion caller (`normalize_and_insert`) now serialise their SQLite write transactions through a shared `KnowledgeGraph::write_lock`. In WAL mode a deferred read-then-write transaction that has another connection commit between its read and its write is rejected with an immediate, un-retriable `SQLITE_BUSY` (the snapshot is stale, so `busy_timeout` cannot help), which silently dropped a location overlay or failed an `insert_fact` under interleaving. The lock is held per-fact across the ingestion write and across the worker's `upsert_location` + `ensure_place_coordinates` writes, but not across the geocode network call, so off-thread geocoding throughput is preserved and reads stay fully concurrent.
+
+### Docs
+
+- `docs/config-system.md`, `docs/wiki/configuration.md`, `docs/entity-locations.md`, `docs/wiki/entity-locations.md`, and `docs/wiki/e2e-tests.md` updated for the new database-path overrides and the write-serialisation fix.
+
 ## [0.86.2] — 2026-08-04
 
 ### Connectors — Email JSON-LD extraction review follow-up (PR #257)

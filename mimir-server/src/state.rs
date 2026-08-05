@@ -106,10 +106,10 @@ impl AppState {
     ) -> anyhow::Result<(Self, tokio::sync::watch::Receiver<bool>)> {
         let cfg = config.snapshot().await;
 
-        let db_path = match cfg.context.db_path.clone() {
-            Some(p) => p,
-            None => mimir_core::paths::default_db_path()?,
-        };
+        let db_path = mimir_core::paths::resolve_db_path(
+            cfg.context.db_path.clone(),
+            mimir_core::paths::default_db_path,
+        )?;
         let context_manager = Arc::new(ContextManager::new(&db_path).await?);
 
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
@@ -140,7 +140,18 @@ impl AppState {
         }
 
         // Initialise knowledge graph.
-        let kg_db_path = mimir_core::paths::knowledge_db_path()?;
+        let kg_db_path = mimir_core::paths::resolve_db_path(
+            cfg.knowledge.db_path.clone(),
+            mimir_core::paths::knowledge_db_path,
+        )?;
+        // Knowledge-graph backups live alongside the (possibly overridden)
+        // knowledge DB so an isolated `knowledge.db_path` keeps backups inside
+        // the same temp/alternate directory instead of escaping to the shared
+        // data dir (issue #233).
+        let backup_dir = kg_db_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("backups");
         let mut knowledge_graph = mimir_knowledge::KnowledgeGraph::init(&kg_db_path).await?;
 
         // Inject the default OSM Nominatim geocoder so the entity-locations
@@ -269,7 +280,10 @@ impl AppState {
         );
 
         // Initialise job queue.
-        let jobs_db_path = mimir_core::paths::jobs_db_path()?;
+        let jobs_db_path = mimir_core::paths::resolve_db_path(
+            cfg.scheduler.db_path.clone(),
+            mimir_core::paths::jobs_db_path,
+        )?;
         let job_queue = Arc::new(JobQueue::init(&jobs_db_path).await?);
 
         // Initialise agent runtime. The LibrarianAgent is registered so it
@@ -297,7 +311,6 @@ impl AppState {
         let kg_for_job = Arc::clone(&knowledge_graph);
         let llm_for_job = Arc::clone(&llm_client);
         let activity_for_job = Arc::clone(&last_user_activity);
-        let backup_dir = mimir_core::paths::data_dir()?.join("backups");
         let timeout_minutes = cfg.knowledge.optimization.timeout_minutes;
         let schedule_time = cfg.knowledge.optimization.schedule_time.clone();
         let pending_cleanup_retention_days = cfg.knowledge.pending_cleanup.retention_days;

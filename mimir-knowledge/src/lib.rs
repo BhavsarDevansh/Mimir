@@ -30,6 +30,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use tokio::sync::Mutex;
 use tokio::sync::{Notify, RwLock, mpsc, oneshot};
 
 use crate::inference::rules::contradiction::ContradictionRule;
@@ -196,6 +197,14 @@ pub struct KnowledgeGraph {
     /// rate limit. The worker processes jobs in FIFO order, preserving
     /// move/supersession semantics; see [`crate::normalize::OverlayJob`].
     location_overlay_tx: mpsc::UnboundedSender<OverlayJob>,
+    /// Serialises all knowledge-graph *write* transactions so the background
+    /// location-overlay worker cannot commit a write in the middle of an
+    /// ingestion caller's read-then-write transaction (issue #236). In WAL
+    /// mode a deferred transaction that reads a snapshot, then has another
+    /// connection commit, then writes returns `SQLITE_BUSY` immediately —
+    /// `busy_timeout` cannot wait it out because the snapshot is stale. The
+    /// lock is held only across write transactions; reads stay concurrent.
+    write_lock: Arc<Mutex<()>>,
 }
 
 impl std::fmt::Debug for KnowledgeGraph {
@@ -238,7 +247,9 @@ impl KnowledgeGraph {
 
         let pending: HashSet<i32> = pending_ids.into_iter().collect();
 
-        let location_overlay_tx = start_location_overlay_worker(pool.clone());
+        let write_lock = Arc::new(Mutex::new(()));
+        let location_overlay_tx =
+            start_location_overlay_worker(pool.clone(), Arc::clone(&write_lock));
 
         Ok(Self {
             pool,
@@ -251,6 +262,7 @@ impl KnowledgeGraph {
             condensation_notify: Arc::new(Notify::new()),
             geocoder: None,
             location_overlay_tx,
+            write_lock,
         })
     }
 
@@ -281,6 +293,15 @@ impl KnowledgeGraph {
     /// Sender for the location-overlay background worker (Phase 3 S3 / #193).
     pub(crate) fn location_overlay_tx(&self) -> &mpsc::UnboundedSender<OverlayJob> {
         &self.location_overlay_tx
+    }
+
+    /// Shared write-serialisation lock (issue #236). Holders perform all
+    /// knowledge-graph *write* transactions under this mutex so the
+    /// background overlay worker and ingestion callers never commit
+    /// concurrently; see [`normalize_and_insert`] and
+    /// [`start_location_overlay_worker`].
+    pub(crate) fn write_lock(&self) -> &Arc<Mutex<()>> {
+        &self.write_lock
     }
 
     /// Await every location-overlay job enqueued before this call.

@@ -209,6 +209,26 @@ impl LlmClient {
         }
     }
 
+    /// Send a non-streaming chat completion request on the **system queue**.
+    ///
+    /// Routes through the backing [`LlmWorkerPool`]'s system queue when pooled,
+    /// so the call runs at lower priority than user chat (a queued user job is
+    /// drained first). When the client has no pool (model-override clones,
+    /// direct test clients) the call runs synchronously via
+    /// [`chat_message_direct`](Self::chat_message_direct) — the system/user
+    /// distinction only exists for a pooled client.
+    pub async fn system_chat_message(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(Message, Usage), LlmError> {
+        if let Some(pool) = &self.pool {
+            pool.enqueue_system_chat_message(messages, tools).await
+        } else {
+            self.chat_message_direct(messages, tools).await
+        }
+    }
+
     /// Send a streaming chat completion request that includes token usage.
     ///
     /// The returned stream yields `StreamItem::Text` for each content chunk and
@@ -530,6 +550,14 @@ impl LlmBackend for LlmClient {
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<(Message, Usage), LlmError> {
         self.chat_message(messages, tools).await
+    }
+
+    async fn system_chat_message(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(Message, Usage), LlmError> {
+        self.system_chat_message(messages, tools).await
     }
 
     async fn chat_stream_with_usage(

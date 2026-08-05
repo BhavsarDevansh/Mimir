@@ -69,6 +69,7 @@ fn home_fact(
         recurrence: models::enums::RecurrenceType::None,
         requires_user_action: false,
         raw_reference: None,
+        extraction_method: None,
         event_type: None,
         location: Some(NormalizedLocation {
             location_type: LocationType::Home,

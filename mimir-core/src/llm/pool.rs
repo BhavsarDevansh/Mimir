@@ -213,6 +213,7 @@ impl LlmWorkerPool {
     pub async fn enqueue_system_chat_message(
         &self,
         messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
     ) -> Result<(Message, Usage), LlmError> {
         let (tx, rx) = oneshot::channel();
         {
@@ -222,7 +223,7 @@ impl LlmWorkerPool {
             }
             queue.push_back(Job::Chat {
                 messages,
-                tools: None,
+                tools,
                 respond: tx,
             });
         }
@@ -235,8 +236,9 @@ impl LlmWorkerPool {
     pub async fn enqueue_system_chat(
         &self,
         messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
     ) -> Result<(String, Usage), LlmError> {
-        let (msg, usage) = self.enqueue_system_chat_message(messages).await?;
+        let (msg, usage) = self.enqueue_system_chat_message(messages, tools).await?;
         Ok((msg.content, usage))
     }
 
@@ -244,6 +246,7 @@ impl LlmWorkerPool {
     pub async fn enqueue_system_chat_stream(
         &self,
         messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
         let (tx, rx) = mpsc::channel::<Result<StreamItem, LlmError>>(64);
         {
@@ -253,7 +256,7 @@ impl LlmWorkerPool {
             }
             queue.push_back(Job::ChatStream {
                 messages,
-                tools: None,
+                tools,
                 respond: tx,
             });
         }
@@ -455,7 +458,7 @@ mod tests {
             .unwrap();
 
         // Enqueue system first — it should sit in the system queue.
-        let system_job = pool.enqueue_system_chat(vec![Message::system("system-first")]);
+        let system_job = pool.enqueue_system_chat(vec![Message::system("system-first")], None);
         // Give the worker a moment to pick up the system job if it were to.
         tokio::time::sleep(Duration::from_millis(50)).await;
 

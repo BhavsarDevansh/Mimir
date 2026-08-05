@@ -40,6 +40,12 @@ pub struct MockLlmClient {
     in_flight_count_val: Mutex<usize>,
     chat_records: Mutex<Vec<CallRecord>>,
     stream_records: Mutex<Vec<CallRecord>>,
+    /// Records for [`LlmBackend::system_chat_message`] calls, kept separate
+    /// from `chat_records` so tests can assert a connector routed its LLM
+    /// extraction through the system queue (#201) rather than the user
+    /// queue. System calls consume the same queued responses as user
+    /// `chat_message` calls.
+    system_chat_records: Mutex<Vec<CallRecord>>,
 }
 
 /// Builder for [`MockLlmClient`].
@@ -62,6 +68,7 @@ impl MockLlmClient {
                 in_flight_count_val: Mutex::new(0),
                 chat_records: Mutex::new(Vec::new()),
                 stream_records: Mutex::new(Vec::new()),
+                system_chat_records: Mutex::new(Vec::new()),
             },
         }
     }
@@ -79,6 +86,30 @@ impl MockLlmClient {
     /// Return all tool options passed to [`LlmBackend::chat`].
     pub fn chat_tools(&self) -> Vec<Option<Vec<serde_json::Value>>> {
         self.chat_records
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.tools.clone())
+            .collect()
+    }
+
+    /// Return all [`Message`] vectors passed to [`LlmBackend::system_chat_message`].
+    ///
+    /// Empty when nothing routed through the system queue, so a test can
+    /// assert a connector used [`LlmBackend::system_chat_message`] rather
+    /// than the user-queue [`LlmBackend::chat_message`] (#201).
+    pub fn system_chat_calls(&self) -> Vec<Vec<Message>> {
+        self.system_chat_records
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.messages.clone())
+            .collect()
+    }
+
+    /// Return all tool options passed to [`LlmBackend::system_chat_message`].
+    pub fn system_chat_tools(&self) -> Vec<Option<Vec<serde_json::Value>>> {
+        self.system_chat_records
             .lock()
             .unwrap()
             .iter()
@@ -201,6 +232,24 @@ impl LlmBackend for MockLlmClient {
             .lock()
             .unwrap()
             .push(CallRecord { messages, tools });
+        match self.chat_responses.lock().unwrap().pop_front() {
+            Some(result) => result,
+            None => Err(LlmError::RetryExhausted { attempts: 1 }),
+        }
+    }
+
+    async fn system_chat_message(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(Message, Usage), LlmError> {
+        self.system_chat_records
+            .lock()
+            .unwrap()
+            .push(CallRecord { messages, tools });
+        // System calls reuse the user-call response queue so a test only
+        // needs to queue responses once regardless of which queue the
+        // caller targets.
         match self.chat_responses.lock().unwrap().pop_front() {
             Some(result) => result,
             None => Err(LlmError::RetryExhausted { attempts: 1 }),
@@ -368,5 +417,34 @@ mod tests {
         assert_eq!(mock.worker_threads(), 2);
         assert!(!mock.user_queue_has_capacity().await);
         assert_eq!(mock.fetch_model_context_window().await.unwrap(), Some(4096));
+    }
+
+    #[tokio::test]
+    async fn test_system_chat_records_separately_from_user_chat() {
+        // A connector LLM call routes through `system_chat_message`, which the
+        // mock records apart from user-queue `chat_message` so a test can
+        // assert the routing (#201). System calls reuse the queued responses.
+        let mock = MockLlmClient::builder()
+            .push_chat("system-reply", Usage::default())
+            .push_chat("user-reply", Usage::default())
+            .build();
+
+        let (sys_text, _) = mock
+            .system_chat(vec![Message::system("extract facts")], None)
+            .await
+            .unwrap();
+        assert_eq!(sys_text, "system-reply");
+
+        let (usr_text, _) = mock.chat(vec![Message::user("hi")], None).await.unwrap();
+        assert_eq!(usr_text, "user-reply");
+
+        // The system call landed in the system record, not the user record.
+        assert_eq!(mock.system_chat_calls().len(), 1);
+        assert_eq!(
+            mock.system_chat_calls()[0],
+            vec![Message::system("extract facts")]
+        );
+        assert_eq!(mock.chat_calls().len(), 1);
+        assert_eq!(mock.chat_calls()[0], vec![Message::user("hi")]);
     }
 }

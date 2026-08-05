@@ -188,6 +188,19 @@ pub struct NormalizedFact {
     /// Native id of the source item (e.g. an email UID, a calendar event id).
     /// Required when [`Provenance::connector_instance_id`] is set.
     pub raw_reference: Option<String>,
+    /// Per-fact extraction-method override (#234).
+    ///
+    /// `None` (the default) means "inherit the batch [`Provenance`]'s
+    /// `extraction_method`" — the behaviour every existing producer relies
+    /// on. A connector whose single `extract()` batch mixes extraction
+    /// methods (e.g. the Email connector, which runs deterministic iMIP /
+    /// JSON-LD layers alongside the LLM layer #201) sets this per fact so
+    /// `sources.extraction_method_id` records how *this* fact was produced,
+    /// not the supervisor's batch-wide default. The fact value wins when set;
+    /// `None` always falls back to the provenance. This keeps mixed-method
+    /// batches distinguishable in the provenance chain and the confidence
+    /// model without requiring one connector instance per method.
+    pub extraction_method: Option<ExtractionMethod>,
     /// Optional event-type hint for the events-subsystem overlay (#74).
     ///
     /// `None` (the default for conversational facts) lets
@@ -308,6 +321,7 @@ async fn process_normalized_fact(
         recurrence,
         requires_user_action,
         ref raw_reference,
+        extraction_method,
         event_type,
         location,
     } = extracted;
@@ -423,7 +437,7 @@ async fn process_normalized_fact(
         connector_instance_id: provenance.connector_instance_id,
         connector_type: provenance.connector_type,
         raw_reference: raw_reference.clone(),
-        extraction_method: Some(provenance.extraction_method),
+        extraction_method: Some(extraction_method.unwrap_or(provenance.extraction_method)),
         inferred: false,
         inference_depth: 0,
         confidence: Some(confidence),

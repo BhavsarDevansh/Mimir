@@ -144,6 +144,9 @@ mail-parser = { version = "0.11.5", optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tempfile = "3"
 wiremock = "0.6"
+# Enable mimir-core's `mock-llm` feature for deterministic connector LLM tests
+# (Email C7 / #201 prose-extraction layer).
+mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
 
 [features]
 default = ["photos", "calendar", "gmail"]

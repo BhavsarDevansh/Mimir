@@ -81,6 +81,17 @@ pub fn not_found(msg: impl Into<String>) -> Response {
     let body = Json(ApiError::new(msg, "NOT_FOUND"));
     (StatusCode::NOT_FOUND, body).into_response()
 }
+/// Return a `BAD_REQUEST` response.
+pub fn bad_request(msg: impl Into<String>) -> Response {
+    let body = Json(ApiError::new(msg, "BAD_REQUEST"));
+    (StatusCode::BAD_REQUEST, body).into_response()
+}
+
+/// Return a `CONFLICT` response.
+pub fn conflict(msg: impl Into<String>) -> Response {
+    let body = Json(ApiError::new(msg, "CONFLICT"));
+    (StatusCode::CONFLICT, body).into_response()
+}
 
 /// Convert a knowledge graph error into an HTTP response.
 pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
@@ -92,7 +103,8 @@ pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
         | KnowledgeError::DuplicatePreference => (StatusCode::BAD_REQUEST, "VALIDATION_ERROR"),
         KnowledgeError::EntityNotFound(_)
         | KnowledgeError::FactNotFound(_)
-        | KnowledgeError::CategoryNotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
+        | KnowledgeError::CategoryNotFound(_)
+        | KnowledgeError::ConnectorNotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, "KG_ERROR"),
     };
     let message = match &e {

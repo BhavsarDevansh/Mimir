@@ -245,6 +245,18 @@ pub struct ConnectorSupervisor {
     handles: Mutex<HashMap<i32, ConnectorHandle>>,
 }
 
+impl std::fmt::Debug for ConnectorSupervisor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `ConnectorHandle` and the `watch::Receiver` are not `Debug`, and
+        // the handles map is private, so report the registry + a running-count
+        // proxy rather than recursing. This mirrors the `ConnectorRegistry`
+        // Debug impl and keeps `AppState`'s `#[derive(Debug)]` working.
+        f.debug_struct("ConnectorSupervisor")
+            .field("registry", &self.registry)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ConnectorSupervisor {
     /// Create a supervisor over a registry, knowledge graph, and the shared
     /// shutdown signal.
@@ -506,6 +518,33 @@ impl ConnectorSupervisor {
             .await
             .get(&id)
             .is_some_and(|handle| !handle.task.is_finished())
+    }
+
+    /// Stop a single connector's runner task and remove it from the
+    /// supervisor (issue #202 / Phase 3 A1).
+    ///
+    /// Aborts the runner in flight (cancelling any pending cycle), awaits its
+    /// termination, and drops the [`ConnectorHandle`] so a subsequent
+    /// [`restore`](Self::restore) or [`trigger_sync`](Self::trigger_sync)
+    /// will treat the instance as down. The connector row is **not** deleted
+    /// here — row lifecycle is the daemon's responsibility; this only manages
+    /// the in-memory task. Persisting the current sync cursor happens in the
+    /// runner's normal shutdown path; an aborted mid-cycle cycle is treated
+    /// the same as `mimir stop` (the cursor reflects the last *completed*
+    /// sync).
+    ///
+    /// Returns `true` if a runner was stopped, `false` if no live runner exists
+    /// for `id` (already finished, never spawned, or previously stopped).
+    pub async fn stop(&self, id: i32) -> bool {
+        let handle = self.handles.lock().await.remove(&id);
+        match handle {
+            Some(handle) => {
+                handle.task.abort();
+                let _ = handle.task.await;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Parse a row's `config_json`, inject instance identity, and ask the

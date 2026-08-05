@@ -269,3 +269,88 @@ async fn upsert_rejects_type_mismatch_on_existing_slug() {
     assert_eq!(updated.backend, "graph");
     assert_eq!(updated.status(), Some(ConnectorStatus::Active));
 }
+
+#[tokio::test]
+async fn count_sources_for_connector_returns_zero_for_unknown() {
+    let (kg, _dir) = init_kg().await;
+    assert_eq!(kg.count_sources_for_connector(i32::MAX).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn delete_connector_removes_row_and_errors_on_missing() {
+    let (kg, _dir) = init_kg().await;
+    let c = kg.upsert_connector(gmail_input("personal")).await.unwrap();
+
+    kg.delete_connector(c.id).await.unwrap();
+    assert!(kg.get_connector(c.id).await.unwrap().is_none());
+    assert!(
+        kg.get_connector_by_slug("personal")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let err = kg.delete_connector(c.id).await;
+    assert!(matches!(
+        err,
+        Err(mimir_knowledge::KnowledgeError::ConnectorNotFound(_))
+    ));
+}
+
+#[tokio::test]
+async fn count_sources_by_connector_groups_in_one_query() {
+    let (kg, _dir) = init_kg().await;
+    use mimir_knowledge::models::entity::EntityType;
+    use mimir_knowledge::models::fact::NewFact;
+    use mimir_knowledge::models::source::{ExtractionMethod, SourceType};
+
+    let alice = kg
+        .create_entity("Alice", EntityType::Person, &[])
+        .await
+        .unwrap()
+        .id;
+    let london = kg
+        .create_entity("London", EntityType::Place, &[])
+        .await
+        .unwrap()
+        .id;
+    let g = kg.upsert_connector(gmail_input("g")).await.unwrap();
+    let c = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: mimir_knowledge::models::enums::ConnectorType::Calendar,
+            slug: "c".to_string(),
+            backend: "caldav".to_string(),
+            display_name: "C".to_string(),
+            config_json: "{}".to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap();
+
+    let mk = |instance_id: i32, raw: &str| NewFact {
+        subject_id: alice,
+        relationship_type: "is_in".to_string(),
+        object_id: Some(london),
+        object_literal: None,
+        valid_from: None,
+        valid_until: None,
+        source_type: SourceType::Connector,
+        connector_instance_id: Some(instance_id),
+        connector_type: None,
+        raw_reference: Some(raw.to_string()),
+        extraction_method: Some(ExtractionMethod::StructuredParse),
+        inferred: false,
+        inference_depth: 0,
+        confidence: None,
+        parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
+    };
+    kg.insert_fact(mk(g.id, "g-1")).await.unwrap();
+    kg.insert_fact(mk(g.id, "g-2")).await.unwrap();
+    kg.insert_fact(mk(c.id, "c-1")).await.unwrap();
+
+    let counts = kg.count_sources_by_connector().await.unwrap();
+    assert_eq!(counts.get(&g.id).copied(), Some(2));
+    assert_eq!(counts.get(&c.id).copied(), Some(1));
+}

@@ -244,3 +244,77 @@ pub async fn set_auth_state(
     .ok_or(KnowledgeError::ConnectorNotFound(id))?;
     Ok(row)
 }
+
+/// Number of `sources` rows attributed to a connector instance.
+///
+/// This is the derived "items ingested" metric surfaced by the connector
+/// status endpoint (issue #202 / Phase 3 A1): the connectors table itself
+/// stores no count column, so the live value is computed from `sources` on
+/// demand. A missing instance id yields `0` (no FK references a deleted row).
+pub async fn count_sources_for_connector(
+    pool: &SqlitePool,
+    id: i32,
+) -> Result<i64, KnowledgeError> {
+    let count = sqlx::query_scalar("SELECT COUNT(*) FROM sources WHERE connector_instance_id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+    Ok(count)
+}
+
+/// Item counts for every connector instance in one query.
+///
+/// A single `GROUP BY` over `sources` returns `(connector_instance_id, count)`
+/// for every instance that has ingested at least one fact. Connectors with no
+/// ingested facts are absent from the map (the caller treats a missing key as
+/// `0`). Used by the `GET /connectors` list route so item counts are derived in
+/// one round-trip rather than N+1 (issue #202 / Phase 3 A1).
+pub async fn count_sources_by_connector(
+    pool: &SqlitePool,
+) -> Result<std::collections::HashMap<i32, i64>, KnowledgeError> {
+    let rows: Vec<(Option<i32>, i64)> = sqlx::query_as(
+        "SELECT connector_instance_id, COUNT(*)          FROM sources WHERE connector_instance_id IS NOT NULL          GROUP BY connector_instance_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, count)| id.map(|id| (id, count)))
+        .collect())
+}
+
+/// Delete a connector instance row, detaching its provenance first.
+///
+/// The `sources.connector_instance_id` FK has no `ON DELETE` clause (it
+/// defaults to `NO ACTION`), so a raw `DELETE` would violate the FK whenever
+/// the instance has ingested facts. This nulls every referencing `sources`
+/// row — preserving the facts with degraded provenance, consistent with the
+/// Phase 3 plan's split that defers the full `forget` cascade to A2 / #203 —
+/// then deletes the connector row, in one transaction so a partial detach can
+/// never leave the row gone-but-referenced (or vice versa). Returns
+/// [`KnowledgeError::ConnectorNotFound`] when no row matches `id`.
+pub async fn delete_connector(pool: &SqlitePool, id: i32) -> Result<(), KnowledgeError> {
+    let mut tx = pool.begin().await?;
+
+    // Detach provenance. Facts survive with `connector_instance_id = NULL`;
+    // the denormalised `connector_type_id` is retained so the connector kind
+    // remains queryable after the instance registry row is gone.
+    sqlx::query("UPDATE sources SET connector_instance_id = NULL WHERE connector_instance_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    let affected = sqlx::query("DELETE FROM connectors WHERE id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+    tx.commit().await?;
+
+    if affected == 0 {
+        Err(KnowledgeError::ConnectorNotFound(id))
+    } else {
+        Ok(())
+    }
+}

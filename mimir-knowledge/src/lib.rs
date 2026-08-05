@@ -1979,6 +1979,30 @@ impl KnowledgeGraph {
         queries::connector::set_auth_state(&self.pool, id, auth_state, self.now()).await
     }
 
+    /// Number of `sources` rows attributed to a connector instance — the
+    /// derived "items ingested" metric for the connector status endpoint
+    /// (issue #202 / Phase 3 A1).
+    pub async fn count_sources_for_connector(&self, id: i32) -> Result<i64, KnowledgeError> {
+        queries::connector::count_sources_for_connector(&self.pool, id).await
+    }
+
+    /// Item counts for every connector instance in one query — a map of
+    /// `connector_id -> items ingested` (instances with no facts are absent;
+    /// treat a missing key as `0`). Used by the list route so item counts are
+    /// derived in one round-trip rather than N+1 (issue #202 / A1).
+    pub async fn count_sources_by_connector(
+        &self,
+    ) -> Result<std::collections::HashMap<i32, i64>, KnowledgeError> {
+        queries::connector::count_sources_by_connector(&self.pool).await
+    }
+
+    /// Delete a connector instance, detaching its provenance first. See
+    /// [`queries::connector::delete_connector`] for the SET NULL FK
+    /// semantics; the full `forget` cascade is deferred to A2 / #203.
+    pub async fn delete_connector(&self, id: i32) -> Result<(), KnowledgeError> {
+        queries::connector::delete_connector(&self.pool, id).await
+    }
+
     // ------------------------------------------------------------------
     // Preference delegates
     // ------------------------------------------------------------------

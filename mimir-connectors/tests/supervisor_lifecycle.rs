@@ -823,3 +823,48 @@ async fn trigger_sync_on_push_connector_is_unsupported() {
     tx.send(true).unwrap();
     supervisor.shutdown().await;
 }
+
+// ---------------------------------------------------------------------------
+// Single-connector stop (A1 / #202)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn stop_aborts_a_single_running_connector() {
+    let (kg, _dir) = init_kg().await;
+    let mut a = upsert(
+        "stop-a",
+        ConnectorType::Gmail,
+        "test",
+        ConnectorStatus::Active,
+    );
+    a.config_json = with_slug("stop-a", json!({ "__ctype": ConnectorType::Gmail as i64 }));
+    let mut b = upsert(
+        "stop-b",
+        ConnectorType::Gmail,
+        "test",
+        ConnectorStatus::Active,
+    );
+    b.config_json = with_slug("stop-b", json!({ "__ctype": ConnectorType::Gmail as i64 }));
+    let row_a = kg.upsert_connector(a).await.unwrap();
+    let row_b = kg.upsert_connector(b).await.unwrap();
+    let kg = Arc::new(kg);
+
+    let (_tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = make_supervisor(kg.clone(), test_registry(), rx);
+    assert_eq!(supervisor.restore().await.unwrap(), 2);
+    assert!(supervisor.is_running(row_a.id).await);
+    assert!(supervisor.is_running(row_b.id).await);
+
+    // Stopping one runner must not affect the other.
+    assert!(supervisor.stop(row_a.id).await);
+    assert!(!supervisor.is_running(row_a.id).await);
+    assert!(supervisor.is_running(row_b.id).await);
+
+    // A second stop on the same id (already down) reports no action.
+    assert!(!supervisor.stop(row_a.id).await);
+    // An unknown id reports no action.
+    assert!(!supervisor.stop(i32::MAX).await);
+
+    supervisor.shutdown().await;
+    assert!(!supervisor.is_running(row_b.id).await);
+}

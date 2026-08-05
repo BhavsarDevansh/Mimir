@@ -1324,3 +1324,62 @@ line2",
         assert_eq!(roundtrip(&summary), summary);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Connector management (Phase 3 A1 / issue #202)
+// ---------------------------------------------------------------------------
+
+/// Request body for `POST /connectors` — register a new connector instance.
+///
+/// `connector_type` and `backend` select the registered factory; `slug` is the
+/// immutable human label; `config_json` is the backend-specific configuration
+/// object serialised as a string (mirrors the `connectors.config_json`
+/// column). The daemon rejects an existing `slug` with `409 Conflict`
+/// (respawn-on-reconfig is A2 / #203) and an unregistered `(type, backend)`
+/// pair with `400 Bad Request`.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct AddConnectorRequest {
+    pub connector_type: String,
+    pub backend: String,
+    pub slug: String,
+    pub display_name: String,
+    pub config_json: serde_json::Value,
+}
+
+/// Status of a connector instance, mirrored as a lowercase string from the
+/// `ConnectorStatus` enum (`setup` / `active` / `paused` / `error`).
+pub type ConnectorStatus = String;
+/// Auth state of a connector instance, mirrored as a lowercase string from the
+/// `ConnectorAuthState` enum (`unauthenticated` / `authenticated` / `expired`).
+pub type ConnectorAuthState = String;
+
+/// A single connector instance with derived status, surfaced by the
+/// connector management routes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConnectorResponse {
+    pub id: i32,
+    /// Connector kind (`gmail` / `calendar` / `photos` / ...).
+    pub connector_type: String,
+    pub slug: String,
+    pub backend: String,
+    pub display_name: String,
+    pub status: ConnectorStatus,
+    pub auth_state: ConnectorAuthState,
+    pub sync_cursor: Option<String>,
+    /// RFC-3339 timestamp of the last successful sync, if any.
+    pub last_sync_at: Option<String>,
+    pub last_error: Option<String>,
+    /// RFC-3339 timestamp of row creation.
+    pub created_at: String,
+    /// RFC-3339 timestamp of the last row mutation.
+    pub updated_at: String,
+    /// Number of `sources` rows attributed to this instance — the derived
+    /// "items ingested" metric computed from the knowledge graph on demand.
+    pub item_count: i64,
+}
+
+/// `GET /connectors` response — every registered instance, oldest first.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConnectorListResponse {
+    pub connectors: Vec<ConnectorResponse>,
+}

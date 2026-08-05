@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.89.0] — 2026-08-05
+
+### Connectors — daemon wiring + connector CRUD/status routes (A1 / #202)
+
+- **Daemon owns the connector framework at startup:** `AppState::from_config_with_llm` now constructs a `ConnectorRegistry`, registers the built-in Photos (`local`), Calendar (`caldav`), and Email (`imap`) factories behind forwarded cargo features on `mimir-server`, builds a `ConnectorSupervisor` subscribed to the daemon-wide shutdown watch, and chains `with_secret_store(FileSecretStore)` (best-effort), `with_geocoder` (the same `Arc<dyn Geocoder>` the knowledge graph holds), `with_user_identity(cfg.identity.name)` (C4 / #198), and `with_llm_backend(llm_client)` (C7 / #201 — enables the Email prose-extraction system-queue path). `Active` connector runners are restored at startup and drained on graceful shutdown via `AppState::shutdown`. `mimir-server` forwards `photos`/`calendar`/`gmail` features to `mimir-connectors` so each factory registration is gated by the same flag that compiles the backend module.
+- **Connector CRUD/status routes:** four Axum routes round-trip via `mimir-client` — `GET /connectors` (list with derived item counts), `POST /connectors` (add-only; validates the `(connector_type, backend)` pair against the registry, rejects an existing slug with `409`, rejects an unregistered backend or unknown type with `400`, creates the instance in `Setup`), `GET /connectors/{id}` (show with item count; `404` when missing), and `DELETE /connectors/{id}` (stops the runner and deletes the row; `204`). Activation, pause/resume, OAuth, the `forget` cascade, and the `mimir connector` CLI land in A2–A4 (#203–#205).
+- **`ConnectorSupervisor::stop(id)`:** per-instance counterpart of `shutdown()` — aborts a single runner and removes it from the handle map (a no-op returning `false` when no live runner exists). `DELETE` uses it so a mid-cycle sync cannot write back to a vanishing row.
+
+### Knowledge graph — connector provenance support
+
+- **`KnowledgeGraph::count_sources_for_connector(id)`:** the derived "items ingested" metric surfaced by the connector status routes (`SELECT COUNT(*) FROM sources WHERE connector_instance_id = ?`). The `connectors` table stores no count column; the value is computed on demand.
+- **`KnowledgeGraph::delete_connector(id)`:** nulls every `sources.connector_instance_id` referencing the row (the FK has no `ON DELETE` clause, so a raw `DELETE` would violate it) then deletes the row, in one transaction. Ingested facts survive with degraded provenance; the full `forget` cascade is deferred to A2 / #203. Returns `ConnectorNotFound` when no row matches. `ConnectorNotFound` is now mapped to `404` by the server error layer.
+
+### API surface
+
+- New wire types in `mimir-api-types`: `AddConnectorRequest`, `ConnectorResponse` (carries `item_count`, lowercase-string `status`/`auth_state`, RFC-3339 timestamps), `ConnectorListResponse`. `mimir-api-types` stays decoupled from `mimir-knowledge`, so the connector kind/status are strings mapped to enums in the route layer.
+- New `mimir-client` methods: `connectors`, `connector`, `connector_add`, `connector_remove`.
+
+### Docs
+
+- New `docs/connector-management.md` (technical). Updated `docs/wiki/connectors.md` (Managing connectors section), `docs/wiki/server.md` (endpoints), `docs/wiki/what-works-now.md` (routes, version, Phase 3 status), `README.md`, and `Mimir-Implementation-Context.md`.
+
 ## [0.88.0] — 2026-08-05
 
 ### Connectors — Email LLM extraction (C7 / #201)

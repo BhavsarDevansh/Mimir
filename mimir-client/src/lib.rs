@@ -2,13 +2,14 @@
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use mimir_api_types::{
-    AuditQueryRequest, AuditQueryResponse, BrowseRequest, BrowseResponse, CategoryDetailResponse,
-    CategoryResponse, ChatRequest, ChatResponse, ConfirmFactResponse, FactDetailResponse,
-    FactEditRequest, FactEditResponse, FactQueryParams, FactQueryResponse, ForgetRequest,
-    ForgetResponse, OptimizationRunNowResponse, OptimizationStatusResponse, PendingListResponse,
-    ProfileRequest, ProfileResponse, RejectFactRequest, RestoreRequest, RestoreResponse,
-    SessionMessagesResponse, SessionSummary, StatusResponse, StreamItem, ToolCallInfo,
-    ToolCallStartInfo, TrashListResponse, Usage,
+    AddConnectorRequest, AuditQueryRequest, AuditQueryResponse, BrowseRequest, BrowseResponse,
+    CategoryDetailResponse, CategoryResponse, ChatRequest, ChatResponse, ConfirmFactResponse,
+    ConnectorListResponse, ConnectorResponse, FactDetailResponse, FactEditRequest,
+    FactEditResponse, FactQueryParams, FactQueryResponse, ForgetRequest, ForgetResponse,
+    OptimizationRunNowResponse, OptimizationStatusResponse, PendingListResponse, ProfileRequest,
+    ProfileResponse, RejectFactRequest, RestoreRequest, RestoreResponse, SessionMessagesResponse,
+    SessionSummary, StatusResponse, StreamItem, ToolCallInfo, ToolCallStartInfo, TrashListResponse,
+    Usage,
 };
 use reqwest::StatusCode;
 use thiserror::Error;
@@ -445,6 +446,41 @@ impl MimirClient {
         Self::check_status(
             self.client
                 .delete(self.url(&format!("kb/categories/{id}")))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    // -----------------------------------------------------------------
+    // Connector management (Phase 3 A1 / #202)
+    // -----------------------------------------------------------------
+
+    /// List every registered connector instance with derived item counts.
+    pub async fn connectors(&self) -> Result<ConnectorListResponse, ClientError> {
+        self.get_json(&self.url("connectors"), &()).await
+    }
+
+    /// Fetch a single connector instance by id.
+    pub async fn connector(&self, id: i32) -> Result<ConnectorResponse, ClientError> {
+        self.get_json(&self.url(&format!("connectors/{id}")), &())
+            .await
+    }
+
+    /// Register a new connector instance. The daemon validates the
+    /// `(connector_type, backend)` pair and rejects an existing slug.
+    pub async fn connector_add(
+        &self,
+        req: AddConnectorRequest,
+    ) -> Result<ConnectorResponse, ClientError> {
+        self.post_json(&self.url("connectors"), &req).await
+    }
+
+    /// Delete a connector instance, detaching its provenance.
+    pub async fn connector_remove(&self, id: i32) -> Result<(), ClientError> {
+        Self::check_status(
+            self.client
+                .delete(self.url(&format!("connectors/{id}")))
                 .send()
                 .await?,
         )

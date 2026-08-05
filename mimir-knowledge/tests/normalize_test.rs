@@ -122,6 +122,47 @@ async fn connector_normalized_fact_inserts_with_connector_provenance() {
 }
 
 #[tokio::test]
+async fn per_fact_extraction_method_override_wins_over_batch_provenance() {
+    // A mixed-method `extract()` batch (e.g. the Email connector running a
+    // deterministic layer alongside the LLM layer) sets `extraction_method`
+    // per fact. The per-fact value must win over the batch `Provenance`'s
+    // method so `sources.extraction_method_id` records how *this* fact was
+    // produced (#234).
+    let (kg, _dir) = fresh_kg().await;
+    let email_instance = upsert(&kg, ConnectorType::Gmail, "email-1").await;
+
+    let mut fact = rome_event("17:42", Some(parse_dt("2026-05-07T00:00:00Z")));
+    // The batch is LLM-extracted, but this one fact came from a structured
+    // (deterministic) layer — the override must win.
+    fact.extraction_method = Some(ExtractionMethod::StructuredParse);
+
+    let outcome = normalize_and_insert(
+        &kg,
+        vec![fact],
+        Provenance::connector(
+            email_instance,
+            ConnectorType::Gmail,
+            ExtractionMethod::LlmExtraction,
+        ),
+    )
+    .await
+    .expect("connector insert should succeed");
+    assert!(outcome.errors.is_empty(), "errors: {:?}", outcome.errors);
+    assert_eq!(outcome.inserted.len(), 1);
+
+    let sources = kg
+        .get_sources_for_fact(outcome.inserted[0].id)
+        .await
+        .unwrap();
+    assert_eq!(sources.len(), 1);
+    assert_eq!(
+        sources[0].extraction_method_id,
+        Some(ExtractionMethod::StructuredParse as i16),
+        "per-fact override must win over the batch LlmExtraction default"
+    );
+}
+
+#[tokio::test]
 async fn cross_connector_corroboration_adds_source_and_boosts_confidence() {
     let (kg, _dir) = fresh_kg().await;
     let calendar_instance = upsert(&kg, ConnectorType::Calendar, "calendar-1").await;

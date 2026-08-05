@@ -850,15 +850,31 @@ impl Connector for EmailConnector {
                 // deterministic extraction unchanged.
                 if facts.len() == before {
                     if let Some(backend) = &self.llm_backend {
-                        facts.extend(
-                            llm::extract_prose_facts(
-                                backend,
-                                self.user_identity.as_deref(),
-                                &message,
-                                &raw_ref,
-                            )
-                            .await,
-                        );
+                        match llm::extract_prose_facts(
+                            backend,
+                            self.user_identity.as_deref(),
+                            &message,
+                            &raw_ref,
+                        )
+                        .await
+                        {
+                            Ok(prose_facts) => facts.extend(prose_facts),
+                            // A retryable LLM failure must not become a
+                            // silent empty extraction: the buffer was drained
+                            // and the IMAP cursor advanced, so re-staging the
+                            // raw email keeps it for the next extraction cycle
+                            // (until extraction succeeds or a durable retry /
+                            // terminal-failure policy lands). Deterministic
+                            // facts already collected this cycle are kept, so
+                            // a transient LLM error never blocks them.
+                            Err(error) => {
+                                warn!(
+                                    raw_ref,
+                                    "LLM email extraction failed; re-staging raw email for retry: {error}"
+                                );
+                                self.buffer.lock().await.push(mail.clone());
+                            }
+                        }
                     }
                 }
             } else {
@@ -1999,6 +2015,34 @@ Sale ends Sunday!\r\n"
         let facts = connector.extract().await.expect("extract");
         assert!(facts.is_empty());
         assert!(mock.system_chat_calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn llm_failure_re_stages_raw_email_for_retry() {
+        // A retryable LLM failure must not become a silent empty extraction:
+        // the raw email is re-staged in the buffer so the next extraction
+        // cycle retries it, and the deterministic layers' facts (here none)
+        // are returned without aborting the batch.
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_chat_error(mimir_core::llm::LlmError::QueueFull)
+                .build(),
+        );
+        let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
+        let prose: Vec<u8> = b"From: reception@dentalclinic.com\r\n\
+Subject: Your appointment\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+\r\n\
+See you Tuesday 3pm.\r\n"
+            .to_vec();
+        stage(&connector, prose).await;
+        let facts = connector.extract().await.expect("extract");
+        assert!(facts.is_empty(), "no deterministic facts for a prose email");
+        assert_eq!(mock.system_chat_calls().len(), 1, "LLM was attempted once");
+        assert!(
+            !connector.buffer.lock().await.is_empty(),
+            "failed raw email must be re-staged for retry"
+        );
     }
 }
 

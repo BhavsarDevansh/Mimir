@@ -225,6 +225,19 @@ pub enum ConnectorError {
     Other(String),
 }
 
+/// Map an LLM-backend failure onto a connector error so the supervisor's
+/// retry loop can surface it. Network-level failures keep their category;
+/// every other provider/parse/queue failure becomes a generic connector
+/// failure (retryable, but not network-specific).
+impl From<mimir_core::llm::LlmError> for ConnectorError {
+    fn from(error: mimir_core::llm::LlmError) -> Self {
+        match error {
+            mimir_core::llm::LlmError::Network(err) => ConnectorError::Network(err.to_string()),
+            other => ConnectorError::Other(other.to_string()),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Mode + sync options + outcome
 // ---------------------------------------------------------------------------

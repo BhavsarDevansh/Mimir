@@ -49,6 +49,11 @@ use tracing::{debug, warn};
 
 use crate::connector::ConnectorError;
 
+/// Name of the LLM tool the extractor must call. Kept as a single constant so
+/// the schema and the response-validation step agree on the expected name; a
+/// tool call whose `function.name` differs is rejected (see [`parse_output`]).
+const EMAIL_EXTRACTION_TOOL_NAME: &str = "extract_email_facts";
+
 // ---------------------------------------------------------------------------
 // Wire types (LLM tool output)
 // ---------------------------------------------------------------------------
@@ -104,7 +109,7 @@ pub(crate) fn email_extraction_tool_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "function",
         "function": {
-            "name": "extract_email_facts",
+            "name": EMAIL_EXTRACTION_TOOL_NAME,
             "description": "Extract real-world facts about the user that the email's prose conveys. Do NOT model the email itself as a fact; extract the underlying event, booking, date, address, transaction, or commitment. Return an empty facts array for marketing, newsletters, or emails with no usable facts.",
             "parameters": {
                 "type": "object",
@@ -215,29 +220,22 @@ extract_email_facts tool."
 // ---------------------------------------------------------------------------
 
 /// Domains of bulk email-service providers. Mail delivered through these is
-/// marketing/notification bulk mail, not one-to-one or transactional mail from
-/// the apparent sender's own domain, so it is skipped before any LLM call.
-/// Transactional senders (banks, airlines, employers) send from their own
-/// domain, never from these ESP domains, so this filter does not drop
-/// statements, bookings, or offers.
+/// Domains of bulk *marketing* platforms — providers whose product is
+/// newsletter/campaign delivery (Mailchimp, HubSpot, …). Mail sent from these
+/// is marketing, so it is skipped before any LLM call.
+/// General-purpose email-service providers that also deliver transactional
+/// receipts, bookings, and account notices (SendGrid, Mailgun, Postmark,
+/// Amazon SES, Mandrill, SparkPost, Brevo) are deliberately *not* listed
+/// here: a booking or bank statement routed through them must still reach
+/// the LLM. Those messages are skipped only when they carry an explicit bulk
+/// signal (the `List-Unsubscribe` header — see [`is_likely_spam`]).
 const MARKETING_SENDER_DOMAINS: &[&str] = &[
     "mailchimp.com",
-    "mcmandrill.com",
-    "mandrillapp.com",
-    "sendgrid.net",
-    "sendgrid.com",
     "hubspot.com",
-    "mailgun.org",
-    "mailgun.net",
-    "sendinblue.com",
-    "brevo.com",
     "mailerlite.com",
     "constantcontact.com",
     "campaignmonitor.com",
     "elasticemail.com",
-    "postmarkapp.com",
-    "sparkpost.com",
-    "amazonses.com",
     "mail.marketing",
     "email-od.com",
 ];
@@ -255,10 +253,23 @@ fn sender_domain(from: Option<&str>) -> Option<String> {
 }
 
 /// Conservative deterministic spam gate: skip the LLM only for obvious
-/// bulk-marketing infrastructure mail (sent through a known ESP domain).
+/// Conservative deterministic spam gate: skip the LLM only for obvious
+/// bulk-marketing mail. A message is skipped when either (a) it carries a
+/// `List-Unsubscribe` header — the universal bulk-mail signal (RFC 8058) that
+/// transactional receipts, bookings, and account notices never carry — or
+/// (b) its sender domain is a pure marketing platform (see
+/// [`MARKETING_SENDER_DOMAINS`]). Provider origin alone never skips a
+/// message, so a transactional email routed through a general-purpose ESP
+/// (SendGrid, Mailgun, Postmark, Amazon SES) still reaches the LLM.
 /// Everything else reaches the LLM, which decides "no facts" by returning an
 /// empty array. Returns `true` when the message should be skipped.
-pub(crate) fn is_likely_spam(from_addr: Option<&str>) -> bool {
+pub(crate) fn is_likely_spam(from_addr: Option<&str>, has_unsubscribe: bool) -> bool {
+    // Explicit bulk signal: a `List-Unsubscribe` header is present only on
+    // bulk mail (newsletters, campaigns, promotional broadcasts). This gate
+    // never drops transactional mail, which does not carry one.
+    if has_unsubscribe {
+        return true;
+    }
     let Some(domain) = sender_domain(from_addr) else {
         return false;
     };
@@ -385,13 +396,31 @@ fn canonicalise_subject(subject: &str, user_identity: Option<&str>) -> String {
 /// output and a fallback JSON parse for backends that emit raw JSON.
 fn parse_output(message: LlmMessage) -> Result<EmailFactOutput, ConnectorError> {
     if let Some(tool_calls) = message.tool_calls {
+        // A single email needs exactly one `extract_email_facts` call. Reject
+        // a multi-call completion (the prompt asks for one call only) and an
+        // unexpected tool name, so arguments from a different function never
+        // become email facts.
+        if tool_calls.len() > 1 {
+            return Err(ConnectorError::Parse(format!(
+                "LLM returned {n} tool calls; expected exactly one \
+                 `{EMAIL_EXTRACTION_TOOL_NAME}` call.",
+                n = tool_calls.len()
+            )));
+        }
         let first = tool_calls
             .into_iter()
             .next()
             .ok_or_else(|| ConnectorError::Parse("LLM tool call list was empty.".into()))?;
+        if first.function.name != EMAIL_EXTRACTION_TOOL_NAME {
+            return Err(ConnectorError::Parse(format!(
+                "LLM returned tool call `{name}`; expected \
+                 `{EMAIL_EXTRACTION_TOOL_NAME}`.",
+                name = first.function.name
+            )));
+        }
         return serde_json::from_str(&first.function.arguments).map_err(|e| {
             ConnectorError::Parse(format!(
-                "failed to parse extract_email_facts arguments: {e}"
+                "failed to parse {EMAIL_EXTRACTION_TOOL_NAME} arguments: {e}"
             ))
         });
     }
@@ -511,22 +540,29 @@ fn build_fact(
 // ---------------------------------------------------------------------------
 
 /// Extract prose facts from a single email via the shared LLM backend's
-/// system queue. Returns the validated [`NormalizedFact`]s (empty for spam or
-/// no-fact emails). Per-fact validation errors are tolerated (warned +
-/// skipped) so one bad fact never aborts the email. LLM-level errors (no
-/// backend response, unparseable output) yield an empty vec with a debug log
-/// rather than failing the whole `extract()` batch — a single unparseable LLM
-/// reply must not drop the deterministic layers' already-collected facts.
+/// system queue. Returns the validated [`NormalizedFact`]s — an *empty* vec
+/// is a legitimate result (spam, no decodable body, or the LLM correctly
+/// found no facts). Per-fact validation errors are tolerated (warned +
+/// skipped) so one bad fact never aborts the email.
+///
+/// Retryable LLM-level failures (queue full, network, provider, or parse
+/// error) are returned as [`ConnectorError`] rather than silently converted
+/// into an empty vec. The connector's `extract()` step re-stages the
+/// affected raw email so the next extraction cycle retries it; an empty vec
+/// returned as success would lose the message forever (the buffer was
+/// drained and the IMAP cursor advanced). A bounded retry / terminal-failure
+/// policy is follow-up work.
 pub(crate) async fn extract_prose_facts(
     backend: &Arc<dyn LlmBackend>,
     user_identity: Option<&str>,
     message: &Message<'_>,
     raw_ref: &str,
-) -> Vec<NormalizedFact> {
+) -> Result<Vec<NormalizedFact>, ConnectorError> {
     let from = from_address(message);
-    if is_likely_spam(from.as_deref()) {
+    let has_unsubscribe = message.header("List-Unsubscribe").is_some();
+    if is_likely_spam(from.as_deref(), has_unsubscribe) {
         debug!(raw_ref, from = ?from, "skipping LLM layer: bulk-marketing sender");
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let subject = message.subject().unwrap_or("").to_string();
@@ -535,7 +571,7 @@ pub(crate) async fn extract_prose_facts(
             raw_ref,
             "no decodable text body for LLM extraction; skipping"
         );
-        return Vec::new();
+        return Ok(Vec::new());
     };
 
     let prompt = build_system_prompt(user_identity);
@@ -548,27 +584,13 @@ pub(crate) async fn extract_prose_facts(
     let messages = vec![LlmMessage::system(prompt), LlmMessage::user(user_turn)];
     let tool = email_extraction_tool_schema();
 
-    let assistant = match backend
+    // Propagate LLM/parse failures so `extract()` can re-stage the raw email
+    // for retry instead of recording a silent empty success.
+    let assistant = backend
         .system_chat_message(messages, Some(vec![tool]))
         .await
-    {
-        Ok((msg, _usage)) => msg,
-        Err(error) => {
-            warn!(raw_ref, "LLM email extraction call failed: {error}");
-            return Vec::new();
-        }
-    };
-
-    let output = match parse_output(assistant) {
-        Ok(output) => output,
-        Err(error) => {
-            warn!(
-                raw_ref,
-                "could not parse LLM email extraction output: {error}"
-            );
-            return Vec::new();
-        }
-    };
+        .map(|(msg, _usage)| msg)?;
+    let output = parse_output(assistant)?;
 
     let mut facts = Vec::with_capacity(output.facts.len());
     for fact in output.facts {
@@ -582,7 +604,7 @@ pub(crate) async fn extract_prose_facts(
         n = facts.len(),
         "LLM email extraction produced facts"
     );
-    facts
+    Ok(facts)
 }
 
 /// Cap the body sent to the LLM to bound token cost. 8 KiB of prose is far more
@@ -649,12 +671,83 @@ mod tests {
     }
 
     #[test]
-    fn spam_filter_skips_known_esp_domains() {
-        assert!(is_likely_spam(Some("promo@mailchimp.com")));
-        assert!(is_likely_spam(Some("news@mc.us1.sendgrid.net")));
-        assert!(!is_likely_spam(Some("statements@barclays.co.uk")));
-        assert!(!is_likely_spam(Some("reservations@ba.com")));
-        assert!(!is_likely_spam(None));
+    fn spam_filter_skips_marketing_senders_and_unsubscribe_signal() {
+        // Pure marketing platforms are skipped by sender domain alone.
+        assert!(is_likely_spam(Some("promo@mailchimp.com"), false));
+        assert!(is_likely_spam(Some("news@hubspot.com"), false));
+        // General-purpose ESPs (SendGrid, Mailgun, Postmark, Amazon SES) are
+        // NOT skipped by domain alone — a transactional receipt routed
+        // through them must reach the LLM.
+        assert!(!is_likely_spam(Some("news@mc.us1.sendgrid.net"), false));
+        assert!(!is_likely_spam(Some("receipt@mailgun.org"), false));
+        assert!(!is_likely_spam(Some("no-reply@amazonses.com"), false));
+        // The same ESP IS skipped when it carries a bulk signal.
+        assert!(is_likely_spam(Some("news@mc.us1.sendgrid.net"), true));
+        // Non-ESP senders are never spam by domain; an unsubscribe header
+        // still marks them bulk.
+        assert!(!is_likely_spam(Some("statements@barclays.co.uk"), false));
+        assert!(!is_likely_spam(Some("reservations@ba.com"), false));
+        assert!(is_likely_spam(Some("news@example.com"), true));
+        assert!(!is_likely_spam(None, false));
+    }
+
+    fn tool_call(name: &str, args: &str) -> LlmMessage {
+        let tool_call = mimir_core::llm::ToolCall {
+            index: 0,
+            id: "call_1".into(),
+            call_type: "function".into(),
+            function: mimir_core::llm::FunctionCall {
+                name: name.into(),
+                arguments: args.into(),
+            },
+        };
+        LlmMessage {
+            role: "assistant".into(),
+            content: String::new(),
+            tool_calls: Some(vec![tool_call]),
+            tool_call_id: None,
+        }
+    }
+
+    #[test]
+    fn parse_output_rejects_unexpected_tool_name() {
+        let msg = tool_call("summarise_email", r#"{"facts": []}"#);
+        assert!(parse_output(msg).is_err());
+    }
+
+    #[test]
+    fn parse_output_rejects_multiple_tool_calls() {
+        let first = mimir_core::llm::ToolCall {
+            index: 0,
+            id: "call_1".into(),
+            call_type: "function".into(),
+            function: mimir_core::llm::FunctionCall {
+                name: "extract_email_facts".into(),
+                arguments: r#"{"facts": []}"#.into(),
+            },
+        };
+        let second = mimir_core::llm::ToolCall {
+            index: 1,
+            id: "call_2".into(),
+            call_type: "function".into(),
+            function: mimir_core::llm::FunctionCall {
+                name: "other_tool".into(),
+                arguments: "{}".into(),
+            },
+        };
+        let msg = LlmMessage {
+            role: "assistant".into(),
+            content: String::new(),
+            tool_calls: Some(vec![first, second]),
+            tool_call_id: None,
+        };
+        assert!(parse_output(msg).is_err());
+    }
+
+    #[test]
+    fn parse_output_accepts_expected_tool_name() {
+        let msg = tool_call("extract_email_facts", r#"{"facts": []}"#);
+        assert!(parse_output(msg).is_ok());
     }
 
     #[test]
@@ -683,7 +776,9 @@ mod tests {
             "Sale ends Sunday",
         );
         let msg = parse(&bytes);
-        let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:1").await;
+        let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:1")
+            .await
+            .expect("spam -> empty facts");
         assert!(facts.is_empty());
         // No LLM call was made (the mock would error with no queued response
         // if the call had been issued, and system_chat_calls stays empty).
@@ -700,7 +795,9 @@ mod tests {
             "Here are this week's links.",
         );
         let msg = parse(&bytes);
-        let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:2").await;
+        let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:2")
+            .await
+            .expect("no-fact -> empty facts");
         assert!(facts.is_empty());
         // The call routed through the system queue, not the user queue.
         assert_eq!(mock.system_chat_calls().len(), 1);
@@ -728,7 +825,9 @@ mod tests {
             "See you Tuesday 3pm. Please arrive 10 minutes early.",
         );
         let msg = parse(&bytes);
-        let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:42").await;
+        let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:42")
+            .await
+            .expect("typed fact");
         assert_eq!(facts.len(), 1, "{facts:?}");
         let f = &facts[0];
         assert_eq!(f.subject, "Devansh", "subject canonicalised to identity");
@@ -758,7 +857,9 @@ mod tests {
         let backend: Arc<dyn LlmBackend> = mock.clone();
         let bytes = email("a@example.com", "Hi", "body");
         let msg = parse(&bytes);
-        let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:3").await;
+        let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:3")
+            .await
+            .expect("dropped event_type");
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0].event_type, None, "unrecognised event_type dropped");
         assert_eq!(mock.system_chat_calls().len(), 1);
@@ -778,18 +879,39 @@ mod tests {
         let backend: Arc<dyn LlmBackend> = mock.clone();
         let bytes = email("a@example.com", "Hi", "body");
         let msg = parse(&bytes);
-        let facts = extract_prose_facts(&backend, None, &msg, "17:4").await;
+        let facts = extract_prose_facts(&backend, None, &msg, "17:4")
+            .await
+            .expect("dropped subject_type");
         assert!(facts.is_empty(), "invalid subject_type drops the fact");
         assert_eq!(mock.system_chat_calls().len(), 1);
     }
 
     #[tokio::test]
-    async fn unparseable_llm_output_yields_no_facts_without_panicking() {
+    async fn unparseable_llm_output_is_a_retryable_error() {
         let mock = Arc::new(mock_with_tool_response(r#"not json at all"#));
         let backend: Arc<dyn LlmBackend> = mock.clone();
         let bytes = email("a@example.com", "Hi", "body");
         let msg = parse(&bytes);
-        let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:5").await;
-        assert!(facts.is_empty());
+        let result = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:5").await;
+        assert!(
+            result.is_err(),
+            "unparseable LLM output must not be a silent empty success"
+        );
+    }
+
+    #[tokio::test]
+    async fn llm_backend_error_is_a_retryable_error() {
+        // A queue-full / network / provider failure is a retryable error, not
+        // an empty fact list — so the connector can re-stage the raw email.
+        let mock = Arc::new(
+            MockLlmClient::builder()
+                .push_chat_error(mimir_core::llm::LlmError::QueueFull)
+                .build(),
+        );
+        let backend: Arc<dyn LlmBackend> = mock.clone();
+        let bytes = email("a@example.com", "Hi", "body");
+        let msg = parse(&bytes);
+        let result = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:6").await;
+        assert!(result.is_err());
     }
 }

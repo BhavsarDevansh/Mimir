@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.90.0] — 2026-08-06
+
+### Connectors — PR #263 review fixes
+
+- **Atomic connector creation (data integrity):** `POST /connectors` no longer pre-reads `get_connector_by_slug` then calls `upsert_connector` (a read-then-write window that let two concurrent same-slug writes both pass the read and let the later one update the first row instead of returning `409`). A new `KnowledgeGraph::create_connector` / `queries::connector::create_connector` does a plain `INSERT` with no `ON CONFLICT` clause and relies on the `connectors.slug UNIQUE` index to reject a duplicate at the database level, mapping the unique violation to a new `KnowledgeError::ConnectorSlugConflict` (mapped to `409 Conflict` by the server error layer, preserving the existing `connector slug '...' already exists` message). `upsert_connector` is retained for the A2 / #203 reconfigure-an-existing-instance flow. New tests: a KnowledgeGraph-level concurrent same-slug create asserting exactly one winner, and a route-level concurrent `POST /connectors` asserting exactly one `201` and one `409`.
+- **`ConnectorSupervisor::stop` returns `false` for an already-finished runner (functional correctness):** previously `stop` removed a stale handle whose task had completed naturally (e.g. an unauthenticated connector whose runner exited at the auth handshake) and returned `true`, contradicting its own doc that `false` means "no live runner exists (already finished, never spawned, or previously stopped)". It now distinguishes a live runner (abort + await + `true`) from a finished one (clean up the stale handle + `false`); the `None` path is unchanged. The `MockConnector` gains an `auth_fail` config flag so the supervisor lifecycle tests can drive the already-finished-handle path.
+
+### Docs
+
+- `docs/connector-management.md`: corrected the `GET /connectors` list-route description (it uses one `count_sources_by_connector` `GROUP BY` query, not a per-row `count_sources_for_connector` query), documented `count_sources_by_connector` in the knowledge-graph additions, and updated the `POST` route notes, supervisor `stop` description, and tests section to reflect the atomic create and finished-runner behaviour.
+- `docs/wiki/what-works-now.md`: fixed a broken code span in the Phase 3 entry (`GET/DELETE /connectors/{id}`).
+- `docs/wiki/connectors.md`: noted that `POST /connectors` slug uniqueness is enforced atomically by the `slug UNIQUE` index.
+
 ## [0.89.0] — 2026-08-05
 
 ### Connectors — daemon wiring + connector CRUD/status routes (A1 / #202)

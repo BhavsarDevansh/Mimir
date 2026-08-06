@@ -87,12 +87,6 @@ pub fn bad_request(msg: impl Into<String>) -> Response {
     (StatusCode::BAD_REQUEST, body).into_response()
 }
 
-/// Return a `CONFLICT` response.
-pub fn conflict(msg: impl Into<String>) -> Response {
-    let body = Json(ApiError::new(msg, "CONFLICT"));
-    (StatusCode::CONFLICT, body).into_response()
-}
-
 /// Convert a knowledge graph error into an HTTP response.
 pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
     use mimir_knowledge::KnowledgeError;
@@ -105,6 +99,7 @@ pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
         | KnowledgeError::FactNotFound(_)
         | KnowledgeError::CategoryNotFound(_)
         | KnowledgeError::ConnectorNotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
+        KnowledgeError::ConnectorSlugConflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, "KG_ERROR"),
     };
     let message = match &e {
@@ -113,7 +108,8 @@ pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
         | KnowledgeError::DuplicatePreference
         | KnowledgeError::EntityNotFound(_)
         | KnowledgeError::FactNotFound(_)
-        | KnowledgeError::CategoryNotFound(_) => e.to_string(),
+        | KnowledgeError::CategoryNotFound(_)
+        | KnowledgeError::ConnectorSlugConflict(_) => e.to_string(),
         _ => "internal knowledge graph error".to_string(),
     };
     let body = Json(ApiError::new(message, code));
@@ -253,6 +249,17 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         let body = body_json(resp).await;
         assert_eq!(body["code"], "NOT_FOUND");
+    }
+
+    #[tokio::test]
+    async fn knowledge_error_connector_slug_conflict_returns_409() {
+        let resp = knowledge_error(mimir_knowledge::KnowledgeError::ConnectorSlugConflict(
+            "personal".to_string(),
+        ));
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "CONFLICT");
+        assert!(body["error"].as_str().unwrap().contains("personal"));
     }
 
     #[tokio::test]

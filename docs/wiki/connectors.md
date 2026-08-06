@@ -73,7 +73,7 @@ As of v0.89.0 (issue #202 / A1), the daemon owns the connector framework and exp
 | `GET` | `/connectors/{id}` | Show a single instance with its derived item count |
 | `DELETE` | `/connectors/{id}` | Stop the runner and delete the instance |
 
-`POST /connectors` is **add-only**: it validates the `(connector_type, backend)` pair against the daemon's registry (rejecting an unregistered backend with `400`), rejects an existing `slug` with `409`, and creates the instance in `Setup` status (it is not started until a future action route moves it to `Active` — A2 / #203). The request body carries `connector_type`, `backend`, `slug`, `display_name`, and `config_json` (a backend-specific JSON object).
+`POST /connectors` is **add-only**: it validates the `(connector_type, backend)` pair against the daemon's registry (rejecting an unregistered backend with `400`), rejects an existing `slug` with `409`, and creates the instance in `Setup` status (it is not started until a future action route moves it to `Active` — A2 / #203). Slug uniqueness is enforced atomically by an insert that relies on the `connectors.slug UNIQUE` index, so two concurrent `POST /connectors` for the same slug cannot both succeed — one wins and the other gets `409 Conflict`. The request body carries `connector_type`, `backend`, `slug`, `display_name`, and `config_json` (a backend-specific JSON object).
 
 `DELETE /connectors/{id}` stops the runner (via `ConnectorSupervisor::stop(id)`, a no-op when no runner exists) and deletes the row. The `sources.connector_instance_id` foreign key is nulled first, so the connector's already-ingested facts survive with degraded provenance — the full `forget` cascade is deferred to A2 / #203.
 

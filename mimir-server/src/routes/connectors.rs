@@ -172,6 +172,11 @@ pub async fn connector_show_handler(
 /// `config_json` (`400`). The instance is created in `Setup` status; the
 /// supervisor does not spawn a runner until a future action route moves it to
 /// `Active` (A2 / #203).
+///
+/// Slug uniqueness is enforced atomically by `create_connector`, which relies
+/// on the `connectors.slug UNIQUE` index rather than a pre-read plus upsert,
+/// so two concurrent `POST /connectors` writes for the same slug cannot both
+/// succeed — one wins and the other gets `409 Conflict`.
 pub async fn connector_add_handler(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AddConnectorRequest>,
@@ -192,27 +197,17 @@ pub async fn connector_add_handler(
         )));
     }
 
-    // Reject an existing slug up front: A1 is add-only. Reconfiguring an
-    // existing instance (respawn-on-reconfig) is A2 / #203.
-    if state
-        .knowledge_graph
-        .get_connector_by_slug(&body.slug)
-        .await
-        .map_err(error::knowledge_error)?
-        .is_some()
-    {
-        return Err(error::conflict(format!(
-            "connector slug '{}' already exists",
-            body.slug
-        )));
-    }
-
     let config_json = serde_json::to_string(&body.config_json)
         .map_err(|e| error::bad_request(format!("invalid config_json: {e}")))?;
 
+    // Atomic create-only insert: the unique-slug constraint is enforced at the
+    // database level, closing the read-then-write window a pre-read
+    // `get_connector_by_slug` + `upsert_connector` would leave. A duplicate slug
+    // surfaces as `ConnectorSlugConflict`, mapped to `409 Conflict` by the
+    // server error layer. Reconfiguring an existing instance is A2 / #203.
     let row = state
         .knowledge_graph
-        .upsert_connector(UpsertConnectorInput {
+        .create_connector(UpsertConnectorInput {
             connector_type,
             slug: body.slug,
             backend: body.backend,

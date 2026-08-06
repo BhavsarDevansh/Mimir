@@ -45,8 +45,8 @@ the last completed sync cursor.
 
 | Method | Path | Handler | Notes |
 |--------|------|---------|------|
-| `GET` | `/connectors` | `connectors_list_handler` | One `count_sources_for_connector` query per row |
-| `POST` | `/connectors` | `connector_add_handler` | Validates `(type, backend)` against the registry; `409` on existing slug; creates in `Setup` |
+| `GET` | `/connectors` | `connectors_list_handler` | One `count_sources_by_connector` (`GROUP BY`) query for the whole list |
+| `POST` | `/connectors` | `connector_add_handler` | Validates `(type, backend)` against the registry; atomic create-only insert (`409` on existing slug via the `slug UNIQUE` index); creates in `Setup` |
 | `GET` | `/connectors/{id}` | `connector_show_handler` | `404` when missing |
 | `DELETE` | `/connectors/{id}` | `connector_remove_handler` | `stop(id)` then `delete_connector`; `204` |
 
@@ -61,8 +61,11 @@ enums in the route layer (`parse_connector_type`).
 ## Knowledge-graph additions (`mimir-knowledge`)
 
 - `KnowledgeGraph::count_sources_for_connector(id) -> i64` — the derived
-  "items ingested" metric (`SELECT COUNT(*) FROM sources WHERE
-  connector_instance_id = ?`).
+  "items ingested" metric for a single instance (`SELECT COUNT(*) FROM sources
+  WHERE connector_instance_id = ?`); used by the show route.
+- `KnowledgeGraph::count_sources_by_connector() -> HashMap<i32, i64>` — every
+  instance's count in one `GROUP BY connector_instance_id` query; used by the
+  list route so item counts stay O(1) round-trips regardless of instance count.
 - `KnowledgeGraph::delete_connector(id)` — nulls every
   `sources.connector_instance_id` referencing the row (the FK has no `ON
   DELETE` clause, so a raw `DELETE` would violate it), then deletes the row,
@@ -72,10 +75,13 @@ enums in the route layer (`parse_connector_type`).
 
 ## Supervisor addition (`mimir-connectors`)
 
-`ConnectorSupervisor::stop(id) -> bool` aborts a single runner and removes it
-from the handle map (returns `false` when no live runner exists for `id`).
-This is the per-instance counterpart of `shutdown()`; `DELETE` uses it so a
-mid-cycle sync cannot write back to a vanishing row.
+`ConnectorSupervisor::stop(id) -> bool` aborts a single *live* runner,
+awaits its termination, and removes it from the handle map. A stale handle
+whose task already finished naturally (e.g. an unauthenticated connector whose
+runner exited at the auth handshake) is cleaned up but reports `false`, as do
+never-spawned or already-stopped ids; only a genuinely running task reports
+`true`. This is the per-instance counterpart of `shutdown()`; `DELETE` uses it
+so a mid-cycle sync cannot write back to a vanishing row.
 
 ## Feature forwarding
 
@@ -89,13 +95,18 @@ backend and its daemon registration.
 
 - `mimir-server` integration tests (`routes/connectors.rs` via `oneshot`):
   add/list/show/remove round-trip, `409` on existing slug, `400` on
-  unregistered backend, `400` on unknown connector type.
+  unregistered backend, `400` on unknown connector type, and a concurrent
+  same-slug `POST` test verifying exactly one `201` and one `409`.
 - `mimir-knowledge`: `count_sources_for_connector` (zero for unknown),
-  `delete_connector` (removes row, `ConnectorNotFound` on missing), and
-  provenance-detach preservation (facts survive, FK nulled, `connector_type_id`
-  retained).
-- `mimir-connectors`: `ConnectorSupervisor::stop` aborts one runner without
-  affecting the others; re-stop / unknown id report no action.
+  `count_sources_by_connector` (one `GROUP BY` query), `delete_connector`
+  (removes row, `ConnectorNotFound` on missing), `create_connector`
+  (atomic insert, `ConnectorSlugConflict` on a duplicate, concurrent same-slug
+  creates yield one winner), and provenance-detach preservation (facts survive,
+  FK nulled, `connector_type_id` retained).
+- `mimir-connectors`: `ConnectorSupervisor::stop` aborts one live runner
+  without affecting the others, returns `false` for an already-finished runner
+  while cleaning up its stale handle, and reports no action on re-stop /
+  unknown id.
 
 ## Out of scope (tracked)
 

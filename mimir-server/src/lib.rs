@@ -3536,6 +3536,57 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 
+    /// Two concurrent `POST /connectors` for the same slug: exactly one wins
+    /// (`201`), the other gets `409 Conflict` — the atomic create-only insert
+    /// closes the read-then-write window the pre-read plus upsert had
+    /// (#202 review).
+    #[tokio::test]
+    async fn test_connector_add_concurrent_same_slug_one_wins() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let body = serde_json::json!({
+            "connector_type": "gmail",
+            "backend": "test",
+            "slug": "race",
+            "display_name": "Race",
+            "config_json": {},
+        });
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let app_a = app.clone();
+        let app_b = app.clone();
+        let barrier_a = barrier.clone();
+        let barrier_b = barrier.clone();
+        let body_a = body.clone();
+        let body_b = body.clone();
+
+        let a = tokio::spawn(async move {
+            barrier_a.wait().await;
+            connector_post(app_a, body_a).await
+        });
+        let b = tokio::spawn(async move {
+            barrier_b.wait().await;
+            connector_post(app_b, body_b).await
+        });
+
+        let ra = a.await.unwrap();
+        let rb = b.await.unwrap();
+        let wins = [ra.status(), rb.status()]
+            .iter()
+            .filter(|&&c| c == StatusCode::CREATED)
+            .count();
+        let conflicts = [ra.status(), rb.status()]
+            .iter()
+            .filter(|&&c| c == StatusCode::CONFLICT)
+            .count();
+        assert_eq!(wins, 1, "exactly one concurrent POST must return 201");
+        assert_eq!(
+            conflicts, 1,
+            "the losing concurrent POST must return 409 Conflict"
+        );
+    }
+
     #[tokio::test]
     async fn test_connector_add_rejects_unregistered_backend() {
         let mock = Arc::new(MockLlmClient::builder().build());

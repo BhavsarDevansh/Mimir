@@ -218,6 +218,11 @@ struct MockConnectorConfig {
     panic_first: u32,
     #[serde(default)]
     always_fail: bool,
+    /// When set, `authenticate()` fails with `NotAuthenticated` so the
+    /// supervisor's runner exits at the auth handshake (used to exercise the
+    /// "already-finished handle" path in `stop`).
+    #[serde(default)]
+    auth_fail: bool,
     /// Static cursor returned by every successful `sync()` (`None` ⇒ unchanged).
     #[serde(default)]
     cursor: Option<String>,
@@ -333,6 +338,7 @@ pub struct MockConnector {
     fail_first: u32,
     panic_first: u32,
     always_fail: bool,
+    auth_fail: bool,
     cursor: Option<String>,
     sync_delay: Duration,
     interval: Duration,
@@ -361,6 +367,7 @@ impl Default for MockConnector {
             fail_first: 0,
             panic_first: 0,
             always_fail: false,
+            auth_fail: false,
             cursor: None,
             sync_delay: Duration::ZERO,
             interval: Duration::from_millis(DEFAULT_INTERVAL_MS),
@@ -384,6 +391,7 @@ impl std::fmt::Debug for MockConnector {
             .field("fail_first", &self.fail_first)
             .field("panic_first", &self.panic_first)
             .field("always_fail", &self.always_fail)
+            .field("auth_fail", &self.auth_fail)
             .field("cursor", &self.cursor)
             .finish()
     }
@@ -446,6 +454,7 @@ impl MockConnector {
             fail_first: parsed.fail_first,
             panic_first: parsed.panic_first,
             always_fail: parsed.always_fail,
+            auth_fail: parsed.auth_fail,
             cursor: parsed.cursor,
             sync_delay: Duration::from_millis(parsed.sync_delay_ms),
             interval: Duration::from_millis(parsed.interval_ms),
@@ -642,6 +651,11 @@ impl MockConnector {
                 "fail_first": { "type": "integer", "minimum": 0, "default": 0 },
                 "panic_first": { "type": "integer", "minimum": 0, "default": 0 },
                 "always_fail": { "type": "boolean", "default": false },
+                "auth_fail": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When set, authenticate() fails with NotAuthenticated so the runner exits at the auth handshake."
+                },
                 "cursor": {
                     "type": ["string", "null"],
                     "description": "Static cursor returned by every successful sync."
@@ -676,6 +690,9 @@ impl Connector for MockConnector {
     }
 
     async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError> {
+        if self.auth_fail {
+            return Err(ConnectorError::NotAuthenticated);
+        }
         Ok(self.auth_state)
     }
 

@@ -538,11 +538,17 @@ impl ConnectorSupervisor {
     pub async fn stop(&self, id: i32) -> bool {
         let handle = self.handles.lock().await.remove(&id);
         match handle {
-            Some(handle) => {
+            // Live runner: abort the in-flight cycle, await its termination,
+            // and report that a runner was stopped.
+            Some(handle) if !handle.task.is_finished() => {
                 handle.task.abort();
                 let _ = handle.task.await;
                 true
             }
+            // A stale handle whose task already completed naturally (e.g. an
+            // unauthenticated connector whose runner exited at the auth
+            // handshake) is cleaned up but reports no live runner was stopped.
+            Some(_) => false,
             None => false,
         }
     }

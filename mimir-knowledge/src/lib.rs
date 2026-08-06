@@ -96,6 +96,9 @@ pub enum KnowledgeError {
     #[error("Connector slug `{0}` already exists with a different connector type")]
     ConnectorTypeMismatch(String),
 
+    #[error("connector slug `{0}` already exists")]
+    ConnectorSlugConflict(String),
+
     #[error("Relationship type hierarchy cycle detected")]
     RelationshipTypeCycle,
 }
@@ -1927,6 +1930,19 @@ impl KnowledgeGraph {
         input: models::connector::UpsertConnectorInput,
     ) -> Result<models::connector::Connector, KnowledgeError> {
         queries::connector::upsert_connector(&self.pool, &input, self.now()).await
+    }
+
+    /// Atomically insert a **new** connector instance, relying on the
+    /// `connectors.slug UNIQUE` index to reject a duplicate slug with
+    /// [`KnowledgeError::ConnectorSlugConflict`] (so two concurrent creates
+    /// for the same slug cannot both succeed). Use this for the add-only
+    /// `POST /connectors` route; reconfiguring an existing instance is A2 /
+    /// #203 and uses [`Self::upsert_connector`].
+    pub async fn create_connector(
+        &self,
+        input: models::connector::UpsertConnectorInput,
+    ) -> Result<models::connector::Connector, KnowledgeError> {
+        queries::connector::create_connector(&self.pool, &input, self.now()).await
     }
 
     /// Advance a connector's opaque sync cursor, stamping `last_sync_at`.

@@ -118,6 +118,63 @@ pub async fn upsert_connector(
     Ok(row)
 }
 
+/// Atomically insert a **new** connector instance, enforcing the unique
+/// `slug` constraint at the database level.
+///
+/// Unlike [`upsert_connector`], this never overwrites an existing row: a plain
+/// `INSERT` with no `ON CONFLICT` clause relies on the `connectors.slug UNIQUE`
+/// index to reject a duplicate slug. The database-level check closes the
+/// read-then-write window that a pre-read `get_connector_by_slug` plus
+/// `upsert_connector` would leave, so two concurrent `POST /connectors` writes
+/// for the same slug cannot both succeed (one wins, the other gets
+/// [`KnowledgeError::ConnectorSlugConflict`]). Use this for add-only flows
+/// (A1); reconfiguring an existing instance is A2 / #203.
+///
+/// `connector_type` is the typed enum whose variants map to the seeded
+/// `connector_types` rows, so the FK is guaranteed valid.
+pub async fn create_connector(
+    pool: &SqlitePool,
+    input: &UpsertConnectorInput,
+    now: DateTime<Utc>,
+) -> Result<Connector, KnowledgeError> {
+    let connector_type_id = input.connector_type as i16;
+    let status_id = input.status.unwrap_or(ConnectorStatus::Setup) as i16;
+    let auth_state_id = input
+        .auth_state
+        .unwrap_or(ConnectorAuthState::Unauthenticated) as i16;
+
+    let row = sqlx::query_as::<_, Connector>(
+        "INSERT INTO connectors \
+         (connector_type_id, slug, backend, display_name, config_json, status_id, auth_state_id, \
+          created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
+                   status_id, auth_state_id, sync_cursor, last_sync_at, last_error, \
+                   created_at, updated_at",
+    )
+    .bind(connector_type_id)
+    .bind(&input.slug)
+    .bind(&input.backend)
+    .bind(&input.display_name)
+    .bind(&input.config_json)
+    .bind(status_id)
+    .bind(auth_state_id)
+    .bind(now)
+    .bind(now)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| match err {
+        // The connectors table's only unique column other than the
+        // autoincrement PK is `slug`, so a unique violation on an insert here
+        // is a slug collision.
+        sqlx::Error::Database(db) if db.is_unique_violation() => {
+            KnowledgeError::ConnectorSlugConflict(input.slug.clone())
+        }
+        other => KnowledgeError::Pool(other),
+    })?;
+    Ok(row)
+}
+
 /// Advance the opaque sync cursor, stamping `last_sync_at` and `updated_at`.
 ///
 /// `cursor = None` clears the cursor (e.g. a full re-sync). Returns

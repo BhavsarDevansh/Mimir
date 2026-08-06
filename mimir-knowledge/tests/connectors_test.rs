@@ -354,3 +354,79 @@ async fn count_sources_by_connector_groups_in_one_query() {
     assert_eq!(counts.get(&g.id).copied(), Some(2));
     assert_eq!(counts.get(&c.id).copied(), Some(1));
 }
+
+// ---------------------------------------------------------------------------
+// Atomic create-only insert (#202 review): unique-slug enforcement at the DB
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn create_connector_inserts_a_new_instance() {
+    let (kg, _dir) = init_kg().await;
+    let c = kg.create_connector(gmail_input("personal")).await.unwrap();
+    assert_eq!(c.slug, "personal");
+    assert_eq!(c.connector_type_id, ConnectorType::Gmail as i16);
+    assert_eq!(c.status(), Some(ConnectorStatus::Setup));
+    assert_eq!(c.auth_state(), Some(ConnectorAuthState::Unauthenticated));
+
+    // A duplicate slug is rejected atomically with the dedicated error.
+    let err = kg.create_connector(gmail_input("personal")).await;
+    match err {
+        Err(mimir_knowledge::KnowledgeError::ConnectorSlugConflict(slug)) => {
+            assert_eq!(slug, "personal");
+        }
+        other => panic!("expected ConnectorSlugConflict, got {other:?}"),
+    }
+    // The original row is untouched.
+    assert_eq!(kg.list_connectors().await.unwrap().len(), 1);
+}
+
+/// Two concurrent `create_connector` writes for the same slug must not both
+/// succeed: the database-level unique constraint lets exactly one win and
+/// surfaces the other as `ConnectorSlugConflict` (#202 review).
+#[tokio::test]
+async fn create_connector_concurrent_same_slug_yields_one_winner() {
+    use std::sync::Arc;
+    let (kg, _dir) = init_kg().await;
+    let kg = Arc::new(kg);
+
+    // A barrier so both tasks race the insert at the same instant.
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let kg_a = kg.clone();
+    let kg_b = kg.clone();
+    let barrier_a = barrier.clone();
+    let barrier_b = barrier.clone();
+
+    let a = tokio::spawn(async move {
+        barrier_a.wait().await;
+        kg_a.create_connector(gmail_input("race")).await
+    });
+    let b = tokio::spawn(async move {
+        barrier_b.wait().await;
+        kg_b.create_connector(gmail_input("race")).await
+    });
+
+    let ra = a.await.unwrap();
+    let rb = b.await.unwrap();
+
+    // Exactly one succeeds; the other gets a slug conflict.
+    let wins = [&ra, &rb].iter().filter(|r| r.is_ok()).count();
+    let conflicts = [&ra, &rb]
+        .iter()
+        .filter(|r| {
+            matches!(
+                r,
+                Err(mimir_knowledge::KnowledgeError::ConnectorSlugConflict(_))
+            )
+        })
+        .count();
+    assert_eq!(wins, 1, "exactly one concurrent create must succeed");
+    assert_eq!(
+        conflicts, 1,
+        "the losing concurrent create must be a slug conflict"
+    );
+
+    // Only one row exists for the slug.
+    let rows = kg.list_connectors().await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].slug, "race");
+}

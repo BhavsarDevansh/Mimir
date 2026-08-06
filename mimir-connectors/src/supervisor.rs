@@ -306,6 +306,20 @@ impl ConnectorSupervisor {
         self
     }
 
+    /// The shared [`SecretStore`] injected via
+    /// [`with_secret_store`](Self::with_secret_store), if any.
+    ///
+    /// Exposed so the daemon's connector removal route can delete the
+    /// credential entry keyed by a connector's slug when the instance is
+    /// deleted, preventing a later same-slug connector from loading the
+    /// deleted instance's stored credentials. Returns `None` when no store
+    /// is configured (the daemon start path is best-effort; tests and
+    /// sandboxed runs may have no `FileSecretStore`), in which case there is
+    /// nothing to clean up.
+    pub fn secret_store(&self) -> Option<Arc<dyn SecretStore>> {
+        self.context.secret_store.clone()
+    }
+
     /// Inject the canonical user identity name (the `config.toml`
     /// `[identity] name`) into the shared [`ConnectorContext`] so connectors
     /// that author user-scoped facts — the Calendar connector (C4 / #198),

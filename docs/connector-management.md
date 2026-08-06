@@ -48,7 +48,7 @@ the last completed sync cursor.
 | `GET` | `/connectors` | `connectors_list_handler` | One `count_sources_by_connector` (`GROUP BY`) query for the whole list |
 | `POST` | `/connectors` | `connector_add_handler` | Validates `(type, backend)` against the registry; atomic create-only insert (`409` on existing slug via the `slug UNIQUE` index); creates in `Setup` |
 | `GET` | `/connectors/{id}` | `connector_show_handler` | `404` when missing |
-| `DELETE` | `/connectors/{id}` | `connector_remove_handler` | `stop(id)` then `delete_connector`; `204` |
+| `DELETE` | `/connectors/{id}` | `connector_remove_handler` | `stop(id)`, delete the slug-keyed secret-store entry (idempotent), then `delete_connector`; `204` (`404` missing, `500` if credential deletion fails and the row is left intact) |
 
 ### Wire types (`mimir-api-types`)
 
@@ -83,6 +83,14 @@ never-spawned or already-stopped ids; only a genuinely running task reports
 `true`. This is the per-instance counterpart of `shutdown()`; `DELETE` uses it
 so a mid-cycle sync cannot write back to a vanishing row.
 
+`ConnectorSupervisor::secret_store() -> Option<Arc<dyn SecretStore>>` exposes
+the shared credential store (injected via `with_secret_store`) so the removal
+route can delete a connector's slug-keyed secret. The `DELETE` route deletes
+the secret *before* the row: a secret-deletion failure aborts the removal
+(`500`) and leaves the instance intact, so the database and secret store are
+never left in an ambiguous state and a later same-slug connector can never
+load a deleted instance's stored credentials.
+
 ## Feature forwarding
 
 `mimir-server` declares `photos`/`calendar`/`gmail` features (default = all
@@ -95,8 +103,11 @@ backend and its daemon registration.
 
 - `mimir-server` integration tests (`routes/connectors.rs` via `oneshot`):
   add/list/show/remove round-trip, `409` on existing slug, `400` on
-  unregistered backend, `400` on unknown connector type, and a concurrent
-  same-slug `POST` test verifying exactly one `201` and one `409`.
+  unregistered backend, `400` on unknown connector type, a concurrent
+  same-slug `POST` test verifying exactly one `201` and one `409`, `404` on
+  deleting an unknown id, and a removal test verifying the slug-keyed
+  secret-store entry is deleted (and cannot be loaded by a later same-slug
+  connector).
 - `mimir-knowledge`: `count_sources_for_connector` (zero for unknown),
   `count_sources_by_connector` (one `GROUP BY` query), `delete_connector`
   (removes row, `ConnectorNotFound` on missing), `create_connector`

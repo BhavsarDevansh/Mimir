@@ -109,6 +109,7 @@ pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
         | KnowledgeError::EntityNotFound(_)
         | KnowledgeError::FactNotFound(_)
         | KnowledgeError::CategoryNotFound(_)
+        | KnowledgeError::ConnectorNotFound(_)
         | KnowledgeError::ConnectorSlugConflict(_) => e.to_string(),
         _ => "internal knowledge graph error".to_string(),
     };
@@ -260,6 +261,19 @@ mod tests {
         let body = body_json(resp).await;
         assert_eq!(body["code"], "CONFLICT");
         assert!(body["error"].as_str().unwrap().contains("personal"));
+    }
+
+    #[tokio::test]
+    async fn knowledge_error_connector_not_found_returns_404_with_detail() {
+        // A delete of an unknown connector must surface the not-found detail
+        // (e.g. "Connector 7 not found"), not the generic "internal knowledge
+        // graph error" mask.
+        let resp = knowledge_error(mimir_knowledge::KnowledgeError::ConnectorNotFound(7));
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "NOT_FOUND");
+        assert!(body["error"].as_str().unwrap().contains("7"));
+        assert_ne!(body["error"], "internal knowledge graph error");
     }
 
     #[tokio::test]

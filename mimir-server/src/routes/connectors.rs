@@ -224,21 +224,60 @@ pub async fn connector_add_handler(
     Ok((StatusCode::CREATED, Json(resp)))
 }
 
-/// `DELETE /connectors/{id}` — stop the runner (if any) and delete the row.
+/// `DELETE /connectors/{id}` — stop the runner (if any), delete the stored
+/// credentials, and delete the row.
 ///
 /// Provenance is detached (the `sources.connector_instance_id` FK is nulled)
 /// so the ingested facts survive with degraded provenance; the full `forget`
-/// cascade is deferred to A2 / #203. Returns `204` on success or `404` when
-/// no row matches `id`.
+/// cascade is deferred to A2 / #203. The connector's secret-store entry
+/// (keyed by its slug) is deleted **before** the row so that a
+/// secret-deletion failure leaves the instance intact (retryable) rather than
+/// a deleted row with lingering credentials that a later same-slug connector
+/// could load; deleting the secret is idempotent, so an instance that never
+/// stored credentials cleans up as a no-op. Returns `204` on success, `404`
+/// when no row matches `id`, or `500` if credential deletion fails (the
+/// instance is not removed in that case).
 pub async fn connector_remove_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> Result<StatusCode, Response> {
+    // Fetch the row first: the slug is needed to delete the connector's stored
+    // credentials, and a missing id surfaces a clean 404 before any mutation.
+    let row = state
+        .knowledge_graph
+        .get_connector(id)
+        .await
+        .map_err(error::knowledge_error)?
+        .ok_or_else(|| error::not_found("connector not found"))?;
+
     // Stop the runner first so a mid-cycle sync cannot write back to a row
     // that is about to disappear. `stop` is a no-op (returns false) when no
     // runner exists for `id`, so an unspawned instance is still deletable.
     state.connector_supervisor.stop(id).await;
 
+    // Delete the connector's stored credentials *before* the row. The secret
+    // is keyed by the connector's slug, so removing it here prevents a later
+    // connector created with the same slug from loading the deleted instance's
+    // credentials. `SecretStore::delete` is idempotent (a missing entry is
+    // `Ok`), so an instance that never stored credentials deletes cleanly. A
+    // failure aborts the removal and returns `500` so the request never
+    // reports success while the database and secret store are left in an
+    // ambiguous state; the instance remains intact and the user can retry.
+    if let Some(secret_store) = state.connector_supervisor.secret_store() {
+        if let Err(error) = secret_store.delete(&row.slug).await {
+            tracing::error!(
+                connector_id = id,
+                slug = %row.slug,
+                %error,
+                "failed to delete connector secret; the instance was not removed",
+            );
+            return Err(error::internal("failed to delete connector credentials"));
+        }
+    }
+
+    // Detach provenance (null the `sources.connector_instance_id` FK) and
+    // delete the row in one transaction so ingested facts survive with
+    // degraded provenance. The full `forget` cascade is A2 / #203.
     state
         .knowledge_graph
         .delete_connector(id)

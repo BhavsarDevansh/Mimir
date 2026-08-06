@@ -712,6 +712,13 @@ mod tests {
                 mimir_connectors::SupervisorConfig::default(),
                 shutdown_tx.subscribe(),
             )
+            // Inject an in-memory secret store so the connector removal route
+            // can exercise credential cleanup (the daemon path uses a
+            // FileSecretStore; tests must not touch the real secrets dir). The
+            // mock connector stores no secrets, so this is a no-op for the
+            // CRUD round-trip tests and only matters for the deletion test.
+            .with_secret_store(Arc::new(mimir_connectors::InMemorySecretStore::new())
+                as std::sync::Arc<dyn mimir_connectors::SecretStore>)
             .with_llm_backend(Arc::clone(&llm) as std::sync::Arc<dyn LlmBackend>),
         );
 
@@ -3663,5 +3670,110 @@ mod tests {
         client.connector_remove(id).await.unwrap();
         let list = client.connectors().await.unwrap();
         assert!(list.connectors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_connector_remove_unknown_returns_404() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/connectors/999999")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["code"], "NOT_FOUND");
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("connector not found")
+        );
+    }
+
+    /// Deleting a connector must also delete its secret-store entry so a later
+    /// connector created with the same slug cannot load the deleted instance's
+    /// credentials (#263 review).
+    #[tokio::test]
+    async fn test_connector_remove_deletes_stored_credentials() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state.clone());
+
+        // Create an authenticated connector instance.
+        let slug = "gmail-secret";
+        let resp = connector_post(
+            app.clone(),
+            serde_json::json!({
+                "connector_type": "gmail",
+                "backend": "test",
+                "slug": slug,
+                "display_name": "Secret Gmail",
+                "config_json": {},
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: mimir_api_types::ConnectorResponse = serde_json::from_slice(&bytes).unwrap();
+        let id = created.id;
+
+        // Store a credential bundle keyed by the connector's slug, mimicking
+        // the OAuth/app-password ingest path (A2 / #203). The test_secret
+        // state injects an InMemorySecretStore, so this never touches disk.
+        let secret_store = state
+            .connector_supervisor
+            .secret_store()
+            .expect("test state injects an InMemorySecretStore");
+        let bundle = mimir_connectors::SecretBundle::AppPassword {
+            password: "hunter2".to_string(),
+        };
+        secret_store.store(slug, &bundle).await.unwrap();
+        assert!(secret_store.load(slug).await.unwrap().is_some());
+
+        // Delete the connector instance.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/connectors/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        // The credential must no longer be loadable.
+        assert!(secret_store.load(slug).await.unwrap().is_none());
+
+        // A new connector created with the same slug cannot load the deleted
+        // instance's credentials (they are gone, not lingering).
+        let resp = connector_post(
+            app.clone(),
+            serde_json::json!({
+                "connector_type": "gmail",
+                "backend": "test",
+                "slug": slug,
+                "display_name": "Secret Gmail 2",
+                "config_json": {},
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert!(secret_store.load(slug).await.unwrap().is_none());
     }
 }

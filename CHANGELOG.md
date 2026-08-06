@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.91.0] — 2026-08-06
+
+### Connectors — PR #263 review feedback (round 2)
+
+- **Delete stored credentials with the connector instance (security):** `DELETE /connectors/{id}` now deletes the connector's slug-keyed `SecretStore` entry as well as the row. Previously the secret lingered after the row was removed, so a later connector created with the same slug could load the deleted instance's credentials. The secret is deleted *before* the row using a new `ConnectorSupervisor::secret_store()` accessor, and `SecretStore::delete` is idempotent (a missing entry is `Ok`), so an instance that never stored credentials cleans up as a no-op. A secret-deletion failure aborts the removal (`500`) and leaves the instance intact, so the database and secret store are never left in an ambiguous state and the request never reports success while a credential lingers. New route test: deleting an authenticated connector removes its credential, verified by loading it again and by re-creating a same-slug connector that cannot load the old secret.
+- **Return the connector-not-found detail (functional correctness):** `KnowledgeError::ConnectorNotFound` was mapped to `404` but the message branch omitted it, so deleting an unknown connector returned the generic `"internal knowledge graph error"` instead of the not-found detail. It now preserves its detail (`"Connector {id} not found"`) like the other not-found variants. New unit test for the mapping and a route-level `DELETE /connectors/{id}` 404 test.
+- **Docs:** updated stale `v0.89.0` release references to `v0.90.0` in `docs/wiki/connectors.md`, the `docs/wiki/what-works-now.md` version banner, and `README.md`; documented the secret-deletion flow in `docs/connector-management.md` and `docs/wiki/connectors.md`.
+
 ## [0.90.0] — 2026-08-06
 
 ### Connectors — PR #263 review fixes

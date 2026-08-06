@@ -105,7 +105,7 @@ pub use mock::{
 };
 pub use registry::{ConnectorRegistry, FnConnectorFactory};
 pub use supervisor::{
-    ConnectorSupervisor, SupervisorConfig, SupervisorError, TriggerError, TriggerOutcome,
+    ActError, ConnectorSupervisor, SupervisorConfig, SupervisorError, TriggerError, TriggerOutcome,
 };
 
 #[cfg(feature = "photos")]

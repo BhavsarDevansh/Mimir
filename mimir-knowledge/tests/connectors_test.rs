@@ -430,3 +430,81 @@ async fn create_connector_concurrent_same_slug_yields_one_winner() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].slug, "race");
 }
+
+// -- forget cascade (Phase 3 A2 / #203) --
+
+use mimir_knowledge::models::audit_log::ChangedBy;
+use mimir_knowledge::models::entity::EntityType;
+use mimir_knowledge::models::fact::NewFact;
+use mimir_knowledge::models::source::SourceType;
+use mimir_knowledge::queries::source::AddSourceRequest;
+
+/// Insert a fact sourced from a connector instance (mimicking ingestion).
+async fn connector_sourced_fact(kg: &KnowledgeGraph, instance_id: i32, value: &str) -> i32 {
+    let entity = kg
+        .create_entity(&format!("Source-{value}"), EntityType::Concept, &[])
+        .await
+        .unwrap();
+    let mut nf = NewFact::new(entity.id, "has_name");
+    nf.object_literal = Some(value.to_string());
+    let fact = kg.insert_fact(nf).await.unwrap();
+    kg.add_source_to_fact(AddSourceRequest {
+        fact_id: fact.id,
+        source_type: SourceType::Connector,
+        connector_instance_id: Some(instance_id),
+        connector_type: Some(ConnectorType::Gmail),
+        raw_reference: Some(format!("raw-{value}")),
+        extraction_method: None,
+        changed_by: ChangedBy::System,
+    })
+    .await
+    .unwrap();
+    fact.id
+}
+
+#[tokio::test]
+async fn forget_connector_facts_trashes_sourced_facts() {
+    let (kg, _dir) = init_kg().await;
+    let connector = kg.create_connector(gmail_input("forget-me")).await.unwrap();
+    let other = kg.create_connector(gmail_input("keep-me")).await.unwrap();
+
+    let f1 = connector_sourced_fact(&kg, connector.id, "alpha").await;
+    let f2 = connector_sourced_fact(&kg, connector.id, "beta").await;
+    let _f3 = connector_sourced_fact(&kg, other.id, "gamma").await;
+
+    // Two facts are sourced from `connector`, one from `other`.
+    assert_eq!(
+        kg.count_sources_for_connector(connector.id).await.unwrap(),
+        2
+    );
+
+    let result = kg
+        .forget_connector_facts(connector.id, ChangedBy::User)
+        .await
+        .unwrap();
+    assert_eq!(result.forgotten_count, 2);
+
+    // The connector's facts are gone; the other connector's fact survives.
+    assert_eq!(
+        kg.count_sources_for_connector(connector.id).await.unwrap(),
+        0
+    );
+    assert_eq!(kg.count_sources_for_connector(other.id).await.unwrap(), 1);
+    // The facts themselves are no longer active (cascade-deleted sources).
+    assert!(kg.get_fact(f1).await.unwrap().is_none());
+    assert!(kg.get_fact(f2).await.unwrap().is_none());
+    // The two trashed facts are recoverable from trash.
+    let trash = kg.list_trash(100, 0).await.unwrap();
+    assert_eq!(trash.len(), 2);
+}
+
+#[tokio::test]
+async fn forget_connector_facts_no_sources_is_zero() {
+    let (kg, _dir) = init_kg().await;
+    let connector = kg.create_connector(gmail_input("empty")).await.unwrap();
+    let result = kg
+        .forget_connector_facts(connector.id, ChangedBy::User)
+        .await
+        .unwrap();
+    assert_eq!(result.forgotten_count, 0);
+}

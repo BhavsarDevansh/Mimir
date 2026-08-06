@@ -9,7 +9,9 @@ pub mod stop;
 
 pub use chat::{chat_handler, chat_stream_handler};
 pub use connectors::{
-    connector_add_handler, connector_remove_handler, connector_show_handler,
+    connector_actions_handler, connector_add_handler, connector_forget_handler,
+    connector_pause_handler, connector_remove_handler, connector_resume_handler,
+    connector_show_handler, connector_sync_handler, connector_tokens_handler,
     connectors_list_handler,
 };
 pub use kb::{

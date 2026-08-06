@@ -127,6 +127,67 @@ pub async fn forget_facts(
     })
 }
 
+/// Soft-delete (trash) every fact sourced from a single connector instance
+/// (Phase 3 A2 / #203).
+///
+/// The connector `forget` cascade: selects every fact id whose `sources`
+/// row carries `connector_instance_id = instance_id`, then trashes each via
+/// [`forget_fact_tx`] — the same trash machinery as [`forget_facts`] — so the
+/// facts are recoverable from trash (30-day expiry) rather than hard-deleted.
+/// Unlike the generic [`forget_facts`], no `--yes` / `--confirm-sensitive`
+/// gate applies: a connector `forget` is an explicit admin action that
+/// removes *all* of the connector's facts, sensitive or not. Inferred child
+/// facts are evaluated via [`evaluate_children`] as usual.
+///
+/// The caller (the server route) deletes the connector row and its stored
+/// secret separately after this returns.
+pub async fn forget_facts_for_connector(
+    pool: &SqlitePool,
+    instance_id: i32,
+    changed_by: ChangedBy,
+    now: DateTime<Utc>,
+) -> Result<ForgetResult, KnowledgeError> {
+    let ids: Vec<i32> = sqlx::query_scalar(
+        "SELECT DISTINCT so.fact_id FROM sources so WHERE so.connector_instance_id = ?",
+    )
+    .bind(instance_id)
+    .fetch_all(pool)
+    .await?;
+
+    let count = ids.len() as u64;
+    if count == 0 {
+        return Ok(ForgetResult {
+            forgotten_count: 0,
+            backup_path: None,
+        });
+    }
+
+    let mut all_children: Vec<(i32, bool)> = Vec::new();
+    for chunk in ids.chunks(50) {
+        let mut tx = pool.begin().await?;
+        for fact_id in chunk {
+            let children = forget_fact_tx(&mut tx, *fact_id, changed_by, now).await?;
+            all_children.extend(children);
+        }
+        tx.commit().await?;
+    }
+
+    let deduped: Vec<(i32, bool)> = {
+        let mut seen = HashSet::new();
+        all_children
+            .into_iter()
+            .filter(|(id, _)| seen.insert(*id))
+            .collect()
+    };
+
+    evaluate_children(pool, deduped, now).await?;
+
+    Ok(ForgetResult {
+        forgotten_count: count,
+        backup_path: None,
+    })
+}
+
 /// Hard-delete all facts after creating a backup.
 async fn forget_all(
     pool: &SqlitePool,

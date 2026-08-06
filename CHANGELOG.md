@@ -1,6 +1,19 @@
 # Changelog
 
-## [0.91.0] — 2026-08-06
+## [0.92.0] — 2026-08-06
+
+### Connectors — action routes + OAuth token ingest + forget cascade (A2 / #203)
+
+- **Action routes:** six new Axum routes round-trip via `mimir-client` — `POST /connectors/{id}/sync` (manual sync trigger, F9; maps the supervisor's `TriggerOutcome` to a `status`-tagged `SyncConnectorResponse`), `POST /connectors/{id}/pause` and `/resume` (lifecycle control), `POST /connectors/{id}/tokens` (ingest a `SecretBundle` keyed by slug via the shared `SecretStore` and flip `auth_state` to `authenticated`), `POST /connectors/{id}/actions` (dispatch `{ kind, payload }` to the connector's `act()` write-back, e.g. the Calendar connector's `create_event`/`update_event`/`delete_event`), and `POST /connectors/{id}/forget` (cascade-forget: stop the runner → trash every fact sourced from the connector via the existing trash machinery → delete the slug-keyed secret → delete the row). `forget` is recoverable from trash for 30 days, unlike `DELETE /connectors/{id}` (A1) which detaches provenance so facts survive with degraded provenance.
+- **Supervisor additions (`mimir-connectors`):** `ConnectorSupervisor::start(id)` re-spawns a single connector (load row → instantiate → stop any existing runner → flip `Active` → spawn), shared via a new private `spawn_into` helper used by both `restore()` and `start()`. `pause(id)`, `resume(id)`, and `act(id, action)` land; each `ConnectorHandle` now retains the live `Arc<dyn Connector>` (cloned from the one moved into the runner) so write-back actions dispatch to the authenticated instance, with on-demand re-instantiation for paused connectors. New `SupervisorError::UnknownConnectorType` variant and a new `ActError` enum.
+- **Knowledge-graph facade (`mimir-knowledge`):** `KnowledgeGraph::forget_connector_facts(id, changed_by)` — the `forget` cascade. Soft-deletes (trashes) every fact whose `sources` row carries `connector_instance_id = id` via the shared `forget_fact_tx` trash machinery; `sources` rows are cascade-deleted with their facts (`ON DELETE CASCADE`); no `--yes`/`--confirm-sensitive` gate applies (an explicit admin action). Backed by a new `forget::forget_facts_for_connector` function.
+- **Wire types (`mimir-api-types`):** `SyncConnectorRequest`/`SyncConnectorResponse`, `IngestTokenRequest` (a `kind`-tagged mirror of `SecretBundle`, keeping `mimir-api-types` decoupled from `mimir-connectors`), `ConnectorActionRequest`/`ActionResultResponse`, `ForgetConnectorResponse`, with round-trip tests.
+- **Server error mapping (`mimir-server`):** a `ConnectorError` → HTTP mapping (`UnsupportedAction`/`Config`/`Parse`→400, `NotAuthenticated`/`Authentication`→401, `Network`→502, `BackendNotFound`→404, `BackendAlreadyRegistered`→409, `Io`/`Other`→500 with detail masked) plus `SupervisorError`, `ActError`, `TriggerError`, and `SecretError` mappings, with unit tests.
+- **Mock connector:** `MockConnector` gains an `act_kind` config so the action-dispatch path is testable; unsupported kinds return `UnsupportedAction`.
+- **Client (`mimir-client`):** `connector_sync`, `connector_pause`, `connector_resume`, `connector_tokens`, `connector_actions`, `connector_forget` methods.
+- **Docs:** updated `docs/connector-management.md`, `docs/wiki/connectors.md`, `docs/wiki/what-works-now.md`, `README.md`, and `Mimir-Implementation-Context.md` to reflect A2 landing. Version bumped 0.91.0 → 0.92.0 (minor — backwards-compatible new feature routes and facade methods).
+
+
 
 ### Connectors — PR #263 review feedback (round 2)
 

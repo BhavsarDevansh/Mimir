@@ -486,6 +486,72 @@ impl MimirClient {
         )
         .await
     }
+
+    /// Trigger a manual sync of a connector instance (Phase 3 A2 / #203).
+    pub async fn connector_sync(
+        &self,
+        id: i32,
+        req: mimir_api_types::SyncConnectorRequest,
+    ) -> Result<mimir_api_types::SyncConnectorResponse, ClientError> {
+        self.post_json(&self.url(&format!("connectors/{id}/sync")), &req)
+            .await
+    }
+
+    /// Pause a connector instance (Phase 3 A2 / #203).
+    pub async fn connector_pause(
+        &self,
+        id: i32,
+    ) -> Result<mimir_api_types::ConnectorResponse, ClientError> {
+        self.post_json(
+            &self.url(&format!("connectors/{id}/pause")),
+            &serde_json::json!({}),
+        )
+        .await
+    }
+
+    /// Resume a connector instance (Phase 3 A2 / #203).
+    pub async fn connector_resume(
+        &self,
+        id: i32,
+    ) -> Result<mimir_api_types::ConnectorResponse, ClientError> {
+        self.post_json(
+            &self.url(&format!("connectors/{id}/resume")),
+            &serde_json::json!({}),
+        )
+        .await
+    }
+
+    /// Ingest credentials for a connector instance (Phase 3 A2 / #203).
+    pub async fn connector_tokens(
+        &self,
+        id: i32,
+        req: mimir_api_types::IngestTokenRequest,
+    ) -> Result<mimir_api_types::ConnectorResponse, ClientError> {
+        self.post_json(&self.url(&format!("connectors/{id}/tokens")), &req)
+            .await
+    }
+
+    /// Dispatch a write-back action to a connector instance (Phase 3 A2 / #203).
+    pub async fn connector_actions(
+        &self,
+        id: i32,
+        req: mimir_api_types::ConnectorActionRequest,
+    ) -> Result<mimir_api_types::ActionResultResponse, ClientError> {
+        self.post_json(&self.url(&format!("connectors/{id}/actions")), &req)
+            .await
+    }
+
+    /// Cascade-forget a connector instance (Phase 3 A2 / #203).
+    pub async fn connector_forget(
+        &self,
+        id: i32,
+    ) -> Result<mimir_api_types::ForgetConnectorResponse, ClientError> {
+        self.post_json(
+            &self.url(&format!("connectors/{id}/forget")),
+            &serde_json::json!({}),
+        )
+        .await
+    }
 }
 
 /// Maximum number of buffered bytes for a single SSE event before the parser

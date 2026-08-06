@@ -69,9 +69,12 @@ use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorStatus, Connec
 use mimir_knowledge::models::source::ExtractionMethod;
 use mimir_knowledge::normalize::{Provenance, normalize_and_insert};
 
+use crate::connector::ActionResult;
 use crate::connector::ConnectorContext;
 use crate::connector::ConnectorMode;
-use crate::connector::{Connector, ConnectorError, HealthStatus, SyncOptions, SyncOutcome};
+use crate::connector::{
+    Connector, ConnectorAction, ConnectorError, HealthStatus, SyncOptions, SyncOutcome,
+};
 use crate::registry::ConnectorRegistry;
 use crate::secrets::SecretStore;
 use mimir_core::geocoder::Geocoder;
@@ -116,6 +119,30 @@ pub enum SupervisorError {
     Connector(#[from] crate::ConnectorError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    /// The connector row exists but its `connector_type_id` does not map to a
+    /// known [`ConnectorType`] (Phase 3 A2 / #203).
+    #[error("connector {id} has an unknown connector_type id {type_id}")]
+    UnknownConnectorType { id: i32, type_id: i16 },
+}
+
+/// Errors raised by [`ConnectorSupervisor::act`] (Phase 3 A2 / #203).
+///
+/// Infrastructure failures of the dispatch mechanism: an unknown instance, an
+/// unresolvable connector type, a knowledge-graph lookup failure, or the
+/// connector's own [`ConnectorError`] (e.g. `UnsupportedAction`).
+#[derive(Debug, thiserror::Error)]
+pub enum ActError {
+    #[error(transparent)]
+    Knowledge(#[from] mimir_knowledge::KnowledgeError),
+    /// No connector row exists with the given instance id.
+    #[error("no connector with id {0}")]
+    NotFound(i32),
+    /// The connector row exists but its `connector_type_id` does not map to a
+    /// known [`ConnectorType`].
+    #[error("connector {id} has an unknown connector_type id {type_id}")]
+    UnknownType { id: i32, type_id: i16 },
+    #[error(transparent)]
+    Connector(#[from] crate::ConnectorError),
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +241,12 @@ pub enum TriggerError {
 struct ConnectorHandle {
     /// The supervised runner task.
     task: JoinHandle<()>,
+    /// The live connector instance (Phase 3 A2 / #203). Kept so
+    /// [`ConnectorSupervisor::act`] can dispatch write-back actions to the
+    /// running, authenticated instance without re-instantiating it. Cloned
+    /// from the same `Arc<dyn Connector>` moved into the runner task, so both
+    /// share one underlying instance.
+    connector: Arc<dyn Connector>,
     /// Connector mode, captured at spawn so `trigger_sync` can reject push
     /// connectors without holding the connector instance.
     mode: ConnectorMode,
@@ -377,33 +410,53 @@ impl ConnectorSupervisor {
                     continue;
                 }
             };
-            // Capture the mode up front so `trigger_sync` can reject push
-            // connectors without holding the connector instance.
-            let mode = connector.mode();
-            let (trigger_tx, trigger_rx) = mpsc::channel(TRIGGER_CHANNEL_CAPACITY);
-            let semaphore = Arc::new(Semaphore::new(1));
-            let handle = tokio::spawn(run_connector(
-                connector,
-                self.kg.clone(),
-                self.config,
-                self.shutdown.clone(),
-                row.id,
-                connector_type,
-                trigger_rx,
-            ));
-            self.handles.lock().await.insert(
-                row.id,
-                ConnectorHandle {
-                    task: handle,
-                    mode,
-                    trigger_tx,
-                    semaphore,
-                },
-            );
+            self.spawn_into(row, connector_type, connector).await;
             spawned += 1;
-            info!(connector_id = row.id, slug = %row.slug, backend = %row.backend, "spawned connector runner");
         }
         Ok(spawned)
+    }
+
+    /// Instantiate, spawn a runner for, and register a single connector row
+    /// (Phase 3 A2 / #203).
+    ///
+    /// Shared by [`restore`](Self::restore) (startup batch) and
+    /// [`start`](Self::start) (single-instance resume / re-spawn). Stops any
+    /// existing runner for `row.id` first so a re-spawn never leaves two
+    /// handles for one instance. The connector is cloned: one `Arc` moves
+    /// into the runner task, one is retained in the
+    /// [`ConnectorHandle`] for [`act`](Self::act) dispatch.
+    async fn spawn_into(
+        &self,
+        row: ConnectorRow,
+        connector_type: ConnectorType,
+        connector: Arc<dyn Connector>,
+    ) {
+        // Capture the mode up front so `trigger_sync` can reject push
+        // connectors without holding the connector instance.
+        let mode = connector.mode();
+        let (trigger_tx, trigger_rx) = mpsc::channel(TRIGGER_CHANNEL_CAPACITY);
+        let semaphore = Arc::new(Semaphore::new(1));
+        let handle = tokio::spawn(run_connector(
+            // One clone feeds the runner; the other is retained below.
+            Arc::clone(&connector),
+            self.kg.clone(),
+            self.config,
+            self.shutdown.clone(),
+            row.id,
+            connector_type,
+            trigger_rx,
+        ));
+        self.handles.lock().await.insert(
+            row.id,
+            ConnectorHandle {
+                task: handle,
+                connector,
+                mode,
+                trigger_tx,
+                semaphore,
+            },
+        );
+        info!(connector_id = row.id, slug = %row.slug, backend = %row.backend, "spawned connector runner");
     }
 
     /// Trigger an immediate sync of the connector with the given instance id,
@@ -565,6 +618,124 @@ impl ConnectorSupervisor {
             Some(_) => false,
             None => false,
         }
+    }
+
+    /// (Re)spawn a single connector's runner by instance id
+    /// (Phase 3 A2 / #203).
+    ///
+    /// Loads the row, instantiates the connector via the registry, transitions
+    /// it to [`ConnectorStatus::Active`] (clearing `last_error`), and spawns a
+    /// supervised runner. Any existing runner for `id` is stopped first so a
+    /// re-spawn never leaves two handles for one instance. Used by
+    /// [`resume`](Self::resume) and (future) reconfig-on-restart.
+    ///
+    /// # Errors
+    ///
+    /// - [`SupervisorError::Knowledge`] — the row lookup or status write
+    ///   failed, or no row matches `id` ([`KnowledgeError::ConnectorNotFound`]).
+    /// - [`SupervisorError::UnknownConnectorType`] — the row's
+    ///   `connector_type_id` is not a known [`ConnectorType`].
+    /// - [`SupervisorError::Connector`] / [`SupervisorError::Json`] — the
+    ///   row's `config_json` could not be parsed or the factory rejected it.
+    pub async fn start(&self, id: i32) -> Result<(), SupervisorError> {
+        // Stop any existing runner first so a re-spawn is idempotent.
+        self.stop(id).await;
+
+        let row = self
+            .kg
+            .get_connector(id)
+            .await?
+            .ok_or(SupervisorError::Knowledge(
+                mimir_knowledge::KnowledgeError::ConnectorNotFound(id),
+            ))?;
+        let connector_type = row
+            .connector_type()
+            .ok_or(SupervisorError::UnknownConnectorType {
+                id,
+                type_id: row.connector_type_id,
+            })?;
+        let connector = self.instantiate(&row, connector_type)?;
+
+        // Transition to Active and clear any prior error before spawning so
+        // the runner starts from a clean lifecycle state.
+        self.kg
+            .set_connector_status(id, ConnectorStatus::Active, Some(None))
+            .await?;
+
+        self.spawn_into(row, connector_type, connector).await;
+        Ok(())
+    }
+
+    /// Pause a connector: stop its runner and transition it to
+    /// [`ConnectorStatus::Paused`] (Phase 3 A2 / #203).
+    ///
+    /// Stopping the runner first prevents a mid-cycle sync writing back to a
+    /// row that is about to become `Paused`. The status write clears
+    /// `last_error` so a paused connector does not display a stale error.
+    /// A connector that was never running (no handle) is still transitioned
+    /// to `Paused` so the persisted state reflects the request.
+    pub async fn pause(&self, id: i32) -> Result<(), SupervisorError> {
+        self.stop(id).await;
+        self.kg
+            .set_connector_status(id, ConnectorStatus::Paused, Some(None))
+            .await?;
+        Ok(())
+    }
+
+    /// Resume a paused/error connector: (re)spawn its runner and transition it
+    /// to [`ConnectorStatus::Active`] (Phase 3 A2 / #203).
+    ///
+    /// Thin wrapper around [`start`](Self::start) that also covers the
+    /// re-spawn-after-circuit-breaker case (an `Error` connector that
+    /// exhausted its restart budget).
+    pub async fn resume(&self, id: i32) -> Result<(), SupervisorError> {
+        self.start(id).await
+    }
+
+    /// Dispatch a write-back action to a connector instance
+    /// (Phase 3 A2 / #203, C4 / #198).
+    ///
+    /// Uses the live, running connector instance when one is available (so
+    /// the action runs against the authenticated connector with its in-memory
+    /// state). When no runner exists (a `Paused` / `Setup` / `Error`
+    /// connector, or one whose runner exited), the connector is
+    /// re-instantiated from its row — backends like the Calendar connector
+    /// re-read credentials from the [`SecretStore`] inside `act`, so they do
+    /// not depend on the runner's auth handshake. The connector's own
+    /// [`ConnectorError`] (e.g. [`ConnectorError::UnsupportedAction`]) is
+    /// returned for the server to map onto an HTTP status.
+    pub async fn act(&self, id: i32, action: ConnectorAction) -> Result<ActionResult, ActError> {
+        // Try the live handle first (no await while holding the lock).
+        let live = {
+            let guard = self.handles.lock().await;
+            guard.get(&id).map(|h| Arc::clone(&h.connector))
+        };
+        let connector = match live {
+            Some(c) => c,
+            None => {
+                let row = self
+                    .kg
+                    .get_connector(id)
+                    .await?
+                    .ok_or(ActError::NotFound(id))?;
+                let connector_type = row.connector_type().ok_or(ActError::UnknownType {
+                    id,
+                    type_id: row.connector_type_id,
+                })?;
+                self.instantiate(&row, connector_type)
+                    .map_err(|e| match e {
+                        SupervisorError::Knowledge(ke) => ActError::Knowledge(ke),
+                        SupervisorError::Connector(ce) => ActError::Connector(ce),
+                        SupervisorError::Json(je) => {
+                            ActError::Connector(ConnectorError::Config(je.to_string()))
+                        }
+                        SupervisorError::UnknownConnectorType { id, type_id } => {
+                            ActError::UnknownType { id, type_id }
+                        }
+                    })?
+            }
+        };
+        Ok(connector.act(action).await?)
     }
 
     /// Parse a row's `config_json`, inject instance identity, and ask the
@@ -1013,6 +1184,7 @@ mod tests {
     use crate::FnConnectorFactory;
     use chrono::Utc;
     use mimir_knowledge::models::connector::Connector as ConnectorRow;
+    use mimir_knowledge::models::connector::UpsertConnectorInput;
 
     fn row_with_cursor(cursor: Option<&str>) -> ConnectorRow {
         ConnectorRow {
@@ -1171,5 +1343,232 @@ mod tests {
             *saw_store.lock().unwrap(),
             "with_secret_store must thread the store into the factory context"
         );
+    }
+    // -- start / pause / resume / act (Phase 3 A2 / #203) --
+
+    /// Build a supervisor + KG with the mock factory registered, and insert a
+    /// connector row in `Setup`/`Unauthenticated`. Returns the supervisor and
+    /// the new row id.
+    async fn supervisor_with_row(
+        config_json: &str,
+    ) -> (
+        Arc<ConnectorSupervisor>,
+        Arc<KnowledgeGraph>,
+        i32,
+        tempfile::TempDir,
+        watch::Sender<bool>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("kg.db"))
+                .await
+                .unwrap(),
+        );
+        let registry = ConnectorRegistry::new();
+        registry
+            .register(
+                ConnectorType::Gmail,
+                "test".to_string(),
+                crate::MockConnectorFactory,
+            )
+            .unwrap();
+        // Keep the watch sender alive for the test's duration: dropping it
+        // closes the channel, which the runner treats as a shutdown signal and
+        // exits immediately.
+        let (tx, rx) = watch::channel(false);
+        let supervisor = ConnectorSupervisor::new(
+            Arc::new(registry),
+            Arc::clone(&kg),
+            SupervisorConfig::default(),
+            rx,
+        );
+        let row = kg
+            .create_connector(UpsertConnectorInput {
+                connector_type: ConnectorType::Gmail,
+                slug: "gmail-test".to_string(),
+                backend: "test".to_string(),
+                display_name: "Gmail Test".to_string(),
+                config_json: config_json.to_string(),
+                status: None,
+                auth_state: None,
+            })
+            .await
+            .unwrap();
+        (Arc::new(supervisor), kg, row.id, dir, tx)
+    }
+
+    #[tokio::test]
+    async fn start_spawns_runner_and_flips_active() {
+        let (supervisor, kg, id, _dir, _tx) = supervisor_with_row(r#"{"act_kind":"echo"}"#).await;
+        // Starts in Setup (create_connector with status None).
+        let before = kg.get_connector(id).await.unwrap().unwrap();
+        assert_eq!(before.status(), Some(ConnectorStatus::Setup));
+
+        supervisor.start(id).await.unwrap();
+
+        // Give the runner a moment to run its auth handshake.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(supervisor.is_running(id).await);
+        let after = kg.get_connector(id).await.unwrap().unwrap();
+        assert_eq!(after.status(), Some(ConnectorStatus::Active));
+        // Clean shutdown so the test does not leak a task.
+        supervisor.stop(id).await;
+    }
+
+    #[tokio::test]
+    async fn start_unknown_id_returns_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("kg.db"))
+                .await
+                .unwrap(),
+        );
+        let registry = ConnectorRegistry::new();
+        let (_tx, rx) = watch::channel(false);
+        let supervisor = ConnectorSupervisor::new(
+            Arc::new(registry),
+            Arc::clone(&kg),
+            SupervisorConfig::default(),
+            rx,
+        );
+        let err = supervisor.start(9999).await.unwrap_err();
+        assert!(matches!(
+            err,
+            SupervisorError::Knowledge(mimir_knowledge::KnowledgeError::ConnectorNotFound(9999))
+        ));
+    }
+
+    #[tokio::test]
+    async fn pause_stops_runner_and_flips_paused() {
+        let (supervisor, kg, id, _dir, _tx) = supervisor_with_row(r#"{"act_kind":"echo"}"#).await;
+        supervisor.start(id).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(supervisor.is_running(id).await);
+
+        supervisor.pause(id).await.unwrap();
+
+        assert!(!supervisor.is_running(id).await);
+        let after = kg.get_connector(id).await.unwrap().unwrap();
+        assert_eq!(after.status(), Some(ConnectorStatus::Paused));
+    }
+
+    #[tokio::test]
+    async fn resume_respawns_after_pause() {
+        let (supervisor, kg, id, _dir, _tx) = supervisor_with_row(r#"{"act_kind":"echo"}"#).await;
+        supervisor.start(id).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        supervisor.pause(id).await.unwrap();
+        assert!(!supervisor.is_running(id).await);
+        assert_eq!(
+            kg.get_connector(id).await.unwrap().unwrap().status(),
+            Some(ConnectorStatus::Paused)
+        );
+
+        supervisor.resume(id).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert!(supervisor.is_running(id).await);
+        assert_eq!(
+            kg.get_connector(id).await.unwrap().unwrap().status(),
+            Some(ConnectorStatus::Active)
+        );
+        supervisor.stop(id).await;
+    }
+
+    #[tokio::test]
+    async fn act_dispatches_to_live_connector() {
+        let (supervisor, _kg, id, _dir, _tx) = supervisor_with_row(r#"{"act_kind":"echo"}"#).await;
+        supervisor.start(id).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let result = supervisor
+            .act(
+                id,
+                ConnectorAction {
+                    kind: "echo".to_string(),
+                    payload: serde_json::json!({
+                        "native_id": "item-1",
+                        "message": "ok",
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(result.success);
+        assert_eq!(result.native_id.as_deref(), Some("item-1"));
+        assert_eq!(result.message.as_deref(), Some("ok"));
+        supervisor.stop(id).await;
+    }
+
+    #[tokio::test]
+    async fn act_unsupported_kind_returns_error() {
+        let (supervisor, _kg, id, _dir, _tx) = supervisor_with_row(r#"{"act_kind":"echo"}"#).await;
+        supervisor.start(id).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let err = supervisor
+            .act(
+                id,
+                ConnectorAction {
+                    kind: "bogus".to_string(),
+                    payload: serde_json::Value::Null,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ActError::Connector(ConnectorError::UnsupportedAction(_))
+        ));
+        supervisor.stop(id).await;
+    }
+
+    #[tokio::test]
+    async fn act_reinstantiates_when_not_running() {
+        // A connector that was never started has no live handle; act must
+        // re-instantiate from the row and still dispatch.
+        let (supervisor, _kg, id, _dir, _tx) = supervisor_with_row(r#"{"act_kind":"echo"}"#).await;
+        // Note: no start() call — the connector is in Setup with no runner.
+        let result = supervisor
+            .act(
+                id,
+                ConnectorAction {
+                    kind: "echo".to_string(),
+                    payload: serde_json::json!({"native_id": "x"}),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(result.success);
+        assert_eq!(result.native_id.as_deref(), Some("x"));
+    }
+
+    #[tokio::test]
+    async fn act_unknown_id_returns_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("kg.db"))
+                .await
+                .unwrap(),
+        );
+        let registry = ConnectorRegistry::new();
+        let (_tx, rx) = watch::channel(false);
+        let supervisor = ConnectorSupervisor::new(
+            Arc::new(registry),
+            Arc::clone(&kg),
+            SupervisorConfig::default(),
+            rx,
+        );
+        let err = supervisor
+            .act(
+                9999,
+                ConnectorAction {
+                    kind: "echo".to_string(),
+                    payload: serde_json::Value::Null,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ActError::NotFound(9999)));
     }
 }

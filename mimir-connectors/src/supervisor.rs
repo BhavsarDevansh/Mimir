@@ -695,20 +695,38 @@ impl ConnectorSupervisor {
     /// Dispatch a write-back action to a connector instance
     /// (Phase 3 A2 / #203, C4 / #198).
     ///
-    /// Uses the live, running connector instance when one is available (so
-    /// the action runs against the authenticated connector with its in-memory
-    /// state). When no runner exists (a `Paused` / `Setup` / `Error`
-    /// connector, or one whose runner exited), the connector is
-    /// re-instantiated from its row — backends like the Calendar connector
-    /// re-read credentials from the [`SecretStore`] inside `act`, so they do
-    /// not depend on the runner's auth handshake. The connector's own
-    /// [`ConnectorError`] (e.g. [`ConnectorError::UnsupportedAction`]) is
-    /// returned for the server to map onto an HTTP status.
+    /// Uses the live, running connector instance only when its runner is
+    /// still alive (checked via `task.is_finished()`, matching
+    /// [`trigger_sync`](Self::trigger_sync)). A handle left behind by a
+    /// runner that exited naturally (auth-expiry, circuit-breaker, or panic)
+    /// is dropped and treated as "no live instance" — its in-memory connector
+    /// may hold expired credentials, so re-instantiating from the row reads
+    /// fresh credentials from the [`SecretStore`]. When no live runner exists
+    /// (a `Paused` / `Setup` / `Error` connector, or one whose runner exited),
+    /// the connector is re-instantiated from its row — backends like the
+    /// Calendar connector re-read credentials from the [`SecretStore`] inside
+    /// `act`, so they do not depend on the runner's auth handshake. The
+    /// connector's own [`ConnectorError`] (e.g.
+    /// [`ConnectorError::UnsupportedAction`]) is returned for the server to
+    /// map onto an HTTP status.
     pub async fn act(&self, id: i32, action: ConnectorAction) -> Result<ActionResult, ActError> {
-        // Try the live handle first (no await while holding the lock).
+        // Use the live, running connector instance only when its runner is
+        // still alive. A handle whose task has finished naturally (auth-expiry
+        // pause, circuit-breaker exhaustion, or panic) is stale: its in-memory
+        // connector may hold expired credentials, so drop it and fall through
+        // to re-instantiate from the row — mirroring `trigger_sync`'s
+        // `is_finished()` check. The lock is not held across the `act` await:
+        // only the `Arc` clone (or a handle removal) happens inside the guard.
         let live = {
-            let guard = self.handles.lock().await;
-            guard.get(&id).map(|h| Arc::clone(&h.connector))
+            let mut guard = self.handles.lock().await;
+            match guard.get(&id) {
+                Some(handle) if !handle.task.is_finished() => Some(Arc::clone(&handle.connector)),
+                Some(_) => {
+                    guard.remove(&id);
+                    None
+                }
+                None => None,
+            }
         };
         let connector = match live {
             Some(c) => c,
@@ -1570,5 +1588,93 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ActError::NotFound(9999)));
+    }
+
+    /// `act` must not reuse a connector whose runner exited naturally
+    /// (auth-expiry / breaker / panic): the handle stays in the map with a
+    /// finished task, but its in-memory connector may hold stale credentials.
+    /// It must drop the stale handle and re-instantiate from the row, reading
+    /// fresh credentials from the secret store. A counting factory proves the
+    /// re-instantiation: one construction at `start`, then a second at `act`.
+    #[tokio::test]
+    async fn act_reinstantiates_after_runner_exits_naturally() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("kg.db"))
+                .await
+                .unwrap(),
+        );
+        let creations = Arc::new(AtomicU32::new(0));
+        let registry = ConnectorRegistry::new();
+        let count = Arc::clone(&creations);
+        registry
+            .register(
+                ConnectorType::Gmail,
+                "test".to_string(),
+                FnConnectorFactory::new(move |config, _ctx| {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    // `config` carries `auth_fail: true` so the runner exits at
+                    // the auth handshake, plus `act_kind: "echo"` for the
+                    // write-back.
+                    let connector = crate::MockConnector::from_config(config)?;
+                    Ok(Arc::new(connector) as Arc<dyn Connector>)
+                }),
+            )
+            .unwrap();
+        let (_tx, rx) = watch::channel(false);
+        let supervisor = ConnectorSupervisor::new(
+            Arc::new(registry),
+            Arc::clone(&kg),
+            SupervisorConfig::default(),
+            rx,
+        );
+
+        let row = kg
+            .create_connector(UpsertConnectorInput {
+                connector_type: ConnectorType::Gmail,
+                slug: "stale-act".to_string(),
+                backend: "test".to_string(),
+                display_name: "Stale".to_string(),
+                config_json: r#"{"act_kind":"echo","auth_fail":true}"#.to_string(),
+                status: None,
+                auth_state: None,
+            })
+            .await
+            .unwrap();
+
+        supervisor.start(row.id).await.unwrap();
+        assert_eq!(
+            creations.load(Ordering::SeqCst),
+            1,
+            "start instantiates once"
+        );
+        // The runner fails the auth handshake and exits; give it a moment.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !supervisor.is_running(row.id).await,
+            "runner should have exited at the auth handshake"
+        );
+
+        // A write-back after the runner exited: must re-instantiate (creation
+        // #2), not reuse the stale in-memory connector.
+        let result = supervisor
+            .act(
+                row.id,
+                ConnectorAction {
+                    kind: "echo".to_string(),
+                    payload: serde_json::json!({"native_id": "fresh"}),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            creations.load(Ordering::SeqCst),
+            2,
+            "act must re-instantiate"
+        );
+        assert!(result.success);
+        assert_eq!(result.native_id.as_deref(), Some("fresh"));
     }
 }

@@ -129,10 +129,14 @@ runner) so write-back actions dispatch to the authenticated instance:
   covering re-spawn-after-circuit-breaker (an `Error` connector that exhausted
   its restart budget).
 - `ConnectorSupervisor::act(id, action) -> Result<ActionResult, ActError>` —
-  dispatches a `ConnectorAction` to the live connector when one is available;
-  otherwise re-instantiates from the row (backends like the Calendar connector
-  re-read credentials inside `act`, so they do not depend on the runner's
-  auth handshake). `ActError` carries `NotFound` / `UnknownType` /
+  dispatches a `ConnectorAction` to the live connector only when its runner is
+  still alive (checked via `task.is_finished()`, mirroring `trigger_sync`); a
+  handle left by a runner that exited naturally (auth-expiry, circuit-breaker,
+  panic) is dropped and the connector is re-instantiated from the row, so a
+  write-back never reuses stale in-memory credentials (e.g. after fresh ones
+  are stored via `POST /connectors/{id}/tokens`). Backends like the Calendar
+  connector re-read credentials inside `act`, so they do not depend on the
+  runner's auth handshake. `ActError` carries `NotFound` / `UnknownType` /
   `Knowledge` / `Connector`; the server maps `UnsupportedAction` → `400`,
   auth failures → `401`, and `Network` → `502`.
 
@@ -173,9 +177,10 @@ backend and its daemon registration.
   unknown id. A2 adds: `start` spawns a runner and flips `Active` (and returns
   `ConnectorNotFound` for an unknown id), `pause` stops the runner and flips
   `Paused`, `resume` re-spawns after pause, `act` dispatches to the live
-  connector (and re-instantiates when not running), `act` returns
-  `UnsupportedAction` for an unconfigured kind, and `act` returns `NotFound`
-  for an unknown id.
+  connector (and re-instantiates when not running), `act` re-instantiates
+  from the row after the runner exits naturally (auth-fail) so it never
+  reuses a stale in-memory connector, `act` returns `UnsupportedAction` for
+  an unconfigured kind, and `act` returns `NotFound` for an unknown id.
 
 ## Out of scope (tracked)
 

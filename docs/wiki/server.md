@@ -30,6 +30,10 @@ bind_addr = "127.0.0.1:8080"
 | `/memory` | `GET` | Live condensed memory block from the knowledge graph |
 | `/chat` | `POST` | Blocking chat completion |
 | `/chat/stream` | `POST` | SSE streaming chat completion |
+| `/connectors` | `GET` | List registered connector instances with derived item counts |
+| `/connectors` | `POST` | Register a new connector instance (add-only) |
+| `/connectors/{id}` | `GET` | Show a single connector instance with its item count |
+| `/connectors/{id}` | `DELETE` | Stop the runner and delete the instance |
 
 ### Status
 

@@ -5,6 +5,7 @@ use std::time::Instant;
 use chrono::Utc;
 use dashmap::DashMap;
 
+use mimir_connectors::{ConnectorRegistry, ConnectorSupervisor, SupervisorConfig};
 use mimir_core::{
     agents::AgentRuntime,
     config::ReloadableConfig,
@@ -54,6 +55,14 @@ pub struct AppState {
     pub last_user_activity: Arc<AtomicU64>,
     /// Cached user entity ID in the knowledge graph (resolved at startup).
     pub user_entity_id: Option<i32>,
+    /// Connector factory registry: maps `(connector_type, backend)` to the
+    /// factory that constructs a connector instance from its `config_json`
+    /// (Phase 3 F7 / #184). Populated at startup with the built-in backends.
+    pub connector_registry: Arc<ConnectorRegistry>,
+    /// Supervised per-connector task lifecycle (Phase 3 F8 / #185). Owns one
+    /// long-lived runner per `Active` connector instance; the daemon signals
+    /// shutdown via the shared `shutdown_tx` watch channel.
+    pub connector_supervisor: Arc<ConnectorSupervisor>,
 }
 
 const MODEL_OVERRIDE_CACHE_CAP: usize = 16;
@@ -163,9 +172,17 @@ impl AppState {
         // Construction only fails if the HTTP client or rate limiter cannot be
         // built, in which case geocoding is disabled (locations still persist
         // with whatever data the producer supplied) rather than aborting start.
+        // The geocoder is shared between the knowledge graph (entity-locations
+        // write path, S3 / #193) and the connector supervisor (Photos place
+        // extraction, C2 / #196), so build the Arc once and hand the same
+        // instance to both.
+        let mut shared_geocoder: Option<std::sync::Arc<dyn mimir_core::geocoder::Geocoder>> = None;
         match mimir_connectors::NominatimGeocoder::with_defaults() {
             Ok(geocoder) => {
-                knowledge_graph.set_geocoder(std::sync::Arc::new(geocoder));
+                let geocoder: std::sync::Arc<dyn mimir_core::geocoder::Geocoder> =
+                    std::sync::Arc::new(geocoder);
+                knowledge_graph.set_geocoder(std::sync::Arc::clone(&geocoder));
+                shared_geocoder = Some(geocoder);
                 tracing::info!("Nominatim geocoder enabled for entity-locations write path");
             }
             Err(error) => tracing::warn!(
@@ -476,6 +493,117 @@ impl AppState {
             job_queue.register(events_job).await?;
         }
 
+        // ---- Connector framework (Phase 3 A1 / #202) ----
+        // Build the registry of built-in connector backends, gated by the
+        // mimir-connectors cargo features. The mock factory is registered only
+        // under `cfg(test)` so a release daemon never advertises a test
+        // connector. Each backend string matches what connectors persist on
+        // their `connectors.backend` row (e.g. "local", "caldav", "imap").
+        let connector_registry = Arc::new(ConnectorRegistry::new());
+        #[cfg(feature = "photos")]
+        {
+            use mimir_connectors::PhotosConnectorFactory;
+            if let Err(e) = connector_registry.register(
+                mimir_knowledge::models::enums::ConnectorType::Photos,
+                "local".to_string(),
+                PhotosConnectorFactory,
+            ) {
+                tracing::warn!("Failed to register Photos connector factory: {e}");
+            }
+        }
+        #[cfg(feature = "calendar")]
+        {
+            use mimir_connectors::CalendarConnectorFactory;
+            if let Err(e) = connector_registry.register(
+                mimir_knowledge::models::enums::ConnectorType::Calendar,
+                "caldav".to_string(),
+                CalendarConnectorFactory,
+            ) {
+                tracing::warn!("Failed to register Calendar connector factory: {e}");
+            }
+        }
+        #[cfg(feature = "gmail")]
+        {
+            use mimir_connectors::EmailConnectorFactory;
+            if let Err(e) = connector_registry.register(
+                mimir_knowledge::models::enums::ConnectorType::Gmail,
+                "imap".to_string(),
+                EmailConnectorFactory,
+            ) {
+                tracing::warn!("Failed to register Email connector factory: {e}");
+            }
+        }
+        #[cfg(test)]
+        {
+            use mimir_connectors::MockConnectorFactory;
+            if let Err(e) = connector_registry.register(
+                mimir_knowledge::models::enums::ConnectorType::Gmail,
+                "test".to_string(),
+                MockConnectorFactory,
+            ) {
+                tracing::warn!("Failed to register mock connector factory: {e}");
+            }
+        }
+
+        // Wire the supervisor with the shared services the connector backends
+        // need at construction: the secret store (F10 / #187, so Email/Calendar
+        // can read credentials immediately), the geocoder (C2 / #196), the user
+        // identity (C4 / #198, so Calendar authors `user has_event`), and the
+        // shared LLM backend (C7 / #201, so the Email prose-extraction layer
+        // routes through the system queue). The shutdown watch is the
+        // daemon-wide signal so `mimir stop` drains the runners too. Builders
+        // consume `self`, so the chain is assembled on the owned value before
+        // it is shared behind `Arc`.
+        //
+        // The secret store is best-effort: `FileSecretStore::new()` resolves
+        // the secrets directory and may fail on hosts without a writable home
+        // (or in sandboxed tests). A missing store does not abort startup —
+        // connectors that need credentials will surface the gap at
+        // authentication and the user can reconfigure. This keeps the daemon
+        // start path robust and avoids writing to a real secrets directory
+        // during tests that exercise the connector routes with the mock
+        // connector (which needs no secrets).
+        let connector_supervisor = ConnectorSupervisor::new(
+            Arc::clone(&connector_registry),
+            Arc::clone(&knowledge_graph),
+            SupervisorConfig::default(),
+            shutdown_tx.subscribe(),
+        );
+        let connector_supervisor =
+            match mimir_connectors::FileSecretStore::new() {
+                Ok(store) => connector_supervisor
+                    .with_secret_store(std::sync::Arc::new(store)
+                        as std::sync::Arc<dyn mimir_connectors::SecretStore>),
+                Err(error) => {
+                    tracing::warn!(
+                        "FileSecretStore unavailable; connector credentials disabled: {error}"
+                    );
+                    connector_supervisor
+                }
+            };
+        let connector_supervisor = match shared_geocoder {
+            Some(geocoder) => connector_supervisor.with_geocoder(geocoder),
+            None => connector_supervisor,
+        };
+        let connector_supervisor = connector_supervisor
+            .with_user_identity(cfg.identity.name.clone())
+            .with_llm_backend(Arc::clone(&llm_client));
+        let connector_supervisor = Arc::new(connector_supervisor);
+
+        // Spawn a runner for every connector row already in `Active` state so
+        // restarts resume syncs. `restore` is best-effort: a failure to restore
+        // one connector (e.g. a missing factory for a stored backend) is
+        // logged inside the supervisor path and must not abort daemon startup —
+        // the user can reconfigure via the routes.
+        match Arc::clone(&connector_supervisor).restore().await {
+            Ok(count) => {
+                if count > 0 {
+                    tracing::info!("Restored {count} connector runner(s) at startup");
+                }
+            }
+            Err(error) => tracing::warn!("Connector supervisor restore failed: {error}"),
+        }
+
         Ok((
             Self {
                 llm_client,
@@ -494,6 +622,8 @@ impl AppState {
                 scheduler,
                 last_user_activity,
                 user_entity_id,
+                connector_registry,
+                connector_supervisor,
             },
             scheduler_shutdown_rx,
         ))
@@ -524,6 +654,13 @@ impl AppState {
     pub async fn shutdown(&self) {
         tracing::info!("Shutting down scheduler...");
         self.scheduler.shutdown();
+
+        // Abort every connector runner and await its termination so the
+        // shared shutdown watch (fired by the caller before this method) does
+        // not race the runtime teardown. The supervisor persists the last
+        // completed sync cursor as part of its shutdown path.
+        tracing::info!("Shutting down connector supervisor...");
+        self.connector_supervisor.shutdown().await;
 
         tracing::info!("Draining pending location-overlay jobs...");
         self.knowledge_graph.flush_location_overlays().await;

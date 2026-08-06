@@ -24,13 +24,14 @@ use mimir_core::config::ReloadableConfig;
 use mimir_core::llm::{LlmBackend, LlmClient};
 
 use crate::routes::{
-    chat_handler, chat_stream_handler, create_category, delete_category, kb_audit_handler,
-    kb_browse_handler, kb_confirm_fact_handler, kb_edit_handler, kb_forget_handler,
-    kb_optimization_run_now_handler, kb_optimization_status_handler, kb_pending_handler,
-    kb_profile_handler, kb_query_handler, kb_reject_fact_handler, kb_show_handler,
-    kb_trash_empty_handler, kb_trash_list_handler, kb_trash_restore_handler, list_categories,
-    memory_handler, memory_refresh_handler, session_messages_handler, sessions_handler,
-    show_category, status_handler, stop_handler,
+    chat_handler, chat_stream_handler, connector_add_handler, connector_remove_handler,
+    connector_show_handler, connectors_list_handler, create_category, delete_category,
+    kb_audit_handler, kb_browse_handler, kb_confirm_fact_handler, kb_edit_handler,
+    kb_forget_handler, kb_optimization_run_now_handler, kb_optimization_status_handler,
+    kb_pending_handler, kb_profile_handler, kb_query_handler, kb_reject_fact_handler,
+    kb_show_handler, kb_trash_empty_handler, kb_trash_list_handler, kb_trash_restore_handler,
+    list_categories, memory_handler, memory_refresh_handler, session_messages_handler,
+    sessions_handler, show_category, status_handler, stop_handler,
 };
 use crate::state::AppState;
 
@@ -128,6 +129,14 @@ pub fn build_app(state: Arc<AppState>) -> Router {
             get(kb_trash_list_handler).delete(kb_trash_empty_handler),
         )
         .route("/kb/trash/restore", post(kb_trash_restore_handler))
+        .route(
+            "/connectors",
+            get(connectors_list_handler).post(connector_add_handler),
+        )
+        .route(
+            "/connectors/{id}",
+            get(connector_show_handler).delete(connector_remove_handler),
+        )
         .route("/stop", post(stop_handler).layer(from_fn(require_loopback)))
         .layer(
             ServiceBuilder::new()
@@ -685,6 +694,34 @@ mod tests {
             }
         };
 
+        // Connector registry + supervisor for the connector management routes
+        // (Phase 3 A1 / #202). Only the mock factory is registered so tests
+        // exercise the CRUD/status surface against a deterministic backend.
+        let connector_registry = Arc::new(mimir_connectors::ConnectorRegistry::new());
+        connector_registry
+            .register(
+                mimir_knowledge::models::enums::ConnectorType::Gmail,
+                "test".to_string(),
+                mimir_connectors::MockConnectorFactory,
+            )
+            .unwrap();
+        let connector_supervisor = Arc::new(
+            mimir_connectors::ConnectorSupervisor::new(
+                Arc::clone(&connector_registry),
+                Arc::clone(&knowledge_graph),
+                mimir_connectors::SupervisorConfig::default(),
+                shutdown_tx.subscribe(),
+            )
+            // Inject an in-memory secret store so the connector removal route
+            // can exercise credential cleanup (the daemon path uses a
+            // FileSecretStore; tests must not touch the real secrets dir). The
+            // mock connector stores no secrets, so this is a no-op for the
+            // CRUD round-trip tests and only matters for the deletion test.
+            .with_secret_store(Arc::new(mimir_connectors::InMemorySecretStore::new())
+                as std::sync::Arc<dyn mimir_connectors::SecretStore>)
+            .with_llm_backend(Arc::clone(&llm) as std::sync::Arc<dyn LlmBackend>),
+        );
+
         let state = Arc::new(AppState {
             llm_client: llm,
             context_manager,
@@ -702,6 +739,8 @@ mod tests {
             scheduler,
             user_entity_id,
             last_user_activity,
+            connector_registry,
+            connector_supervisor,
         });
 
         (state, temp)
@@ -3373,5 +3412,368 @@ mod tests {
             !found.is_empty(),
             "non-incognito turn should persist the entity/fact"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Connector management routes (Phase 3 A1 / #202)
+    // -----------------------------------------------------------------
+
+    async fn connector_post(
+        app: axum::Router,
+        body: serde_json::Value,
+    ) -> axum::response::Response {
+        let body = serde_json::to_string(&body).unwrap();
+        app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/connectors")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_connector_add_list_show_remove_round_trip() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        // Add a new connector instance via the registered "test" backend.
+        let resp = connector_post(
+            app.clone(),
+            serde_json::json!({
+                "connector_type": "gmail",
+                "backend": "test",
+                "slug": "personal",
+                "display_name": "Personal",
+                "config_json": {},
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: mimir_api_types::ConnectorResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(created.slug, "personal");
+        assert_eq!(created.connector_type, "gmail");
+        assert_eq!(created.backend, "test");
+        assert_eq!(created.status, "setup");
+        assert_eq!(created.auth_state, "unauthenticated");
+        assert_eq!(created.item_count, 0);
+        let id = created.id;
+
+        // GET /connectors lists the instance.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/connectors")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list: mimir_api_types::ConnectorListResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(list.connectors.len(), 1);
+        assert_eq!(list.connectors[0].id, id);
+
+        // GET /connectors/{id} shows it.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/connectors/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // DELETE /connectors/{id} removes it.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/connectors/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        // GET /connectors/{id} now 404s.
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/connectors/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_connector_add_rejects_existing_slug() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+        let body = serde_json::json!({
+            "connector_type": "gmail",
+            "backend": "test",
+            "slug": "dupe",
+            "display_name": "Dupe",
+            "config_json": {},
+        });
+        let resp = connector_post(app.clone(), body.clone()).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let resp = connector_post(app, body).await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    /// Two concurrent `POST /connectors` for the same slug: exactly one wins
+    /// (`201`), the other gets `409 Conflict` — the atomic create-only insert
+    /// closes the read-then-write window the pre-read plus upsert had
+    /// (#202 review).
+    #[tokio::test]
+    async fn test_connector_add_concurrent_same_slug_one_wins() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let body = serde_json::json!({
+            "connector_type": "gmail",
+            "backend": "test",
+            "slug": "race",
+            "display_name": "Race",
+            "config_json": {},
+        });
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let app_a = app.clone();
+        let app_b = app.clone();
+        let barrier_a = barrier.clone();
+        let barrier_b = barrier.clone();
+        let body_a = body.clone();
+        let body_b = body.clone();
+
+        let a = tokio::spawn(async move {
+            barrier_a.wait().await;
+            connector_post(app_a, body_a).await
+        });
+        let b = tokio::spawn(async move {
+            barrier_b.wait().await;
+            connector_post(app_b, body_b).await
+        });
+
+        let ra = a.await.unwrap();
+        let rb = b.await.unwrap();
+        let wins = [ra.status(), rb.status()]
+            .iter()
+            .filter(|&&c| c == StatusCode::CREATED)
+            .count();
+        let conflicts = [ra.status(), rb.status()]
+            .iter()
+            .filter(|&&c| c == StatusCode::CONFLICT)
+            .count();
+        assert_eq!(wins, 1, "exactly one concurrent POST must return 201");
+        assert_eq!(
+            conflicts, 1,
+            "the losing concurrent POST must return 409 Conflict"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_connector_add_rejects_unregistered_backend() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+        let resp = connector_post(
+            app,
+            serde_json::json!({
+                "connector_type": "gmail",
+                "backend": "no-such-backend",
+                "slug": "x",
+                "display_name": "X",
+                "config_json": {},
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_connector_add_rejects_unknown_type() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+        let resp = connector_post(
+            app,
+            serde_json::json!({
+                "connector_type": "rss",
+                "backend": "test",
+                "slug": "x",
+                "display_name": "X",
+                "config_json": {},
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_connector_round_trip_via_mimir_client() {
+        // Acceptance criterion for #202: list/status/add/remove round-trip
+        // via `mimir-client` over a real TCP listener (not just `oneshot`).
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let client = mimir_client::MimirClient::new(format!("http://127.0.0.1:{port}"));
+        let req = mimir_api_types::AddConnectorRequest {
+            connector_type: "gmail".to_string(),
+            backend: "test".to_string(),
+            slug: "via-client".to_string(),
+            display_name: "Via Client".to_string(),
+            config_json: serde_json::json!({}),
+        };
+        let created = client.connector_add(req).await.unwrap();
+        assert_eq!(created.slug, "via-client");
+        assert_eq!(created.status, "setup");
+        assert_eq!(created.item_count, 0);
+        let id = created.id;
+
+        let list = client.connectors().await.unwrap();
+        assert_eq!(list.connectors.len(), 1);
+        assert_eq!(list.connectors[0].id, id);
+
+        let shown = client.connector(id).await.unwrap();
+        assert_eq!(shown.backend, "test");
+
+        client.connector_remove(id).await.unwrap();
+        let list = client.connectors().await.unwrap();
+        assert!(list.connectors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_connector_remove_unknown_returns_404() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/connectors/999999")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["code"], "NOT_FOUND");
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("connector not found")
+        );
+    }
+
+    /// Deleting a connector must also delete its secret-store entry so a later
+    /// connector created with the same slug cannot load the deleted instance's
+    /// credentials (#263 review).
+    #[tokio::test]
+    async fn test_connector_remove_deletes_stored_credentials() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state.clone());
+
+        // Create an authenticated connector instance.
+        let slug = "gmail-secret";
+        let resp = connector_post(
+            app.clone(),
+            serde_json::json!({
+                "connector_type": "gmail",
+                "backend": "test",
+                "slug": slug,
+                "display_name": "Secret Gmail",
+                "config_json": {},
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: mimir_api_types::ConnectorResponse = serde_json::from_slice(&bytes).unwrap();
+        let id = created.id;
+
+        // Store a credential bundle keyed by the connector's slug, mimicking
+        // the OAuth/app-password ingest path (A2 / #203). The test_secret
+        // state injects an InMemorySecretStore, so this never touches disk.
+        let secret_store = state
+            .connector_supervisor
+            .secret_store()
+            .expect("test state injects an InMemorySecretStore");
+        let bundle = mimir_connectors::SecretBundle::AppPassword {
+            password: "hunter2".to_string(),
+        };
+        secret_store.store(slug, &bundle).await.unwrap();
+        assert!(secret_store.load(slug).await.unwrap().is_some());
+
+        // Delete the connector instance.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/connectors/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        // The credential must no longer be loadable.
+        assert!(secret_store.load(slug).await.unwrap().is_none());
+
+        // A new connector created with the same slug cannot load the deleted
+        // instance's credentials (they are gone, not lingering).
+        let resp = connector_post(
+            app.clone(),
+            serde_json::json!({
+                "connector_type": "gmail",
+                "backend": "test",
+                "slug": slug,
+                "display_name": "Secret Gmail 2",
+                "config_json": {},
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert!(secret_store.load(slug).await.unwrap().is_none());
     }
 }

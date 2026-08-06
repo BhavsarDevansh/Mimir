@@ -81,6 +81,11 @@ pub fn not_found(msg: impl Into<String>) -> Response {
     let body = Json(ApiError::new(msg, "NOT_FOUND"));
     (StatusCode::NOT_FOUND, body).into_response()
 }
+/// Return a `BAD_REQUEST` response.
+pub fn bad_request(msg: impl Into<String>) -> Response {
+    let body = Json(ApiError::new(msg, "BAD_REQUEST"));
+    (StatusCode::BAD_REQUEST, body).into_response()
+}
 
 /// Convert a knowledge graph error into an HTTP response.
 pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
@@ -92,7 +97,9 @@ pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
         | KnowledgeError::DuplicatePreference => (StatusCode::BAD_REQUEST, "VALIDATION_ERROR"),
         KnowledgeError::EntityNotFound(_)
         | KnowledgeError::FactNotFound(_)
-        | KnowledgeError::CategoryNotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
+        | KnowledgeError::CategoryNotFound(_)
+        | KnowledgeError::ConnectorNotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
+        KnowledgeError::ConnectorSlugConflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, "KG_ERROR"),
     };
     let message = match &e {
@@ -101,7 +108,9 @@ pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
         | KnowledgeError::DuplicatePreference
         | KnowledgeError::EntityNotFound(_)
         | KnowledgeError::FactNotFound(_)
-        | KnowledgeError::CategoryNotFound(_) => e.to_string(),
+        | KnowledgeError::CategoryNotFound(_)
+        | KnowledgeError::ConnectorNotFound(_)
+        | KnowledgeError::ConnectorSlugConflict(_) => e.to_string(),
         _ => "internal knowledge graph error".to_string(),
     };
     let body = Json(ApiError::new(message, code));
@@ -241,6 +250,30 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         let body = body_json(resp).await;
         assert_eq!(body["code"], "NOT_FOUND");
+    }
+
+    #[tokio::test]
+    async fn knowledge_error_connector_slug_conflict_returns_409() {
+        let resp = knowledge_error(mimir_knowledge::KnowledgeError::ConnectorSlugConflict(
+            "personal".to_string(),
+        ));
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "CONFLICT");
+        assert!(body["error"].as_str().unwrap().contains("personal"));
+    }
+
+    #[tokio::test]
+    async fn knowledge_error_connector_not_found_returns_404_with_detail() {
+        // A delete of an unknown connector must surface the not-found detail
+        // (e.g. "Connector 7 not found"), not the generic "internal knowledge
+        // graph error" mask.
+        let resp = knowledge_error(mimir_knowledge::KnowledgeError::ConnectorNotFound(7));
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "NOT_FOUND");
+        assert!(body["error"].as_str().unwrap().contains("7"));
+        assert_ne!(body["error"], "internal knowledge graph error");
     }
 
     #[tokio::test]

@@ -61,3 +61,22 @@ All data stays local-first. Secrets are stored per-connector with permission val
 ## How to follow progress
 
 See `VISION/09-Roadmap/Phase-3-Plan.md` for the full design and issue breakdown, and `docs/connectors-framework.md` for the technical implementation details.
+
+## Managing connectors (daemon routes)
+
+As of v0.91.0 (issue #202 / A1), the daemon owns the connector framework and exposes four HTTP routes for managing connector instances. The `ConnectorRegistry` and `ConnectorSupervisor` are constructed at startup: the built-in Photos (`local`), Calendar (`caldav`), and Email (`imap`) factories are registered behind their cargo features, and the supervisor is wired with the shared geocoder, the `FileSecretStore`, the configured user identity (so the Calendar connector authors `user has_event` against the canonical user entity), and the shared `Arc<dyn LlmBackend>` (so the Email prose-extraction layer routes through the system queue). `Active` connector runners are restored at startup and drained on graceful shutdown.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/connectors` | List every registered instance with derived item counts and last-sync/health |
+| `POST` | `/connectors` | Register a new instance (add-only) |
+| `GET` | `/connectors/{id}` | Show a single instance with its derived item count |
+| `DELETE` | `/connectors/{id}` | Stop the runner and delete the instance |
+
+`POST /connectors` is **add-only**: it validates the `(connector_type, backend)` pair against the daemon's registry (rejecting an unregistered backend with `400`), rejects an existing `slug` with `409`, and creates the instance in `Setup` status (it is not started until a future action route moves it to `Active` — A2 / #203). Slug uniqueness is enforced atomically by an insert that relies on the `connectors.slug UNIQUE` index, so two concurrent `POST /connectors` for the same slug cannot both succeed — one wins and the other gets `409 Conflict`. The request body carries `connector_type`, `backend`, `slug`, `display_name`, and `config_json` (a backend-specific JSON object).
+
+`DELETE /connectors/{id}` stops the runner (via `ConnectorSupervisor::stop(id)`, a no-op when no runner exists), deletes the connector's slug-keyed secret-store entry so a later connector with the same slug cannot load the deleted instance's credentials, then deletes the row. The secret is removed before the row, so a credential-deletion failure leaves the instance intact (the request returns `500` and the row is not removed) rather than a deleted row with lingering credentials. The `sources.connector_instance_id` foreign key is nulled first, so the connector's already-ingested facts survive with degraded provenance — the full `forget` cascade is deferred to A2 / #203.
+
+Status responses carry a derived `item_count`: the number of `sources` rows attributed to the instance, computed on demand via `KnowledgeGraph::count_sources_for_connector`. The `connectors` table itself stores no count column.
+
+Activation, pause/resume, manual sync, OAuth token ingestion, and the `forget` cascade land in A2–A4 (issues #203–#205). The `mimir connector` CLI subcommands that plumb these routes land in A3.

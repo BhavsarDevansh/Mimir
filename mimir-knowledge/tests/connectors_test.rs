@@ -269,3 +269,164 @@ async fn upsert_rejects_type_mismatch_on_existing_slug() {
     assert_eq!(updated.backend, "graph");
     assert_eq!(updated.status(), Some(ConnectorStatus::Active));
 }
+
+#[tokio::test]
+async fn count_sources_for_connector_returns_zero_for_unknown() {
+    let (kg, _dir) = init_kg().await;
+    assert_eq!(kg.count_sources_for_connector(i32::MAX).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn delete_connector_removes_row_and_errors_on_missing() {
+    let (kg, _dir) = init_kg().await;
+    let c = kg.upsert_connector(gmail_input("personal")).await.unwrap();
+
+    kg.delete_connector(c.id).await.unwrap();
+    assert!(kg.get_connector(c.id).await.unwrap().is_none());
+    assert!(
+        kg.get_connector_by_slug("personal")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let err = kg.delete_connector(c.id).await;
+    assert!(matches!(
+        err,
+        Err(mimir_knowledge::KnowledgeError::ConnectorNotFound(_))
+    ));
+}
+
+#[tokio::test]
+async fn count_sources_by_connector_groups_in_one_query() {
+    let (kg, _dir) = init_kg().await;
+    use mimir_knowledge::models::entity::EntityType;
+    use mimir_knowledge::models::fact::NewFact;
+    use mimir_knowledge::models::source::{ExtractionMethod, SourceType};
+
+    let alice = kg
+        .create_entity("Alice", EntityType::Person, &[])
+        .await
+        .unwrap()
+        .id;
+    let london = kg
+        .create_entity("London", EntityType::Place, &[])
+        .await
+        .unwrap()
+        .id;
+    let g = kg.upsert_connector(gmail_input("g")).await.unwrap();
+    let c = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: mimir_knowledge::models::enums::ConnectorType::Calendar,
+            slug: "c".to_string(),
+            backend: "caldav".to_string(),
+            display_name: "C".to_string(),
+            config_json: "{}".to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap();
+
+    let mk = |instance_id: i32, raw: &str| NewFact {
+        subject_id: alice,
+        relationship_type: "is_in".to_string(),
+        object_id: Some(london),
+        object_literal: None,
+        valid_from: None,
+        valid_until: None,
+        source_type: SourceType::Connector,
+        connector_instance_id: Some(instance_id),
+        connector_type: None,
+        raw_reference: Some(raw.to_string()),
+        extraction_method: Some(ExtractionMethod::StructuredParse),
+        inferred: false,
+        inference_depth: 0,
+        confidence: None,
+        parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
+    };
+    kg.insert_fact(mk(g.id, "g-1")).await.unwrap();
+    kg.insert_fact(mk(g.id, "g-2")).await.unwrap();
+    kg.insert_fact(mk(c.id, "c-1")).await.unwrap();
+
+    let counts = kg.count_sources_by_connector().await.unwrap();
+    assert_eq!(counts.get(&g.id).copied(), Some(2));
+    assert_eq!(counts.get(&c.id).copied(), Some(1));
+}
+
+// ---------------------------------------------------------------------------
+// Atomic create-only insert (#202 review): unique-slug enforcement at the DB
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn create_connector_inserts_a_new_instance() {
+    let (kg, _dir) = init_kg().await;
+    let c = kg.create_connector(gmail_input("personal")).await.unwrap();
+    assert_eq!(c.slug, "personal");
+    assert_eq!(c.connector_type_id, ConnectorType::Gmail as i16);
+    assert_eq!(c.status(), Some(ConnectorStatus::Setup));
+    assert_eq!(c.auth_state(), Some(ConnectorAuthState::Unauthenticated));
+
+    // A duplicate slug is rejected atomically with the dedicated error.
+    let err = kg.create_connector(gmail_input("personal")).await;
+    match err {
+        Err(mimir_knowledge::KnowledgeError::ConnectorSlugConflict(slug)) => {
+            assert_eq!(slug, "personal");
+        }
+        other => panic!("expected ConnectorSlugConflict, got {other:?}"),
+    }
+    // The original row is untouched.
+    assert_eq!(kg.list_connectors().await.unwrap().len(), 1);
+}
+
+/// Two concurrent `create_connector` writes for the same slug must not both
+/// succeed: the database-level unique constraint lets exactly one win and
+/// surfaces the other as `ConnectorSlugConflict` (#202 review).
+#[tokio::test]
+async fn create_connector_concurrent_same_slug_yields_one_winner() {
+    use std::sync::Arc;
+    let (kg, _dir) = init_kg().await;
+    let kg = Arc::new(kg);
+
+    // A barrier so both tasks race the insert at the same instant.
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let kg_a = kg.clone();
+    let kg_b = kg.clone();
+    let barrier_a = barrier.clone();
+    let barrier_b = barrier.clone();
+
+    let a = tokio::spawn(async move {
+        barrier_a.wait().await;
+        kg_a.create_connector(gmail_input("race")).await
+    });
+    let b = tokio::spawn(async move {
+        barrier_b.wait().await;
+        kg_b.create_connector(gmail_input("race")).await
+    });
+
+    let ra = a.await.unwrap();
+    let rb = b.await.unwrap();
+
+    // Exactly one succeeds; the other gets a slug conflict.
+    let wins = [&ra, &rb].iter().filter(|r| r.is_ok()).count();
+    let conflicts = [&ra, &rb]
+        .iter()
+        .filter(|r| {
+            matches!(
+                r,
+                Err(mimir_knowledge::KnowledgeError::ConnectorSlugConflict(_))
+            )
+        })
+        .count();
+    assert_eq!(wins, 1, "exactly one concurrent create must succeed");
+    assert_eq!(
+        conflicts, 1,
+        "the losing concurrent create must be a slug conflict"
+    );
+
+    // Only one row exists for the slug.
+    let rows = kg.list_connectors().await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].slug, "race");
+}

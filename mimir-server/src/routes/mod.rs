@@ -1,4 +1,5 @@
 pub mod chat;
+pub mod connectors;
 pub mod kb;
 pub mod kb_categories;
 pub mod memory;
@@ -7,6 +8,10 @@ pub mod status;
 pub mod stop;
 
 pub use chat::{chat_handler, chat_stream_handler};
+pub use connectors::{
+    connector_add_handler, connector_remove_handler, connector_show_handler,
+    connectors_list_handler,
+};
 pub use kb::{
     kb_audit_handler, kb_browse_handler, kb_confirm_fact_handler, kb_edit_handler,
     kb_forget_handler, kb_optimization_run_now_handler, kb_optimization_status_handler,

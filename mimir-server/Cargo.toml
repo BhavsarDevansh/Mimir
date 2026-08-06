@@ -13,7 +13,7 @@ rust-version.workspace = true
 mimir-core = { path = "../mimir-core" }
 mimir-api-types = { path = "../mimir-api-types" }
 mimir-knowledge = { path = "../mimir-knowledge" }
-mimir-connectors = { path = "../mimir-connectors" }
+mimir-connectors = { path = "../mimir-connectors", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "signal"] }
 axum = { version = "0.8", features = ["macros", "tokio", "json"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
@@ -32,7 +32,17 @@ tokio-stream = "0.1"
 http = "1.2"
 uuid = { version = "1.23", features = ["v4"] }
 
+[features]
+default = ["photos", "calendar", "gmail"]
+## Forwarded to mimir-connectors: register the Photos (local-fs) factory.
+photos = ["mimir-connectors/photos"]
+## Forwarded to mimir-connectors: register the Calendar (CalDAV) factory.
+calendar = ["mimir-connectors/calendar"]
+## Forwarded to mimir-connectors: register the Email (IMAP) factory.
+gmail = ["mimir-connectors/gmail"]
+
 [dev-dependencies]
+mimir-client = { path = "../mimir-client" }
 mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
 reqwest = { version = "0.13", features = ["json"] }
 tempfile = "3"

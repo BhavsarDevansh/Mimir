@@ -245,6 +245,18 @@ pub struct ConnectorSupervisor {
     handles: Mutex<HashMap<i32, ConnectorHandle>>,
 }
 
+impl std::fmt::Debug for ConnectorSupervisor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `ConnectorHandle` and the `watch::Receiver` are not `Debug`, and
+        // the handles map is private, so report the registry + a running-count
+        // proxy rather than recursing. This mirrors the `ConnectorRegistry`
+        // Debug impl and keeps `AppState`'s `#[derive(Debug)]` working.
+        f.debug_struct("ConnectorSupervisor")
+            .field("registry", &self.registry)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ConnectorSupervisor {
     /// Create a supervisor over a registry, knowledge graph, and the shared
     /// shutdown signal.
@@ -292,6 +304,20 @@ impl ConnectorSupervisor {
     pub fn with_secret_store(mut self, store: Arc<dyn SecretStore>) -> Self {
         self.context.secret_store = Some(store);
         self
+    }
+
+    /// The shared [`SecretStore`] injected via
+    /// [`with_secret_store`](Self::with_secret_store), if any.
+    ///
+    /// Exposed so the daemon's connector removal route can delete the
+    /// credential entry keyed by a connector's slug when the instance is
+    /// deleted, preventing a later same-slug connector from loading the
+    /// deleted instance's stored credentials. Returns `None` when no store
+    /// is configured (the daemon start path is best-effort; tests and
+    /// sandboxed runs may have no `FileSecretStore`), in which case there is
+    /// nothing to clean up.
+    pub fn secret_store(&self) -> Option<Arc<dyn SecretStore>> {
+        self.context.secret_store.clone()
     }
 
     /// Inject the canonical user identity name (the `config.toml`
@@ -506,6 +532,39 @@ impl ConnectorSupervisor {
             .await
             .get(&id)
             .is_some_and(|handle| !handle.task.is_finished())
+    }
+
+    /// Stop a single connector's runner task and remove it from the
+    /// supervisor (issue #202 / Phase 3 A1).
+    ///
+    /// Aborts the runner in flight (cancelling any pending cycle), awaits its
+    /// termination, and drops the [`ConnectorHandle`] so a subsequent
+    /// [`restore`](Self::restore) or [`trigger_sync`](Self::trigger_sync)
+    /// will treat the instance as down. The connector row is **not** deleted
+    /// here — row lifecycle is the daemon's responsibility; this only manages
+    /// the in-memory task. Persisting the current sync cursor happens in the
+    /// runner's normal shutdown path; an aborted mid-cycle cycle is treated
+    /// the same as `mimir stop` (the cursor reflects the last *completed*
+    /// sync).
+    ///
+    /// Returns `true` if a runner was stopped, `false` if no live runner exists
+    /// for `id` (already finished, never spawned, or previously stopped).
+    pub async fn stop(&self, id: i32) -> bool {
+        let handle = self.handles.lock().await.remove(&id);
+        match handle {
+            // Live runner: abort the in-flight cycle, await its termination,
+            // and report that a runner was stopped.
+            Some(handle) if !handle.task.is_finished() => {
+                handle.task.abort();
+                let _ = handle.task.await;
+                true
+            }
+            // A stale handle whose task already completed naturally (e.g. an
+            // unauthenticated connector whose runner exited at the auth
+            // handshake) is cleaned up but reports no live runner was stopped.
+            Some(_) => false,
+            None => false,
+        }
     }
 
     /// Parse a row's `config_json`, inject instance identity, and ask the

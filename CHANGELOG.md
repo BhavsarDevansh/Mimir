@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.91.0] — 2026-08-06
+
+### Connectors — PR #263 review feedback (round 2)
+
+- **Delete stored credentials with the connector instance (security):** `DELETE /connectors/{id}` now deletes the connector's slug-keyed `SecretStore` entry as well as the row. Previously the secret lingered after the row was removed, so a later connector created with the same slug could load the deleted instance's credentials. The secret is deleted *before* the row using a new `ConnectorSupervisor::secret_store()` accessor, and `SecretStore::delete` is idempotent (a missing entry is `Ok`), so an instance that never stored credentials cleans up as a no-op. A secret-deletion failure aborts the removal (`500`) and leaves the instance intact, so the database and secret store are never left in an ambiguous state and the request never reports success while a credential lingers. New route test: deleting an authenticated connector removes its credential, verified by loading it again and by re-creating a same-slug connector that cannot load the old secret.
+- **Return the connector-not-found detail (functional correctness):** `KnowledgeError::ConnectorNotFound` was mapped to `404` but the message branch omitted it, so deleting an unknown connector returned the generic `"internal knowledge graph error"` instead of the not-found detail. It now preserves its detail (`"Connector {id} not found"`) like the other not-found variants. New unit test for the mapping and a route-level `DELETE /connectors/{id}` 404 test.
+- **Docs:** updated stale `v0.89.0` release references to `v0.90.0` in `docs/wiki/connectors.md`, the `docs/wiki/what-works-now.md` version banner, and `README.md`; documented the secret-deletion flow in `docs/connector-management.md` and `docs/wiki/connectors.md`.
+
+## [0.90.0] — 2026-08-06
+
+### Connectors — PR #263 review fixes
+
+- **Atomic connector creation (data integrity):** `POST /connectors` no longer pre-reads `get_connector_by_slug` then calls `upsert_connector` (a read-then-write window that let two concurrent same-slug writes both pass the read and let the later one update the first row instead of returning `409`). A new `KnowledgeGraph::create_connector` / `queries::connector::create_connector` does a plain `INSERT` with no `ON CONFLICT` clause and relies on the `connectors.slug UNIQUE` index to reject a duplicate at the database level, mapping the unique violation to a new `KnowledgeError::ConnectorSlugConflict` (mapped to `409 Conflict` by the server error layer, preserving the existing `connector slug '...' already exists` message). `upsert_connector` is retained for the A2 / #203 reconfigure-an-existing-instance flow. New tests: a KnowledgeGraph-level concurrent same-slug create asserting exactly one winner, and a route-level concurrent `POST /connectors` asserting exactly one `201` and one `409`.
+- **`ConnectorSupervisor::stop` returns `false` for an already-finished runner (functional correctness):** previously `stop` removed a stale handle whose task had completed naturally (e.g. an unauthenticated connector whose runner exited at the auth handshake) and returned `true`, contradicting its own doc that `false` means "no live runner exists (already finished, never spawned, or previously stopped)". It now distinguishes a live runner (abort + await + `true`) from a finished one (clean up the stale handle + `false`); the `None` path is unchanged. The `MockConnector` gains an `auth_fail` config flag so the supervisor lifecycle tests can drive the already-finished-handle path.
+
+### Docs
+
+- `docs/connector-management.md`: corrected the `GET /connectors` list-route description (it uses one `count_sources_by_connector` `GROUP BY` query, not a per-row `count_sources_for_connector` query), documented `count_sources_by_connector` in the knowledge-graph additions, and updated the `POST` route notes, supervisor `stop` description, and tests section to reflect the atomic create and finished-runner behaviour.
+- `docs/wiki/what-works-now.md`: fixed a broken code span in the Phase 3 entry (`GET/DELETE /connectors/{id}`).
+- `docs/wiki/connectors.md`: noted that `POST /connectors` slug uniqueness is enforced atomically by the `slug UNIQUE` index.
+
+## [0.89.0] — 2026-08-05
+
+### Connectors — daemon wiring + connector CRUD/status routes (A1 / #202)
+
+- **Daemon owns the connector framework at startup:** `AppState::from_config_with_llm` now constructs a `ConnectorRegistry`, registers the built-in Photos (`local`), Calendar (`caldav`), and Email (`imap`) factories behind forwarded cargo features on `mimir-server`, builds a `ConnectorSupervisor` subscribed to the daemon-wide shutdown watch, and chains `with_secret_store(FileSecretStore)` (best-effort), `with_geocoder` (the same `Arc<dyn Geocoder>` the knowledge graph holds), `with_user_identity(cfg.identity.name)` (C4 / #198), and `with_llm_backend(llm_client)` (C7 / #201 — enables the Email prose-extraction system-queue path). `Active` connector runners are restored at startup and drained on graceful shutdown via `AppState::shutdown`. `mimir-server` forwards `photos`/`calendar`/`gmail` features to `mimir-connectors` so each factory registration is gated by the same flag that compiles the backend module.
+- **Connector CRUD/status routes:** four Axum routes round-trip via `mimir-client` — `GET /connectors` (list with derived item counts), `POST /connectors` (add-only; validates the `(connector_type, backend)` pair against the registry, rejects an existing slug with `409`, rejects an unregistered backend or unknown type with `400`, creates the instance in `Setup`), `GET /connectors/{id}` (show with item count; `404` when missing), and `DELETE /connectors/{id}` (stops the runner and deletes the row; `204`). Activation, pause/resume, OAuth, the `forget` cascade, and the `mimir connector` CLI land in A2–A4 (#203–#205).
+- **`ConnectorSupervisor::stop(id)`:** per-instance counterpart of `shutdown()` — aborts a single runner and removes it from the handle map (a no-op returning `false` when no live runner exists). `DELETE` uses it so a mid-cycle sync cannot write back to a vanishing row.
+
+### Knowledge graph — connector provenance support
+
+- **`KnowledgeGraph::count_sources_for_connector(id)`:** the derived "items ingested" metric surfaced by the connector status routes (`SELECT COUNT(*) FROM sources WHERE connector_instance_id = ?`). The `connectors` table stores no count column; the value is computed on demand.
+- **`KnowledgeGraph::delete_connector(id)`:** nulls every `sources.connector_instance_id` referencing the row (the FK has no `ON DELETE` clause, so a raw `DELETE` would violate it) then deletes the row, in one transaction. Ingested facts survive with degraded provenance; the full `forget` cascade is deferred to A2 / #203. Returns `ConnectorNotFound` when no row matches. `ConnectorNotFound` is now mapped to `404` by the server error layer.
+
+### API surface
+
+- New wire types in `mimir-api-types`: `AddConnectorRequest`, `ConnectorResponse` (carries `item_count`, lowercase-string `status`/`auth_state`, RFC-3339 timestamps), `ConnectorListResponse`. `mimir-api-types` stays decoupled from `mimir-knowledge`, so the connector kind/status are strings mapped to enums in the route layer.
+- New `mimir-client` methods: `connectors`, `connector`, `connector_add`, `connector_remove`.
+
+### Docs
+
+- New `docs/connector-management.md` (technical). Updated `docs/wiki/connectors.md` (Managing connectors section), `docs/wiki/server.md` (endpoints), `docs/wiki/what-works-now.md` (routes, version, Phase 3 status), `README.md`, and `Mimir-Implementation-Context.md`.
+
 ## [0.88.0] — 2026-08-05
 
 ### Connectors — Email LLM extraction (C7 / #201)

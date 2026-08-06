@@ -145,18 +145,8 @@ async fn item_count_derivable_per_connector_instance() {
     kg.insert_fact(mk(gmail.id, "g-2")).await.unwrap();
     kg.insert_fact(mk(calendar.id, "c-1")).await.unwrap();
 
-    let gmail_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM sources WHERE connector_instance_id = ?")
-            .bind(gmail.id)
-            .fetch_one(kg.pool())
-            .await
-            .unwrap();
-    let calendar_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM sources WHERE connector_instance_id = ?")
-            .bind(calendar.id)
-            .fetch_one(kg.pool())
-            .await
-            .unwrap();
+    let gmail_count = kg.count_sources_for_connector(gmail.id).await.unwrap();
+    let calendar_count = kg.count_sources_for_connector(calendar.id).await.unwrap();
     assert_eq!(gmail_count, 2);
     assert_eq!(calendar_count, 1);
 }
@@ -403,4 +393,40 @@ async fn gate_still_rejects_type_mismatch_when_confidence_is_explicit() {
         result.is_err(),
         "explicit confidence must not bypass the connector_type consistency check"
     );
+}
+
+#[tokio::test]
+async fn delete_connector_detaches_provenance_preserving_facts() {
+    // A1 / #202: deleting a connector instance must null its sources FK so the
+    // facts survive with degraded provenance (the full forget cascade is A2).
+    let (kg, _dir) = init_kg().await;
+    let alice = person(&kg, "Alice").await;
+    let london = place(&kg, "London").await;
+    let gmail = kg.upsert_connector(gmail_input("gmail-1")).await.unwrap();
+
+    let fact = kg
+        .insert_fact(connector_fact(
+            alice,
+            Some(london),
+            Some(gmail.id),
+            Some(ConnectorType::Gmail),
+            Some("msg-1"),
+            Some(ExtractionMethod::StructuredParse),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(kg.count_sources_for_connector(gmail.id).await.unwrap(), 1);
+
+    kg.delete_connector(gmail.id).await.unwrap();
+
+    // The fact and its source row survive; the instance reference is nulled.
+    let sources = kg.get_sources_for_fact(fact.id).await.unwrap();
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0].connector_instance_id, None);
+    // The denormalised connector kind is retained for post-deletion queries.
+    assert_eq!(
+        sources[0].connector_type_id,
+        Some(ConnectorType::Gmail as i16)
+    );
+    assert_eq!(kg.count_sources_for_connector(gmail.id).await.unwrap(), 0);
 }

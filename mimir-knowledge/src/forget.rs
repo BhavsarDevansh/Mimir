@@ -51,6 +51,40 @@ pub struct ForgetResult {
     pub backup_path: Option<PathBuf>,
 }
 
+/// Batch size for the trash transactions: one transaction per chunk keeps a
+/// large forget from holding a single long-lived write lock.
+const TRASH_BATCH_SIZE: usize = 50;
+
+/// Trash every fact in `ids` in transactional batches, then evaluate the
+/// inferred children they leave behind.
+///
+/// Shared by [`forget_facts`], [`forget_all`], and
+/// [`forget_facts_for_connector`] so the batching, transaction boundary, and
+/// child-deduplication rules have one definition.
+async fn trash_ids_in_batches(
+    pool: &SqlitePool,
+    ids: &[i32],
+    changed_by: ChangedBy,
+    now: DateTime<Utc>,
+) -> Result<(), KnowledgeError> {
+    let mut all_children: Vec<(i32, bool)> = Vec::new();
+    for chunk in ids.chunks(TRASH_BATCH_SIZE) {
+        let mut tx = pool.begin().await?;
+        for fact_id in chunk {
+            all_children.extend(forget_fact_tx(&mut tx, *fact_id, changed_by, now).await?);
+        }
+        tx.commit().await?;
+    }
+
+    let mut seen = HashSet::new();
+    let deduped: Vec<(i32, bool)> = all_children
+        .into_iter()
+        .filter(|(id, _)| seen.insert(*id))
+        .collect();
+
+    evaluate_children(pool, deduped, now).await
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -101,25 +135,7 @@ pub async fn forget_facts(
         ));
     }
 
-    let mut all_children: Vec<(i32, bool)> = Vec::new();
-    for chunk in ids.chunks(50) {
-        let mut tx = pool.begin().await?;
-        for fact_id in chunk {
-            let children = forget_fact_tx(&mut tx, *fact_id, changed_by, now).await?;
-            all_children.extend(children);
-        }
-        tx.commit().await?;
-    }
-
-    let deduped: Vec<(i32, bool)> = {
-        let mut seen = HashSet::new();
-        all_children
-            .into_iter()
-            .filter(|(id, _)| seen.insert(*id))
-            .collect()
-    };
-
-    evaluate_children(pool, deduped, now).await?;
+    trash_ids_in_batches(pool, &ids, changed_by, now).await?;
 
     Ok(ForgetResult {
         forgotten_count: count,
@@ -137,7 +153,11 @@ pub async fn forget_facts(
 /// Unlike the generic [`forget_facts`], no `--yes` / `--confirm-sensitive`
 /// gate applies: a connector `forget` is an explicit admin action that
 /// removes *all* of the connector's facts, sensitive or not. Inferred child
-/// facts are evaluated via [`evaluate_children`] as usual.
+/// facts are evaluated via [`evaluate_children`] as usual. A fact sourced
+/// from *both* the connector and an independent source (e.g. a chat turn) is
+/// trashed wholesale — the connector source is the trigger and the fact is
+/// recoverable from trash — so the cascade does not preserve facts that a
+/// connector corroborated.
 ///
 /// The caller (the server route) deletes the connector row and its stored
 /// secret separately after this returns.
@@ -162,25 +182,7 @@ pub async fn forget_facts_for_connector(
         });
     }
 
-    let mut all_children: Vec<(i32, bool)> = Vec::new();
-    for chunk in ids.chunks(50) {
-        let mut tx = pool.begin().await?;
-        for fact_id in chunk {
-            let children = forget_fact_tx(&mut tx, *fact_id, changed_by, now).await?;
-            all_children.extend(children);
-        }
-        tx.commit().await?;
-    }
-
-    let deduped: Vec<(i32, bool)> = {
-        let mut seen = HashSet::new();
-        all_children
-            .into_iter()
-            .filter(|(id, _)| seen.insert(*id))
-            .collect()
-    };
-
-    evaluate_children(pool, deduped, now).await?;
+    trash_ids_in_batches(pool, &ids, changed_by, now).await?;
 
     Ok(ForgetResult {
         forgotten_count: count,
@@ -208,23 +210,7 @@ async fn forget_all(
             .fetch_all(pool)
             .await?;
         let count = ids.len() as u64;
-        let mut all_children: Vec<(i32, bool)> = Vec::new();
-        for chunk in ids.chunks(50) {
-            let mut tx = pool.begin().await?;
-            for fact_id in chunk {
-                let children = forget_fact_tx(&mut tx, *fact_id, changed_by, now).await?;
-                all_children.extend(children);
-            }
-            tx.commit().await?;
-        }
-        let deduped: Vec<(i32, bool)> = {
-            let mut seen = HashSet::new();
-            all_children
-                .into_iter()
-                .filter(|(id, _)| seen.insert(*id))
-                .collect()
-        };
-        evaluate_children(pool, deduped, now).await?;
+        trash_ids_in_batches(pool, &ids, changed_by, now).await?;
         return Ok(ForgetResult {
             forgotten_count: count,
             backup_path: Some(backup_path),

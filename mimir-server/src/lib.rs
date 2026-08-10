@@ -142,9 +142,15 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route("/connectors/{id}/sync", post(connector_sync_handler))
         .route("/connectors/{id}/pause", post(connector_pause_handler))
         .route("/connectors/{id}/resume", post(connector_resume_handler))
-        .route("/connectors/{id}/tokens", post(connector_tokens_handler))
+        .route(
+            "/connectors/{id}/tokens",
+            post(connector_tokens_handler).layer(from_fn(require_loopback)),
+        )
         .route("/connectors/{id}/actions", post(connector_actions_handler))
-        .route("/connectors/{id}/forget", post(connector_forget_handler))
+        .route(
+            "/connectors/{id}/forget",
+            post(connector_forget_handler).layer(from_fn(require_loopback)),
+        )
         .route("/stop", post(stop_handler).layer(from_fn(require_loopback)))
         .layer(
             ServiceBuilder::new()
@@ -3788,7 +3794,8 @@ mod tests {
     // -- Action routes (Phase 3 A2 / #203) --
 
     /// POST to a connector sub-route (e.g. `/connectors/{id}/sync`) with an
-    /// optional JSON body.
+    /// optional JSON body. Attaches a loopback `ConnectInfo` so the
+    /// loopback-gated routes (`tokens`, `forget`) are reachable.
     async fn connector_sub_post(
         app: axum::Router,
         id: i32,
@@ -3796,7 +3803,14 @@ mod tests {
         body: Option<serde_json::Value>,
     ) -> axum::response::Response {
         let uri = format!("/connectors/{id}/{action}");
-        let mut builder = Request::builder().method("POST").uri(uri);
+        let mut builder =
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    0,
+                ))));
         let req = match body {
             Some(value) => {
                 let payload = serde_json::to_string(&value).unwrap();
@@ -3839,8 +3853,16 @@ mod tests {
         let created = create_test_connector(&app, "sync-me", serde_json::json!({})).await;
         // Activate the connector so a sync trigger has a runner to wake.
         state.connector_supervisor.start(created.id).await.unwrap();
-        // Give the runner a moment to complete its auth handshake.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Wait for the runner to complete its auth handshake (poll, not a
+        // fixed sleep, so a loaded CI runner cannot fail the trigger).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !state.connector_supervisor.is_running(created.id).await {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for connector runner to start"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
 
         let resp = connector_sub_post(app, created.id, "sync", Some(serde_json::json!({}))).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -4030,6 +4052,18 @@ mod tests {
         let app = super::build_app(state.clone());
         let created = create_test_connector(&app, "forget-me", serde_json::json!({})).await;
 
+        // Store a credential so the cascade's secret deletion is exercised.
+        let secret_store = state.connector_supervisor.secret_store().unwrap();
+        secret_store
+            .store(
+                &created.slug,
+                &mimir_connectors::SecretBundle::ApiToken {
+                    token: "tok".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+
         // Insert a connector-sourced fact directly via the KG.
         use mimir_knowledge::models::audit_log::ChangedBy;
         use mimir_knowledge::models::entity::EntityType;
@@ -4093,6 +4127,8 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        // The stored credential is gone.
+        assert!(secret_store.load(&created.slug).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -4102,5 +4138,48 @@ mod tests {
         let app = super::build_app(state.clone());
         let resp = connector_sub_post(app, 9999, "forget", None).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// The credential-ingest and forget routes are loopback-only: a
+    /// non-loopback caller must be rejected before any mutation.
+    #[tokio::test]
+    async fn test_connector_tokens_and_forget_reject_non_loopback() {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = super::build_app(state.clone());
+        let created = create_test_connector(&app, "guarded", serde_json::json!({})).await;
+
+        for action in ["tokens", "forget"] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/connectors/{}/{}", created.id, action))
+                        .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                            [192, 168, 1, 1],
+                            0,
+                        ))))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::FORBIDDEN,
+                "non-loopback {action} must be rejected"
+            );
+        }
+
+        // The connector row is untouched by the rejected requests.
+        assert!(
+            state
+                .knowledge_graph
+                .get_connector(created.id)
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 }

@@ -52,9 +52,9 @@ the last completed sync cursor.
 | `POST` | `/connectors/{id}/sync` | `connector_sync_handler` | Manual sync trigger (F9); maps `TriggerOutcome` → `SyncConnectorResponse`; `404` unknown, `409` not running / push-mode (A2 / #203) |
 | `POST` | `/connectors/{id}/pause` | `connector_pause_handler` | `stop(id)` + `set_connector_status(Paused)`; returns the updated `ConnectorResponse` (A2 / #203) |
 | `POST` | `/connectors/{id}/resume` | `connector_resume_handler` | `start(id)` (re-spawn + `Active`); returns the updated `ConnectorResponse` (A2 / #203) |
-| `POST` | `/connectors/{id}/tokens` | `connector_tokens_handler` | Ingest a `SecretBundle` (keyed by slug), flip `auth_state` → `Authenticated`; returns the updated `ConnectorResponse` (A2 / #203) |
+| `POST` | `/connectors/{id}/tokens` | `connector_tokens_handler` | Ingest a `SecretBundle` (keyed by slug), flip `auth_state` → `Authenticated` (credentials present, not validated); loopback-only; returns the updated `ConnectorResponse` (A2 / #203) |
 | `POST` | `/connectors/{id}/actions` | `connector_actions_handler` | Dispatch `{ kind, payload }` to `Connector::act` (C4 write-back); `400` on `UnsupportedAction`, `401` on auth failure (A2 / #203) |
-| `POST` | `/connectors/{id}/forget` | `connector_forget_handler` | `stop(id)` → trash the connector's sourced facts → delete the secret → delete the row; returns `ForgetConnectorResponse` (A2 / #203) |
+| `POST` | `/connectors/{id}/forget` | `connector_forget_handler` | Loopback-only cascade: lifecycle-lock the instance → mark `Paused` → `supervisor.forget(id)` (stop runner + connector-local cleanup) → delete the secret → trash the sourced facts → delete the row; returns `ForgetConnectorResponse` (A2 / #203) |
 
 ### Wire types (`mimir-api-types`)
 
@@ -113,9 +113,11 @@ the secret *before* the row: a secret-deletion failure aborts the removal
 never left in an ambiguous state and a later same-slug connector can never
 load a deleted instance's stored credentials.
 
-A2 / #203 adds four lifecycle methods. Each row's `ConnectorHandle` now also
-retains the live `Arc<dyn Connector>` (cloned from the one moved into the
-runner) so write-back actions dispatch to the authenticated instance:
+A2 / #203 adds four supervisor methods — three lifecycle methods (`start` /
+`pause` / `resume`) and one action method (`act`). Each row's
+`ConnectorHandle` now also retains the live `Arc<dyn Connector>` (cloned from
+the one moved into the runner) so write-back actions dispatch to the
+authenticated instance:
 
 - `ConnectorSupervisor::start(id) -> Result<(), SupervisorError>` — loads the
   row, instantiates via the registry, stops any existing runner first (so
@@ -139,6 +141,25 @@ runner) so write-back actions dispatch to the authenticated instance:
   runner's auth handshake. `ActError` carries `NotFound` / `UnknownType` /
   `Knowledge` / `Connector`; the server maps `UnsupportedAction` → `400`,
   auth failures → `401`, and `Network` → `502`.
+- `ConnectorSupervisor::forget(id) -> Result<(), SupervisorError>` — the
+  connector-local half of the forget cascade: stops the runner and invokes
+  `Connector::forget()` on the live instance when its runner is still alive
+  (so in-memory state such as the Photos watcher is torn down), or on a
+  freshly re-instantiated instance otherwise. The knowledge-graph fact trash
+  and row deletion are the daemon's responsibility.
+- `ConnectorSupervisor::lifecycle_lock(id) -> OwnedMutexGuard<()>` — a
+  per-connector lock serialising lifecycle mutations: `start` / `resume` and
+  the forget cascade both hold it, so a concurrent `resume` cannot re-spawn a
+  runner while a forget cascade is deleting the row.
+
+The forget cascade (`POST /connectors/{id}/forget`) is loopback-only and
+serialised per connector: it marks the instance `Paused` (with `last_error =
+"forget in progress"`) so an aborted cascade leaves a state a retry can reason
+about, deletes the secret *before* the irreversible fact trash (a
+credential-deletion failure aborts with nothing destroyed), then trashes the
+facts and deletes the row. If a later step fails, the residual state is a
+`Paused`, credential-less row whose facts may already be trashed — retrying
+the cascade is idempotent and self-heals.
 
 ## Feature forwarding
 
@@ -180,7 +201,10 @@ backend and its daemon registration.
   connector (and re-instantiates when not running), `act` re-instantiates
   from the row after the runner exits naturally (auth-fail) so it never
   reuses a stale in-memory connector, `act` returns `UnsupportedAction` for
-  an unconfigured kind, and `act` returns `NotFound` for an unknown id.
+  an unconfigured kind, `act` returns `NotFound` for an unknown id, and
+  `forget` stops the runner and invokes the connector's local `forget()` on
+  the live instance (re-instantiating when not running, `ConnectorNotFound`
+  for an unknown id).
 
 ## Out of scope (tracked)
 

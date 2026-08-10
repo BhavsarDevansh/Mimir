@@ -508,3 +508,34 @@ async fn forget_connector_facts_no_sources_is_zero() {
         .unwrap();
     assert_eq!(result.forgotten_count, 0);
 }
+
+/// A fact sourced from *both* the connector and an independent source (a chat
+/// turn) is trashed wholesale by the connector cascade: the connector source
+/// is the trigger, and the fact is recoverable from trash.
+#[tokio::test]
+async fn forget_connector_facts_trashes_multi_source_facts() {
+    let (kg, _dir) = init_kg().await;
+    let connector = kg.create_connector(gmail_input("multi")).await.unwrap();
+
+    let fact_id = connector_sourced_fact(&kg, connector.id, "shared").await;
+    // A second, connector-independent source for the same fact.
+    kg.add_source_to_fact(AddSourceRequest {
+        fact_id,
+        source_type: SourceType::Interaction,
+        connector_instance_id: None,
+        connector_type: None,
+        raw_reference: Some("chat-1".to_string()),
+        extraction_method: None,
+        changed_by: ChangedBy::User,
+    })
+    .await
+    .unwrap();
+
+    let result = kg
+        .forget_connector_facts(connector.id, ChangedBy::User)
+        .await
+        .unwrap();
+    assert_eq!(result.forgotten_count, 1);
+    assert!(kg.get_fact(fact_id).await.unwrap().is_none());
+    assert_eq!(kg.list_trash(100, 0).await.unwrap().len(), 1);
+}

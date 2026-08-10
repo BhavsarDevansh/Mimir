@@ -104,10 +104,19 @@ pub fn connector_error(e: mimir_connectors::ConnectorError) -> Response {
             "CONNECTOR_BAD_REQUEST",
             e.to_string(),
         ),
-        ConnectorError::NotAuthenticated | ConnectorError::Authentication(_) => (
+        ConnectorError::NotAuthenticated => (
             StatusCode::UNAUTHORIZED,
             "CONNECTOR_UNAUTHORIZED",
             e.to_string(),
+        ),
+        // `Authentication` may embed provider-echoed request details (OAuth
+        // token-endpoint failures); the full detail is logged above via
+        // `error!`, but the client-facing message stays fixed so a provider
+        // response can never leak credentials or tokens back to the caller.
+        ConnectorError::Authentication(_) => (
+            StatusCode::UNAUTHORIZED,
+            "CONNECTOR_UNAUTHORIZED",
+            "authentication failed".to_string(),
         ),
         ConnectorError::Network(_) => (StatusCode::BAD_GATEWAY, "CONNECTOR_NETWORK", e.to_string()),
         ConnectorError::BackendNotFound { .. } => (
@@ -440,6 +449,21 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         let body = body_json(resp).await;
         assert_eq!(body["code"], "CONNECTOR_UNAUTHORIZED");
+    }
+
+    /// `Authentication` may embed provider-echoed request details (OAuth
+    /// token-endpoint failures); the client-facing body must stay fixed so a
+    /// provider response can never leak credentials back to the caller.
+    #[tokio::test]
+    async fn connector_authentication_masks_detail() {
+        let resp = connector_error(mimir_connectors::ConnectorError::Authentication(
+            "refresh failed: token=secret-ish&client_id=abc".into(),
+        ));
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "CONNECTOR_UNAUTHORIZED");
+        assert!(!body["error"].as_str().unwrap().contains("secret-ish"));
+        assert_eq!(body["error"], "authentication failed");
     }
 
     #[tokio::test]

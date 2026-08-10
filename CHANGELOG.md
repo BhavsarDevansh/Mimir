@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.93.0] — 2026-08-10
+
+### Connectors — PR #268 review feedback
+
+- **Forget cascade invokes `Connector::forget()` (contract fix):** the daemon's forget route now calls a new `ConnectorSupervisor::forget(id)` which stops the runner and invokes the connector's local `forget()` cleanup on the live instance (or a freshly re-instantiated one when no runner is alive), honouring the `Connector` trait contract that connector-local cleanup is the supervisor's job. The cascade is serialised per connector via a new `ConnectorSupervisor::lifecycle_lock(id)` (also acquired by `start`/`resume`), marks the instance `Paused` first so an aborted cascade leaves a state a retry can reason about, and deletes the secret *before* the irreversible fact trash so a credential-deletion failure aborts with nothing destroyed.
+- **Credential-ingest and forget routes are loopback-only:** `POST /connectors/{id}/tokens` and `/forget` now carry the `require_loopback` layer like the other sensitive/destructive endpoints; a non-loopback caller gets `403` before any mutation (new route test).
+- **OAuth failure details masked in `401` responses:** `ConnectorError::Authentication` now returns the fixed `"authentication failed"` body (full detail stays in the server log) so a provider-echoed token-endpoint response can never leak credentials back to the caller (new unit test).
+- **`IngestTokenRequest` gets a redacting `Debug` impl:** the derived `Debug` printed `access_token` / `refresh_token` / `token` / `password` verbatim; the manual impl prints `<redacted>` while keeping variant tags and optional-field presence visible (new unit test).
+- **`spawn_into` now enforces its documented invariant:** it stops any existing runner for the row before inserting the new handle, so a re-spawn can never detach a live task; `start`'s redundant pre-stop is removed (the lifecycle lock now serialises against the forget cascade).
+- **`ActError` gains `From<SupervisorError>`:** the manual `map_err` at the dispatch site is replaced with `?`, so a new `SupervisorError` variant is caught by the compiler instead of silently falling through.
+- **Shared batch-trash helper in `mimir-knowledge`:** the third verbatim copy of the chunked trash loop is extracted into `forget::trash_ids_in_batches` (with a `TRASH_BATCH_SIZE` const), used by `forget_facts`, `forget_all`, and `forget_facts_for_connector`.
+- **Test hardening:** fixed 50 ms sleeps in supervisor/server tests are replaced with polling helpers (`wait_for_status` / `wait_for_running` / `wait_for_runner_exit`) so loaded CI runners cannot flake; new tests cover multi-source fact trash, `forget` on live / cold / unknown instances, secret deletion in the forget route, and non-loopback rejection.
+- **Docs:** `docs/connector-management.md` and `docs/wiki/connectors.md` classify `act` as an action method (not lifecycle), document `start` as an internal supervisor method, refresh the backend status (Calendar/Email extraction + write-back shipped), describe the hardened forget cascade, and remove the remaining A1-era status text; `docs/wiki/what-works-now.md` documents natural runner-exit recovery. Version bumped 0.92.0 → 0.93.0 (patch — review fixes only).
+
 ## [0.92.0] — 2026-08-06
 
 ### Connectors — action routes + OAuth token ingest + forget cascade (A2 / #203)

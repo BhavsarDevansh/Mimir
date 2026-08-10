@@ -1431,6 +1431,34 @@ line2",
         assert!(!json.as_object().unwrap().contains_key("expires_at"));
     }
 
+    /// The redacting `Debug` impl must never print a secret value verbatim,
+    /// while keeping the variant tag and optional-field presence visible.
+    #[test]
+    fn ingest_token_debug_redacts_secrets() {
+        let req = IngestTokenRequest::OAuth {
+            access_token: "super-secret-at".to_string(),
+            refresh_token: Some("super-secret-rt".to_string()),
+            expires_at: Some("2026-01-01T00:00:00Z".to_string()),
+        };
+        let debug = format!("{req:?}");
+        assert!(!debug.contains("super-secret-at"));
+        assert!(!debug.contains("super-secret-rt"));
+        assert!(debug.contains("IngestTokenRequest::OAuth"));
+        assert!(debug.contains("expires_at"));
+
+        let api = IngestTokenRequest::ApiToken {
+            token: "super-secret-tok".to_string(),
+        };
+        let debug = format!("{api:?}");
+        assert!(!debug.contains("super-secret-tok"));
+
+        let pw = IngestTokenRequest::AppPassword {
+            password: "super-secret-pw".to_string(),
+        };
+        let debug = format!("{pw:?}");
+        assert!(!debug.contains("super-secret-pw"));
+    }
+
     roundtrip_tests!(
         connector_action_request,
         full: ConnectorActionRequest {
@@ -1579,8 +1607,10 @@ pub enum SyncConnectorResponse {
 /// pulling `mimir-connectors` (or `chrono`) into this decoupled wire crate.
 /// The daemon converts this to a `SecretBundle`, stores it via the
 /// `SecretStore` keyed by the connector's slug, and flips the connector's
-/// `auth_state` to `authenticated`.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+/// `auth_state` to `authenticated` — meaning *credentials are present*, not
+/// that they have been validated against the service (validation happens at
+/// the next sync's auth handshake).
+#[derive(Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum IngestTokenRequest {
     /// OAuth 2.0 access token with optional refresh token and expiry.
@@ -1603,6 +1633,39 @@ pub enum IngestTokenRequest {
     AppPassword { password: String },
 }
 
+/// Redacting `Debug`: the secret fields (`access_token`, `refresh_token`,
+/// `token`, `password`) are never printed verbatim, so a stray
+/// `tracing::debug!(?body, ...)` or panic message cannot leak plaintext
+/// credentials into logs. Variant tags and optional-field presence stay
+/// visible for diagnostics.
+impl std::fmt::Debug for IngestTokenRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OAuth {
+                refresh_token,
+                expires_at,
+                ..
+            } => f
+                .debug_struct("IngestTokenRequest::OAuth")
+                .field("access_token", &"<redacted>")
+                .field(
+                    "refresh_token",
+                    &refresh_token.as_ref().map(|_| "<redacted>"),
+                )
+                .field("expires_at", expires_at)
+                .finish(),
+            Self::ApiToken { .. } => f
+                .debug_struct("IngestTokenRequest::ApiToken")
+                .field("token", &"<redacted>")
+                .finish(),
+            Self::AppPassword { .. } => f
+                .debug_struct("IngestTokenRequest::AppPassword")
+                .field("password", &"<redacted>")
+                .finish(),
+        }
+    }
+}
+
 /// Request body for `POST /connectors/{id}/actions` — write-back dispatch.
 ///
 /// `kind` and `payload` are forwarded to the connector's `act()` (e.g. the
@@ -1612,7 +1675,7 @@ pub enum IngestTokenRequest {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ConnectorActionRequest {
     pub kind: String,
-    #[serde(default = "serde_json::Value::default")]
+    #[serde(default)]
     pub payload: serde_json::Value,
 }
 

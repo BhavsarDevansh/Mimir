@@ -145,6 +145,22 @@ pub enum ActError {
     Connector(#[from] crate::ConnectorError),
 }
 
+impl From<SupervisorError> for ActError {
+    fn from(error: SupervisorError) -> Self {
+        match error {
+            SupervisorError::Knowledge(ke) => ActError::Knowledge(ke),
+            SupervisorError::Connector(ce) => ActError::Connector(ce),
+            // A malformed `config_json` is a connector configuration fault.
+            SupervisorError::Json(je) => {
+                ActError::Connector(ConnectorError::Config(je.to_string()))
+            }
+            SupervisorError::UnknownConnectorType { id, type_id } => {
+                ActError::UnknownType { id, type_id }
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Manual sync trigger types (F9 / #186)
 // ---------------------------------------------------------------------------
@@ -276,6 +292,11 @@ pub struct ConnectorSupervisor {
     /// connectors that need no injected services are unaffected.
     context: ConnectorContext,
     handles: Mutex<HashMap<i32, ConnectorHandle>>,
+    /// Per-connector lifecycle locks serialising lifecycle mutations
+    /// (`start` / `resume` vs the daemon's forget cascade) for one instance.
+    /// Created on first use and retained; bounded by the number of connector
+    /// ids ever operated on.
+    lifecycle_locks: Mutex<HashMap<i32, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl std::fmt::Debug for ConnectorSupervisor {
@@ -306,7 +327,25 @@ impl ConnectorSupervisor {
             shutdown,
             context: ConnectorContext::empty(),
             handles: Mutex::new(HashMap::new()),
+            lifecycle_locks: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Acquire the per-connector lifecycle lock for `id`.
+    ///
+    /// Serialises lifecycle mutations for one instance: `start` / `resume`
+    /// and the daemon's forget cascade both hold this lock, so a concurrent
+    /// `resume` cannot re-spawn a runner while a forget cascade is deleting
+    /// the row (and a forget cascade cannot trash facts while a resume is
+    /// mid-spawn). The lock is created on first use and retained.
+    pub async fn lifecycle_lock(&self, id: i32) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut map = self.lifecycle_locks.lock().await;
+            map.entry(id)
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        lock.lock_owned().await
     }
 
     /// Inject a shared geocoder made available to every connector this
@@ -431,6 +470,11 @@ impl ConnectorSupervisor {
         connector_type: ConnectorType,
         connector: Arc<dyn Connector>,
     ) {
+        // Enforce the documented invariant for every caller: an existing
+        // runner is aborted and awaited before the new handle replaces it, so
+        // a re-spawn never detaches a live task (dropping a `JoinHandle`
+        // would leave the old runner polling untracked).
+        self.stop(row.id).await;
         // Capture the mode up front so `trigger_sync` can reject push
         // connectors without holding the connector instance.
         let mode = connector.mode();
@@ -638,8 +682,10 @@ impl ConnectorSupervisor {
     /// - [`SupervisorError::Connector`] / [`SupervisorError::Json`] — the
     ///   row's `config_json` could not be parsed or the factory rejected it.
     pub async fn start(&self, id: i32) -> Result<(), SupervisorError> {
-        // Stop any existing runner first so a re-spawn is idempotent.
-        self.stop(id).await;
+        // Serialise against a concurrent forget cascade for the same
+        // instance: the cascade holds this lock for its whole duration, so a
+        // re-spawn can never sync against a row that is about to be deleted.
+        let _guard = self.lifecycle_lock(id).await;
 
         let row = self
             .kg
@@ -710,25 +756,7 @@ impl ConnectorSupervisor {
     /// [`ConnectorError::UnsupportedAction`]) is returned for the server to
     /// map onto an HTTP status.
     pub async fn act(&self, id: i32, action: ConnectorAction) -> Result<ActionResult, ActError> {
-        // Use the live, running connector instance only when its runner is
-        // still alive. A handle whose task has finished naturally (auth-expiry
-        // pause, circuit-breaker exhaustion, or panic) is stale: its in-memory
-        // connector may hold expired credentials, so drop it and fall through
-        // to re-instantiate from the row — mirroring `trigger_sync`'s
-        // `is_finished()` check. The lock is not held across the `act` await:
-        // only the `Arc` clone (or a handle removal) happens inside the guard.
-        let live = {
-            let mut guard = self.handles.lock().await;
-            match guard.get(&id) {
-                Some(handle) if !handle.task.is_finished() => Some(Arc::clone(&handle.connector)),
-                Some(_) => {
-                    guard.remove(&id);
-                    None
-                }
-                None => None,
-            }
-        };
-        let connector = match live {
+        let connector = match self.live_connector(id).await {
             Some(c) => c,
             None => {
                 let row = self
@@ -740,20 +768,81 @@ impl ConnectorSupervisor {
                     id,
                     type_id: row.connector_type_id,
                 })?;
-                self.instantiate(&row, connector_type)
-                    .map_err(|e| match e {
-                        SupervisorError::Knowledge(ke) => ActError::Knowledge(ke),
-                        SupervisorError::Connector(ce) => ActError::Connector(ce),
-                        SupervisorError::Json(je) => {
-                            ActError::Connector(ConnectorError::Config(je.to_string()))
-                        }
-                        SupervisorError::UnknownConnectorType { id, type_id } => {
-                            ActError::UnknownType { id, type_id }
-                        }
-                    })?
+                self.instantiate(&row, connector_type)?
             }
         };
         Ok(connector.act(action).await?)
+    }
+
+    /// Run a connector's local `forget()` cleanup (Phase 3 A2 / #203).
+    ///
+    /// Stops the runner (if any) and invokes [`Connector::forget`] on the
+    /// live instance when its runner is still alive, or on a freshly
+    /// re-instantiated instance otherwise — mirroring [`act`](Self::act). The
+    /// knowledge-graph fact trash and row deletion are the daemon's
+    /// responsibility; this method only handles the connector-local cleanup
+    /// half of the cascade. The caller must hold the per-connector
+    /// [`lifecycle_lock`](Self::lifecycle_lock) for `id` for the whole
+    /// cascade (the daemon's forget route does), so a concurrent
+    /// [`start`](Self::start) / [`resume`](Self::resume) cannot re-spawn the
+    /// runner mid-cleanup.
+    ///
+    /// # Errors
+    ///
+    /// - [`SupervisorError::Knowledge`] — the row lookup failed, or no row
+    ///   matches `id` ([`KnowledgeError::ConnectorNotFound`]).
+    /// - [`SupervisorError::UnknownConnectorType`] — the row's
+    ///   `connector_type_id` is not a known [`ConnectorType`].
+    /// - [`SupervisorError::Connector`] / [`SupervisorError::Json`] — the
+    ///   row's `config_json` could not be parsed, the factory rejected it, or
+    ///   the connector's own `forget()` failed.
+    pub async fn forget(&self, id: i32) -> Result<(), SupervisorError> {
+        // Stop the runner before forget() so a mid-cycle sync cannot write
+        // back to a vanishing row or race the connector-local cleanup.
+        self.stop(id).await;
+
+        let connector = match self.live_connector(id).await {
+            Some(c) => c,
+            None => {
+                let row = self
+                    .kg
+                    .get_connector(id)
+                    .await?
+                    .ok_or(SupervisorError::Knowledge(
+                        mimir_knowledge::KnowledgeError::ConnectorNotFound(id),
+                    ))?;
+                let connector_type =
+                    row.connector_type()
+                        .ok_or(SupervisorError::UnknownConnectorType {
+                            id,
+                            type_id: row.connector_type_id,
+                        })?;
+                self.instantiate(&row, connector_type)?
+            }
+        };
+        connector.forget().await?;
+        Ok(())
+    }
+
+    /// Clone the live connector for `id`, if its runner is still alive.
+    ///
+    /// A handle whose task has finished naturally (auth-expiry pause,
+    /// circuit-breaker exhaustion, or panic) is stale: its in-memory
+    /// connector may hold expired credentials, so it is dropped and `None` is
+    /// returned so the caller re-instantiates from the row — mirroring
+    /// [`trigger_sync`](Self::trigger_sync)'s `is_finished()` check. The
+    /// lock is not held across any await: only the `Arc` clone (or a handle
+    /// removal) happens inside the guard.
+    async fn live_connector(&self, id: i32) -> Option<Arc<dyn Connector>> {
+        let mut guard = self.handles.lock().await;
+        match guard.get(&id) {
+            Some(handle) if !handle.task.is_finished() => Some(Arc::clone(&handle.connector)),
+            Some(_) => {
+                guard.remove(&id);
+                None
+            }
+            None => None,
+        }
     }
 
     /// Parse a row's `config_json`, inject instance identity, and ask the
@@ -1415,6 +1504,51 @@ mod tests {
         (Arc::new(supervisor), kg, row.id, dir, tx)
     }
 
+    /// Poll `kg.get_connector(id).status()` until it equals `expected`, with
+    /// a generous deadline, so runner transitions are gated on an observable
+    /// condition rather than a fixed real-time sleep (which can be too short
+    /// on a loaded CI runner).
+    async fn wait_for_status(kg: &KnowledgeGraph, id: i32, expected: ConnectorStatus) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = kg.get_connector(id).await.unwrap().unwrap().status();
+            if status == Some(expected) {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for connector {id} to reach {expected:?} (last: {status:?})"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Poll until the runner for `id` is alive (spawned and past its auth
+    /// handshake), with a generous deadline.
+    async fn wait_for_running(supervisor: &ConnectorSupervisor, id: i32) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !supervisor.is_running(id).await {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for connector {id} runner to start"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Poll until the runner for `id` has exited naturally (auth-expiry /
+    /// breaker / panic), with a generous deadline.
+    async fn wait_for_runner_exit(supervisor: &ConnectorSupervisor, id: i32) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while supervisor.is_running(id).await {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for connector {id} runner to exit"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     #[tokio::test]
     async fn start_spawns_runner_and_flips_active() {
         let (supervisor, kg, id, _dir, _tx) = supervisor_with_row(r#"{"act_kind":"echo"}"#).await;
@@ -1424,11 +1558,10 @@ mod tests {
 
         supervisor.start(id).await.unwrap();
 
-        // Give the runner a moment to run its auth handshake.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Wait for the runner to complete its auth handshake and persist
+        // Active.
+        wait_for_status(&kg, id, ConnectorStatus::Active).await;
         assert!(supervisor.is_running(id).await);
-        let after = kg.get_connector(id).await.unwrap().unwrap();
-        assert_eq!(after.status(), Some(ConnectorStatus::Active));
         // Clean shutdown so the test does not leak a task.
         supervisor.stop(id).await;
     }
@@ -1460,7 +1593,7 @@ mod tests {
     async fn pause_stops_runner_and_flips_paused() {
         let (supervisor, kg, id, _dir, _tx) = supervisor_with_row(r#"{"act_kind":"echo"}"#).await;
         supervisor.start(id).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        wait_for_status(&kg, id, ConnectorStatus::Active).await;
         assert!(supervisor.is_running(id).await);
 
         supervisor.pause(id).await.unwrap();
@@ -1474,7 +1607,7 @@ mod tests {
     async fn resume_respawns_after_pause() {
         let (supervisor, kg, id, _dir, _tx) = supervisor_with_row(r#"{"act_kind":"echo"}"#).await;
         supervisor.start(id).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        wait_for_status(&kg, id, ConnectorStatus::Active).await;
         supervisor.pause(id).await.unwrap();
         assert!(!supervisor.is_running(id).await);
         assert_eq!(
@@ -1483,7 +1616,7 @@ mod tests {
         );
 
         supervisor.resume(id).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        wait_for_status(&kg, id, ConnectorStatus::Active).await;
 
         assert!(supervisor.is_running(id).await);
         assert_eq!(
@@ -1497,7 +1630,7 @@ mod tests {
     async fn act_dispatches_to_live_connector() {
         let (supervisor, _kg, id, _dir, _tx) = supervisor_with_row(r#"{"act_kind":"echo"}"#).await;
         supervisor.start(id).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        wait_for_running(&supervisor, id).await;
 
         let result = supervisor
             .act(
@@ -1522,7 +1655,7 @@ mod tests {
     async fn act_unsupported_kind_returns_error() {
         let (supervisor, _kg, id, _dir, _tx) = supervisor_with_row(r#"{"act_kind":"echo"}"#).await;
         supervisor.start(id).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        wait_for_running(&supervisor, id).await;
 
         let err = supervisor
             .act(
@@ -1650,12 +1783,8 @@ mod tests {
             1,
             "start instantiates once"
         );
-        // The runner fails the auth handshake and exits; give it a moment.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(
-            !supervisor.is_running(row.id).await,
-            "runner should have exited at the auth handshake"
-        );
+        // The runner fails the auth handshake and exits; wait for it.
+        wait_for_runner_exit(&supervisor, row.id).await;
 
         // A write-back after the runner exited: must re-instantiate (creation
         // #2), not reuse the stale in-memory connector.
@@ -1676,5 +1805,186 @@ mod tests {
         );
         assert!(result.success);
         assert_eq!(result.native_id.as_deref(), Some("fresh"));
+    }
+
+    /// Test wrapper that records `forget()` calls on an inner mock connector,
+    /// so tests can assert the supervisor actually invokes the connector-local
+    /// cleanup half of the cascade.
+    struct ForgetRecordingConnector {
+        inner: crate::MockConnector,
+        forget_calls: Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    #[async_trait::async_trait]
+    impl Connector for ForgetRecordingConnector {
+        fn id(&self) -> &str {
+            self.inner.id()
+        }
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+        fn connector_type(&self) -> ConnectorType {
+            self.inner.connector_type()
+        }
+        fn mode(&self) -> ConnectorMode {
+            self.inner.mode()
+        }
+        fn config_schema(&self) -> serde_json::Value {
+            self.inner.config_schema()
+        }
+        async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError> {
+            self.inner.authenticate().await
+        }
+        async fn health(&self) -> Result<HealthStatus, ConnectorError> {
+            self.inner.health().await
+        }
+        async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
+            self.inner.sync(options).await
+        }
+        async fn extract(
+            &self,
+        ) -> Result<Vec<mimir_knowledge::normalize::NormalizedFact>, ConnectorError> {
+            self.inner.extract().await
+        }
+        async fn forget(&self) -> Result<(), ConnectorError> {
+            self.forget_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.forget().await
+        }
+    }
+
+    /// `forget` must stop the runner and invoke the connector's local
+    /// `forget()` on the live instance (the instance whose in-memory state —
+    /// e.g. the Photos watcher — is exactly what the cleanup must tear down).
+    #[tokio::test]
+    async fn forget_stops_runner_and_calls_connector_forget() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("kg.db"))
+                .await
+                .unwrap(),
+        );
+        let forget_calls = Arc::new(AtomicU32::new(0));
+        let calls = Arc::clone(&forget_calls);
+        let registry = ConnectorRegistry::new();
+        registry
+            .register(
+                ConnectorType::Gmail,
+                "test".to_string(),
+                FnConnectorFactory::new(move |config, _ctx| {
+                    let inner = crate::MockConnector::from_config(config)?;
+                    Ok(Arc::new(ForgetRecordingConnector {
+                        inner,
+                        forget_calls: Arc::clone(&calls),
+                    }) as Arc<dyn Connector>)
+                }),
+            )
+            .unwrap();
+        let (_tx, rx) = watch::channel(false);
+        let supervisor = ConnectorSupervisor::new(
+            Arc::new(registry),
+            Arc::clone(&kg),
+            SupervisorConfig::default(),
+            rx,
+        );
+        let row = kg
+            .create_connector(UpsertConnectorInput {
+                connector_type: ConnectorType::Gmail,
+                slug: "forget-live".to_string(),
+                backend: "test".to_string(),
+                display_name: "Forget Live".to_string(),
+                config_json: "{}".to_string(),
+                status: None,
+                auth_state: None,
+            })
+            .await
+            .unwrap();
+
+        supervisor.start(row.id).await.unwrap();
+        wait_for_running(&supervisor, row.id).await;
+
+        supervisor.forget(row.id).await.unwrap();
+
+        assert_eq!(forget_calls.load(Ordering::SeqCst), 1);
+        assert!(!supervisor.is_running(row.id).await);
+    }
+
+    /// `forget` on a connector that was never started must re-instantiate
+    /// from the row and still invoke the connector's local cleanup.
+    #[tokio::test]
+    async fn forget_reinstantiates_when_not_running() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("kg.db"))
+                .await
+                .unwrap(),
+        );
+        let forget_calls = Arc::new(AtomicU32::new(0));
+        let calls = Arc::clone(&forget_calls);
+        let registry = ConnectorRegistry::new();
+        registry
+            .register(
+                ConnectorType::Gmail,
+                "test".to_string(),
+                FnConnectorFactory::new(move |config, _ctx| {
+                    let inner = crate::MockConnector::from_config(config)?;
+                    Ok(Arc::new(ForgetRecordingConnector {
+                        inner,
+                        forget_calls: Arc::clone(&calls),
+                    }) as Arc<dyn Connector>)
+                }),
+            )
+            .unwrap();
+        let (_tx, rx) = watch::channel(false);
+        let supervisor = ConnectorSupervisor::new(
+            Arc::new(registry),
+            Arc::clone(&kg),
+            SupervisorConfig::default(),
+            rx,
+        );
+        let row = kg
+            .create_connector(UpsertConnectorInput {
+                connector_type: ConnectorType::Gmail,
+                slug: "forget-cold".to_string(),
+                backend: "test".to_string(),
+                display_name: "Forget Cold".to_string(),
+                config_json: "{}".to_string(),
+                status: None,
+                auth_state: None,
+            })
+            .await
+            .unwrap();
+
+        // Note: no start() call — the connector is in Setup with no runner.
+        supervisor.forget(row.id).await.unwrap();
+
+        assert_eq!(forget_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn forget_unknown_id_returns_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("kg.db"))
+                .await
+                .unwrap(),
+        );
+        let registry = ConnectorRegistry::new();
+        let (_tx, rx) = watch::channel(false);
+        let supervisor = ConnectorSupervisor::new(
+            Arc::new(registry),
+            Arc::clone(&kg),
+            SupervisorConfig::default(),
+            rx,
+        );
+        let err = supervisor.forget(9999).await.unwrap_err();
+        assert!(matches!(
+            err,
+            SupervisorError::Knowledge(mimir_knowledge::KnowledgeError::ConnectorNotFound(9999))
+        ));
     }
 }

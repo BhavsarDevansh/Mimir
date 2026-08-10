@@ -671,7 +671,12 @@ impl MockConnector {
                     "description": "Static cursor returned by every successful sync."
                 },
                 "sync_delay_ms": { "type": "integer", "minimum": 0, "default": 0 },
-                "display_name": { "type": ["string", "null"] }
+                "display_name": { "type": ["string", "null"] },
+                "act_kind": {
+                    "type": ["string", "null"],
+                    "default": null,
+                    "description": "When set, act() accepts this action kind and echoes the payload's native_id / message; any other kind yields UnsupportedAction."
+                }
             }
         })
     }

@@ -8,9 +8,20 @@ The LLM client is Mimir's interface to OpenAI-compatible language-model APIs. It
 
 ```text
 mimir-core/src/llm/
-├── mod.rs      # Public exports
-├── types.rs    # Request/response types and errors
-└── client.rs   # HTTP client with retry logic
+├── mod.rs              # Public exports
+├── types.rs            # Request/response types and errors
+├── backend.rs          # `LlmBackend` trait + mock backend
+├── client/             # HTTP client with retry logic
+│   ├── mod.rs          # `LlmClient` facade, exports
+│   ├── construct.rs    # construction, base URL, timeout wiring
+│   ├── chat.rs         # chat completion requests (streaming + blocking)
+│   ├── transport.rs    # reqwest transport + SSE parsing
+│   └── tests.rs        # unit tests
+├── mock.rs             # deterministic mock backend for tests
+└── pool/               # priority-based worker pool
+    ├── mod.rs          # `LlmWorkerPool` facade
+    ├── queue.rs        # priority queue
+    └── worker.rs       # worker task
 ```
 
 ## Dependencies (verified via Context7 + crates.io)

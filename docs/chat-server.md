@@ -149,3 +149,7 @@ Per-session requests are serialised using a `DashMap<String, Arc<Semaphore>>`. C
 ## Configuration
 
 The server reads its bind address from `[server].bind_addr` in `~/.config/mimir/config.toml` (default: `127.0.0.1:8080`). See [Configuration](configuration.md) for details.
+
+## Module Layout
+
+`mimir-server` splits the daemon into `app.rs` (router assembly + loopback guard), `server.rs` (startup and background tasks), `shutdown.rs` (signal handling + bounded graceful drain), `state/` (shared `AppState` construction), `routes/` (one module per endpoint family — `chat.rs`, `connectors.rs`, `kb/`, `memory.rs`, `sessions.rs`, `status.rs`, `stop.rs`, `kb_categories.rs`), and `error.rs` (wire error mapping). The KB route family is further split by concern in `routes/kb/` (`query`, `detail`, `browse`, `pending`, `trash`, `forget`, `optimization`, `helpers`, `params`).

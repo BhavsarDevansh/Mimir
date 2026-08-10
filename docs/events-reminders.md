@@ -83,7 +83,7 @@ future-dated facts.
 
 ## Scan Job — `events.upcoming_scan`
 
-Registered in `AppState::from_config_with_llm` (`mimir-server/src/state.rs`),
+Registered in `AppState::from_config_with_llm` (`mimir-server/src/state/`),
 one scheduled job per configured run time (default 06:00 and 18:00). Three
 deterministic passes:
 
@@ -150,8 +150,8 @@ calendar day is never mislabelled `today`.
 - `mimir-knowledge/src/models/recurrence.rs` — `next_occurrence` + helpers
 - `mimir-knowledge/src/queries/event.rs` — CRUD, active/overdue, scan helpers
 - `mimir-knowledge/src/events.rs` — `run_upcoming_scan` + `ScanSummary`
-- `mimir-knowledge/src/extract.rs` — `event_from_extraction`, `parse_recurrence`
-- `mimir-knowledge/src/queries/memory.rs` — `render_upcoming_section`
+- `mimir-knowledge/src/extract/` — `event_from_extraction`, `parse_recurrence`
+- `mimir-knowledge/src/queries/memory/render.rs` — `render_upcoming_section`
 - `mimir-knowledge/src/db/migrations/039_create_events.sql`
 - `mimir-knowledge/src/db/migrations/040_drop_entity_dates.sql`
 

@@ -282,7 +282,7 @@ impl ConnectorRegistry {
 
 ## Testing
 
-- Unit tests (`src/photos.rs`): cursor diffing/pruning/round-trip, path
+- Unit tests (`src/photos/`): cursor diffing/pruning/round-trip, path
   helpers, EXIF GPS+datetime parsing against committed fixtures
   (`tests/fixtures/exif.jpg`, `exif.tif`, `no_gps.jpg`, `no_exif.jpg`), fact
   conversion, config validation, signature reading, mtime fallback. Fixtures
@@ -296,7 +296,7 @@ impl ConnectorRegistry {
   unit tests (mock geocoder place fact, no-geocoder fallback, cache hit +
   cache-miss-then-hit, transient-error-not-cached), the `place_fact` /
   `coords_only_fact` shape tests, the geocoder `short_name` unit tests
-  (`mimir-connectors/src/geocoder.rs`), and the integration test
+  (`mimir-connectors/src/geocoder/`), and the integration test
   `supervisor_ingests_photo_as_took_photo_at_place_fact` (a GPS photo ingested
   through the supervisor with a mock geocoder produces a `took_photo_at`
   place fact). `mimir-knowledge/tests/normalize_test.rs` adds

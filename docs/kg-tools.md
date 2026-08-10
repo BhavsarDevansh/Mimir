@@ -121,14 +121,14 @@ Stop conditions: `depth >= max_depth`, `visited.len() >= max_nodes`, or empty fr
 - `mimir-knowledge/src/db/migrations/028_add_performance_indexes.sql`
 - `mimir-knowledge/src/queries/search.rs`
 - `mimir-knowledge/src/queries/traverse.rs`
-- `mimir-knowledge/src/queries/entity.rs` (additions)
-- `mimir-knowledge/src/queries/fact.rs` (additions)
+- `mimir-knowledge/src/queries/entity/` (additions)
+- `mimir-knowledge/src/queries/fact/` (additions)
 - `mimir-knowledge/src/tools/kg_query.rs`
 - `mimir-knowledge/src/tools/kg_related.rs`
 - `mimir-knowledge/src/tools/kg_search.rs`
 - `mimir-knowledge/src/tools/mod.rs`
 - `mimir-knowledge/src/lib.rs` (exports)
-- `mimir-server/src/state.rs` (integration)
+- `mimir-server/src/state/` (integration)
 
 ## Batch Insertion
 
@@ -233,4 +233,4 @@ Retrieved 1 facts across 1 entities, 0 relations, and 1 conversation snippets
 - `mimir-knowledge/src/retrieval/agent.rs`
 - `mimir-knowledge/src/retrieval/types.rs`
 - `mimir-knowledge/src/tools/retrieve_context.rs`
-- `mimir-server/src/state.rs` (registration)
+- `mimir-server/src/state/` (registration)

@@ -29,7 +29,7 @@ Mimir supports hot-reloading non-sensitive configuration settings at runtime. Th
 
 ### ReloadableConfig
 
-Located in `mimir-core/src/config.rs`. Wraps the live `Config` behind `Arc<tokio::sync::RwLock<Config>>` and stores the config file path.
+Located in `mimir-core/src/config/reload.rs`. Wraps the live `Config` behind `Arc<tokio::sync::RwLock<Config>>` and stores the config file path.
 
 **`snapshot()`**: Acquires a read lock, clones the config, and releases the lock. The clone is cheap because `Config` is a small struct (~10 fields). This avoids holding the lock across await points.
 
@@ -91,7 +91,7 @@ The following fields are considered sensitive and are not reloadable:
 
 ## Tests
 
-Unit tests in `mimir-core/src/config.rs`:
+Unit tests in `mimir-core/src/config/tests.rs`:
 - `test_reloadable_applies_non_sensitive_change`: Changes `personality.preset` and `memory.char_limit`, verifies new values.
 - `test_reloadable_rejects_sensitive_change`: Changes `llm.model`, verifies `SensitiveFieldChanged` error and old model retained.
 - `test_reloadable_rejects_invalid_toml`: Corrupts the file, verifies `Parse` error and old config retained.

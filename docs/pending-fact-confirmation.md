@@ -25,7 +25,7 @@ automated cleanup job.
    constant) and object-text keywords (`SENSITIVE_KEYWORDS` constant). Only
    facts that pass both the LLM flag and the Rust check are inserted with
    `Disputed` status and `pending_confirmation = TRUE`
-   (`mimir-knowledge/src/extract.rs`, `insert_sensitive_fact`). The fact id is
+   (`mimir-knowledge/src/extract/`, `insert_sensitive_fact`). The fact id is
    added to the in-memory `pending_confirmations` set.
 2. **Confirm** — `KnowledgeGraph::confirm_fact(id)` flips status to `Active`,
    sets confidence to `1.0`, clears `pending_confirmation`, writes a

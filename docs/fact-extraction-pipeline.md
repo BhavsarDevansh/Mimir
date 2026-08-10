@@ -112,13 +112,13 @@ preserving the previous batch behaviour.
 
 ## Files
 
-- `mimir-knowledge/src/extract.rs` — conversational half: `remember` tool schema, extraction prompts, LLM-output parsing, and the adapter that maps `ExtractedFact` onto `NormalizedFact`/`Provenance`
-- `mimir-knowledge/src/normalize.rs` — shared `normalize_and_insert` boundary (entity resolution, confidence, sensitivity gate, insertion, event overlay) used by both chat and connectors
-- `mimir-knowledge/src/queries/fact.rs` — `insert_fact_in_tx`, corroboration + supersession paths
+- `mimir-knowledge/src/extract/` — conversational half: `remember` tool schema, extraction prompts, LLM-output parsing, and the adapter that maps `ExtractedFact` onto `NormalizedFact`/`Provenance`
+- `mimir-knowledge/src/normalize/` — shared `normalize_and_insert` boundary (entity resolution, confidence, sensitivity gate, insertion, event overlay) used by both chat and connectors
+- `mimir-knowledge/src/queries/fact/` — `insert_fact_in_tx`, corroboration + supersession paths
 - `mimir-knowledge/src/confidence.rs` — structural confidence model + transactional confidence cascade
 - `mimir-knowledge/src/sensitivity.rs` — deterministic sensitivity gate (category + content checks)
 - `mimir-knowledge/src/lib.rs` — `KnowledgeGraph` facade methods
-- `mimir-knowledge/tests/extraction_test.rs` — conversational extraction integration tests
+- `mimir-knowledge/tests/extraction_tool_test.rs`, `extraction_text_fallback_test.rs`, `extraction_rust_overrides_test.rs` — conversational extraction integration tests
 - `mimir-knowledge/tests/normalize_test.rs` — shared-boundary integration tests (connector insert + cross-connector corroboration)
 - `mimir-knowledge/src/db/migrations/026_add_pending_confirmation.sql`
 - `mimir-knowledge/src/db/migrations/027_add_rejected_change_type.sql`
@@ -300,7 +300,7 @@ and re-exported from `mimir_knowledge::extract` for existing callers.
 
 ## Testing
 
-11 integration tests in `mimir-knowledge/tests/extraction_test.rs`:
+11 integration tests across `mimir-knowledge/tests/extraction_tool_test.rs`, `extraction_text_fallback_test.rs`, and `extraction_rust_overrides_test.rs`:
 
 1. `test_explicit_extraction` — Active, confidence 1.0, source attached.
 2. `test_casual_extraction` — Confidence 0.30, Disputed on overlap.
@@ -322,6 +322,6 @@ During extraction, each fact's `relationship_type` is resolved through `Knowledg
 
 The batch flow (`extracted_to_normalized` → `normalize_and_insert`, shared by `extract_facts`/`extract_facts_with_context` and the `remember` tool entrypoint `process_remember_output`) tolerates predicate-resolution errors per-fact: one invalid predicate is recorded in `ExtractionOutcome::errors` without aborting the rest of the batch.
 
-> **Issue #136:** the deprecated hardcoded `normalize_predicate` map and the duplicate `normalize_relationship_type` snake_case helper were removed from `mimir-knowledge/src/extract.rs`. Migrations `036_seed_relationship_type_aliases.sql` and `037_seed_core_predicates_and_aliases.sql` seed every legacy synonym as data, so behaviour is unchanged for `attended`→`studied_at`, `hobbies`→`hobby`, etc. A side effect of routing through `ensure_relationship_type` is that an unknown predicate on a fact that is later rejected (e.g. invalid `subject_type`) still registers its canonical type; this is intentional and idempotent.
+> **Issue #136:** the deprecated hardcoded `normalize_predicate` map and the duplicate `normalize_relationship_type` snake_case helper were removed from `mimir-knowledge/src/extract/`. Migrations `036_seed_relationship_type_aliases.sql` and `037_seed_core_predicates_and_aliases.sql` seed every legacy synonym as data, so behaviour is unchanged for `attended`→`studied_at`, `hobbies`→`hobby`, etc. A side effect of routing through `ensure_relationship_type` is that an unknown predicate on a fact that is later rejected (e.g. invalid `subject_type`) still registers its canonical type; this is intentional and idempotent.
 
 The `LIST_PREDICATES` allow-list was expanded to include `has_pets`, `has_child`, `has_parent`, `has_sibling`, and `has_partner` so comma-separated values for these predicates are correctly split into individual facts.

@@ -46,7 +46,7 @@ concrete `LlmClient` but cannot be expressed directly in a trait without RPITIT.
 
 ### `LlmClient`
 
-`mimir-core/src/llm/client.rs` implements `LlmBackend` for `LlmClient`. Every
+`mimir-core/src/llm/client/` implements `LlmBackend` for `LlmClient`. Every
 method delegates to the existing inherent method with the same name. There is
 **no behavioural change**.
 
@@ -68,7 +68,7 @@ method delegates to the existing inherent method with the same name. There is
 
 ## AppState Refactor
 
-`mimir-server/src/state.rs` changed:
+`mimir-server/src/state/` changed:
 
 ```rust
 pub llm_client: Arc<LlmClient>;      // old

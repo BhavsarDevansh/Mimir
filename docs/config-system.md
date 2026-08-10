@@ -1,7 +1,7 @@
 # Configuration System
 
-> **Scope:** `mimir-core/src/config.rs`, `config/default.toml`
-> **Scope:** `mimir-core/src/config.rs`, `mimir-core/src/paths.rs`, `config/default.toml`
+> **Scope:** `mimir-core/src/config/`, `config/default.toml`
+> **Scope:** `mimir-core/src/config/`, `mimir-core/src/paths.rs`, `config/default.toml`
 > **Last updated:** 2026-05-21
 
 ## Architecture

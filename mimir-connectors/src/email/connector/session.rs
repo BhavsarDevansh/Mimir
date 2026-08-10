@@ -1,0 +1,164 @@
+//! IMAP session lifecycle: open, sync, and capability probing.
+
+use std::time::Duration;
+
+use chrono::Utc;
+use tracing::{debug, warn};
+
+use crate::connector::{ConnectorError, SyncOptions, SyncOutcome};
+use crate::email::config::{DEFAULT_IMAP_PORT, DEFAULT_MAILBOX, EmailSyncMode, encode_cursor};
+use crate::email::connector::EmailConnector;
+use crate::email::imap;
+use crate::email::imap::{FetchResult, ImapSession, connect_tls, imap_login};
+
+impl EmailConnector {
+    pub(crate) fn port(&self) -> u16 {
+        self.config.port.unwrap_or(DEFAULT_IMAP_PORT)
+    }
+    pub(crate) fn mailbox(&self) -> &str {
+        self.config.mailbox.as_deref().unwrap_or(DEFAULT_MAILBOX)
+    }
+    fn idle_timeout(&self) -> Duration {
+        Duration::from_secs(self.config.idle_timeout_secs)
+    }
+
+    /// Decide whether this cycle uses IDLE (Push) or polling (Polling).
+    /// `Ok(true)` → IDLE. Honours the explicit config mode, falling back to
+    /// the cached capability for `auto`. `Idle` mode errors if the server is
+    /// known to lack `IDLE`, matching the documented contract. Synchronous
+    /// (a `std::sync::Mutex` guard never held across an `await`).
+    pub(super) fn use_idle(&self) -> Result<bool, ConnectorError> {
+        match self.config.mode {
+            // Forced IDLE: error if the capability probe confirmed the server
+            // does not advertise `IDLE`. An unprobed (`None`) cache lets the
+            // IDLE attempt proceed; the server's BAD response surfaces the
+            // mismatch on the next cycle.
+            EmailSyncMode::Idle => match *self.supports_idle.lock().unwrap() {
+                Some(false) => Err(ConnectorError::Config(
+                    "idle mode requested but the server does not advertise IDLE".into(),
+                )),
+                _ => Ok(true),
+            },
+            EmailSyncMode::Poll => Ok(false),
+            // `Auto` defaults to Push when unprobed, matching `mode()` (which
+            // reports `ConnectorMode::Push` for `None`); otherwise follows the
+            // cached capability so `mode()` and `use_idle()` never disagree
+            // (a mismatch would let the supervisor's push loop busy-spin).
+            EmailSyncMode::Auto => Ok(self.supports_idle.lock().unwrap().unwrap_or(true)),
+        }
+    }
+
+    /// Open an authenticated session to the configured IMAP server, resolving
+    /// credentials (and persisting any OAuth refresh) first.
+    pub(super) async fn open_session(
+        &self,
+    ) -> Result<ImapSession<imap::TlsStream>, ConnectorError> {
+        let (auth, refreshed) = self.resolve_credentials().await?;
+        if let Some(b) = refreshed {
+            self.persist_refreshed(&b).await?;
+        }
+        let stream = connect_tls(&self.config.host, self.port()).await?;
+        let client = async_imap::Client::new(stream);
+        imap_login(client, auth).await
+    }
+
+    /// Run one sync cycle against an already-authenticated session. Generic
+    /// over the stream so tests drive it against a fake server. Selects the
+    /// mailbox, validates the UIDVALIDITY cursor, optionally blocks on IDLE
+    /// (Push), then incrementally `UID FETCH`es and stages new messages.
+    pub(super) async fn run_sync<S: imap::ImapStream>(
+        &self,
+        mut session: ImapSession<S>,
+        options: SyncOptions,
+    ) -> Result<SyncOutcome, ConnectorError> {
+        let idle = self.use_idle()?;
+        let info = session.examine(self.mailbox()).await?;
+        let uid_validity = info.uid_validity;
+
+        // Validate the persisted cursor against the current UIDVALIDITY:
+        // a mismatch (mailbox recreated) invalidates all prior UIDs → full.
+        let cursor = *self.last_uid.lock().await;
+        let last_uid = match (cursor, options.full) {
+            (_, true) => None,
+            (Some((v, u)), false) if v == uid_validity => Some(u),
+            _ => None,
+        };
+        if cursor.is_some() && matches!(cursor, Some((v, _)) if v != uid_validity) {
+            warn!(
+                uid_validity,
+                "IMAP UIDVALIDITY changed; performing full re-sync"
+            );
+        }
+
+        let mut session = if idle {
+            let (sess, new_data) = session.idle_wait(self.idle_timeout()).await?;
+            if !new_data {
+                // IDLE timed out / was interrupted with no new mail.
+                sess.logout().await;
+                return Ok(SyncOutcome {
+                    fetched: 0,
+                    new_cursor: None,
+                    fetched_at: Utc::now(),
+                });
+            }
+            sess
+        } else {
+            session
+        };
+
+        let FetchResult { messages, max_uid } = session.fetch_since(last_uid, uid_validity).await?;
+        session.logout().await;
+
+        let fetched = u32::try_from(messages.len()).unwrap_or(u32::MAX);
+        self.buffer.lock().await.extend(messages);
+
+        // Advance the cursor: persist on a full/first sync or when new mail
+        // arrived; leave it unchanged when an incremental cycle fetched
+        // nothing (the supervisor skips a no-op cursor write).
+        let new_cursor = match (last_uid, max_uid) {
+            (None, _) => Some(encode_cursor(uid_validity, max_uid)),
+            (Some(prev), max) if max > prev => Some(encode_cursor(uid_validity, max)),
+            _ => None,
+        };
+        *self.last_uid.lock().await = Some((uid_validity, max_uid));
+
+        debug!(
+            fetched,
+            uid_validity,
+            last_uid = max_uid,
+            idle,
+            "email sync cycle complete"
+        );
+
+        Ok(SyncOutcome {
+            fetched,
+            new_cursor,
+            fetched_at: Utc::now(),
+        })
+    }
+
+    /// Shared probe used by both [`Connector::authenticate`] and
+    /// [`Connector::health`]: resolve credentials (refreshing OAuth),
+    /// connect, log in, probe `CAPABILITY` (caching IDLE support), and log
+    /// out. Returns the cached `IDLE` capability. Callers map the
+    /// [`ConnectorError`] onto their respective lifecycle enums.
+    pub(super) async fn probe_capability(&self) -> Result<bool, ConnectorError> {
+        let (auth, refreshed) = self.resolve_credentials().await?;
+        if let Some(b) = refreshed {
+            self.persist_refreshed(&b).await?;
+        }
+        let stream = connect_tls(&self.config.host, self.port()).await?;
+        let client = async_imap::Client::new(stream);
+        let mut session = imap_login(client, auth).await?;
+        let supports = match session.supports_idle().await {
+            Ok(supports) => supports,
+            Err(e) => {
+                session.logout().await;
+                return Err(e);
+            }
+        };
+        session.logout().await;
+        *self.supports_idle.lock().unwrap() = Some(supports);
+        Ok(supports)
+    }
+}

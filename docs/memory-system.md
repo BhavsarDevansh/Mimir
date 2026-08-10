@@ -25,7 +25,7 @@ These facts are categorised as Identity (category ID 110) so they rank at the to
 
 ### Fact Ranking & Selection
 
-Implemented in `mimir-knowledge/src/queries/memory.rs`.
+Implemented in `mimir-knowledge/src/queries/memory/`.
 
 - **Identity facts** always rank first (name, pronouns, birthdate)
 - **Temporal boost** increases score for upcoming events (birthdays, appointments) based on proximity
@@ -71,7 +71,7 @@ condensation_top_n = 500
 
 ## Files
 
-- `mimir-knowledge/src/queries/memory.rs` — ranking, scoring, budget fill
+- `mimir-knowledge/src/queries/memory/` — ranking (`ranking.rs`), scoring, budget fill (`build.rs`), rendering (`render.rs`)
 - `mimir-knowledge/src/models/memory.rs` — `MemorySchema`, `MemoryBucket`, `RankedFact`
 - `mimir-knowledge/src/condensation.rs` — LLM condensation pipeline
 - `mimir-knowledge/src/queries/system_state.rs` — `condensed_memory` cache read/write

@@ -128,9 +128,9 @@ Resource cleanup (`AppState::shutdown()`) runs in either case.
 
 - `mimir-server/src/lib.rs` — `ShutdownSource`, `server_exit_message()`, `spawn_os_signal_shutdown()`, `watch_shutdown()`, `serve_with_bounded_drain()`, `GRACEFUL_DRAIN_TIMEOUT`, and `start_server()`
 - `mimir-server/src/routes/stop.rs` — `stop_handler()` (logs `ShutdownSource::StopEndpoint` with the peer address)
-- `mimir-server/src/state.rs` — `AppState::shutdown()`
+- `mimir-server/src/state/` — `AppState::shutdown()`
 - `mimir-core/src/scheduler.rs` — `BackgroundScheduler::shutdown()`
-- `mimir-core/src/context.rs` — `ContextManager::close()`
-- `mimir-core/src/llm/pool.rs` — `LlmWorkerPool::shutdown()`
-- `mimir-core/src/llm/client.rs` — `LlmClient::shutdown()`
+- `mimir-core/src/context/` — `ContextManager::close()`
+- `mimir-core/src/llm/pool/` — `LlmWorkerPool::shutdown()`
+- `mimir-core/src/llm/client/` — `LlmClient::shutdown()`
 - `mimir-core/src/llm/backend.rs` — `LlmBackend::shutdown()` trait method

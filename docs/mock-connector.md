@@ -10,7 +10,7 @@ health/auth states to exercise the `ConnectorSupervisor`. It never touches the
 database — the supervisor inserts its facts through the shared
 `normalize_and_insert` pipeline.
 
-It lives in `mimir-connectors/src/mock.rs` and is always compiled, so
+It lives in `mimir-connectors/src/mock/` and is always compiled, so
 `cargo build -p mimir-connectors --no-default-features` still produces a working
 framework + mock harness (the gated Photos/Calendar/Gmail backends are absent,
 but the mock and the framework core remain).
@@ -135,7 +135,7 @@ that injected failures are recorded rather than omitted.
 - `tests/mock_connector.rs` — unit tests for config parsing, identity, both
   modes, canned-fact staging/draining, incremental `batch_size`, knobs, and the
   recorder.
-- `tests/supervisor_lifecycle.rs` — the supervised-lifecycle behavioural suite
+- `tests/supervisor_lifecycle_tests.rs` — the supervised-lifecycle behavioural suite
   now drives the `MockConnector` (the previous private `TestConnector` was
   removed — DRY).
 - `tests/mock_ingestion_e2e.rs` — the T1 vehicle: the real

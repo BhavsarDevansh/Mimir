@@ -203,11 +203,11 @@ OAuth variant:
 
 ## Tests
 
-- Unit (`src/calendar/caldav.rs`): sync-collection full/incremental parse,
+- Unit (`src/calendar/caldav/`): sync-collection full/incremental parse,
   401 handling, PROPFIND resourcetype calendar detection, `icalendar` field
   extraction + recurrence, invalid-payload resilience — all against a
   `wiremock` mock CalDAV server.
-- Integration (`tests/calendar_connector.rs`): app-password sync, incremental
+- Integration (`tests/calendar_sync_tests.rs`): app-password sync, incremental
   sync-token, `full`-sync cursor reset, OAuth refresh-on-expiry + bundle
   persistence, health (online / not-configured / auth-expired), factory
   construction + config round-trip, and a full `ConnectorSupervisor` round-trip

@@ -1,0 +1,534 @@
+mod common;
+use common::*;
+
+#[tokio::test]
+async fn test_kg_tools_registered() {
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock).await;
+
+    let names: Vec<String> = state
+        .tool_registry
+        .list()
+        .into_iter()
+        .map(|m| m.name)
+        .collect();
+
+    assert!(names.contains(&"kg_query".to_string()));
+    assert!(names.contains(&"kg_related".to_string()));
+    assert!(names.contains(&"kg_search".to_string()));
+    assert!(names.contains(&"expand_catalogue".to_string()));
+    assert!(names.contains(&"get_facts_in_catalogue".to_string()));
+    assert!(names.contains(&"remember".to_string()));
+}
+#[tokio::test]
+async fn test_kg_tools_in_openai_export() {
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock).await;
+
+    let exported = state.tool_registry.export_openai_tools();
+    let names: Vec<String> = exported
+        .iter()
+        .filter_map(|v| {
+            v.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect();
+
+    assert!(names.contains(&"kg_query".to_string()));
+    assert!(names.contains(&"kg_related".to_string()));
+    assert!(names.contains(&"kg_search".to_string()));
+    assert!(names.contains(&"expand_catalogue".to_string()));
+    assert!(names.contains(&"get_facts_in_catalogue".to_string()));
+    assert!(names.contains(&"remember".to_string()));
+}
+#[tokio::test]
+async fn test_kb_optimization_status_returns_job() {
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/kb/optimization/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let resp: mimir_api_types::OptimizationStatusResponse =
+        serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(resp.job_id, "knowledge.optimization");
+    assert_eq!(resp.priority, "system");
+    assert!(resp.schedule.is_some());
+}
+#[tokio::test]
+async fn test_kb_optimization_run_now_triggers_job() {
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/kb/optimization/run-now")
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    0,
+                ))))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let resp: mimir_api_types::OptimizationRunNowResponse =
+        serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(resp.status, "succeeded");
+}
+// ------------------------------------------------------------------
+// KG CLI route tests
+// ------------------------------------------------------------------
+#[tokio::test]
+async fn test_kb_query_returns_facts() {
+    let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+
+    // Seed an entity and a fact
+    let entity = state
+        .knowledge_graph
+        .create_entity(
+            "Alice",
+            mimir_knowledge::models::entity::EntityType::Person,
+            &[],
+        )
+        .await
+        .unwrap();
+    let pred_id = state
+        .knowledge_graph
+        .ensure_relationship_type("works_at")
+        .await
+        .unwrap();
+    let _fact = mimir_knowledge::queries::fact::insert_fact(
+        state.knowledge_graph.pool(),
+        &mimir_knowledge::models::fact::NewFact {
+            subject_id: entity.id,
+            relationship_type: "works_at".to_string(),
+            object_id: None,
+            object_literal: Some("Acme".to_string()),
+            valid_from: None,
+            valid_until: None,
+            source_type: mimir_knowledge::models::source::SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: vec![],
+            category_ids: vec![],
+        },
+        pred_id,
+        0.95,
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
+
+    let app = mimir_server::build_app(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/kb/query?entity=Alice")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(!json.get("facts").unwrap().as_array().unwrap().is_empty());
+}
+#[tokio::test]
+async fn test_kb_show_returns_fact_detail() {
+    let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+    let entity = state
+        .knowledge_graph
+        .create_entity(
+            "Bob",
+            mimir_knowledge::models::entity::EntityType::Person,
+            &[],
+        )
+        .await
+        .unwrap();
+    let pred_id = state
+        .knowledge_graph
+        .ensure_relationship_type("likes")
+        .await
+        .unwrap();
+    let fact = mimir_knowledge::queries::fact::insert_fact(
+        state.knowledge_graph.pool(),
+        &mimir_knowledge::models::fact::NewFact {
+            subject_id: entity.id,
+            relationship_type: "likes".to_string(),
+            object_id: None,
+            object_literal: Some("Pizza".to_string()),
+            valid_from: None,
+            valid_until: None,
+            source_type: mimir_knowledge::models::source::SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: vec![],
+            category_ids: vec![],
+        },
+        pred_id,
+        0.88,
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
+
+    let app = mimir_server::build_app(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/kb/facts/{}", fact.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["fact"]["id"], fact.id);
+}
+#[tokio::test]
+async fn test_kb_browse_returns_edges() {
+    let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+    let alice = state
+        .knowledge_graph
+        .create_entity(
+            "Alice",
+            mimir_knowledge::models::entity::EntityType::Person,
+            &[],
+        )
+        .await
+        .unwrap();
+    let acme = state
+        .knowledge_graph
+        .create_entity(
+            "Acme",
+            mimir_knowledge::models::entity::EntityType::Organization,
+            &[],
+        )
+        .await
+        .unwrap();
+    let pred_id = state
+        .knowledge_graph
+        .ensure_relationship_type("works_at")
+        .await
+        .unwrap();
+    let _fact = mimir_knowledge::queries::fact::insert_fact(
+        state.knowledge_graph.pool(),
+        &mimir_knowledge::models::fact::NewFact {
+            subject_id: alice.id,
+            relationship_type: "works_at".to_string(),
+            object_id: Some(acme.id),
+            object_literal: None,
+            valid_from: None,
+            valid_until: None,
+            source_type: mimir_knowledge::models::source::SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: vec![],
+            category_ids: vec![],
+        },
+        pred_id,
+        0.92,
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
+
+    let app = mimir_server::build_app(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/kb/browse?entity=Alice&depth=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(!json.get("edges").unwrap().as_array().unwrap().is_empty());
+}
+#[tokio::test]
+async fn test_kb_profile_returns_groups() {
+    let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+    let entity = state
+        .knowledge_graph
+        .create_entity(
+            "Charlie",
+            mimir_knowledge::models::entity::EntityType::Person,
+            &[],
+        )
+        .await
+        .unwrap();
+    let pred_id = state
+        .knowledge_graph
+        .ensure_relationship_type("enjoys")
+        .await
+        .unwrap();
+    let _fact = mimir_knowledge::queries::fact::insert_fact(
+        state.knowledge_graph.pool(),
+        &mimir_knowledge::models::fact::NewFact {
+            subject_id: entity.id,
+            relationship_type: "enjoys".to_string(),
+            object_id: None,
+            object_literal: Some("Hiking".to_string()),
+            valid_from: None,
+            valid_until: None,
+            source_type: mimir_knowledge::models::source::SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: vec![],
+            category_ids: vec![],
+        },
+        pred_id,
+        0.95,
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
+
+    let app = mimir_server::build_app(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/kb/profile?entity=Charlie")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["entity_name"], "Charlie");
+}
+#[tokio::test]
+async fn test_kb_audit_returns_entries() {
+    let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+    let entity = state
+        .knowledge_graph
+        .create_entity(
+            "Dave",
+            mimir_knowledge::models::entity::EntityType::Person,
+            &[],
+        )
+        .await
+        .unwrap();
+    let pred_id = state
+        .knowledge_graph
+        .ensure_relationship_type("lives_in")
+        .await
+        .unwrap();
+    let _fact = mimir_knowledge::queries::fact::insert_fact(
+        state.knowledge_graph.pool(),
+        &mimir_knowledge::models::fact::NewFact {
+            subject_id: entity.id,
+            relationship_type: "lives_in".to_string(),
+            object_id: None,
+            object_literal: Some("London".to_string()),
+            valid_from: None,
+            valid_until: None,
+            source_type: mimir_knowledge::models::source::SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: vec![],
+            category_ids: vec![],
+        },
+        pred_id,
+        0.90,
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
+
+    let app = mimir_server::build_app(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/kb/audit?entity=Dave")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let entries = json["entries"].as_array().unwrap();
+    assert!(
+        !entries.is_empty(),
+        "expected at least one audit entry (Created)"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["change_type"].as_str() == Some("created")),
+        "expected a Created audit entry"
+    );
+}
+#[tokio::test]
+async fn test_kb_forget_restore_trash_roundtrip() {
+    let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+    let entity = state
+        .knowledge_graph
+        .create_entity(
+            "Eve",
+            mimir_knowledge::models::entity::EntityType::Person,
+            &[],
+        )
+        .await
+        .unwrap();
+    let pred_id = state
+        .knowledge_graph
+        .ensure_relationship_type("has")
+        .await
+        .unwrap();
+    let fact = mimir_knowledge::queries::fact::insert_fact(
+        state.knowledge_graph.pool(),
+        &mimir_knowledge::models::fact::NewFact {
+            subject_id: entity.id,
+            relationship_type: "has".to_string(),
+            object_id: None,
+            object_literal: Some("Cat".to_string()),
+            valid_from: None,
+            valid_until: None,
+            source_type: mimir_knowledge::models::source::SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: vec![],
+            category_ids: vec![],
+        },
+        pred_id,
+        0.85,
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
+
+    let app = mimir_server::build_app(state.clone());
+
+    // Forget
+    let _forget_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/kb/facts/forget")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"fact_id": fact.id}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // List trash
+    let trash_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/kb/trash")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(trash_resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(trash_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let trash_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(!trash_json["items"].as_array().unwrap().is_empty());
+
+    // Restore
+    let _restore_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/kb/trash/restore")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::json!({"all": true}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+}

@@ -7,6 +7,22 @@ use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::fact::{Fact, NewFact};
 use mimir_knowledge::models::source::SourceType;
 
+pub async fn create_person(kg: &KnowledgeGraph, name: &str) -> i32 {
+    let entity = kg
+        .create_entity(name, EntityType::Person, &[])
+        .await
+        .unwrap();
+    entity.id
+}
+
+pub async fn create_place(kg: &KnowledgeGraph, name: &str) -> i32 {
+    let entity = kg
+        .create_entity(name, EntityType::Place, &[])
+        .await
+        .unwrap();
+    entity.id
+}
+
 pub struct TestGraph {
     pub kg: KnowledgeGraph,
     pub _dir: tempfile::TempDir,
@@ -22,21 +38,11 @@ impl TestGraph {
     }
 
     pub async fn create_person(&self, name: &str) -> i32 {
-        let entity = self
-            .kg
-            .create_entity(name, EntityType::Person, &[])
-            .await
-            .unwrap();
-        entity.id
+        create_person(&self.kg, name).await
     }
 
     pub async fn create_place(&self, name: &str) -> i32 {
-        let entity = self
-            .kg
-            .create_entity(name, EntityType::Place, &[])
-            .await
-            .unwrap();
-        entity.id
+        create_place(&self.kg, name).await
     }
 
     pub async fn create_activity(&self, name: &str) -> i32 {

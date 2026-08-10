@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.94.0] — 2026-08-10
+
+### Module-split refactor
+
+- **Oversized files broken into single-concern modules:** every file that mixed multiple responsibilities is now a directory of small modules with the public API re-exported unchanged from the root module. In `mimir-connectors`: `supervisor` (`config`/`error`/`trigger`/`runner`/`control`/`cycle`), `calendar` (`construct`/`credentials`/`sync`/`trait_impl`/`payload` + `caldav/`), `email` (`config`/`factory`/`imap`/`connector/`/`jsonld/`/`llm/`), `rate_limit/`, `geocoder/`, `ical/`, `mock/`, `photos/`, and `secrets` (`error`/`bundle`/`store`/`file`/`memory`). In `mimir-core`: `config/`, `context/`, `job_queue/`, `llm/client/`, and `llm/pool/`. In `mimir-knowledge`: `extract/`, `normalize/`, `forget/`, `queries/entity/`, `queries/fact/`, `queries/memory/`, `queries/preference/`, and `optimization/`. In `mimir-server`: `routes/kb/`, `state/`, plus `app.rs`/`server.rs`/`shutdown.rs` extracted from `lib.rs`. In `mimir-client`: `kb/`. In `mimir-api-types`: `chat.rs`/`connectors.rs`/`kb.rs`/`kb_maintenance.rs`.
+- **Integration suites split per feature:** `fact_management_test.rs` (2627 lines) → eight fact-focused suites; `integration_tests.rs`, `extraction_test.rs`, `calendar_connector.rs`, `supervisor_lifecycle.rs`, `kb_tests.rs`, and `chat_tests.rs` each split into per-concern files with shared fixtures in `tests/common/`.
+- **Documentation refresh:** `docs/refactoring-module-split.md` and `docs/wiki/module-split.md` document the new module map and rationale; subsystem docs (`workspace`, `chat-server`, `config-system`, `llm-client`, `knowledge-graph-schema`, `connectors-framework`, and others) now reference the new module locations.
+- **Quality pass:** zero-warning `cargo clippy --workspace --all-targets` (fixed orphaned doc-comment blocks, `module_inception` via `supervisor/runner.rs`, `too_many_arguments` allowances, and a `doc_lazy_continuation`); `cargo fmt --all` clean; full workspace suite 1476 passed / 0 failed. Version bumped 0.93.0 → 0.94.0 (minor — refactor, no public API or behaviour changes).
+
 ## [0.93.0] — 2026-08-10
 
 ### Connectors — PR #268 review feedback

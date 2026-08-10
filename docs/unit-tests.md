@@ -42,8 +42,8 @@ restore/trash/trash_empty/pending/confirm/reject`, `stop` (success/503/error),
 
 ## `mimir-core`
 
-- `job_queue.rs`: 14 tests for `JobPriority::from_i16`, `JobRunStatus` str
-- `job_queue.rs`: 15 tests for `JobPriority::from_i16`, `JobRunStatus` str
+- `job_queue/`: 14 tests for `JobPriority::from_i16`, `JobRunStatus` str
+- `job_queue/`: 15 tests for `JobPriority::from_i16`, `JobRunStatus` str
   roundtrip + fallback, `DailySchedule` parse/`as_hhmm`/`next_after`
   (TZ-robust, including non-zero-padded `%H:%M` acceptance), `JobError`
   predicates, enum serde roundtrips, `JobContext`.
@@ -87,7 +87,7 @@ restore/trash/trash_empty/pending/confirm/reject`, `stop` (success/503/error),
 
 ## `mimir` (binary)
 
-- `kb.rs`: 16 tests for `parse_datetime` (RFC3339, date-only, ISO without zone,
+- `kb/`: 16 tests for `parse_datetime` (RFC3339, date-only, ISO without zone,
   space separator, fractional seconds, invalid), `confidence_color` boundary
   semantics, and `truncate` (short/exact/long+ellipsis/multibyte/`max=0`).
 

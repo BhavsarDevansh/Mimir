@@ -389,6 +389,7 @@ HTTP route are separate Phase 3 issues (A2 action routes / A3 CLI) that call
 
 ## Crate layout
 
+The crate root (`src/lib.rs`) re-exports the public API; each subsystem is a directory with one file per concern. `src/supervisor/` splits lifecycle config, errors, trigger types, the runner (struct + spawning), runtime control (start/stop/pause/resume/trigger dispatch), and the per-connector cycle loop across `config.rs`, `error.rs`, `trigger.rs`, `runner.rs`, `control.rs`, and `cycle.rs`. `src/calendar/` splits `construct`, `credentials`, `sync`, `trait_impl`, and `payload` with the CalDAV transport under `caldav/{client,ical,xml}`. `src/email/` splits `config`, `factory`, `imap`, the connector (`connector/{construct,credentials,extract,session,trait_impl}`), JSON-LD extractors (`jsonld/{facts,html,nodes,reservations,values}`), and the LLM extractor (`llm/{message,parse,schema}`). `src/secrets/` splits `error`, `bundle`, the `SecretStore` trait + slug validation (`store.rs`), the on-disk store (`file.rs`), and the in-memory helper (`memory.rs`). `src/rate_limit/`, `src/geocoder/`, `src/ical/`, `src/mock/`, and `src/photos/` follow the same pattern.
 
 | Module | Role | Filled by |
 |--------|------|-----------|

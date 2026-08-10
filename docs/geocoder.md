@@ -72,7 +72,7 @@ panic" guarantee. Callers wanting the literal acceptance can map `Err` → `None
 
 ## Nominatim backend
 
-`NominatimGeocoder` (`mimir-connectors/src/geocoder.rs`) issues `GET /search`
+`NominatimGeocoder` (`mimir-connectors/src/geocoder/`) issues `GET /search`
 (forward) and `GET /reverse` (reverse) with `format=json&addressdetails=1&
 namedetails=1`. `lat`/`lon` are returned by Nominatim as strings and parsed to
 `f64`.

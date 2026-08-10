@@ -2,7 +2,7 @@
 
 ## Overview
 
-`LlmWorkerPool` (`mimir-core/src/llm/pool.rs`) is a priority-based work distributor that ensures user-facing chat requests are always serviced before background system tasks. All LLM calls made via `LlmClient` now pass through this pool.
+`LlmWorkerPool` (`mimir-core/src/llm/pool/`) is a priority-based work distributor that ensures user-facing chat requests are always serviced before background system tasks. All LLM calls made via `LlmClient` now pass through this pool.
 
 ## Design
 

@@ -56,4 +56,4 @@ pub struct RetrievedContext {
 
 ## Integration
 
-The `retrieve_context` tool is registered in `mimir-server/src/state.rs` alongside other KG tools. The main LLM's tool loop automatically makes it available when the system prompt encourages thorough investigation.
+The `retrieve_context` tool is registered in `mimir-server/src/state/` alongside other KG tools. The main LLM's tool loop automatically makes it available when the system prompt encourages thorough investigation.

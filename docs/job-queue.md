@@ -60,7 +60,7 @@ converted to UTC for daemon state. Key points:
   `DailySchedule::naive_to_utc_local`, which resolves DST gaps (spring-forward)
   and ambiguities (falls back to the earlier offset).
 - `naive_to_utc_local` is `pub` and shared with the CLI date filters
-  (`mimir/src/kb.rs::parse_datetime`) so local times are interpreted
+  (`mimir/src/kb/mod.rs::parse_datetime`) so local times are interpreted
   consistently across the daemon and CLI (issue #168).
 
 `JobError::is_not_registered` and `JobError::is_already_running` are documented

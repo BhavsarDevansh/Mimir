@@ -53,3 +53,7 @@ All workspace members stay in sync on the same semver version unless there is an
 - **PATCH** — backwards-compatible bug fixes, documentation updates
 - **MINOR** — backwards-compatible new features, refactors, subsystem additions
 - **MAJOR** — breaking changes to public APIs, configuration formats, or data models
+
+## Module Layout
+
+Each crate organises its source into single-concern modules. Subsystems that grew beyond one responsibility live in directories with one file per concern, e.g. `mimir-connectors/src/supervisor/{runner,control,cycle,trigger,config,error}.rs` and `mimir-knowledge/src/queries/fact/{insert,read,update,status,pending,corroboration,conflict,browse}.rs`. Large integration suites are split per feature under each crate's `tests/` directory with shared fixtures in `tests/common/`. The detailed module map from the 0.94.0 split is in [refactoring-module-split.md](refactoring-module-split.md).

@@ -56,7 +56,7 @@ Removing a connector wipes its secret file: `DELETE /connectors/{id}` deletes th
 
 - **Photos** — local photo library watching + EXIF/GPS extraction + GPS → place reverse-geocoding landed (C1 / #195 + C2 / #196).
 - **Calendar** — CalDAV transport, event → KB fact extraction, events-subsystem (#74) integration, and write-back all landed (C3 / #197 + C4 / #198); remaining work is server-side deletion → KB fact lifecycle (the extractor only yields facts).
-- **Email** — IMAP transport (C5 / #199), structured extraction (C6 / #200), `schema.org` JSON-LD extraction (#249), and LLM extraction for flights/bookings (C7 / #201) all landed; remaining work is the interactive OAuth PKCE login (A4 / #206).
+- **Email** — IMAP transport (C5 / #199), structured extraction (C6 / #200), `schema.org` JSON-LD extraction (#249), and LLM extraction for flights/bookings (C7 / #201) all landed; remaining work is the interactive OAuth PKCE login (A4 / #205).
 
 All data stays local-first. Secrets are stored per-connector with permission validation; an OS keyring backend will be an opt-in extra.
 

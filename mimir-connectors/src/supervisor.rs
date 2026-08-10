@@ -797,11 +797,18 @@ impl ConnectorSupervisor {
     ///   row's `config_json` could not be parsed, the factory rejected it, or
     ///   the connector's own `forget()` failed.
     pub async fn forget(&self, id: i32) -> Result<(), SupervisorError> {
+        // Capture the live connector BEFORE stopping the runner: `stop()`
+        // removes the handle and the aborted runner task drops its `Arc`, so
+        // the live instance's in-memory state (e.g. the Photos watcher) is
+        // exactly what `forget()` must tear down. The clone keeps the
+        // instance alive across the stop.
+        let live = self.live_connector(id).await;
+
         // Stop the runner before forget() so a mid-cycle sync cannot write
         // back to a vanishing row or race the connector-local cleanup.
         self.stop(id).await;
 
-        let connector = match self.live_connector(id).await {
+        let connector = match live {
             Some(c) => c,
             None => {
                 let row = self
@@ -1855,7 +1862,9 @@ mod tests {
 
     /// `forget` must stop the runner and invoke the connector's local
     /// `forget()` on the live instance (the instance whose in-memory state —
-    /// e.g. the Photos watcher — is exactly what the cleanup must tear down).
+    /// e.g. the Photos watcher — is exactly what the cleanup must tear down),
+    /// not on a re-instantiated copy: the factory must be called exactly once
+    /// (at `start`), proving `forget` used the live instance.
     #[tokio::test]
     async fn forget_stops_runner_and_calls_connector_forget() {
         use std::sync::atomic::{AtomicU32, Ordering};
@@ -1868,12 +1877,15 @@ mod tests {
         );
         let forget_calls = Arc::new(AtomicU32::new(0));
         let calls = Arc::clone(&forget_calls);
+        let creations = Arc::new(AtomicU32::new(0));
+        let created = Arc::clone(&creations);
         let registry = ConnectorRegistry::new();
         registry
             .register(
                 ConnectorType::Gmail,
                 "test".to_string(),
                 FnConnectorFactory::new(move |config, _ctx| {
+                    created.fetch_add(1, Ordering::SeqCst);
                     let inner = crate::MockConnector::from_config(config)?;
                     Ok(Arc::new(ForgetRecordingConnector {
                         inner,
@@ -1908,6 +1920,11 @@ mod tests {
         supervisor.forget(row.id).await.unwrap();
 
         assert_eq!(forget_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            creations.load(Ordering::SeqCst),
+            1,
+            "forget must run on the live instance, not a re-instantiated one"
+        );
         assert!(!supervisor.is_running(row.id).await);
     }
 

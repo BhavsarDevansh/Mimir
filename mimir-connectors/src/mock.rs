@@ -46,8 +46,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::connector::{
-    Connector, ConnectorError, ConnectorFactory, ConnectorMode, HealthStatus, SyncOptions,
-    SyncOutcome,
+    ActionResult, Connector, ConnectorAction, ConnectorError, ConnectorFactory, ConnectorMode,
+    HealthStatus, SyncOptions, SyncOutcome,
 };
 use mimir_knowledge::models::entity::{ENTITY_TYPES, EntityType};
 use mimir_knowledge::models::enums::{
@@ -232,6 +232,10 @@ struct MockConnectorConfig {
     /// Optional display name; defaults to the slug.
     #[serde(default)]
     display_name: Option<String>,
+    /// When set, the mock accepts this `act()` kind and returns a canned
+    /// `ActionResult` echoing the payload (Phase 3 A2 / #203).
+    #[serde(default)]
+    act_kind: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +352,10 @@ pub struct MockConnector {
     /// failed/panicked cycles do not consume a batch window.
     sync_successes: AtomicU32,
     buffer: Mutex<Vec<NormalizedFact>>,
+    /// When set, `act()` accepts this action kind and returns a canned
+    /// [`ActionResult`] echoing the payload's `native_id` / `message` (Phase 3
+    /// A2 / #203). Any other kind yields `UnsupportedAction`.
+    act_kind: Option<String>,
 }
 
 impl Default for MockConnector {
@@ -375,6 +383,7 @@ impl Default for MockConnector {
             sync_calls: AtomicU32::new(0),
             sync_successes: AtomicU32::new(0),
             buffer: Mutex::new(Vec::new()),
+            act_kind: None,
         }
     }
 }
@@ -462,6 +471,7 @@ impl MockConnector {
             sync_calls: AtomicU32::new(0),
             sync_successes: AtomicU32::new(0),
             buffer: Mutex::new(Vec::new()),
+            act_kind: parsed.act_kind,
         })
     }
 
@@ -661,7 +671,12 @@ impl MockConnector {
                     "description": "Static cursor returned by every successful sync."
                 },
                 "sync_delay_ms": { "type": "integer", "minimum": 0, "default": 0 },
-                "display_name": { "type": ["string", "null"] }
+                "display_name": { "type": ["string", "null"] },
+                "act_kind": {
+                    "type": ["string", "null"],
+                    "default": null,
+                    "description": "When set, act() accepts this action kind and echoes the payload's native_id / message; any other kind yields UnsupportedAction."
+                }
             }
         })
     }
@@ -779,6 +794,29 @@ impl Connector for MockConnector {
         let mut buffer = self.buffer.lock().await;
         let drained = std::mem::take(&mut *buffer);
         Ok(drained)
+    }
+
+    async fn act(&self, action: ConnectorAction) -> Result<ActionResult, ConnectorError> {
+        match self.act_kind.as_deref() {
+            Some(kind) if kind == action.kind => {
+                let native_id = action
+                    .payload
+                    .get("native_id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                let message = action
+                    .payload
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                Ok(ActionResult {
+                    success: true,
+                    native_id,
+                    message,
+                })
+            }
+            _ => Err(ConnectorError::UnsupportedAction(action.kind)),
+        }
     }
 
     async fn forget(&self) -> Result<(), ConnectorError> {

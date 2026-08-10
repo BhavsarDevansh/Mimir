@@ -441,6 +441,10 @@ fn config_schema_describes_mode_and_facts() {
     assert!(props.contains_key("interval_ms"));
     assert!(props.contains_key("facts"));
     assert!(props.contains_key("health"));
+    assert!(
+        props.contains_key("act_kind"),
+        "act_kind must be listed so a config with it validates against the schema"
+    );
 }
 
 // ---------------------------------------------------------------------------

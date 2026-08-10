@@ -6,12 +6,15 @@
 //! `(connector_type, backend)` pair against the daemon's
 //! [`ConnectorRegistry`] so an unregistered backend is rejected up front.
 //! `DELETE /connectors/{id}` stops the runner (if any) and deletes the row,
-//! detaching provenance (the full `forget` cascade is A2 / #203).
+//! detaching provenance so ingested facts survive with degraded provenance.
 //!
-//! Adding a connector creates it in `Setup` status; activation (move to
-//! `Active` so the supervisor spawns a runner) is an action route that lands
-//! with A2 / #203. This keeps A1 a CRUD/status surface, matching the issue's
-//! add/remove framing.
+//! Action routes (A2 / #203): `POST /connectors/{id}/sync` (manual sync),
+//! `POST /connectors/{id}/pause` / `resume` (lifecycle control), `POST
+//! /connectors/{id}/tokens` (credential ingest + auth-state flip), `POST
+//! /connectors/{id}/actions` (write-back dispatch), and `POST
+//! /connectors/{id}/forget` (cascade-forget the connector's facts, secret, and
+//! row). Adding a connector creates it in `Setup`; activation (spawn a runner)
+//! is the `resume` action.
 
 use std::sync::Arc;
 
@@ -122,6 +125,23 @@ fn to_response_with_count(
     }
 }
 
+/// Fetch a connector row by id and build a [`ConnectorResponse`] (with its
+/// derived item count). Shared by the show route and the action routes that
+/// return the updated instance after a mutation (`pause` / `resume` /
+/// `tokens`). Returns `404` when no row matches `id`.
+async fn connector_response(
+    state: &AppState,
+    id: i32,
+) -> Result<Json<ConnectorResponse>, Response> {
+    let row = state
+        .knowledge_graph
+        .get_connector(id)
+        .await
+        .map_err(error::knowledge_error)?
+        .ok_or_else(|| error::not_found("connector not found"))?;
+    Ok(Json(to_response(state, row).await?))
+}
+
 /// `GET /connectors` — every registered instance, oldest first, with derived
 /// item counts.
 ///
@@ -156,13 +176,7 @@ pub async fn connector_show_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> Result<Json<ConnectorResponse>, Response> {
-    let row = state
-        .knowledge_graph
-        .get_connector(id)
-        .await
-        .map_err(error::knowledge_error)?
-        .ok_or_else(|| error::not_found("connector not found"))?;
-    Ok(Json(to_response(&state, row).await?))
+    connector_response(&state, id).await
 }
 
 /// `POST /connectors` — register a new connector instance.
@@ -285,4 +299,257 @@ pub async fn connector_remove_handler(
         .map_err(error::knowledge_error)?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// Action routes (Phase 3 A2 / issue #203)
+// ---------------------------------------------------------------------------
+
+/// `POST /connectors/{id}/sync` — trigger a manual sync (F9).
+pub async fn connector_sync_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i32>,
+    Json(body): Json<mimir_api_types::SyncConnectorRequest>,
+) -> Result<Json<mimir_api_types::SyncConnectorResponse>, Response> {
+    let options = mimir_connectors::SyncOptions {
+        full: body.full,
+        since: body.since.map(std::time::Duration::from_secs),
+    };
+    let outcome = state
+        .connector_supervisor
+        .trigger_sync(id, options)
+        .await
+        .map_err(error::trigger_error)?;
+    Ok(Json(match outcome {
+        mimir_connectors::TriggerOutcome::Ok {
+            fetched,
+            new_cursor,
+        } => mimir_api_types::SyncConnectorResponse::Ok {
+            fetched,
+            new_cursor,
+        },
+        mimir_connectors::TriggerOutcome::AuthExpired => {
+            mimir_api_types::SyncConnectorResponse::AuthExpired
+        }
+        mimir_connectors::TriggerOutcome::Failed(message) => {
+            mimir_api_types::SyncConnectorResponse::Failed { message }
+        }
+    }))
+}
+
+/// `POST /connectors/{id}/pause` — stop the runner and transition to `Paused`.
+pub async fn connector_pause_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i32>,
+) -> Result<Json<ConnectorResponse>, Response> {
+    state
+        .connector_supervisor
+        .pause(id)
+        .await
+        .map_err(error::supervisor_error)?;
+    connector_response(&state, id).await
+}
+
+/// `POST /connectors/{id}/resume` — (re)spawn the runner and transition to `Active`.
+pub async fn connector_resume_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i32>,
+) -> Result<Json<ConnectorResponse>, Response> {
+    state
+        .connector_supervisor
+        .resume(id)
+        .await
+        .map_err(error::supervisor_error)?;
+    connector_response(&state, id).await
+}
+
+/// Convert a wire [`mimir_api_types::IngestTokenRequest`] into the
+/// [`mimir_connectors::SecretBundle`] it mirrors, parsing the RFC-3339 OAuth
+/// expiry into a `DateTime<Utc>`. Returns an error *message* (not a `Response`)
+/// on a malformed expiry so the caller maps it onto a `400` — keeping the
+/// `Result` small and avoiding `clippy::result_large_err`.
+fn to_secret_bundle(
+    req: mimir_api_types::IngestTokenRequest,
+) -> Result<mimir_connectors::SecretBundle, String> {
+    Ok(match req {
+        mimir_api_types::IngestTokenRequest::OAuth {
+            access_token,
+            refresh_token,
+            expires_at,
+        } => {
+            let expires_at = match expires_at {
+                Some(s) => Some(
+                    chrono::DateTime::parse_from_rfc3339(&s)
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .map_err(|e| format!("invalid expires_at: {e}"))?,
+                ),
+                None => None,
+            };
+            mimir_connectors::SecretBundle::OAuth {
+                access_token,
+                refresh_token,
+                expires_at,
+            }
+        }
+        mimir_api_types::IngestTokenRequest::ApiToken { token } => {
+            mimir_connectors::SecretBundle::ApiToken { token }
+        }
+        mimir_api_types::IngestTokenRequest::AppPassword { password } => {
+            mimir_connectors::SecretBundle::AppPassword { password }
+        }
+    })
+}
+
+/// `POST /connectors/{id}/tokens` — ingest credentials and flip `auth_state`.
+///
+/// `auth_state` becomes `authenticated` as soon as the bundle is written to
+/// the store — meaning *credentials are present*, not that they have been
+/// validated. The actual handshake runs at the next sync; a credential kind
+/// the backend rejects surfaces there as `NotAuthenticated` / `Expired`.
+pub async fn connector_tokens_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i32>,
+    Json(body): Json<mimir_api_types::IngestTokenRequest>,
+) -> Result<Json<ConnectorResponse>, Response> {
+    let row = state
+        .knowledge_graph
+        .get_connector(id)
+        .await
+        .map_err(error::knowledge_error)?
+        .ok_or_else(|| error::not_found("connector not found"))?;
+
+    let bundle = to_secret_bundle(body).map_err(error::bad_request)?;
+    let secret_store = state
+        .connector_supervisor
+        .secret_store()
+        .ok_or_else(|| error::internal("no secret store configured"))?;
+    secret_store
+        .store(&row.slug, &bundle)
+        .await
+        .map_err(error::secret_error)?;
+
+    // Credentials are now present; flip auth_state to Authenticated.
+    state
+        .knowledge_graph
+        .set_auth_state(
+            id,
+            mimir_knowledge::models::enums::ConnectorAuthState::Authenticated,
+        )
+        .await
+        .map_err(error::knowledge_error)?;
+
+    connector_response(&state, id).await
+}
+
+/// `POST /connectors/{id}/actions` — dispatch a write-back action (C4).
+pub async fn connector_actions_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i32>,
+    Json(body): Json<mimir_api_types::ConnectorActionRequest>,
+) -> Result<Json<mimir_api_types::ActionResultResponse>, Response> {
+    let action = mimir_connectors::ConnectorAction {
+        kind: body.kind,
+        payload: body.payload,
+    };
+    let result = state
+        .connector_supervisor
+        .act(id, action)
+        .await
+        .map_err(error::act_error)?;
+    Ok(Json(mimir_api_types::ActionResultResponse {
+        success: result.success,
+        native_id: result.native_id,
+        message: result.message,
+    }))
+}
+
+/// `POST /connectors/{id}/forget` — cascade-forget a connector's facts, secret,
+/// and row.
+///
+/// Soft-deletes (trashes) every fact sourced from the connector, deletes its
+/// stored credential, then deletes the connector row. Unlike
+/// [`connector_remove_handler`] (which detaches provenance so facts survive),
+/// this removes the connector's facts entirely (recoverable from trash).
+///
+/// The cascade is serialised per connector via the supervisor's lifecycle
+/// lock, so a concurrent `resume` cannot re-spawn the runner mid-cascade. The
+/// instance is first marked `Paused` (with `last_error = "forget in
+/// progress"`) so an aborted cascade leaves a state a retry can reason about;
+/// the secret is deleted before the irreversible fact trash, so a
+/// credential-deletion failure aborts with nothing destroyed. If a later step
+/// fails (fact trash or row deletion), the residual state is a `Paused`,
+/// credential-less row whose facts may already be trashed — retrying the
+/// cascade is idempotent and self-heals.
+pub async fn connector_forget_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i32>,
+) -> Result<Json<mimir_api_types::ForgetConnectorResponse>, Response> {
+    // Verify the connector exists (clean 404 before any mutation).
+    let row = state
+        .knowledge_graph
+        .get_connector(id)
+        .await
+        .map_err(error::knowledge_error)?
+        .ok_or_else(|| error::not_found("connector not found"))?;
+
+    // Serialise the whole cascade against lifecycle mutations (resume) for
+    // this instance, so a concurrent re-spawn cannot sync against a row that
+    // is about to be deleted.
+    let _guard = state.connector_supervisor.lifecycle_lock(id).await;
+
+    // Mark the instance Paused before the cascade so a concurrent `resume`
+    // observes a non-active row, and so an aborted cascade leaves the
+    // connector in a state a retry can reason about.
+    state
+        .knowledge_graph
+        .set_connector_status(
+            id,
+            mimir_knowledge::models::enums::ConnectorStatus::Paused,
+            Some(Some("forget in progress".to_string())),
+        )
+        .await
+        .map_err(error::knowledge_error)?;
+
+    // Stop the runner and run the connector's local forget() cleanup
+    // (watcher teardown, in-memory buffers, connector-owned credentials).
+    state
+        .connector_supervisor
+        .forget(id)
+        .await
+        .map_err(error::supervisor_error)?;
+
+    // Delete the connector's stored credentials (idempotent) before the
+    // irreversible fact trash: a failure here aborts the request with nothing
+    // destroyed, so the caller can retry cleanly. Connectors whose forget()
+    // deletes their own secret (Calendar/Email) make this a no-op.
+    if let Some(secret_store) = state.connector_supervisor.secret_store() {
+        if let Err(err) = secret_store.delete(&row.slug).await {
+            tracing::error!(
+                connector_id = id,
+                slug = %row.slug,
+                error = %err,
+                "failed to delete connector secret; no facts were forgotten"
+            );
+            return Err(error::internal("failed to delete connector credentials"));
+        }
+    }
+
+    // Trash every fact sourced from this connector instance.
+    let result = state
+        .knowledge_graph
+        .forget_connector_facts(id, mimir_knowledge::models::audit_log::ChangedBy::User)
+        .await
+        .map_err(error::knowledge_error)?;
+
+    // Delete the connector row (nulls the FK cascade already handled by the
+    // fact trash, then removes the row).
+    state
+        .knowledge_graph
+        .delete_connector(id)
+        .await
+        .map_err(error::knowledge_error)?;
+
+    Ok(Json(mimir_api_types::ForgetConnectorResponse {
+        forgotten_count: result.forgotten_count,
+    }))
 }

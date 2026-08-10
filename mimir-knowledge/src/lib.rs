@@ -1785,6 +1785,27 @@ impl KnowledgeGraph {
         Ok(result)
     }
 
+    /// Soft-delete (trash) every fact sourced from a single connector instance
+    /// (Phase 3 A2 / #203).
+    ///
+    /// The connector `forget` cascade: trashes all facts whose `sources` row
+    /// carries `connector_instance_id = id` via the shared trash machinery, so
+    /// they are recoverable from trash (30-day expiry). `sources` rows are
+    /// cascade-deleted with their facts; the connector row and its stored
+    /// secret are removed separately by the caller. Returns how many facts
+    /// were trashed.
+    pub async fn forget_connector_facts(
+        &self,
+        instance_id: i32,
+        changed_by: models::audit_log::ChangedBy,
+    ) -> Result<forget::ForgetResult, KnowledgeError> {
+        let result =
+            forget::forget_facts_for_connector(&self.pool, instance_id, changed_by, self.now())
+                .await?;
+        self.set_condensation_dirty();
+        Ok(result)
+    }
+
     /// Restore a single fact from trash.
     pub async fn restore_fact(
         &self,

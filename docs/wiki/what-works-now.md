@@ -1,105 +1,8 @@
 # What Works in Mimir Today
 
 > **Last updated:** 2026-08-11
-> **Version:** 0.96.1
-> v0.96.0 lands the Phase 3 oauth2/reqwest reconciliation (issue #240): OAuth token refresh for the Calendar and Email connectors now runs on the vetted `oauth2` crate (5.0.0) with `default-features = false`, speaking HTTP through a custom `OAuthHttpClient` adapter over the workspace's single reqwest 0.13 client — the crate's reqwest 0.12 dependency never enters the tree, so there is still exactly one HTTP/TLS stack. The adapter never follows redirects (a credential POST cannot be bounced to another host), the HTTPS/loopback token-endpoint gate is preserved, provider response errors surface only parsed `error`/`error_description` fields (never the raw response body), and network failures include the underlying reqwest error detail. Refresh-token rotation, expiry skew handling, and the persisted `SecretBundle` shape are unchanged, and the shared refresh path is now DRY-extracted (`oauth::resolve_access_token`) so Calendar and Email no longer duplicate the refresh decision logic. The interactive OAuth PKCE login that obtains the *first* token remains A4 (#205) and now builds directly on this adapter.
-> v0.95.0 adds the `mimir connector` CLI (Phase 3 A3 / issue #204): ten subcommands plumbing the A1/A2 daemon routes through `mimir-client` — `add` (registers in `Setup`, merges `--config-json` with positional `key=value` config pairs, and prompts for/ingests non-OAuth credentials via `inquire`), `auth` (complete or refresh credentials on an existing instance), `list`, `status [slug]`, `sync <slug> [--full|--since]` (human durations like `7d`), `pause`, `resume`, `remove` (detach provenance), `forget` (cascade-trash facts, recoverable 30 days), and `act` (write-back dispatch with an inline or `--json-file` payload). The CLI resolves slugs client-side, renders `--json` output everywhere sensible, adds activation hints for the `CONNECTOR_NOT_RUNNING` 409, and ships an e2e cycle test (add → status → auth → resume → sync → pause → resume → remove, then add → forget on a second instance) against an in-process daemon with the mock connector (new `mock-connector` daemon feature). Shared CLI helpers (`exit_with_error`, `make_client`, `print_json`) are extracted to `mimir/src/cli_util.rs` and reused by `kb` (DRY). See `docs/cli.md` and `docs/wiki/cli-commands.md` for the command reference; the OAuth PKCE loopback flow remains A4 (#205).
-> v0.94.0 is a code-organisation release: oversized files (up to four thousand lines) are split into single-concern modules across every crate (`mimir-connectors`, `mimir-core`, `mimir-knowledge`, `mimir-server`, `mimir-client`, `mimir-api-types`), integration suites are split per feature with shared fixtures, documentation maps the new module layout (`docs/refactoring-module-split.md`, `docs/wiki/module-split.md`), and clippy is zero-warning. No public API, configuration, CLI, or HTTP behaviour changed.
-> **Release summary:** Phase 2 knowledge-graph work is live — core relationship ontology seeded category-first (Issue #135): predicate aliases for verb canonicalization plus `category_aliases` and category-subtree retrieval for grouping/multi-tag precision; relationship type aliases are the single source of truth for predicate resolution (Issue #133), Fact Ranking & Selection Engine (#108), LLM Condensation Pipeline & Regeneration Triggers (#109), live memory wired into the daemon, the `mimir-knowledge` forgetting system, Agentic Pre-Response Context Retrieval (#128), the Librarian Agent (#130), LLM-orchestrated learning via the `remember` tool (#137), a hardened system prompt that enforces the agentic contract — `retrieve_context` dispatch, no fact invention, and `remember` encouragement (#138), and a redesigned Librarian extraction prompt that injects the same core-facts block as the core agent and learns only from user-labelled messages (#139), and the full pending sensitive-fact confirmation lifecycle — HTTP routes, CLI commands, and a daily auto-cleanup job (#141). v0.57.0 adds the events & reminders subsystem — a lifecycle + recurrence overlay on facts that surfaces upcoming birthdays, appointments, deadlines, and tasks in the Upcoming memory section, with a deterministic scan job and the deprecation of `entity_dates` (#74).
-> v0.92.0 adds connector action routes + OAuth token ingest + the forget cascade (Phase 3 A2 / #203): six new Axum routes round-trip via `mimir-client` — `POST /connectors/{id}/sync` (manual sync trigger, F9; maps the supervisor's `TriggerOutcome` to a `status`-tagged `SyncConnectorResponse`), `POST /connectors/{id}/pause` and `/resume` (lifecycle control: `pause` stops the runner and flips `Paused`; `resume` re-spawns it and flips `Active`), `POST /connectors/{id}/tokens` (ingest a `SecretBundle` keyed by slug via the shared `SecretStore` and flip `auth_state` to `authenticated`), `POST /connectors/{id}/actions` (dispatch `{ kind, payload }` to the connector's `act()` write-back, e.g. the Calendar connector's `create_event`/`update_event`/`delete_event`), and `POST /connectors/{id}/forget` (the loopback-only cascade: mark the instance `Paused` → stop the runner and run the connector's local `forget()` cleanup → delete the slug-keyed secret → trash every fact sourced from the connector via the existing trash machinery → delete the row). Unlike `DELETE /connectors/{id}` (A1, which detaches provenance so facts survive), `forget` removes the connector's facts entirely (recoverable from trash for 30 days). New supervisor methods: `ConnectorSupervisor::start(id)` (re-spawn a single connector, the foundation for resume and future reconfig), `pause(id)`, `resume(id)`, and `act(id, action)` — each `ConnectorHandle` now retains the live `Arc<dyn Connector>` so write-backs dispatch to the authenticated instance, with on-demand re-instantiation whenever no live runner exists — not only for paused connectors, but also after a runner exits naturally (auth expiry, circuit-breaker termination, or panic), so refreshed credentials are picked up on the next dispatch. New KG facade: `KnowledgeGraph::forget_connector_facts(id)`. New wire types in `mimir-api-types`: `SyncConnectorRequest`/`SyncConnectorResponse`, `IngestTokenRequest` (a `kind`-tagged mirror of `SecretBundle`, decoupled from `mimir-connectors`), `ConnectorActionRequest`/`ActionResultResponse`, `ForgetConnectorResponse`. The `MockConnector` gains an `act_kind` config so the action-dispatch path is testable. A `ConnectorError` → HTTP mapping (`UnsupportedAction`/`Config`→400, auth→401, `Network`→502) plus `SupervisorError`/`ActError`/`TriggerError`/`SecretError` mappings land in the server error layer. The `mimir connector …` CLI is A3 (#204); the OAuth PKCE loopback flow is A4 (#205). No new dependencies. This is a `mimir-server` routes module + `mimir-connectors` supervisor + `mimir-knowledge` facade + `mimir-api-types` wire types, with unit + integration tests.
-> v0.88.0 adds Email LLM extraction (Phase 3 C7 / #201): the IMAP Email connector's `extract()` cascade gains a third, last-resort layer for unstructured prose that deterministic layers cannot read — a dentist's "see you Tuesday 3pm" with no `.ics`, a flight confirmation in prose, a bank statement, a job offer. Layer 3 runs only for messages that layers 1 (iMIP invites / #200) and 2 (`schema.org` JSON-LD / #249) produced no facts for, so a deterministic layer that already read the email is never re-processed by the LLM. The LLM must call a strict `extract_email_facts` tool (a closed JSON Schema) and Rust validates every field against the typed enums before building `NormalizedFact`s — entity types, temporal bounds, an `event_type` hint (mapped against the `EventType` enum, dropped if unrecognised, never trusted raw), recurrence, and the location overlay — reusing the shared `mimir-knowledge::extract` parsing helpers (DRY with the conversational `remember` path). User-scoped subjects are canonicalised to the injected `user_identity` so they resolve to the canonical user entity (matching the C4/#198 and #249 layers). All facts carry `source_type = Connector`, `extraction_method = LlmExtraction`, and the email's `UIDVALIDITY`-qualified IMAP UID as `raw_reference`. Per the project rule "logic in Rust, not prompts", obvious bulk-marketing mail is skipped by a deterministic Rust pre-filter (`is_likely_spam`) before any LLM call: a message is skipped when it carries a `List-Unsubscribe` header or is sent from a pure marketing platform (mailchimp/hubspot/etc.); general-purpose ESPs that also deliver transactional mail (sendgrid/mailgun/postmark/amazonses) are kept unless the unsubscribe signal is present, so bookings and receipts routed through them still reach the LLM. The LLM only does fact extraction and returns an empty `facts` array for no-fact prose; a retryable LLM failure (queue full, network, provider, parse error) is propagated as a `ConnectorError` and the raw email is re-staged so the next extraction cycle retries it (a durable terminal-failure policy is follow-up work). Every LLM call routes through a new `LlmBackend::system_chat_message` trait method (the shared `LlmWorkerPool`'s **system queue**, priority below user chat), so a one-call-at-a-time provider is never starved by an extraction burst and a queued user chat preempts a waiting connector call (#201 acceptance). The system-queue path now carries tool schemas (previously the system queue dropped them). This change also resolves #234: `ExtractionMethod` moves onto `NormalizedFact` as a per-fact override (defaulting to the batch `Provenance`'s method), so a single mixed-method `extract()` batch records the right method per fact in `sources.extraction_method_id` — fixing the supervisor's hardcoded `StructuredParse`. The `Arc<dyn LlmBackend>` is injected into the connector via `ConnectorContext::llm_backend` (+ `ConnectorSupervisor::with_llm_backend`); daemon wiring is #202.
-> v0.89.0 adds the connector management server surface (Phase 3 A1 / #202): the daemon now constructs and owns the `ConnectorRegistry` and `ConnectorSupervisor` at startup — registering the built-in Photos (`local`), Calendar (`caldav`), and Email (`imap`) factories behind forwarded cargo features, wiring the supervisor with the shared geocoder, `FileSecretStore`, the configured user identity, and the shared `Arc<dyn LlmBackend>` (so the Email prose-extraction layer's C7 system-queue path is live), restoring `Active` connector runners on startup, and draining them on graceful shutdown. Four Axum routes round-trip via `mimir-client`: `GET /connectors`, `POST /connectors` (add-only, rejects an existing slug with 409 and an unregistered `(type, backend)` with 400, creates the instance in `Setup`), `GET /connectors/{id}`, and `DELETE /connectors/{id}` (stops the runner via a new `ConnectorSupervisor::stop(id)` and deletes the row, nulling the `sources.connector_instance_id` FK so ingested facts survive with degraded provenance; the full forget cascade is A2 / #203). Status responses carry a derived `item_count` (computed from the `sources` table on demand via a new `KnowledgeGraph::count_sources_for_connector`). Activation, pause/resume, OAuth token ingest, the `forget` cascade, and write-back actions landed in A2 / #203 (v0.92.0); the `mimir connector` CLI and OAuth PKCE flow are A3–A4. This is a `mimir-server` routes module (`routes/connectors.rs`) plus wire types in `mimir-api-types` and client methods in `mimir-client`, with integration tests covering the add/list/show/remove round-trip and the 409/400 rejection paths. daemon wiring is #202. No new dependencies (reuses `mimir-core::llm` and `mimir-knowledge::extract`); tests use `mimir-core`'s `mock-llm` feature. This is a library component in `mimir-connectors` (`email/llm.rs`) with unit tests (spam filter, subject canonicalisation, HTML stripping, no-fact path, typed dentist-appointment fact, unrecognised event_type dropped, invalid subject_type dropped, unparseable output tolerated) and cascade tests (layer 3 skipped when no backend / not invoked when a deterministic layer already produced facts / extracts prose when layers 1–2 produced none / skips spam), plus a `MockLlmClient` that records `system_chat_message` calls separately from user-queue calls.
-> v0.85.0 adds Email structured extraction (Phase 3 C6 / #200): the IMAP Email connector's `extract()` now runs a deterministic extraction cascade over staged RFC 822 messages and, today, turns iMIP calendar invites (`text/calendar; method=REQUEST|REPLY`) into the same appointment fact cluster the Calendar connector emits — `user has_event <event>` typed `EventType::Appointment` (recurrence from `RRULE` `FREQ`, temporal bounds from `DTSTART`/`DTEND`), plus `<event> located_in <place>` and `<attendee> attending <event>` — reusing a new shared `mimir-connectors::ical` module (the Calendar connector's VEVENT parsing + fact cluster, now DRY across both backends). The email is treated as provenance (its IMAP UID is each fact's `raw_reference`), not the fact: no per-email communication facts and no `Person` entities auto-created from `From`/`To` headers, so marketing/spam produces no junk facts; a plain prose email with no `text/calendar` part produces nothing. The connector now authors user-scoped facts against the injected canonical user identity (`ConnectorContext::user_identity`), matching the Calendar connector. Free-text prose extraction (flights, bookings, confirmations) is C7 / #201.
-> v0.86.0 adds Email schema.org JSON-LD deterministic extraction (Phase 3, #249): the IMAP Email connector's `extract()` cascade gains a second deterministic layer that scans `text/html` MIME parts for `<script type="application/ld+json">` blocks and extracts typed fact clusters for recognised `schema.org` types — `FlightReservation` (`user has_flight <flight>` typed `Appointment`, plus `departs_from`/`arrives_at`/`operated_by`), `LodgingReservation` (`has_booking`, `Appointment`, `located_in`), `EventReservation` (`has_event`, `Appointment`, `located_in`), `Order` (`has_order`, plus `purchased_from`), `ParcelDelivery` (`has_delivery` typed `Reminder`, plus `shipped_by`/`delivered_to`), `Ticket` (`has_ticket`, plus `issued_by`), and `ReservationPackage` (flattens `subReservation` for multi-leg flights). Unrecognised types are logged and skipped, never guessed. The primary user-scoped fact is only emitted when a canonical user identity is configured; secondary facts (airports, airlines, venues, carriers, merchants) are always emitted. No LLM — pure Rust parsing (no new dependencies). This is a library component in `mimir-connectors` (`email/jsonld.rs`) with unit tests for each type, the HTML `<script>` scanner, JSON-LD structural normalization, a cascade integration test (iMIP + JSON-LD from one email), and a KB integration test (flight fact entity resolution + `Appointment` overlay + connector provenance). The shared `vevent_fact` helper in `ical.rs` is made `pub(crate)` for DRY reuse.
-> v0.86.1 addresses PR #257 review feedback on the JSON-LD extraction layer: the primary `Appointment`-typed reservation facts (flight/lodging/event) now require a parseable start time before emission (matching the iMIP layer's `DTSTART` rule, so no appointment overlay is created without a `valid_from`); `LodgingReservation` no longer emits a self-referential `located_in` when the resolved location equals the booking name; identifier fields (`orderNumber`/`trackingNumber`/`ticketNumber`/`flightNumber`/`iataCode`) now accept JSON numbers, and array-wrapped values are trimmed, via a shared `scalar_string` helper; `parse_datetime` accepts naive datetimes with fractional seconds and minute-only precision; `<script type="…">` attribute values are trimmed before the `application/ld+json` comparison (HTML5 spec compliance); and `mod jsonld` is narrowed to `pub(crate)`. A known limitation — iMIP + JSON-LD both firing on one email can produce duplicate `Event` entities — is now documented inline. New unit tests cover each change.
-> v0.84.2 addresses PR #248 review feedback on the Calendar connector (C4 / #198): recurring `has_event` facts no longer carry the first instance's `DTEND` as `valid_until` (which would expire a weekly standup minutes after its first occurrence) — `valid_until` is left unset when `RRULE` `FREQ` is present, so current-facts reads and supersession keep the recurring fact live; CalDAV write-back (`create_event`/`update_event`/`delete_event`) now validates the payload `href` against the configured `calendar_url` origin (scheme, host, port, and calendar-collection path) before issuing the request, so a caller-supplied URL cannot redirect the stored credentials to another host or an unrelated resource on the same host; `TZID`-qualified datetimes at a DST autumn-fold prefer the earliest offset over the naive-as-UTC fallback; and the canonical user identity is stored trimmed so a padded `[identity] name` cannot create a duplicate person entity. Docs align with the new fact cardinality and the C4 status. This is a library component in `mimir-connectors`.
-> v0.84.1 fixes the Calendar secondary-fact overlay (review follow-up, #198): `event_to_facts` no longer sets `valid_from`/`valid_until` on the secondary `located_in` and `attending` facts, which previously inherited the event's `DTSTART`/`DTEND` and spawned a spurious `Reminder` events-subsystem overlay; the primary `has_event` fact remains the sole overlay source.
-> v0.84.0 adds Calendar event → knowledge-graph extraction and CalDAV write-back (Phase 3 C4 / #198): the CalDAV Calendar connector's `extract()` now drains staged VEVENTs into a cluster of `NormalizedFact`s through the shared `normalize_and_insert` pipeline — a primary `user has_event <event>` (typed `EventType::Appointment`, recurrence from `RRULE` `FREQ`), `<event> located_in <place>`, and `<attendee> attending <event>` — so every subject/object resolves to an entity via the full F5 chain and future-dated / recurring events surface in the user's "Upcoming" memory section (#74). The connector authors facts as the canonical user identity (the `config.toml` `[identity] name`, injected via the shared `ConnectorContext::user_identity`), matching the daemon's `user_entity_id` rather than carrying a disconnected owner-name. Dates are parsed to UTC at staging time, including `TZID`-qualified values resolved via `chrono-tz`; only `RRULE` `FREQ` maps to the KB's coarse `RecurrenceType`. C4 also adds the only connector write-back: `act()` creates/updates/deletes remote events via CalDAV `PUT`/`DELETE` (`If-None-Match` / `If-Match`, idempotent `DELETE` on 404), building VEVENTs with the `icalendar` builder. Server-side deletion → KB fact lifecycle is a follow-up (the extractor only yields facts). This is a library component with unit + integration tests (parsing, recurrence/date mapping, extraction shape, write-back against a mock CalDAV server, and a full sync → KB → "Upcoming" round-trip). New deps: `chrono-tz` 0.10 and `uuid` v1 (already in tree); `event_type: Option<EventType>` hint added to `NormalizedFact`.
-> v0.83.0 adds the IMAP email connector (Phase 3 C5 / #199): the third concrete connector backend (after Photos and Calendar), in `mimir-connectors` (feature `gmail`). An `async-imap` 0.11.3 client (built `runtime-tokio`, no default `async-std`) speaks IMAP over a hand-rolled TCP + `tokio-rustls` handshake (the workspace keeps a single rustls TLS stack instead of async-imap's `connect()` / `async-native-tls`): `LOGIN` (app password) and `AUTHENTICATE XOAUTH2` (Google / Microsoft OAuth, with the access token refreshed via a shared hand-rolled token-endpoint POST — DRY with the Calendar connector, avoiding the reqwest-0.12-duplicating `oauth2` crate). It runs in `Push` (IMAP IDLE) mode when the server advertises IDLE and falls back to `Polling` otherwise — auto-detected via a CAPABILITY probe in `authenticate`/`health`. Incremental sync is by UID with a UIDVALIDITY-safe `<uid_validity>:<last_uid>` cursor (a mismatch on `EXAMINE` triggers a full re-fetch, so a recreated mailbox never silently gaps/duplicates), using `BODY.PEEK[]` so mail is not marked seen. The connector is transport-only: it logs in, watches for new mail, and stages raw RFC 822 messages; `extract()` returns no facts yet. Mail parsing + structured fact extraction (headers/dates/ contacts) is C6 / #200; LLM extraction (flights/bookings) is C7 / #201. The interactive OAuth PKCE login is A4 / #205; daemon `AppState` wiring (A1 / #202) and the `mimir connector …` CLI (A3 / #204) have since landed. This is a library component in `mimir-connectors` with unit tests plus a fake-IMAP integration suite (login, XOAUTH2 SASL, IDLE push, polling, incremental/no-op/full sync, UIDVALIDITY reset) over a `duplex` pair — no TLS, no live account. No new downloads (all deps already in the tree via reqwest/async-imap).
-> v0.82.0 adds the CalDAV calendar connector (Phase 3 C3 / #197): the
-> second concrete connector backend (after Photos), in `mimir-connectors`
-> (feature `calendar`). A `CalDavClient` speaks CalDAV over the existing
-> `reqwest` 0.13 — PROPFIND (Depth 0 `resourcetype`) for calendar/health
-> verification and a `sync-collection` REPORT (RFC 6578) for event sync,
-> requesting `<cal:calendar-data/>` inline so changed VEVENTs and a new
-> `sync-token` arrive in one round trip. Omitting the sync-token does a full
-> sync and yields the initial token; including it does an incremental sync
-> (no full re-fetch), so the persisted sync-token is the connector's
-> incremental cursor. `icalendar` parses each VEVENT (UID/summary/DTSTART/
-> DTEND/location/status/RRULE) into a staged `RawCalDavEvent`; `roxmltree`
-> parses the WebDAV XML by local tag name (namespace-prefix tolerant). Auth is
-> an app password (HTTP Basic — iCloud/Fastmail/Nextcloud) or an OAuth bearer
-> token (Google) that the connector **refreshes** when expired (within a 60 s
-> skew) and persists back to the `SecretStore` — the interactive PKCE login
-> that *obtains* the first token is A4 / #205. This is the first backend that
-> needs credentials, so the framework `ConnectorContext` gained a
-> `secret_store` field and `ConnectorSupervisor::with_secret_store` (a breaking
-> internal construction-context change, allowed by policy). `extract()`
-> returns no facts yet — C3 is transport-only; C4 / #198 does event → KB fact
-> extraction + events-subsystem (#74) integration + write-back. This is a
-> library component in `mimir-connectors` with unit + integration tests against
-> a `wiremock` mock CalDAV server. It is available infrastructure; the daemon
-> `AppState` wiring and `mimir connector …` CLI land in A1–A3.
-
-> v0.78.0 adds the entity-locations write path (Phase 3 S3 / #193): a "where" fact (e.g. "I live at 10 Downing St") carries a typed `NormalizedLocation` overlay that `normalize_and_insert` turns into an `entity_locations` row for the resolved subject entity. The missing geo half is filled via the injected `Geocoder` — address-only is forward-geocoded to coords, coords-only is reverse-geocoded to a place name — and a move (home 2020–2023, home 2023–present) closes the prior open-ended location of the same type at the new start date. Rows link back to their source fact via a new nullable `source_fact_id` FK (migration `044`). The `Geocoder` is stored on `KnowledgeGraph` and injected by the daemon (Nominatim default); geocoder failures are logged and tolerated. The conversational `remember` tool schema gained an optional `location` object; connectors fill the same overlay field. Proximity queries (`find_nearby`) and the sensitive-fact confirmation path are follow-ups.
-> v0.79.0 adds the entity-locations proximity query (Phase 3 S4 / #194):
-> `KnowledgeGraph::find_nearby(lat, lon, radius_km, at)` returns every
-> remembered location within a radius of a point, sorted nearest-first, each
-> with its exact great-circle distance. A coarse SQLite bounding-box pre-filter
-> (backed by a new composite `latitude, longitude` index, migration `045`) is
-> followed by an exact Haversine post-filter computed in pure Rust
-> (`mimir-knowledge::geo` — no external `geo` crate). An optional `at` instant
-> scopes results to locations valid at that time. This closes the query half of
-> #65 (the write half landed in #193). Locations without coordinates are
-> skipped; edge-of-box over-inclusions are dropped by the exact distance.
-
-> v0.80.0 adds the first concrete connector backend — the local-filesystem
-> Photos connector (Phase 3 C1 / #195): a read-only, push-mode, no-network
-> connector in `mimir-connectors` (feature `photos`) that watches a configured
-> directory recursively with `notify` (debounced ~2s), extracts EXIF GPS +
-> datetime with `kamadak-exif` (JPEG/TIFF/HEIF/PNG/WebP), and emits one
-> `took_photo` fact per photo (C1) / `took_photo_at <place>` fact (C2 / #196,
-> v0.81.0) through the shared `normalize_and_insert` pipeline. C2
-> reverse-geocodes the EXIF GPS into a locality-level place name (reusing the
-> shared `Geocoder` injected via a new `ConnectorContext` threaded factory →
-> registry → supervisor) so the place is a `Place` object entity and photos at
-> the same spot corroborate into one open-ended fact (+0.05/source, capped
-> 0.95; base 0.80). A coord-dedup cache (~111 m buckets) bounds geocode calls
-> to one per shooting spot, and transient errors aren't cached. Two
-> `entity_locations` rows are written: the owner's `Visited` row (coords +
-> place name) and a new idempotent `Geographic` row (migration `046`) anchoring
-> the place entity's own coordinates, so `find_nearby` resolves places by
-> where they are. When no place resolves, the photo degrades to the C1
-> coords-only `took_photo` shape so no data is lost. A per-file mtime/inode
-> incremental cursor persists across restarts so unchanged photos are never
-> re-scanned; the supervisor injects the persisted `sync_cursor` into a
-> connector's `config_json` as `__cursor`. This is a library component; the
-> daemon `AppState` wiring and `mimir connector …` CLI land in A1–A3.
-> v0.81.0 adds Photos connector GPS → place extraction (Phase 3 C2 / #196): the local-filesystem Photos connector (C1 / #195) now reverse-geocodes each photo's EXIF GPS into a locality-level place name via the shared `Geocoder` (injected through a new `ConnectorContext` threaded factory → registry → supervisor), emitting `owner took_photo_at <place>` facts whose place is a `Place` object entity. Photos at the same place corroborate into one open-ended fact (+0.05/source, capped 0.95; base confidence 0.80), so the knowledge graph grows with distinct places visited, not photo count. A coord-dedup cache (~111 m buckets) bounds geocode calls to one per shooting spot; transient errors aren't cached. Two `entity_locations` rows are written per place fact: the owner's `Visited` row (coords + place name) and a new idempotent `Geographic` row (migration `046`, `LocationType::Geographic = 6`) anchoring the place entity's own coordinates, so `find_nearby` resolves places by where they are. `GeocodeResult` gained a `short_name` field (the most specific locality: city → town → village → … → first display-name segment). When no place resolves (no geocoder / no match / transient error), the photo degrades to the C1 coords-only `took_photo <rel_path>` shape so no data is lost. This is a library component with unit + integration tests; the daemon `AppState` wiring (A1) and `mimir connector …` CLI (A3) land in later Phase 3 issues.
-> 
-
-> v0.77.0 adds the geocoder service (Phase 3 S1 / #191): a pluggable `Geocoder` trait (forward address → coords, reverse lat/lon → place) with an OSM Nominatim default backend. The trait and `GeocodeResult`/`GeocodeError` types live in `mimir-core` (so the Location Search tool #98 — a `mimir-core` tool — can name it; `mimir-core` cannot depend on `mimir-connectors`), and the `NominatimGeocoder` backend lives in `mimir-connectors`. Throttling reuses the F12 `RateLimiter` (`RateLimitConfig::nominatim`, ≤ 1 req/s) and transient 429/502/503/504 + transport failures retry via `retry_with_backoff` honouring a `Retry-After`; quota exhaustion is non-retryable. The endpoint, descriptive `User-Agent` (Nominatim policy), optional contact email, rate-limit policy, and retry budget are all configurable (self-hosted Nominatim is supported for heavy use). A successful "no match" yields `Ok(None)`; transport/decode failures yield `Err(GeocodeError)` and are logged — they never panic. Results carry lat/lon/country/`country_code`/alternative names. This is a library component with `wiremock`-backed integration tests; wiring into the Photos connector (C2), the entity-locations write path (S3/#65), and the Location Search tool (#98) lands in later Phase 3 issues.
-
-> v0.72.0 adds shared rate-limiting + retry/backoff primitives for network connectors (Phase 3 F12 / #189): a `RateLimitConfig` (`requests_per_second` / `burst_size` / optional `daily_quota` / `backoff_strategy`) plus a `RateLimiter` (a vetted, `unsafe`-free `governor` GCRA token bucket) and a `retry_with_backoff` helper. Connectors will route their outbound HTTP/IMAP/CalDAV API calls through one per-instance limiter for uniform throttling, an optional rolling 24h daily cap (which returns a non-blocking `QuotaExhausted` so the supervisor can pause gracefully instead of parking a task), and 429/502/503/504 retry with exponential/linear/fixed backoff + jitter honouring a server `Retry-After`. Connector **LLM** calls are exempt (decision D′) — those route through the shared `LlmWorkerPool` system queue. The config is `serde`-serialisable (human-readable durations) so it embeds in each connector's `config_json`; a `nominatim()` preset enforces the OSM Nominatim ≤ 1 req/s policy. This is a library component in `mimir-connectors` with unit + integration tests. It is available infrastructure now; connectors will route their outbound calls through it as their backends land (geocoder #191, Photos/Calendar/Email backends in later Phase 3 issues), and the rolling daily-quota window can be snapshotted and restored across restarts so a relaunch cannot bypass a provider's 24-hour quota.
-
-> v0.75.0 adds the configurable, always-compiled mock connector test harness (Phase 3 F13 / #190): an in-memory connector (`MockConnector` + `MockConnectorFactory` + `MockFactConfig` + `MockSyncRecorder`) whose behaviour is driven entirely by its `config_json` — it emits canned `NormalizedFact`s on a configurable cadence in both `Polling` and `Push` modes, with configurable health/auth state, failure/panic injection, an optional `batch_size` for incremental sync, and sync-options observation for concurrency tests. `MockConnector::default()` preserves the legacy no-op identity so existing trait tests keep passing. It is the T1 sync→extract→insert→query vehicle: the real `ConnectorSupervisor` + `KnowledgeGraph` ingest a mock's canned facts end-to-end with connector provenance (`SourceType::Connector`, `connector_instance_id`, `raw_reference`, `ExtractionMethod::StructuredParse`), without any real service. The previous private `TestConnector` in the supervisor lifecycle tests was removed in favour of the shared `MockConnector` (DRY). No new dependencies. This is a library component in `mimir-connectors` with unit + integration tests.
-
-> v0.71.0 adds the connector secret store (Phase 3 F10 / #187): a single `SecretStore` trait backs every connector auth kind — one `SecretBundle` enum covers OAuth 2.0 (`access_token` + optional `refresh_token` + optional `expires_at`), API tokens, and app passwords, keyed by connector slug. The V1 default `FileSecretStore` persists one JSON file per connector under `~/.local/share/mimir/secrets/<slug>.json`, file mode `0600`, directory `0700`, plaintext at rest (consistent with the plaintext LLM API key in `config.toml` and the home-directory trust boundary; at-rest encryption deferred). Loads *fail closed*: a secret file or directory with any group/other permission bits set is refused rather than read, writes are atomic (temp + rename), and slugs are validated against `[A-Za-z0-9_-]{1,128}` to block path traversal. An `InMemorySecretStore` is included as a test/helper backend. The end-to-end `connector remove` secret wipe is the consumer's job (server/CLI routes, #202/#204/#203); this issue delivers the `delete(slug)` capability.
-
-> v0.60.0 adds corroboration detection (#79): when a new non-explicit fact covers the same claim as an existing Active or pending_confirmation fact (same subject + predicate + object, temporally overlapping), Mimir adds a source to the existing fact instead of creating a duplicate, and boosts its confidence +0.05 per independent source (capped at 0.95; explicit and inferred facts excluded). Re-statements from the same source are a no-op, and the confidence change cascades comprehensively to inferred children.
-
-> v0.65.0 adds the shared `normalize_and_insert` ingestion boundary (Phase 3 F4 / #181): the resolve → confidence → sensitivity-gate → insert orchestration is extracted from the conversational `remember` path into one reusable function in `mimir-knowledge::normalize`. Both chat learning and (future) service connectors funnel through it via a provenance-annotated `NormalizedFact` type and a batch-level `Provenance`, so connector-sourced facts get identical confidence scoring, corroboration, supersession, and sensitivity gating — including cross-connector corroboration, where a Gmail flight fact and a Calendar event describing the same trip merge into one knowledge-graph fact with boosted confidence instead of duplicating.
-
-> v0.66.0 adds the full entity-resolution chain (Phase 3 F5 / #182): `resolve_entity` now runs exact name → alias → FTS5 fuzzy (score ≥ 0.9) → create new, restricted to the requested entity type. A short token-overlap query like "John" resolves to the canonical "John Smith" person, while a cross-type fuzzy hit ("Apple" as a concept vs "Apple Inc" the organization) is dropped so a new entity is created instead of a wrong merge. The chain is shared by chat extraction and connectors; alias learning stays explicit via `preferred_name`.
-
-> v0.67.0 defines the runtime `Connector` trait and its data types (Phase 3 F6 / #183): the async, object-safe `Connector` interface every service-ingestion worker implements — `sync` (fetch raw items) → `extract` (produce typed `NormalizedFact`s), plus `authenticate`, `health`, optional `act` write-back, and `forget`. Ingestion is two-step and DB-free: the connector fetches and parses, and the supervisor (F8) will call the shared `normalize_and_insert` pipeline. New types include `ConnectorMode` (polling vs push), `SyncOptions`/`SyncOutcome`, `HealthStatus` (a transient probe, renamed to disambiguate from the persisted lifecycle enums), `ConnectorAction`/`ActionResult`, and `ConnectorError`. No backends sync yet.
-
-> v0.68.0 adds the `ConnectorRegistry` and multi-backend factory dispatch (Phase 3 F7 / #184): the registry maps each `(connector_type, backend)` pair — e.g. `(Email, imap)` or `(Calendar, caldav)` — to a `ConnectorFactory` that constructs the right implementation from a connector's stored config. A connector *type* is the reliability/provenance axis; a *backend* is the provider implementation chosen per instance. New backends register a new factory with no schema change, many backends coexist under one type, and reliability stays per-type. A closure-backed `FnConnectorFactory` and an always-compiled `MockConnectorFactory` keep the registry exercisable under every feature combination. The supervisor, secret store, and concrete backends (Photos, CalDAV Calendar, IMAP Email) land in later Phase 3 issues.
-
-> v0.69.0 adds the `ConnectorSupervisor` supervised lifecycle (Phase 3 F8 / #185): one supervised background task per connector whose status is `Active`, centralising spawn-on-startup, restart with exponential backoff, a circuit breaker (after `max_failures` consecutive failures the connector moves to `Error` and stops auto-restarting, requiring a manual `resume`), auth-expiry pausing (`health() == AuthExpired` → `auth_state = Expired`, `status = Paused`, task exits), graceful shutdown, and cursor persistence. `Paused` / `Error` / `Setup` connectors are not auto-started. Each cycle runs `health` → `sync` → `extract` → `normalize_and_insert` (the shared ingestion boundary) in an isolated sub-task so a connector panic is caught via `JoinError::is_panic` instead of unwinding the runner; the shared shutdown `watch` channel aborts in-flight cycles, with the cursor always reflecting the last completed sync (daemon/CLI wiring that drives this channel from `mimir stop` lands in later Phase 3 issues). `yield-on-user-activity` is deferred for V1. This is a library component in `mimir-connectors` with integration tests against a configurable in-memory mock; daemon `AppState` wiring and the `mimir connector …` CLI land in later Phase 3 issues (A1–A3). The secret store and concrete backends (Photos, CalDAV Calendar, IMAP Email) land in later Phase 3 issues.
-
-> v0.70.0 adds manual sync triggering (Phase 3 F9 / #186): `ConnectorSupervisor::trigger_sync(id, SyncOptions)` (and a slug-based `trigger_sync_by_slug`) wakes a connector's runner from its polling-interval wait so a sync runs immediately with caller-supplied options — `--full` forces a non-incremental pass (cursor ignored/reset) and `since` is a relative time-window hint. A one-permit `tokio::sync::Semaphore` per connector serialises concurrent callers (overlapping triggers queue rather than launching parallel cycles), and a per-connector request channel carries the options and returns the cycle's `TriggerOutcome` (`Ok { fetched, new_cursor }`, `AuthExpired`, or `Failed`). Triggering a connector that is not running (`Paused`/`Error`/`Setup` or exited) returns `TriggerError::NotRunning`; push-mode connectors (no polling interval to preempt) return `TriggerError::PushUnsupported` — push manual sync is deferred. The runner's post-cycle wait is now a `select!` between the polling interval, a trigger, and shutdown, so a trigger preempts the interval (and backoff after a failure). This is a library component in `mimir-connectors` with integration tests against a configurable in-memory mock; daemon `AppState` wiring and the `mimir connector sync …` CLI land in later Phase 3 issues (A1–A3). The secret store and concrete backends (Photos, CalDAV Calendar, IMAP Email) land in later Phase 3 issues.
-
+> **Version:** 0.96.2
+> This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in `CHANGELOG.md`; this file deliberately does not repeat either.
 
 ---
 
@@ -127,12 +30,12 @@ Mimir is distributed as a **single binary** (`mimir`) that operates in two modes
 
 Library crates provide code organisation:
 
-- `mimir-core` — LLM client, config, memory, context, personality, tools, skills, paths
+- `mimir-core` — LLM client + worker pool, config, context, personality, tools, skills, job queue, scheduler, paths
 - `mimir-server` — Axum routes, state, middleware (library, no binary)
 - `mimir-client` — HTTP client for talking to the daemon
 - `mimir-api-types` — Shared request/response types
-- `mimir-knowledge` — SQLite knowledge graph (Phase 2; wired into daemon via live memory block and condensation pipeline)
-- [`Librarian Agent`](../../docs/librarian-agent.md) — On-demand fact-extraction agent; no longer auto-triggered every turn (see #137). Its extraction prompt now reuses the core agent's core-facts block and learns only from `[User]`-labelled messages (#139)
+- `mimir-knowledge` — SQLite knowledge graph: entities, facts, inference, memory, forgetting, optimization, librarian + retrieval agents
+- `mimir-connectors` — Connector framework: `Connector` trait, registry, supervisor, secret store, rate limiting, geocoder, and the Photos / CalDAV Calendar / IMAP Email backends
 
 ---
 
@@ -150,9 +53,7 @@ cargo build --workspace --release
 ./target/release/mimir init
 ```
 
-This creates:
-- `~/.config/mimir/config.toml`
-- `~/.local/share/mimir/` (data directory)
+This creates `~/.config/mimir/config.toml` and `~/.local/share/mimir/` (data directory), and on Linux offers to install a systemd user service.
 
 ### 3. Configure
 
@@ -196,110 +97,169 @@ If the daemon is not running, client commands will prompt you to auto-start it.
 
 ## Feature Reference
 
+Status legend: **✅ Works** — implemented and usable today; **🟡 Partial** — works but with known gaps or pending hardening; **❌ Not implemented** — tracked on the roadmap. Every pending item links to its GitHub issue.
+
 ### CLI Commands
 
 All client commands talk to the daemon over HTTP. If the daemon is down, you are prompted to start it (unless stdin is not a TTY).
 
-| Command | Status | Description |
-|---------|--------|-------------|
-| `mimir init` | ✅ Works | First-run bootstrap: creates directories, default config, and optionally installs a systemd user service |
-| `mimir start` | ✅ Works | Runs the daemon in the foreground (binds to TCP localhost) |
-| `mimir stop` | ✅ Works | Graceful shutdown via POST `/stop` |
-| `mimir ask` | ✅ Works | Single-shot query with streaming, piping, model/personality override, incognito mode, and verbose token usage |
-| `mimir chat` | ✅ Works | Interactive REPL with session history, `/history` resume, `/memory`, `/status`, `/clear`, `/help`, multi-line input, and SSE streaming |
-| `mimir status` | ✅ Works | Health check: config, LLM reachability, queue depth, memory usage |
-| `mimir memory` | ✅ Works | Prints the live condensed memory block from the knowledge graph |
-| `mimir tool list` | ✅ Works | Lists registered tools and their permissions |
-| `mimir tool enable/disable/permission` | ✅ Works | Change tool permission levels (saved to `tools.toml`) |
-| `mimir skill list/show/add/delete/enable/disable` | ✅ Works | Manage skills (built-in, user-added, and generated) |
-| `mimir kb` | ✅ Works | All `mimir kb` commands route through daemon HTTP; audit and CRUD supported via daemon |
+| Command | Status | Notes & pending work |
+|---------|--------|----------------------|
+| `mimir init` | ✅ Works | First-run bootstrap: directories, default config, identity prompt, optional systemd install. macOS launchd auto-start is unimplemented ([#285](https://github.com/BhavsarDevansh/Mimir/issues/285)). |
+| `mimir start` | ✅ Works | Foreground daemon; binds to the configured `server.bind_addr` (TCP localhost by default). |
+| `mimir stop` | ✅ Works | Graceful shutdown via `POST /stop`; verifies the daemon actually exited. |
+| `mimir ask` | ✅ Works | Single-shot query with streaming, piping, model/personality override, incognito mode, and verbose token usage. |
+| `mimir chat` | ✅ Works | Interactive REPL with `/history` resume, `/memory`, `/status`, `/clear`, `/help`, multi-line input, and SSE streaming. The session id is not persisted across restarts — resuming requires `/history` navigation ([#280](https://github.com/BhavsarDevansh/Mimir/issues/280)). |
+| `mimir status` | ✅ Works | Health check: config, LLM reachability, queue depth, memory usage. |
+| `mimir memory` | ✅ Works | Prints the live condensed memory block; `--refresh` forces regeneration. |
+| `mimir tool list` | ✅ Works | Lists registered tools and their permissions. |
+| `mimir tool enable/disable/permission` | ✅ Works | Change tool permission levels (saved to `tools.toml`). |
+| `mimir skill list/show/add/delete/enable/disable` | ✅ Works | Manage skills (built-in, user-added). Generated-skill lifecycle is not implemented ([#20](https://github.com/BhavsarDevansh/Mimir/issues/20)). |
+| `mimir kb` | ✅ Works | All `mimir kb` commands route through daemon HTTP (no direct DB access); audit, CRUD, trash, pending confirmation, categories, and optimization are supported. The old "migrate kb to daemon routes" issue [#90](https://github.com/BhavsarDevansh/Mimir/issues/90) appears resolved. |
+| `mimir connector` | 🟡 Partial | Ten subcommands (add, auth, list, status, sync, pause, resume, remove, forget, act) plumbing the daemon routes. Interactive OAuth PKCE login is missing ([#205](https://github.com/BhavsarDevansh/Mimir/issues/205)); `--password`/`--token` flags leak secrets to the process list ([#270](https://github.com/BhavsarDevansh/Mimir/issues/270)); there is no way to discover registered types/backends ([#271](https://github.com/BhavsarDevansh/Mimir/issues/271)). |
 
 ### Chat & Conversation
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Streaming responses | ✅ Works | SSE `/chat/stream` endpoint; tokens arrive in real time |
-| Non-streaming responses | ✅ Works | `/chat` endpoint; full response returned as JSON |
-| Session persistence | ✅ Works | Each conversation gets a UUID; history is SQLite-backed |
-| Session resume | ✅ Works | `/history` in `mimir chat` lets you pick and resume past sessions |
-| Context trimming | ✅ Works | Automatically trims to `max_tokens` and `max_turns` config limits |
-| Conversation history search (FTS5) | ✅ Works | `search_conversation_history` built-in tool with snippet extraction |
-| Incognito mode | ✅ Works | `--incognito` skips all persistence (no session, no memory learning) |
-| Model override | ✅ Works | `-m gpt-4o-mini` creates a cached override client |
-| Personality override | ✅ Works | `-p concise` overrides the config preset for one query |
-| Markdown rendering | ✅ Works | Terminal output adds blank lines around code fences for readability |
+| Feature | Status | Notes & pending work |
+|---------|--------|----------------------|
+| Streaming responses | ✅ Works | SSE `/chat/stream` endpoint with agentic tool loop; the old streaming bug ([#71](https://github.com/BhavsarDevansh/Mimir/issues/71)) is fixed. |
+| Non-streaming responses | ✅ Works | `/chat` endpoint; full response returned as JSON with tool-call info. |
+| Session persistence | ✅ Works | Each conversation gets a UUID; history is SQLite-backed and survives restarts. |
+| Session resume | ✅ Works | `/history` in `mimir chat` lists sessions and replays messages from the last compaction point. No auto-resume or `--session` flag ([#280](https://github.com/BhavsarDevansh/Mimir/issues/280)). |
+| Context trimming | ✅ Works | Drops oldest message pairs to `max_tokens` / `max_turns` config limits; system prompt preserved. |
+| Session compaction | ❌ Not implemented | The `sessions.summary` / `compacted_at` columns and the read path exist, but nothing ever writes them — long sessions are trimmed, never summarised ([#279](https://github.com/BhavsarDevansh/Mimir/issues/279)). |
+| Conversation history search (FTS5) | ✅ Works | `search_conversation_history` built-in tool with BM25 ranking and snippet extraction. |
+| Incognito mode | ✅ Works | `--incognito` skips all persistence; write-capable tools are blocked so no facts are stored ([#155](https://github.com/BhavsarDevansh/Mimir/issues/155)). |
+| Model override | ✅ Works | `-m gpt-4o-mini` creates a per-request cached override client. |
+| Personality override | ✅ Works | `-p concise` overrides the config preset for one query or session. |
+| Markdown rendering | ✅ Works | Terminal output adds blank lines around code fences for readability. |
 | Piped input | ✅ Works | `cat file.txt \| mimir ask …` |
-| Multi-line input | ✅ Works | Ctrl-D to submit multi-line text in interactive chat |
-| Token usage display | ✅ Works | `--verbose` shows prompt/completion/total token counts |
+| Multi-line input | ✅ Works | Trailing `\` continues input on the next line. |
+| Token usage display | ✅ Works | `--verbose` shows prompt/completion/total token counts. |
 
 ### Tools & Skills
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Tool registry | ✅ Works | Object-safe `Tool` trait; permissions per tool |
-| Skill registry | ✅ Works | Object-safe `Skill` trait with `SkillContext` |
-| Builtin tools | ✅ Works | `get_current_time`, `search_web`, `memory`, `context_summary`, etc. |
-| Builtin skills | ✅ Works | `research_synthesis`, `test_driven_development` |
-| User skills | ✅ Works | Markdown files in `~/.config/mimir/skills/` |
-| Generated skills | ✅ Works | Auto-created by the agent; tracked with metrics |
-| Metrics tracking | ✅ Works | SQLite-backed invocation counts, success rates, corrections |
+| Feature | Status | Notes & pending work |
+|---------|--------|----------------------|
+| Tool registry | ✅ Works | Object-safe `Tool` trait; per-tool permissions (auto/ask/disabled) persisted to `tools.toml`. |
+| Skill registry | ✅ Works | Object-safe `Skill` trait with `SkillContext`; built-in, user, and generated origins. |
+| Builtin tools | ✅ Works | `get_current_time` (local timezone + UTC offset, [#45](https://github.com/BhavsarDevansh/Mimir/issues/45) fixed), `echo`, `get_weather` (wttr.in, metric-only), `search_conversation_history`; knowledge-graph tools `kg_query`, `kg_related`, `kg_search`, `kg_expand_catalogue`, `kg_facts_in_catalogue`, `remember`, `retrieve_context`. |
+| Builtin skills | ✅ Works | `research_synthesis`, `test_driven_development`. |
+| User skills | ✅ Works | Markdown files in `~/.config/mimir/skills/` with YAML frontmatter. |
+| Generated skills | ❌ Not implemented | Post-session reflection loop, utility scoring, pruning, and promotion are scaffolded but unused ([#20](https://github.com/BhavsarDevansh/Mimir/issues/20)). |
+| Metrics tracking | ✅ Works | SQLite-backed invocation counts, success rates, corrections. |
+| Requested tool backlog | ❌ Not implemented | Time-to/since ([#83](https://github.com/BhavsarDevansh/Mimir/issues/83)), web search/scraper/wikipedia ([#93](https://github.com/BhavsarDevansh/Mimir/issues/93)–[#96](https://github.com/BhavsarDevansh/Mimir/issues/96)), RSS ([#97](https://github.com/BhavsarDevansh/Mimir/issues/97)), geocoding tool ([#98](https://github.com/BhavsarDevansh/Mimir/issues/98), deferred wrapper [#192](https://github.com/BhavsarDevansh/Mimir/issues/192)), distance/routing, flights, stocks, sports, weather enhancement, timezone, calculator, curl ([#99](https://github.com/BhavsarDevansh/Mimir/issues/99)–[#106](https://github.com/BhavsarDevansh/Mimir/issues/106)). |
 
 ### Memory System
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Knowledge graph memory | ✅ Works | Live condensed memory (~2,500 chars) ranked from the knowledge graph and injected into every system prompt |
-| LLM-orchestrated learning | ✅ Works | The LLM calls the `remember` tool during conversation to persist facts; learning no longer fires automatically on every turn (#137) |
-| Frozen snapshots | ✅ Works | Condensed memory is read from `system_state` once per session; changes don't affect the current chat |
-| Knowledge-graph managed | ✅ Works | Manage memory via the knowledge-graph UI/CLI or import/export tools; no memory.md file |
-| Size limit enforcement | ✅ Works | Configurable `char_limit` (default 2,500) |
+| Feature | Status | Notes & pending work |
+|---------|--------|----------------------|
+| Knowledge graph memory | ✅ Works | Live condensed memory (~2,500 chars) ranked from the knowledge graph (confidence × category × temporal boost × priority × centrality) and injected into every system prompt. |
+| LLM-orchestrated learning | ✅ Works | The LLM calls the `remember` tool during conversation; learning no longer fires automatically on every turn ([#137](https://github.com/BhavsarDevansh/Mimir/issues/137)). No safety-net fallback if the LLM never calls `remember` ([#156](https://github.com/BhavsarDevansh/Mimir/issues/156)). |
+| Frozen snapshots | ✅ Works | Condensed memory is read from `system_state` once per session; changes don't affect the current chat. |
+| Knowledge-graph managed | ✅ Works | Memory is a ranked view of the graph; no `memory.md` file. |
+| Size limit enforcement | ✅ Works | Configurable `char_limit` (default 2,500). |
+| Pinning / deprioritisation | ❌ Not implemented | No way to force a fact into (or out of) the condensed block ([#284](https://github.com/BhavsarDevansh/Mimir/issues/284)). |
 
 ### Configuration
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| TOML config file | ✅ Works | `~/.config/mimir/config.toml` |
+| Feature | Status | Notes & pending work |
+|---------|--------|----------------------|
+| TOML config file | ✅ Works | `~/.config/mimir/config.toml` with commented defaults. |
 | Environment overrides | ✅ Works | `MIMIR_LLM_API_KEY`, `MIMIR_BASE_URL`, etc. |
-| XDG path resolution | ✅ Works | Respects `XDG_CONFIG_HOME` and `XDG_DATA_HOME` |
-| Hot-reload | ✅ Works | Non-sensitive config changes apply without restarting the daemon |
-| Auto-initialisation | ✅ Works | First use creates defaults automatically |
+| XDG path resolution | ✅ Works | Respects `XDG_CONFIG_HOME` and `XDG_DATA_HOME`. |
+| Hot-reload | 🟡 Partial | Non-sensitive chat-facing settings (personality, temperature, context limits, tool rounds) apply without restart. Scheduler, job-schedule, and connector settings are read once at startup and silently ignore reloads ([#286](https://github.com/BhavsarDevansh/Mimir/issues/286)). |
+| Auto-initialisation | ✅ Works | First use creates defaults automatically. |
 
 ### Personality
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Presets | ✅ Works | `transparent`, `concise`, `warm`, `formal` |
-| System prompt generation | ✅ Works | Combines preset + condensed memory from the knowledge graph; explicitly marked as non-exhaustive with a note directing the LLM to KG tools |
-| CLI override | ✅ Works | `--personality` flag on `mimir ask` |
+| Feature | Status | Notes & pending work |
+|---------|--------|----------------------|
+| Presets | ✅ Works | `transparent`, `concise`, `warm`, `formal`, plus custom `.personality.md` files. |
+| System prompt generation | ✅ Works | Preset tone + shared operating directives (honesty, retrieval, learning) + condensed memory block, explicitly marked as a non-exhaustive subset ([#138](https://github.com/BhavsarDevansh/Mimir/issues/138)). |
+| CLI override | ✅ Works | `--personality` flag on `mimir ask` and `mimir chat`. |
 
 ### Deployment & Operations
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| systemd user service | ✅ Works | `mimir init` offers to install and enable it |
-| Graceful shutdown | ✅ Works | `mimir stop` or Ctrl-C / SIGTERM |
-| Daemon-down detection | ✅ Works | CLI probes `/status`; prompts to start if unreachable |
-| Loopback security | ✅ Works | `/stop` is restricted to `127.0.0.1` |
-| CORS for local dev | ✅ Works | Whitelisted ports: 8080, 3000, 5173 |
+| Feature | Status | Notes & pending work |
+|---------|--------|----------------------|
+| systemd user service | ✅ Works | `mimir init` offers to install and enable it on Linux. |
+| macOS launchd | ❌ Not implemented | `mimir init` prints "planned for a future phase" ([#285](https://github.com/BhavsarDevansh/Mimir/issues/285)). |
+| Graceful shutdown | ✅ Works | `mimir stop`, Ctrl-C, or SIGTERM; drains in-flight requests and tears down background tasks; shutdown cause is logged. |
+| Daemon-down detection | ✅ Works | CLI probes `/health`; prompts to auto-start with a 10 s readiness timeout. |
+| Loopback security | 🟡 Partial | `/stop` and a few management routes are loopback-restricted, but the HTTP API has no authentication — any local process can read/write the knowledge graph, and a `0.0.0.0` bind exposes everything ([#281](https://github.com/BhavsarDevansh/Mimir/issues/281)). |
+| CORS for local dev | ✅ Works | Whitelisted ports: 8080, 3000, 5173. |
 
 ### Knowledge Graph (Phase 2)
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| SQLite schema & migrations | ✅ Works | In `mimir-knowledge` crate |
-| Entity CRUD | ✅ Works | Types, aliases, deduplication, dates, locations (stubs) |
-| Fact CRUD | ✅ Works | Temporal bounds, statuses, dependencies, cascade forget |
-| Confidence model | ✅ Works | Graph-derived; no LLM involvement, no decay |
-| Inference engine (Rust) | ✅ Works | Transitivity, contradiction, propagation, threshold rules |
-| Provenance tracking | ✅ Works | Source tracking with connector_instance_id FK + raw_reference + typed audit log with change_type/changed_by |
-| Forgetting system | ✅ Works | Trash, cascade forget, restore, bulk operations |
-| FTS5 search | ✅ Works | Full-text search over entities and aliases |
-| **Fact extraction pipeline** | ✅ Works | LLM → Rust validation → entity resolution (exact → alias → FTS5 fuzzy ≥ 0.9, type-filtered → create) → confidence → sensitive confirmation → insert (issues #55, #182) |
-| **`mimir kb` CLI (daemon-routed)** | ✅ Works | All `mimir kb` commands route through daemon HTTP (no direct DB access); audit and CRUD supported via daemon |
-| **Pending sensitive-fact confirmation** | ✅ Works | `GET /kb/pending`, `POST /kb/facts/{id}/confirm`, `POST /kb/facts/{id}/reject`; CLI `mimir kb pending|confirm|reject`; optional reject `--reason` written to the audit log (#141) |
-| **Pending-fact auto-cleanup** | ✅ Works | Daily `knowledge.pending_cleanup` job hard-deletes facts awaiting confirmation past `retention_days` (default 7); configurable under `[knowledge.pending_cleanup]` (#141) |
-| **Relationship type DAG + aliases** | ✅ Works | `relationship_type_hierarchy` and `relationship_type_aliases` tables enable ontology-driven predicate discovery; aliases resolve automatically through `ensure_relationship_type` |
-| **Category aliases + subtree retrieval** | ✅ Works | `category_aliases` map domain words (`education`, `hobbies`, `family`…) to Dewey categories; `get_facts_in_category_subtree` gathers facts across a category subtree (#135) |
+| Feature | Status | Notes & pending work |
+|---------|--------|----------------------|
+| SQLite schema & migrations | ✅ Works | In `mimir-knowledge` crate; WAL mode, write-serialisation lock. |
+| Entity CRUD | ✅ Works | Types, aliases, deduplication, dates, and locations (the "locations (stubs)" note is stale — the full write path landed in [#193](https://github.com/BhavsarDevansh/Mimir/issues/193)). |
+| Fact CRUD | ✅ Works | Temporal bounds, statuses, dependencies, cascade forget. |
+| Confidence model | ✅ Works | Graph-derived; no LLM involvement, no decay; corroboration boosts up to 0.95. |
+| Inference engine (Rust) | ✅ Works | Transitivity, contradiction, propagation, threshold rules; deterministic and transparent. |
+| Provenance tracking | ✅ Works | Source tracking with `connector_instance_id` FK + `raw_reference` + typed audit log with `change_type`/`changed_by`. |
+| Forgetting system | ✅ Works | Trash (30-day retention), cascade forget, restore, bulk operations with safeguards. |
+| FTS5 search | ✅ Works | Full-text search over entities and aliases with top-fact retrieval. |
+| Fact extraction pipeline | ✅ Works | LLM → Rust validation → entity resolution (exact → alias → FTS5 fuzzy ≥ 0.9, type-filtered → create) → confidence → sensitive confirmation → insert ([#55](https://github.com/BhavsarDevansh/Mimir/issues/55), [#182](https://github.com/BhavsarDevansh/Mimir/issues/182)). |
+| `mimir kb` CLI (daemon-routed) | ✅ Works | All commands route through daemon HTTP. |
+| Pending sensitive-fact confirmation | ✅ Works | `GET /kb/pending`, confirm/reject routes + CLI; optional reject `--reason` in the audit log ([#141](https://github.com/BhavsarDevansh/Mimir/issues/141)). |
+| Pending-fact auto-cleanup | ✅ Works | Daily `knowledge.pending_cleanup` job hard-deletes unconfirmed facts past `retention_days` (default 7). |
+| Relationship type DAG + aliases | ✅ Works | `relationship_type_hierarchy` + `relationship_type_aliases`; aliases resolve through `ensure_relationship_type` ([#133](https://github.com/BhavsarDevansh/Mimir/issues/133)). |
+| Category aliases + subtree retrieval | ✅ Works | `category_aliases` + `get_facts_in_category_subtree` ([#135](https://github.com/BhavsarDevansh/Mimir/issues/135)). |
+| Semantic entity dedup (LLM) | ❌ Not implemented | `enqueue_semantic_dedup` is a stub returning `NotYetImplemented`; the `entity_merge_queue` table and alias-overlap flagging exist ([#282](https://github.com/BhavsarDevansh/Mimir/issues/282)). |
+| Pattern consolidation (nightly pass 6) | ❌ Not implemented | Pass logs "not yet implemented" and succeeds ([#67](https://github.com/BhavsarDevansh/Mimir/issues/67)). |
+| kb import / export | ❌ Not implemented | Obsidian / Markdown / CSV import-export ([#120](https://github.com/BhavsarDevansh/Mimir/issues/120), [#62](https://github.com/BhavsarDevansh/Mimir/issues/62)); bidirectional Obsidian watcher ([#66](https://github.com/BhavsarDevansh/Mimir/issues/66)). |
+| kb heatmap / reset polish | ❌ Not implemented | Deferred CLI commands ([#69](https://github.com/BhavsarDevansh/Mimir/issues/69)). |
+| Entity locations | 🟡 Partial | Write path, geocoding, proximity queries work. Re-statement dedup is missing ([#228](https://github.com/BhavsarDevansh/Mimir/issues/228)); sensitive location facts don't get their overlay on confirmation ([#226](https://github.com/BhavsarDevansh/Mimir/issues/226)); geocoder is not configurable ([#227](https://github.com/BhavsarDevansh/Mimir/issues/227)); a flaky batch test is tracked ([#230](https://github.com/BhavsarDevansh/Mimir/issues/230)). |
+
+### Events & Reminders
+
+| Feature | Status | Notes & pending work |
+|---------|--------|----------------------|
+| Event overlay + scan job | ✅ Works | Lifecycle + recurrence overlay on facts; daily scan derives overlays, auto-completes past reminders, advances recurring events; "Upcoming" memory section ([#74](https://github.com/BhavsarDevansh/Mimir/issues/74)). |
+| Proactive surface | ❌ Not implemented | Notifications, smart completion, and a `mimir events` CLI are Phase 5 work ([#143](https://github.com/BhavsarDevansh/Mimir/issues/143)). |
+
+### Connectors (Phase 3)
+
+| Feature | Status | Notes & pending work |
+|---------|--------|----------------------|
+| Framework (F1–F13) | ✅ Works | Crate + feature flags, instance registry, provenance FK, shared `normalize_and_insert`, entity-resolution chain, `Connector` trait, registry + factory dispatch, supervised lifecycle, manual sync triggering, secret store, rate-limit/retry primitives, mock connector ([#179](https://github.com/BhavsarDevansh/Mimir/issues/179)–[#190](https://github.com/BhavsarDevansh/Mimir/issues/190)). |
+| Daemon wiring + routes (A1–A3) | ✅ Works | Registry/supervisor owned by the daemon, startup restore, CRUD/status/sync/pause/resume/tokens/actions/forget routes, `mimir connector` CLI ([#202](https://github.com/BhavsarDevansh/Mimir/issues/202)–[#204](https://github.com/BhavsarDevansh/Mimir/issues/204)). |
+| Photos (local) | 🟡 Partial | `notify` watcher, EXIF GPS/datetime, incremental cursor, `took_photo` facts, place anchoring. Coords-only fallback uses a file-path object instead of a real-world visit ([#250](https://github.com/BhavsarDevansh/Mimir/issues/250)); `owner_name` is disconnected from the canonical user identity ([#246](https://github.com/BhavsarDevansh/Mimir/issues/246)); `NormalizedFact` boilerplate is duplicated ([#255](https://github.com/BhavsarDevansh/Mimir/issues/255)); RAW formats are deferred. |
+| Calendar (CalDAV) | 🟡 Partial | PROPFIND + sync-collection incremental sync, app-password + OAuth refresh, event fact cluster, write-back (`create_event`/`update_event`/`delete_event`). Server-side deletions are logged but not propagated to fact lifecycle ([#247](https://github.com/BhavsarDevansh/Mimir/issues/247)); auth error arm duplicated with Email ([#273](https://github.com/BhavsarDevansh/Mimir/issues/273)); enum→wire-string conversion is fragile ([#264](https://github.com/BhavsarDevansh/Mimir/issues/264)); supervisor start/resume race ([#266](https://github.com/BhavsarDevansh/Mimir/issues/266)); forget SQL duplication ([#267](https://github.com/BhavsarDevansh/Mimir/issues/267)). |
+| Email (IMAP) | 🟡 Partial | `LOGIN`/`XOAUTH2`, `UID FETCH` incremental sync, `IDLE` push with polling fallback, iMIP invites, schema.org JSON-LD, LLM prose extraction. LLM-extraction retry is in-memory and unbounded — not restart-safe ([#262](https://github.com/BhavsarDevansh/Mimir/issues/262)); iMIP `CANCEL` invites are skipped ([#283](https://github.com/BhavsarDevansh/Mimir/issues/283)); LLM tool-call parsing is duplicated with the conversational path ([#259](https://github.com/BhavsarDevansh/Mimir/issues/259)); auth error arm duplicated with Calendar ([#273](https://github.com/BhavsarDevansh/Mimir/issues/273)). |
+| OAuth token refresh | ✅ Works | `oauth2` 5.0.0 with `default-features = false` over a custom reqwest 0.13 adapter; redirects disabled, HTTPS/loopback gate, secret-hygiene error mapping ([#240](https://github.com/BhavsarDevansh/Mimir/issues/240)). |
+| OAuth PKCE login (A4) | ❌ Not implemented | Interactive loopback flow for the first token ([#205](https://github.com/BhavsarDevansh/Mimir/issues/205)); mock OAuth server + e2e tests ([#207](https://github.com/BhavsarDevansh/Mimir/issues/207)). |
+| OS-keyring secret backend | ❌ Not implemented | Opt-in `keyring` backend, deferred ([#188](https://github.com/BhavsarDevansh/Mimir/issues/188)). |
+| Mock connector | ✅ Works | Config-driven, always compiled; polling/push modes, failure injection ([#190](https://github.com/BhavsarDevansh/Mimir/issues/190)). |
+| Rate limiting + retry | ✅ Works | Per-instance GCRA limiter, daily quota, retry/backoff with `Retry-After` honouring ([#189](https://github.com/BhavsarDevansh/Mimir/issues/189)). |
+| Geocoder | ✅ Works | OSM Nominatim forward/reverse with rate limiting ([#191](https://github.com/BhavsarDevansh/Mimir/issues/191)). Not configurable ([#227](https://github.com/BhavsarDevansh/Mimir/issues/227)); `RateLimitConfig::nominatim()` duplicates `Default` ([#223](https://github.com/BhavsarDevansh/Mimir/issues/223)); conversational geocoding tool deferred ([#192](https://github.com/BhavsarDevansh/Mimir/issues/192)). |
+| Push-mode manual sync | ❌ Not implemented | `trigger_sync` returns `PushUnsupported` for push connectors (deferred in F9 / [#186](https://github.com/BhavsarDevansh/Mimir/issues/186)). |
+| E2E / integration harness | 🟡 Partial | CLI e2e cycle test exists; the mock sync→normalize→insert→query provenance/confidence/corroboration assertions are not yet written ([#206](https://github.com/BhavsarDevansh/Mimir/issues/206)). |
+
+### Background Jobs & Scheduler
+
+| Feature | Status | Notes & pending work |
+|---------|--------|----------------------|
+| Job queue + scheduler | ✅ Works | SQLite-backed queue with dedup, debounce, cooldown, idle gating; memory condensation, nightly optimization, pending cleanup, and events scan jobs. |
+| Resource-limit enforcement | 🟡 Partial | Timeouts only; per-job CPU/memory limits and graceful cancellation are follow-up work ([#91](https://github.com/BhavsarDevansh/Mimir/issues/91)). |
+
+### LLM Client & Worker Pool
+
+| Feature | Status | Notes & pending work |
+|---------|--------|----------------------|
+| LLM client | ✅ Works | OpenAI-compatible chat + streaming, retry/backoff on 429/502/503/504, typed error mapping. |
+| Worker pool | ✅ Works | Priority queues (user > system) with bounded capacity; connector LLM calls run at system priority. |
+
+### Librarian & Retrieval Agents
+
+| Feature | Status | Notes & pending work |
+|---------|--------|----------------------|
+| Librarian agent | ✅ Works | On-demand fact extraction from labelled transcripts; registered in the daemon but no longer auto-triggered every turn ([#137](https://github.com/BhavsarDevansh/Mimir/issues/137), [#139](https://github.com/BhavsarDevansh/Mimir/issues/139)). |
+| Automatic Librarian fallback | ❌ Not implemented | No safety net if the conversational LLM never calls `remember` ([#156](https://github.com/BhavsarDevansh/Mimir/issues/156)). |
+| Retrieval agent | ✅ Works | `retrieve_context` dispatches parallel retrieval agents (KG + conversation search, ≤ 25 rounds) ([#128](https://github.com/BhavsarDevansh/Mimir/issues/128)). |
 
 ---
 
@@ -309,30 +269,124 @@ The daemon exposes an OpenAI-compatible chat endpoint plus Mimir-specific manage
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/health` | Cheap liveness probe (no LLM or DB access) |
 | `GET` | `/status` | Health, config, LLM reachability, memory usage |
 | `GET` | `/memory` | Live condensed memory block from the knowledge graph |
+| `POST` | `/memory/refresh` | Force memory regeneration (loopback only) |
 | `GET` | `/sessions` | List conversation sessions |
-| `GET` | `/sessions/{id}/messages` | Messages for a session (from last compaction) |
+| `GET` | `/sessions/{id}/messages` | Messages for a session (from last compaction point) |
 | `POST` | `/chat` | Blocking chat with agentic tool loop |
 | `POST` | `/chat/stream` | SSE streaming chat |
 | `POST` | `/stop` | Graceful shutdown (loopback only) |
 | `GET` | `/connectors` | List registered connector instances with derived item counts |
 | `POST` | `/connectors` | Register a new connector instance (add-only; validates the backend) |
 | `GET` | `/connectors/{id}` | Show a single connector instance with its item count |
-| `DELETE` | `/connectors/{id}` | Stop the runner and delete the instance (detaches provenance) |
+| `DELETE` | `/connectors/{id}` | Stop the runner, delete the instance and its stored credentials (detaches provenance) |
+| `POST` | `/connectors/{id}/sync` | Trigger a manual sync |
+| `POST` | `/connectors/{id}/pause` | Stop the runner and flip to `Paused` |
+| `POST` | `/connectors/{id}/resume` | Re-spawn the runner and flip to `Active` |
+| `POST` | `/connectors/{id}/tokens` | Ingest a `SecretBundle` (loopback only) |
+| `POST` | `/connectors/{id}/actions` | Dispatch a write-back action |
+| `POST` | `/connectors/{id}/forget` | Cascade-trash the connector's facts, delete credentials and row (loopback only) |
 | `GET` | `/kb/query` | Query facts for an entity |
 | `GET` | `/kb/facts/{id}` | Show a single fact with sources, deps, audit |
 | `PATCH` | `/kb/facts/{id}` | Edit mutable fact fields |
 | `POST` | `/kb/facts/forget` | Forget facts (single or bulk) |
+| `POST` | `/kb/facts/{id}/confirm` | Confirm a pending sensitive fact (loopback only) |
+| `POST` | `/kb/facts/{id}/reject` | Reject a pending sensitive fact (loopback only) |
+| `GET` | `/kb/pending` | List sensitive facts awaiting confirmation (loopback only) |
 | `GET` | `/kb/browse` | Graph traversal from an entity |
 | `GET` | `/kb/profile` | Generate entity profile from top-confidence facts |
 | `GET` | `/kb/audit` | Query the fact audit log |
 | `GET` | `/kb/trash` | List trash contents |
 | `POST` | `/kb/trash/restore` | Restore facts from trash |
 | `DELETE` | `/kb/trash` | Empty trash permanently |
-| `GET` | `/kb/pending` | List sensitive facts awaiting confirmation |
-| `POST` | `/kb/facts/{id}/confirm` | Confirm a pending fact (→ Active, confidence 1.0) |
-| `POST` | `/kb/facts/{id}/reject` | Reject a pending fact (hard-delete + audit; 204) |
+| `GET` | `/kb/categories` | List categories |
+| `POST` | `/kb/categories` | Create a category |
+| `GET` | `/kb/categories/{id}` | Show a category with children and fact count |
+| `DELETE` | `/kb/categories/{id}` | Delete an empty category |
+| `GET` | `/kb/optimization/status` | Optimization job status |
+| `POST` | `/kb/optimization/run-now` | Trigger optimization immediately (loopback only) |
+
+---
+
+## Feature-Level Roadmap
+
+The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature backlog of work needed to make each subsystem robust. Issues are grouped by subsystem; each item is independently actionable.
+
+### Core Agent & Chat
+
+| Work item | Issue |
+|-----------|-------|
+| Session compaction (LLM summarisation of old turns) | [#279](https://github.com/BhavsarDevansh/Mimir/issues/279) |
+| `mimir chat` session persistence / auto-resume | [#280](https://github.com/BhavsarDevansh/Mimir/issues/280) |
+| Automatic Librarian fallback when `remember` is not called | [#156](https://github.com/BhavsarDevansh/Mimir/issues/156) |
+| Generated skills: reflection loop, utility scoring, pruning | [#20](https://github.com/BhavsarDevansh/Mimir/issues/20) |
+| Tool backlog: time-to/since, web, wikipedia, weather, timezone, calculator, curl, sports, stocks, flights, distance, RSS | [#83](https://github.com/BhavsarDevansh/Mimir/issues/83), [#93](https://github.com/BhavsarDevansh/Mimir/issues/93)–[#106](https://github.com/BhavsarDevansh/Mimir/issues/106) |
+| JobQueue resource-limit enforcement | [#91](https://github.com/BhavsarDevansh/Mimir/issues/91) |
+| AppState construction refactor (monolith) | [#265](https://github.com/BhavsarDevansh/Mimir/issues/265) |
+| Config hot-reload propagation to scheduler/jobs | [#286](https://github.com/BhavsarDevansh/Mimir/issues/286) |
+| Code quality: duplicate `#[cfg(test)]`, sync skill file I/O | [#287](https://github.com/BhavsarDevansh/Mimir/issues/287) |
+
+### Knowledge Graph
+
+| Work item | Issue |
+|-----------|-------|
+| LLM-based semantic entity dedup | [#282](https://github.com/BhavsarDevansh/Mimir/issues/282) |
+| Pattern consolidation (nightly pass 6) | [#67](https://github.com/BhavsarDevansh/Mimir/issues/67) |
+| kb import / export (Obsidian, Markdown, CSV) | [#120](https://github.com/BhavsarDevansh/Mimir/issues/120), [#62](https://github.com/BhavsarDevansh/Mimir/issues/62) |
+| Bidirectional Obsidian file watcher | [#66](https://github.com/BhavsarDevansh/Mimir/issues/66) |
+| kb heatmap / reset | [#69](https://github.com/BhavsarDevansh/Mimir/issues/69) |
+| Entity-location re-statement dedup | [#228](https://github.com/BhavsarDevansh/Mimir/issues/228) |
+| Location overlay on sensitive-fact confirmation | [#226](https://github.com/BhavsarDevansh/Mimir/issues/226) |
+| Geocoder configuration (disable, self-hosted, contact email) | [#227](https://github.com/BhavsarDevansh/Mimir/issues/227) |
+| Flaky tests: location batch, pending TTL, e2e migration | [#230](https://github.com/BhavsarDevansh/Mimir/issues/230), [#241](https://github.com/BhavsarDevansh/Mimir/issues/241), [#243](https://github.com/BhavsarDevansh/Mimir/issues/243) |
+| Memory pinning / deprioritisation | [#284](https://github.com/BhavsarDevansh/Mimir/issues/284) |
+
+### Connectors
+
+| Work item | Issue |
+|-----------|-------|
+| OAuth PKCE loopback login (A4) | [#205](https://github.com/BhavsarDevansh/Mimir/issues/205) |
+| Mock OAuth server + PKCE/rate-limit/supervisor e2e tests | [#207](https://github.com/BhavsarDevansh/Mimir/issues/207) |
+| Mock sync→normalize→insert→query e2e assertions | [#206](https://github.com/BhavsarDevansh/Mimir/issues/206) |
+| Email: durable retry / terminal-failure policy for LLM extraction | [#262](https://github.com/BhavsarDevansh/Mimir/issues/262) |
+| Email: iMIP CANCEL lifecycle | [#283](https://github.com/BhavsarDevansh/Mimir/issues/283) |
+| Calendar: propagate server-side deletions (tombstones) | [#247](https://github.com/BhavsarDevansh/Mimir/issues/247) |
+| Photos: coords-only `took_photo` fallback semantics | [#250](https://github.com/BhavsarDevansh/Mimir/issues/250) |
+| Photos: `owner_name` vs canonical user identity | [#246](https://github.com/BhavsarDevansh/Mimir/issues/246) |
+| Connector catalog route + CLI discovery | [#271](https://github.com/BhavsarDevansh/Mimir/issues/271) |
+| Secret ingestion via env/stdin (no process-list leak) | [#270](https://github.com/BhavsarDevansh/Mimir/issues/270) |
+| OS-keyring secret backend | [#188](https://github.com/BhavsarDevansh/Mimir/issues/188) |
+| Supervisor start/resume race | [#266](https://github.com/BhavsarDevansh/Mimir/issues/266) |
+| Enum→wire-string conversion robustness | [#264](https://github.com/BhavsarDevansh/Mimir/issues/264) |
+| DRY: forget SQL, auth error arms, photos boilerplate, LLM parsing, rate-limit default | [#267](https://github.com/BhavsarDevansh/Mimir/issues/267), [#273](https://github.com/BhavsarDevansh/Mimir/issues/273), [#255](https://github.com/BhavsarDevansh/Mimir/issues/255), [#259](https://github.com/BhavsarDevansh/Mimir/issues/259), [#223](https://github.com/BhavsarDevansh/Mimir/issues/223) |
+| Geocoding conversational tool | [#192](https://github.com/BhavsarDevansh/Mimir/issues/192) |
+| Deps ledger: icalendar MSRV pin | [#239](https://github.com/BhavsarDevansh/Mimir/issues/239) |
+
+### Security & Deployment
+
+| Work item | Issue |
+|-----------|-------|
+| HTTP API authentication / authorization | [#281](https://github.com/BhavsarDevansh/Mimir/issues/281) |
+| Unix domain socket transport | [#25](https://github.com/BhavsarDevansh/Mimir/issues/25) |
+| macOS launchd auto-start | [#285](https://github.com/BhavsarDevansh/Mimir/issues/285) |
+
+### Proactive Agent (Phase 5)
+
+| Work item | Issue |
+|-----------|-------|
+| Events & reminders: notifications, smart completion, CLI | [#143](https://github.com/BhavsarDevansh/Mimir/issues/143) |
+| Domain events / proactive surfacing | [#68](https://github.com/BhavsarDevansh/Mimir/issues/68) |
+
+### Maintenance & Docs
+
+| Work item | Issue |
+|-----------|-------|
+| `--no-default-features --all-targets` build | [#277](https://github.com/BhavsarDevansh/Mimir/issues/277) |
+| Intra-doc link warnings in `mimir-connectors` | [#276](https://github.com/BhavsarDevansh/Mimir/issues/276) |
+| `tabled` 0.21 / proc-macro-error2 future rejection | [#275](https://github.com/BhavsarDevansh/Mimir/issues/275) |
+| Stale docs: connectors framework, VISION technical design, location types, markdown reflow | [#274](https://github.com/BhavsarDevansh/Mimir/issues/274), [#260](https://github.com/BhavsarDevansh/Mimir/issues/260), [#222](https://github.com/BhavsarDevansh/Mimir/issues/222), [#224](https://github.com/BhavsarDevansh/Mimir/issues/224), [#245](https://github.com/BhavsarDevansh/Mimir/issues/245) |
 
 ---
 
@@ -340,23 +394,33 @@ The daemon exposes an OpenAI-compatible chat endpoint plus Mimir-specific manage
 
 | Issue | Impact | Workaround |
 |-------|--------|------------|
-| [#71](https://github.com/BhavsarDevansh/Mimir/issues/71) — `mimir chat` streaming bug | Streaming may fail in some environments | Use `mimir ask` for single-shot queries; restart daemon if stream stalls |
-| [#45](https://github.com/BhavsarDevansh/Mimir/issues/45) — UTC time | `get_current_time` returns UTC | Ask Mimir to convert to your timezone verbally |
+| [#281](https://github.com/BhavsarDevansh/Mimir/issues/281) — no HTTP API auth | Any local process can read/write the knowledge graph | Keep the daemon on loopback; do not set `bind_addr` to `0.0.0.0` |
 | [#25](https://github.com/BhavsarDevansh/Mimir/issues/25) — Unix socket transport | TCP is the only transport | TCP on `127.0.0.1:8080` is secure for local use |
-| | | 
+| [#205](https://github.com/BhavsarDevansh/Mimir/issues/205) — OAuth PKCE login | OAuth connectors can't obtain their first token interactively | Use app passwords where the provider allows |
+| [#279](https://github.com/BhavsarDevansh/Mimir/issues/279) — no session compaction | Very long conversations are trimmed, not summarised | Keep `max_turns` modest (10–30) |
+| [#280](https://github.com/BhavsarDevansh/Mimir/issues/280) — chat session not persisted | Restarting `mimir chat` starts a new session | Use `/history` to resume |
+| [#262](https://github.com/BhavsarDevansh/Mimir/issues/262) — email LLM retry not durable | A restart can drop a message whose prose extraction failed | None; deterministic layers (iMIP, JSON-LD) are unaffected |
+| [#247](https://github.com/BhavsarDevansh/Mimir/issues/247) / [#283](https://github.com/BhavsarDevansh/Mimir/issues/283) — deletions not propagated | Cancelled calendar events / iMIP CANCELs stay in the KB | Forget the facts manually with `mimir kb forget` |
+| [#156](https://github.com/BhavsarDevansh/Mimir/issues/156) — no Librarian fallback | Learning depends on the LLM calling `remember` | None; mention important facts explicitly |
+| [#20](https://github.com/BhavsarDevansh/Mimir/issues/20) — no generated skills | Skills are built-in or hand-written only | Write your own skill files |
+| [#143](https://github.com/BhavsarDevansh/Mimir/issues/143) — no proactive notifications | Events surface only in the "Upcoming" memory section | Check `mimir memory` / the Upcoming section |
+| [#120](https://github.com/BhavsarDevansh/Mimir/issues/120) — no kb import/export | Knowledge graph is not portable to Obsidian/CSV | Use the daemon API or CLI CRUD |
+| [#270](https://github.com/BhavsarDevansh/Mimir/issues/270) — secret flags leak | `--password`/`--token` appear in the process list | Use the interactive prompt instead |
+| [#271](https://github.com/BhavsarDevansh/Mimir/issues/271) — no connector catalog | Types/backends are not discoverable from the CLI | Read `docs/wiki/connectors.md` |
+| [#230](https://github.com/BhavsarDevansh/Mimir/issues/230), [#241](https://github.com/BhavsarDevansh/Mimir/issues/241), [#243](https://github.com/BhavsarDevansh/Mimir/issues/243) — flaky tests | Intermittent CI failures | Re-run the affected test |
 
 ---
 
 ## Roadmap Summary
 
-- **Phase 1 — Core Agent** ✅ Complete
-- **Phase 2 — Knowledge Graph** ✅ Complete
-- **Phase 3 — Connectors** 🚧 In progress — the `mimir-connectors` crate is scaffolded (crate, feature flags `photos`/`calendar`/`gmail`, DB-access boundary via `KnowledgeGraph` only), the `connectors` instance-registry table + `KnowledgeGraph` facade methods landed in #179 / F2 (sync cursor, auth state, and health persist across restarts), the `sources.connector_instance_id` provenance FK migration + per-connector item-count query landed in #180 / F3, the shared `normalize_and_insert` ingestion boundary landed in #181 / F4 (connectors funnel through the same confidence/corroboration/sensitivity pipeline as chat), the full entity-resolution chain landed in #182 / F5, and the runtime `Connector` trait + data types landed in #183 / F6 (the async, object-safe contract every connector implements; two-step DB-free ingestion — `sync` → `extract` → supervisor-owned `normalize_and_insert`), and the `ConnectorRegistry` + multi-backend factory dispatch landed in #184 / F7 (the registry maps `(connector_type, backend)` to a `ConnectorFactory`; new backends register a new factory with no schema change, many backends coexist under one type, and reliability stays per-type), and the `ConnectorSupervisor` supervised lifecycle landed in #185 / F8 (one supervised task per `Active` connector: spawn-on-startup, restart-with-backoff, circuit breaker, auth-expiry pausing, graceful shutdown, and cursor persistence; each cycle runs `sync` → `extract` → `normalize_and_insert` in an isolated sub-task so a connector panic is contained). The connector secret store landed in #187 / F10 (a single `SecretStore` trait + `SecretBundle` enum + `FileSecretStore`: one `0600` JSON file per connector under `~/.local/share/mimir/secrets/`, plaintext at rest, fail-closed permission checks, atomic writes, slug validation; an `InMemorySecretStore` helper is included). The shared rate-limit + retry/backoff primitives landed in #189 / F12 (a per-instance `RateLimiter` backed by `governor` GCRA + an optional rolling 24h daily quota that returns a non-blocking `QuotaExhausted`, plus a `retry_with_backoff` helper for uniform 429/502/503/504 handling with exponential/linear/fixed backoff + jitter and `Retry-After` honouring; connector LLM calls are exempt per decision D′). The configurable, always-compiled mock connector test harness landed in #190 / F13 (a config-driven in-memory connector emitting canned `NormalizedFact`s in polling/push modes with health/auth/failure/panic injection; the T1 sync→extract→insert→query vehicle; the supervisor lifecycle tests now drive it, replacing the private `TestConnector`). The daemon wiring landed in #202 / A1: the daemon constructs and owns the `ConnectorRegistry` + `ConnectorSupervisor`, registers the built-in Photos/Calendar/Email factories behind forwarded cargo features, wires the supervisor with the shared geocoder/secret-store/user-identity/LLM backend, restores `Active` runners at startup, and exposes connector CRUD/status routes (`GET/POST /connectors`, `GET/DELETE /connectors/{id}`) with derived item counts. The connector action routes landed in A2 (#203) and the `mimir connector` CLI plumbing in A3 (#204); only the interactive OAuth PKCE loopback flow (A4 / #205) and the optional OS-keyring backend (#188) remain. The Photos (C1/C2), CalDAV Calendar (C3/C4), and Email (C5–C7) concrete backends have already landed
+- **Phase 1 — Core Agent** ✅ Complete (chat, tools, skills, memory, config, personality, deployment)
+- **Phase 2 — Knowledge Graph** ✅ Complete (entities, facts, inference, forgetting, memory, librarian, retrieval); hardening backlog in the feature-level roadmap above
+- **Phase 3 — Connectors** 🚧 In progress — framework (F1–F13), daemon wiring (A1–A3), and the Photos / CalDAV Calendar / IMAP Email backends are live; the remaining Phase 3 work is the OAuth PKCE login (A4 / [#205](https://github.com/BhavsarDevansh/Mimir/issues/205)), the keyring backend ([#188](https://github.com/BhavsarDevansh/Mimir/issues/188)), and the per-backend hardening items listed under Connectors above
 - **Phase 4 — Reasoning** ⏳ Planned (inference engine expansion)
-- **Phase 5 — Proactive Agent** ⏳ Planned (events, reminders, domain surfacing)
+- **Phase 5 — Proactive Agent** ⏳ Planned (events, reminders, domain surfacing — [#143](https://github.com/BhavsarDevansh/Mimir/issues/143), [#68](https://github.com/BhavsarDevansh/Mimir/issues/68))
 - **Phase 6 — Vision** ⏳ Planned (long-term memory consolidation)
 
-See `VISION/09-Roadmap/` for full details.
+See `VISION/09-Roadmap/` for the phase-level detail.
 
 ---
 

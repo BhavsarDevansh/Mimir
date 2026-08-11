@@ -1,12 +1,11 @@
 //! Credential resolution and OAuth token refresh for the CalDAV connector.
 
-use chrono::Utc;
-
 use super::CalendarAuthMethod;
 use crate::calendar::caldav::CalDavAuth;
 
 use crate::calendar::CalendarConnector;
 use crate::connector::ConnectorError;
+use crate::oauth;
 use crate::secrets::SecretBundle;
 
 impl CalendarConnector {
@@ -29,44 +28,33 @@ impl CalendarConnector {
                 None,
             )),
             (
-                CalendarAuthMethod::OAuth { .. },
-                SecretBundle::OAuth {
-                    access_token,
-                    refresh_token,
-                    expires_at,
+                CalendarAuthMethod::OAuth {
+                    token_endpoint,
+                    client_id,
+                    client_secret,
+                    scopes,
                 },
+                SecretBundle::OAuth { .. },
             ) => {
-                // Refresh if expired (or within a 60 s skew of expiry). An
-                // unknown expiry (`None`) does not force a refresh on every
-                // cycle — that would triple the POSTs against the token
-                // endpoint and invite rate limiting. The token is reused
-                // as-is; if it is actually expired the server returns 401 and
-                // the next cycle re-authenticates.
-                let needs_refresh = expires_at
-                    .map(|exp| exp <= Utc::now() + chrono::Duration::seconds(60))
-                    .unwrap_or(false);
-                if needs_refresh {
-                    let refresh_token = refresh_token.clone().ok_or_else(|| {
-                        ConnectorError::Authentication(
-                            "OAuth access token expired and no refresh token is stored".into(),
-                        )
-                    })?;
-                    let refreshed = self.refresh_oauth(&refresh_token).await?;
-                    let token = refreshed.access_token.clone().ok_or_else(|| {
-                        ConnectorError::Authentication(
-                            "token endpoint returned no access_token".into(),
-                        )
-                    })?;
-                    let auth = CalDavAuth::Bearer { token };
-                    Ok((auth, Some(refreshed.into_bundle(Some(refresh_token)))))
-                } else {
-                    Ok((
-                        CalDavAuth::Bearer {
-                            token: access_token.clone(),
-                        },
-                        None,
-                    ))
-                }
+                // Resolve a live access token through the shared OAuth refresh
+                // path (issue #240: `oauth2` 5.0.0 over the workspace reqwest
+                // 0.13 client). Returns the token to use and, when a refresh
+                // happened, the refreshed bundle for the caller to persist.
+                let http = self.oauth_http.as_ref().ok_or_else(|| {
+                    ConnectorError::Config(
+                        "OAuth auth method configured without an OAuth HTTP client".into(),
+                    )
+                })?;
+                let (token, refreshed) = oauth::resolve_access_token(
+                    http,
+                    token_endpoint,
+                    client_id,
+                    client_secret.as_deref(),
+                    scopes.as_deref(),
+                    bundle,
+                )
+                .await?;
+                Ok((CalDavAuth::Bearer { token }, refreshed))
             }
             // Auth method / bundle kind mismatch — e.g. an app-password bundle
             // configured as OAuth, or vice versa.
@@ -75,40 +63,6 @@ impl CalendarConnector {
                 self.config.auth.discriminant()
             ))),
         }
-    }
-
-    /// Refresh an OAuth access token via the configured token endpoint.
-    ///
-    /// Delegates to the shared [`crate::oauth::refresh_token`] helper so the
-    /// Calendar and Email connectors share one refresh implementation (DRY).
-    /// The `oauth2` crate is avoided: it depends on reqwest 0.12, which would
-    /// duplicate the workspace's reqwest 0.13 stack; a refresh is a single
-    /// form-encoded HTTPS POST returning JSON. The interactive PKCE login
-    /// that *obtains* the first token is A4 / #205.
-    async fn refresh_oauth(
-        &self,
-        refresh_token: &str,
-    ) -> Result<crate::oauth::RefreshTokenResponse, ConnectorError> {
-        let CalendarAuthMethod::OAuth {
-            token_endpoint,
-            client_id,
-            client_secret,
-            scopes,
-        } = &self.config.auth
-        else {
-            return Err(ConnectorError::Config(
-                "refresh_oauth called for a non-OAuth connector".into(),
-            ));
-        };
-        crate::oauth::refresh_token(
-            &self.http,
-            token_endpoint,
-            client_id,
-            client_secret.as_deref(),
-            scopes.as_deref(),
-            refresh_token,
-        )
-        .await
     }
 
     /// Persist a refreshed OAuth bundle back to the secret store.
@@ -124,3 +78,7 @@ impl CalendarConnector {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "credentials_tests.rs"]
+mod tests;

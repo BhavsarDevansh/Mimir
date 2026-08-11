@@ -44,6 +44,7 @@ use tokio::sync::Mutex;
 
 use crate::calendar::caldav::RawCalDavEvent;
 use crate::connector::{Connector, ConnectorContext, ConnectorError, ConnectorFactory};
+use crate::oauth::OAuthHttpClient;
 use crate::secrets::SecretStore;
 
 // ---------------------------------------------------------------------------
@@ -161,6 +162,14 @@ pub struct CalendarConnector {
     secret_store: Option<Arc<dyn SecretStore>>,
     /// Shared HTTP client (auth applied per-request from the loaded bundle).
     http: reqwest::Client,
+    /// OAuth HTTP client for token refresh (issue #240): the `oauth2`-crate
+    /// adapter over the workspace reqwest 0.13 client, built with redirects
+    /// disabled so a credential POST can never be bounced to another host.
+    /// `None` for non-OAuth auth methods — the client is only built when the
+    /// config actually needs it (an app-password connector must not allocate
+    /// a second connection pool or fail startup on an OAuth client build
+    /// error).
+    oauth_http: Option<OAuthHttpClient>,
     /// In-memory incremental cursor (the last persisted sync-token). Seeded
     /// from `__cursor` at construction; the supervisor persists the value
     /// returned by [`sync`](Connector::sync) via `update_sync_cursor`.

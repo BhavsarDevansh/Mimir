@@ -51,7 +51,7 @@ Build the connector framework and implement one backend per core connector type,
 ### E. Auth & secret storage
 - `SecretStore` trait in `mimir-connectors`; V1 = `FileSecretStore` (plaintext, `0600` file / `0700` dir, one file per connector, perm validation). `keyring` as **opt-in** feature-gated backend, default off.
 - `SecretBundle` enum: `OAuth { access_token, refresh_token, expires_at } | ApiToken(String) | AppPassword(String)`.
-- OAuth PKCE (`oauth2 5.0.0`): **CLI runs the ephemeral loopback callback server**, opens the auth URL, exchanges the code, POSTs the token bundle to a daemon route for storage.
+- OAuth PKCE (`oauth2 5.0.0`): **CLI runs the ephemeral loopback callback server**, opens the auth URL, exchanges the code, POSTs the token bundle to a daemon route for storage. `oauth2` is pulled with `default-features = false` and talks HTTP through a custom `AsyncHttpClient` adapter over the workspace's single reqwest 0.13 client (`OAuthHttpClient`, issue #240) — its optional reqwest 0.12 dependency never enters the tree.
 - Refresh-on-sync; refresh failure → `auth_state='expired'`, paused, manual re-auth.
 - `connector remove` wipes secret + row; `forget` cascades (drops facts with that `connector_instance_id` via existing trash machinery).
 - At-rest encryption (argon2 + chacha20poly1305) **deferred** — marginal gain over 0600 unless keychain-anchored; revisit with the sensitivity overhaul.
@@ -82,7 +82,7 @@ Framework + Mock → Photos (local) → Calendar (CalDAV) → Email (IMAP). Asce
 
 | Crate | Version | Used by | Feature-gated |
 |-------|---------|---------|---------------|
-| `oauth2` | 5.0.0 | Calendar, Email, CLI PKCE | `calendar`, `gmail` |
+| `oauth2` | 5.0.0 (`default-features = false`) | Calendar, Email, CLI PKCE | `oauth` (enabled by `calendar`, `gmail`) |
 | `async-imap` | 0.11.2 | Email (IMAP + IDLE) | `gmail` |
 | `mail-parser` | 0.11.4 | Email parsing | `gmail` |
 | `icalendar` | 0.17.12 | Calendar parse + build | `calendar` |
@@ -92,6 +92,8 @@ Framework + Mock → Photos (local) → Calendar (CalDAV) → Email (IMAP). Asce
 | `argon2` / `chacha20poly1305` | — | Deferred (at-rest encryption) | not in V1 |
 
 All HTTP via `reqwest` (already a workspace dep). No `sqlx` in `mimir-connectors`.
+
+**Reconciliation decision (#240, v0.96.0):** `oauth2` 5.0.0's optional `reqwest` feature pins reqwest 0.12, which would duplicate the workspace's reqwest 0.13 HTTP/TLS stack. The chosen path is `oauth2` with `default-features = false` plus a custom [`OAuthHttpClient`](../../docs/oauth-client.md) adapter that implements the crate's `AsyncHttpClient` trait over the workspace reqwest 0.13 client — one reqwest major in the tree, the vetted PKCE/refresh protocol code, redirects disabled on OAuth calls, and the pre-existing HTTPS/loopback endpoint gate + secret-hygiene error mapping preserved. oauth2 5.0.0's unconditional deps are already in the tree except `rand 0.8` (a third rand line alongside 0.9/0.10; small and required by oauth2's PKCE verifier generation) and `thiserror 1.x` (already in the tree). No reqwest 0.12-compatible oauth2 release exists (latest is still 5.0.0 as of 2026-08-11), so "wait for an upgrade" is struck from the options.
 
 ## 5. Issue breakdown
 
@@ -169,4 +171,3 @@ OAuth connectors path: **F10 → C3 / C5**, gated on **A4** for the interactive 
 - #66 Obsidian bidirectional watcher (blocked on #62/#120)
 - #67 pattern consolidation, #69 kb heatmap/reset
 - Function-calling tools #83, #93–#105 (relabeled `tools`)
-

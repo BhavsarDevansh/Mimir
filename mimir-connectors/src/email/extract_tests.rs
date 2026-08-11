@@ -7,11 +7,10 @@ use mimir_knowledge::models::enums::EventType;
 use mimir_knowledge::normalize::NormalizedFact;
 
 pub(super) fn connector_with_identity(name: Option<&str>) -> EmailConnector {
-    EmailConnector::from_config_with_http(
+    EmailConnector::from_config_with_deps(
         app_config(),
         None,
         name.map(|n| n.to_string()),
-        None,
         None,
         None,
     )

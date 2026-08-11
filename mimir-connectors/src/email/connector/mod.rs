@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 
 use crate::email::config::EmailConfigDto;
 use crate::email::imap;
+use crate::oauth::OAuthHttpClient;
 use crate::secrets::SecretStore;
 use mimir_core::llm::LlmBackend;
 
@@ -44,8 +45,14 @@ pub struct EmailConnector {
     /// Shared credential store (loaded by slug); `None` means the daemon did
     /// not wire one in (sync/authenticate then fail `NotAuthenticated`).
     secret_store: Option<Arc<dyn SecretStore>>,
-    /// Shared HTTP client for OAuth token refresh.
-    http: reqwest::Client,
+    /// OAuth HTTP client for token refresh (issue #240): the `oauth2`-crate
+    /// adapter over the workspace reqwest 0.13 client, built with redirects
+    /// disabled so a credential POST can never be bounced to another host.
+    /// `None` for non-OAuth auth methods — the client is only built when the
+    /// config actually needs it (an app-password connector must not allocate
+    /// a second connection pool or fail startup on an OAuth client build
+    /// error).
+    oauth_http: Option<OAuthHttpClient>,
     /// In-memory incremental cursor (`(uid_validity, last_uid)`). Seeded from
     /// `__cursor` at construction; the supervisor persists the value returned
     /// by [`sync`](Connector::sync) via `update_sync_cursor`.

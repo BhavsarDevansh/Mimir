@@ -2,13 +2,15 @@
 
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::time::Duration;
 
 use tokio::sync::Mutex;
 
 use crate::connector::ConnectorError;
-use crate::email::config::{DEFAULT_DISPLAY_NAME, DEFAULT_SLUG, EmailConfigDto, parse_cursor};
+use crate::email::config::{
+    DEFAULT_DISPLAY_NAME, DEFAULT_SLUG, EmailAuthMethod, EmailConfigDto, parse_cursor,
+};
 use crate::email::connector::EmailConnector;
+use crate::oauth::OAuthHttpClient;
 use crate::secrets::SecretStore;
 use mimir_core::llm::LlmBackend;
 
@@ -20,18 +22,17 @@ impl EmailConnector {
         secret_store: Option<Arc<dyn SecretStore>>,
         cursor: Option<String>,
     ) -> Result<Self, ConnectorError> {
-        Self::from_config_with_http(config, secret_store, None, cursor, None, None)
+        Self::from_config_with_deps(config, secret_store, None, cursor, None)
     }
 
-    /// Build a connector, allowing an injected `http` client (tests inject a
-    /// client pointed at a mock token endpoint; production passes `None` for a
-    /// default 30 s-timeout client).
-    pub fn from_config_with_http(
+    /// Build a connector with optional injected dependencies: the canonical
+    /// user identity and a shared LLM backend (tests inject a mock; the
+    /// daemon passes the live backend through the factory).
+    pub fn from_config_with_deps(
         config: serde_json::Value,
         secret_store: Option<Arc<dyn SecretStore>>,
         user_identity: Option<String>,
         cursor: Option<String>,
-        http: Option<reqwest::Client>,
         llm_backend: Option<Arc<dyn LlmBackend>>,
     ) -> Result<Self, ConnectorError> {
         // Recover the supervisor-injected slug before parsing the DTO: serde
@@ -44,12 +45,12 @@ impl EmailConnector {
             .unwrap_or_else(|| DEFAULT_SLUG.to_string());
         let dto: EmailConfigDto = serde_json::from_value(config)
             .map_err(|e| ConnectorError::Config(format!("invalid email config: {e}")))?;
-        let http = match http {
-            Some(c) => c,
-            None => reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .map_err(|e| ConnectorError::Config(format!("HTTP client build failed: {e}")))?,
+        // Only an OAuth-configured connector needs the hardened OAuth client;
+        // an app-password connector must not allocate a second reqwest
+        // connection pool or fail startup if the OAuth client build fails.
+        let oauth_http = match &dto.auth {
+            EmailAuthMethod::OAuth { .. } => Some(OAuthHttpClient::new()?),
+            EmailAuthMethod::AppPassword { .. } => None,
         };
         Ok(Self {
             slug,
@@ -59,7 +60,7 @@ impl EmailConnector {
                 .unwrap_or_else(|| DEFAULT_DISPLAY_NAME.to_string()),
             config: dto,
             secret_store,
-            http,
+            oauth_http,
             last_uid: Mutex::new(cursor.as_deref().and_then(parse_cursor)),
             supports_idle: StdMutex::new(None),
             buffer: Mutex::new(Vec::new()),

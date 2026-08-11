@@ -33,12 +33,11 @@ impl ConnectorFactory for EmailConnectorFactory {
             .get("__cursor")
             .and_then(|v| v.as_str())
             .map(str::to_string);
-        let connector = EmailConnector::from_config_with_http(
+        let connector = EmailConnector::from_config_with_deps(
             config,
             ctx.secret_store.clone(),
             ctx.user_identity.clone(),
             cursor,
-            None,
             ctx.llm_backend.clone(),
         )?;
         Ok(Arc::new(connector) as Arc<dyn Connector>)

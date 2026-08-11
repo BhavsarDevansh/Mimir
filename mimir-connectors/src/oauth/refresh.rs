@@ -9,8 +9,8 @@
 use chrono::{DateTime, Utc};
 use oauth2::basic::{BasicClient, BasicErrorResponse, BasicTokenResponse};
 use oauth2::{
-    AuthType, ClientId, ClientSecret, RefreshToken, RequestTokenError, Scope, TokenResponse,
-    TokenUrl,
+    AuthType, ClientId, ClientSecret, HttpClientError, RefreshToken, RequestTokenError, Scope,
+    TokenResponse, TokenUrl,
 };
 
 use crate::connector::ConnectorError;
@@ -86,7 +86,20 @@ fn map_token_error(err: RefreshGrantError) -> ConnectorError {
             ConnectorError::Authentication(format!("token refresh failed: {detail}"))
         }
         RequestTokenError::Request(e) => {
-            ConnectorError::Network(format!("token refresh failed: {e}"))
+            // oauth2's `HttpClientError::Reqwest` Display is the constant
+            // "client error" (the inner error is not part of the format
+            // string), so format the inner error to keep the actual cause
+            // (DNS / timeout / TLS / connection) in logs and `last_error`.
+            // The inner reqwest error contains no secret material (URL +
+            // error kind).
+            let detail = match &e {
+                HttpClientError::Reqwest(inner) => inner.to_string(),
+                HttpClientError::Http(err) => err.to_string(),
+                HttpClientError::Io(err) => err.to_string(),
+                HttpClientError::Other(msg) => msg.clone(),
+                _ => e.to_string(),
+            };
+            ConnectorError::Network(format!("token refresh failed: {detail}"))
         }
         // The parse error's `Vec<u8>` payload is the raw response body —
         // deliberately dropped.
@@ -103,7 +116,14 @@ fn map_token_error(err: RefreshGrantError) -> ConnectorError {
 /// (a provider value cannot realistically overflow `i64` seconds, but a
 /// hostile value must not panic).
 fn expires_at_from_now(secs: std::time::Duration) -> DateTime<Utc> {
-    Utc::now() + chrono::Duration::from_std(secs).unwrap_or(chrono::Duration::MAX)
+    let dur = chrono::Duration::from_std(secs).unwrap_or(chrono::Duration::MAX);
+    // `DateTime + TimeDelta` panics on overflow, and `Duration::MAX` (~292e9
+    // years) is far beyond chrono's ±262143-year range, so a hostile
+    // `expires_in` must saturate at `MAX_UTC` instead of panicking the
+    // refresh path.
+    Utc::now()
+        .checked_add_signed(dur)
+        .unwrap_or(DateTime::<Utc>::MAX_UTC)
 }
 
 /// Build a [`SecretBundle::OAuth`] from an `oauth2` token response, retaining
@@ -404,6 +424,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn map_token_error_surfaces_underlying_network_cause() {
+        // oauth2's `HttpClientError::Reqwest` Display is the constant "client
+        // error" (the inner reqwest error is not part of the format string),
+        // so the mapping must format the inner error itself — otherwise every
+        // DNS/timeout/TLS/connection failure reads as "client error" in logs
+        // and the persisted `last_error`.
+        let reqwest_err = reqwest::Client::new()
+            .get("http://")
+            .send()
+            .await
+            .expect_err("invalid URL must fail at send time");
+        let err = map_token_error(RequestTokenError::Request(HttpClientError::Reqwest(
+            Box::new(reqwest_err),
+        )));
+        let msg = format!("{err}");
+        assert!(
+            matches!(err, ConnectorError::Network(_)),
+            "network failure must map to Network, got {msg}"
+        );
+        assert!(
+            msg.contains("builder error"),
+            "underlying reqwest cause missing: {msg}"
+        );
+        assert!(
+            !msg.contains("client error"),
+            "constant oauth2 display leaked instead of the cause: {msg}"
+        );
+    }
+
+    #[tokio::test]
     async fn refresh_token_truncates_a_long_error_description() {
         let server = MockServer::start().await;
         let long_desc = "d".repeat(1000);
@@ -523,6 +573,41 @@ mod tests {
         assert!(is_loopback_url(
             &reqwest::Url::parse("http://localhost/token").unwrap()
         ));
+    }
+
+    #[test]
+    fn expires_at_from_now_saturates_instead_of_panicking() {
+        // u64::MAX seconds overflows chrono's `TimeDelta`, so the MAX
+        // fallback is used; that still exceeds chrono's `DateTime` range, so
+        // the result must saturate at `MAX_UTC` rather than panic.
+        assert_eq!(
+            expires_at_from_now(std::time::Duration::from_secs(u64::MAX)),
+            DateTime::<Utc>::MAX_UTC
+        );
+        // ~317,000 years fits in a `TimeDelta` but overflows `DateTime`'s
+        // ±262143-year range — must saturate, not panic.
+        assert_eq!(
+            expires_at_from_now(std::time::Duration::from_secs(10_000_000_000_000)),
+            DateTime::<Utc>::MAX_UTC
+        );
+    }
+
+    #[test]
+    fn into_bundle_saturates_hostile_expires_in() {
+        // A hostile token endpoint can return an absurd `expires_in`; the
+        // bundle conversion must saturate instead of panicking the refresh
+        // path.
+        let resp: BasicTokenResponse = serde_json::from_value(serde_json::json!({
+            "access_token": "fresh",
+            "token_type": "Bearer",
+            "expires_in": 18446744073709551615u64,
+        }))
+        .expect("token response");
+        let bundle = into_bundle(&resp, None);
+        let SecretBundle::OAuth { expires_at, .. } = bundle else {
+            panic!("expected OAuth bundle, got {bundle:?}");
+        };
+        assert_eq!(expires_at, Some(DateTime::<Utc>::MAX_UTC));
     }
 
     #[test]

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.96.2] — 2026-08-11
+
+### Docs — what-works-now.md rewritten as a feature-level roadmap
+
+- **`docs/wiki/what-works-now.md` rewritten.** The changelog block in the header is removed (release history lives in this file), the Phase 3 roadmap wall-of-text is condensed to a summary, and the feature reference is expanded into an honest per-feature status guide (✅ works / 🟡 partial / ❌ not implemented) with the pending work for each feature linked to its GitHub issue. New sections cover Events & Reminders, Connectors, Background Jobs, the LLM client/worker pool, and the Librarian/Retrieval agents; the API endpoint table now matches the real route set; the Known Limitations table drops the closed #71/#45 entries and lists the current open issues.
+- **Nine new GitHub issues created from the audit** (#279–#287): session compaction, chat session persistence, HTTP API authentication, LLM semantic entity dedup, email iMIP CANCEL lifecycle, memory pinning, macOS launchd, config hot-reload propagation, and a small code-quality cleanup.
+- Version bumped 0.96.1 → 0.96.2 (patch — documentation only; no code or behaviour change).
+
 ## [0.96.1] — 2026-08-11
 
 ### Review fixes — oauth2/reqwest reconciliation (PR #278)

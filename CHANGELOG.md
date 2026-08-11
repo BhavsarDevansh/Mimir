@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.96.1] — 2026-08-11
+
+### Review fixes — oauth2/reqwest reconciliation (PR #278)
+
+- **OAuth HTTP client built only for OAuth auth methods.** `CalendarConnector` and `EmailConnector` now construct the hardened `OAuthHttpClient` only when the config uses `CalendarAuthMethod::OAuth` / `EmailAuthMethod::OAuth` (stored as `Option`); an app-password connector no longer allocates a second reqwest connection pool and can no longer fail startup on an OAuth client build error.
+- **Token-response body capped at 64 KiB.** The `OAuthHttpClient` adapter streams the token-endpoint response with an explicit bound instead of buffering it whole, so a compromised or misconfigured endpoint cannot force a large allocation on the refresh path of a long-running daemon.
+- **Hostile `expires_in` clamped to 90 days.** `expires_at_from_now` no longer saturates at chrono's `MAX_UTC` (which made `needs_refresh` permanently false and reused a dead access token forever); absurd provider values now clamp to a plausible 90-day lifetime.
+- **`OAuthHttpClient::from_client` narrowed to `pub(crate)`** (test-only escape hatch around the redirect hardening), and the crate-level docs no longer link to the feature-gated `oauth` module from the no-feature doc build.
+- **Tests:** unknown-expiry reuse test, oversized-body rejection tests, and the network-cause assertion no longer depends on reqwest's internal `"builder error"` display string.
+- **Docs:** the OAuth error contract is now stated consistently across the connector docs (provider response errors expose only parsed `error`/`error_description`; network failures include the underlying reqwest error detail; raw response bodies are never surfaced), the A4 CLI PKCE flow is marked planned/reserved in the framework table, and the Email OAuth credential model documents the optional `client_secret` (sent in the token-refresh request body when configured, never stored or logged).
+
 ## [0.96.0] — 2026-08-11
 
 ### OAuth2 / reqwest reconciliation (issue #240)
@@ -10,7 +21,7 @@
 - **Dead code removed:** the Email connector's now-unused shared `reqwest::Client` field/param is gone (`from_config_with_http` → `from_config_with_deps`), and reqwest's `form` feature is dropped from `mimir-connectors` (the `oauth2` crate builds its own form-encoded body).
 - **Tests:** 27 new/updated tests — wiremock refresh round-trips (request shape, token parsing, rotation, scope joining), secret-hygiene + truncation, redirect non-following (attacker host sees zero requests), HTTPS/lookalike-loopback gates, skew-window refresh, and connector-level expired-token refresh for both Calendar and Email. Full workspace suite green; clippy/fmt clean. New deps: `oauth2` 5.0.0 (+ `http` 1.x declared directly); `rand 0.8` enters the tree as a third rand line (oauth2's PKCE verifier generation; 0.9/0.10 already present) — recorded in the deps ledger.
 - **Review fixes:** network-level refresh failures now surface the underlying reqwest cause — oauth2's `HttpClientError::Reqwest` display is the constant `client error` (the inner error is not part of the format string), so the adapter formats the inner error (DNS / timeout / TLS / connection) into `ConnectorError::Network` — and a hostile `expires_in` saturates at chrono's `MAX_UTC` instead of panicking the refresh path (`DateTime + TimeDelta` overflows on values beyond year 262143; `Duration::MAX` is far beyond that range).
-- **Docs:** deps ledger (`VISION/09-Roadmap/Phase-3-Plan.md` §4) records the chosen path; new technical doc `docs/oauth-client.md`; `docs/calendar-connector.md`, `docs/email-connector.md`, `docs/wiki/connectors.md`, `docs/wiki/what-works-now.md`, `README.md`, and `Mimir-Implementation-Context.md` updated. `AGENTS.md` needs no change (no rule or ledger reference became stale). Version bumped 0.95.1 → 0.96.0 (minor — backwards-compatible new dependency + internal refactor; no public API/CLI/config/HTTP surface changed except the internal `from_config_with_http` rename).
+- **Docs:** deps ledger (`VISION/09-Roadmap/Phase-3-Plan.md` §4) records the chosen path; new technical doc `docs/oauth-client.md`; `docs/calendar-connector.md`, `docs/email-connector.md`, `docs/wiki/connectors.md`, `docs/wiki/what-works-now.md`, `README.md`, and `Mimir-Implementation-Context.md` updated. `AGENTS.md` needs no change (no rule or ledger reference became stale). Version bumped 0.95.1 → 0.96.0 (minor — backwards-compatible new dependency + internal refactor). The `EmailConnector::from_config_with_http` → `from_config_with_deps` rename is a **public API change** (`EmailConnector` is re-exported from `mimir-connectors`): the injected `reqwest::Client` parameter is removed (the connector now builds its own OAuth HTTP client from config) and the final parameter is the optional LLM backend. Migrate callers to `from_config_with_deps(config, secret_store, user_identity, cursor, llm_backend)`.
 
 ## [0.95.1] — 2026-08-11
 

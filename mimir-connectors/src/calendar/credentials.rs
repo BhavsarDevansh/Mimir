@@ -40,8 +40,13 @@ impl CalendarConnector {
                 // path (issue #240: `oauth2` 5.0.0 over the workspace reqwest
                 // 0.13 client). Returns the token to use and, when a refresh
                 // happened, the refreshed bundle for the caller to persist.
+                let http = self.oauth_http.as_ref().ok_or_else(|| {
+                    ConnectorError::Config(
+                        "OAuth auth method configured without an OAuth HTTP client".into(),
+                    )
+                })?;
                 let (token, refreshed) = oauth::resolve_access_token(
-                    &self.oauth_http,
+                    http,
                     token_endpoint,
                     client_id,
                     client_secret.as_deref(),

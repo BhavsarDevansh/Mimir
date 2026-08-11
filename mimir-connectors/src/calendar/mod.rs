@@ -165,7 +165,11 @@ pub struct CalendarConnector {
     /// OAuth HTTP client for token refresh (issue #240): the `oauth2`-crate
     /// adapter over the workspace reqwest 0.13 client, built with redirects
     /// disabled so a credential POST can never be bounced to another host.
-    oauth_http: OAuthHttpClient,
+    /// `None` for non-OAuth auth methods — the client is only built when the
+    /// config actually needs it (an app-password connector must not allocate
+    /// a second connection pool or fail startup on an OAuth client build
+    /// error).
+    oauth_http: Option<OAuthHttpClient>,
     /// In-memory incremental cursor (the last persisted sync-token). Seeded
     /// from `__cursor` at construction; the supervisor persists the value
     /// returned by [`sync`](Connector::sync) via `update_sync_cursor`.

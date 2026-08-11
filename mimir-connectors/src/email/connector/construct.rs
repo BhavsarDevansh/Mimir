@@ -6,7 +6,9 @@ use std::sync::Mutex as StdMutex;
 use tokio::sync::Mutex;
 
 use crate::connector::ConnectorError;
-use crate::email::config::{DEFAULT_DISPLAY_NAME, DEFAULT_SLUG, EmailConfigDto, parse_cursor};
+use crate::email::config::{
+    DEFAULT_DISPLAY_NAME, DEFAULT_SLUG, EmailAuthMethod, EmailConfigDto, parse_cursor,
+};
 use crate::email::connector::EmailConnector;
 use crate::oauth::OAuthHttpClient;
 use crate::secrets::SecretStore;
@@ -43,7 +45,13 @@ impl EmailConnector {
             .unwrap_or_else(|| DEFAULT_SLUG.to_string());
         let dto: EmailConfigDto = serde_json::from_value(config)
             .map_err(|e| ConnectorError::Config(format!("invalid email config: {e}")))?;
-        let oauth_http = OAuthHttpClient::new()?;
+        // Only an OAuth-configured connector needs the hardened OAuth client;
+        // an app-password connector must not allocate a second reqwest
+        // connection pool or fail startup if the OAuth client build fails.
+        let oauth_http = match &dto.auth {
+            EmailAuthMethod::OAuth { .. } => Some(OAuthHttpClient::new()?),
+            EmailAuthMethod::AppPassword { .. } => None,
+        };
         Ok(Self {
             slug,
             display_name: dto

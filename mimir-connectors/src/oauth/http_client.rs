@@ -25,8 +25,18 @@ use crate::connector::ConnectorError;
 /// compromised or malicious token endpoint bounce the refresh grant (or, in
 /// A4 / #205, the authorization-code exchange) to an attacker-controlled
 /// host. This matches the `oauth2` crate's own SSRF guidance.
+///
+/// # Response body bound
+///
+/// Token responses are a few hundred bytes; the body read is capped at
+/// `MAX_RESPONSE_BYTES` so a compromised or misconfigured endpoint cannot
+/// force a large allocation on the refresh path of a long-running daemon.
 #[derive(Clone, Debug)]
 pub struct OAuthHttpClient(reqwest::Client);
+
+/// Upper bound on a token-endpoint response body. A token response is a few
+/// hundred bytes; anything larger is rejected rather than buffered whole.
+const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 
 impl OAuthHttpClient {
     /// Build a hardened OAuth HTTP client: 30 s timeout, redirects disabled.
@@ -41,7 +51,8 @@ impl OAuthHttpClient {
 
     /// Wrap an existing client. Used by tests to point the adapter at a mock
     /// server; the caller is responsible for the redirect policy.
-    pub fn from_client(client: reqwest::Client) -> Self {
+    #[cfg(test)]
+    pub(crate) fn from_client(client: reqwest::Client) -> Self {
         Self(client)
     }
 }
@@ -62,9 +73,69 @@ impl<'c> AsyncHttpClient<'c> for OAuthHttpClient {
             for (name, value) in response.headers().iter() {
                 builder = builder.header(name, value);
             }
-            builder
-                .body(response.bytes().await.map_err(Box::new)?.to_vec())
-                .map_err(HttpClientError::Http)
+            let mut body = Vec::new();
+            let mut response = response;
+            while let Some(chunk) = response.chunk().await.map_err(Box::new)? {
+                if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
+                    return Err(HttpClientError::Other(format!(
+                        "token response body exceeds {MAX_RESPONSE_BYTES} bytes"
+                    )));
+                }
+                body.extend_from_slice(&chunk);
+            }
+            builder.body(body).map_err(HttpClientError::Http)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn call_rejects_oversized_response_body() {
+        // A hostile or misconfigured token endpoint must not be able to force
+        // a large allocation: the adapter caps the body read and rejects
+        // anything over the bound.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'x'; 70 * 1024]))
+            .mount(&server)
+            .await;
+
+        let client = OAuthHttpClient::from_client(reqwest::Client::new());
+        let request = http::Request::builder()
+            .method("POST")
+            .uri(format!("{}/token", server.uri()))
+            .body(Vec::new())
+            .expect("request");
+        let err = client
+            .call(request)
+            .await
+            .expect_err("oversized body must be rejected");
+        assert!(
+            matches!(err, HttpClientError::Other(_)),
+            "expected Other error, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn call_accepts_small_response_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'x'; 1024]))
+            .mount(&server)
+            .await;
+
+        let client = OAuthHttpClient::from_client(reqwest::Client::new());
+        let request = http::Request::builder()
+            .method("POST")
+            .uri(format!("{}/token", server.uri()))
+            .body(Vec::new())
+            .expect("request");
+        let response = client.call(request).await.expect("small body must pass");
+        assert_eq!(response.body().len(), 1024);
     }
 }

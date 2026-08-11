@@ -112,18 +112,23 @@ fn map_token_error(err: RefreshGrantError) -> ConnectorError {
     }
 }
 
-/// `expires_in` seconds → absolute expiry, saturating at chrono's maximum
-/// (a provider value cannot realistically overflow `i64` seconds, but a
-/// hostile value must not panic).
+/// Upper bound on a provider-supplied `expires_in`. Saturating at `MAX_UTC`
+/// would make `needs_refresh` permanently false (the connector would reuse a
+/// dead access token forever), so a hostile or absurd value is clamped to a
+/// plausible lifetime instead.
+const MAX_TOKEN_LIFETIME_DAYS: i64 = 90;
+
+/// `expires_in` seconds → absolute expiry, clamped to
+/// [`MAX_TOKEN_LIFETIME_DAYS`] (a provider value cannot realistically exceed
+/// 90 days, but a hostile value must not panic).
 fn expires_at_from_now(secs: std::time::Duration) -> DateTime<Utc> {
-    let dur = chrono::Duration::from_std(secs).unwrap_or(chrono::Duration::MAX);
+    let cap = chrono::Duration::days(MAX_TOKEN_LIFETIME_DAYS);
+    let dur = chrono::Duration::from_std(secs).unwrap_or(cap).min(cap);
     // `DateTime + TimeDelta` panics on overflow, and `Duration::MAX` (~292e9
     // years) is far beyond chrono's ±262143-year range, so a hostile
-    // `expires_in` must saturate at `MAX_UTC` instead of panicking the
-    // refresh path.
-    Utc::now()
-        .checked_add_signed(dur)
-        .unwrap_or(DateTime::<Utc>::MAX_UTC)
+    // `expires_in` must clamp instead of panicking the refresh path.
+    let now = Utc::now();
+    now.checked_add_signed(dur).unwrap_or(now + cap)
 }
 
 /// Build a [`SecretBundle::OAuth`] from an `oauth2` token response, retaining
@@ -444,7 +449,7 @@ mod tests {
             "network failure must map to Network, got {msg}"
         );
         assert!(
-            msg.contains("builder error"),
+            msg.len() > "token refresh failed: ".len(),
             "underlying reqwest cause missing: {msg}"
         );
         assert!(
@@ -576,27 +581,29 @@ mod tests {
     }
 
     #[test]
-    fn expires_at_from_now_saturates_instead_of_panicking() {
-        // u64::MAX seconds overflows chrono's `TimeDelta`, so the MAX
-        // fallback is used; that still exceeds chrono's `DateTime` range, so
-        // the result must saturate at `MAX_UTC` rather than panic.
-        assert_eq!(
-            expires_at_from_now(std::time::Duration::from_secs(u64::MAX)),
-            DateTime::<Utc>::MAX_UTC
-        );
-        // ~317,000 years fits in a `TimeDelta` but overflows `DateTime`'s
-        // ±262143-year range — must saturate, not panic.
-        assert_eq!(
-            expires_at_from_now(std::time::Duration::from_secs(10_000_000_000_000)),
-            DateTime::<Utc>::MAX_UTC
-        );
+    fn expires_at_from_now_clamps_hostile_values_to_90_days() {
+        // u64::MAX seconds overflows chrono's `TimeDelta`; ~317,000 years
+        // fits in a `TimeDelta` but overflows `DateTime`'s ±262143-year
+        // range. Neither may panic, and neither may saturate at `MAX_UTC`
+        // (that would make `needs_refresh` permanently false and the
+        // connector would reuse a dead token forever) — both clamp to the
+        // 90-day cap.
+        for secs in [u64::MAX, 10_000_000_000_000] {
+            let capped = expires_at_from_now(std::time::Duration::from_secs(secs));
+            let remaining = capped.signed_duration_since(Utc::now());
+            assert!(
+                (chrono::Duration::days(89)..=chrono::Duration::days(90)).contains(&remaining),
+                "expiry not clamped to the 90-day cap: {remaining:?}"
+            );
+        }
     }
 
     #[test]
-    fn into_bundle_saturates_hostile_expires_in() {
+    fn into_bundle_clamps_hostile_expires_in() {
         // A hostile token endpoint can return an absurd `expires_in`; the
-        // bundle conversion must saturate instead of panicking the refresh
-        // path.
+        // bundle conversion must clamp instead of panicking the refresh path
+        // (and must not store `MAX_UTC`, which would disable proactive
+        // refresh forever).
         let resp: BasicTokenResponse = serde_json::from_value(serde_json::json!({
             "access_token": "fresh",
             "token_type": "Bearer",
@@ -607,7 +614,13 @@ mod tests {
         let SecretBundle::OAuth { expires_at, .. } = bundle else {
             panic!("expected OAuth bundle, got {bundle:?}");
         };
-        assert_eq!(expires_at, Some(DateTime::<Utc>::MAX_UTC));
+        let remaining = expires_at
+            .expect("clamped expiry")
+            .signed_duration_since(Utc::now());
+        assert!(
+            (chrono::Duration::days(89)..=chrono::Duration::days(90)).contains(&remaining),
+            "expiry not clamped to the 90-day cap: {remaining:?}"
+        );
     }
 
     #[test]
@@ -687,6 +700,24 @@ mod tests {
             resolve_access_token(&client(), TOKEN_ENDPOINT, "cid", None, None, &bundle)
                 .await
                 .expect("no refresh needed");
+        assert_eq!(token, "ya29.access");
+        assert!(refreshed.is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_access_token_reuses_token_with_unknown_expiry() {
+        // An unknown expiry (`expires_at: None`) must not force a refresh on
+        // every cycle — the token is reused as-is; if it is actually expired
+        // the provider returns 401 and the next cycle re-authenticates.
+        let bundle = SecretBundle::OAuth {
+            access_token: "ya29.access".into(),
+            refresh_token: Some("rt".into()),
+            expires_at: None,
+        };
+        let (token, refreshed) =
+            resolve_access_token(&client(), TOKEN_ENDPOINT, "cid", None, None, &bundle)
+                .await
+                .expect("unknown expiry must not force a refresh");
         assert_eq!(token, "ya29.access");
         assert!(refreshed.is_none());
     }

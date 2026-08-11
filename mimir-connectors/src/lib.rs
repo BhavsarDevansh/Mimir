@@ -42,10 +42,10 @@
 //!   F12 / #189): token-bucket throttling (governor GCRA), optional rolling 24h
 //!   daily quota, and uniform 429/503 retry with jitter. Connector LLM calls are
 //!   exempt (decision D′); this governs HTTP/IMAP/CalDAV API calls only.
-//! - [`oauth`] — shared OAuth 2.0 client + token-refresh helpers (issue #240),
+//! - `oauth` — shared OAuth 2.0 client + token-refresh helpers (issue #240),
 //!   used by the Calendar (C3 / #197) and Email (C5 / #199) OAuth connectors
 //!   and (from A4 / #205) the CLI PKCE login. Built on `oauth2` 5.0.0 with
-//!   `default-features = false` and a custom [`oauth::OAuthHttpClient`] adapter
+//!   `default-features = false` and a custom `oauth::OAuthHttpClient` adapter
 //!   over the workspace's single reqwest 0.13 client — the crate's optional
 //!   reqwest 0.12 dependency never enters the tree. Gated by the `oauth`
 //!   feature (enabled by `calendar`, `gmail`, and the CLI).

@@ -12,7 +12,7 @@ use crate::connector::ConnectorError;
 use crate::oauth::OAuthHttpClient;
 use crate::secrets::{SecretBundle, SecretStore};
 
-use super::{CalendarConfigDto, DEFAULT_DISPLAY_NAME, DEFAULT_SLUG};
+use super::{CalendarAuthMethod, CalendarConfigDto, DEFAULT_DISPLAY_NAME, DEFAULT_SLUG};
 
 impl CalendarConnector {
     /// Build a connector from its parsed configuration, an optional secret
@@ -52,7 +52,13 @@ impl CalendarConnector {
                 .build()
                 .map_err(|e| ConnectorError::Config(format!("HTTP client build failed: {e}")))?,
         };
-        let oauth_http = OAuthHttpClient::new()?;
+        // Only an OAuth-configured connector needs the hardened OAuth client;
+        // an app-password connector must not allocate a second reqwest
+        // connection pool or fail startup if the OAuth client build fails.
+        let oauth_http = match &dto.auth {
+            CalendarAuthMethod::OAuth { .. } => Some(OAuthHttpClient::new()?),
+            CalendarAuthMethod::AppPassword { .. } => None,
+        };
         Ok(Self {
             slug,
             display_name: dto

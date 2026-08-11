@@ -168,8 +168,9 @@ dependency never enters the tree, and a custom `OAuthHttpClient` adapter
 implements the crate's `AsyncHttpClient` trait over the workspace's single
 reqwest 0.13 client (see [OAuth client](oauth-client.md)). The adapter's client
 never follows redirects (a credential POST cannot be bounced to another host),
-the HTTPS/loopback endpoint gate is preserved, and error strings surface only
-the parsed `error`/`error_description` fields — never the raw response body.
+the HTTPS/loopback endpoint gate is preserved, provider response errors surface
+only the parsed `error`/`error_description` fields (never the raw response
+body), and network failures include the underlying reqwest error detail.
 
 ## Config
 

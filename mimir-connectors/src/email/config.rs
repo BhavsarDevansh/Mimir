@@ -71,6 +71,9 @@ pub enum EmailAuthMethod {
     OAuth {
         /// Account username / email embedded in the XOAUTH2 initial response.
         username: String,
+        /// Authorization endpoint the interactive PKCE login (A4 / #205)
+        /// points the user's browser at.
+        auth_uri: String,
         /// Token endpoint URL for refreshing the access token.
         token_endpoint: String,
         /// OAuth client id (public clients have no secret).

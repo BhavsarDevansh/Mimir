@@ -29,6 +29,7 @@ impl CalendarConnector {
             )),
             (
                 CalendarAuthMethod::OAuth {
+                    auth_uri: _,
                     token_endpoint,
                     client_id,
                     client_secret,

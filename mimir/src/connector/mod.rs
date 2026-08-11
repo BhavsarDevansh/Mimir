@@ -2,12 +2,12 @@
 //!
 //! Every subcommand talks to the daemon over HTTP via `mimir-client` — the
 //! same pattern as `mimir kb`. One module per concern: [`add`] for
-//! registration + non-OAuth credential ingest, [`auth`] for re-runnable
-//! credential ingest on an existing instance, [`query`] for list/status,
-//! [`lifecycle`] for pause/resume/remove/forget, [`sync`] for manual sync
-//! triggers, and [`actions`] for write-back dispatch. Shared helpers
-//! (slug resolution, duration/config parsing, prompting, rendering) live
-//! here.
+//! registration + credential ingest, [`auth`] for re-runnable credential
+//! ingest on an existing instance, [`oauth`] for the shared interactive
+//! PKCE flow (A4 / #205), [`query`] for list/status, [`lifecycle`] for
+//! pause/resume/remove/forget, [`sync`] for manual sync triggers, and
+//! [`actions`] for write-back dispatch. Shared helpers (slug resolution,
+//! duration/config parsing, prompting, rendering) live here.
 
 use colored::Colorize;
 use is_terminal::IsTerminal;
@@ -20,6 +20,7 @@ mod actions;
 mod add;
 mod auth;
 mod lifecycle;
+mod oauth;
 mod query;
 mod sync;
 #[cfg(test)]
@@ -196,13 +197,14 @@ fn set_dotted_path(target: &mut serde_json::Value, key: &str, value: serde_json:
         .insert((*last).to_string(), value);
 }
 
-/// Which non-OAuth secret the `add` flow should ingest for a config,
+/// Which credential the `add`/`auth` flows should acquire for a config,
 /// derived deterministically from the config's `auth.kind` tag — the same
-/// tag the backends' `SecretBundle` enum uses. OAuth is A4 (#205) and never
-/// prompts here.
+/// tag the backends' auth-method DTOs use. OAuth is A4 (#205): the
+/// interactive PKCE flow replaces the credential prompt.
 enum CredentialKind {
     AppPassword,
     ApiToken,
+    OAuth,
     None,
 }
 
@@ -210,6 +212,7 @@ fn credential_kind_for(config: &serde_json::Value) -> CredentialKind {
     match config.pointer("/auth/kind").and_then(|v| v.as_str()) {
         Some("app_password") => CredentialKind::AppPassword,
         Some("api_token") => CredentialKind::ApiToken,
+        Some("oauth") => CredentialKind::OAuth,
         _ => CredentialKind::None,
     }
 }
@@ -244,6 +247,14 @@ fn add_secret(
                 );
             }
             token.or_else(|| prompt_secret("API token:"))
+        }
+        CredentialKind::OAuth => {
+            if password.is_some() || token.is_some() {
+                eprintln!(
+                    "Warning: --password/--token given but auth.kind is 'oauth' — ignoring them (the PKCE flow obtains the token)"
+                );
+            }
+            None
         }
         CredentialKind::None => {
             if password.is_some() || token.is_some() {

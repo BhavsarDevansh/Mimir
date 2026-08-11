@@ -5,11 +5,15 @@ use mimir_api_types::{
     SyncConnectorResponse,
 };
 use mimir_client::MimirClient;
+use mimir_connectors::SecretBundle;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{body_json, method, path},
+    matchers::{body_json, body_partial_json, method, path},
 };
 
+use super::add::handle_connector_add_with_opener;
+use super::auth::handle_connector_auth_with_opener;
+use super::oauth::{oauth_flow_config, oauth_ingest_request};
 use super::*;
 
 fn connector_fixture(id: i32, slug: &str) -> ConnectorResponse {
@@ -38,6 +42,58 @@ async fn mount_list(server: &MockServer, connectors: Vec<ConnectorResponse>) {
         )
         .mount(server)
         .await;
+}
+
+/// A fake browser opener that drives the loopback callback itself: parses
+/// the authorize URL for the redirect URI + CSRF state, then GETs the
+/// callback with a canned code — exactly what a real browser does.
+fn self_callback_opener() -> impl Fn(&str) + Send + Sync {
+    |url: &str| {
+        let url = url.to_string();
+        tokio::spawn(async move {
+            let parsed = reqwest::Url::parse(&url).expect("authorize URL");
+            let state = parsed
+                .query_pairs()
+                .find(|(k, _)| k == "state")
+                .expect("state param")
+                .1
+                .into_owned();
+            let redirect = parsed
+                .query_pairs()
+                .find(|(k, _)| k == "redirect_uri")
+                .expect("redirect_uri param")
+                .1
+                .into_owned();
+            let callback = format!("{redirect}?code=auth-code&state={state}");
+            let _ = reqwest::get(callback).await;
+        });
+    }
+}
+
+/// Mount a wiremock token endpoint that answers the PKCE code exchange.
+async fn mount_token_endpoint(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "ya29.access",
+            "token_type": "Bearer",
+            "refresh_token": "rt",
+            "expires_in": 3600,
+        })))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+/// The OAuth config fields the PKCE flow needs, as `key=value` pairs.
+fn oauth_config_pairs(token_endpoint: &str) -> Vec<String> {
+    vec![
+        "auth.kind=oauth".to_string(),
+        "auth.auth_uri=https://oauth.example.com/authorize".to_string(),
+        format!("auth.token_endpoint={token_endpoint}"),
+        "auth.client_id=test-client".to_string(),
+        "calendar_url=https://dav.example.com/cal".to_string(),
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -182,8 +238,9 @@ fn credential_kind_detected_from_auth_tag() {
         credential_kind_for(&api_token),
         CredentialKind::ApiToken
     ));
+    let oauth = serde_json::json!({"auth": {"kind": "oauth"}});
+    assert!(matches!(credential_kind_for(&oauth), CredentialKind::OAuth));
     for config in [
-        serde_json::json!({"auth": {"kind": "oauth"}}),
         serde_json::json!({"host": "imap.example.com"}),
         serde_json::Value::Null,
     ] {
@@ -305,30 +362,190 @@ async fn add_with_app_password_ingests_credentials() {
 }
 
 #[tokio::test]
-async fn add_with_oauth_config_never_ingests_tokens() {
-    let server = MockServer::start().await;
+async fn add_with_oauth_config_runs_pkce_flow_and_ingests_tokens() {
+    let daemon = MockServer::start().await;
+    let token_server = MockServer::start().await;
     let created = connector_fixture(1, "calendar");
     Mock::given(method("POST"))
         .and(path("/connectors"))
         .respond_with(ResponseTemplate::new(201).set_body_json(&created))
-        .mount(&server)
+        .mount(&daemon)
         .await;
+    let mut authenticated = created;
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_partial_json(serde_json::json!({
+            "kind": "oauth",
+            "access_token": "ya29.access",
+            "refresh_token": "rt",
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&daemon)
+        .await;
+    mount_token_endpoint(&token_server).await;
 
-    handle_connector_add(
+    handle_connector_add_with_opener(
         "calendar".to_string(),
         "caldav".to_string(),
-        vec![
-            "auth.kind=oauth".to_string(),
-            "auth.username=me@example.com".to_string(),
-            "calendar_url=https://dav.example.com/cal".to_string(),
-        ],
+        oauth_config_pairs(&format!("{}/token", token_server.uri())),
         None,
         None,
         None,
         None,
         None,
         true,
+        &daemon.uri(),
+        &self_callback_opener(),
+    )
+    .await;
+
+    // The PKCE flow must have exchanged the code and POSTed the OAuth
+    // bundle to the daemon's token route.
+    let token_requests = daemon
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path().contains("/tokens"))
+        .count();
+    assert_eq!(token_requests, 1);
+}
+
+#[test]
+fn oauth_flow_config_extracts_fields() {
+    let config = serde_json::json!({
+        "auth": {
+            "kind": "oauth",
+            "auth_uri": "https://oauth.example.com/authorize",
+            "token_endpoint": "https://oauth.example.com/token",
+            "client_id": "cid",
+            "client_secret": "secret",
+            "scopes": ["a", "b"],
+        }
+    });
+    let flow = oauth_flow_config(&config).expect("config");
+    assert_eq!(flow.auth_uri, "https://oauth.example.com/authorize");
+    assert_eq!(flow.token_endpoint, "https://oauth.example.com/token");
+    assert_eq!(flow.client_id, "cid");
+    assert_eq!(flow.client_secret.as_deref(), Some("secret"));
+    assert_eq!(
+        flow.scopes.as_deref(),
+        Some(&["a".to_string(), "b".to_string()][..])
+    );
+}
+
+#[test]
+fn oauth_flow_config_rejects_missing_fields() {
+    let missing_uri = serde_json::json!({
+        "auth": {"kind": "oauth", "token_endpoint": "https://oauth.example.com/token", "client_id": "cid"}
+    });
+    let err = oauth_flow_config(&missing_uri).expect_err("auth_uri is required");
+    assert!(err.contains("auth_uri"), "got: {err}");
+
+    let missing_auth = serde_json::json!({"calendar_url": "https://dav.example.com/cal"});
+    let err = oauth_flow_config(&missing_auth).expect_err("auth object is required");
+    assert!(err.contains("auth"), "got: {err}");
+}
+
+#[test]
+fn oauth_ingest_request_converts_bundle_to_wire() {
+    let bundle = SecretBundle::OAuth {
+        access_token: "ya29.access".to_string(),
+        refresh_token: Some("rt".to_string()),
+        expires_at: Some(chrono::Utc::now()),
+    };
+    let req = oauth_ingest_request(&bundle);
+    match req {
+        mimir_api_types::IngestTokenRequest::OAuth {
+            access_token,
+            refresh_token,
+            expires_at,
+        } => {
+            assert_eq!(access_token, "ya29.access");
+            assert_eq!(refresh_token.as_deref(), Some("rt"));
+            assert!(
+                expires_at
+                    .as_ref()
+                    .is_some_and(|s| chrono::DateTime::parse_from_rfc3339(s).is_ok()),
+                "expiry must be RFC-3339, got {expires_at:?}"
+            );
+        }
+        other => panic!("expected OAuth ingest request, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// auth
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn auth_with_oauth_config_runs_pkce_flow_and_ingests_tokens() {
+    let daemon = MockServer::start().await;
+    let token_server = MockServer::start().await;
+    let conn = connector_fixture(1, "calendar");
+    mount_list(&daemon, vec![conn.clone()]).await;
+    let mut authenticated = conn;
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_partial_json(serde_json::json!({
+            "kind": "oauth",
+            "access_token": "ya29.access",
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&daemon)
+        .await;
+    mount_token_endpoint(&token_server).await;
+
+    handle_connector_auth_with_opener(
+        "calendar".to_string(),
+        oauth_config_pairs(&format!("{}/token", token_server.uri())),
+        None,
+        None,
+        None,
+        true,
+        &daemon.uri(),
+        &self_callback_opener(),
+    )
+    .await;
+
+    let token_requests = daemon
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .count();
+    assert_eq!(token_requests, 1);
+}
+
+#[tokio::test]
+async fn auth_with_password_flag_ingests_app_password() {
+    let server = MockServer::start().await;
+    let conn = connector_fixture(1, "gmail");
+    mount_list(&server, vec![conn.clone()]).await;
+    let mut authenticated = conn;
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_json(serde_json::json!({
+            "kind": "app_password",
+            "password": "hunter2"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&server)
+        .await;
+
+    handle_connector_auth_with_opener(
+        "gmail".to_string(),
+        vec![],
+        None,
+        Some("hunter2".to_string()),
+        None,
+        true,
         &server.uri(),
+        &|_url: &str| {},
     )
     .await;
 
@@ -337,9 +554,9 @@ async fn add_with_oauth_config_never_ingests_tokens() {
         .await
         .unwrap()
         .into_iter()
-        .filter(|r| r.url.path().contains("/tokens"))
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
         .count();
-    assert_eq!(token_requests, 0);
+    assert_eq!(token_requests, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -549,6 +766,8 @@ async fn auth_with_token_ingests_api_token() {
 
     handle_connector_auth(
         "demo".to_string(),
+        vec![],
+        None,
         None,
         Some("tok-123".to_string()),
         true,
@@ -585,6 +804,8 @@ async fn auth_with_password_ingests_app_password() {
 
     handle_connector_auth(
         "demo".to_string(),
+        vec![],
+        None,
         Some("hunter2".to_string()),
         None,
         true,

@@ -131,6 +131,7 @@ async fn resolve_auth_oauth_reuses_unexpired_token() {
     cfg["auth"] = serde_json::json!({
         "kind": "oauth",
         "username": "devansh@example.com",
+        "auth_uri": "https://oauth.example.com/authorize",
         "token_endpoint": "https://oauth.example.com/token",
         "client_id": "cid",
     });
@@ -177,6 +178,7 @@ async fn resolve_auth_oauth_refreshes_expired_token() {
     cfg["auth"] = serde_json::json!({
         "kind": "oauth",
         "username": "devansh@example.com",
+        "auth_uri": "https://oauth.example.com/authorize",
         "token_endpoint": format!("{}/token", server.uri()),
         "client_id": "cid",
         "client_secret": "secret",

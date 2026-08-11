@@ -404,7 +404,7 @@ mimir connector add gmail --backend imap host=imap.fastmail.com auth.kind=app_pa
 mimir connector add calendar --backend caldav --config-json '{"calendar_url":"https://dav.example.com/cal","auth":{"kind":"app_password","username":"me@example.com"}}' --slug work-cal
 ```
 
-Config is given as `key=value` pairs with dotted nesting (`auth.kind=app_password`) plus an optional `--config-json` base object. Scalar values are parsed as booleans, numbers, or strings. OAuth configs (`auth.kind=oauth`) do not prompt — interactive OAuth login is coming in the PKCE flow (A4 / #205). `--slug` defaults to the connector type and `--name` to its title-cased form.
+Config is given as `key=value` pairs with dotted nesting (`auth.kind=app_password`) plus an optional `--config-json` base object. Scalar values are parsed as booleans, numbers, or strings. OAuth configs (`auth.kind=oauth`) run the interactive PKCE login (A4 / #205) instead of prompting: the CLI opens the provider's authorize URL in your browser (printed first for headless/SSH sessions), receives the redirect on an ephemeral loopback listener, exchanges the code, and POSTs the token bundle to the daemon — the instance becomes `authenticated`. `--slug` defaults to the connector type and `--name` to its title-cased form.
 
 ### `mimir connector list` / `status`
 
@@ -437,7 +437,13 @@ mimir connector auth gmail --password 'app-pw'     # app-password backend
 mimir connector auth gmail                          # interactive: pick the kind, then enter the secret
 ```
 
-The credential kind comes from the flag (`--password` / `--token` are mutually exclusive) or an interactive selection when neither is given. After re-authing an expired connector, run `mimir connector resume <slug>` to restart its runner.
+The credential kind comes from the flag (`--password` / `--token` are mutually exclusive), an interactive selection when neither is given, or the `auth.kind` of a re-supplied config (`--config-json` / `key=value` pairs). An `auth.kind=oauth` config runs the interactive PKCE login (A4 / #205) instead of prompting — the daemon does not expose the stored config on the wire, so the OAuth fields (`auth.auth_uri`, `auth.token_endpoint`, `auth.client_id`, optional `auth.client_secret` / `auth.scopes`) are re-supplied:
+
+```bash
+mimir connector auth gmail auth.kind=oauth auth.auth_uri=https://accounts.google.com/o/oauth2/v2/auth auth.token_endpoint=https://oauth2.googleapis.com/token auth.client_id=... auth.username=you@gmail.com
+```
+
+After re-authing an expired connector, run `mimir connector resume <slug>` to restart its runner.
 
 ### `mimir connector pause` / `resume`
 

@@ -12,6 +12,7 @@ fn oauth_config(token_endpoint: &str) -> serde_json::Value {
         "calendar_url": "https://caldav.example.com/calendar/",
         "auth": {
             "kind": "oauth",
+            "auth_uri": "https://oauth.example.com/authorize",
             "token_endpoint": token_endpoint,
             "client_id": "cid",
             "client_secret": "secret",

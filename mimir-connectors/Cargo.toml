@@ -55,6 +55,11 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # (reqwest and oauth2 both depend on http 1.x), so no new download; declared
 # directly so the adapter does not rely on a transitive re-export.
 http = { version = "1", optional = true }
+# `url` parses the loopback callback request target and decodes its query
+# pairs (A4 / #205 PKCE flow). Already in the tree at 2.5.8 (oauth2's own
+# dependency), so no new download; declared directly so the PKCE module does
+# not rely on a transitive re-export. Gated by the `oauth` feature.
+url = { version = "2", optional = true }
 # `percent-encoding` percent-encodes the `/search` query value. It is already a
 # transitive dependency (via `reqwest`/`url`, resolved at 2.3.2) so this adds no
 # new download; declared directly so the geocoder does not rely on transitive
@@ -173,7 +178,7 @@ photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"]
 ## `default-features = false` + a custom `AsyncHttpClient` adapter over the
 ## workspace reqwest 0.13 client (see `src/oauth/`). Enabled by the OAuth
 ## backends (`calendar`, `gmail`) and by the CLI's PKCE login flow (A4 / #205).
-oauth = ["dep:oauth2", "dep:http"]
+oauth = ["dep:oauth2", "dep:http", "dep:url"]
 ## CalDAV calendar ingestion: read/sync + event fact extraction (C3–C4).
 calendar = ["dep:icalendar", "dep:roxmltree", "dep:chrono-tz", "dep:uuid", "oauth"]
 ## IMAP email ingestion, Gmail and other providers (C5–C7).

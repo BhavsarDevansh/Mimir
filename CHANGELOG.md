@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.97.0] — 2026-08-11
+
+### Phase 3 A4 — interactive OAuth PKCE loopback flow (issue #205)
+
+- **`mimir-connectors::oauth::pkce` — the interactive PKCE authorization-code flow.** `run_pkce_flow` binds an ephemeral loopback listener on `127.0.0.1:0`, builds the provider's authorize URL with an S256 PKCE challenge + CSRF state, receives the redirect (8 KiB read cap, state validated, favicon probes ignored), exchanges the code via the shared `OAuthHttpClient` (HTTPS/loopback token-endpoint gate + secret-hygiene error mapping), and returns the `SecretBundle::OAuth` for the caller to persist. The daemon never runs a transient HTTP server. Public surface: `PkceFlowConfig`, `run_pkce_flow`, `DEFAULT_FLOW_TIMEOUT` (gated by the `oauth` feature, which now also gates `url`).
+- **`mimir connector add` / `auth` run the flow for `auth.kind=oauth` configs.** `add` acquires the credential *before* registering the instance (a canceled prompt or aborted OAuth flow exits with nothing created) and POSTs the exchanged bundle to the daemon's token-ingest route so the instance becomes `authenticated`. `auth` re-runs the flow for expired credentials, taking the OAuth client config from re-supplied `key=value` / `--config-json` args (the daemon does not expose the stored config on the wire). The authorize URL is printed before the browser is opened (`webbrowser` 1.2.4), so headless/SSH sessions can complete the login manually; a browser-open failure is non-fatal.
+- **Breaking config change: `auth_uri` is now required on OAuth auth methods.** `CalendarAuthMethod::OAuth` and `EmailAuthMethod::OAuth` gained a required `auth_uri` field (the provider's authorization endpoint), reflected in the JSON schemas and config docs. Existing OAuth configs must add `auth.auth_uri` before the flow can run.
+- **Tests:** 12 new `run_pkce_flow` / `parse_callback` tests (happy path, state mismatch, timeout, non-HTTPS token endpoint, invalid auth URI, favicon probe, provider-error param, percent-decoding, secret-hygiene error mapping, refresh-token retention, expiry clamping) plus CLI e2e tests for the add/auth PKCE paths against a wiremock token endpoint, config extraction, and ingest conversion.
+- **Docs:** `docs/oauth-client.md` documents the flow and its security properties; connector-management, CLI, email/calendar connector, wiki, README, `Mimir-Implementation-Context.md`, and the VISION Phase 3 plan updated; `VISION/03-Connectors/User-Experience.md` onboarding example updated from paste-a-code to the loopback flow.
+- Version bumped 0.96.2 → 0.97.0 (minor — new feature; breaking config change acceptable per project policy).
+
 ## [0.96.2] — 2026-08-11
 
 ### Docs — what-works-now.md rewritten as a feature-level roadmap

@@ -19,6 +19,17 @@ mimir-server = { path = "../mimir-server" }
 mimir-client = { path = "../mimir-client" }
 mimir-api-types = { path = "../mimir-api-types" }
 mimir-knowledge = { path = "../mimir-knowledge" }
+# A4 (issue #205): the interactive PKCE loopback login runs in the CLI
+# process (the daemon never runs a transient HTTP server). The flow lives in
+# `mimir-connectors::oauth::pkce` (built on the shared `OAuthHttpClient`
+# adapter from #240); the `oauth` feature gates it. The daemon side of the
+# flow is the token-ingest route, reached via `mimir-client`.
+mimir-connectors = { path = "../mimir-connectors", features = ["oauth"] }
+# `webbrowser` (1.2.4, latest stable) opens the provider's authorize URL in
+# the user's default browser for the PKCE flow. Cross-platform (macOS `open`,
+# Linux `xdg-open`, Windows `start`, WSL interop) and safe (spawns the
+# platform opener, no `unsafe`). License MIT/Apache-2.0 (GPL-3-compatible).
+webbrowser = "1.2.4"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
 dirs = "6.0"

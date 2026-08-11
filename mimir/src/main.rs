@@ -200,12 +200,23 @@ async fn main() {
             }
             cli::ConnectorCommands::Auth {
                 slug,
+                config,
+                config_json,
                 password,
                 token,
                 json,
             } => {
                 ensure_daemon(&base_url, &mut daemon_started).await;
-                connector::handle_connector_auth(slug, password, token, json, &base_url).await;
+                connector::handle_connector_auth(
+                    slug,
+                    config,
+                    config_json,
+                    password,
+                    token,
+                    json,
+                    &base_url,
+                )
+                .await;
             }
             cli::ConnectorCommands::Status { slug, json } => {
                 ensure_daemon(&base_url, &mut daemon_started).await;

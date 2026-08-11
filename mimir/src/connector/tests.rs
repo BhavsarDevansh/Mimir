@@ -128,6 +128,39 @@ fn merge_config_rejects_malformed_input() {
 }
 
 #[test]
+fn merge_config_quoted_values_stay_strings() {
+    let merged = merge_config(
+        &[
+            "account=\"0755\"".to_string(),
+            "version=\"1.0\"".to_string(),
+            "flag=\"true\"".to_string(),
+            "note=\"hello world\"".to_string(),
+        ],
+        None,
+    )
+    .unwrap();
+    assert_eq!(merged["account"], serde_json::json!("0755"));
+    assert_eq!(merged["version"], serde_json::json!("1.0"));
+    assert_eq!(merged["flag"], serde_json::json!("true"));
+    assert_eq!(merged["note"], serde_json::json!("hello world"));
+}
+
+#[test]
+fn parse_config_scalar_honors_double_quotes() {
+    assert_eq!(parse_config_scalar("\"0755\""), serde_json::json!("0755"));
+    assert_eq!(parse_config_scalar("\"1.0\""), serde_json::json!("1.0"));
+    assert_eq!(parse_config_scalar("\"true\""), serde_json::json!("true"));
+    assert_eq!(
+        parse_config_scalar("\"hello world\""),
+        serde_json::json!("hello world")
+    );
+    assert_eq!(parse_config_scalar("\"\""), serde_json::json!(""));
+    assert_eq!(parse_config_scalar("0755"), serde_json::json!(755));
+    assert_eq!(parse_config_scalar("true"), serde_json::json!(true));
+    assert_eq!(parse_config_scalar("\"0755"), serde_json::json!("\"0755"));
+}
+
+#[test]
 fn merge_config_dotted_path_overwrites_scalar() {
     let merged = merge_config(&["auth.kind=oauth".to_string()], Some(r#"{"auth": 5}"#)).unwrap();
     assert_eq!(merged["auth"]["kind"], serde_json::json!("oauth"));
@@ -328,6 +361,7 @@ async fn sync_sends_human_duration_as_seconds() {
                 new_cursor: Some("c1".to_string()),
             }),
         )
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -354,6 +388,7 @@ async fn sync_full_omits_since() {
                 new_cursor: None,
             }),
         )
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -373,6 +408,7 @@ async fn pause_and_resume_round_trip() {
     Mock::given(method("POST"))
         .and(path("/connectors/7/pause"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&paused))
+        .expect(1)
         .mount(&server)
         .await;
     let mut active = connector_fixture(7, "demo");
@@ -380,6 +416,7 @@ async fn pause_and_resume_round_trip() {
     Mock::given(method("POST"))
         .and(path("/connectors/7/resume"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&active))
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -394,6 +431,7 @@ async fn remove_deletes_instance() {
     Mock::given(method("DELETE"))
         .and(path("/connectors/7"))
         .respond_with(ResponseTemplate::new(204))
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -411,6 +449,7 @@ async fn forget_trashes_facts_and_reports_count() {
                 forgotten_count: 12,
             }),
         )
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -438,6 +477,7 @@ async fn act_dispatches_inline_payload() {
                 message: Some("etag-1".to_string()),
             }),
         )
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -469,6 +509,7 @@ async fn act_reads_payload_from_json_file() {
                 message: None,
             }),
         )
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -538,6 +579,7 @@ async fn auth_with_password_ingests_app_password() {
             "password": "hunter2"
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .expect(1)
         .mount(&server)
         .await;
 

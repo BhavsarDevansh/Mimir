@@ -2,7 +2,7 @@
 
 > **Phase:** 3 — Connectors (C5 / issue #199)
 > **Feature flag:** `gmail` (default). Framework + mock stay built without it.
-> **Status:** Implemented (library only). C5 transport (#199) + C6 structured extraction (#200, iMIP calendar invites) + #249 (schema.org JSON-LD deterministic extraction) + C7 LLM extraction (#201, unstructured prose) are done. The daemon `AppState` wiring (A1 / #202), action routes (A2 / #203), and the `mimir connector …` CLI (A3 / #204) have landed; the interactive OAuth PKCE login is A4 / #205.
+> **Status:** Implemented (library + daemon/CLI integration). C5 transport (#199) + C6 structured extraction (#200, iMIP calendar invites) + #249 (schema.org JSON-LD deterministic extraction) + C7 LLM extraction (#201, unstructured prose) are done. The daemon `AppState` wiring (A1 / #202), action routes (A2 / #203), and the `mimir connector …` CLI (A3 / #204) are integrated; only the interactive OAuth PKCE login remains (A4 / #205).
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose

@@ -148,8 +148,13 @@ fn merge_config(pairs: &[String], config_json: Option<&str>) -> Result<serde_jso
     Ok(config)
 }
 
-/// Parse a `key=value` config value as a boolean, number, or string.
+/// Parse a `key=value` config value as a boolean, number, or string. A
+/// value wrapped in double quotes is always a string (`account="0755"`
+/// keeps the leading zero instead of becoming the number 755).
 fn parse_config_scalar(raw: &str) -> serde_json::Value {
+    if raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"') {
+        return serde_json::Value::String(raw[1..raw.len() - 1].to_string());
+    }
     match raw {
         "true" => return serde_json::Value::Bool(true),
         "false" => return serde_json::Value::Bool(false),

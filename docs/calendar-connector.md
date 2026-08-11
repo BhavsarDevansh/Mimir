@@ -2,7 +2,7 @@
 
 > **Phase:** 3 — Connectors (C3 / issue #197, C4 / issue #198)
 > **Feature flag:** `calendar` (default). Framework + mock stay built without it.
-> **Status:** Implemented (library only). C3 (#197) delivers transport + read/sync; C4 (#198) adds event → KB fact extraction, events-subsystem (#74) integration, and CalDAV write-back (`act`). The daemon `AppState` wiring (A1 / #202), action routes (A2 / #203), and the `mimir connector …` CLI (A3 / #204) have landed; the interactive OAuth PKCE login is A4 / #205. Server-side deletion → KB fact lifecycle is tracked as a follow-up (the extractor only yields facts).
+> **Status:** Implemented (library + daemon/CLI integration). C3 (#197) delivers transport + read/sync; C4 (#198) adds event → KB fact extraction, events-subsystem (#74) integration, and CalDAV write-back (`act`). The daemon `AppState` wiring (A1 / #202), action routes (A2 / #203), and the `mimir connector …` CLI (A3 / #204) are integrated; only the interactive OAuth PKCE login remains (A4 / #205). Server-side deletion → KB fact lifecycle is tracked as a follow-up (the extractor only yields facts).
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose

@@ -1,11 +1,7 @@
 # Calendar Connector
 
 > **Phase:** 3 — Connectors
-> **Status:** Library done — C3 (#197) transport + read/sync, C4 (#198)
-> event → knowledge-graph extraction, events-subsystem integration, and
-> write-back. Daemon wiring and the `mimir connector …` CLI come in later
-> Phase 3 issues (A1–A3). Server-side deletion → KB fact lifecycle is a
-> follow-up.
+> **Status:** Implemented (library + daemon/CLI) — C3 (#197) transport + read/sync, C4 (#198) event → knowledge-graph extraction, events-subsystem integration, and write-back. Daemon wiring (A1 / #202), action routes (A2 / #203), and the `mimir connector …` CLI (A3 / #204) have landed; the interactive OAuth PKCE login remains A4 / #205. Server-side deletion → KB fact lifecycle is a follow-up.
 
 ## What it is
 

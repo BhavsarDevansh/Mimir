@@ -10,10 +10,20 @@ use wiremock::{
 };
 
 fn run_mimir(args: &[&str], base_url: &str) -> (String, String, std::process::ExitStatus) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_dir = temp.path().join("config");
+    let data_dir = temp.path().join("data");
+    let home_dir = temp.path().join("home");
+    std::fs::create_dir_all(config_dir.join("mimir")).unwrap();
+    std::fs::create_dir_all(data_dir.join("mimir")).unwrap();
+    std::fs::create_dir_all(&home_dir).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mimir"))
         .args(args)
         .env("NO_COLOR", "1")
         .env("MIMIR_BASE_URL", base_url)
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .env("HOME", &home_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -119,6 +129,81 @@ fn connector_list_fails_when_daemon_down() {
     assert!(
         combined.contains("Error") || combined.contains("error"),
         "should report an error when the daemon is unreachable, got: {combined}"
+    );
+}
+
+#[test]
+fn connector_add_rejects_both_flags() {
+    let (stdout, stderr, status) = run_mimir(
+        &[
+            "connector",
+            "add",
+            "gmail",
+            "--backend",
+            "test",
+            "--password",
+            "p",
+            "--token",
+            "t",
+        ],
+        "http://127.0.0.1:1",
+    );
+    assert!(
+        !status.success(),
+        "add must reject passing both --password and --token"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("cannot be used with '--token <TOKEN>'"),
+        "expected the clap both-flags conflict error, got: {combined}"
+    );
+}
+
+#[tokio::test]
+async fn connector_add_ingest_failure_hints_at_auth() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/connectors"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(connector_fixture(1, "demo")))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
+            "error": "secret store unavailable",
+            "code": "SECRET_STORE_ERROR"
+        })))
+        .mount(&server)
+        .await;
+
+    let (stdout, stderr, status) = run_mimir(
+        &[
+            "connector",
+            "add",
+            "gmail",
+            "--backend",
+            "test",
+            "--slug",
+            "demo",
+            "auth.kind=app_password",
+            "--password",
+            "hunter2",
+            "--json",
+        ],
+        &server.uri(),
+    );
+    assert!(
+        !status.success(),
+        "add must fail when credential ingest fails.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("mimir connector auth demo"),
+        "expected the recovery hint in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("secret store unavailable"),
+        "expected the server error detail in stderr, got: {stderr}"
     );
 }
 

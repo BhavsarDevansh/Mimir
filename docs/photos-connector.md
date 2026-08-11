@@ -2,9 +2,7 @@
 
 > **Phase:** 3 — Connectors (C1 / issue #195)
 > **Feature flag:** `photos` (default). Framework + mock stay built without it.
-> **Status:** Implemented (library only). Daemon `AppState` wiring + the
-> `mimir connector …` CLI land in A1–A3 (issues #202–#204); C2 (GPS → place
-> reverse-geocoding + `entity_locations` enrichment) is #196.
+> **Status:** Implemented (library + daemon/CLI integration). Daemon `AppState` wiring (A1 / #202), action routes (A2 / #203), and the `mimir connector …` CLI (A3 / #204) are integrated; C2 (GPS → place reverse-geocoding + `entity_locations` enrichment) is #196.
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose

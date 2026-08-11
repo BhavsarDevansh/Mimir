@@ -62,13 +62,13 @@ pub async fn handle_connector_add(
             output = client
                 .connector_tokens(id, IngestTokenRequest::AppPassword { password: secret })
                 .await
-                .unwrap_or_else(|e| exit_with_error(render_client_error(e)));
+                .unwrap_or_else(|e| exit_with_error(ingest_failure(e, &slug)));
         }
         (CredentialKind::ApiToken, Some(secret)) => {
             output = client
                 .connector_tokens(id, IngestTokenRequest::ApiToken { token: secret })
                 .await
-                .unwrap_or_else(|e| exit_with_error(render_client_error(e)));
+                .unwrap_or_else(|e| exit_with_error(ingest_failure(e, &slug)));
         }
         (kind, None) => {
             if !matches!(kind, CredentialKind::None) {
@@ -93,4 +93,14 @@ pub async fn handle_connector_add(
     println!(
         "Next: run `mimir connector resume {slug}` to activate it, then `mimir connector sync {slug}` to sync."
     );
+}
+
+/// Render the exit message when credential ingest fails after the instance
+/// was registered: the connector stays unauthenticated and can be completed
+/// later with `mimir connector auth <slug>`.
+fn ingest_failure(e: mimir_client::ClientError, slug: &str) -> String {
+    format!(
+        "{} — connector '{slug}' was registered but left unauthenticated; retry with `mimir connector auth {slug}`",
+        render_client_error(e)
+    )
 }

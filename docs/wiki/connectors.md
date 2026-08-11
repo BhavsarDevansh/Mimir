@@ -91,7 +91,7 @@ Status responses carry a derived `item_count`: the number of `sources` rows attr
 
 ## Managing connectors from the CLI
 
-The `mimir connector` command group (A3 / #204) plumbs these routes so you never need to call the daemon by hand. Every subcommand supports `--json` for scriptable output; slug-based commands resolve slugs client-side against the instance list. See [CLI Commands](cli-commands.md) for the full reference with examples.
+The `mimir connector` command group (A3 / #204) plumbs these routes so you never need to call the daemon by hand. Every subcommand except `remove` supports `--json` for scriptable output; slug-based commands resolve slugs client-side against the instance list. See [CLI Commands](cli-commands.md) for the full reference with examples.
 
 ```bash
 # Add (created in Setup — resume activates it)
@@ -101,10 +101,14 @@ mimir connector add gmail --backend imap host=imap.gmail.com auth.kind=app_passw
 mimir connector resume gmail
 mimir connector sync gmail --since 7d
 
-# Status, lifecycle, teardown
+# Status and lifecycle
 mimir connector status gmail
 mimir connector pause gmail
+
+# Teardown — remove and forget are alternatives, not a sequence (remove deletes
+# the row, so a later forget on the same slug cannot resolve it)
 mimir connector remove gmail --yes       # detaches provenance; facts survive
+# or
 mimir connector forget gmail --yes       # trashes the connector's facts (recoverable 30 days)
 
 # Write-back (Calendar)

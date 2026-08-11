@@ -382,7 +382,7 @@ pub enum ConnectorCommands {
         #[arg(long)]
         name: Option<String>,
         /// App-password credential (skips the interactive prompt).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "token")]
         password: Option<String>,
         /// API-token credential (skips the interactive prompt).
         #[arg(long)]

@@ -486,3 +486,67 @@ async fn act_reads_payload_from_json_file() {
     )
     .await;
 }
+
+// ---------------------------------------------------------------------------
+// auth
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn auth_with_token_ingests_api_token() {
+    let server = MockServer::start().await;
+    mount_list(&server, vec![connector_fixture(7, "demo")]).await;
+    let mut authenticated = connector_fixture(7, "demo");
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/7/tokens"))
+        .and(body_json(
+            serde_json::json!({"kind": "api_token", "token": "tok-123"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&server)
+        .await;
+
+    handle_connector_auth(
+        "demo".to_string(),
+        None,
+        Some("tok-123".to_string()),
+        true,
+        &server.uri(),
+    )
+    .await;
+
+    let token_requests = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/7/tokens")
+        .count();
+    assert_eq!(token_requests, 1);
+}
+
+#[tokio::test]
+async fn auth_with_password_ingests_app_password() {
+    let server = MockServer::start().await;
+    mount_list(&server, vec![connector_fixture(7, "demo")]).await;
+    let mut authenticated = connector_fixture(7, "demo");
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/7/tokens"))
+        .and(body_json(serde_json::json!({
+            "kind": "app_password",
+            "password": "hunter2"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&server)
+        .await;
+
+    handle_connector_auth(
+        "demo".to_string(),
+        Some("hunter2".to_string()),
+        None,
+        true,
+        &server.uri(),
+    )
+    .await;
+}

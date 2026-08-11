@@ -4,18 +4,21 @@
 use mimir_api_types::{AddConnectorRequest, IngestTokenRequest};
 
 use super::{
-    CredentialKind, credential_kind_for, exit_with_error, make_client, merge_config, print_json,
-    prompt_secret, render_client_error, title_case,
+    CredentialKind, add_secret, credential_kind_for, exit_with_error, make_client, merge_config,
+    print_json, render_client_error, title_case,
 };
 
 /// Register a new connector instance.
 ///
 /// The daemon creates the instance in `Setup` (activation is the `resume`
-/// action, A2 / #203). When the merged config declares a non-OAuth `auth`
-/// kind, the matching credential is prompted for via `inquire` (or taken
-/// from `--password` / `--token`) and ingested through the token route so
-/// the instance becomes `authenticated`. OAuth configs never prompt here —
-/// the interactive PKCE flow is A4 (#205).
+/// action, A2 / #203). The non-OAuth credential (if the merged config
+/// declares one) is prompted for via `inquire` *before* the instance is
+/// registered, so a canceled prompt aborts with nothing created; the secret
+/// is then ingested through the token route so the instance becomes
+/// `authenticated`. A non-interactive run without `--password` / `--token`
+/// proceeds with an unauthenticated instance and warns — it can be
+/// completed later with `mimir connector auth <slug>`. OAuth configs never
+/// prompt here — the interactive PKCE flow is A4 (#205).
 #[allow(clippy::too_many_arguments)] // mirrors the clap field count (kb style)
 pub async fn handle_connector_add(
     connector_type: String,
@@ -35,6 +38,10 @@ pub async fn handle_connector_add(
     let slug = slug.unwrap_or_else(|| connector_type.to_ascii_lowercase());
     let display_name = name.unwrap_or_else(|| title_case(&connector_type));
 
+    // Prompt for the credential before the daemon registers anything: a
+    // canceled prompt exits here with no instance created.
+    let secret = add_secret(&merged, password, token);
+
     let request = AddConnectorRequest {
         connector_type,
         backend,
@@ -49,51 +56,29 @@ pub async fn handle_connector_add(
     let id = created.id;
     let mut output = created;
 
-    // Non-OAuth credential ingest. The prompt is skipped when a flag was
-    // supplied or stdin is not a terminal (scripts must pass the flag).
-    match credential_kind_for(&merged) {
-        CredentialKind::AppPassword => {
-            if token.is_some() {
+    // Non-OAuth credential ingest (secret already resolved pre-create).
+    match (credential_kind_for(&merged), secret) {
+        (CredentialKind::AppPassword, Some(secret)) => {
+            output = client
+                .connector_tokens(id, IngestTokenRequest::AppPassword { password: secret })
+                .await
+                .unwrap_or_else(|e| exit_with_error(render_client_error(e)));
+        }
+        (CredentialKind::ApiToken, Some(secret)) => {
+            output = client
+                .connector_tokens(id, IngestTokenRequest::ApiToken { token: secret })
+                .await
+                .unwrap_or_else(|e| exit_with_error(render_client_error(e)));
+        }
+        (kind, None) => {
+            if !matches!(kind, CredentialKind::None) {
                 eprintln!(
-                    "Warning: --token given but auth.kind is 'app_password' — ignoring it (pass --password instead)"
+                    "Warning: no credential provided — connector '{slug}' left unauthenticated (pass --password/--token, or run `mimir connector auth {slug}` to complete it later)"
                 );
-            }
-            match password.or_else(|| prompt_secret("App password:")) {
-                Some(secret) => {
-                    output = client
-                        .connector_tokens(id, IngestTokenRequest::AppPassword { password: secret })
-                        .await
-                        .unwrap_or_else(|e| exit_with_error(render_client_error(e)));
-                }
-                None => eprintln!(
-                    "Warning: no app password provided — connector '{slug}' left unauthenticated (pass --password to supply one non-interactively)"
-                ),
             }
         }
-        CredentialKind::ApiToken => {
-            if password.is_some() {
-                eprintln!(
-                    "Warning: --password given but auth.kind is 'api_token' — ignoring it (pass --token instead)"
-                );
-            }
-            match token.or_else(|| prompt_secret("API token:")) {
-                Some(secret) => {
-                    output = client
-                        .connector_tokens(id, IngestTokenRequest::ApiToken { token: secret })
-                        .await
-                        .unwrap_or_else(|e| exit_with_error(render_client_error(e)));
-                }
-                None => eprintln!(
-                    "Warning: no API token provided — connector '{slug}' left unauthenticated (pass --token to supply one non-interactively)"
-                ),
-            }
-        }
-        CredentialKind::None => {
-            if password.is_some() || token.is_some() {
-                eprintln!(
-                    "Warning: --password/--token given but config declares no non-OAuth credential kind — ignoring them (set auth.kind=app_password or auth.kind=api_token)"
-                );
-            }
+        (CredentialKind::None, Some(_)) => {
+            unreachable!("add_secret only returns a secret for non-OAuth kinds")
         }
     }
 

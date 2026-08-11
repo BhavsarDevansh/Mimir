@@ -391,6 +391,20 @@ pub enum ConnectorCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Ingest credentials for an existing connector (completes an unauthenticated instance, or re-auths after expiry).
+    Auth {
+        /// Connector slug.
+        slug: String,
+        /// App-password credential (skips the interactive prompt).
+        #[arg(long, conflicts_with = "token")]
+        password: Option<String>,
+        /// API-token credential (skips the interactive prompt).
+        #[arg(long)]
+        token: Option<String>,
+        /// Output raw JSON instead of a summary.
+        #[arg(long)]
+        json: bool,
+    },
     /// List every registered connector instance.
     List {
         /// Output raw JSON instead of a table.

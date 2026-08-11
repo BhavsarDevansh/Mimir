@@ -111,4 +111,4 @@ mimir connector forget gmail --yes       # trashes the connector's facts (recove
 mimir connector act calendar create_event '{"summary":"Lunch","start":"2026-08-12T12:00:00Z"}'
 ```
 
-Non-OAuth configs (`auth.kind=app_password`) prompt for the credential via `inquire` and ingest it through the daemon's token route; pass `--password`/`--token` to supply it non-interactively. OAuth configs do not prompt yet — the interactive PKCE login is A4 (#205).
+Non-OAuth configs (`auth.kind=app_password`) prompt for the credential via `inquire` and ingest it through the daemon's token route; pass `--password`/`--token` to supply it non-interactively, or run `mimir connector auth <slug>` later to complete or refresh credentials on an existing instance. OAuth configs do not prompt yet — the interactive PKCE login is A4 (#205).

@@ -47,6 +47,31 @@ fn connector_full_lifecycle_cycle() {
     assert_eq!(shown["id"], id);
     assert_eq!(shown["status"], "setup");
 
+    // auth completes the credential ingest on the existing instance (no
+    // remove + re-add), flipping auth_state to authenticated.
+    let (stdout, stderr, status) = daemon.run_cli(&[
+        "connector",
+        "auth",
+        "demo",
+        "--token",
+        "test-token",
+        "--json",
+    ]);
+    assert!(
+        status.success(),
+        "connector auth failed.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let authed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(authed["id"], id);
+    assert_eq!(authed["auth_state"], "authenticated");
+    let (stdout, stderr, status) = daemon.run_cli(&["connector", "status", "demo", "--json"]);
+    assert!(
+        status.success(),
+        "connector status after auth failed.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let shown: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(shown["auth_state"], "authenticated");
+
     // list includes it.
     let (stdout, stderr, status) = daemon.run_cli(&["connector", "list", "--json"]);
     assert!(

@@ -2,7 +2,8 @@
 //!
 //! Every subcommand talks to the daemon over HTTP via `mimir-client` — the
 //! same pattern as `mimir kb`. One module per concern: [`add`] for
-//! registration + non-OAuth credential ingest, [`query`] for list/status,
+//! registration + non-OAuth credential ingest, [`auth`] for re-runnable
+//! credential ingest on an existing instance, [`query`] for list/status,
 //! [`lifecycle`] for pause/resume/remove/forget, [`sync`] for manual sync
 //! triggers, and [`actions`] for write-back dispatch. Shared helpers
 //! (slug resolution, duration/config parsing, prompting, rendering) live
@@ -17,6 +18,7 @@ pub(crate) use crate::cli_util::{exit_with_error, make_client, print_json};
 
 mod actions;
 mod add;
+mod auth;
 mod lifecycle;
 mod query;
 mod sync;
@@ -25,6 +27,7 @@ mod tests;
 
 pub use actions::handle_connector_act;
 pub use add::handle_connector_add;
+pub use auth::handle_connector_auth;
 pub use lifecycle::{
     handle_connector_forget, handle_connector_pause, handle_connector_remove,
     handle_connector_resume,
@@ -203,6 +206,48 @@ fn credential_kind_for(config: &serde_json::Value) -> CredentialKind {
         Some("app_password") => CredentialKind::AppPassword,
         Some("api_token") => CredentialKind::ApiToken,
         _ => CredentialKind::None,
+    }
+}
+
+/// Resolve the non-OAuth credential secret for `add` *before* the instance
+/// exists: the matching flag wins, then an interactive `inquire` prompt. A
+/// canceled prompt (Esc/Ctrl-D) exits, so the daemon never registers a
+/// zombie `Setup` row for an aborted interactive run.
+///
+/// Returns `None` when the config declares no credential, or when stdin is
+/// not a terminal and no flag was supplied — the caller proceeds with an
+/// unauthenticated instance and warns (recoverable later via
+/// `mimir connector auth <slug>`).
+fn add_secret(
+    config: &serde_json::Value,
+    password: Option<String>,
+    token: Option<String>,
+) -> Option<String> {
+    match credential_kind_for(config) {
+        CredentialKind::AppPassword => {
+            if token.is_some() {
+                eprintln!(
+                    "Warning: --token given but auth.kind is 'app_password' — ignoring it (pass --password instead)"
+                );
+            }
+            password.or_else(|| prompt_secret("App password:"))
+        }
+        CredentialKind::ApiToken => {
+            if password.is_some() {
+                eprintln!(
+                    "Warning: --password given but auth.kind is 'api_token' — ignoring it (pass --token instead)"
+                );
+            }
+            token.or_else(|| prompt_secret("API token:"))
+        }
+        CredentialKind::None => {
+            if password.is_some() || token.is_some() {
+                eprintln!(
+                    "Warning: --password/--token given but config declares no non-OAuth credential kind — ignoring them (set auth.kind=app_password or auth.kind=api_token)"
+                );
+            }
+            None
+        }
     }
 }
 

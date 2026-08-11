@@ -427,6 +427,18 @@ mimir connector sync photos --full --json
 
 A connector that is not running (e.g. freshly added, still `Setup`) reports a 409 with a hint to run `mimir connector resume <slug>` first.
 
+### `mimir connector auth`
+
+Ingest credentials for an existing connector — completes an instance that was registered without credentials (a non-interactive `add`, or a credential the daemon later rejected) and re-auths after expiry, without `remove` + re-`add`:
+
+```bash
+mimir connector auth gmail --token 'api-token'     # API-token backend
+mimir connector auth gmail --password 'app-pw'     # app-password backend
+mimir connector auth gmail                          # interactive: pick the kind, then enter the secret
+```
+
+The credential kind comes from the flag (`--password` / `--token` are mutually exclusive) or an interactive selection when neither is given. After re-authing an expired connector, run `mimir connector resume <slug>` to restart its runner.
+
 ### `mimir connector pause` / `resume`
 
 ```bash

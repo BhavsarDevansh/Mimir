@@ -96,6 +96,7 @@ Manages connector instances through the daemon's connector routes (Phase 3 A3 / 
 - `mimir connector list [--json]` — every registered instance as a table.
 - `mimir connector status [<slug>] [--json]` — detailed view of one instance, or the overview table when the slug is omitted.
 - `mimir connector sync <slug> [--full | --since <duration>] [--json]` — manual sync; `--since` accepts `30s`/`5m`/`12h`/`7d` or bare seconds, and conflicts with `--full`. A `Setup`/paused instance reports the `CONNECTOR_NOT_RUNNING` 409 with an activation hint.
+- `mimir connector auth <slug> [--password <p> | --token <t>] [--json]` — ingest credentials for an existing instance (completes an unauthenticated `add`, or re-auths after expiry) without `remove` + re-`add`; without a flag it interactively asks which credential kind the connector uses.
 - `mimir connector pause <slug> [--json]` / `resume <slug> [--json]` — stop/re-spawn the runner.
 - `mimir connector remove <slug> [--yes]` — delete the instance and credentials, detaching provenance (facts survive).
 - `mimir connector forget <slug> [--yes] [--json]` — cascade-forget: trash the connector's facts (recoverable 30 days), delete credentials and row.

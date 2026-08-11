@@ -121,3 +121,28 @@ fn connector_list_fails_when_daemon_down() {
         "should report an error when the daemon is unreachable, got: {combined}"
     );
 }
+
+#[test]
+fn connector_auth_rejects_both_flags() {
+    let (stdout, stderr, status) = run_mimir(
+        &[
+            "connector",
+            "auth",
+            "demo",
+            "--password",
+            "p",
+            "--token",
+            "t",
+        ],
+        "http://127.0.0.1:1",
+    );
+    assert!(
+        !status.success(),
+        "auth must reject passing both --password and --token"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("cannot be used with '--token <TOKEN>'"),
+        "expected the clap both-flags conflict error, got: {combined}"
+    );
+}

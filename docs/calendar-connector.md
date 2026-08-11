@@ -2,12 +2,7 @@
 
 > **Phase:** 3 — Connectors (C3 / issue #197, C4 / issue #198)
 > **Feature flag:** `calendar` (default). Framework + mock stay built without it.
-> **Status:** Implemented (library only). C3 (#197) delivers transport +
-> read/sync; C4 (#198) adds event → KB fact extraction, events-subsystem (#74)
-> integration, and CalDAV write-back (`act`). The daemon `AppState` wiring +
-> `mimir connector …` CLI land in A1–A3 (#202–#204); the interactive OAuth
-> PKCE login is A4 / #206. Server-side deletion → KB fact lifecycle is
-> tracked as a follow-up (the extractor only yields facts).
+> **Status:** Implemented (library + daemon/CLI integration). C3 (#197) delivers transport + read/sync; C4 (#198) adds event → KB fact extraction, events-subsystem (#74) integration, and CalDAV write-back (`act`). The daemon `AppState` wiring (A1 / #202), action routes (A2 / #203), and the `mimir connector …` CLI (A3 / #204) are integrated; only the interactive OAuth PKCE login remains (A4 / #205). Server-side deletion → KB fact lifecycle is tracked as a follow-up (the extractor only yields facts).
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -53,7 +48,7 @@ to `ConnectorError` strings (which the supervisor persists to `last_error`
 discriminant only, never a `Debug` of the OAuth config.
 
 The interactive PKCE login that *obtains* the first OAuth token is
-**A4 / `#206`**, out of scope here. `#197` only consumes + refreshes a stored token.
+**A4 / `#205`**, out of scope here. `#197` only consumes + refreshes a stored token.
 
 ## Sync protocol
 
@@ -169,7 +164,7 @@ All optional, gated by the `calendar` feature:
 The `oauth2` crate is **deliberately not** pulled in: `oauth2` 5.0.0 depends on
 `reqwest` 0.12, which would duplicate the workspace's reqwest 0.13 HTTP/TLS
 stack, and #197 only needs the refresh grant (a single form-encoded POST). It
-is deferred to A4 / #206, where the PKCE authorization-code flow justifies it.
+is deferred to A4 / #205, where the PKCE authorization-code flow justifies it.
 See the follow-up issue tracking the deps-ledger / reqwest-0.13 reconciliation.
 
 ## Config

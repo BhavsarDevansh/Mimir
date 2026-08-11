@@ -3,10 +3,7 @@ use mimir_core::paths;
 use mimir_core::skills::{Skill, SkillRegistry, SkillSource, SkillsPermissionsConfig};
 use mimir_core::tools::{ToolPermission, ToolRegistry, ToolSource, ToolsConfig};
 
-pub fn exit_with_error(msg: impl std::fmt::Display) -> ! {
-    eprintln!("Error: {}", msg);
-    std::process::exit(1);
-}
+pub use crate::cli_util::exit_with_error;
 
 fn skills_dir() -> std::path::PathBuf {
     paths::skills_dir()

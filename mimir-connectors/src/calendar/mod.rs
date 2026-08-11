@@ -6,7 +6,7 @@
 //! implementing the two-step ingestion model ([`crate::Connector`]) in
 //! `Polling` mode. Auth is an app password (HTTP Basic) or an OAuth bearer
 //! token refreshed by the connector; the interactive PKCE login that obtains
-//! the first token is A4 / #206.
+//! the first token is A4 / #205.
 //!
 //! # C3 / C4 boundary
 //!
@@ -89,7 +89,7 @@ pub enum CalendarAuthMethod {
     /// OAuth 2.0 (Google Calendar). The access/refresh tokens live in the
     /// [`SecretStore`] as a
     /// [`SecretBundle::OAuth`](crate::secrets::SecretBundle::OAuth); only the client config is non-secret. The
-    /// interactive PKCE login that obtains the first token is A4 / #206.
+    /// interactive PKCE login that obtains the first token is A4 / #205.
     #[serde(rename = "oauth")]
     OAuth {
         /// Token endpoint URL for refreshing the access token.

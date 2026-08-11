@@ -1,8 +1,7 @@
 # Photos Connector
 
 > **Phase:** 3 — Connectors
-> **Status:** Done (library) — C1 (#195) + C2 (#196). Daemon wiring and the
-> `mimir connector …` CLI come in later Phase 3 issues (A1–A3).
+> **Status:** Done (library + daemon/CLI) — C1 (#195) + C2 (#196). Daemon wiring (A1 / #202), action routes (A2 / #203), and the `mimir connector …` CLI (A3 / #204) have landed.
 
 ## What it is
 

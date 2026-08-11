@@ -2,7 +2,7 @@
 
 > **Phase:** 3 — Connectors (C5 / issue #199)
 > **Feature flag:** `gmail` (default). Framework + mock stay built without it.
-> **Status:** Implemented (library only). C5 transport (#199) + C6 structured extraction (#200, iMIP calendar invites) + #249 (schema.org JSON-LD deterministic extraction) + C7 LLM extraction (#201, unstructured prose) are done. The daemon `AppState` wiring + `mimir connector …` CLI land in A1–A3 (#202–#204); the interactive OAuth PKCE login is A4 / #206.
+> **Status:** Implemented (library + daemon/CLI integration). C5 transport (#199) + C6 structured extraction (#200, iMIP calendar invites) + #249 (schema.org JSON-LD deterministic extraction) + C7 LLM extraction (#201, unstructured prose) are done. The daemon `AppState` wiring (A1 / #202), action routes (A2 / #203), and the `mimir connector …` CLI (A3 / #204) are integrated; only the interactive OAuth PKCE login remains (A4 / #205).
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -18,7 +18,7 @@ The issue body was written before the connector framework landed; the following 
 - **`async-imap 0.11.3`, not 0.11.2.** The spec pins `0.11.2`; the latest stable is `0.11.3` (one patch). Built with `default-features = false` + `runtime-tokio` — the crate's *default* feature is `runtime-async-std`, which would pull `async-std` into the tokio-only workspace.
 - **rustls, not async-native-tls.** The spec is silent on TLS. async-imap's `connect()` helper uses `async-native-tls` (system OpenSSL). The workspace standardizes on **rustls** (reqwest `rustls` + `rustls-native-certs`), so the connector hand-rolls the TCP + `tokio-rustls` handshake and feeds the `TlsStream` to `async_imap::Client::new` (which accepts any tokio async stream). The `aws-lc-rs` crypto provider matches the one reqwest already compiles — no second TLS stack or provider enters the tree.
 - **Cursor encodes UIDVALIDITY.** The spec says "incremental sync by last UID". A bare last-UID is unsafe: if the mailbox is recreated, `UIDVALIDITY` changes and every prior UID is stale (silent gaps/duplicates). The cursor is `<uid_validity>:<last_uid>` (e.g. `17:42`); a UIDVALIDITY mismatch on `EXAMINE` triggers a full re-fetch.
-- **OAuth refresh is hand-rolled (DRY with Calendar).** The `oauth2` crate depends on reqwest 0.12, duplicating the workspace reqwest 0.13 stack. The refresh is a single form-encoded POST on the existing reqwest 0.13, shared via `mimir-connectors::oauth`. The interactive PKCE login that *obtains* the first token is A4 / #206.
+- **OAuth refresh is hand-rolled (DRY with Calendar).** The `oauth2` crate depends on reqwest 0.12, duplicating the workspace reqwest 0.13 stack. The refresh is a single form-encoded POST on the existing reqwest 0.13, shared via `mimir-connectors::oauth`. The interactive PKCE login that *obtains* the first token is A4 / #205.
 
 ## Auth
 

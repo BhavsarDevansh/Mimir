@@ -427,10 +427,12 @@ impl AppState {
 
         // ---- Connector framework (Phase 3 A1 / #202) ----
         // Build the registry of built-in connector backends, gated by the
-        // mimir-connectors cargo features. The mock factory is registered only
-        // under `cfg(test)` so a release daemon never advertises a test
-        // connector. Each backend string matches what connectors persist on
-        // their `connectors.backend` row (e.g. "local", "caldav", "imap").
+        // mimir-connectors cargo features. The mock factory is registered
+        // under `cfg(test)` and the `mock-connector` feature so a release
+        // daemon never advertises a test connector unless explicitly built
+        // with the feature (the CLI e2e suite enables it). Each backend
+        // string matches what connectors persist on their `connectors.backend`
+        // row (e.g. "local", "caldav", "imap").
         let connector_registry = Arc::new(ConnectorRegistry::new());
         #[cfg(feature = "photos")]
         {
@@ -465,7 +467,7 @@ impl AppState {
                 tracing::warn!("Failed to register Email connector factory: {e}");
             }
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "mock-connector"))]
         {
             use mimir_connectors::MockConnectorFactory;
             if let Err(e) = connector_registry.register(

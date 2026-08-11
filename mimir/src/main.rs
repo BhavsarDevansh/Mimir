@@ -2,7 +2,9 @@
 mod ask;
 mod chat;
 mod cli;
+mod cli_util;
 mod commands;
+mod connector;
 mod constants;
 mod daemon_guard;
 mod init;
@@ -163,6 +165,87 @@ async fn main() {
             cli::KbCommands::Reject { fact_id, reason } => {
                 ensure_daemon(&base_url, &mut daemon_started).await;
                 kb::handle_kb_reject(fact_id, reason, &base_url).await;
+            }
+        },
+        cli::Commands::Connector { command } => match command {
+            cli::ConnectorCommands::Add {
+                connector_type,
+                backend,
+                config,
+                config_json,
+                slug,
+                name,
+                password,
+                token,
+                json,
+            } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                connector::handle_connector_add(
+                    connector_type,
+                    backend,
+                    config,
+                    config_json,
+                    slug,
+                    name,
+                    password,
+                    token,
+                    json,
+                    &base_url,
+                )
+                .await;
+            }
+            cli::ConnectorCommands::List { json } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                connector::handle_connector_list(json, &base_url).await;
+            }
+            cli::ConnectorCommands::Auth {
+                slug,
+                password,
+                token,
+                json,
+            } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                connector::handle_connector_auth(slug, password, token, json, &base_url).await;
+            }
+            cli::ConnectorCommands::Status { slug, json } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                connector::handle_connector_status(slug, json, &base_url).await;
+            }
+            cli::ConnectorCommands::Sync {
+                slug,
+                full,
+                since,
+                json,
+            } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                connector::handle_connector_sync(slug, full, since, json, &base_url).await;
+            }
+            cli::ConnectorCommands::Pause { slug, json } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                connector::handle_connector_pause(slug, json, &base_url).await;
+            }
+            cli::ConnectorCommands::Resume { slug, json } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                connector::handle_connector_resume(slug, json, &base_url).await;
+            }
+            cli::ConnectorCommands::Remove { slug, yes } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                connector::handle_connector_remove(slug, yes, &base_url).await;
+            }
+            cli::ConnectorCommands::Forget { slug, yes, json } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                connector::handle_connector_forget(slug, yes, json, &base_url).await;
+            }
+            cli::ConnectorCommands::Act {
+                slug,
+                kind,
+                payload,
+                json_file,
+                json,
+            } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                connector::handle_connector_act(slug, kind, payload, json_file, json, &base_url)
+                    .await;
             }
         },
         cli::Commands::Init => init::handle_init().await,

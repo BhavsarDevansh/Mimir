@@ -1,7 +1,7 @@
 # Email Connector
 
 > **Phase:** 3 — Connectors
-> **Status:** Library done — C5 transport (#199) + C6 structured extraction (#200, calendar invites) + #249 (schema.org JSON-LD deterministic extraction) + C7 LLM extraction (#201, unstructured prose). Daemon wiring and the `mimir connector …` CLI come in later Phase 3 issues (A1–A3).
+> **Status:** Implemented (library + daemon/CLI) — C5 transport (#199) + C6 structured extraction (#200, calendar invites) + #249 (schema.org JSON-LD deterministic extraction) + C7 LLM extraction (#201, unstructured prose). Daemon wiring (A1 / #202), action routes (A2 / #203), and the `mimir connector …` CLI (A3 / #204) have landed; the interactive OAuth PKCE login remains A4 / #205.
 
 ## What it is
 
@@ -53,13 +53,13 @@ This is a library component today (in `mimir-connectors`); the daemon wiring tha
 ## Authentication
 
 - **App password** — best for most providers. Generate an app-specific password in your provider's security settings (Gmail calls them "app passwords"); Mimir uses standard IMAP `LOGIN`. Your username is in the connector config; the password is stored securely.
-- **OAuth (Google / Microsoft)** — the connector stores your access + refresh token and refreshes the access token automatically before it expires, so you stay connected without re-authorising. The first token is obtained via an interactive sign-in flow that arrives in a later issue (#206).
+- **OAuth (Google / Microsoft)** — the connector stores your access + refresh token and refreshes the access token automatically before it expires, so you stay connected without re-authorising. The first token is obtained via an interactive sign-in flow that arrives in a later issue (#205).
 
 ## Privacy
 
 - Mimir only **reads** mail — it never sends, deletes, or marks messages. It uses `BODY.PEEK[]` so your unread mail stays unread.
 - All data is fetched and stored locally; no cloud intermediary.
-- "Forget everything from Gmail" is a library-level capability (the connector's `forget()` wipes its cursor, buffer, and stored secret) — it is not yet exposed through a `mimir connector …` command until the daemon wiring (A1–A3 / #202–#204) lands.
+- "Forget everything from Gmail" is exposed through `mimir connector forget <slug>` (A3 / #204): the cascade trashes the connector's facts (recoverable 30 days), credentials, and row, beyond the library-level `forget()` wipe of cursor, buffer, and stored secret.
 
 ## Config example
 

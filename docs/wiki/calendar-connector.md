@@ -1,11 +1,7 @@
 # Calendar Connector
 
 > **Phase:** 3 — Connectors
-> **Status:** Library done — C3 (#197) transport + read/sync, C4 (#198)
-> event → knowledge-graph extraction, events-subsystem integration, and
-> write-back. Daemon wiring and the `mimir connector …` CLI come in later
-> Phase 3 issues (A1–A3). Server-side deletion → KB fact lifecycle is a
-> follow-up.
+> **Status:** Implemented (library + daemon/CLI) — C3 (#197) transport + read/sync, C4 (#198) event → knowledge-graph extraction, events-subsystem integration, and write-back. Daemon wiring (A1 / #202), action routes (A2 / #203), and the `mimir connector …` CLI (A3 / #204) have landed; the interactive OAuth PKCE login remains A4 / #205. Server-side deletion → KB fact lifecycle is a follow-up.
 
 ## What it is
 
@@ -73,7 +69,7 @@ A delete on the server does not yet remove the corresponding KB fact automatical
 - **OAuth (Google)** — the connector stores your access + refresh token and
   **refreshes** the access token automatically before each sync when it
   expires. The initial sign-in (the OAuth PKCE dance) is added in a later
-  issue (A4 / #206); for now you supply the first token.
+  issue (A4 / #205); for now you supply the first token.
 
 Mimir can also write back to your calendar: creating, updating, or deleting
 remote events via CalDAV `PUT`/`DELETE` (added in C4 / #198). This is the
@@ -95,7 +91,7 @@ only connector with write support.
   against fully RFC 6578-compliant servers (iCloud, Nextcloud). Google-specific
   handling is a follow-on.
 - The interactive OAuth login (PKCE) is not yet wired — supply the first token
-  manually until A4 (#206).
+  manually until A4 (#205).
 - Event → knowledge-graph extraction and write-back are live (C4 / #198);
   richer `RRULE` recurrence rules and server-side deletion → KB fact lifecycle
   are follow-ups.

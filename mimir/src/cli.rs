@@ -25,6 +25,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: KbCommands,
     },
+    /// Connector management commands.
+    Connector {
+        #[command(subcommand)]
+        command: ConnectorCommands,
+    },
     /// Start the Mimir HTTP server (foreground daemon).
     Start,
     /// Stop the Mimir HTTP server.
@@ -354,4 +359,128 @@ pub enum SkillCommands {
     Enable { name: String },
     /// Disable a skill.
     Disable { name: String },
+}
+
+#[derive(Subcommand)]
+pub enum ConnectorCommands {
+    /// Register a new connector instance.
+    Add {
+        /// Connector type (gmail, calendar, photos).
+        connector_type: String,
+        /// Backend (imap, caldav, local, ...).
+        #[arg(long)]
+        backend: String,
+        /// Configuration as `key=value` pairs (dotted keys nest, e.g. `auth.kind=app_password`).
+        config: Vec<String>,
+        /// Full backend configuration as a JSON object (key=value pairs override it).
+        #[arg(long)]
+        config_json: Option<String>,
+        /// Unique slug (defaults to the connector type).
+        #[arg(long)]
+        slug: Option<String>,
+        /// Human-readable display name (defaults to the connector type).
+        #[arg(long)]
+        name: Option<String>,
+        /// App-password credential (skips the interactive prompt).
+        #[arg(long, conflicts_with = "token")]
+        password: Option<String>,
+        /// API-token credential (skips the interactive prompt).
+        #[arg(long)]
+        token: Option<String>,
+        /// Output raw JSON instead of a summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Ingest credentials for an existing connector (completes an unauthenticated instance, or re-auths after expiry).
+    Auth {
+        /// Connector slug.
+        slug: String,
+        /// App-password credential (skips the interactive prompt).
+        #[arg(long, conflicts_with = "token")]
+        password: Option<String>,
+        /// API-token credential (skips the interactive prompt).
+        #[arg(long)]
+        token: Option<String>,
+        /// Output raw JSON instead of a summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List every registered connector instance.
+    List {
+        /// Output raw JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show connector status (all instances, or one by slug).
+    Status {
+        /// Connector slug (omitting shows every instance).
+        slug: Option<String>,
+        /// Output raw JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Trigger a manual sync of a connector.
+    Sync {
+        /// Connector slug.
+        slug: String,
+        /// Force a full (non-incremental) sync.
+        #[arg(long, conflicts_with = "since")]
+        full: bool,
+        /// Only fetch items newer than this window (e.g. 7d, 12h, 30m, or bare seconds).
+        #[arg(long)]
+        since: Option<String>,
+        /// Output raw JSON instead of a summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Pause a connector (stop its runner).
+    Pause {
+        /// Connector slug.
+        slug: String,
+        /// Output raw JSON instead of a summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Resume a connector (re-spawn its runner).
+    Resume {
+        /// Connector slug.
+        slug: String,
+        /// Output raw JSON instead of a summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a connector, detaching its provenance (ingested facts survive).
+    Remove {
+        /// Connector slug.
+        slug: String,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Forget a connector: trash its sourced facts (recoverable 30 days), delete its credentials and row.
+    Forget {
+        /// Connector slug.
+        slug: String,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+        /// Output raw JSON instead of a summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Dispatch a write-back action (e.g. create_event, update_event, delete_event).
+    Act {
+        /// Connector slug.
+        slug: String,
+        /// Action kind.
+        kind: String,
+        /// Inline JSON payload.
+        payload: Option<String>,
+        /// Read the JSON payload from a file instead of the positional argument.
+        #[arg(long, conflicts_with = "payload")]
+        json_file: Option<std::path::PathBuf>,
+        /// Output raw JSON instead of a summary.
+        #[arg(long)]
+        json: bool,
+    },
 }

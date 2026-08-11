@@ -7,7 +7,7 @@ The `mimir` binary provides a command-line interface for interacting with Mimir.
 - **Daemon mode** (`mimir start`): runs the persistent HTTP server in the foreground
 - **Client mode** (`mimir ask`, `mimir chat`, etc.): interacts with Mimir's subsystems
 
-Currently, client-mode commands link `mimir-core` directly for LLM, memory, context, and personality operations. In a future release, they will communicate with the daemon via HTTP.
+All client-mode commands now talk to the daemon over HTTP through `mimir-client` — `ask`, `chat`, `kb`, `connector`, `memory`, and `status` all route through the daemon's Axum server (the daemon-guard auto-starts it when it is not running). No client-mode command touches the knowledge graph, memory, or LLM directly.
 
 ## Architecture
 
@@ -16,9 +16,12 @@ mimir (single binary)
  ├── main.rs         — Dispatch: daemon or client based on subcommand
  ├── cli.rs          — Command definitions (clap)
  ├── commands.rs     — Tool & Skill subcommand handlers
+ ├── cli_util.rs     — Shared CLI helpers (exit, client, JSON output)
  ├── start.rs        — Daemon launcher (in-process Axum server)
  ├── ask.rs          — Single-shot query
  ├── chat.rs         — Interactive REPL
+ ├── kb/             — Knowledge-graph subcommand handlers
+ ├── connector/      — Connector subcommand handlers
  ├── status.rs       — System status
  ├── memory_cmd.rs   — Memory viewer
  ├── init.rs         — First-run bootstrap
@@ -85,6 +88,22 @@ Displays:
 
 Prints the live condensed memory block from the knowledge graph.
 
+### `mimir connector`
+
+Manages connector instances through the daemon's connector routes (Phase 3 A3 / issue #204):
+
+- `mimir connector add <type> --backend <b> [key=value...] [--config-json <json>] [--slug <s>] [--name <n>] [--password <p> | --token <t>]` — register a new instance (created in `Setup`; non-OAuth `auth.kind` configs prompt for the credential via `inquire` unless the flag is given). Dotted keys nest (`auth.kind=app_password auth.username=me@example.com`); scalar values parse as booleans/numbers/strings. OAuth configs do not prompt — the interactive PKCE flow is A4 (#205).
+- `mimir connector list [--json]` — every registered instance as a table.
+- `mimir connector status [<slug>] [--json]` — detailed view of one instance, or the overview table when the slug is omitted.
+- `mimir connector sync <slug> [--full | --since <duration>] [--json]` — manual sync; `--since` accepts `30s`/`5m`/`12h`/`7d` or bare seconds, and conflicts with `--full`. A `Setup`/paused instance reports the `CONNECTOR_NOT_RUNNING` 409 with an activation hint.
+- `mimir connector auth <slug> [--password <p> | --token <t>] [--json]` — ingest credentials for an existing instance (completes an unauthenticated `add`, or re-auths after expiry) without `remove` + re-`add`; without a flag it interactively asks which credential kind the connector uses.
+- `mimir connector pause <slug> [--json]` / `resume <slug> [--json]` — stop/re-spawn the runner.
+- `mimir connector remove <slug> [--yes]` — delete the instance and credentials, detaching provenance (facts survive).
+- `mimir connector forget <slug> [--yes] [--json]` — cascade-forget: trash the connector's facts (recoverable 30 days), delete credentials and row.
+- `mimir connector act <slug> <kind> [payload-json | --json-file <path>] [--json]` — write-back dispatch (e.g. Calendar `create_event`/`update_event`/`delete_event`).
+
+All commands resolve slugs client-side against `GET /connectors` (there is no by-slug route). Credential prompts and destructive confirmations require a terminal; scripts pass `--password`/`--token`/`--yes`.
+
 ### `mimir kb` date filters
 
 KB audit and forget commands accept `--from`/`--to` date filters via
@@ -99,7 +118,7 @@ intuitively rather than being silently shifted to UTC (issue #168).
 
 - **Single binary**: The `mimir` binary contains both the daemon and client code. `mimir start` runs the Axum server in-process; no separate `mimir-server` binary is needed.
 - **Daemon mode**: The server reads `bind_addr` from `[server]` config (default: `127.0.0.1:8080`) and listens for HTTP connections. systemd manages backgrounding and restarts.
-- **Direct library linkage (current)**: CLI commands talk to `mimir-core` directly, bypassing the HTTP server. This will be refactored to use `mimir-client` for daemon communication in a future release.
+- **HTTP client mode (current)**: every client-mode command talks to the daemon over HTTP via `mimir-client`; the daemon owns the knowledge graph, memory, connectors, and LLM pool. `mimir start` runs the Axum server in-process; `mimir-client` is the single transport for client commands (`kb` and `connector` share the `cli_util` helpers).
 - **LlmClient pooling**: Each command creates its own `LlmClient` with a single-worker pool.
 - **Incognito mode**: Skips `ContextManager` persistence; uses `LlmClient` for one-shot operations.
 - **REPL session**: Uses a single `ContextManager` session for the REPL duration with in-memory conversation history.

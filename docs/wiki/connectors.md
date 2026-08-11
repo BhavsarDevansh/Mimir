@@ -1,7 +1,7 @@
 # Connectors
 
 > **Phase:** 3 — Connectors
-> **Status:** In progress (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10). Shared rate-limit + retry/backoff primitives landed (issue #189 / F12). Configurable, always-compiled mock connector test harness landed (issue #190 / F13). The daemon owns the connector framework at startup and exposes connector CRUD/status HTTP routes (A1 / #202). Connector action routes — sync, pause/resume, OAuth token ingest, write-back dispatch, and the forget cascade — landed (A2 / #203); the `mimir connector …` CLI is A3 (#204) and the OAuth PKCE loopback flow is A4 (#205). **Three concrete backends have landed and all three emit knowledge-graph facts.** The local-filesystem Photos connector (issue #195 / C1, enriched in C2 / #196) — a `notify` file watcher with EXIF GPS/datetime extraction and a per-file mtime/inode incremental cursor — emits a `took_photo` fact per photo. The CalDAV Calendar connector (issue #197 / C3, enriched in C4 / #198) — a `Polling` CalDAV client (PROPFIND + sync-collection REPORT, sync-token incremental sync) with app-password and OAuth-refresh auth via the secret store — extracts event facts (`user has_event`, `located_in`, `attending`) and supports write-back (`create_event` / `update_event` / `delete_event`). The **IMAP Email connector** (issue #199 / C5, enriched in C6 / #200, C7 / #201, and #249) — an `async-imap` client (IMAP `LOGIN` / `AUTHENTICATE XOAUTH2`, `UID FETCH` incremental sync, `IDLE` push with a polling fallback, a UIDVALIDITY-safe last-UID cursor, and a hand-rolled TCP+rustls TLS handshake) — extracts normalized facts from mail, including iMIP invites, `schema.org` JSON-LD reservations, and LLM-extracted flights/bookings from prose.
+> **Status:** In progress (issue #178). Instance registry table + facade landed (issue #179). `sources` provenance FK landed (issue #180). Shared `normalize_and_insert` ingestion boundary landed (issue #181). Full entity-resolution chain landed (issue #182). The runtime `Connector` trait + data types landed (issue #183 / F6). The `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). The `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10). Shared rate-limit + retry/backoff primitives landed (issue #189 / F12). Configurable, always-compiled mock connector test harness landed (issue #190 / F13). The daemon owns the connector framework at startup and exposes connector CRUD/status HTTP routes (A1 / #202). Connector action routes — sync, pause/resume, OAuth token ingest, write-back dispatch, and the forget cascade — landed (A2 / #203). The `mimir connector …` CLI landed (A3 / #204); the OAuth PKCE loopback flow is A4 (#205). **Three concrete backends have landed and all three emit knowledge-graph facts.** The local-filesystem Photos connector (issue #195 / C1, enriched in C2 / #196) — a `notify` file watcher with EXIF GPS/datetime extraction and a per-file mtime/inode incremental cursor — emits a `took_photo` fact per photo. The CalDAV Calendar connector (issue #197 / C3, enriched in C4 / #198) — a `Polling` CalDAV client (PROPFIND + sync-collection REPORT, sync-token incremental sync) with app-password and OAuth-refresh auth via the secret store — extracts event facts (`user has_event`, `located_in`, `attending`) and supports write-back (`create_event` / `update_event` / `delete_event`). The **IMAP Email connector** (issue #199 / C5, enriched in C6 / #200, C7 / #201, and #249) — an `async-imap` client (IMAP `LOGIN` / `AUTHENTICATE XOAUTH2`, `UID FETCH` incremental sync, `IDLE` push with a polling fallback, a UIDVALIDITY-safe last-UID cursor, and a hand-rolled TCP+rustls TLS handshake) — extracts normalized facts from mail, including iMIP invites, `schema.org` JSON-LD reservations, and LLM-extracted flights/bookings from prose.
 
 ## What connectors are
 
@@ -89,4 +89,30 @@ Status responses carry a derived `item_count`: the number of `sources` rows attr
 
 `POST /connectors/{id}/forget` is the full cascade: it marks the instance `Paused` (so an aborted cascade leaves a state a retry can reason about), stops the runner and runs the connector's local `forget()` cleanup, deletes the slug-keyed secret, trashes every fact the connector sourced (recoverable from trash for 30 days), and deletes the row. The cascade is serialised per connector and loopback-only, and the secret is deleted before the irreversible fact trash so a credential-deletion failure aborts with nothing destroyed.
 
-The `mimir connector` CLI subcommands that plumb these routes land in A3 (#204).
+## Managing connectors from the CLI
+
+The `mimir connector` command group (A3 / #204) plumbs these routes so you never need to call the daemon by hand. Every subcommand except `remove` supports `--json` for scriptable output; slug-based commands resolve slugs client-side against the instance list. See [CLI Commands](cli-commands.md) for the full reference with examples.
+
+```bash
+# Add (created in Setup — resume activates it)
+mimir connector add gmail --backend imap host=imap.gmail.com auth.kind=app_password auth.username=me@gmail.com
+
+# Activate and sync
+mimir connector resume gmail
+mimir connector sync gmail --since 7d
+
+# Status and lifecycle
+mimir connector status gmail
+mimir connector pause gmail
+
+# Teardown — remove and forget are alternatives, not a sequence (remove deletes
+# the row, so a later forget on the same slug cannot resolve it)
+mimir connector remove gmail --yes       # detaches provenance; facts survive
+# or
+mimir connector forget gmail --yes       # trashes the connector's facts (recoverable 30 days)
+
+# Write-back (Calendar)
+mimir connector act calendar create_event '{"summary":"Lunch","start":"2026-08-12T12:00:00Z"}'
+```
+
+Non-OAuth configs (`auth.kind=app_password`) prompt for the credential via `inquire` and ingest it through the daemon's token route; pass `--password`/`--token` to supply it non-interactively, or run `mimir connector auth <slug>` later to complete or refresh credentials on an existing instance. OAuth configs do not prompt yet — the interactive PKCE login is A4 (#205).

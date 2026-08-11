@@ -66,7 +66,7 @@ pub enum EmailAuthMethod {
     /// live in the [`SecretStore`](crate::secrets::SecretStore) as a
     /// [`SecretBundle::OAuth`](crate::secrets::SecretBundle::OAuth); only the client config + the account email
     /// are non-secret. The interactive PKCE login that obtains the first
-    /// token is A4 / #206.
+    /// token is A4 / #205.
     #[serde(rename = "oauth")]
     OAuth {
         /// Account username / email embedded in the XOAUTH2 initial response.

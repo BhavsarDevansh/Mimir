@@ -10,11 +10,10 @@ use super::extract_tests::{invite_email, plain_email};
 /// identity) so the layer-3 prose path is exercised end-to-end through
 /// `extract()`.
 fn connector_with_llm(name: Option<&str>, backend: Option<Arc<dyn LlmBackend>>) -> EmailConnector {
-    EmailConnector::from_config_with_http(
+    EmailConnector::from_config_with_deps(
         app_config(),
         None,
         name.map(|n| n.to_string()),
-        None,
         None,
         backend,
     )

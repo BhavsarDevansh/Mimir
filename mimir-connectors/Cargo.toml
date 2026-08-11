@@ -45,9 +45,16 @@ humantime = "2.4"
 # consistent with `mimir-core`/`mimir-server`; `json` deserialises Nominatim
 # responses. The backend builds `/search` and `/reverse` query strings by hand
 # (see `percent_encode_query` in `src/geocoder.rs`), so the `query` feature is
-# not required. `mimir-core` re-exports the `Geocoder` trait the backend
-# implements.
-reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls", "rustls-native-certs"] }
+# not required. `form` was dropped in #240: the OAuth refresh POST is now
+# built by the `oauth2` crate itself (which constructs the form-encoded body
+# as bytes), so reqwest's `form` feature is unused. `mimir-core` re-exports
+# the `Geocoder` trait the backend implements.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "rustls-native-certs"] }
+# `http` 1.x request/response types for the `oauth2` adapter (`OAuthHttpClient`
+# converts `http::Request<Vec<u8>>` ↔ reqwest and back). Already in the tree
+# (reqwest and oauth2 both depend on http 1.x), so no new download; declared
+# directly so the adapter does not rely on a transitive re-export.
+http = { version = "1", optional = true }
 # `percent-encoding` percent-encodes the `/search` query value. It is already a
 # transitive dependency (via `reqwest`/`url`, resolved at 2.3.2) so this adds no
 # new download; declared directly so the geocoder does not rely on transitive
@@ -72,15 +79,25 @@ kamadak-exif = { version = "0.6", optional = true }
 # 0.17.12) is the strongly-typed RFC 5545 parser/builder used to parse CalDAV
 # VEVENT payloads. Its default features already include `parser` (nom-backed),
 # so no extra feature flag is required for parsing. License MIT/Apache-2.0
-# (GPL-3-compatible). Gated by the `calendar` feature. The `oauth2` crate is
-# deliberately NOT pulled in here: oauth2 5.0.0 depends on reqwest 0.12, which
-# would duplicate the workspace's reqwest 0.13 HTTP/TLS stack. #197 only needs
-# OAuth *token refresh* (the interactive PKCE login is A4 / #205), and a refresh
-# is a single form-encoded HTTPS POST returning JSON — hand-rolled on the
-# existing reqwest 0.13 (see `CalendarConnector::refresh_oauth`). The `oauth2`
-# crate is deferred to A4, where the PKCE authorization-code flow justifies it;
-# see the follow-up issue tracking the deps-ledger / reqwest-0.13 reconciliation.
+# (GPL-3-compatible). Gated by the `calendar` feature. OAuth token refresh for
+# this connector runs through the shared `oauth` module (issue #240): `oauth2`
+# 5.0.0 is pulled with `default-features = false` so its optional `reqwest`
+# 0.12 dependency never enters the tree — the crate talks HTTP through the
+# workspace's single reqwest 0.13 client via a custom `AsyncHttpClient`
+# adapter (`OAuthHttpClient`, see `src/oauth/http_client.rs`).
 icalendar = { version = "0.17", optional = true }
+# OAuth 2.0 (issue #240): the vetted `oauth2` 5.0.0 protocol implementation
+# (PKCE S256, authorization-code + refresh grants) with `default-features =
+# false` — its default `reqwest` feature pins reqwest 0.12, which would
+# duplicate the workspace's reqwest 0.13 HTTP/TLS stack. Instead `src/oauth/`
+# implements the crate's `AsyncHttpClient` trait over the workspace reqwest
+# 0.13 client (`OAuthHttpClient`). oauth2 5.0.0's unconditional deps are
+# already in the tree (sha2 0.10, base64, serde_path_to_error, thiserror 1.x,
+# http 1.x, url) except `rand 0.8` — a third rand line (workspace already has
+# 0.9 via governor and 0.10 transitively); it is small, ubiquitous, and
+# required by oauth2's PKCE verifier generation. License MIT/Apache-2.0
+# (GPL-3-compatible). Gated by the `oauth` feature.
+oauth2 = { version = "5.0", default-features = false, optional = true }
 # `roxmltree` is a small, pure-Rust, read-only DOM XML parser used to walk
 # CalDAV WebDAV multistatus responses (sync-collection REPORT + PROPFIND).
 # A DOM parser is far simpler + more robust than a hand-rolled pull-parser for
@@ -152,7 +169,12 @@ mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
 default = ["photos", "calendar", "gmail"]
 ## Google Photos / Apple Photos / local photo library ingestion (C1–C2).
 photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"]
+## Shared OAuth 2.0 client + refresh helpers (issue #240): `oauth2` 5.0.0 with
+## `default-features = false` + a custom `AsyncHttpClient` adapter over the
+## workspace reqwest 0.13 client (see `src/oauth/`). Enabled by the OAuth
+## backends (`calendar`, `gmail`) and by the CLI's PKCE login flow (A4 / #205).
+oauth = ["dep:oauth2", "dep:http"]
 ## CalDAV calendar ingestion: read/sync + event fact extraction (C3–C4).
-calendar = ["dep:icalendar", "dep:roxmltree", "dep:chrono-tz", "dep:uuid"]
+calendar = ["dep:icalendar", "dep:roxmltree", "dep:chrono-tz", "dep:uuid", "oauth"]
 ## IMAP email ingestion, Gmail and other providers (C5–C7).
-gmail = ["dep:async-imap", "dep:base64", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures", "dep:icalendar", "dep:chrono-tz", "dep:mail-parser"]
+gmail = ["dep:async-imap", "dep:base64", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures", "dep:icalendar", "dep:chrono-tz", "dep:mail-parser", "oauth"]

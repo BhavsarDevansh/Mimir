@@ -42,7 +42,13 @@
 //!   F12 / #189): token-bucket throttling (governor GCRA), optional rolling 24h
 //!   daily quota, and uniform 429/503 retry with jitter. Connector LLM calls are
 //!   exempt (decision D′); this governs HTTP/IMAP/CalDAV API calls only.
-//! - `oauth` — shared OAuth 2.0 token-refresh helpers (DRY, used by the Calendar (C3 / #197) and Email (C5 / #199) OAuth connectors): a hand-rolled `refresh_token` POST on the existing `reqwest` 0.13, with secret-safe error reporting. (Private module: linked here as a code span to avoid `private_intra_doc_links`.)
+//! - [`oauth`] — shared OAuth 2.0 client + token-refresh helpers (issue #240),
+//!   used by the Calendar (C3 / #197) and Email (C5 / #199) OAuth connectors
+//!   and (from A4 / #205) the CLI PKCE login. Built on `oauth2` 5.0.0 with
+//!   `default-features = false` and a custom [`oauth::OAuthHttpClient`] adapter
+//!   over the workspace's single reqwest 0.13 client — the crate's optional
+//!   reqwest 0.12 dependency never enters the tree. Gated by the `oauth`
+//!   feature (enabled by `calendar`, `gmail`, and the CLI).
 //! - [`secrets`] — [`SecretStore`] trait + [`SecretBundle`] enum +
 //!   [`FileSecretStore`] / [`InMemorySecretStore`] (F10 / #187): per-connector
 //!   credential storage, one store for all auth kinds (OAuth / API token / app
@@ -58,9 +64,10 @@
 //! # Feature flags
 //!
 //! `photos`, `calendar`, and `gmail` gate the per-type backends, which are
-//! added in later Phase 3 issues (C1–C7). The framework core and the mock
-//! connector are **always built**, so `--no-default-features` still compiles a
-//! working framework + mock harness.
+//! added in later Phase 3 issues (C1–C7); `oauth` is the shared OAuth 2.0
+//! client + refresh layer enabled by `calendar`/`gmail` and the CLI PKCE flow.
+//! The framework core and the mock connector are **always built**, so
+//! `--no-default-features` still compiles a working framework + mock harness.
 
 pub mod connector;
 pub mod geocoder;
@@ -70,7 +77,15 @@ pub mod geocoder;
 #[cfg(any(feature = "calendar", feature = "gmail"))]
 pub mod ical;
 pub mod mock;
-mod oauth;
+/// OAuth 2.0 client + token-refresh helpers (issue #240), gated by the `oauth`
+/// feature. [`oauth::OAuthHttpClient`] implements the `oauth2` crate's
+/// `AsyncHttpClient` trait over the workspace reqwest 0.13 client; the
+/// refresh helpers (`refresh_token`, `resolve_access_token`) drive the
+/// vetted `oauth2` 5.0.0 refresh grant with the workspace's secret-hygiene
+/// error mapping (parsed `error`/`error_description` only, never the raw
+/// response body) and HTTPS/loopback endpoint gate.
+#[cfg(feature = "oauth")]
+pub mod oauth;
 pub mod rate_limit;
 pub mod registry;
 pub mod secrets;

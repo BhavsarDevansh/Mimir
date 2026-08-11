@@ -1,0 +1,40 @@
+# OAuth Client & Token Refresh (mimir-connectors)
+
+> **Phase:** 3 — Connectors
+> **Issue:** #240 (oauth2/reqwest reconciliation)
+> **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md` §4
+> **Landed in:** v0.96.0
+
+## Purpose
+
+One shared OAuth 2.0 path for every connector that authenticates with OAuth: token refresh today (Calendar C3 / #197, Email C5 / #199) and the interactive PKCE authorization-code login from A4 / #205. The implementation uses the vetted `oauth2` crate (5.0.0) with `default-features = false` and a custom HTTP adapter over the workspace's single reqwest 0.13 client.
+
+## Why the adapter
+
+`oauth2` 5.0.0's optional `reqwest` feature pins reqwest 0.12, which would duplicate the workspace's reqwest 0.13 HTTP/TLS stack if the crate were enabled with its default features. Because `oauth2`'s `HttpRequest`/`HttpResponse` are plain `http` 1.x types (the same version reqwest 0.13 uses), the crate's `AsyncHttpClient` trait can be implemented directly over the workspace client — the same pattern as `oauth2`'s own `reqwest_client.rs`, with no reqwest 0.12 in the tree. The workspace therefore keeps exactly one reqwest major while still using the vetted protocol code (PKCE S256, authorization-code and refresh grants) rather than hand-rolling security-sensitive OAuth logic.
+
+## Module layout
+
+- `src/oauth/mod.rs` — module docs, public surface (`OAuthHttpClient`), internal re-exports.
+- `src/oauth/http_client.rs` — the `OAuthHttpClient` newtype: `OAuthHttpClient::new()` builds a hardened reqwest 0.13 client (30 s timeout, `redirect::Policy::none`), `OAuthHttpClient::from_client(...)` wraps an injected client for tests, and the `AsyncHttpClient<'c>` impl converts `http::Request<Vec<u8>>` → reqwest request → `http::Response<Vec<u8>>`.
+- `src/oauth/refresh.rs` — the refresh grant (`refresh_token`), the shared "resolve a live access token" helper (`resolve_access_token`), the bundle conversion (`into_bundle`), the HTTPS/loopback endpoint gate, and the secret-hygiene error mapping.
+
+## Security properties
+
+- **HTTPS-only token endpoints.** `refresh_token` rejects non-HTTPS endpoints before any credential is posted. Loopback HTTP (`localhost`, any `127.0.0.0/8`, `::1`) is permitted — it is Mimir's local trust boundary, the same model as the home-directory secret store. The host is parsed as a real `IpAddr`, so look-alike DNS names like `127.0.0.1.evil.com` are rejected.
+- **Redirects disabled.** The OAuth client never follows redirects, so a compromised or malicious token endpoint cannot bounce a credential POST (refresh grant today, code exchange in A4) to an attacker-controlled host. This follows the `oauth2` crate's own SSRF guidance and fixes a gap in the pre-#240 hand-rolled refresh, which used the default redirect-following client.
+- **Secret hygiene.** Provider error payloads routinely echo request parameters (the refresh token or client secret). Error strings report only the HTTP-level outcome plus the parsed `error`/`error_description` fields (truncated to 256 bytes), never the raw response body — `RequestTokenError::Parse`'s body payload is deliberately dropped. This preserves the promise of the pre-#240 hand-rolled helper.
+- **Client credentials in the body.** `AuthType::RequestBody` sends `client_id`/`client_secret` as form fields (not HTTP Basic), matching the providers Mimir targets and the pre-#240 behaviour exactly.
+
+## Feature gating
+
+The `oauth` feature (default off) gates `oauth2` + `http` and the `oauth` module. It is enabled by the `calendar` and `gmail` backend features (both use refresh) and will be enabled by the CLI PKCE flow (A4 / #205). `--no-default-features` builds of `mimir-connectors` never compile the module.
+
+## Usage
+
+- **Refresh:** both connectors hold an `OAuthHttpClient` (`CalendarConnector::oauth_http`, `EmailConnector::oauth_http`) and their `resolve_auth` OAuth arms call `oauth::resolve_access_token(&oauth_http, token_endpoint, client_id, client_secret, scopes, bundle)`, which returns the live access token plus the refreshed bundle to persist (refresh-token rotation is retained — a response without a new `refresh_token` keeps the stored one).
+- **PKCE (A4 / #205):** the CLI flow will build an `oauth2::basic::BasicClient` with `authorize_url` + `PkceCodeChallenge::new_random_sha256()` and exchange the code via `request_async(&OAuthHttpClient)`, then POST the resulting `SecretBundle` to the daemon's token-ingest route.
+
+## Dependency notes
+
+oauth2 5.0.0's unconditional dependencies are already in the workspace tree (sha2 0.10, base64, serde_path_to_error, thiserror 1.x, http 1.x, url) except `rand 0.8` — a third rand line alongside 0.9 (governor) and 0.10 (transitive). It is small, ubiquitous, and required by oauth2's PKCE verifier generation. No reqwest-0.13-compatible `oauth2` release exists (latest is still 5.0.0 as of 2026-08-11), so the "wait for an upgrade" option is struck from the deps ledger.

@@ -389,7 +389,7 @@ HTTP route are separate Phase 3 issues (A2 action routes / A3 CLI) that call
 
 ## Crate layout
 
-The crate root (`src/lib.rs`) re-exports the public API; each subsystem is a directory with one file per concern. `src/supervisor/` splits lifecycle config, errors, trigger types, the runner (struct + spawning), runtime control (start/stop/pause/resume/trigger dispatch), and the per-connector cycle loop across `config.rs`, `error.rs`, `trigger.rs`, `runner.rs`, `control.rs`, and `cycle.rs`. `src/calendar/` splits `construct`, `credentials`, `sync`, `trait_impl`, and `payload` with the CalDAV transport under `caldav/{client,ical,xml}`. `src/email/` splits `config`, `factory`, `imap`, the connector (`connector/{construct,credentials,extract,session,trait_impl}`), JSON-LD extractors (`jsonld/{facts,html,nodes,reservations,values}`), and the LLM extractor (`llm/{message,parse,schema}`). `src/secrets/` splits `error`, `bundle`, the `SecretStore` trait + slug validation (`store.rs`), the on-disk store (`file.rs`), and the in-memory helper (`memory.rs`). `src/rate_limit/`, `src/geocoder/`, `src/ical/`, `src/mock/`, and `src/photos/` follow the same pattern.
+The crate root (`src/lib.rs`) re-exports the public API; each subsystem is a directory with one file per concern. `src/supervisor/` splits lifecycle config, errors, trigger types, the runner (struct + spawning), runtime control (start/stop/pause/resume/trigger dispatch), and the per-connector cycle loop across `config.rs`, `error.rs`, `trigger.rs`, `runner.rs`, `control.rs`, and `cycle.rs`. `src/calendar/` splits `construct`, `credentials`, `sync`, `trait_impl`, and `payload` with the CalDAV transport under `caldav/{client,ical,xml}`. `src/email/` splits `config`, `factory`, `imap`, the connector (`connector/{construct,credentials,extract,session,trait_impl}`), JSON-LD extractors (`jsonld/{facts,html,nodes,reservations,values}`), and the LLM extractor (`llm/{message,parse,schema}`). `src/secrets/` splits `error`, `bundle`, the `SecretStore` trait + slug validation (`store.rs`), the on-disk store (`file.rs`), and the in-memory helper (`memory.rs`). `src/oauth/` splits the `OAuthHttpClient` adapter (`http_client.rs`) from the refresh grant + endpoint gate + error mapping (`refresh.rs`). `src/rate_limit/`, `src/geocoder/`, `src/ical/`, `src/mock/`, and `src/photos/` follow the same pattern.
 
 | Module | Role | Filled by |
 |--------|------|-----------|
@@ -398,6 +398,7 @@ The crate root (`src/lib.rs`) re-exports the public API; each subsystem is a dir
 | `supervisor` | `ConnectorSupervisor` + `SupervisorConfig` + `SupervisorError` + `TriggerOutcome` + `TriggerError`: supervised per-connector task lifecycle (spawn / restart / backoff / circuit-breaker / startup-restore / graceful-shutdown / cursor-persistence), and manual sync triggering (`trigger_sync` / `trigger_sync_by_slug` — per-connector semaphore + request channel; preempts the polling interval) | F8 — done (#185), F9 — done (#186) |
 | `mock` | `MockConnector` + `MockConnectorFactory` + `MockFactConfig` + `MockSyncRecorder` (configurable, always-compiled test harness: emits canned `NormalizedFact`s in `Polling`/`Push` modes with health/auth/failure/panic injection and sync-options observation) | F13 — done (#190) |
 | `photos` *(feature `photos`)* | `PhotosConnector` + `PhotosConnectorFactory` + `PhotosCursor`: read-only local-filesystem push connector — `notify` recursive watcher + `kamadak-exif` GPS/datetime extraction + per-file mtime/inode incremental cursor | C1 — done (#195) |
+| `oauth` *(feature `oauth`)* | `OAuthHttpClient` (the `oauth2`-crate `AsyncHttpClient` adapter over the workspace reqwest 0.13 client) + `refresh_token` / `resolve_access_token` refresh helpers with the HTTPS/loopback endpoint gate and secret-hygiene error mapping; used by the Calendar and Email OAuth backends, and by the A4 CLI PKCE flow | #240 — done (v0.96.0) |
 
 Provenance types that connectors reference (`ConnectorType`, `SourceType`)
 live in `mimir-knowledge` and are re-used, not duplicated (DRY).
@@ -407,18 +408,19 @@ live in `mimir-knowledge` and are re-used, not duplicated (DRY).
 ```toml
 [features]
 default = ["photos", "calendar", "gmail"]
-photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"] # local photo ingestion (C1 done; C2 pending)
-calendar = [] # CalDAV calendar ingestion (C3–C4)
-gmail = []    # IMAP email ingestion (C5–C7)
+photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"] # local photo ingestion (C1–C2 done)
+oauth = ["dep:oauth2", "dep:http"] # shared OAuth 2.0 client + refresh (issue #240)
+calendar = ["dep:icalendar", "dep:roxmltree", "dep:chrono-tz", "dep:uuid", "oauth"] # CalDAV calendar ingestion (C3–C4 done)
+gmail = ["dep:async-imap", "dep:base64", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures", "dep:icalendar", "dep:chrono-tz", "dep:mail-parser", "oauth"] # IMAP email ingestion (C5–C7 done)
 ```
 
 The framework core and the mock connector are **always built**. Running
 `cargo build -p mimir-connectors --no-default-features` therefore still
 compiles a working framework + mock harness — the gated backends are simply
 absent. The `photos` feature gates the `notify` / `notify-debouncer-full` /
-`kamadak-exif` dependencies and the `photos` module (C1 / #195); the `calendar`
-and `gmail` features gate no code yet (their deps and modules land with
-C3–C7 / F10).
+`kamadak-exif` dependencies and the `photos` module (C1 / #195); `oauth` gates
+`oauth2` / `http` and the `oauth` module (#240); `calendar` and `gmail` gate
+their backend deps and modules and enable `oauth` for their OAuth refresh path.
 
 ## Workspace wiring
 

@@ -153,3 +153,64 @@ async fn resolve_auth_oauth_reuses_unexpired_token() {
         other => panic!("expected Xoauth2, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn resolve_auth_oauth_refreshes_expired_token() {
+    // An expired stored token triggers the shared OAuth refresh path
+    // (issue #240: `oauth2` 5.0.0 over the workspace reqwest 0.13 client)
+    // against the configured token endpoint.
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "fresh",
+            "token_type": "Bearer",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut cfg = app_config();
+    cfg["auth"] = serde_json::json!({
+        "kind": "oauth",
+        "username": "devansh@example.com",
+        "token_endpoint": format!("{}/token", server.uri()),
+        "client_id": "cid",
+        "client_secret": "secret",
+        "scopes": ["https://mail.google.com/"],
+    });
+    let connector = EmailConnector::from_config(cfg, None, None).expect("config");
+    let bundle = SecretBundle::OAuth {
+        access_token: "stale".into(),
+        refresh_token: Some("rt".into()),
+        expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
+    };
+    let (auth, refreshed) = connector.resolve_auth(&bundle).await.expect("refresh");
+    match auth {
+        ImapAuth::Xoauth2 {
+            username,
+            access_token,
+        } => {
+            assert_eq!(username, "devansh@example.com");
+            assert_eq!(access_token, "fresh");
+        }
+        other => panic!("expected Xoauth2, got {other:?}"),
+    }
+    let SecretBundle::OAuth {
+        access_token,
+        refresh_token,
+        ..
+    } = refreshed.expect("refreshed bundle")
+    else {
+        panic!("expected OAuth bundle");
+    };
+    assert_eq!(access_token, "fresh");
+    assert_eq!(
+        refresh_token.as_deref(),
+        Some("rt"),
+        "prior refresh token retained"
+    );
+}

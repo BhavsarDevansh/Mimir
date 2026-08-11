@@ -9,12 +9,14 @@ use tokio::sync::Mutex;
 use crate::calendar::CalendarConnector;
 use crate::calendar::caldav::CalDavClient;
 use crate::connector::ConnectorError;
+use crate::oauth::OAuthHttpClient;
 use crate::secrets::{SecretBundle, SecretStore};
 
 use super::{CalendarConfigDto, DEFAULT_DISPLAY_NAME, DEFAULT_SLUG};
 
 impl CalendarConnector {
-    /// (optional), and the supervisor-injected cursor.
+    /// Build a connector from its parsed configuration, an optional secret
+    /// store, and the supervisor-injected cursor.
     pub fn from_config(
         config: serde_json::Value,
         secret_store: Option<Arc<dyn SecretStore>>,
@@ -50,6 +52,7 @@ impl CalendarConnector {
                 .build()
                 .map_err(|e| ConnectorError::Config(format!("HTTP client build failed: {e}")))?,
         };
+        let oauth_http = OAuthHttpClient::new()?;
         Ok(Self {
             slug,
             display_name: dto
@@ -62,6 +65,7 @@ impl CalendarConnector {
                 .map(|n| n.trim().to_string()),
             secret_store,
             http,
+            oauth_http,
             sync_token: Mutex::new(cursor.filter(|c| !c.is_empty())),
             buffer: Mutex::new(Vec::new()),
         })

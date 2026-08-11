@@ -157,15 +157,19 @@ All optional, gated by the `calendar` feature:
 |-------|---------|------|
 | `icalendar` | 0.17.x | Strongly-typed RFC 5545 iCalendar parser (default `parser` feature). **Resolves to 0.17.6 under the workspace MSRV (1.85); 0.17.12 requires Rust 1.88** — see the follow-up issue tracking the deps-ledger / MSRV reconciliation. |
 | `roxmltree` | 0.21 | Pure-Rust read-only DOM XML parser for WebDAV multistatus responses. |
-| `reqwest` | 0.13 (in tree) | HTTP; the `form` feature was added for the OAuth refresh token POST. |
+| `reqwest` | 0.13 (in tree) | HTTP (CalDAV + the `OAuthHttpClient` adapter's transport). |
+| `oauth2` | 5.0.0 (`default-features = false`) | Vetted OAuth 2.0 protocol code (refresh grant today, PKCE in A4 / #205); talks HTTP through the `OAuthHttpClient` adapter over the workspace reqwest 0.13 client (issue #240). Gated by the `oauth` feature. |
 | `chrono-tz` | 0.10 | IANA timezone database for `chrono`; resolves `TZID`-qualified `DTSTART`/`DTEND` to UTC. New in C4. |
 | `uuid` | 1 (in tree) | `v4` UID generation for new write-back events. New in C4. |
 
-The `oauth2` crate is **deliberately not** pulled in: `oauth2` 5.0.0 depends on
-`reqwest` 0.12, which would duplicate the workspace's reqwest 0.13 HTTP/TLS
-stack, and #197 only needs the refresh grant (a single form-encoded POST). It
-is deferred to A4 / #205, where the PKCE authorization-code flow justifies it.
-See the follow-up issue tracking the deps-ledger / reqwest-0.13 reconciliation.
+OAuth token refresh runs on the vetted `oauth2` crate (issue #240): `oauth2`
+5.0.0 is pulled with `default-features = false` so its optional reqwest 0.12
+dependency never enters the tree, and a custom `OAuthHttpClient` adapter
+implements the crate's `AsyncHttpClient` trait over the workspace's single
+reqwest 0.13 client (see [OAuth client](oauth-client.md)). The adapter's client
+never follows redirects (a credential POST cannot be bounced to another host),
+the HTTPS/loopback endpoint gate is preserved, and error strings surface only
+the parsed `error`/`error_description` fields — never the raw response body.
 
 ## Config
 

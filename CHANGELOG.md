@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.95.0] — 2026-08-11
+
+### CLI — `mimir connector` subcommands (Phase 3 A3 / #204)
+
+- **Nine connector subcommands plumb the A1/A2 daemon routes** through `mimir-client` in a new `mimir/src/connector/` module (clap definitions in `mimir/src/cli.rs`, dispatch in `main.rs`, one handler module per concern — `add`/`query`/`lifecycle`/`sync`/`actions`). `add <type> --backend <b> [key=value...]` registers an instance in `Setup` (dotted config keys nest, `--config-json` provides a base object, scalars parse as booleans/numbers/strings); `list` and `status [slug]` render tabled/coloured overviews; `sync <slug> [--full | --since <dur>]` triggers a manual cycle (human durations `30s`/`5m`/`12h`/`7d` or bare seconds, `--full`/`--since` mutually exclusive); `pause`/`resume` control the runner; `remove` detaches provenance (facts survive) while `forget` cascade-trashes the connector's facts (recoverable 30 days), credentials, and row; `act <slug> <kind> [payload | --json-file]` dispatches write-backs (Calendar `create_event`/`update_event`/`delete_event`) and echoes the `ActionResult`. Every subcommand supports `--json` output consistent with `kb`.
+- **Non-OAuth credential ingest:** when the merged config declares `auth.kind=app_password`/`api_token`, `add` prompts for the secret via `inquire` and ingests it through `POST /connectors/{id}/tokens` (`--password`/`--token` flags make it non-interactive); OAuth configs never prompt — the PKCE flow remains A4 (#205). Destructive subcommands confirm via `inquire` with a `--yes` skip, and `sync` surfaces the `CONNECTOR_NOT_RUNNING` 409 with an activation hint (`mimir connector resume <slug>`).
+- **Slug resolution + error rendering:** slug-based subcommands resolve slugs client-side against `GET /connectors` (no by-slug route), and daemon `ApiError` JSON bodies are unwrapped so users see the human detail instead of raw JSON.
+- **Shared CLI helpers (DRY):** `exit_with_error`, `make_client`, and `print_json` move to `mimir/src/cli_util.rs`, reused by both the `kb` and `connector` command groups (previously duplicated in `kb/mod.rs` and `commands.rs`).
+- **`mock-connector` daemon feature:** `mimir-server` gains a `mock-connector` feature (default off) that registers the mock factory in the daemon registry (previously `cfg(test)`-only), enabling a real CLI e2e cycle — `mimir/tests/connector_e2e.rs` runs add → status → resume → sync → pause → resume → remove → forget against an in-process daemon with the mock backend; `mimir/tests/common/mod.rs` extracts the shared `TestDaemon` fixture from `e2e.rs` (DRY), and `mimir/tests/connector_cli_tests.rs` covers the full clap → daemon-guard → HTTP path against wiremock. 27 new tests total.
+- **Docs:** `docs/cli.md` (new `mimir connector` reference + corrected "direct library linkage" overview), `docs/connector-management.md` (A3 section), `docs/wiki/cli-commands.md` (connector section), `docs/wiki/connectors.md` (CLI usage), `docs/wiki/what-works-now.md`, `README.md`, and `Mimir-Implementation-Context.md` updated; stale `A4 / #206` references corrected to `#205` across connector docs. Version bumped 0.94.0 → 0.95.0 (minor — backwards-compatible new feature).
+
 ## [0.94.0] — 2026-08-10
 
 ### Module-split refactor
@@ -280,7 +291,7 @@
 - **Auth:** app password (HTTP Basic — iCloud/Fastmail/Nextcloud) or an OAuth
   bearer token (Google) that the connector **refreshes** when expired (within a
   60 s skew) and persists back to the `SecretStore`. The interactive PKCE login
-  that *obtains* the first OAuth token is deferred to A4 / #206; #197 only
+  that *obtains* the first OAuth token is deferred to A4 / #205; #197 only
   consumes + refreshes a stored token.
 - **Framework:** this is the first backend that needs credentials, so
   `ConnectorContext` gained a `secret_store: Option<Arc<dyn SecretStore>>`
@@ -297,7 +308,7 @@
   "0.21"`, both gated by `calendar`. The `form` feature was added to the
   workspace `reqwest` for the OAuth refresh token POST. The `oauth2` crate is
   **deliberately not** pulled in (it depends on `reqwest` 0.12, duplicating the
-  stack, and #197 only needs the refresh grant) — deferred to A4 / #206.
+  stack, and #197 only needs the refresh grant) — deferred to A4 / #205.
 - **Tests:** unit tests for the CalDAV transport (sync-collection full/
   incremental parse, 401 handling, PROPFIND resourcetype detection, icalendar
   field extraction + recurrence, invalid-payload resilience) against a

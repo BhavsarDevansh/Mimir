@@ -84,7 +84,7 @@ impl CalendarConnector {
     /// The `oauth2` crate is avoided: it depends on reqwest 0.12, which would
     /// duplicate the workspace's reqwest 0.13 stack; a refresh is a single
     /// form-encoded HTTPS POST returning JSON. The interactive PKCE login
-    /// that *obtains* the first token is A4 / #206.
+    /// that *obtains* the first token is A4 / #205.
     async fn refresh_oauth(
         &self,
         refresh_token: &str,

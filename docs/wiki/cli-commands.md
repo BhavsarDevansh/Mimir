@@ -381,3 +381,80 @@ audit entry is recorded. An optional `--reason` is written into the audit log
 mimir kb reject 42
 mimir kb reject 42 --reason "entered in error"
 ```
+
+## `mimir connector` — Connector Commands
+
+Manage connector instances (email, calendar, photos) through the daemon over HTTP. Every command supports `--json` for structured, scriptable output, and slug-based commands resolve slugs against the daemon's instance list.
+
+### `mimir connector add`
+
+Register a new connector instance. The instance is created in `Setup` — run `mimir connector resume` to activate it, then `sync` to ingest.
+
+```bash
+# Photos: watch a local directory
+mimir connector add photos --backend local watch_dir=/home/me/Pictures
+
+# Email over an app password (prompts for the password, then ingests it)
+mimir connector add gmail --backend imap host=imap.gmail.com auth.kind=app_password auth.username=me@gmail.com
+
+# Non-interactive: pass the credential flag
+mimir connector add gmail --backend imap host=imap.fastmail.com auth.kind=app_password auth.username=me@fastmail.com --password 'app-password'
+
+# Complex configs: full JSON object, with key=value overrides on top
+mimir connector add calendar --backend caldav --config-json '{"calendar_url":"https://dav.example.com/cal","auth":{"kind":"app_password","username":"me@example.com"}}' --slug work-cal
+```
+
+Config is given as `key=value` pairs with dotted nesting (`auth.kind=app_password`) plus an optional `--config-json` base object. Scalar values are parsed as booleans, numbers, or strings. OAuth configs (`auth.kind=oauth`) do not prompt — interactive OAuth login is coming in the PKCE flow (A4 / #205). `--slug` defaults to the connector type and `--name` to its title-cased form.
+
+### `mimir connector list` / `status`
+
+```bash
+mimir connector list              # table of every instance
+mimir connector list --json
+mimir connector status            # overview table
+mimir connector status gmail      # detailed view of one instance
+mimir connector status gmail --json
+```
+
+### `mimir connector sync`
+
+Trigger a manual sync. `--since` accepts human durations (`30s`, `5m`, `12h`, `7d`) or bare seconds and conflicts with `--full`:
+
+```bash
+mimir connector sync gmail --since 7d
+mimir connector sync photos --full --json
+```
+
+A connector that is not running (e.g. freshly added, still `Setup`) reports a 409 with a hint to run `mimir connector resume <slug>` first.
+
+### `mimir connector pause` / `resume`
+
+```bash
+mimir connector pause gmail        # stop the runner
+mimir connector resume gmail       # re-spawn the runner (activate)
+```
+
+### `mimir connector remove` vs `forget`
+
+Both delete the instance and its stored credentials; they differ in what happens to the ingested facts:
+
+- `remove` detaches provenance — the facts survive with degraded provenance.
+- `forget` cascade-trashes every fact the connector sourced (recoverable from trash for 30 days) and then deletes the instance.
+
+Both confirm interactively; pass `--yes` to skip:
+
+```bash
+mimir connector remove gmail --yes
+mimir connector forget gmail --yes --json
+```
+
+### `mimir connector act`
+
+Dispatch a write-back action (the Calendar connector supports `create_event`, `update_event`, `delete_event`):
+
+```bash
+mimir connector act calendar create_event '{"summary":"Lunch","start":"2026-08-12T12:00:00Z"}'
+mimir connector act calendar delete_event --json-file payload.json --json
+```
+
+The output echoes the daemon's `ActionResult`: `native_id` (the remote resource href) and `message` (e.g. the new ETag).

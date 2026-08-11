@@ -6,7 +6,7 @@
 //! HTTP/TLS stack. An OAuth 2.0 token refresh is a single form-encoded HTTPS
 //! POST returning JSON, so it is hand-rolled on the existing `reqwest` 0.13.
 //! The interactive PKCE authorization-code flow that *obtains* the first
-//! token is deferred to A4 / #206.
+//! token is deferred to A4 / #205.
 //!
 //! # Secret hygiene
 //!

@@ -73,7 +73,7 @@ A delete on the server does not yet remove the corresponding KB fact automatical
 - **OAuth (Google)** — the connector stores your access + refresh token and
   **refreshes** the access token automatically before each sync when it
   expires. The initial sign-in (the OAuth PKCE dance) is added in a later
-  issue (A4 / #206); for now you supply the first token.
+  issue (A4 / #205); for now you supply the first token.
 
 Mimir can also write back to your calendar: creating, updating, or deleting
 remote events via CalDAV `PUT`/`DELETE` (added in C4 / #198). This is the
@@ -95,7 +95,7 @@ only connector with write support.
   against fully RFC 6578-compliant servers (iCloud, Nextcloud). Google-specific
   handling is a follow-on.
 - The interactive OAuth login (PKCE) is not yet wired — supply the first token
-  manually until A4 (#206).
+  manually until A4 (#205).
 - Event → knowledge-graph extraction and write-back are live (C4 / #198);
   richer `RRULE` recurrence rules and server-side deletion → KB fact lifecycle
   are follow-ups.

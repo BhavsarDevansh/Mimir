@@ -22,7 +22,7 @@
 //! [`CalDavAuth::Basic`] (app password — iCloud, Fastmail, Nextcloud) and
 //! [`CalDavAuth::Bearer`] (OAuth access token — Google, refreshed by the
 //! connector). The interactive PKCE login that *obtains* the first OAuth token
-//! is A4 / #206; this transport only consumes a token and the connector
+//! is A4 / #205; this transport only consumes a token and the connector
 //! refreshes it.
 //!
 //! # No `unsafe`

@@ -4,8 +4,8 @@
 //! for entity profiles and audit trails, [`maintenance`] for forget/restore/
 //! trash/optimization/category/pending flows. Shared helpers live here.
 
+use crate::cli_util::{exit_with_error, make_client};
 use chrono::{DateTime, Utc};
-use mimir_client::MimirClient;
 
 mod maintenance;
 mod profile;
@@ -43,19 +43,6 @@ fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
         }
     }
     None
-}
-
-// ------------------------------------------------------------------
-// Shared error helper
-// ------------------------------------------------------------------
-
-fn exit_with_error(msg: impl std::fmt::Display) -> ! {
-    eprintln!("Error: {}", msg);
-    std::process::exit(1);
-}
-
-fn make_client(base_url: &str) -> MimirClient {
-    MimirClient::new(base_url)
 }
 
 // ------------------------------------------------------------------

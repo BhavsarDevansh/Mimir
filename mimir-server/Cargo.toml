@@ -40,6 +40,10 @@ photos = ["mimir-connectors/photos"]
 calendar = ["mimir-connectors/calendar"]
 ## Forwarded to mimir-connectors: register the Email (IMAP) factory.
 gmail = ["mimir-connectors/gmail"]
+## Register the mock connector factory (test harness) in the daemon registry.
+## Enabled by the CLI e2e suite so `mimir connector` exercises a real
+## add → resume → sync → pause → remove cycle against an in-process daemon.
+mock-connector = []
 
 [dev-dependencies]
 mimir-client = { path = "../mimir-client" }

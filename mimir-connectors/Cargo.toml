@@ -75,7 +75,7 @@ kamadak-exif = { version = "0.6", optional = true }
 # (GPL-3-compatible). Gated by the `calendar` feature. The `oauth2` crate is
 # deliberately NOT pulled in here: oauth2 5.0.0 depends on reqwest 0.12, which
 # would duplicate the workspace's reqwest 0.13 HTTP/TLS stack. #197 only needs
-# OAuth *token refresh* (the interactive PKCE login is A4 / #206), and a refresh
+# OAuth *token refresh* (the interactive PKCE login is A4 / #205), and a refresh
 # is a single form-encoded HTTPS POST returning JSON — hand-rolled on the
 # existing reqwest 0.13 (see `CalendarConnector::refresh_oauth`). The `oauth2`
 # crate is deferred to A4, where the PKCE authorization-code flow justifies it;

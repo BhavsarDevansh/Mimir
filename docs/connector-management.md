@@ -1,9 +1,7 @@
 # Connector Management (server) — `mimir-server::routes::connectors`
 
-> **Phase:** 3 — Connectors (A1 / issue #202, A2 / issue #203)
-> **Status:** A1 (CRUD/status) and A2 (action routes + token ingest + forget
-> cascade) implemented. The `mimir connector …` CLI is A3 (#204); the OAuth
-> PKCE loopback flow is A4 (#205).
+> **Phase:** 3 — Connectors (A1 / issue #202, A2 / issue #203, A3 / issue #204)
+> **Status:** A1 (CRUD/status), A2 (action routes + token ingest + forget cascade), and A3 (the `mimir connector …` CLI) implemented. The OAuth PKCE loopback flow is A4 (#205).
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -169,6 +167,10 @@ three) that forward to `mimir-connectors`, so the route layer can
 flag that compiles the backend module. Disabling a feature removes both the
 backend and its daemon registration.
 
+## CLI (`mimir connector`, A3 / #204)
+
+The `mimir` binary's `connector` command group (`mimir/src/connector/`) plumbs the routes above, following the same HTTP-client pattern as `mimir kb` — clap definitions in `mimir/src/cli.rs`, one handler module per concern (`add`/`query`/`lifecycle`/`sync`/`actions`), and shared helpers (`exit_with_error`, `make_client`, `print_json`) in `mimir/src/cli_util.rs` shared with the `kb` group (DRY). Because the daemon has no by-slug route, slug-based subcommands resolve slugs client-side against `GET /connectors`. `add` merges `--config-json` with positional `key=value` pairs (dotted keys nest; scalars parse as booleans/numbers/strings) and, when the merged config declares a non-OAuth `auth.kind` (`app_password`/`api_token`), prompts for the credential via `inquire` and ingests it through `POST /connectors/{id}/tokens` (the `--password`/`--token` flags make this non-interactive). OAuth configs never prompt — the interactive PKCE flow is A4 (#205). Destructive subcommands (`remove`/`forget`) confirm via `inquire` with a `--yes` skip, `sync` surfaces the `CONNECTOR_NOT_RUNNING` 409 with an activation hint (`mimir connector resume <slug>`), and `--since` accepts human durations (`7d`, `12h`, `30m`, `90s`) or bare seconds. The `mock-connector` feature (default off) registers the mock factory in the daemon registry so the CLI e2e suite can run the full add → resume → sync → pause → remove → forget cycle against an in-process daemon.
+
 ## Tests
 
 - `mimir-server` integration tests (`routes/connectors.rs` via `oneshot`):
@@ -208,7 +210,6 @@ backend and its daemon registration.
 
 ## Out of scope (tracked)
 
-- `mimir connector …` CLI plumbing — A3 / #204.
 - OAuth PKCE loopback callback flow — A4 / #205.
 - Reconfig-on-restart (edit a connector's `config_json` and restart its
   runner) — deferred; the `start(id)` supervisor method added in A2 is the

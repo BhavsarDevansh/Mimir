@@ -138,7 +138,19 @@ db_path = "{jobs_db}"
     /// Run the `mimir` CLI binary against this daemon with the isolated
     /// environment, returning (stdout, stderr, status).
     pub fn run_cli(&self, args: &[&str]) -> (String, String, ExitStatus) {
-        let output = Command::new(env!("CARGO_BIN_EXE_mimir"))
+        self.run_cli_with_env(args, &[])
+    }
+
+    /// Like [`run_cli`](Self::run_cli) but with extra environment variables
+    /// (e.g. `BROWSER` for the OAuth PKCE E2E, which drives the flow through
+    /// a fake browser).
+    pub fn run_cli_with_env(
+        &self,
+        args: &[&str],
+        extra_env: &[(&str, &str)],
+    ) -> (String, String, ExitStatus) {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mimir"));
+        command
             .args(args)
             .env("NO_COLOR", "1")
             .env("MIMIR_BASE_URL", &self.base_url)
@@ -147,9 +159,11 @@ db_path = "{jobs_db}"
             .env("HOME", &self.home_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .expect("spawn mimir");
+            .stderr(Stdio::piped());
+        for (key, value) in extra_env {
+            command.env(key, value);
+        }
+        let output = command.output().expect("spawn mimir");
         (
             String::from_utf8_lossy(&output.stdout).to_string(),
             String::from_utf8_lossy(&output.stderr).to_string(),

@@ -103,6 +103,12 @@ icalendar = { version = "0.17", optional = true }
 # required by oauth2's PKCE verifier generation. License MIT/Apache-2.0
 # (GPL-3-compatible). Gated by the `oauth` feature.
 oauth2 = { version = "5.0", default-features = false, optional = true }
+# T2 (issue #207): the in-process mock OAuth server generates a self-signed
+# certificate at test runtime (`rcgen` 0.14.x, latest stable) and computes the
+# PKCE S256 challenge check with `sha2` (0.10, already in the tree via
+# `oauth2`). Both are gated by the `test-mock-oauth` feature (off by default).
+rcgen = { version = "0.14", optional = true }
+sha2 = { version = "0.10", optional = true }
 # `roxmltree` is a small, pure-Rust, read-only DOM XML parser used to walk
 # CalDAV WebDAV multistatus responses (sync-collection REPORT + PROPFIND).
 # A DOM parser is far simpler + more robust than a hand-rolled pull-parser for
@@ -166,6 +172,9 @@ mail-parser = { version = "0.11.5", optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tempfile = "3"
 wiremock = "0.6"
+# `url` builds/parses the mock-OAuth-server request forms in the T2 E2E tests
+# (issue #207). Already in the tree (oauth2's dependency), so no new download.
+url = "2"
 # Enable mimir-core's `mock-llm` feature for deterministic connector LLM tests
 # (Email C7 / #201 prose-extraction layer).
 mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
@@ -179,6 +188,12 @@ photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"]
 ## workspace reqwest 0.13 client (see `src/oauth/`). Enabled by the OAuth
 ## backends (`calendar`, `gmail`) and by the CLI's PKCE login flow (A4 / #205).
 oauth = ["dep:oauth2", "dep:http", "dep:url"]
+## In-process mock OAuth 2.0 authorization server (Phase 3 T2 / #207): an
+## HTTPS `/authorize` + HTTP `/token` loopback pair that the PKCE-flow E2E
+## tests drive without a real provider. Test-only, off by default. Reuses the
+## `oauth` feature (the flow under test) and the `tokio-rustls`/`rustls`/
+## `base64` optional deps already gated by `gmail`.
+test-mock-oauth = ["oauth", "dep:rcgen", "dep:sha2", "dep:tokio-rustls", "dep:rustls", "dep:base64"]
 ## CalDAV calendar ingestion: read/sync + event fact extraction (C3–C4).
 calendar = ["dep:icalendar", "dep:roxmltree", "dep:chrono-tz", "dep:uuid", "oauth"]
 ## IMAP email ingestion, Gmail and other providers (C5–C7).

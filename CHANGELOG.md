@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.99.0] — 2026-08-12
+
+### Phase 3 T2 — mock OAuth server + PKCE/rate-limit/supervisor E2E tests (issue #207)
+
+- **In-process mock OAuth 2.0 authorization server.** `mimir-connectors::mock_oauth` (feature `test-mock-oauth`, off by default) serves the two endpoints the interactive PKCE flow needs without a real provider: an HTTPS `GET /authorize` (self-signed `rcgen` certificate generated per test run; the flow's HTTPS-only `auth_uri` gate is honoured) issues a one-time code and redirects to the loopback callback with the CSRF `state` echoed, and an HTTP `POST /token` validates the PKCE S256 `code_verifier` against the challenge captured at authorize time, enforces one-time code use, and issues an OAuth token bundle. Both endpoints record every request for assertions.
+- **PKCE flow E2E against the mock server.** `mimir-connectors/tests/oauth_pkce_e2e.rs` drives `run_pkce_flow` through the full authorize → redirect → loopback callback → code-exchange round trip with a fake-browser opener, and asserts the exchanged `SecretBundle` contents plus the exact authorize/token request shapes. Mock-correctness tests cover the state echo, one-time code replay rejection, wrong-verifier rejection, and unknown grant types.
+- **Daemon-level OAuth E2E.** `mimir/tests/connector_oauth_e2e.rs` drives the real `mimir connector add` CLI against the real daemon with `auth.kind=oauth` config: the CLI's `webbrowser` call is redirected to a `$BROWSER` fake-browser script (`curl -k -L`) that follows the HTTPS authorize redirect, and the exchanged tokens land in the daemon's secret store (`auth_state=authenticated`), after which the instance can be resumed and synced.
+- **Rate-limit/backoff tests over real HTTP.** `mimir-connectors/tests/rate_limit_http.rs` verifies the F12 primitives against a wiremock endpoint: 429 with `Retry-After` (and 503) are retried by `retry_with_backoff` with the server hint driving the wait, and a `RateLimiter` with `daily_quota=Some(N)` stops issuing HTTP calls once the quota is spent (the exhaustion surfaces as a non-retryable `QuotaExhausted` and the wiremock `expect` proves no further request).
+- **Supervisor edge-case tests.** `mimir-connectors/tests/supervisor_lifecycle_tests.rs` now covers the F8 edge cases: startup restore, graceful-shutdown cursor persistence, circuit breaker (both ordinary failures and repeated panics), and panic recovery.
+- **Test harness DRY.** `TestDaemon` gains `run_cli_with_env` (extra env vars, e.g. `BROWSER` for the OAuth E2E) alongside the existing `run_cli` / `run_cli_json` helpers.
+- **Docs:** `docs/e2e-testing.md` (T2 sections), `docs/oauth-client.md` (feature gating + testing), `docs/wiki/what-works-now.md` (PKCE + E2E harness rows → ✅ Works, #207 removed from the Connectors work items), and `docs/wiki/Testing-and-Benchmarks.md` updated.
+- Version bumped 0.98.0 → 0.99.0 (minor — backwards-compatible new test deliverable, matching the 0.97.2 → 0.98.0 precedent for T1 / #206).
+
 ## [0.98.0] — 2026-08-12
 
 ### Phase 3 T1 — mock connector sync→normalize→insert→query E2E harness (issue #206)

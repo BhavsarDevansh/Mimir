@@ -54,6 +54,9 @@ tabled = "0.21"
 tempfile = "3"
 mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
 mimir-server = { path = "../mimir-server", features = ["mock-connector"] }
+# The in-process mock OAuth server (Phase 3 T2 / #207) for the daemon-level
+# PKCE E2E test; the feature is test-only and off in production builds.
+mimir-connectors = { path = "../mimir-connectors", features = ["test-mock-oauth"] }
 reqwest = { version = "0.13", features = ["blocking"] }
 nix = { version = "0.31", features = ["signal"] }
 wiremock = "0.6.5"

@@ -60,12 +60,18 @@
 //!   [`ConnectorSupervisor::trigger_sync`] preempts a connector's polling
 //!   interval with caller-supplied [`SyncOptions`] and serialises concurrent
 //!   triggers via a per-connector semaphore, returning the cycle outcome.
+//! - `mock_oauth` — in-process mock OAuth 2.0 authorization server (T2 /
+//!   #207): an HTTPS `/authorize` + HTTP `/token` loopback pair that the PKCE
+//!   flow E2E tests drive without a real provider. Test-only, gated by the
+//!   `test-mock-oauth` feature (off by default).
 //!
 //! # Feature flags
 //!
 //! `photos`, `calendar`, and `gmail` gate the per-type backends, which are
 //! added in later Phase 3 issues (C1–C7); `oauth` is the shared OAuth 2.0
 //! client + refresh layer enabled by `calendar`/`gmail` and the CLI PKCE flow.
+//! `test-mock-oauth` gates the in-process mock OAuth server used by the T2
+//! E2E tests (off by default).
 //! The framework core and the mock connector are **always built**, so
 //! `--no-default-features` still compiles a working framework + mock harness.
 
@@ -77,6 +83,13 @@ pub mod geocoder;
 #[cfg(any(feature = "calendar", feature = "gmail"))]
 pub mod ical;
 pub mod mock;
+/// In-process mock OAuth 2.0 authorization server for tests (Phase 3 T2 /
+/// #207): an HTTPS `/authorize` + HTTP `/token` loopback pair that the PKCE
+/// flow E2E tests drive without a real provider. Gated by the
+/// `test-mock-oauth` feature (off by default; enabled by this crate's
+/// integration tests and the `mimir` binary's daemon-level tests).
+#[cfg(feature = "test-mock-oauth")]
+pub mod mock_oauth;
 /// OAuth 2.0 client + token-refresh helpers (issue #240), gated by the `oauth`
 /// feature. [`oauth::OAuthHttpClient`] implements the `oauth2` crate's
 /// `AsyncHttpClient` trait over the workspace reqwest 0.13 client; the

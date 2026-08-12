@@ -199,7 +199,11 @@ async fn polling_mock_syncs_canned_facts_into_kb() {
         .iter()
         .find(|f| f.object_literal.as_deref() == Some("Acme"))
         .expect("works_at Acme fact not found");
-    assert!(works_at.confidence > 0.0);
+    assert!(
+        (works_at.confidence - 0.85).abs() < 0.001,
+        "expected the Gmail reliability score (0.85), got {}",
+        works_at.confidence
+    );
     assert_connector_source(&kg, works_at.id, row.id, "m-1").await;
 
     // Bob's "lives_in London" fact is present too.

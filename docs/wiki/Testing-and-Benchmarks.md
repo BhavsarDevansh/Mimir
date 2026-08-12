@@ -13,6 +13,7 @@ benchmark coverage and triaged the findings into prescriptive GitHub issues
   milliseconds and need no network.
 - **Integration tests** (`<crate>/tests/*.rs`) exercise SQLite-backed and
   wiremock-backed pathways end to end.
+- **Daemon E2E tests** (`mimir/tests/*.rs`) boot the real daemon in-process (mock LLM, isolated temp HOME/XDG) and drive the real `mimir` CLI binary against it — the full connector lifecycle plus the mock-connector sync → `normalize_and_insert` → KB-query round trip with provenance, reliability-score confidence, and corroboration assertions (issue #206).
 - **Benchmarks** (criterion) measure both hotpaths (context manager, KG
   inference, memory condensation) and non-hotpath pure helpers
   (FTS5 escaping, confidence scoring, serde roundtrips).

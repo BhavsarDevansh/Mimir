@@ -1,7 +1,7 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-08-11
-> **Version:** 0.96.2
+> **Last updated:** 2026-08-12
+> **Version:** 0.98.0
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in `CHANGELOG.md`; this file deliberately does not repeat either.
 
 ---
@@ -237,7 +237,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Rate limiting + retry | ✅ Works | Per-instance GCRA limiter, daily quota, retry/backoff with `Retry-After` honouring ([#189](https://github.com/BhavsarDevansh/Mimir/issues/189)). |
 | Geocoder | ✅ Works | OSM Nominatim forward/reverse with rate limiting ([#191](https://github.com/BhavsarDevansh/Mimir/issues/191)). Not configurable ([#227](https://github.com/BhavsarDevansh/Mimir/issues/227)); `RateLimitConfig::nominatim()` duplicates `Default` ([#223](https://github.com/BhavsarDevansh/Mimir/issues/223)); conversational geocoding tool deferred ([#192](https://github.com/BhavsarDevansh/Mimir/issues/192)). |
 | Push-mode manual sync | ❌ Not implemented | `trigger_sync` returns `PushUnsupported` for push connectors (deferred in F9 / [#186](https://github.com/BhavsarDevansh/Mimir/issues/186)). |
-| E2E / integration harness | 🟡 Partial | CLI e2e cycle test exists; the mock sync→normalize→insert→query provenance/confidence/corroboration assertions are not yet written ([#206](https://github.com/BhavsarDevansh/Mimir/issues/206)). |
+| E2E / integration harness | ✅ Works | Daemon-level tests drive the real CLI + in-process daemon: the full connector lifecycle plus the mock sync→normalize→insert→query round trip asserting `source_type=Connector`, instance provenance, reliability-score confidence, and the corroboration path (second instance boosts +0.05; re-sync is a re-statement no-op) ([#206](https://github.com/BhavsarDevansh/Mimir/issues/206)). |
 
 ### Background Jobs & Scheduler
 
@@ -348,7 +348,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | Work item | Issue |
 |-----------|-------|
 | Mock OAuth server + PKCE/rate-limit/supervisor e2e tests | [#207](https://github.com/BhavsarDevansh/Mimir/issues/207) |
-| Mock sync→normalize→insert→query e2e assertions | [#206](https://github.com/BhavsarDevansh/Mimir/issues/206) |
 | Email: durable retry / terminal-failure policy for LLM extraction | [#262](https://github.com/BhavsarDevansh/Mimir/issues/262) |
 | Email: iMIP CANCEL lifecycle | [#283](https://github.com/BhavsarDevansh/Mimir/issues/283) |
 | Calendar: propagate server-side deletions (tombstones) | [#247](https://github.com/BhavsarDevansh/Mimir/issues/247) |

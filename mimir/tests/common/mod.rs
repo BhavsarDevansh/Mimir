@@ -157,6 +157,26 @@ db_path = "{jobs_db}"
         )
     }
 
+    /// Run the CLI and parse stdout as JSON, panicking with the full output on
+    /// failure. Commands must be invoked with `--json` (or otherwise print a
+    /// single JSON document to stdout). Shared fixture: not every test binary
+    /// uses every helper, so dead-code analysis is relaxed for this one.
+    #[allow(dead_code)]
+    pub fn run_cli_json(&self, args: &[&str]) -> serde_json::Value {
+        let (stdout, stderr, status) = self.run_cli(args);
+        assert!(
+            status.success(),
+            "`mimir {}` failed.\nstdout: {stdout}\nstderr: {stderr}",
+            args.join(" ")
+        );
+        serde_json::from_str(stdout.trim()).unwrap_or_else(|error| {
+            panic!(
+                "`mimir {}` did not print JSON.\nstdout: {stdout}\nstderr: {stderr}\nerror: {error}",
+                args.join(" ")
+            )
+        })
+    }
+
     /// Stop the daemon via `mimir stop` and await server exit (up to 5 s).
     pub fn stop(self) {
         let (_, stderr, status) = self.run_cli(&["stop"]);

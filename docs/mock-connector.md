@@ -138,11 +138,8 @@ that injected failures are recorded rather than omitted.
 - `tests/supervisor_lifecycle_tests.rs` — the supervised-lifecycle behavioural suite
   now drives the `MockConnector` (the previous private `TestConnector` was
   removed — DRY).
-- `tests/mock_ingestion_e2e.rs` — the T1 vehicle: the real
-  `ConnectorSupervisor` + `KnowledgeGraph` ingest a `MockConnector`'s canned
-  facts in both polling and push modes, asserting KB facts + connector
-  provenance (`SourceType::Connector`, `connector_instance_id`,
-  `raw_reference`, `ExtractionMethod::StructuredParse`).
+- `tests/mock_ingestion_e2e.rs` — the T1 vehicle: the real `ConnectorSupervisor` + `KnowledgeGraph` ingest a `MockConnector`'s canned facts in both polling and push modes, asserting KB facts + connector provenance (`SourceType::Connector`, `connector_instance_id`, `raw_reference`, `ExtractionMethod::StructuredParse`) and the exact Gmail reliability-score confidence (0.85).
+- `mimir/tests/connector_e2e.rs` — the daemon-level T1 harness (issue #206): the real `mimir` CLI drives an in-process daemon (built with the `mock-connector` feature) through add → auth → resume → sync, then verifies the KB via `mimir kb query` / `kb show --json` — facts land with `source_type=Connector`, provenance tied to the instance, confidence 0.85, and a second instance corroborating the same claim boosts confidence to 0.90 while a plain re-sync stays a re-statement no-op.
 
 ## Connections
 
@@ -150,5 +147,4 @@ that injected failures are recorded rather than omitted.
   `normalize_and_insert` (F4 / #181) — no parallel pipeline.
 - Reuses the `ConnectorRegistry` + `ConnectorSupervisor` (F7 / F8) unchanged.
 - No new dependencies (in-memory; uses existing `tokio`, `serde`, `chrono`).
-- Server/HTTP-level E2E wiring (the broader T1) is a separate issue; this
-  delivers the library-level vehicle.
+- The daemon-level E2E wiring (the broader T1) landed in issue #206 on top of this library-level vehicle.

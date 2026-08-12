@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.98.0] — 2026-08-12
+
+### Phase 3 T1 — mock connector sync→normalize→insert→query E2E harness (issue #206)
+
+- **Daemon-level fact-ingestion E2E tests.** `mimir/tests/connector_e2e.rs` now configures the `gmail/test` mock connector's `facts` knob and drives the full pipeline through the real CLI + in-process daemon: `connector add --config-json` → auth → resume → sync → `kb query` / `kb show`. The tests assert facts land with `source_type=Connector`, provenance tied to the connector instance (`connector_instance_id` + `raw_reference`), confidence from the connector reliability score (Gmail = 0.85), sync-cursor persistence, and the derived per-instance `item_count`.
+- **Corroboration path exercised end-to-end.** A second connector instance corroborating the same claim merges into the existing fact row (entity resolution), adds an independent source, and boosts confidence to 0.90 (+0.05, capped at 0.95); a plain re-sync of the same instance is asserted to be a re-statement no-op (no extra source, no further boost).
+- **Supervisor-level confidence assertion.** `mimir-connectors/tests/mock_ingestion_e2e.rs` now asserts the exact Gmail reliability score (0.85) instead of a loose `> 0.0` check.
+- **Test harness DRY.** `TestDaemon` gains a `run_cli_json` helper (asserts success + parses JSON stdout); the existing lifecycle e2e test was refactored onto it.
+- **Docs:** `docs/e2e-testing.md` (connector E2E section), `docs/mock-connector.md` (T1 status), `docs/connector-management.md`, `docs/wiki/connectors.md`, `docs/wiki/what-works-now.md` (E2E harness row → ✅ Works), `docs/wiki/Testing-and-Benchmarks.md`, `README.md`, and `Mimir-Implementation-Context.md` updated.
+- Version bumped 0.97.2 → 0.98.0 (minor — backwards-compatible new test harness deliverable, matching the 0.94 → 0.95 precedent for the mock-connector daemon feature).
+
 ## [0.97.2] — 2026-08-12
 
 ### Review fixes — PKCE flow security hardening and OAuth config back-compat (PR #291)

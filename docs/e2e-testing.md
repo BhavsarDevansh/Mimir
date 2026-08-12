@@ -40,3 +40,15 @@ To add a new E2E scenario (e.g. streaming chat, memory viewing):
 2. Start the server in-process with a pre-bound listener and injected mock backend.
 3. Set `MIMIR_BASE_URL` on every CLI invocation.
 4. Assert on captured stdout/stderr.
+
+## Connector E2E (Phase 3 T1 / issue #206)
+
+`mimir/tests/connector_e2e.rs` extends the same pattern to the connector framework. The shared `TestDaemon` fixture (`mimir/tests/common/mod.rs`) starts the daemon with the `mock-connector` feature so the `gmail/test` mock backend is registered, and `run_cli_json` runs a CLI subcommand and parses its JSON stdout (asserting success first).
+
+The fact-ingestion tests configure the mock's `facts` knob via `mimir connector add --config-json`, then drive add → auth → resume → sync and verify the knowledge graph through the real HTTP surface:
+
+- `mimir kb query <entity> --json` — fact presence, predicate/object, and confidence (Gmail reliability score = 0.85).
+- `mimir kb show <fact_id> --json` — provenance: a `Connector` source with the instance id and `raw_reference`.
+- `mimir connector status --json` — `sync_cursor` persistence and the derived per-instance `item_count`.
+
+Corroboration is exercised end-to-end: a second instance emitting the same claim merges into the existing fact row (entity resolution), adds an independent source, and boosts confidence to 0.90; a plain re-sync of the first instance is asserted to be a re-statement no-op (no extra source, no further boost). The supervisor-level round trip (polling + push modes) lives in `mimir-connectors/tests/mock_ingestion_e2e.rs`.

@@ -395,6 +395,11 @@ pub enum ConnectorCommands {
     Auth {
         /// Connector slug.
         slug: String,
+        /// Configuration as `key=value` pairs (dotted keys nest, e.g. `auth.kind=oauth`). Required to re-run the OAuth PKCE flow.
+        config: Vec<String>,
+        /// Full backend configuration as a JSON object (key=value pairs override it). Required to re-run the OAuth PKCE flow.
+        #[arg(long)]
+        config_json: Option<String>,
         /// App-password credential (skips the interactive prompt).
         #[arg(long, conflicts_with = "token")]
         password: Option<String>,

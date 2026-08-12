@@ -54,9 +54,10 @@ impl Connector for CalendarConnector {
                         },
                         {
                             "type": "object",
-                            "required": ["kind", "token_endpoint", "client_id"],
+                            "required": ["kind", "auth_uri", "token_endpoint", "client_id"],
                             "properties": {
                                 "kind": { "const": "oauth" },
+                                "auth_uri": { "type": "string", "format": "uri" },
                                 "token_endpoint": { "type": "string", "format": "uri" },
                                 "client_id": { "type": "string" },
                                 "client_secret": { "type": "string" },

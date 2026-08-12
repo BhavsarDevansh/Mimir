@@ -18,6 +18,27 @@ pub(crate) fn app_config() -> serde_json::Value {
 }
 
 #[test]
+fn oauth_config_without_auth_uri_deserializes_from_stored_record() {
+    // Records persisted before the `auth_uri` field (pre-0.97.0) must still
+    // load — `auth_uri` is only required when starting the interactive PKCE
+    // flow, not for token refresh.
+    let dto: EmailConfigDto = serde_json::from_value(serde_json::json!({
+        "host": "imap.example.com",
+        "auth": {
+            "kind": "oauth",
+            "username": "devansh@example.com",
+            "token_endpoint": "https://oauth.example.com/token",
+            "client_id": "cid",
+        },
+    }))
+    .expect("stored record without auth_uri must load");
+    let EmailAuthMethod::OAuth { auth_uri, .. } = dto.auth else {
+        panic!("expected OAuth auth method");
+    };
+    assert_eq!(auth_uri, None);
+}
+
+#[test]
 fn cursor_round_trip() {
     assert_eq!(encode_cursor(17, 42), "17:42");
     assert_eq!(parse_cursor("17:42"), Some((17, 42)));
@@ -131,6 +152,7 @@ async fn resolve_auth_oauth_reuses_unexpired_token() {
     cfg["auth"] = serde_json::json!({
         "kind": "oauth",
         "username": "devansh@example.com",
+        "auth_uri": "https://oauth.example.com/authorize",
         "token_endpoint": "https://oauth.example.com/token",
         "client_id": "cid",
     });
@@ -177,6 +199,7 @@ async fn resolve_auth_oauth_refreshes_expired_token() {
     cfg["auth"] = serde_json::json!({
         "kind": "oauth",
         "username": "devansh@example.com",
+        "auth_uri": "https://oauth.example.com/authorize",
         "token_endpoint": format!("{}/token", server.uri()),
         "client_id": "cid",
         "client_secret": "secret",

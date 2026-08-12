@@ -74,16 +74,43 @@ fn is_loopback_url(url: &reqwest::Url) -> bool {
 type RefreshGrantError =
     RequestTokenError<oauth2::HttpClientError<reqwest::Error>, BasicErrorResponse>;
 
+/// Reject a token endpoint that is not HTTPS (or loopback HTTP) before any
+/// credential is posted. The refresh request carries the `refresh_token`
+/// (and `client_secret`); a `http://` (or otherwise typo'd) remote endpoint
+/// would leak them over an unencrypted hop. Loopback HTTP (`127.0.0.1` /
+/// `::1` / `localhost`) is permitted: it is Mimir's local trust boundary
+/// (same as the home-directory trust model) and the credentials never
+/// traverse a network. `token_endpoint` is non-secret config, but the URL
+/// parse error is surfaced as `Config` rather than echoing the raw string.
+///
+/// Shared by the refresh grant and the interactive PKCE code exchange
+/// (A4 / #205): both post credentials to the token endpoint.
+pub(crate) fn validate_token_endpoint(token_endpoint: &str) -> Result<(), ConnectorError> {
+    let parsed = reqwest::Url::parse(token_endpoint)
+        .map_err(|e| ConnectorError::Config(format!("token endpoint is not a valid URL: {e}")))?;
+    let scheme = parsed.scheme();
+    let loopback = is_loopback_url(&parsed);
+    if scheme != "https" && !(scheme == "http" && loopback) {
+        return Err(ConnectorError::Config(format!(
+            "token endpoint must use HTTPS (scheme `{scheme}` rejected); refusing to post credentials over a non-loopback link"
+        )));
+    }
+    Ok(())
+}
+
 /// Map an `oauth2` refresh-grant error onto [`ConnectorError`], preserving
 /// the secret-hygiene promise: the raw response body is never surfaced
 /// (providers may echo the request's `client_secret` or `refresh_token` in
 /// error payloads). Only the parsed `error`/`error_description` fields are
-/// reported, bounded via [`truncate_description`].
-fn map_token_error(err: RefreshGrantError) -> ConnectorError {
+/// reported, bounded via [`truncate_description`]. `what` names the grant
+/// ("token refresh" / "token exchange") so the shared mapping reads
+/// correctly for both the refresh grant and the PKCE code exchange
+/// (A4 / #205).
+pub(crate) fn map_token_error(err: RefreshGrantError, what: &str) -> ConnectorError {
     match err {
         RequestTokenError::ServerResponse(resp) => {
             let detail = truncate_description(&resp.to_string());
-            ConnectorError::Authentication(format!("token refresh failed: {detail}"))
+            ConnectorError::Authentication(format!("{what} failed: {detail}"))
         }
         RequestTokenError::Request(e) => {
             // oauth2's `HttpClientError::Reqwest` Display is the constant
@@ -99,15 +126,15 @@ fn map_token_error(err: RefreshGrantError) -> ConnectorError {
                 HttpClientError::Other(msg) => msg.clone(),
                 _ => e.to_string(),
             };
-            ConnectorError::Network(format!("token refresh failed: {detail}"))
+            ConnectorError::Network(format!("{what} failed: {detail}"))
         }
         // The parse error's `Vec<u8>` payload is the raw response body —
         // deliberately dropped.
         RequestTokenError::Parse(_, _) => {
-            ConnectorError::Parse("token refresh response parse failed".into())
+            ConnectorError::Parse(format!("{what} response parse failed"))
         }
         RequestTokenError::Other(msg) => {
-            ConnectorError::Authentication(format!("token refresh failed: {msg}"))
+            ConnectorError::Authentication(format!("{what} failed: {msg}"))
         }
     }
 }
@@ -164,23 +191,7 @@ pub(crate) async fn refresh_token(
     scopes: Option<&[String]>,
     refresh_token: &str,
 ) -> Result<BasicTokenResponse, ConnectorError> {
-    // Reject non-HTTPS token endpoints before posting credentials. The refresh
-    // request carries the `refresh_token` (and `client_secret`); a `http://`
-    // (or otherwise typo'd) remote endpoint would leak them over an
-    // unencrypted hop. Loopback HTTP (`127.0.0.1` / `::1` / `localhost`) is
-    // permitted: it is Mimir's local trust boundary (same as the
-    // home-directory trust model) and the credentials never traverse a
-    // network. `token_endpoint` is non-secret config, but the URL parse error
-    // is surfaced as `Config` rather than echoing the raw string.
-    let parsed = reqwest::Url::parse(token_endpoint)
-        .map_err(|e| ConnectorError::Config(format!("token endpoint is not a valid URL: {e}")))?;
-    let scheme = parsed.scheme();
-    let loopback = is_loopback_url(&parsed);
-    if scheme != "https" && !(scheme == "http" && loopback) {
-        return Err(ConnectorError::Config(format!(
-            "token endpoint must use HTTPS (scheme `{scheme}` rejected); refusing to post refresh credentials over a non-loopback link"
-        )));
-    }
+    validate_token_endpoint(token_endpoint)?;
 
     // Client credentials are sent in the request body (not HTTP Basic) to
     // match the providers Mimir targets (Google, Apple, Nextcloud), which
@@ -200,7 +211,10 @@ pub(crate) async fn refresh_token(
     for scope in scopes.into_iter().flatten() {
         request = request.add_scope(Scope::new(scope.clone()));
     }
-    request.request_async(http).await.map_err(map_token_error)
+    request
+        .request_async(http)
+        .await
+        .map_err(|e| map_token_error(e, "token refresh"))
 }
 
 /// Resolve a live OAuth access token from a stored [`SecretBundle::OAuth`],
@@ -440,9 +454,10 @@ mod tests {
             .send()
             .await
             .expect_err("invalid URL must fail at send time");
-        let err = map_token_error(RequestTokenError::Request(HttpClientError::Reqwest(
-            Box::new(reqwest_err),
-        )));
+        let err = map_token_error(
+            RequestTokenError::Request(HttpClientError::Reqwest(Box::new(reqwest_err))),
+            "token refresh",
+        );
         let msg = format!("{err}");
         assert!(
             matches!(err, ConnectorError::Network(_)),

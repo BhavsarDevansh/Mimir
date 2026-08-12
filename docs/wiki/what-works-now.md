@@ -116,7 +116,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | `mimir tool enable/disable/permission` | ✅ Works | Change tool permission levels (saved to `tools.toml`). |
 | `mimir skill list/show/add/delete/enable/disable` | ✅ Works | Manage skills (built-in, user-added). Generated-skill lifecycle is not implemented ([#20](https://github.com/BhavsarDevansh/Mimir/issues/20)). |
 | `mimir kb` | ✅ Works | All `mimir kb` commands route through daemon HTTP (no direct DB access); audit, CRUD, trash, pending confirmation, categories, and optimization are supported. The old "migrate kb to daemon routes" issue [#90](https://github.com/BhavsarDevansh/Mimir/issues/90) appears resolved. |
-| `mimir connector` | 🟡 Partial | Ten subcommands (add, auth, list, status, sync, pause, resume, remove, forget, act) plumbing the daemon routes. Interactive OAuth PKCE login is missing ([#205](https://github.com/BhavsarDevansh/Mimir/issues/205)); `--password`/`--token` flags leak secrets to the process list ([#270](https://github.com/BhavsarDevansh/Mimir/issues/270)); there is no way to discover registered types/backends ([#271](https://github.com/BhavsarDevansh/Mimir/issues/271)). |
+| `mimir connector` | 🟡 Partial | Ten subcommands (add, auth, list, status, sync, pause, resume, remove, forget, act) plumbing the daemon routes, including the interactive OAuth PKCE login (A4 / [#205](https://github.com/BhavsarDevansh/Mimir/issues/205)) for `auth.kind=oauth` configs. `--password`/`--token` flags leak secrets to the process list ([#270](https://github.com/BhavsarDevansh/Mimir/issues/270)); there is no way to discover registered types/backends ([#271](https://github.com/BhavsarDevansh/Mimir/issues/271)). |
 
 ### Chat & Conversation
 
@@ -226,12 +226,12 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
 | Framework (F1–F13) | ✅ Works | Crate + feature flags, instance registry, provenance FK, shared `normalize_and_insert`, entity-resolution chain, `Connector` trait, registry + factory dispatch, supervised lifecycle, manual sync triggering, secret store, rate-limit/retry primitives, mock connector ([#179](https://github.com/BhavsarDevansh/Mimir/issues/179)–[#190](https://github.com/BhavsarDevansh/Mimir/issues/190)). |
-| Daemon wiring + routes (A1–A3) | ✅ Works | Registry/supervisor owned by the daemon, startup restore, CRUD/status/sync/pause/resume/tokens/actions/forget routes, `mimir connector` CLI ([#202](https://github.com/BhavsarDevansh/Mimir/issues/202)–[#204](https://github.com/BhavsarDevansh/Mimir/issues/204)). |
+| Daemon wiring + routes (A1–A4) | ✅ Works | Registry/supervisor owned by the daemon, startup restore, CRUD/status/sync/pause/resume/tokens/actions/forget routes, `mimir connector` CLI, interactive OAuth PKCE login ([#202](https://github.com/BhavsarDevansh/Mimir/issues/202)–[#205](https://github.com/BhavsarDevansh/Mimir/issues/205)). |
 | Photos (local) | 🟡 Partial | `notify` watcher, EXIF GPS/datetime, incremental cursor, `took_photo` facts, place anchoring. Coords-only fallback uses a file-path object instead of a real-world visit ([#250](https://github.com/BhavsarDevansh/Mimir/issues/250)); `owner_name` is disconnected from the canonical user identity ([#246](https://github.com/BhavsarDevansh/Mimir/issues/246)); `NormalizedFact` boilerplate is duplicated ([#255](https://github.com/BhavsarDevansh/Mimir/issues/255)); RAW formats are deferred. |
 | Calendar (CalDAV) | 🟡 Partial | PROPFIND + sync-collection incremental sync, app-password + OAuth refresh, event fact cluster, write-back (`create_event`/`update_event`/`delete_event`). Server-side deletions are logged but not propagated to fact lifecycle ([#247](https://github.com/BhavsarDevansh/Mimir/issues/247)); auth error arm duplicated with Email ([#273](https://github.com/BhavsarDevansh/Mimir/issues/273)); enum→wire-string conversion is fragile ([#264](https://github.com/BhavsarDevansh/Mimir/issues/264)); supervisor start/resume race ([#266](https://github.com/BhavsarDevansh/Mimir/issues/266)); forget SQL duplication ([#267](https://github.com/BhavsarDevansh/Mimir/issues/267)). |
 | Email (IMAP) | 🟡 Partial | `LOGIN`/`XOAUTH2`, `UID FETCH` incremental sync, `IDLE` push with polling fallback, iMIP invites, schema.org JSON-LD, LLM prose extraction. LLM-extraction retry is in-memory and unbounded — not restart-safe ([#262](https://github.com/BhavsarDevansh/Mimir/issues/262)); iMIP `CANCEL` invites are skipped ([#283](https://github.com/BhavsarDevansh/Mimir/issues/283)); LLM tool-call parsing is duplicated with the conversational path ([#259](https://github.com/BhavsarDevansh/Mimir/issues/259)); auth error arm duplicated with Calendar ([#273](https://github.com/BhavsarDevansh/Mimir/issues/273)). |
 | OAuth token refresh | ✅ Works | `oauth2` 5.0.0 with `default-features = false` over a custom reqwest 0.13 adapter; redirects disabled, HTTPS/loopback gate, secret-hygiene error mapping ([#240](https://github.com/BhavsarDevansh/Mimir/issues/240)). |
-| OAuth PKCE login (A4) | ❌ Not implemented | Interactive loopback flow for the first token ([#205](https://github.com/BhavsarDevansh/Mimir/issues/205)); mock OAuth server + e2e tests ([#207](https://github.com/BhavsarDevansh/Mimir/issues/207)). |
+| OAuth PKCE login (A4) | ✅ Works | Interactive loopback flow for the first token: ephemeral loopback listener, browser-opened authorize URL (printed first for headless sessions), CSRF state validation, code exchange, token POST to the daemon ([#205](https://github.com/BhavsarDevansh/Mimir/issues/205)). Mock OAuth server + e2e tests remain ([#207](https://github.com/BhavsarDevansh/Mimir/issues/207)). |
 | OS-keyring secret backend | ❌ Not implemented | Opt-in `keyring` backend, deferred ([#188](https://github.com/BhavsarDevansh/Mimir/issues/188)). |
 | Mock connector | ✅ Works | Config-driven, always compiled; polling/push modes, failure injection ([#190](https://github.com/BhavsarDevansh/Mimir/issues/190)). |
 | Rate limiting + retry | ✅ Works | Per-instance GCRA limiter, daily quota, retry/backoff with `Retry-After` honouring ([#189](https://github.com/BhavsarDevansh/Mimir/issues/189)). |
@@ -347,7 +347,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 
 | Work item | Issue |
 |-----------|-------|
-| OAuth PKCE loopback login (A4) | [#205](https://github.com/BhavsarDevansh/Mimir/issues/205) |
 | Mock OAuth server + PKCE/rate-limit/supervisor e2e tests | [#207](https://github.com/BhavsarDevansh/Mimir/issues/207) |
 | Mock sync→normalize→insert→query e2e assertions | [#206](https://github.com/BhavsarDevansh/Mimir/issues/206) |
 | Email: durable retry / terminal-failure policy for LLM extraction | [#262](https://github.com/BhavsarDevansh/Mimir/issues/262) |
@@ -357,6 +356,8 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | Photos: `owner_name` vs canonical user identity | [#246](https://github.com/BhavsarDevansh/Mimir/issues/246) |
 | Connector catalog route + CLI discovery | [#271](https://github.com/BhavsarDevansh/Mimir/issues/271) |
 | Secret ingestion via env/stdin (no process-list leak) | [#270](https://github.com/BhavsarDevansh/Mimir/issues/270) |
+| CLI: `key=value` config pairs cannot express JSON arrays (scopes silently dropped) | [#289](https://github.com/BhavsarDevansh/Mimir/issues/289) |
+| DRY: `self_callback_opener` test helper duplicated across crates | [#290](https://github.com/BhavsarDevansh/Mimir/issues/290) |
 | OS-keyring secret backend | [#188](https://github.com/BhavsarDevansh/Mimir/issues/188) |
 | Supervisor start/resume race | [#266](https://github.com/BhavsarDevansh/Mimir/issues/266) |
 | Enum→wire-string conversion robustness | [#264](https://github.com/BhavsarDevansh/Mimir/issues/264) |
@@ -396,7 +397,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 |-------|--------|------------|
 | [#281](https://github.com/BhavsarDevansh/Mimir/issues/281) — no HTTP API auth | Any local process can read/write the knowledge graph | Keep the daemon on loopback; do not set `bind_addr` to `0.0.0.0` |
 | [#25](https://github.com/BhavsarDevansh/Mimir/issues/25) — Unix socket transport | TCP is the only transport | TCP on `127.0.0.1:8080` is secure for local use |
-| [#205](https://github.com/BhavsarDevansh/Mimir/issues/205) — OAuth PKCE login | OAuth connectors can't obtain their first token interactively | Use app passwords where the provider allows |
 | [#279](https://github.com/BhavsarDevansh/Mimir/issues/279) — no session compaction | Very long conversations are trimmed, not summarised | Keep `max_turns` modest (10–30) |
 | [#280](https://github.com/BhavsarDevansh/Mimir/issues/280) — chat session not persisted | Restarting `mimir chat` starts a new session | Use `/history` to resume |
 | [#262](https://github.com/BhavsarDevansh/Mimir/issues/262) — email LLM retry not durable | A restart can drop a message whose prose extraction failed | None; deterministic layers (iMIP, JSON-LD) are unaffected |
@@ -415,7 +415,7 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 
 - **Phase 1 — Core Agent** ✅ Complete (chat, tools, skills, memory, config, personality, deployment)
 - **Phase 2 — Knowledge Graph** ✅ Complete (entities, facts, inference, forgetting, memory, librarian, retrieval); hardening backlog in the feature-level roadmap above
-- **Phase 3 — Connectors** 🚧 In progress — framework (F1–F13), daemon wiring (A1–A3), and the Photos / CalDAV Calendar / IMAP Email backends are live; the remaining Phase 3 work is the OAuth PKCE login (A4 / [#205](https://github.com/BhavsarDevansh/Mimir/issues/205)), the keyring backend ([#188](https://github.com/BhavsarDevansh/Mimir/issues/188)), and the per-backend hardening items listed under Connectors above
+- **Phase 3 — Connectors** 🚧 In progress — framework (F1–F13), daemon wiring + CLI (A1–A4, including the interactive OAuth PKCE login), and the Photos / CalDAV Calendar / IMAP Email backends are live; the remaining Phase 3 work is the keyring backend ([#188](https://github.com/BhavsarDevansh/Mimir/issues/188)), the mock OAuth server + e2e tests ([#207](https://github.com/BhavsarDevansh/Mimir/issues/207)), and the per-backend hardening items listed under Connectors above
 - **Phase 4 — Reasoning** ⏳ Planned (inference engine expansion)
 - **Phase 5 — Proactive Agent** ⏳ Planned (events, reminders, domain surfacing — [#143](https://github.com/BhavsarDevansh/Mimir/issues/143), [#68](https://github.com/BhavsarDevansh/Mimir/issues/68))
 - **Phase 6 — Vision** ⏳ Planned (long-term memory consolidation)

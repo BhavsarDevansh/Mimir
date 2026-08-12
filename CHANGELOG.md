@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.97.2] — 2026-08-12
+
+### Review fixes — PKCE flow security hardening and OAuth config back-compat (PR #291)
+
+- **HTTPS-only authorization endpoint.** `run_pkce_flow` now rejects any `auth_uri` whose scheme is not `https` before the browser is opened (RFC 8252 §7.5) — the authorization endpoint carries the user's credentials, so plain HTTP is never allowed there even though the token endpoint gate permits loopback HTTP.
+- **Fixed callback error page.** A callback that aborts the flow (provider `error` param, missing/incorrect `state`) now responds with a fixed HTML page instead of echoing the provider-controlled `error` value into the browser (XSS on the loopback origin); the diagnostic stays in the process error only.
+- **Stored OAuth configs without `auth_uri` load again.** `CalendarAuthMethod::OAuth` and `EmailAuthMethod::OAuth` persist `auth_uri` as optional (`#[serde(default)]`), so records created before the field existed (pre-0.97.0) deserialize instead of failing at startup; new configs still require `auth_uri` via the JSON schema, and the interactive PKCE flow still fails with a clear message when it is absent.
+- **`oauth::pkce` is now a public module** (`mimir_connectors::oauth::pkce`), alongside the existing root re-exports.
+- **OAuth progress output moved to stderr.** The printed authorize URL and the "Starting OAuth login" message go to stderr, so `mimir connector add/auth --json` stdout stays valid JSON for scripts.
+- **Docs:** `docs/wiki/cli-commands.md` documents that `auth.scopes` must be supplied via `--config-json` (the `key=value` parser drops JSON arrays, #289); `docs/wiki/connectors.md` documents the required `mimir connector resume <slug>` step after `add`/re-auth; the VISION onboarding example uses the documented `mimir connector add gmail --backend <b>` syntax; `docs/oauth-client.md` security properties updated.
+- **Tests:** non-https `auth_uri` rejected without opening the browser, callback error page does not echo provider input, and stored-record deserialization without `auth_uri` for both Calendar and Email.
+- Version bumped 0.97.1 → 0.97.2 (patch — bug fixes, no API breakage).
+
+## [0.97.1] — 2026-08-12
+
+### Review fixes — PKCE loopback flow robustness and timeout UX (PR #291)
+
+- **Per-connection read deadline on the loopback callback listener.** A connection that sends nothing (or a partial request) is now dropped after a 10-second deadline instead of stalling the whole flow until the 5-minute overall timeout — a stalled or hostile local process can no longer waste the user's authorization. The dropped connection is ignored and the flow keeps waiting for the real callback.
+- **Timeout error no longer points at a dead login.** When the flow times out, the error now states that the flow aborted and the command must be re-run, instead of telling the user to complete a login whose loopback listener is already closed.
+- **Tests:** stalled-connection read timeout, stalled connection followed by a real callback, and the timeout message wording.
+- **Docs:** `docs/oauth-client.md` security properties and `docs/wiki/cli-commands.md` updated with the per-connection deadline and timeout behaviour.
+- Version bumped 0.97.0 → 0.97.1 (patch — bug fixes, no API change).
+
+## [0.97.0] — 2026-08-11
+
+### Phase 3 A4 — interactive OAuth PKCE loopback flow (issue #205)
+
+- **`mimir-connectors::oauth::pkce` — the interactive PKCE authorization-code flow.** `run_pkce_flow` binds an ephemeral loopback listener on `127.0.0.1:0`, builds the provider's authorize URL with an S256 PKCE challenge + CSRF state, receives the redirect (8 KiB read cap, state validated, favicon probes ignored), exchanges the code via the shared `OAuthHttpClient` (HTTPS/loopback token-endpoint gate + secret-hygiene error mapping), and returns the `SecretBundle::OAuth` for the caller to persist. The daemon never runs a transient HTTP server. Public surface: `PkceFlowConfig`, `run_pkce_flow`, `DEFAULT_FLOW_TIMEOUT` (gated by the `oauth` feature, which now also gates `url`).
+- **`mimir connector add` / `auth` run the flow for `auth.kind=oauth` configs.** `add` acquires the credential *before* registering the instance (a canceled prompt or aborted OAuth flow exits with nothing created) and POSTs the exchanged bundle to the daemon's token-ingest route so the instance becomes `authenticated`. `auth` re-runs the flow for expired credentials, taking the OAuth client config from re-supplied `key=value` / `--config-json` args (the daemon does not expose the stored config on the wire). The authorize URL is printed before the browser is opened (`webbrowser` 1.2.4), so headless/SSH sessions can complete the login manually; a browser-open failure is non-fatal.
+- **Breaking config change: `auth_uri` is now required on OAuth auth methods.** `CalendarAuthMethod::OAuth` and `EmailAuthMethod::OAuth` gained a required `auth_uri` field (the provider's authorization endpoint), reflected in the JSON schemas and config docs. Existing OAuth configs must add `auth.auth_uri` before the flow can run.
+- **Tests:** 12 new `run_pkce_flow` / `parse_callback` tests (happy path, state mismatch, timeout, non-HTTPS token endpoint, invalid auth URI, favicon probe, provider-error param, percent-decoding, secret-hygiene error mapping, refresh-token retention, expiry clamping) plus CLI e2e tests for the add/auth PKCE paths against a wiremock token endpoint, config extraction, and ingest conversion.
+- **Docs:** `docs/oauth-client.md` documents the flow and its security properties; connector-management, CLI, email/calendar connector, wiki, README, `Mimir-Implementation-Context.md`, and the VISION Phase 3 plan updated; `VISION/03-Connectors/User-Experience.md` onboarding example updated from paste-a-code to the loopback flow.
+- Version bumped 0.96.2 → 0.97.0 (minor — new feature; breaking config change acceptable per project policy).
+
 ## [0.96.2] — 2026-08-11
 
 ### Docs — what-works-now.md rewritten as a feature-level roadmap

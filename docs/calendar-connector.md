@@ -2,7 +2,7 @@
 
 > **Phase:** 3 — Connectors (C3 / issue #197, C4 / issue #198)
 > **Feature flag:** `calendar` (default). Framework + mock stay built without it.
-> **Status:** Implemented (library + daemon/CLI integration). C3 (#197) delivers transport + read/sync; C4 (#198) adds event → KB fact extraction, events-subsystem (#74) integration, and CalDAV write-back (`act`). The daemon `AppState` wiring (A1 / #202), action routes (A2 / #203), and the `mimir connector …` CLI (A3 / #204) are integrated; only the interactive OAuth PKCE login remains (A4 / #205). Server-side deletion → KB fact lifecycle is tracked as a follow-up (the extractor only yields facts).
+> **Status:** Implemented (library + daemon/CLI integration). C3 (#197) delivers transport + read/sync; C4 (#198) adds event → KB fact extraction, events-subsystem (#74) integration, and CalDAV write-back (`act`). The daemon `AppState` wiring (A1 / #202), action routes (A2 / #203), the `mimir connector …` CLI (A3 / #204), and the interactive OAuth PKCE login (A4 / #205) are integrated. Server-side deletion → KB fact lifecycle is tracked as a follow-up (the extractor only yields facts).
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -30,7 +30,7 @@ Two credential kinds, mirroring [`SecretBundle`](connector-secret-store.md):
   `SecretStore` under the connector slug as `SecretBundle::AppPassword`.
 - **OAuth 2.0** (Google Calendar) — bearer token. The access/refresh tokens
   live in the `SecretStore` as `SecretBundle::OAuth`; the non-secret client
-  config (`token_endpoint`, `client_id`, optional `client_secret`/`scopes`)
+  config (`auth_uri`, `token_endpoint`, `client_id`, optional `client_secret`/`scopes`)
   lives in `config_json`. The connector **refreshes** an expired access token
   (within a 60 s skew) before every sync/authenticate/health call and persists
   the refreshed bundle back to the store. An **unknown** expiry
@@ -48,7 +48,7 @@ to `ConnectorError` strings (which the supervisor persists to `last_error`
 discriminant only, never a `Debug` of the OAuth config.
 
 The interactive PKCE login that *obtains* the first OAuth token is
-**A4 / `#205`**, out of scope here. `#197` only consumes + refreshes a stored token.
+**A4 / `#205`**, implemented in `mimir-connectors::oauth::pkce` and driven by the CLI (`mimir connector add` / `auth` with an `auth.kind=oauth` config): the CLI binds an ephemeral loopback listener, opens the provider's authorize URL in the browser (printed first for headless sessions), exchanges the code, and POSTs the token bundle to the daemon's token-ingest route. `#197` consumes + refreshes a stored token.
 
 ## Sync protocol
 
@@ -158,7 +158,7 @@ All optional, gated by the `calendar` feature:
 | `icalendar` | 0.17.x | Strongly-typed RFC 5545 iCalendar parser (default `parser` feature). **Resolves to 0.17.6 under the workspace MSRV (1.85); 0.17.12 requires Rust 1.88** — see the follow-up issue tracking the deps-ledger / MSRV reconciliation. |
 | `roxmltree` | 0.21 | Pure-Rust read-only DOM XML parser for WebDAV multistatus responses. |
 | `reqwest` | 0.13 (in tree) | HTTP (CalDAV + the `OAuthHttpClient` adapter's transport). |
-| `oauth2` | 5.0.0 (`default-features = false`) | Vetted OAuth 2.0 protocol code (refresh grant today, PKCE in A4 / #205); talks HTTP through the `OAuthHttpClient` adapter over the workspace reqwest 0.13 client (issue #240). Gated by the `oauth` feature. |
+| `oauth2` | 5.0.0 (`default-features = false`) | Vetted OAuth 2.0 protocol code (refresh grant + PKCE authorization-code flow, A4 / #205); talks HTTP through the `OAuthHttpClient` adapter over the workspace reqwest 0.13 client (issue #240). Gated by the `oauth` feature. |
 | `chrono-tz` | 0.10 | IANA timezone database for `chrono`; resolves `TZID`-qualified `DTSTART`/`DTEND` to UTC. New in C4. |
 | `uuid` | 1 (in tree) | `v4` UID generation for new write-back events. New in C4. |
 
@@ -194,6 +194,7 @@ OAuth variant:
   "calendar_url": "https://apidata.googleusercontent.com/caldav/v2/.../events/",
   "auth": {
     "kind": "oauth",
+    "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
     "token_endpoint": "https://oauth2.googleapis.com/token",
     "client_id": "mimir-client",
     "scopes": ["https://www.googleapis.com/auth/calendar.readonly"]

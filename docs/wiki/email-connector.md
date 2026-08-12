@@ -1,7 +1,7 @@
 # Email Connector
 
 > **Phase:** 3 — Connectors
-> **Status:** Implemented (library + daemon/CLI) — C5 transport (#199) + C6 structured extraction (#200, calendar invites) + #249 (schema.org JSON-LD deterministic extraction) + C7 LLM extraction (#201, unstructured prose). Daemon wiring (A1 / #202), action routes (A2 / #203), and the `mimir connector …` CLI (A3 / #204) have landed; the interactive OAuth PKCE login remains A4 / #205.
+> **Status:** Implemented (library + daemon/CLI) — C5 transport (#199) + C6 structured extraction (#200, calendar invites) + #249 (schema.org JSON-LD deterministic extraction) + C7 LLM extraction (#201, unstructured prose) + the interactive OAuth PKCE login (A4 / #205).
 
 ## What it is
 
@@ -53,7 +53,7 @@ This is a library component today (in `mimir-connectors`); the daemon wiring tha
 ## Authentication
 
 - **App password** — best for most providers. Generate an app-specific password in your provider's security settings (Gmail calls them "app passwords"); Mimir uses standard IMAP `LOGIN`. Your username is in the connector config; the password is stored securely.
-- **OAuth (Google / Microsoft)** — the connector stores your access + refresh token and refreshes the access token automatically before it expires, so you stay connected without re-authorising. The first token is obtained via an interactive sign-in flow that arrives in a later issue (#205).
+- **OAuth (Google / Microsoft)** — the connector stores your access + refresh token and refreshes the access token automatically before it expires, so you stay connected without re-authorising. The first token is obtained via the interactive PKCE sign-in flow (A4 / #205): `mimir connector add gmail … auth.kind=oauth …` opens the provider's authorize URL in your browser, receives the redirect on a loopback listener, and stores the exchanged token bundle.
 
 ## Privacy
 

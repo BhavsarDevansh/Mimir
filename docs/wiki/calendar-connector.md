@@ -1,7 +1,7 @@
 # Calendar Connector
 
 > **Phase:** 3 — Connectors
-> **Status:** Implemented (library + daemon/CLI) — C3 (#197) transport + read/sync, C4 (#198) event → knowledge-graph extraction, events-subsystem integration, and write-back. Daemon wiring (A1 / #202), action routes (A2 / #203), and the `mimir connector …` CLI (A3 / #204) have landed; the interactive OAuth PKCE login remains A4 / #205. Server-side deletion → KB fact lifecycle is a follow-up.
+> **Status:** Implemented (library + daemon/CLI) — C3 (#197) transport + read/sync, C4 (#198) event → knowledge-graph extraction, events-subsystem integration, write-back, and the interactive OAuth PKCE login (A4 / #205). Server-side deletion → KB fact lifecycle is a follow-up.
 
 ## What it is
 
@@ -68,8 +68,10 @@ A delete on the server does not yet remove the corresponding KB fact automatical
   securely.
 - **OAuth (Google)** — the connector stores your access + refresh token and
   **refreshes** the access token automatically before each sync when it
-  expires. The initial sign-in (the OAuth PKCE dance) is added in a later
-  issue (A4 / #205); for now you supply the first token.
+  expires. The initial sign-in is the interactive OAuth PKCE dance (A4 /
+  #205): `mimir connector add calendar … auth.kind=oauth …` opens the
+  provider's authorize URL in your browser, receives the redirect on a
+  loopback listener, and stores the exchanged token bundle.
 
 Mimir can also write back to your calendar: creating, updating, or deleting
 remote events via CalDAV `PUT`/`DELETE` (added in C4 / #198). This is the
@@ -90,8 +92,8 @@ only connector with write support.
 - Google's CalDAV sync-token support is non-standard; the generic client works
   against fully RFC 6578-compliant servers (iCloud, Nextcloud). Google-specific
   handling is a follow-on.
-- The interactive OAuth login (PKCE) is not yet wired — supply the first token
-  manually until A4 (#205).
+- The interactive OAuth login (PKCE) is wired (A4 / #205); Google-specific
+  CalDAV sync-token handling remains a follow-on.
 - Event → knowledge-graph extraction and write-back are live (C4 / #198);
   richer `RRULE` recurrence rules and server-side deletion → KB fact lifecycle
   are follow-ups.

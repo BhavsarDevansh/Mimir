@@ -76,7 +76,7 @@ fn default_poll_jitter_secs() -> u64 {
 ///
 /// Tagged by `kind` so the on-disk JSON is self-describing:
 /// `{"kind":"app_password","username":"..."}` or
-/// `{"kind":"oauth","token_endpoint":"...","client_id":"..."}`.
+/// `{"kind":"oauth","auth_uri":"...","token_endpoint":"...","client_id":"..."}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CalendarAuthMethod {
@@ -93,6 +93,13 @@ pub enum CalendarAuthMethod {
     /// interactive PKCE login that obtains the first token is A4 / #205.
     #[serde(rename = "oauth")]
     OAuth {
+        /// Authorization endpoint the interactive PKCE login (A4 / #205)
+        /// points the user's browser at. Optional on stored records so
+        /// configs persisted before the field existed (pre-0.97.0) still
+        /// load; the interactive flow requires it and fails with a clear
+        /// message when it is absent.
+        #[serde(default)]
+        auth_uri: Option<String>,
         /// Token endpoint URL for refreshing the access token.
         token_endpoint: String,
         /// OAuth client id (public clients have no secret).

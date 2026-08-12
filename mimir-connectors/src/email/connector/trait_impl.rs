@@ -70,10 +70,11 @@ impl Connector for EmailConnector {
                         },
                         {
                             "type": "object",
-                            "required": ["kind", "username", "token_endpoint", "client_id"],
+                            "required": ["kind", "username", "auth_uri", "token_endpoint", "client_id"],
                             "properties": {
                                 "kind": { "const": "oauth" },
                                 "username": { "type": "string" },
+                                "auth_uri": { "type": "string", "format": "uri" },
                                 "token_endpoint": { "type": "string", "format": "uri" },
                                 "client_id": { "type": "string" },
                                 "client_secret": { "type": "string" },

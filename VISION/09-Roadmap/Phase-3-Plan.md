@@ -82,7 +82,9 @@ Framework + Mock → Photos (local) → Calendar (CalDAV) → Email (IMAP). Asce
 
 | Crate | Version | Used by | Feature-gated |
 |-------|---------|---------|---------------|
-| `oauth2` | 5.0.0 (`default-features = false`) | Calendar, Email, CLI PKCE | `oauth` (enabled by `calendar`, `gmail`) |
+| `oauth2` | 5.0.0 (`default-features = false`) | Calendar, Email, CLI PKCE | `oauth` (enabled by `calendar`, `gmail`; also enabled by the `mimir` binary) |
+| `webbrowser` | 1.2.4 | CLI PKCE (A4): opens the provider's authorize URL in the default browser (cross-platform, MIT/Apache-2.0) | `mimir` binary |
+| `url` | 2.x (in tree) | CLI PKCE (A4): parses the loopback callback query string | `oauth` (mimir-connectors) |
 | `async-imap` | 0.11.2 | Email (IMAP + IDLE) | `gmail` |
 | `mail-parser` | 0.11.4 | Email parsing | `gmail` |
 | `icalendar` | 0.17.12 | Calendar parse + build | `calendar` |
@@ -133,7 +135,7 @@ Issues are tagged `phase-3`. Dependency references use "Blocked by: #N". Full sp
 - **A1** Server: `AppState` registry/supervisor wiring + connector CRUD/status routes
 - **A2** Server: action routes (sync/pause/resume) + OAuth token-ingest + `forget` cascade
 - **A3** CLI: `mimir connector` subcommands plumbing to daemon
-- **A4** CLI: OAuth PKCE loopback callback flow
+- **A4** CLI: OAuth PKCE loopback callback flow — **implemented (v0.97.0)**: `mimir connector add` / `auth` with an `auth.kind=oauth` config run the flow in the CLI process (`mimir-connectors::oauth::pkce`): ephemeral loopback listener on `127.0.0.1:0`, browser-opened authorize URL (printed first for headless sessions), CSRF state validation, code exchange via the shared `OAuthHttpClient`, token POST to the daemon's ingest route. `CalendarAuthMethod::OAuth` / `EmailAuthMethod::OAuth` gained a required `auth_uri` field (breaking config change).
 
 ### Epic 5 — Testing
 - **T1** Integration/E2E test harness (mock connector sync → normalize → insert → query)
@@ -160,7 +162,7 @@ F4,F7 ─> F13 ─────────────────────�
 ```
 
 Critical path (first vertical slice): **F1 → F6 → F7 → F8 → C1 → C2** (Photos).
-OAuth connectors path: **F10 → C3 / C5**, gated on **A4** for the interactive flow.
+OAuth connectors path: **F10 → C3 / C5 → A4** (the interactive PKCE flow landed in v0.97.0).
 
 ## 7. Out of scope (follow-on issues, enabled by this framework)
 - Cloud photo backends (Apple Photos library, Nextcloud, Google Photos)

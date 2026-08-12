@@ -7,13 +7,13 @@ A Connector is a bridge between the agent and an external service (email, calend
 
 ### Adding a Connector
 ```bash
-$ agent connector add gmail
+$ mimir connector add gmail --backend <b> auth.kind=oauth auth.auth_uri=https://accounts.google.com/o/oauth2/v2/auth auth.token_endpoint=https://oauth2.googleapis.com/token auth.client_id=... auth.username=you@gmail.com
 Connector: Gmail
 Required permissions: read emails, read labels
-1. Open this URL in your browser:
-   https://accounts.google.com/o/oauth2/auth?...
-2. Paste the authorization code: ████████
-3. Connected! Syncing emails from the last 30 days...
+If the browser does not open automatically, visit:
+  https://accounts.google.com/o/oauth2/v2/auth?client_id=...&code_challenge=...&state=...
+[Browser opens; the user authorizes; the provider redirects to the loopback callback]
+Connected! Syncing emails from the last 30 days...
 
 $ agent connector add homeassistant
 Connector: Home Assistant
@@ -21,6 +21,7 @@ URL: http://homeassistant.local:8123
 Long-lived access token: ████████
 Connected! Found 47 entities (lights, sensors, cameras).
 ```
+The OAuth flow (A4 / #205) runs entirely in the CLI process: it binds an ephemeral loopback listener on `127.0.0.1`, opens the provider's authorize URL in the default browser (the URL is printed first, so headless/SSH sessions can open it manually), receives the redirect, exchanges the code, and POSTs the token bundle to the daemon — the user never copies a code. A canceled flow exits with nothing created.
 
 ### Checking Status
 ```bash

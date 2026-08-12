@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.97.1] — 2026-08-12
+
+### Review fixes — PKCE loopback flow robustness and timeout UX (PR #291)
+
+- **Per-connection read deadline on the loopback callback listener.** A connection that sends nothing (or a partial request) is now dropped after a 10-second deadline instead of stalling the whole flow until the 5-minute overall timeout — a stalled or hostile local process can no longer waste the user's authorization. The dropped connection is ignored and the flow keeps waiting for the real callback.
+- **Timeout error no longer points at a dead login.** When the flow times out, the error now states that the flow aborted and the command must be re-run, instead of telling the user to complete a login whose loopback listener is already closed.
+- **Tests:** stalled-connection read timeout, stalled connection followed by a real callback, and the timeout message wording.
+- **Docs:** `docs/oauth-client.md` security properties and `docs/wiki/cli-commands.md` updated with the per-connection deadline and timeout behaviour.
+- Version bumped 0.97.0 → 0.97.1 (patch — bug fixes, no API change).
+
 ## [0.97.0] — 2026-08-11
 
 ### Phase 3 A4 — interactive OAuth PKCE loopback flow (issue #205)

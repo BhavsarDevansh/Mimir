@@ -25,6 +25,10 @@
 //!   response body.
 //! - **Bounded callback read** — the loopback request is read with an 8 KiB
 //!   cap, so a hostile local process cannot force a large allocation.
+//! - **Per-connection read deadline** — a connection that sends nothing (or
+//!   a partial request) is dropped after a short deadline instead of
+//!   stalling the flow until the overall timeout, so a stalled or hostile
+//!   local process cannot waste the user's authorization.
 //!
 //! The authorize URL is printed by the caller regardless of whether the
 //! browser could be opened, so the flow works in headless/SSH sessions (the
@@ -67,6 +71,12 @@ pub struct PkceFlowConfig {
 
 /// Default time the flow waits for the browser callback before aborting.
 pub const DEFAULT_FLOW_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// Per-connection deadline for reading the loopback callback request. A
+/// browser sends its request immediately after connecting; a connection
+/// that sends nothing (or a partial request) within this window is dropped
+/// so a stalled or hostile local process cannot block the flow.
+const CONNECTION_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Path the loopback listener expects the provider to redirect to.
 const CALLBACK_PATH: &str = "/callback";
@@ -127,11 +137,14 @@ pub async fn run_pkce_flow(
 
     open_browser(authorize_url.as_str());
 
-    let code = tokio::time::timeout(timeout, wait_for_callback(&listener, &csrf_token))
-        .await
-        .map_err(|_| {
+    let code = tokio::time::timeout(
+        timeout,
+        wait_for_callback(&listener, &csrf_token, CONNECTION_READ_TIMEOUT),
+    )
+    .await
+    .map_err(|_| {
             ConnectorError::Authentication(format!(
-                "authorization timed out after {}s — no callback received; open the printed URL in a browser and complete the login",
+                "authorization timed out after {}s — no callback received; the flow has aborted, so re-run the command to start a new login",
                 timeout.as_secs()
             ))
         })??;
@@ -159,10 +172,11 @@ enum CallbackOutcome {
 async fn wait_for_callback(
     listener: &TcpListener,
     expected_state: &CsrfToken,
+    connection_timeout: Duration,
 ) -> Result<String, ConnectorError> {
     loop {
         let (mut socket, _) = listener.accept().await?;
-        match handle_connection(&mut socket, expected_state).await? {
+        match handle_connection(&mut socket, expected_state, connection_timeout).await? {
             CallbackOutcome::Ignore => continue,
             CallbackOutcome::Code(code) => return Ok(code),
         }
@@ -174,8 +188,13 @@ async fn wait_for_callback(
 async fn handle_connection(
     socket: &mut TcpStream,
     expected_state: &CsrfToken,
+    connection_timeout: Duration,
 ) -> Result<CallbackOutcome, ConnectorError> {
-    let request = read_request(socket).await?;
+    let Some(request) = read_request(socket, connection_timeout).await? else {
+        // Stalled connection — drop it and keep waiting for the real
+        // callback.
+        return Ok(CallbackOutcome::Ignore);
+    };
     match parse_callback(&request, expected_state.secret()) {
         Ok(None) => {
             respond(socket, 404, "Not Found", "Not found.").await?;
@@ -243,23 +262,37 @@ fn parse_query(query: &str) -> HashMap<String, String> {
         .collect()
 }
 
-/// Read a single HTTP request with a hard byte cap. The read stops at the
-/// end of the header block (`\r\n\r\n`) or the cap, whichever comes first —
-/// a GET callback carries no body.
-async fn read_request(socket: &mut TcpStream) -> Result<String, ConnectorError> {
+/// Read a single HTTP request with a hard byte cap and a per-connection
+/// deadline. The read stops at the end of the header block (`\r\n\r\n`) or
+/// the cap, whichever comes first — a GET callback carries no body.
+///
+/// Returns `Ok(None)` when the connection stalls (no complete request within
+/// `deadline`); the caller drops the connection and keeps waiting, so a
+/// hostile local process cannot block the flow.
+async fn read_request(
+    socket: &mut TcpStream,
+    deadline: Duration,
+) -> Result<Option<String>, ConnectorError> {
     let mut buf = [0u8; MAX_REQUEST_BYTES];
     let mut read = 0;
-    loop {
-        let n = socket.read(&mut buf[read..]).await?;
-        if n == 0 {
-            break;
+    let read_loop = async {
+        loop {
+            let n = socket.read(&mut buf[read..]).await?;
+            if n == 0 {
+                break;
+            }
+            read += n;
+            if read >= MAX_REQUEST_BYTES || buf[..read].ends_with(b"\r\n\r\n") {
+                break;
+            }
         }
-        read += n;
-        if read >= MAX_REQUEST_BYTES || buf[..read].ends_with(b"\r\n\r\n") {
-            break;
-        }
+        Ok::<(), ConnectorError>(())
+    };
+    match tokio::time::timeout(deadline, read_loop).await {
+        Err(_) => Ok(None),
+        Ok(Err(e)) => Err(e),
+        Ok(Ok(())) => Ok(Some(String::from_utf8_lossy(&buf[..read]).into_owned())),
     }
-    Ok(String::from_utf8_lossy(&buf[..read]).into_owned())
 }
 
 /// Write a minimal HTTP/1.1 response to the browser.
@@ -507,6 +540,48 @@ mod tests {
             "got {err:?}"
         );
         assert!(err.to_string().contains("timed out"), "got: {err}");
+        // The flow has aborted and the listener is closed — the message must
+        // tell the user to re-run rather than complete a login that can no
+        // longer complete.
+        assert!(err.to_string().contains("re-run"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn read_request_times_out_on_stalled_connection() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // A local process connects and sends nothing — the read must be
+        // dropped after the per-connection deadline instead of blocking the
+        // flow until the overall timeout.
+        let _stalled = TcpStream::connect(addr).await.unwrap();
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket, Duration::from_millis(50))
+            .await
+            .expect("stalled read must not error");
+        assert_eq!(request, None, "stalled connection must be dropped");
+    }
+
+    #[tokio::test]
+    async fn wait_for_callback_drops_stalled_connection_and_accepts_real_callback() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let csrf = CsrfToken::new("csrf-token".to_string());
+
+        // A hostile/stalled local process connects and sends nothing. The
+        // connection must be dropped after the per-connection deadline and
+        // the flow must still accept the real callback.
+        let _stalled = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let callback = format!("http://127.0.0.1:{port}/callback?code=abc&state=csrf-token");
+        let callback_task = tokio::spawn(async move {
+            let _ = reqwest::get(callback).await;
+        });
+        let code = wait_for_callback(&listener, &csrf, Duration::from_millis(50))
+            .await
+            .expect("flow must survive a stalled connection");
+        callback_task.await.unwrap();
+        assert_eq!(code, "abc");
     }
 
     #[tokio::test]

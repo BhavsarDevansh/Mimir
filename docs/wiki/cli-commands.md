@@ -404,7 +404,7 @@ mimir connector add gmail --backend imap host=imap.fastmail.com auth.kind=app_pa
 mimir connector add calendar --backend caldav --config-json '{"calendar_url":"https://dav.example.com/cal","auth":{"kind":"app_password","username":"me@example.com"}}' --slug work-cal
 ```
 
-Config is given as `key=value` pairs with dotted nesting (`auth.kind=app_password`) plus an optional `--config-json` base object. Scalar values are parsed as booleans, numbers, or strings. OAuth configs (`auth.kind=oauth`) run the interactive PKCE login (A4 / #205) instead of prompting: the CLI opens the provider's authorize URL in your browser (printed first for headless/SSH sessions), receives the redirect on an ephemeral loopback listener, exchanges the code, and POSTs the token bundle to the daemon — the instance becomes `authenticated`. `--slug` defaults to the connector type and `--name` to its title-cased form.
+Config is given as `key=value` pairs with dotted nesting (`auth.kind=app_password`) plus an optional `--config-json` base object. Scalar values are parsed as booleans, numbers, or strings. OAuth configs (`auth.kind=oauth`) run the interactive PKCE login (A4 / #205) instead of prompting: the CLI opens the provider's authorize URL in your browser (printed first for headless/SSH sessions), receives the redirect on an ephemeral loopback listener, exchanges the code, and POSTs the token bundle to the daemon — the instance becomes `authenticated`. The flow waits up to 5 minutes for the callback; if it times out, the flow aborts and you re-run the command to start a new login. `--slug` defaults to the connector type and `--name` to its title-cased form.
 
 ### `mimir connector list` / `status`
 

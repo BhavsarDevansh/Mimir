@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.97.2] — 2026-08-12
+
+### Review fixes — PKCE flow security hardening and OAuth config back-compat (PR #291)
+
+- **HTTPS-only authorization endpoint.** `run_pkce_flow` now rejects any `auth_uri` whose scheme is not `https` before the browser is opened (RFC 8252 §7.5) — the authorization endpoint carries the user's credentials, so plain HTTP is never allowed there even though the token endpoint gate permits loopback HTTP.
+- **Fixed callback error page.** A callback that aborts the flow (provider `error` param, missing/incorrect `state`) now responds with a fixed HTML page instead of echoing the provider-controlled `error` value into the browser (XSS on the loopback origin); the diagnostic stays in the process error only.
+- **Stored OAuth configs without `auth_uri` load again.** `CalendarAuthMethod::OAuth` and `EmailAuthMethod::OAuth` persist `auth_uri` as optional (`#[serde(default)]`), so records created before the field existed (pre-0.97.0) deserialize instead of failing at startup; new configs still require `auth_uri` via the JSON schema, and the interactive PKCE flow still fails with a clear message when it is absent.
+- **`oauth::pkce` is now a public module** (`mimir_connectors::oauth::pkce`), alongside the existing root re-exports.
+- **OAuth progress output moved to stderr.** The printed authorize URL and the "Starting OAuth login" message go to stderr, so `mimir connector add/auth --json` stdout stays valid JSON for scripts.
+- **Docs:** `docs/wiki/cli-commands.md` documents that `auth.scopes` must be supplied via `--config-json` (the `key=value` parser drops JSON arrays, #289); `docs/wiki/connectors.md` documents the required `mimir connector resume <slug>` step after `add`/re-auth; the VISION onboarding example uses the documented `mimir connector add gmail --backend <b>` syntax; `docs/oauth-client.md` security properties updated.
+- **Tests:** non-https `auth_uri` rejected without opening the browser, callback error page does not echo provider input, and stored-record deserialization without `auth_uri` for both Calendar and Email.
+- Version bumped 0.97.1 → 0.97.2 (patch — bug fixes, no API breakage).
+
 ## [0.97.1] — 2026-08-12
 
 ### Review fixes — PKCE loopback flow robustness and timeout UX (PR #291)

@@ -437,7 +437,7 @@ mimir connector auth gmail --password 'app-pw'     # app-password backend
 mimir connector auth gmail                          # interactive: pick the kind, then enter the secret
 ```
 
-The credential kind comes from the flag (`--password` / `--token` are mutually exclusive), an interactive selection when neither is given, or the `auth.kind` of a re-supplied config (`--config-json` / `key=value` pairs). An `auth.kind=oauth` config runs the interactive PKCE login (A4 / #205) instead of prompting — the daemon does not expose the stored config on the wire, so the OAuth fields (`auth.auth_uri`, `auth.token_endpoint`, `auth.client_id`, optional `auth.client_secret` / `auth.scopes`) are re-supplied:
+The credential kind comes from the flag (`--password` / `--token` are mutually exclusive), an interactive selection when neither is given, or the `auth.kind` of a re-supplied config (`--config-json` / `key=value` pairs). An `auth.kind=oauth` config runs the interactive PKCE login (A4 / #205) instead of prompting — the daemon does not expose the stored config on the wire, so the OAuth fields (`auth.auth_uri`, `auth.token_endpoint`, `auth.client_id`, optional `auth.client_secret` / `auth.scopes`) are re-supplied. `auth.scopes` is a JSON array, which the `key=value` parser cannot express (values are silently dropped, [#289](https://github.com/BhavsarDevansh/Mimir/issues/289)) — supply it through `--config-json` until that issue is fixed:
 
 ```bash
 mimir connector auth gmail auth.kind=oauth auth.auth_uri=https://accounts.google.com/o/oauth2/v2/auth auth.token_endpoint=https://oauth2.googleapis.com/token auth.client_id=... auth.username=you@gmail.com

@@ -52,9 +52,10 @@ pub(crate) fn oauth_flow_config(config: &serde_json::Value) -> Result<PkceFlowCo
 
 /// Open the authorize URL in the user's default browser, printing it first
 /// so a headless/SSH session can complete the login manually. A browser-open
-/// failure is non-fatal — the printed URL is the fallback.
+/// failure is non-fatal — the printed URL is the fallback. Progress goes to
+/// stderr so `--json` command output on stdout stays valid JSON.
 pub(crate) fn open_in_browser(url: &str) {
-    println!("If the browser does not open automatically, visit:\n  {url}");
+    eprintln!("If the browser does not open automatically, visit:\n  {url}");
     if let Err(e) = webbrowser::open(url) {
         eprintln!("Could not open a browser automatically ({e}) — open the URL above manually.");
     }
@@ -70,7 +71,7 @@ pub(crate) async fn run_oauth_flow_with_opener(
 ) -> SecretBundle {
     let flow_config = oauth_flow_config(config).unwrap_or_else(|e| exit_with_error(e));
     let http = OAuthHttpClient::new().unwrap_or_else(|e| exit_with_error(e.to_string()));
-    println!("Starting OAuth login — complete the authorization in the browser that opens.");
+    eprintln!("Starting OAuth login — complete the authorization in the browser that opens.");
     run_pkce_flow(&flow_config, &http, opener, DEFAULT_FLOW_TIMEOUT)
         .await
         .unwrap_or_else(|e| exit_with_error(e))

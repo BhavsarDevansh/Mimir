@@ -36,7 +36,7 @@ pub use http_client::OAuthHttpClient;
 pub use pkce::{DEFAULT_FLOW_TIMEOUT, PkceFlowConfig, run_pkce_flow};
 
 mod http_client;
-mod pkce;
+pub mod pkce;
 mod refresh;
 
 pub(crate) use refresh::resolve_access_token;

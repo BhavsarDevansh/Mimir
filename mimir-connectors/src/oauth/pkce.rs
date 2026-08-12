@@ -103,6 +103,19 @@ pub async fn run_pkce_flow(
     // material is exchanged — same gate as the refresh grant.
     validate_token_endpoint(&config.token_endpoint)?;
 
+    // The authorization endpoint is where the user's credentials are
+    // entered, so it must be HTTPS (RFC 8252 §7.5) — never plain HTTP, even
+    // on loopback. The token endpoint gate above permits loopback HTTP
+    // because that is Mimir's local trust boundary; the browser is not.
+    let auth_url = url::Url::parse(&config.auth_uri)
+        .map_err(|e| ConnectorError::Config(format!("auth_uri is not a valid URL: {e}")))?;
+    if auth_url.scheme() != "https" {
+        return Err(ConnectorError::Config(
+            "auth_uri must be an https URL — the authorization endpoint carries the user's credentials"
+                .to_string(),
+        ));
+    }
+
     // Bind the loopback callback listener on an ephemeral port. The redirect
     // URI is derived from the bound port, so the provider must accept
     // loopback redirect URIs (RFC 8252 native-app pattern).
@@ -205,7 +218,16 @@ async fn handle_connection(
             Ok(CallbackOutcome::Code(code))
         }
         Err(message) => {
-            respond(socket, 400, "Bad Request", &message).await?;
+            // The message can contain a provider-controlled `error` param —
+            // never echo it into the HTML response (XSS on the loopback
+            // origin). The diagnostic stays in the process error only.
+            respond(
+                socket,
+                400,
+                "Bad Request",
+                "Authorization failed. Return to the terminal.",
+            )
+            .await?;
             Err(ConnectorError::Authentication(message))
         }
     }
@@ -610,6 +632,52 @@ mod tests {
         .await
         .expect_err("invalid auth_uri must be rejected");
         assert!(matches!(err, ConnectorError::Config(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn run_pkce_flow_rejects_non_https_auth_uri_without_opening_browser() {
+        let mut config = flow_config("https://oauth.example.com/token");
+        config.auth_uri = "http://oauth.example.com/authorize".to_string();
+        let opened = std::sync::atomic::AtomicBool::new(false);
+        let opener = |_url: &str| opened.store(true, std::sync::atomic::Ordering::SeqCst);
+        let err = run_pkce_flow(&config, &test_http(), &opener, Duration::from_secs(10))
+            .await
+            .expect_err("non-https auth_uri must be rejected");
+        assert!(matches!(err, ConnectorError::Config(_)), "got {err:?}");
+        assert!(
+            !opened.load(std::sync::atomic::Ordering::SeqCst),
+            "browser must not be opened for a non-https authorization endpoint"
+        );
+    }
+
+    #[tokio::test]
+    async fn callback_error_page_does_not_echo_provider_input() {
+        // A provider-controlled `error` param (here with markup) must not be
+        // echoed into the HTML response — that would be XSS on the loopback
+        // origin. The diagnostic stays in the process error only.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let csrf = CsrfToken::new("csrf-token".to_string());
+        let callback = format!(
+            "http://127.0.0.1:{port}/callback?error=access_denied%3Cscript%3E&state=csrf-token"
+        );
+        let callback_task = tokio::spawn(async move {
+            let response = reqwest::get(callback).await.unwrap();
+            let status = response.status();
+            let body = response.text().await.unwrap();
+            (status, body)
+        });
+        let err = wait_for_callback(&listener, &csrf, Duration::from_secs(5))
+            .await
+            .expect_err("provider error must abort the flow");
+        let (status, body) = callback_task.await.unwrap();
+        assert_eq!(status, reqwest::StatusCode::BAD_REQUEST);
+        assert!(
+            !body.contains("access_denied"),
+            "provider error must not be echoed into HTML: {body}"
+        );
+        assert!(body.contains("Authorization failed"), "got: {body}");
+        assert!(err.to_string().contains("access_denied"), "got: {err}");
     }
 
     #[tokio::test]

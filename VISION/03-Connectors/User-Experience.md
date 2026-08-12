@@ -7,7 +7,7 @@ A Connector is a bridge between the agent and an external service (email, calend
 
 ### Adding a Connector
 ```bash
-$ agent connector add gmail auth.kind=oauth auth.auth_uri=https://accounts.google.com/o/oauth2/v2/auth auth.token_endpoint=https://oauth2.googleapis.com/token auth.client_id=... auth.username=you@gmail.com
+$ mimir connector add gmail --backend <b> auth.kind=oauth auth.auth_uri=https://accounts.google.com/o/oauth2/v2/auth auth.token_endpoint=https://oauth2.googleapis.com/token auth.client_id=... auth.username=you@gmail.com
 Connector: Gmail
 Required permissions: read emails, read labels
 If the browser does not open automatically, visit:

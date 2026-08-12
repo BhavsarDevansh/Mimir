@@ -2,6 +2,7 @@
 //! issue #240).
 
 use super::*;
+use crate::calendar::CalendarConfigDto;
 use crate::calendar::caldav::CalDavAuth;
 use chrono::Utc;
 use wiremock::matchers::{method, path};
@@ -27,6 +28,26 @@ fn oauth_bundle(access_token: &str, expires_at: Option<chrono::DateTime<Utc>>) -
         refresh_token: Some("rt".into()),
         expires_at,
     }
+}
+
+#[test]
+fn oauth_config_without_auth_uri_deserializes_from_stored_record() {
+    // Records persisted before the `auth_uri` field (pre-0.97.0) must still
+    // load — `auth_uri` is only required when starting the interactive PKCE
+    // flow, not for token refresh.
+    let dto: CalendarConfigDto = serde_json::from_value(serde_json::json!({
+        "calendar_url": "https://caldav.example.com/calendar/",
+        "auth": {
+            "kind": "oauth",
+            "token_endpoint": "https://oauth.example.com/token",
+            "client_id": "cid",
+        },
+    }))
+    .expect("stored record without auth_uri must load");
+    let CalendarAuthMethod::OAuth { auth_uri, .. } = dto.auth else {
+        panic!("expected OAuth auth method");
+    };
+    assert_eq!(auth_uri, None);
 }
 
 #[tokio::test]

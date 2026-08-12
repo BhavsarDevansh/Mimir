@@ -94,8 +94,12 @@ pub enum CalendarAuthMethod {
     #[serde(rename = "oauth")]
     OAuth {
         /// Authorization endpoint the interactive PKCE login (A4 / #205)
-        /// points the user's browser at.
-        auth_uri: String,
+        /// points the user's browser at. Optional on stored records so
+        /// configs persisted before the field existed (pre-0.97.0) still
+        /// load; the interactive flow requires it and fails with a clear
+        /// message when it is absent.
+        #[serde(default)]
+        auth_uri: Option<String>,
         /// Token endpoint URL for refreshing the access token.
         token_endpoint: String,
         /// OAuth client id (public clients have no secret).

@@ -52,3 +52,18 @@ The fact-ingestion tests configure the mock's `facts` knob via `mimir connector 
 - `mimir connector status --json` — `sync_cursor` persistence and the derived per-instance `item_count`.
 
 Corroboration is exercised end-to-end: a second instance emitting the same claim merges into the existing fact row (entity resolution), adds an independent source, and boosts confidence to 0.90; a plain re-sync of the first instance is asserted to be a re-statement no-op (no extra source, no further boost). The supervisor-level round trip (polling + push modes) lives in `mimir-connectors/tests/mock_ingestion_e2e.rs`.
+
+## Mock OAuth server + PKCE E2E (Phase 3 T2 / issue #207)
+
+The interactive PKCE login (A4 / #205) is exercised end-to-end against an in-process mock OAuth server instead of a real provider:
+
+- **`mimir-connectors/src/mock_oauth.rs`** (feature `test-mock-oauth`, off by default) is a two-listener loopback server sharing one state object: an HTTPS `GET /authorize` (the flow's `auth_uri` gate requires HTTPS; the self-signed certificate is generated per test run with `rcgen`) and an HTTP `POST /token` (loopback HTTP is the shared token-endpoint gate's local trust boundary). The authorize endpoint records the request, issues a one-time code, and redirects to the client's `redirect_uri` with the CSRF `state` echoed; the token endpoint validates the PKCE S256 `code_verifier` against the challenge captured at authorize time, enforces one-time code use, and issues an OAuth token bundle. Both endpoints record every request for assertions.
+- **`mimir-connectors/tests/oauth_pkce_e2e.rs`** drives `run_pkce_flow` against the mock server with a fake-browser opener that GETs the authorize URL (accepting the test certificate) and follows the redirect into the loopback callback — the full authorize → redirect → callback → exchange round trip. Mock-correctness tests cover the state echo, one-time code replay rejection, wrong-verifier rejection, unknown grant types, non-S256 challenge-method rejection, and CR/LF rejection in the redirect URI and state.
+- **`mimir/tests/connector_oauth_e2e.rs`** drives the real `mimir connector add` CLI against the real daemon with `auth.kind=oauth` config: the CLI's `webbrowser` call is redirected to a `$BROWSER` fake-browser script (`curl -k -L`) that follows the HTTPS authorize redirect, and the exchanged tokens land in the daemon's secret store (`auth_state=authenticated`), after which the instance can be resumed and synced.
+
+The `test-mock-oauth` feature is enabled for the workspace test run through the `mimir` binary's dev-dependencies, so `cargo test --workspace` executes these tests; a standalone `cargo test -p mimir-connectors` needs `--features test-mock-oauth`.
+
+## Rate-limit/backoff + supervisor edge-case tests (Phase 3 T2 / issue #207)
+
+- **`mimir-connectors/tests/rate_limit_http.rs`** verifies the F12 primitives over real HTTP: a wiremock endpoint returning 429 with `Retry-After` (and 503) is retried by `retry_with_backoff` with the server hint driving the wait, and a `RateLimiter` with `daily_quota=Some(N)` stops issuing HTTP calls once the quota is spent (the exhaustion surfaces as a non-retryable `QuotaExhausted` and the wiremock `expect` proves no further request).
+- **`mimir-connectors/tests/supervisor_lifecycle_tests.rs`** covers the F8 edge cases: startup restore, graceful-shutdown cursor persistence, circuit breaker (both ordinary failures and repeated panics), and panic recovery.

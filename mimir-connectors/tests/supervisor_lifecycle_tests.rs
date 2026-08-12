@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
+use mimir_connectors::MockSyncRecorder;
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorStatus, ConnectorType};
 
 mod common;
@@ -242,8 +243,11 @@ async fn circuit_breaker_sets_error_after_max_failures() {
     let row = kg.upsert_connector(input).await.unwrap();
     let kg = Arc::new(kg);
 
+    // The recorder counts every sync attempt, so `len() == 3` proves the
+    // breaker opened after exactly three panic attempts (max_failures = 3).
+    let recorder = Arc::new(MockSyncRecorder::default());
     let (_tx, rx) = tokio::sync::watch::channel(false);
-    let supervisor = make_supervisor(kg.clone(), test_registry(), rx);
+    let supervisor = make_supervisor(kg.clone(), recording_registry(recorder.clone()), rx);
     supervisor.restore().await.unwrap();
 
     // After `max_failures` consecutive failures the breaker trips.
@@ -269,6 +273,11 @@ async fn circuit_breaker_sets_error_after_max_failures() {
         Duration::from_secs(2),
     )
     .await;
+    assert_eq!(
+        recorder.len(),
+        3,
+        "the breaker must open after exactly three panic attempts"
+    );
     supervisor.shutdown().await;
 }
 
@@ -360,6 +369,62 @@ async fn task_panic_is_recovered_then_succeeds() {
     .await;
 
     tx.send(true).unwrap();
+    supervisor.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// Circuit breaker via the panic path (T2 / #207)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn circuit_breaker_trips_on_repeated_panics() {
+    let (kg, _dir) = init_kg().await;
+    let mut input = upsert(
+        "panic-doomed",
+        ConnectorType::Gmail,
+        "test",
+        ConnectorStatus::Active,
+    );
+    // `make_supervisor` uses max_failures = 3; three consecutive panics must
+    // trip the breaker exactly like three ordinary failures.
+    input.config_json = with_slug(
+        "panic-doomed",
+        json!({ "__ctype": ConnectorType::Gmail as i64, "panic_first": 3 }),
+    );
+    let row = kg.upsert_connector(input).await.unwrap();
+    let kg = Arc::new(kg);
+
+    let (_tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = make_supervisor(kg.clone(), test_registry(), rx);
+    supervisor.restore().await.unwrap();
+
+    wait_for_async(
+        || async {
+            kg.get_connector(row.id)
+                .await
+                .unwrap()
+                .map(|c| c.status() == Some(ConnectorStatus::Error))
+                .unwrap_or(false)
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+
+    let after = kg.get_connector(row.id).await.unwrap().unwrap();
+    assert_eq!(after.status(), Some(ConnectorStatus::Error));
+    assert!(
+        after
+            .last_error
+            .as_deref()
+            .is_some_and(|e| e.contains("panicked")),
+        "last_error must record the panic, got {:?}",
+        after.last_error
+    );
+    wait_for_async(
+        || async { !supervisor.is_running(row.id).await },
+        Duration::from_secs(2),
+    )
+    .await;
     supervisor.shutdown().await;
 }
 

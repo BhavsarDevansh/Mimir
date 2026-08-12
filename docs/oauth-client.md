@@ -23,7 +23,7 @@ One shared OAuth 2.0 path for every connector that authenticates with OAuth: tok
 ## Security properties
 
 - **HTTPS-only token endpoints.** `refresh_token` and `run_pkce_flow` reject non-HTTPS endpoints before any credential is posted. Loopback HTTP (`localhost`, any `127.0.0.0/8`, `::1`) is permitted — it is Mimir's local trust boundary, the same model as the home-directory secret store. The host is parsed as a real `IpAddr`, so look-alike DNS names like `127.0.0.1.evil.com` are rejected.
-- **HTTPS-only authorization endpoint.** The PKCE flow rejects any `auth_uri` whose scheme is not `https` before the browser is opened — the authorization endpoint is where the user's credentials are entered, so plain HTTP is never allowed there (RFC 8252 §7.5), even though the token endpoint gate permits loopback HTTP.
+- **HTTPS-only authorization endpoint.** The PKCE flow rejects any `auth_uri` whose scheme is not `https` before the browser is opened — the authorization endpoint is where the user's credentials are entered, so plain HTTP is never allowed there (RFC 6749 §3.1 requires TLS on the authorization endpoint), even though the token endpoint gate permits loopback HTTP.
 - **Redirects disabled.** The OAuth client never follows redirects, so a compromised or malicious token endpoint cannot bounce a credential POST (refresh grant and code exchange) to an attacker-controlled host. This follows the `oauth2` crate's own SSRF guidance and fixes a gap in the pre-#240 hand-rolled refresh, which used the default redirect-following client.
 - **Loopback-only callback listener.** The PKCE flow binds `127.0.0.1` (never `0.0.0.0`), so no remote host can race the callback and steal the authorization code. The callback request is read with an 8 KiB cap so a hostile local process cannot force a large allocation, and each connection has a 10-second read deadline — a connection that sends nothing (or a partial request) is dropped and the flow keeps waiting, so a stalled or hostile local process cannot block the login.
 - **CSRF state validation.** The callback's `state` must match the generated `CsrfToken` or the flow aborts without exchanging. A browser's `/favicon.ico` probe is ignored rather than treated as a callback.
@@ -35,7 +35,11 @@ One shared OAuth 2.0 path for every connector that authenticates with OAuth: tok
 
 ## Feature gating
 
-The `oauth` feature (default off) gates `oauth2` + `http` + `url` and the `oauth` module. It is enabled by the `calendar` and `gmail` backend features (both use refresh) and by the `mimir` binary (the CLI PKCE flow, A4 / #205). `--no-default-features` builds of `mimir-connectors` never compile the module.
+The `oauth` feature (default off) gates `oauth2` + `http` + `url` and the `oauth` module. It is enabled by the `calendar` and `gmail` backend features (both use refresh) and by the `mimir` binary (the CLI PKCE flow, A4 / #205). `--no-default-features` builds of `mimir-connectors` never compile the module. The `test-mock-oauth` feature (off by default, T2 / #207) additionally gates the in-process mock OAuth server (`src/mock_oauth.rs`) used by the PKCE E2E tests; it is enabled for the workspace test run through the `mimir` binary's dev-dependencies.
+
+## Testing (T2 / #207)
+
+The PKCE flow is exercised end-to-end against an in-process mock OAuth server (`mimir-connectors/src/mock_oauth.rs`, feature `test-mock-oauth`) instead of a real provider: an HTTPS `GET /authorize` (self-signed `rcgen` certificate; the flow's HTTPS-only `auth_uri` gate is honoured) issues a one-time code and redirects to the loopback callback with the CSRF `state` echoed, and an HTTP `POST /token` validates the PKCE S256 `code_verifier` against the challenge captured at authorize time before issuing a token bundle. `mimir-connectors/tests/oauth_pkce_e2e.rs` drives `run_pkce_flow` through the full round trip with a fake-browser opener, and `mimir/tests/connector_oauth_e2e.rs` drives the real `mimir connector add` CLI against the real daemon with a `$BROWSER` fake-browser script (`curl -k -L`), asserting the exchanged tokens land in the daemon's secret store.
 
 ## Usage
 

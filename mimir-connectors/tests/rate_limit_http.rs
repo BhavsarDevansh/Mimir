@@ -118,8 +118,8 @@ async fn retry_with_backoff_retries_http_429_honouring_retry_after() {
     .expect("429s must be retried");
     assert_eq!(body, "ok");
     assert!(
-        start.elapsed() >= Duration::from_secs(1),
-        "the server Retry-After must drive the wait, took {:?}",
+        start.elapsed() >= Duration::from_secs(2),
+        "each server Retry-After must drive the wait, took {:?}",
         start.elapsed()
     );
 }

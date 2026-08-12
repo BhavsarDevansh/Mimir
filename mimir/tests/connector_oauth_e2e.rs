@@ -3,6 +3,8 @@
 //! in-process mock OAuth server (via a `$BROWSER` fake browser) and ingests
 //! the exchanged tokens into the real daemon.
 
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use std::os::unix::fs::PermissionsExt;
@@ -14,6 +16,19 @@ use mimir_connectors::mock_oauth::MockOAuthServer;
 fn oauth_add_runs_pkce_flow_against_mock_server_and_ingests_tokens() {
     let daemon = TestDaemon::start();
     let oauth = MockOAuthServer::start();
+
+    // The fake browser script needs `curl`; fail with a clear prerequisite
+    // message instead of a timeout deep inside the flow.
+    let curl_check = std::process::Command::new("curl")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("spawn curl --version");
+    assert!(
+        curl_check.success(),
+        "the OAuth E2E test requires `curl` (used by the fake browser script)"
+    );
 
     // A fake browser: `webbrowser` on Linux honours `$BROWSER`; the script
     // follows the HTTPS authorize redirect into the loopback callback

@@ -322,4 +322,43 @@ async fn authorize_rejects_crlf_in_redirect_uri() {
         400,
         "CR/LF in the redirect URI must be rejected"
     );
+    assert!(
+        response.headers().get("x-evil").is_none(),
+        "no header may be injected through the redirect URI"
+    );
+    assert!(
+        server.authorize_requests().await.is_empty(),
+        "a rejected authorize request must not be recorded"
+    );
+}
+
+#[tokio::test]
+async fn authorize_rejects_crlf_in_state() {
+    let server = MockOAuthServer::start();
+    let client = tls_skipping_client();
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("client_id", "direct-client")
+        .append_pair("redirect_uri", "http://127.0.0.1:9999/cb")
+        .append_pair("state", "s\r\nX-Evil: 1")
+        .append_pair("code_challenge", "challenge")
+        .append_pair("code_challenge_method", "S256")
+        .finish();
+    let response = client
+        .get(format!("{}?{query}", server.authorize_url()))
+        .send()
+        .await
+        .expect("authorize request");
+    assert_eq!(
+        response.status(),
+        400,
+        "CR/LF in the state must be rejected"
+    );
+    assert!(
+        response.headers().get("x-evil").is_none(),
+        "no header may be injected through the state"
+    );
+    assert!(
+        server.authorize_requests().await.is_empty(),
+        "a rejected authorize request must not be recorded"
+    );
 }

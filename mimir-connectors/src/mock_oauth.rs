@@ -5,7 +5,7 @@
 //!
 //! - **`GET /authorize` over HTTPS** — the browser-facing endpoint. The
 //!   flow's `auth_uri` gate requires HTTPS (the authorization endpoint
-//!   carries the user's credentials; RFC 6749 §3.1.2.1), so the mock serves
+//!   carries the user's credentials; RFC 6749 §3.1), so the mock serves
 //!   TLS with a self-signed certificate generated at test runtime. It
 //!   records the request, issues a one-time authorization code, and answers
 //!   `302 Found` with the code and the client's CSRF `state` echoed back to
@@ -180,12 +180,16 @@ impl MockOAuthServer {
         &self.token_url
     }
 
-    /// Authorize requests received so far, in order.
+    /// Authorize requests received so far, in order. Only requests that pass
+    /// validation are recorded — a rejected authorize request never appears
+    /// here (tests assert on this).
     pub async fn authorize_requests(&self) -> Vec<AuthorizeRequest> {
         self.state.authorize_requests.lock().await.clone()
     }
 
-    /// Token requests received so far, in order.
+    /// Token requests received so far, in order. Unlike authorize requests,
+    /// token requests are recorded *before* validation, so rejected exchanges
+    /// (wrong verifier, replayed code, unknown grant type) do appear here.
     pub async fn token_requests(&self) -> Vec<TokenRequest> {
         self.state.token_requests.lock().await.clone()
     }
@@ -278,11 +282,11 @@ where
             return Ok(None);
         }
         buf.extend_from_slice(&chunk[..n]);
-        if buf.len() >= MAX_REQUEST_BYTES {
-            return Ok(None);
-        }
         if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
             break pos + 4;
+        }
+        if buf.len() >= MAX_REQUEST_BYTES {
+            return Ok(None);
         }
     };
     let head = String::from_utf8_lossy(&buf[..header_end]).into_owned();
@@ -368,6 +372,11 @@ where
     let Some(state_param) = get("state") else {
         return respond(stream, 400, "Bad Request", &[], &[]).await;
     };
+    if state_param.contains(['\r', '\n']) {
+        // `state` is echoed into the `Location` header alongside the redirect
+        // URI; reject CR/LF for the same header-injection reason.
+        return respond(stream, 400, "Bad Request", &[], &[]).await;
+    }
     let code_challenge = get("code_challenge").unwrap_or_default();
     let code_challenge_method = get("code_challenge_method").unwrap_or_default();
     if code_challenge_method != "S256" {
@@ -402,7 +411,11 @@ where
         },
     );
 
-    let location = format!("{redirect_uri}?code={code}&state={state_param}");
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("code", &code)
+        .append_pair("state", &state_param)
+        .finish();
+    let location = format!("{redirect_uri}?{query}");
     respond(
         stream,
         302,

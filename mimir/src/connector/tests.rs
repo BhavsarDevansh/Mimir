@@ -6,6 +6,7 @@ use mimir_api_types::{
 };
 use mimir_client::MimirClient;
 use mimir_connectors::SecretBundle;
+use mimir_connectors::test_utils::self_callback_opener;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_json, body_partial_json, method, path},
@@ -42,32 +43,6 @@ async fn mount_list(server: &MockServer, connectors: Vec<ConnectorResponse>) {
         )
         .mount(server)
         .await;
-}
-
-/// A fake browser opener that drives the loopback callback itself: parses
-/// the authorize URL for the redirect URI + CSRF state, then GETs the
-/// callback with a canned code — exactly what a real browser does.
-fn self_callback_opener() -> impl Fn(&str) + Send + Sync {
-    |url: &str| {
-        let url = url.to_string();
-        tokio::spawn(async move {
-            let parsed = reqwest::Url::parse(&url).expect("authorize URL");
-            let state = parsed
-                .query_pairs()
-                .find(|(k, _)| k == "state")
-                .expect("state param")
-                .1
-                .into_owned();
-            let redirect = parsed
-                .query_pairs()
-                .find(|(k, _)| k == "redirect_uri")
-                .expect("redirect_uri param")
-                .1
-                .into_owned();
-            let callback = format!("{redirect}?code=auth-code&state={state}");
-            let _ = reqwest::get(callback).await;
-        });
-    }
 }
 
 /// Mount a wiremock token endpoint that answers the PKCE code exchange.
@@ -396,7 +371,7 @@ async fn add_with_oauth_config_runs_pkce_flow_and_ingests_tokens() {
         None,
         true,
         &daemon.uri(),
-        &self_callback_opener(),
+        &self_callback_opener("auth-code"),
     )
     .await;
 
@@ -506,7 +481,7 @@ async fn auth_with_oauth_config_runs_pkce_flow_and_ingests_tokens() {
         None,
         true,
         &daemon.uri(),
-        &self_callback_opener(),
+        &self_callback_opener("auth-code"),
     )
     .await;
 

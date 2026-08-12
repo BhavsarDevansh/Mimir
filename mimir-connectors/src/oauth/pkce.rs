@@ -338,6 +338,7 @@ const SUCCESS_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::{callback_url, parse_authorize_url, self_callback_opener};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -353,32 +354,6 @@ mod tests {
 
     fn test_http() -> OAuthHttpClient {
         OAuthHttpClient::from_client(reqwest::Client::new())
-    }
-
-    /// An opener that drives the loopback callback itself: parses the
-    /// authorize URL for the redirect URI + CSRF state, then GETs the
-    /// callback with a canned code — exactly what a real browser does.
-    fn self_callback_opener(code: &'static str) -> impl Fn(&str) + Send + Sync {
-        move |url: &str| {
-            let url = url.to_string();
-            tokio::spawn(async move {
-                let parsed = reqwest::Url::parse(&url).expect("authorize URL");
-                let state = parsed
-                    .query_pairs()
-                    .find(|(k, _)| k == "state")
-                    .expect("state param")
-                    .1
-                    .into_owned();
-                let redirect = parsed
-                    .query_pairs()
-                    .find(|(k, _)| k == "redirect_uri")
-                    .expect("redirect_uri param")
-                    .1
-                    .into_owned();
-                let callback = format!("{redirect}?code={code}&state={state}");
-                let _ = reqwest::get(callback).await;
-            });
-        }
     }
 
     // -------------------------------------------------------------------
@@ -508,14 +483,8 @@ mod tests {
         let opener = |url: &str| {
             let url = url.to_string();
             tokio::spawn(async move {
-                let parsed = reqwest::Url::parse(&url).expect("authorize URL");
-                let redirect = parsed
-                    .query_pairs()
-                    .find(|(k, _)| k == "redirect_uri")
-                    .expect("redirect_uri param")
-                    .1
-                    .into_owned();
-                let callback = format!("{redirect}?code=stolen&state=wrong-state");
+                let params = parse_authorize_url(&url).expect("authorize URL");
+                let callback = callback_url(&params.redirect_uri, "stolen", "wrong-state");
                 let _ = reqwest::get(callback).await;
             });
         };
@@ -698,27 +667,15 @@ mod tests {
         let opener = |url: &str| {
             let url = url.to_string();
             tokio::spawn(async move {
-                let parsed = reqwest::Url::parse(&url).expect("authorize URL");
-                let state = parsed
-                    .query_pairs()
-                    .find(|(k, _)| k == "state")
-                    .expect("state param")
-                    .1
-                    .into_owned();
-                let redirect = parsed
-                    .query_pairs()
-                    .find(|(k, _)| k == "redirect_uri")
-                    .expect("redirect_uri param")
-                    .1
-                    .into_owned();
+                let params = parse_authorize_url(&url).expect("authorize URL");
                 // A favicon probe on the same origin, before the real
                 // callback — must be ignored, not abort the flow.
-                let favicon = reqwest::Url::parse(&redirect)
+                let favicon = reqwest::Url::parse(&params.redirect_uri)
                     .expect("redirect URL")
                     .join("/favicon.ico")
                     .expect("favicon URL");
                 let _ = reqwest::get(favicon).await;
-                let callback = format!("{redirect}?code=auth-code&state={state}");
+                let callback = callback_url(&params.redirect_uri, "auth-code", &params.state);
                 let _ = reqwest::get(callback).await;
             });
         };

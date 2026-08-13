@@ -1306,3 +1306,106 @@ async fn corroborated_restatement_keeps_single_location_row() {
         "corroborated re-statement must not duplicate"
     );
 }
+
+/// A start-less re-statement of a bounded open-ended row must widen the union
+/// to an unbounded start: `None` is an unbounded bound, so merging
+/// `2020-present` with a same-place claim of "until 2023" (no start) keeps the
+/// unbounded start rather than pinning it to 2020.
+#[tokio::test]
+async fn start_unbounded_restatement_keeps_unbounded_start() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let first = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            None,
+            Some(parse_dt("2020-01-01T00:00:00Z")),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let second = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            None,
+            None,
+            Some(parse_dt("2023-06-01T00:00:00Z")),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.id, first.id, "overlapping re-statement must merge");
+
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(locs.len(), 1);
+    assert!(
+        locs[0].valid_from.is_none(),
+        "union of a bounded and a start-unbounded statement must stay unbounded"
+    );
+    assert!(
+        locs[0].valid_until.is_none(),
+        "open-ended side must stay open in the union"
+    );
+}
+
+/// Two concurrent facade upserts of the same place must not race: the facade
+/// holds the shared write lock across the candidate lookup and the write, so
+/// the second call sees the first's row and merges instead of inserting a
+/// duplicate (issue #236).
+#[tokio::test]
+async fn concurrent_facade_upserts_of_same_place_keep_single_row() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let from = parse_dt("2020-01-01T00:00:00Z");
+    let kg = Arc::new(kg);
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let kg = Arc::clone(&kg);
+        handles.push(tokio::spawn(async move {
+            kg.upsert_location(
+                entity.id,
+                LocationType::Home,
+                Some("10 Downing St"),
+                Some(51.5034),
+                Some(-0.1276),
+                Some("Europe/London"),
+                Some(from),
+                None,
+                None,
+            )
+            .await
+            .unwrap()
+        }));
+    }
+    let first = handles.pop().unwrap().await.unwrap();
+    let second = handles.pop().unwrap().await.unwrap();
+    assert_eq!(
+        first.id, second.id,
+        "concurrent re-statements must merge into one row"
+    );
+
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(
+        locs.len(),
+        1,
+        "concurrent facade upserts must not duplicate the row"
+    );
+}

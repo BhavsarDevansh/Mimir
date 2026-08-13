@@ -139,8 +139,10 @@ pub async fn upsert_location(
     // commits in between (WAL stale-snapshot upgrade, issue #236), and the
     // supervisor's bookkeeping writes (cursor/status) do exactly that. The
     // merge or move below is still atomic in its own transaction, and the
-    // overlay worker's write lock serialises it against ingestion callers, so
-    // the lookup cannot go stale on the pipeline paths.
+    // shared knowledge-graph write lock serialises every caller — the facade
+    // acquires it in `KnowledgeGraph::upsert_location`, and the overlay
+    // worker holds it across `apply_location_overlay` — so the lookup cannot
+    // go stale on any path.
     //
     // The WHERE clause pre-filters to rows whose period can overlap the
     // incoming one (a SQL mirror of `ranges_overlap`), keeping the fetch
@@ -275,10 +277,12 @@ fn same_place(
 /// Merge a re-statement's temporal bounds into the existing row's, producing
 /// the interval union (issue #228).
 ///
-/// The merged row starts at the earliest definite `valid_from` and ends at the
-/// latest definite `valid_until`; either side becomes open-ended when any
-/// statement is open-ended on that side, so a same-place re-statement never
-/// closes an open-ended row — the open "currently lives there" claim wins.
+/// The merged row starts at the earliest definite `valid_from` when both
+/// statements have a start, and ends at the latest definite `valid_until`;
+/// either side becomes open-ended when any statement is open-ended on that
+/// side (`None` is an unbounded bound, so a start-less statement widens the
+/// union to an unbounded start), so a same-place re-statement never closes an
+/// open-ended row — the open "currently lives there" claim wins.
 fn merged_bounds(
     existing_from: Option<DateTime<Utc>>,
     existing_until: Option<DateTime<Utc>>,
@@ -287,9 +291,7 @@ fn merged_bounds(
 ) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
     let valid_from = match (existing_from, incoming_from) {
         (Some(a), Some(b)) => Some(a.min(b)),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
+        _ => None,
     };
     let valid_until = match (existing_until, incoming_until) {
         (Some(a), Some(b)) => Some(a.max(b)),

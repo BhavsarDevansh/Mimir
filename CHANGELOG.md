@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.101.7] — 2026-08-13
+
+### Entity-location dedup hardened (PR #308 review)
+
+- **Facade upserts serialised with the write lock.** `KnowledgeGraph::upsert_location` now holds the shared knowledge-graph write lock across the re-statement candidate lookup and the write, so two concurrent facade calls cannot both read a stale no-match and insert duplicate rows (or close each other's row). A concurrent facade-upsert test covers identical locations.
+- **Start-less re-statements keep an unbounded start.** The interval-union merge previously pinned `valid_from` to the bounded statement's start when merging e.g. `2020-present` with a same-place claim of "until 2023" (no start); the union now stays unbounded (`None`) whenever either statement has no start, matching the overlap query's unbounded semantics. A test covers the bounded + start-unbounded union.
+- **Docs:** the dedup contract (0.1 km coordinate tolerance, shared-attribute veto, overlapping-period-only merge) is now stated consistently in `docs/wiki/entity-locations.md`, `Mimir-Implementation-Context.md`, `README.md`, and `docs/wiki/what-works-now.md`; `docs/entity-locations.md` updated for the merge and locking rules.
+- Version bumped 0.101.6 → 0.101.7 (patch — backwards-compatible bug fixes).
+
 ## [0.101.6] — 2026-08-13
 
 ### Entity-location re-statement deduplication (issue #228)

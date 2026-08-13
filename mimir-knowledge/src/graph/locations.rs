@@ -53,7 +53,10 @@ impl KnowledgeGraph {
     /// `location_type` that began before `valid_from` (sets its
     /// `valid_until = valid_from`), then inserts the new row — modelling a
     /// move such as "home 2020-2023, home 2023-present". The whole operation
-    /// is atomic in one transaction. Returns the persisted location.
+    /// is atomic in one transaction. The shared knowledge-graph write lock is
+    /// held across the candidate lookup and the write so concurrent facade
+    /// calls cannot both read a stale no-match and duplicate or supersede
+    /// each other's row (issue #236). Returns the persisted location.
     ///
     /// Geocoding (filling the missing half of address/coords) is the caller's
     /// responsibility; this method persists exactly what it is given.
@@ -70,6 +73,12 @@ impl KnowledgeGraph {
         valid_until: Option<DateTime<Utc>>,
         source_fact_id: Option<i32>,
     ) -> Result<models::entity_location::EntityLocation, KnowledgeError> {
+        // Serialise the candidate lookup + write with the overlay worker and
+        // ingestion callers (issue #236): without the shared write lock, two
+        // concurrent facade calls could both read no candidate and then
+        // insert duplicate rows (or close each other's row) from stale
+        // lookups.
+        let _write_guard = self.write_lock().lock().await;
         queries::entity::upsert_location(
             self.pool(),
             entity_id,

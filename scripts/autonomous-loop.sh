@@ -363,8 +363,9 @@ PROMPT
         return 0
     fi
     gh pr merge "$num" --merge --delete-branch 2>&1 | tee -a "$LOG_FILE" >&2 || { err "merge of PR #$num failed"; return 1; }
-    git -C "$PROJECT_ROOT" checkout main 2>&1 | tee -a "$LOG_FILE" >&2
-    git -C "$PROJECT_ROOT" pull --ff-only 2>&1 | tee -a "$LOG_FILE" >&2
+#    git -C "$PROJECT_ROOT" checkout main 2>&1 | tee -a "$LOG_FILE" >&2
+#    git -C "$PROJECT_ROOT" pull --ff-only 2>&1 | tee -a "$LOG_FILE" >&2
+     git -C "$PROJECT_ROOT" switch main && git -C "$PROJECT_ROOT" fetch -p && git -C "$PROJECT_ROOT" pull && cargo clean
     if ! git -C "$PROJECT_ROOT" branch -d "$branch" 2>&1 | tee -a "$LOG_FILE" >&2; then
         warn "local branch '$branch' was not fully merged; leaving it in place."
     fi

@@ -5,7 +5,7 @@
 
 ## Purpose
 
-A self-driving orchestration script that advances the Mimir repository toward a fully implemented feature set without human intervention. On each cadence tick (default every 2 hours; `MIMIR_AUTONOMOUS_INTERVAL` seconds) it drives the GitHub pull-request lifecycle and picks up new work from the issue tracker, delegating all coding work to `codex exec` subagents that load the project's `AGENTS.md` and the `gh-issue-tdd` / `gh-review-commit` skills. The script keeps all control flow in deterministic bash (git and `gh` calls) and only delegates open-ended engineering work (implementing, reviewing, addressing comments) to the agent, respecting the project rule that logic must live in deterministic code, not in prompts.
+A self-driving orchestration script that advances the Mimir repository toward a fully implemented feature set without human intervention. On each cadence tick (default every 2 hours; `MIMIR_AUTONOMOUS_INTERVAL` seconds) it drives the GitHub pull-request lifecycle and picks up code-quality work from the issue tracker, delegating all coding work to `codex exec` subagents that load the project's `AGENTS.md` and the `gh-issue-tdd` / `gh-review-commit` skills. The script keeps all control flow in deterministic bash (git and `gh` calls) and only delegates open-ended engineering work (implementing, reviewing, addressing comments) to the agent, respecting the project rule that logic must live in deterministic code, not in prompts.
 
 ## Design
 
@@ -42,9 +42,9 @@ With `MIMIR_AUTONOMOUS_INTERVAL=1800` (30 minutes) a typical issue lifecycle is:
 
 `coderabbit_skipped()` inspects `coderabbitai` review bodies for the "out of reviews" / skipped-review message. A skipped review produces no threads, so the PR proceeds through the normal "no open comments" path and still must satisfy the merge-state gate; the skip is logged explicitly so the audit trail explains why CodeRabbit did not block the merge.
 
-### Issue selection
+### Issue selection (code quality only)
 
-`candidate_issues()` lists open issues and filters: issues with the `blocked` label are skipped; `help-wanted` issues are skipped unless the repo owner has commented after the agent's most recent question marker; issues carrying the active phase label (`phase-3` per `VISION/09-Roadmap`) are listed first, then everything else, each group sorted by ascending issue number. The top candidates (up to 5) are handed to `codex exec`, which reads the roadmap and `Mimir-Implementation-Context.md` to confirm the right one and then implements it via the `gh-issue-tdd` skill.
+`candidate_issues()` lists open issues and filters: issues with the `blocked` label are skipped; `help-wanted` issues are skipped unless the repo owner has commented after the agent's most recent question marker; **feature development is excluded** — an issue must carry at least one quality label (`bug`, `refactor`, `maintenance`, `performance`, `security`, `documentation`, `testing`, `build`) or a quality title prefix (`DRY:`, `Robustness:`, `Refactor:`, `Maintenance:`, `Bug:`, `Fix:`, `Flaky`, `Spec drift`, `E2E test`, `Docs:`, `Security:`, `Perf`, `Cleanup`, `Code quality`), and the `feature` label plus `Implement` / `Future:` titles are hard exclusions. Issues carrying the active phase label (`phase-3` per `VISION/09-Roadmap`) are listed first, then everything else, each group sorted by ascending issue number. The top candidates (up to 5) are handed to `codex exec`, which reads the roadmap and `Mimir-Implementation-Context.md` to confirm the right one and then implements it via the `gh-issue-tdd` skill. The prompt additionally instructs the agent never to implement feature development and to fix missing quality/feature labels it encounters.
 
 ### Issue hygiene
 

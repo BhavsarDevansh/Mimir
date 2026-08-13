@@ -15,9 +15,11 @@ set -euo pipefail
 #       - No open PR -> if the tree is clean, switch to main and pull.
 #
 #   * On main:
-#       - Pick the next unblocked issue (checking roadmaps/vision docs), then
-#         implement it via the gh-issue-tdd skill and publish as a draft PR, or
-#         post clarifying questions with the help-wanted label.
+#       - Pick the next unblocked code-quality issue (maintenance, DRY, bug
+#         fixes, refactors, robustness, performance, security, documentation,
+#         testing, build; feature development is excluded), then implement it
+#         via the gh-issue-tdd skill and publish as a draft PR, or post
+#         clarifying questions with the help-wanted label.
 #
 # The hard work (review, implementation, addressing comments) is delegated to
 # `codex exec`, which loads the project's AGENTS.md and the gh-issue-tdd /
@@ -49,6 +51,10 @@ ONCE=0
 LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/mimir"
 LOG_FILE="${MIMIR_AUTONOMOUS_LOG:-$LOG_DIR/autonomous.log}"
 QUESTION_MARKER_PREFIX="<!-- mimir-autonomous-question:"
+# Issue categories the loop is allowed to implement. Feature development is
+# excluded outright: the loop exists to pay down maintenance, DRY, bug,
+# robustness, performance, security, documentation, testing and build debt.
+QUALITY_LABELS="bug,refactor,maintenance,performance,security,documentation,testing,build"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -200,8 +206,31 @@ issue_questions_answered() {
     return 1
 }
 
+# Return 0 if the issue is code-quality work the loop may implement, 1 if it is
+# feature development (or unclassifiable). Quality is decided by label first,
+# then by title heuristics; the `feature` label and obvious feature titles are
+# hard exclusions.
+is_quality_issue() {
+    local title="$1" labels="$2"
+    local label_set=",$labels,"
+    [[ "$label_set" == *",feature,"* ]] && return 1
+    local lbl q
+    IFS=',' read -ra q <<<"$QUALITY_LABELS"
+    for lbl in "${q[@]}"; do
+        [[ "$label_set" == *",$lbl,"* ]] && return 0
+    done
+    if [[ "$title" =~ ^(DRY|Robustness|Refactor|Maintenance|Bug|Fix|Flaky|Code[[:space:]]quality|Spec[[:space:]]drift|E2E[[:space:]]test|Security|Perf|Cleanup|Docs?)[:[:space:]] ]]; then
+        return 0
+    fi
+    if [[ "$title" =~ ^(Implement|Future:) ]]; then
+        return 1
+    fi
+    return 1
+}
+
 # Print candidate issue numbers (one per line), sorted by current-phase priority
-# then number, excluding blocked and unanswered help-wanted issues.
+# then number, excluding blocked, unanswered help-wanted, and non-quality
+# (feature-development) issues.
 candidate_issues() {
     local owner_repo="$1"
     local owner repo
@@ -209,10 +238,10 @@ candidate_issues() {
     repo="${owner_repo#*/}"
     local all current_phase
     current_phase="phase-3" # active phase per VISION/09-Roadmap
-    all=$(gh issue list --state open --json number,labels --jq '.[] | "\(.number)\t\([.labels[].name]|join(","))"' 2>/dev/null || true)
+    all=$(gh issue list --state open --limit 200 --json number,title,labels --jq '.[] | "\(.number)\t\(.title)\t\([.labels[].name]|join(","))"' 2>/dev/null || true)
     [[ -z "$all" ]] && return 0
-    local in_phase="" others="" num labels
-    while IFS=$'\t' read -r num labels; do
+    local in_phase="" others="" num title labels
+    while IFS=$'\t' read -r num title labels; do
         [[ -z "$num" ]] && continue
         local label_set=",$labels,"
         if [[ "$label_set" == *",blocked,"* ]]; then continue; fi
@@ -221,6 +250,7 @@ candidate_issues() {
                 continue
             fi
         fi
+        if ! is_quality_issue "$title" "$labels"; then continue; fi
         if [[ "$label_set" == *",$current_phase,"* ]]; then
             in_phase+="$num"$'\n'
         else
@@ -374,7 +404,7 @@ You are the Mimir autonomous developer. Select the next unblocked issue to imple
 $cand_list
 
 Process:
-  1. Read \`VISION/09-Roadmap/*.md\` and \`Mimir-Implementation-Context.md\` to confirm which candidate is the correct next issue per the roadmap (earliest active phase, lowest number, not blocked, dependencies satisfied).
+  1. All candidates are code-quality issues. Read \`VISION/09-Roadmap/*.md\` and \`Mimir-Implementation-Context.md\` to confirm which candidate is the correct next issue per the roadmap (earliest active phase, lowest number, not blocked, dependencies satisfied). NEVER implement feature development (new capabilities, new tools, new phases) — if every candidate is feature work or blocked, do nothing and report that.
   2. Fetch the FULL chosen issue before working on it: \`gh issue view N --comments\` plus \`gh api repos/<owner>/<repo>/issues/N\` for every field (title, body, labels, state, milestone, assignees) and every comment. Also read the VISION docs for the issue's subsystem.
   3. The issue spec may be outdated vs. the current codebase. Verify every claim against the code and implement against CURRENT reality, not stale wording. If the issue body is materially outdated, update it (\`gh issue edit N --body-file\`) or post a follow-up comment so it reflects the latest context.
   4. If the chosen issue has the \`help-wanted\` label and its clarifying questions have been answered by the repo owner in the comments, proceed to implement it.
@@ -392,6 +422,7 @@ Process:
        - Push the branch and publish as a DRAFT pull request linking the issue with a closing statement (e.g. \`Closes #N\`).
   7. Issue and codebase hygiene while working:
        - If you encounter other open issues whose contents are stale relative to the codebase, update them (body edit or comment) with the latest context so the tracker stays accurate.
+       - If an issue you inspect is missing its appropriate quality labels (bug, refactor, maintenance, performance, security, documentation, testing, build) or a feature request lacks the \`feature\` label, add the missing labels via \`gh issue edit\` so the tracker stays accurate.
        - If you find problems OUTSIDE the current change (misplaced code, DRY violations, performance issues, bugs, security concerns), create new GitHub issues with clear, self-contained context, using ONLY the repo's existing labels (bug, performance, refactor, maintenance, documentation, build, testing, security, feature, core-agent, knowledge-graph, connectors, cli, chat, memory, tools, phase-2, phase-3, etc).
        - Take small opportunities to improve code quality in files you already touch, without expanding scope.
 
@@ -399,6 +430,7 @@ Rules:
   - Do NOT co-author or co-sign commits.
   - Follow AGENTS.md strictly, including the no-unsafe policy, semantic versioning, and single-line markdown prose.
   - Only implement ONE issue per run.
+  - Quality issues only: maintenance, DRY, bug fixes, refactors, robustness, performance, security, documentation, testing, build. Feature development is never in scope.
 PROMPT
     run_codex "$prompt" || return 1
 }

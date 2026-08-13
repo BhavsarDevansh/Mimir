@@ -79,6 +79,7 @@ After implementation is complete and all tests pass:
 - Keep open GitHub issues accurate: whenever you work in an area with open issues, refresh stale issue bodies and comments with the current state of the codebase instead of leaving outdated context in the tracker.
 - When you discover bugs, DRY violations, misplaced code, performance problems, or security concerns outside the current change set, file a new GitHub issue with clear, self-contained context, using only existing repository labels.
 - The repository can be driven by `scripts/autonomous-loop.sh`, which implements issues and maintains pull requests without human intervention. Human- and agent-initiated work must follow the same standards in this file.
+- The autonomous loop only implements code-quality issues (maintenance, DRY, bug fixes, refactors, robustness, performance, security, documentation, testing, build); feature development is out of scope for the loop.
 
 ## Semantic Versioning
 

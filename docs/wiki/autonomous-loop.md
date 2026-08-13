@@ -2,7 +2,7 @@
 
 ## What it is
 
-Mimir can drive its own development. A small script, `scripts/autonomous-loop.sh`, wakes up on a configurable cadence (default every two hours, or every 30 minutes with `MIMIR_AUTONOMOUS_INTERVAL=1800`) and asks one question: "what should I work on next?" It then either finishes off an open pull request or picks up a new issue from the GitHub backlog — writing code, running tests, updating docs, and publishing its work as a draft pull request, all on its own.
+Mimir can drive its own development. A small script, `scripts/autonomous-loop.sh`, wakes up on a configurable cadence (default every two hours, or every 30 minutes with `MIMIR_AUTONOMOUS_INTERVAL=1800`) and asks one question: "what should I work on next?" It then either finishes off an open pull request or picks up a code-quality issue from the GitHub backlog — maintenance, DRY, bug fixes, refactors, robustness, performance, security, documentation, testing, and build work — writing code, running tests, updating docs, and publishing its work as a draft pull request, all on its own. Feature development is deliberately out of scope for the loop.
 
 ## How it works
 
@@ -11,7 +11,7 @@ Each cycle the loop checks which git branch you are on:
 - **On a feature branch with a draft PR** — it reviews its own diff against `main`, fixes every issue it finds (no matter how small), pushes, and marks the PR ready for review.
 - **On a feature branch with a ready PR** — it looks for outstanding review comments (for example from CodeRabbit). If there are any, it fixes them and pushes. If everything is resolved — or CodeRabbit skipped its review because it is out of reviews for a while — and GitHub reports the PR merge state as clean, it merges the PR into `main`, switches the local branch to `main` and pulls the latest changes.
 - **On a feature branch with no PR** — if the working tree is clean it switches back to `main` and pulls. If there is uncommitted work it leaves things alone for you to handle.
-- **On `main`** — it picks the next unblocked issue (checking the roadmap and vision docs to make sure it is the right one) and implements it as a draft PR, updating docs and running tests as it goes. A typical ticket takes a few 30-minute cycles: implement and open the draft PR, self-review and mark ready, address any review comments, then merge and move on to the next ticket.
+- **On `main`** — it picks the next unblocked code-quality issue (checking the roadmap and vision docs to make sure it is the right one, and skipping anything labelled as feature development) and implements it as a draft PR, updating docs and running tests as it goes. A typical ticket takes a few 30-minute cycles: implement and open the draft PR, self-review and mark ready, address any review comments, then merge and move on to the next ticket.
 
 ## Keeping the issue tracker healthy
 

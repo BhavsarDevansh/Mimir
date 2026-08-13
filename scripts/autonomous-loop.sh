@@ -68,9 +68,25 @@ QUALITY_LABELS="bug,refactor,maintenance,performance,security,documentation,test
 # ---------------------------------------------------------------------------
 mkdir -p "$LOG_DIR" "$LOG_FILE_DIR"
 
-log()  { printf '%s [INFO] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" | tee -a "$LOG_FILE" >&2; }
-warn() { printf '%s [WARN] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" | tee -a "$LOG_FILE" >&2; }
-err()  { printf '%s [ERROR] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" | tee -a "$LOG_FILE" >&2; }
+BLACK=$(tput setaf 0)
+RED=$(tput setaf 1)
+GREEN=$(tput setaf 2)
+YELLOW=$(tput setaf 3)
+LIME_YELLOW=$(tput setaf 190)
+POWDER_BLUE=$(tput setaf 153)
+BLUE=$(tput setaf 4)
+MAGENTA=$(tput setaf 5)
+CYAN=$(tput setaf 6)
+WHITE=$(tput setaf 7)
+BRIGHT=$(tput bold)
+NORMAL=$(tput sgr0)
+BLINK=$(tput blink)
+REVERSE=$(tput smso)
+UNDERLINE=$(tput smul)
+
+log()  { printf ${CYAN}'%s [INFO] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"${NORMAL} | tee -a "$LOG_FILE" >&2; }
+warn() { printf ${YELLOW}'%s [WARN] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"${NORMAL} | tee -a "$LOG_FILE" >&2; }
+err()  { printf ${RED}'%s [ERROR] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"${NORMAL} | tee -a "$LOG_FILE" >&2; }
 
 require() { command -v "$1" >/dev/null 2>&1 || { err "missing required tool: $1"; exit 1; }; }
 
@@ -445,7 +461,7 @@ Process:
   7. Issue and codebase hygiene while working:
        - If you encounter other open issues whose contents are stale relative to the codebase, update them (body edit or comment) with the latest context so the tracker stays accurate.
        - If an issue you inspect is missing its appropriate quality labels (bug, refactor, maintenance, performance, security, documentation, testing, build) or a feature request lacks the \`feature\` label, add the missing labels via \`gh issue edit\` so the tracker stays accurate.
-       - If you find problems OUTSIDE the current change (misplaced code, DRY violations, performance issues, bugs, security concerns), create new GitHub issues with clear, self-contained context, using ONLY the repo's existing labels (bug, performance, refactor, maintenance, documentation, build, testing, security, feature, core-agent, knowledge-graph, connectors, cli, chat, memory, tools, phase-2, phase-3, etc).
+       - If you find problems OUTSIDE the current change (misplaced code, DRY violations, performance issues, bugs, security concerns), check for existing related open github issues and update them if needed. If no relevant issues exist create new GitHub issues with clear, self-contained context, using ONLY the repo's existing labels (bug, performance, refactor, maintenance, documentation, build, testing, security, feature, core-agent, knowledge-graph, connectors, cli, chat, memory, tools, phase-2, phase-3, etc).
        - Take small opportunities to improve code quality in files you already touch, without expanding scope.
 
 Rules:

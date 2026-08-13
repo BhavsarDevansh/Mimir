@@ -5,6 +5,7 @@ use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
 use crate::models::entity_location::EntityLocation;
+use crate::queries::fact::ranges_overlap;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_location_in_tx(
@@ -101,16 +102,22 @@ pub async fn insert_location(
 }
 
 /// Upsert a location for an entity with move/supersession semantics
-/// (Phase 3 S3 / #193).
+/// (Phase 3 S3 / #193), deduplicating same-place re-statements (issue #228).
 ///
-/// Begins a transaction, closes any still-open location of the same
-/// `entity_id` + `location_type_id` that began before `valid_from` (sets its
-/// `valid_until = valid_from`) via [`close_prior_open_locations_in_tx`], then
-/// inserts the new row via [`insert_location_in_tx`]. Atomic in one
-/// transaction. Shared by the [`KnowledgeGraph::upsert_location`](crate::KnowledgeGraph::upsert_location) facade and
-/// the background location-overlay worker so both apply identical move
-/// semantics. Geocoding (filling the missing half) is the caller's
-/// responsibility; this persists exactly what it is given.
+/// If the incoming location is the *same place* as an existing row of the same
+/// `entity_id` + `location_type_id` whose period overlaps it, the statement is
+/// a re-statement rather than a move — the existing row absorbs the incoming
+/// bounds (interval union) and any shape fields it is missing, and no new row
+/// is inserted and nothing is closed. Otherwise the move/supersession path
+/// applies, atomically in one transaction: any still-open location of the same
+/// `entity_id` + `location_type_id` that began before `valid_from` is closed
+/// (its `valid_until` set to `valid_from`) via
+/// [`close_prior_open_locations_in_tx`], then the new row is inserted via
+/// [`insert_location_in_tx`]. Shared by the
+/// [`KnowledgeGraph::upsert_location`](crate::KnowledgeGraph::upsert_location) facade and the background
+/// location-overlay worker so both apply identical semantics. Geocoding
+/// (filling the missing half) is the caller's responsibility; this persists
+/// exactly what it is given.
 #[allow(clippy::too_many_arguments)]
 pub async fn upsert_location(
     pool: &SqlitePool,
@@ -124,7 +131,80 @@ pub async fn upsert_location(
     valid_until: Option<DateTime<Utc>>,
     source_fact_id: Option<i32>,
 ) -> Result<EntityLocation, KnowledgeError> {
+    // Re-statement dedup: fold the incoming statement into the earliest
+    // overlapping same-place row when one exists. The lookup runs *before* the
+    // transaction (on a separate read) so the transaction's first statement is
+    // always a write: a deferred transaction that reads first and writes
+    // second fails with an un-retriable SQLITE_BUSY when another connection
+    // commits in between (WAL stale-snapshot upgrade, issue #236), and the
+    // supervisor's bookkeeping writes (cursor/status) do exactly that. The
+    // merge or move below is still atomic in its own transaction, and the
+    // shared knowledge-graph write lock serialises every caller — the facade
+    // acquires it in `KnowledgeGraph::upsert_location`, and the overlay
+    // worker holds it across `apply_location_overlay` — so the lookup cannot
+    // go stale on any path.
+    //
+    // The WHERE clause pre-filters to rows whose period can overlap the
+    // incoming one (a SQL mirror of `ranges_overlap`), keeping the fetch
+    // proportional to the overlapping history rather than the entity's full
+    // location history; the exact overlap + same-place predicate is still
+    // applied in Rust below, so the SQL is a pre-filter only.
+    let candidates: Vec<EntityLocation> = sqlx::query_as::<_, EntityLocation>(
+        "SELECT id, entity_id, location_type_id, address, latitude, longitude, timezone, \
+         valid_from, valid_until, source_fact_id, created_at \
+         FROM entity_locations WHERE entity_id = ? AND location_type_id = ? \
+           AND (valid_from IS NULL OR ? IS NULL OR valid_from < ?) \
+           AND (? IS NULL OR valid_until IS NULL OR ? < valid_until) \
+         ORDER BY created_at, id",
+    )
+    .bind(entity_id)
+    .bind(location_type_id)
+    .bind(valid_until)
+    .bind(valid_until)
+    .bind(valid_from)
+    .bind(valid_from)
+    .fetch_all(pool)
+    .await?;
     let mut tx = pool.begin().await?;
+    if let Some(existing) = candidates.iter().find(|row| {
+        same_place(
+            row.address.as_deref(),
+            row.latitude,
+            row.longitude,
+            address,
+            latitude,
+            longitude,
+        ) && ranges_overlap(row.valid_from, row.valid_until, valid_from, valid_until)
+    }) {
+        let (merged_from, merged_until) = merged_bounds(
+            existing.valid_from,
+            existing.valid_until,
+            valid_from,
+            valid_until,
+        );
+        let record = sqlx::query_as::<_, EntityLocation>(
+            "UPDATE entity_locations \
+             SET address = COALESCE(address, ?), \
+                 latitude = COALESCE(latitude, ?), \
+                 longitude = COALESCE(longitude, ?), \
+                 timezone = COALESCE(timezone, ?), \
+                 valid_from = ?, valid_until = ? \
+             WHERE id = ? \
+             RETURNING id, entity_id, location_type_id, address, latitude, longitude, timezone, valid_from, valid_until, source_fact_id, created_at",
+        )
+        .bind(address)
+        .bind(latitude)
+        .bind(longitude)
+        .bind(timezone)
+        .bind(merged_from)
+        .bind(merged_until)
+        .bind(existing.id)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        return Ok(record);
+    }
+
     close_prior_open_locations_in_tx(&mut tx, entity_id, location_type_id, valid_from).await?;
     let record = insert_location_in_tx(
         &mut tx,
@@ -141,6 +221,83 @@ pub async fn upsert_location(
     .await?;
     tx.commit().await?;
     Ok(record)
+}
+
+/// Radius (in kilometres) within which two coordinate pairs are considered the
+/// same place for re-statement dedup (issue #228).
+///
+/// Roughly consumer-GPS precision at the same property (~100 m); deliberately
+/// larger than a single GPS fix's noise so repeated fixes at one place merge,
+/// while genuinely different places (typically hundreds of metres apart) stay
+/// distinct.
+const SAME_PLACE_RADIUS_KM: f64 = 0.1;
+
+/// Whether two location shapes describe the same place (issue #228).
+///
+/// A shared attribute that *disagrees* is a veto: different addresses (or
+/// coordinates far apart) mean different places even when the other attribute
+/// alone would suggest a match — the move semantics of a different address are
+/// preserved even if a geocoder returns nearby points for both, and a shared
+/// address string is not enough to override coordinates hundreds of metres
+/// apart (the same street name can exist in different places). Otherwise the
+/// strongest shared *agreement* decides: both addresses present and equal, or
+/// both coordinate pairs within [`SAME_PLACE_RADIUS_KM`] (tolerating GPS noise
+/// and geocoder drift for the same property). Rows that share no attribute
+/// (e.g. one address-only, one coords-only) cannot be linked and are treated
+/// as different places.
+fn same_place(
+    existing_address: Option<&str>,
+    existing_latitude: Option<f64>,
+    existing_longitude: Option<f64>,
+    incoming_address: Option<&str>,
+    incoming_latitude: Option<f64>,
+    incoming_longitude: Option<f64>,
+) -> bool {
+    let addresses_agree = match (existing_address, incoming_address) {
+        (Some(a), Some(b)) => Some(a == b),
+        _ => None,
+    };
+    let coords_agree = match (
+        existing_latitude,
+        existing_longitude,
+        incoming_latitude,
+        incoming_longitude,
+    ) {
+        (Some(lat1), Some(lon1), Some(lat2), Some(lon2)) => {
+            Some(crate::geo::haversine_km(lat1, lon1, lat2, lon2) < SAME_PLACE_RADIUS_KM)
+        }
+        _ => None,
+    };
+    if addresses_agree == Some(false) || coords_agree == Some(false) {
+        return false;
+    }
+    addresses_agree == Some(true) || coords_agree == Some(true)
+}
+
+/// Merge a re-statement's temporal bounds into the existing row's, producing
+/// the interval union (issue #228).
+///
+/// The merged row starts at the earliest definite `valid_from` when both
+/// statements have a start, and ends at the latest definite `valid_until`;
+/// either side becomes open-ended when any statement is open-ended on that
+/// side (`None` is an unbounded bound, so a start-less statement widens the
+/// union to an unbounded start), so a same-place re-statement never closes an
+/// open-ended row — the open "currently lives there" claim wins.
+fn merged_bounds(
+    existing_from: Option<DateTime<Utc>>,
+    existing_until: Option<DateTime<Utc>>,
+    incoming_from: Option<DateTime<Utc>>,
+    incoming_until: Option<DateTime<Utc>>,
+) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    let valid_from = match (existing_from, incoming_from) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        _ => None,
+    };
+    let valid_until = match (existing_until, incoming_until) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        _ => None,
+    };
+    (valid_from, valid_until)
 }
 
 /// Idempotently anchor a `Place` entity's geographic coordinates

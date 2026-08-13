@@ -27,7 +27,17 @@ overlay** alongside the usual subject–relationship–object triple. Mimir:
    and supersedes the prior home).
 3. **Handles moves** — adding a new home with a start date automatically closes
    the previous open-ended home at that date, so the history stays consistent.
-4. **Doesn't block on geocoding** — the address/GPS lookup + write happen on a
+4. **Recognises re-statements** — if Mimir hears the same place again (same
+   address, or coordinates within ~0.1 km, and an overlapping time window —
+   e.g. you re-tell it your address, or a connector re-imports the same
+   home), it treats that as a confirmation of the existing record, not a
+   move: no duplicate row is created, the time window is extended to cover
+   both statements, and any missing detail (e.g. coordinates you only
+   supplied the second time) is filled in. A shared detail that disagrees
+   (a different address, or coordinates more than 0.1 km apart) vetoes the
+   merge and still counts as a move, and the same place at disjoint periods
+   stays separate rows.
+5. **Doesn't block on geocoding** — the address/GPS lookup + write happen on a
    background worker, so remembering many places at once (e.g. a connector
    importing lots of GPS-tagged photos) isn't slowed to the geocoder's ~1
    lookup/sec rate.

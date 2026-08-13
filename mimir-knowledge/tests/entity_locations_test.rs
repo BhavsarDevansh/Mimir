@@ -697,3 +697,715 @@ async fn rejecting_sensitive_location_fact_leaves_no_overlay() {
         "pending_location_meta must cascade-delete with the fact"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Re-statement deduplication (issue #228)
+// ---------------------------------------------------------------------------
+
+/// A re-stated open-ended home (same address, later `valid_from`) must not
+/// close the prior open row and insert a duplicate: one continuous home stays
+/// one row, still open-ended, still dated from the first statement.
+#[tokio::test]
+async fn restated_open_home_does_not_create_duplicate_row() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let from_2020 = parse_dt("2020-01-01T00:00:00Z");
+    let from_2023 = parse_dt("2023-06-01T00:00:00Z");
+
+    let first = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            Some(51.5034),
+            Some(-0.1276),
+            Some("Europe/London"),
+            Some(from_2020),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let second = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            Some(51.5034),
+            Some(-0.1276),
+            Some("Europe/London"),
+            Some(from_2023),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        second.id, first.id,
+        "re-statement must return the existing row, not insert a new one"
+    );
+
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(locs.len(), 1, "re-stated home must not duplicate the row");
+    assert_eq!(locs[0].id, first.id);
+    assert_eq!(locs[0].valid_from, Some(from_2020));
+    assert!(
+        locs[0].valid_until.is_none(),
+        "re-statement must not close the open-ended row"
+    );
+}
+
+/// Two timeless re-statements of the same home (no bounds at all) previously
+/// produced two open-ended rows; they must collapse to one.
+#[tokio::test]
+async fn timeless_restatement_does_not_create_duplicate_row() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let first = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let second = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.id, first.id);
+
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(locs.len(), 1);
+    assert!(locs[0].valid_from.is_none());
+    assert!(locs[0].valid_until.is_none());
+}
+
+/// A re-statement with an *earlier* `valid_from` extends the open row's bounds
+/// backward instead of creating a second overlapping row.
+#[tokio::test]
+async fn restatement_with_earlier_valid_from_extends_bounds_backward() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let from_2023 = parse_dt("2023-06-01T00:00:00Z");
+    let from_2020 = parse_dt("2020-01-01T00:00:00Z");
+
+    let first = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            None,
+            Some(from_2023),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let second = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            None,
+            Some(from_2020),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.id, first.id);
+
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(locs.len(), 1);
+    assert_eq!(
+        locs[0].valid_from,
+        Some(from_2020),
+        "bounds must extend back to the earliest statement"
+    );
+    assert!(locs[0].valid_until.is_none());
+}
+
+/// An identical bounded re-statement (same period, same place) — the shape the
+/// fact layer's corroboration path re-drives through the overlay worker — must
+/// not produce a second row.
+#[tokio::test]
+async fn identical_bounded_restatement_does_not_create_duplicate_row() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let from = parse_dt("2020-01-01T00:00:00Z");
+    let until = parse_dt("2023-06-01T00:00:00Z");
+
+    let first = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            None,
+            Some(from),
+            Some(until),
+            None,
+        )
+        .await
+        .unwrap();
+    let second = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            None,
+            Some(from),
+            Some(until),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.id, first.id);
+
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(locs.len(), 1);
+    assert_eq!(locs[0].valid_from, Some(from));
+    assert_eq!(locs[0].valid_until, Some(until));
+}
+
+/// A re-statement that carries a bound the existing row lacks must fill the
+/// missing half rather than being dropped on merge.
+#[tokio::test]
+async fn restatement_fills_missing_geo_half() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    // First statement: address only (no geocoder available at the time).
+    let first = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            Some("Europe/London"),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    // Re-statement: same address plus resolved coordinates.
+    let second = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            Some(51.5034),
+            Some(-0.1276),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.id, first.id);
+
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(locs.len(), 1);
+    assert_eq!(locs[0].address.as_deref(), Some("10 Downing St"));
+    assert!((locs[0].latitude.unwrap() - 51.5034).abs() < 1e-6);
+    assert!((locs[0].longitude.unwrap() - -0.1276).abs() < 1e-6);
+    assert_eq!(
+        locs[0].timezone.as_deref(),
+        Some("Europe/London"),
+        "existing shape must be preserved when the re-statement omits it"
+    );
+}
+
+/// Coords-only re-statements of the same place (e.g. repeated photo GPS fixes)
+/// merge when the points are within the same-place radius.
+#[tokio::test]
+async fn coords_only_restatement_within_radius_merges() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let first = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Visited,
+            None,
+            Some(51.5034),
+            Some(-0.1276),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    // ~40 m north of the first fix — same property under GPS noise.
+    let second = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Visited,
+            None,
+            Some(51.5038),
+            Some(-0.1276),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.id, first.id);
+
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(locs.len(), 1);
+}
+
+/// The same address string with coordinates far apart is contradictory
+/// evidence (the same street name exists in different places): the veto rule
+/// treats it as a move rather than merging.
+#[tokio::test]
+async fn same_address_far_coords_treated_as_move() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let first = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            Some(51.5),
+            Some(-0.13),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    // ~5 km away, same address string.
+    let second = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            Some(51.545),
+            Some(-0.13),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(second.id, first.id);
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(locs.len(), 2);
+}
+
+/// Coords-only statements far apart (beyond the same-place radius) are
+/// different places: they must not merge.
+#[tokio::test]
+async fn coords_only_beyond_radius_stays_distinct() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let first = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Visited,
+            None,
+            Some(51.5),
+            Some(-0.13),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    // ~2 km away — well beyond the 0.1 km same-place radius.
+    let second = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Visited,
+            None,
+            Some(51.52),
+            Some(-0.13),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(second.id, first.id);
+
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(locs.len(), 2);
+}
+
+/// A genuinely different place (different address and coordinates) still
+/// supersedes: the prior open row is closed at the move date and the new row
+/// is inserted.
+#[tokio::test]
+async fn different_address_still_supersedes_open_row() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let from_2020 = parse_dt("2020-01-01T00:00:00Z");
+    let from_2023 = parse_dt("2023-06-01T00:00:00Z");
+
+    let first = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("Old Road"),
+            Some(51.0),
+            Some(-0.1),
+            None,
+            Some(from_2020),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let second = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("New Road"),
+            Some(52.0),
+            Some(-0.2),
+            None,
+            Some(from_2023),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(second.id, first.id, "a move must insert a new row");
+
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(locs.len(), 2, "both rows should coexist");
+    let old = locs
+        .iter()
+        .find(|l| l.address.as_deref() == Some("Old Road"))
+        .unwrap();
+    let new = locs
+        .iter()
+        .find(|l| l.address.as_deref() == Some("New Road"))
+        .unwrap();
+    assert_eq!(old.valid_until, Some(from_2023), "prior row closed at move");
+    assert_eq!(new.valid_from, Some(from_2023));
+    assert!(new.valid_until.is_none());
+}
+
+/// Same place, disjoint periods (a gap in between) are distinct facts: the
+/// second period must NOT merge into the first.
+#[tokio::test]
+async fn non_overlapping_same_place_periods_stay_distinct() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let first = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            None,
+            Some(parse_dt("2020-01-01T00:00:00Z")),
+            Some(parse_dt("2021-01-01T00:00:00Z")),
+            None,
+        )
+        .await
+        .unwrap();
+    let second = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            None,
+            Some(parse_dt("2023-01-01T00:00:00Z")),
+            Some(parse_dt("2024-01-01T00:00:00Z")),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(second.id, first.id);
+
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(
+        locs.len(),
+        2,
+        "disjoint periods of the same place stay distinct"
+    );
+}
+
+/// A bounded re-statement of an open-ended row must not close it: the open row
+/// is the stronger "currently lives there" claim, so the re-statement's end
+/// bound is absorbed and the row stays open-ended.
+#[tokio::test]
+async fn bounded_restatement_does_not_close_open_row() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let first = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            None,
+            Some(parse_dt("2020-01-01T00:00:00Z")),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let second = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            None,
+            Some(parse_dt("2020-01-01T00:00:00Z")),
+            Some(parse_dt("2023-06-01T00:00:00Z")),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.id, first.id, "bounded re-statement must not insert");
+
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(locs.len(), 1);
+    assert!(
+        locs[0].valid_until.is_none(),
+        "open row must not be closed by a same-place re-statement"
+    );
+}
+
+/// End-to-end: two identical claims through `normalize_and_insert` — the
+/// second corroborates the first at the fact layer (same fact, no new row) and
+/// re-drives the overlay worker; the location row must not be duplicated.
+#[tokio::test]
+async fn corroborated_restatement_keeps_single_location_row() {
+    let (kg, _dir) = fresh_kg().await;
+    // `home_fact` defaults to an explicit `UserEdit` source, which always
+    // supersedes rather than corroborates; use a non-explicit interaction
+    // source so the second identical claim takes the corroboration path.
+    let mut first_fact = home_fact(Some("10 Downing St"), None, None, None);
+    first_fact.source_type = SourceType::Interaction;
+    let first = normalize_and_insert(
+        &kg,
+        vec![first_fact],
+        Provenance::chat(ExtractionMethod::LlmExtraction),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.inserted.len(), 1);
+
+    let mut second_fact = home_fact(Some("10 Downing St"), None, None, None);
+    second_fact.source_type = SourceType::Interaction;
+    let second = normalize_and_insert(
+        &kg,
+        vec![second_fact],
+        Provenance::chat(ExtractionMethod::LlmExtraction),
+    )
+    .await
+    .unwrap();
+    assert_eq!(second.inserted.len(), 1);
+    assert_eq!(
+        second.inserted[0].id, first.inserted[0].id,
+        "identical claim must corroborate the existing fact, not insert a new one"
+    );
+
+    let locs = subject_locations(&kg, first.inserted[0].subject_id).await;
+    assert_eq!(
+        locs.len(),
+        1,
+        "corroborated re-statement must not duplicate"
+    );
+}
+
+/// A start-less re-statement of a bounded open-ended row must widen the union
+/// to an unbounded start: `None` is an unbounded bound, so merging
+/// `2020-present` with a same-place claim of "until 2023" (no start) keeps the
+/// unbounded start rather than pinning it to 2020.
+#[tokio::test]
+async fn start_unbounded_restatement_keeps_unbounded_start() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let first = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            None,
+            Some(parse_dt("2020-01-01T00:00:00Z")),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let second = kg
+        .upsert_location(
+            entity.id,
+            LocationType::Home,
+            Some("10 Downing St"),
+            None,
+            None,
+            None,
+            None,
+            Some(parse_dt("2023-06-01T00:00:00Z")),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.id, first.id, "overlapping re-statement must merge");
+
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(locs.len(), 1);
+    assert!(
+        locs[0].valid_from.is_none(),
+        "union of a bounded and a start-unbounded statement must stay unbounded"
+    );
+    assert!(
+        locs[0].valid_until.is_none(),
+        "open-ended side must stay open in the union"
+    );
+}
+
+/// Two concurrent facade upserts of the same place must not race: the facade
+/// holds the shared write lock across the candidate lookup and the write, so
+/// the second call sees the first's row and merges instead of inserting a
+/// duplicate (issue #236).
+#[tokio::test]
+async fn concurrent_facade_upserts_of_same_place_keep_single_row() {
+    let (kg, _dir) = fresh_kg().await;
+    let entity = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let from = parse_dt("2020-01-01T00:00:00Z");
+    let kg = Arc::new(kg);
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let kg = Arc::clone(&kg);
+        handles.push(tokio::spawn(async move {
+            kg.upsert_location(
+                entity.id,
+                LocationType::Home,
+                Some("10 Downing St"),
+                Some(51.5034),
+                Some(-0.1276),
+                Some("Europe/London"),
+                Some(from),
+                None,
+                None,
+            )
+            .await
+            .unwrap()
+        }));
+    }
+    let first = handles.pop().unwrap().await.unwrap();
+    let second = handles.pop().unwrap().await.unwrap();
+    assert_eq!(
+        first.id, second.id,
+        "concurrent re-statements must merge into one row"
+    );
+
+    let locs = kg.get_locations(entity.id).await.unwrap();
+    assert_eq!(
+        locs.len(),
+        1,
+        "concurrent facade upserts must not duplicate the row"
+    );
+}

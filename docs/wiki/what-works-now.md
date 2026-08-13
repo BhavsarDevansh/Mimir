@@ -212,7 +212,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Pattern consolidation (nightly pass 6) | ❌ Not implemented | Pass logs "not yet implemented" and succeeds ([#67](https://github.com/BhavsarDevansh/Mimir/issues/67)). |
 | kb import / export | ❌ Not implemented | Obsidian / Markdown / CSV import-export ([#120](https://github.com/BhavsarDevansh/Mimir/issues/120), [#62](https://github.com/BhavsarDevansh/Mimir/issues/62)); bidirectional Obsidian watcher ([#66](https://github.com/BhavsarDevansh/Mimir/issues/66)). |
 | kb heatmap / reset polish | ❌ Not implemented | Deferred CLI commands ([#69](https://github.com/BhavsarDevansh/Mimir/issues/69)). |
-| Entity locations | 🟡 Partial | Write path, geocoding, proximity queries work; sensitive location facts get their overlay when confirmed ([#226](https://github.com/BhavsarDevansh/Mimir/issues/226)). Re-statement dedup is missing ([#228](https://github.com/BhavsarDevansh/Mimir/issues/228)); geocoder is not configurable ([#227](https://github.com/BhavsarDevansh/Mimir/issues/227)); a flaky batch test is tracked ([#230](https://github.com/BhavsarDevansh/Mimir/issues/230)). |
+| Entity locations | 🟡 Partial | Write path, geocoding, proximity queries work; sensitive location facts get their overlay when confirmed ([#226](https://github.com/BhavsarDevansh/Mimir/issues/226)); overlapping same-place re-statements are deduplicated instead of duplicating rows ([#228](https://github.com/BhavsarDevansh/Mimir/issues/228)). Geocoder is not configurable ([#227](https://github.com/BhavsarDevansh/Mimir/issues/227)); a flaky batch test is tracked ([#230](https://github.com/BhavsarDevansh/Mimir/issues/230)). |
 
 ### Events & Reminders
 
@@ -337,8 +337,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | kb import / export (Obsidian, Markdown, CSV) | [#120](https://github.com/BhavsarDevansh/Mimir/issues/120), [#62](https://github.com/BhavsarDevansh/Mimir/issues/62) |
 | Bidirectional Obsidian file watcher | [#66](https://github.com/BhavsarDevansh/Mimir/issues/66) |
 | kb heatmap / reset | [#69](https://github.com/BhavsarDevansh/Mimir/issues/69) |
-| Entity-location re-statement dedup | [#228](https://github.com/BhavsarDevansh/Mimir/issues/228) |
-| Location overlay on sensitive-fact confirmation | [#226](https://github.com/BhavsarDevansh/Mimir/issues/226) |
 | Geocoder configuration (disable, self-hosted, contact email) | [#227](https://github.com/BhavsarDevansh/Mimir/issues/227) |
 | Flaky tests: location batch, pending TTL, e2e migration | [#230](https://github.com/BhavsarDevansh/Mimir/issues/230), [#241](https://github.com/BhavsarDevansh/Mimir/issues/241), [#243](https://github.com/BhavsarDevansh/Mimir/issues/243) |
 | Memory pinning / deprioritisation | [#284](https://github.com/BhavsarDevansh/Mimir/issues/284) |

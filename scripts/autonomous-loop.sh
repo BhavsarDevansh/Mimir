@@ -509,5 +509,7 @@ log "autonomous loop started (interval: ${INTERVAL}s, sandbox: $SANDBOX)"
 while true; do
     run_iteration || warn "iteration exited with errors; continuing."
     log "sleeping ${INTERVAL}s until next iteration."
-    sleep "$INTERVAL"
+    # Close the lock fd in the sleep child so a killed loop never leaves an
+    # orphaned sleep holding the flock until its timer expires.
+    sleep "$INTERVAL" 9>&-
 done

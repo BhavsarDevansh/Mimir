@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.101.3] — 2026-08-13
+
+### Location-type spec drift fixed (issue #224)
+
+- **`location_types` taxonomy corrected to the seeded source of truth.** The #65 issue body and `VISION/09-Roadmap/Phase-2-Knowledge-Graph.md` listed `Previous(3) / Frequent(4) / EventLocation(5)`, but migration `001` and `models::enums::LocationType` seed `Visited(3) / Origin(4) / Current(5)` (plus `Geographic(6)` from migration `046`). The #65 body and the roadmap deliverable list now match the database and Rust enum, `docs/entity-locations.md` drops the obsolete drift note, `docs/knowledge-graph-schema.md` corrects the `location_types` row count to 6, and `docs/wiki/what-works-now.md` removes the resolved #222/#224 items from the stale-docs row.
+- Version bumped 0.101.2 → 0.101.3 (patch — backwards-compatible documentation update).
+
 ## [0.101.2] — 2026-08-13
 
 ### DRY: RateLimitConfig::nominatim() delegates to Default (issue #223)

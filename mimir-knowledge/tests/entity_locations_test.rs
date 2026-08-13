@@ -1293,6 +1293,7 @@ async fn corroborated_restatement_keeps_single_location_row() {
     )
     .await
     .unwrap();
+    assert_eq!(second.inserted.len(), 1);
     assert_eq!(
         second.inserted[0].id, first.inserted[0].id,
         "identical claim must corroborate the existing fact, not insert a new one"

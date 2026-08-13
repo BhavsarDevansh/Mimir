@@ -141,14 +141,26 @@ pub async fn upsert_location(
     // merge or move below is still atomic in its own transaction, and the
     // overlay worker's write lock serialises it against ingestion callers, so
     // the lookup cannot go stale on the pipeline paths.
+    //
+    // The WHERE clause pre-filters to rows whose period can overlap the
+    // incoming one (a SQL mirror of `ranges_overlap`), keeping the fetch
+    // proportional to the overlapping history rather than the entity's full
+    // location history; the exact overlap + same-place predicate is still
+    // applied in Rust below, so the SQL is a pre-filter only.
     let candidates: Vec<EntityLocation> = sqlx::query_as::<_, EntityLocation>(
         "SELECT id, entity_id, location_type_id, address, latitude, longitude, timezone, \
          valid_from, valid_until, source_fact_id, created_at \
          FROM entity_locations WHERE entity_id = ? AND location_type_id = ? \
+           AND (valid_from IS NULL OR ? IS NULL OR valid_from < ?) \
+           AND (? IS NULL OR valid_until IS NULL OR ? < valid_until) \
          ORDER BY created_at, id",
     )
     .bind(entity_id)
     .bind(location_type_id)
+    .bind(valid_until)
+    .bind(valid_until)
+    .bind(valid_from)
+    .bind(valid_from)
     .fetch_all(pool)
     .await?;
     let mut tx = pool.begin().await?;

@@ -198,7 +198,8 @@ row with the confirmed fact's bounds and `source_fact_id`, while rejecting it
 leaves no overlay and cascade-deletes the persisted shape; and the
 re-statement dedup matrix (issue #228) — open, timeless, identical-bounded,
 earlier-`valid_from` (bounds extension), missing-geo-half fill, coords-only
-within-radius, disjoint-periods-stay-distinct, bounded-does-not-close-open,
+within-radius, same-address-far-coords veto, coords-only beyond-radius,
+disjoint-periods-stay-distinct, bounded-does-not-close-open,
 different-address-still-supersedes, and an end-to-end corroborated re-statement
 through `normalize_and_insert`. The conversational path is covered by
 `extract/confirm_tests.rs`

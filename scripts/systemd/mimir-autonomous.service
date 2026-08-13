@@ -1,0 +1,15 @@
+[Unit]
+Description=Mimir autonomous development loop (single iteration)
+Wants=mimir-autonomous.timer
+
+[Service]
+Type=oneshot
+ExecStart=%h/Projects/Rust/Mimir/scripts/autonomous-loop.sh --once
+WorkingDirectory=%h/Projects/Rust/Mimir
+# Run with full access so codex can build, test, commit, push, and call gh.
+Environment=MIMIR_AUTONOMOUS_BYPASS=1
+Environment=MIMIR_AUTONOMOUS_INTERVAL=7200
+# Environment=MIMIR_AUTONOMOUS_MODEL=gpt-5.5
+StandardOutput=append:%h/.local/state/mimir/autonomous.log
+StandardError=append:%h/.local/state/mimir/autonomous.log
+TimeoutStartSec=2h

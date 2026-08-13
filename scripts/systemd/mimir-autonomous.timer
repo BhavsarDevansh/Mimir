@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Mimir autonomous development loop every 2 hours
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=2h
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

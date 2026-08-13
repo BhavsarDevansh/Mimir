@@ -1,0 +1,112 @@
+# Autonomous Development Loop
+
+> **Component:** `scripts/autonomous-loop.sh` (+ optional `scripts/systemd/` user timer)
+> **Status:** Active
+
+## Purpose
+
+A self-driving orchestration script that advances the Mimir repository toward a fully implemented feature set without human intervention. On each cadence tick (default every 2 hours; `MIMIR_AUTONOMOUS_INTERVAL` seconds) it drives the GitHub pull-request lifecycle and picks up new work from the issue tracker, delegating all coding work to `codex exec` subagents that load the project's `AGENTS.md` and the `gh-issue-tdd` / `gh-review-commit` skills. The script keeps all control flow in deterministic bash (git and `gh` calls) and only delegates open-ended engineering work (implementing, reviewing, addressing comments) to the agent, respecting the project rule that logic must live in deterministic code, not in prompts.
+
+## Design
+
+```
+autonomous-loop.sh
+├── run_iteration()                 # one pass, guarded by flock
+│   ├── git fetch origin --prune
+│   ├── branch == main      -> handle_main_branch()
+│   └── branch != main      -> handle_feature_branch()
+│       ├── no open PR      -> clean? checkout main + pull
+│       ├── draft PR        -> codex review+fix+push -> gh pr ready
+│       └── ready PR        -> unresolved comments? codex fix+push
+│                              else merge (CodeRabbit-skip aware) + back to main
+└── delegates coding to: codex exec (gh-issue-tdd, gh-review-commit skills)
+```
+
+### Branch detection
+
+`current_branch()` reads `git rev-parse --abbrev-ref HEAD`. A detached HEAD is treated as "go back to main and pull".
+
+### Cadence and the review loop
+
+With `MIMIR_AUTONOMOUS_INTERVAL=1800` (30 minutes) a typical issue lifecycle is: iteration 1 on main picks the next unblocked issue, implements it with TDD, updates docs, and pushes a DRAFT PR; iteration 2 (30 minutes later) runs a PR-style self-review against main, fixes every finding, and marks the PR ready; iteration 3 checks for unresolved review threads (CodeRabbit and human) and addresses them via the `gh-review-commit` skill; iteration 4 re-checks and merges once nothing is left open, then switches local main and pulls; iteration 5 (on main) picks the next ticket and the cycle repeats.
+
+### PR inspection
+
+- `pr_for_branch` — `gh pr list --head <branch> --state open`.
+- `pr_is_draft` — `gh pr view <num> --json isDraft`.
+- `count_unresolved_threads` — paginated `gh api graphql` over `reviewThreads`, counting nodes where `isResolved == false` and `isOutdated == false`. This is the source of truth for "are there open review comments" (CodeRabbit findings land here).
+- `has_changes_requested` — `gh pr view --json reviews` for any `CHANGES_REQUESTED` state.
+- `pr_mergeable` — gates merging on `mergeStateStatus` being `CLEAN`/`BEHIND`/`UNSTABLE`.
+
+### CodeRabbit skip handling
+
+`coderabbit_skipped()` inspects `coderabbitai` review bodies for the "out of reviews" / skipped-review message. A skipped review produces no threads, so the PR merges on the normal "no open comments" path; the skip is logged explicitly so the audit trail explains why the merge went ahead.
+
+### Issue selection
+
+`candidate_issues()` lists open issues and filters: issues with the `blocked` label are skipped; `help-wanted` issues are skipped unless the repo owner has commented after the agent's most recent question marker; issues carrying the active phase label (`phase-3` per `VISION/09-Roadmap`) are listed first, then everything else, each group sorted by ascending issue number. The top candidates (up to 5) are handed to `codex exec`, which reads the roadmap and `Mimir-Implementation-Context.md` to confirm the right one and then implements it via the `gh-issue-tdd` skill.
+
+### Issue hygiene
+
+The implementation prompt requires the agent to: fetch the full issue (all fields plus every comment via `gh issue view N --comments` and the issues API); verify the spec against the current codebase and update outdated issue bodies with the latest context; read the relevant VISION docs; when genuinely blocked, post the exact human requirements plus the `help-wanted` label and the `<!-- mimir-autonomous-question:N -->` marker instead of guessing; file new GitHub issues for out-of-scope problems (misplaced code, DRY violations, performance, bugs, security) using only existing labels; and keep README.md, docs/wiki/what-works-now.md and AGENTS.md accurate while updating docs.
+
+### Question / answer protocol
+
+When an issue needs clarification, the agent does not implement it. Instead it adds the `help-wanted` label (`gh issue edit <N> --add-label help-wanted`) and posts a comment whose final line is the hidden marker `<!-- mimir-autonomous-question:N -->`. `issue_questions_answered()` finds the latest comment containing that marker, records its timestamp and author, and returns true only if a later comment by a different author exists. This lets the loop revisit answered tickets on a future run while skipping tickets whose questions are still outstanding, and keeps the loop moving to a different ticket when a human is needed.
+
+### Delegation to `codex exec`
+
+`run_codex()` writes the prompt to a temp file and pipes it via stdin (`codex exec ... -`). Default sandbox is `danger-full-access` because the agent must build, run tests, commit, push, and call `gh`. Set `MIMIR_AUTONOMOUS_BYPASS=1` to pass `--dangerously-bypass-approvals-and-sandbox` for fully unattended operation (used by the systemd unit).
+
+## Configuration (environment variables)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MIMIR_AUTONOMOUS_INTERVAL` | `7200` | Seconds between iterations (loop mode); `1800` gives a 30-minute cadence. |
+| `MIMIR_AUTONOMOUS_SANDBOX` | `danger-full-access` | codex `-s` sandbox mode. |
+| `MIMIR_AUTONOMOUS_MODEL` | _unset_ | Override the codex model. |
+| `MIMIR_AUTONOMOUS_BYPASS` | `0` | `1` => `--dangerously-bypass-approvals-and-sandbox`. |
+| `MIMIR_AUTONOMOUS_LOG` | `$XDG_STATE_HOME/mimir/autonomous.log` | Log file path. |
+| `MIMIR_AUTONOMOUS_DRY_RUN` | `0` | `1` => dry run (print actions, skip codex). |
+
+## Running
+
+### One-off / loop
+
+```bash
+scripts/autonomous-loop.sh --once        # single iteration
+scripts/autonomous-loop.sh               # loop forever, 2h cadence
+MIMIR_AUTONOMOUS_INTERVAL=1800 scripts/autonomous-loop.sh   # loop forever, 30-min cadence
+scripts/autonomous-loop.sh --dry-run     # preview decisions
+```
+
+### systemd user timer (recommended for persistence)
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp scripts/systemd/mimir-autonomous.{service,timer} ~/.config/systemd/user/
+# edit the ExecStart/WorkingDirectory paths in the service if your checkout lives elsewhere
+systemctl --user daemon-reload
+systemctl --user enable --now mimir-autonomous.timer
+systemctl --user list-timers mimir-autonomous.timer
+```
+
+The timer fires `OnUnitActiveSec=2h` with `Persistent=true`, so missed runs while the machine was off are caught up on boot. Each run is a `oneshot` invocation of `--once`, so a crashed iteration cannot stall the cadence.
+
+### Stopping the loop
+
+For a foreground or `setsid`-detached run, kill the process (`pkill -f autonomous-loop.sh`) and any running `codex exec` child. For the systemd timer, run `systemctl --user disable --now mimir-autonomous.timer`. The `flock` on `$XDG_STATE_HOME/mimir/autonomous.lock` prevents overlapping iterations, so a killed run never leaves a stale lock behind.
+
+## Safety
+
+- A `flock` on `$XDG_STATE_HOME/mimir/autonomous.lock` prevents overlapping iterations.
+- Merging only happens when the PR is mergeable and no unresolved review threads remain; a CodeRabbit skip is logged and treated as a clear review.
+- The agent is instructed never to co-author commits, to follow `AGENTS.md` (including the no-unsafe policy and semantic versioning), and to only touch files referenced by review comments when addressing PR feedback.
+- All actions are timestamped in `autonomous.log`.
+
+## System connections
+
+- Reads `AGENTS.md`, `Mimir-Implementation-Context.md`, `VISION/09-Roadmap/`.
+- Uses the `gh-issue-tdd` and `gh-review-commit` codex skills (from `~/.codex/skills` and the `github@openai-curated` plugin).
+- Drives GitHub via `gh` (issues, PRs, review threads, merges, labels).
+- Drives git locally (fetch, branch, checkout, commit, push, delete).

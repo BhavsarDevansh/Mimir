@@ -35,6 +35,8 @@ overlay** alongside the usual subject–relationship–object triple. Mimir:
 The location row links back to the fact that produced it, so it's traceable and
 honours forgetting (forgetting the fact keeps the address but unlinks it).
 
+**Sensitive locations:** if a "where" fact is flagged sensitive, Mimir holds the location in limbo with the fact — no location row exists until you confirm it via the pending-fact flow (`kb audit`). Once you confirm, the location is recorded exactly like a non-sensitive one (geocoded, with the fact's time bounds). If the location write fails during confirmation, Mimir keeps the pending shape so the overlay can be retried instead of losing the location. If you reject the fact, nothing is stored at all.
+
 ## Location types
 
 `Home`, `Work`, `Visited`, `Origin`, `Current`, and `Geographic`.
@@ -87,7 +89,5 @@ skipped by proximity searches — they have no point to measure distance from.
   failures when many locations are remembered at once.
 - Locations don't carry their own confidence score yet — provenance is via the
   source fact.
-- A *sensitive* "where" fact is held for confirmation like any sensitive fact;
-  its location is applied once you confirm it (follow-up work).
 - Geocoder settings (self-hosted Nominatim endpoint, disable toggle) are not yet
   configurable — the public-instance defaults are used.

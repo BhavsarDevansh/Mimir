@@ -69,6 +69,7 @@ Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `0
 | `entity_merge_queue` | Pending entity deduplication tasks |
 | `trash` | Soft-deleted rows with full payload JSON |
 | `pending_event_meta` | Fact-keyed cache of the extracted event shape for pending sensitive facts; consumed on confirm, cascade-deleted on reject (migration 041) |
+| `pending_location_meta` | Fact-keyed cache of the extracted `NormalizedLocation` shape for pending sensitive "where" facts; consumed on confirm, cascade-deleted on reject (migration 048) |
 | `entity_fts` | FTS5 virtual table for entity name / alias search |
 | `optimization_runs` | One row per nightly-optimization run (started/finished, status, trigger) — migration `030` |
 | `optimization_pass_runs` | One row per pass within a run (pass name, status, counts, error) — migration `030` |
@@ -161,6 +162,10 @@ Migrations are strictly ordered by foreign-key dependencies:
 35. `042` — Connector instance registry: `connectors` + `connector_statuses` / `connector_auth_states` lookups (#179)
 36. `043` — `sources.connector_instance_id` FK migration (`connector_id TEXT` → integer FK to `connectors(id)`) (#180)
 37. `044` — `entity_locations.source_fact_id` FK for the location-overlay write path (#193)
+38. `045` — `entity_locations` coordinate index for proximity queries (#194)
+39. `046` — `Geographic` location type (id 6) for place coordinate anchoring (#196)
+40. `047` — Partial unique index on `entity_locations(entity_id)` scoped to `location_type_id = 6` (single `Geographic` row per place) (#196)
+41. `048` — `pending_location_meta` cache for sensitive-fact location shape across the confirmation boundary (#226)
 
 ---
 

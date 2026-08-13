@@ -41,6 +41,8 @@ mod process;
 mod sensitive;
 mod types;
 
-pub(crate) use overlay::{OverlayJob, start_location_overlay_worker};
+pub(crate) use overlay::{
+    LocationOverlayApply, OverlayJob, apply_location_overlay, start_location_overlay_worker,
+};
 pub use process::normalize_and_insert;
 pub use types::{ExtractionOutcome, NormalizedFact, NormalizedLocation, PendingFact, Provenance};

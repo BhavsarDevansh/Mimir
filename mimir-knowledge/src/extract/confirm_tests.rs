@@ -2,7 +2,9 @@ use super::*;
 
 use crate::clock::MockClock;
 use crate::extract::process_remember_output;
-use crate::extract::schema::{Classification, ExtractedFact, RememberOutput, Temporal};
+use crate::extract::schema::{
+    Classification, ExtractedFact, ExtractedLocation, RememberOutput, Temporal,
+};
 use chrono::{DateTime, Duration, Utc};
 
 /// Fresh KnowledgeGraph with a controllable clock for time-sensitive tests.
@@ -302,6 +304,119 @@ async fn confirm_legacy_pending_fact_without_future_date_creates_no_overlay() {
             .unwrap()
             .is_none(),
         "non-future legacy fact should not get an overlay"
+    );
+}
+
+/// A sensitive "where" fact must keep its structured location overlay across
+/// the confirmation boundary: `confirm_fact` rebuilds the `entity_locations`
+/// row (geocoding the missing half) from the shape persisted at extraction
+/// time (issue #226).
+#[tokio::test]
+async fn confirm_rebuilds_location_overlay_for_sensitive_where_fact() {
+    use mimir_core::geocoder::{GeocodeResult, MockGeocoder};
+
+    let start = DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+        .unwrap()
+        .into();
+    let (mut kg, _clock, _dir) = fresh_kg_with_clock(start).await;
+    kg.set_geocoder(std::sync::Arc::new(MockGeocoder::new().with_forward(Ok(
+        Some(GeocodeResult {
+            latitude: 51.5074,
+            longitude: -0.1278,
+            display_name: "London, Greater London, England, United Kingdom".to_string(),
+            short_name: Some("London".to_string()),
+            country: Some("United Kingdom".to_string()),
+            country_code: Some("gb".to_string()),
+            alternative_names: vec![],
+        }),
+    ))));
+
+    let outcome = process_remember_output(
+        &kg,
+        RememberOutput {
+            facts: vec![ExtractedFact {
+                classification: Classification::Explicit,
+                subject: "Devansh".to_string(),
+                subject_type: "Person".to_string(),
+                relationship_type: "lives_at".to_string(),
+                object: "10 Downing St".to_string(),
+                object_is_entity: false,
+                object_type: None,
+                temporal: Some(Temporal {
+                    valid_from: Some("2024-03-15T12:00:00Z".to_string()),
+                    valid_until: Some("2024-09-15T12:00:00Z".to_string()),
+                }),
+                is_sensitive: true,
+                correction_scope: None,
+                categories: vec!["230".to_string()],
+                recurrence: None,
+                requires_user_action: None,
+                location: Some(ExtractedLocation {
+                    location_type: Some("Home".to_string()),
+                    address: Some("10 Downing St, London".to_string()),
+                    latitude: None,
+                    longitude: None,
+                    timezone: Some("Europe/London".to_string()),
+                }),
+            }],
+        },
+    )
+    .await
+    .expect("extraction should succeed");
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected extraction errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(outcome.pending_confirmation.len(), 1);
+    let fact_id = outcome.pending_confirmation[0].fact_id;
+
+    let confirmed = kg
+        .confirm_fact(fact_id)
+        .await
+        .expect("confirm should succeed");
+
+    let locs = kg
+        .get_locations(confirmed.subject_id)
+        .await
+        .expect("locations should be readable");
+    assert_eq!(locs.len(), 1);
+    let loc = &locs[0];
+    assert_eq!(loc.location_type_id, LocationType::Home as i16);
+    assert_eq!(loc.address.as_deref(), Some("10 Downing St, London"));
+    assert!(
+        (loc.latitude.unwrap() - 51.5074).abs() < 1e-6,
+        "overlay must be forward-geocoded on confirm"
+    );
+    assert!((loc.longitude.unwrap() - -0.1278).abs() < 1e-6);
+    assert_eq!(loc.timezone.as_deref(), Some("Europe/London"));
+    assert_eq!(
+        loc.valid_from,
+        Some(start),
+        "confirmed fact's overlay must preserve the start bound"
+    );
+    assert_eq!(
+        loc.valid_until,
+        Some(
+            DateTime::parse_from_rfc3339("2024-09-15T12:00:00Z")
+                .unwrap()
+                .into()
+        ),
+        "confirmed fact's overlay must preserve the end bound"
+    );
+    assert_eq!(
+        loc.source_fact_id,
+        Some(fact_id),
+        "location row must link back to the confirmed fact"
+    );
+
+    // The consumed metadata must be cleaned up.
+    assert!(
+        queries::entity::get_pending_location_meta(kg.pool(), fact_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "pending_location_meta should be removed after confirm"
     );
 }
 

@@ -23,14 +23,22 @@ use crate::queries;
 ///
 /// This runs on the background [`location_overlay_worker`] (not the ingestion
 /// caller's task) so a connector batch of location facts is not gated on the
-/// geocoder's rate limit. Only the non-sensitive (inserted) path enqueues an
-/// overlay today; wiring the pending-confirmation path is tracked as follow-up
-/// work.
-async fn apply_location_overlay(
+/// geocoder's rate limit. The non-sensitive (inserted) path enqueues an
+/// [`OverlayJob::Apply`]; the pending-confirmation path (issue #226) rebuilds
+/// the overlay from `pending_location_meta` on [`confirm_fact`](crate::extract::confirm_fact)
+/// and calls this directly — a single user-initiated action, so the
+/// synchronous call is not a throughput concern.
+///
+/// Returns `true` when the location was persisted (or was a no-op with no geo
+/// data), and `false` when the `entity_locations` upsert failed. Callers that
+/// consume persisted overlay state — e.g. the confirm path deleting
+/// `pending_location_meta` — must only consume it on `true` so a failed write
+/// can be retried instead of losing the only location payload.
+pub(crate) async fn apply_location_overlay(
     pool: &sqlx::SqlitePool,
     write_lock: &std::sync::Arc<tokio::sync::Mutex<()>>,
     apply: LocationOverlayApply,
-) {
+) -> bool {
     let LocationOverlayApply {
         geocoder,
         entity_id,
@@ -41,7 +49,7 @@ async fn apply_location_overlay(
         place_anchor,
     } = apply;
     if !location.has_geo_data() {
-        return;
+        return true;
     }
 
     let has_coords = location.latitude.is_some() && location.longitude.is_some();
@@ -87,7 +95,7 @@ async fn apply_location_overlay(
     // the rate-limited network call does not block ingestion.
     let _write_guard = write_lock.lock().await;
 
-    if let Err(error) = queries::entity::upsert_location(
+    let upsert_ok = match queries::entity::upsert_location(
         pool,
         entity_id,
         location.location_type as i16,
@@ -101,8 +109,12 @@ async fn apply_location_overlay(
     )
     .await
     {
-        tracing::warn!("failed to persist location overlay for fact {fact_id}: {error}");
-    }
+        Ok(_) => true,
+        Err(error) => {
+            tracing::warn!("failed to persist location overlay for fact {fact_id}: {error}");
+            false
+        }
+    };
 
     // Anchor the place entity's own coordinates (Phase 3 C2 / #196). Only for
     // facts whose object is a Place (e.g. a `took_photo_at <place>` connector
@@ -132,6 +144,8 @@ async fn apply_location_overlay(
             );
         }
     }
+
+    upsert_ok
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.101.5] — 2026-08-13
+
+### Sensitive-fact location overlay hardened (PR #307 review)
+
+- **Atomic pending-fact + location-shape persistence.** The `pending_location_meta` insert now happens in the same transaction as the pending-fact insert (`insert_sensitive_fact`), so a confirmable fact can never exist without the shape confirmation needs to rebuild its `entity_locations` row; if either write fails, both roll back and the fact is reported as an error instead of being left confirmable without its location payload.
+- **Overlay meta consumed only on success.** `apply_location_overlay` now reports whether the `entity_locations` upsert succeeded, and `confirm_fact` deletes `pending_location_meta` only after a successful write — a failed write retains the shape (with a warning) so the overlay can be retried instead of losing the only location payload.
+- **Tests:** the confirm-path tests now supply a bounded `valid_until` and assert the confirmed location row preserves both temporal bounds (`mimir-knowledge/tests/entity_locations_test.rs`, `extract/confirm_tests.rs`).
+- **Docs:** `docs/entity-locations.md`, `docs/pending-fact-confirmation.md`, and `docs/wiki/entity-locations.md` updated for the atomic persistence and retention-on-failure behaviour.
+- Version bumped 0.101.4 → 0.101.5 (patch — backwards-compatible bug fixes).
+
+## [0.101.4] — 2026-08-13
+
+### Sensitive-fact location overlay rebuilt on confirmation (issue #226)
+
+- **Sensitive "where" facts keep their structured geo data across the confirmation boundary.** The entity-locations overlay was only applied on the non-sensitive (inserted) path; a sensitive location fact landed as `pending_confirmation` and `confirm_fact` never re-derived it, so a confirmed sensitive location fact lost its `entity_locations` row entirely. The sensitive path in `normalize::process_normalized_fact` now persists the `NormalizedLocation` shape into a new `pending_location_meta` table (migration `048`, the location analogue of `pending_event_meta`), and `extract::confirm_fact` rebuilds the overlay on confirmation — re-running the same geocode-fill + `upsert_location` with the confirmed fact's id and temporal bounds, then consuming the meta row. Rejecting the pending fact hard-deletes it, so `ON DELETE CASCADE` removes the meta row automatically and no orphan location row can be left behind.
+- **Tests:** integration coverage in `mimir-knowledge/tests/entity_locations_test.rs` (confirm produces a geocoded row with temporal bounds + `source_fact_id`; reject leaves nothing) and a conversational-path unit test in `extract/confirm_tests.rs`.
+- **Docs:** `docs/entity-locations.md` (pending-path section), `docs/pending-fact-confirmation.md`, `docs/knowledge-graph-schema.md` (new table + migration list 045–048), `docs/wiki/entity-locations.md`, and `docs/wiki/what-works-now.md`.
+- **API addition:** `LocationType` now implements `TryFrom<i16>` (matching the other `#[repr(i16)]` enums in `models/enums.rs`), so raw lookup ids convert with a fallible typed conversion instead of a manual match.
+- **Public API:** `queries::entity::{PendingLocationMeta, insert_pending_location_meta, get_pending_location_meta, delete_pending_location_meta}` — the `pending_location_meta` row model and its read/write/delete queries, mirroring the `queries::event` pending-event-meta API.
+- Version bumped 0.101.3 → 0.101.4 (patch — backwards-compatible bug fix).
+
 ## [0.101.3] — 2026-08-13
 
 ### Location-type spec drift fixed (issue #224)

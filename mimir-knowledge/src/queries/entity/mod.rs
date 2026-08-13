@@ -25,8 +25,10 @@ pub use dedup::{
     flag_overlapping_aliases,
 };
 pub use locations::{
-    close_prior_open_locations_in_tx, ensure_place_coordinates, get_locations, insert_location,
-    insert_location_in_tx, update_location, upsert_location,
+    PendingLocationMeta, close_prior_open_locations_in_tx, delete_pending_location_meta,
+    ensure_place_coordinates, get_locations, get_pending_location_meta, insert_location,
+    insert_location_in_tx, insert_pending_location_meta, insert_pending_location_meta_in_tx,
+    update_location, upsert_location,
 };
 pub use names::get_entity_names;
 pub use nearby::find_nearby;

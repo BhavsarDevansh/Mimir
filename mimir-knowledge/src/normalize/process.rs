@@ -262,7 +262,13 @@ async fn process_normalized_fact(
     // object text. Rust can only narrow (AND gate) — it never flags a fact as
     // sensitive when the producer did not.
     if crate::sensitivity::is_sensitive(is_sensitive, &new_fact.category_ids, &object) {
-        let fact = insert_sensitive_fact(kg, new_fact, now, relationship_type_id).await?;
+        // The location-overlay shape is persisted inside the same transaction
+        // as the pending fact (issue #226), so a confirmable fact can never
+        // exist without the shape `confirm_fact` needs to rebuild its
+        // `entity_locations` row.
+        let fact =
+            insert_sensitive_fact(kg, new_fact, now, relationship_type_id, location.as_ref())
+                .await?;
 
         // Only add to in-memory cache after successful commit.
         kg.pending_confirmations().write().await.insert(fact.id);

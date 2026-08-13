@@ -220,3 +220,126 @@ pub async fn update_location(
     .await?;
     Ok(record)
 }
+
+/// Persisted location-overlay shape for a pending sensitive fact, used to
+/// rebuild the `entity_locations` row on confirmation (issue #226).
+///
+/// Only the shape fields are stored: `entity_id` and the temporal bounds come
+/// from the confirmed fact, and `fact_id` from the row key. The row is
+/// consumed by [`delete_pending_location_meta`] once the overlay is rebuilt;
+/// rejecting the fact hard-deletes the row via `ON DELETE CASCADE`.
+#[derive(Debug, sqlx::FromRow)]
+pub struct PendingLocationMeta {
+    pub location_type_id: i16,
+    pub address: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub timezone: Option<String>,
+}
+
+/// Persist the location-overlay shape for a pending sensitive fact.
+///
+/// Idempotent (`ON CONFLICT DO UPDATE`) so re-extraction of the same pending
+/// fact refreshes the shape rather than failing.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_pending_location_meta(
+    pool: &SqlitePool,
+    fact_id: i32,
+    location_type_id: i16,
+    address: Option<&str>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    timezone: Option<&str>,
+) -> Result<(), KnowledgeError> {
+    let mut tx = pool.begin().await?;
+    insert_pending_location_meta_in_tx(
+        &mut tx,
+        fact_id,
+        location_type_id,
+        address,
+        latitude,
+        longitude,
+        timezone,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Persist the location-overlay shape for a pending sensitive fact inside an
+/// existing transaction.
+///
+/// The sensitive-fact insert and its overlay shape commit atomically (issue
+/// #226): a confirmable fact must never exist without the shape confirmation
+/// needs to rebuild its `entity_locations` row. Idempotent (`ON CONFLICT DO
+/// UPDATE`) so re-extraction of the same pending fact refreshes the shape
+/// rather than failing.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_pending_location_meta_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    fact_id: i32,
+    location_type_id: i16,
+    address: Option<&str>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    timezone: Option<&str>,
+) -> Result<(), KnowledgeError> {
+    sqlx::query(
+        "INSERT INTO pending_location_meta \
+         (fact_id, location_type_id, address, latitude, longitude, timezone) \
+         VALUES (?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(fact_id) DO UPDATE SET \
+          location_type_id = excluded.location_type_id, \
+          address = excluded.address, \
+          latitude = excluded.latitude, \
+          longitude = excluded.longitude, \
+          timezone = excluded.timezone",
+    )
+    .bind(fact_id)
+    .bind(location_type_id)
+    .bind(address)
+    .bind(latitude)
+    .bind(longitude)
+    .bind(timezone)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Read the persisted location-overlay shape for a pending sensitive fact, if
+/// any.
+///
+/// Returns `None` for pending facts that carried no location overlay (or that
+/// predate the `pending_location_meta` table); callers then skip the overlay
+/// rebuild entirely.
+pub async fn get_pending_location_meta(
+    pool: &SqlitePool,
+    fact_id: i32,
+) -> Result<Option<PendingLocationMeta>, KnowledgeError> {
+    let row = sqlx::query_as::<_, PendingLocationMeta>(
+        "SELECT location_type_id, address, latitude, longitude, timezone \
+         FROM pending_location_meta WHERE fact_id = ?",
+    )
+    .bind(fact_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Remove the persisted location-overlay shape once the overlay has been
+/// rebuilt on confirmation.
+///
+/// Call only after the overlay write has succeeded: on a failed write the row
+/// must be retained so the rebuild can be retried. Rejecting a fact
+/// hard-deletes the row via `ON DELETE CASCADE`, so this is only needed for
+/// the confirm path.
+pub async fn delete_pending_location_meta(
+    pool: &SqlitePool,
+    fact_id: i32,
+) -> Result<(), KnowledgeError> {
+    sqlx::query("DELETE FROM pending_location_meta WHERE fact_id = ?")
+        .bind(fact_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}

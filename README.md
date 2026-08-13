@@ -119,7 +119,7 @@ The full project vision, architecture, and design documentation lives in the `VI
 - `08-Architecture/` — Security, privacy, deployment, integration points
 - `09-Roadmap/` — Phased implementation plans
 
-Technical implementation docs (per-subsystem, including OAuth, testing, and the connector framework) live in `docs/`, and user-facing feature docs in `docs/wiki/`.
+Technical implementation docs (per-subsystem, including OAuth, testing, and the connector framework) live in [docs/](docs/), and user-facing feature docs in [docs/wiki/](docs/wiki/).
 
 ## License
 

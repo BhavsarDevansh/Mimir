@@ -46,8 +46,17 @@ pub fn parse_authorize_url(url: &str) -> Result<AuthorizeUrlParams, String> {
 
 /// Build the loopback callback URL a browser hits after the provider
 /// redirects: the `redirect_uri` plus the code and echoed CSRF state.
+///
+/// The code and state are appended as percent-encoded query pairs (a value
+/// containing `+`, `#`, `%`, or `&` must not be mangled or re-parsed as a
+/// different parameter), and an existing query on the redirect URI is
+/// preserved with the correct `&` separator.
 pub fn callback_url(redirect_uri: &str, code: &str, state: &str) -> String {
-    format!("{redirect_uri}?code={code}&state={state}")
+    let mut url = reqwest::Url::parse(redirect_uri).expect("redirect_uri is a valid URL");
+    url.query_pairs_mut()
+        .append_pair("code", code)
+        .append_pair("state", state);
+    url.to_string()
 }
 
 /// An opener that drives the loopback callback itself: parses the authorize
@@ -67,6 +76,7 @@ pub fn self_callback_opener(code: &'static str) -> impl Fn(&str) + Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
@@ -98,6 +108,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn callback_url_percent_encodes_reserved_characters_and_preserves_query() {
+        assert_eq!(
+            callback_url(
+                "http://127.0.0.1:43123/callback?existing=1",
+                "a+b/c",
+                "s#t&t"
+            ),
+            "http://127.0.0.1:43123/callback?existing=1&code=a%2Bb%2Fc&state=s%23t%26t"
+        );
+    }
+
     #[tokio::test]
     async fn self_callback_opener_drives_the_loopback_callback() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -114,12 +136,20 @@ mod tests {
         self_callback_opener("auth-code")(&authorize_url);
 
         // The fake browser must GET the loopback callback with the code and
-        // the CSRF state echoed — the request the real flow parses.
-        let (mut socket, _peer) = listener.accept().await.expect("callback connection");
+        // the CSRF state echoed — the request the real flow parses. Every
+        // wait is bounded so a broken opener fails the test with a clear
+        // message instead of hanging it.
+        let (mut socket, _peer) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("timed out waiting for the callback connection")
+            .expect("callback connection");
         let mut request = Vec::new();
         let mut chunk = [0u8; 128];
         loop {
-            let n = socket.read(&mut chunk).await.expect("read request");
+            let n = tokio::time::timeout(Duration::from_secs(5), socket.read(&mut chunk))
+                .await
+                .expect("timed out reading the callback request")
+                .expect("read request");
             if n == 0 {
                 break;
             }

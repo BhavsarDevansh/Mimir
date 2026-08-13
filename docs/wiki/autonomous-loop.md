@@ -33,7 +33,7 @@ If the loop starts an issue but realises it needs a clarification or a decision 
 - Run it via the provided systemd timer so it survives reboots, or leave a `setsid`-detached run going for a 30-minute cadence.
 - Keep `main` clean; the loop will not start new work on a dirty `main`.
 - Review merged PRs occasionally — the loop follows `AGENTS.md` but a human spot-check keeps it honest.
-- Watch `MIMIR_AUTONOMOUS_LOG` or `${XDG_STATE_HOME:-$HOME/.local/state}/mimir/autonomous.log` for a timestamped record of the agent's conversations. The loop logs what the agent says (and fatal codex errors), not the raw transcripts of files it read or commands it ran — those stay in codex's session files if you ever need them.
+- Watch `MIMIR_AUTONOMOUS_LOG` or `${XDG_STATE_HOME:-$HOME/.local/state}/mimir/autonomous.log` for a timestamped record of the agent's conversations. The loop logs what the agent says (and fatal codex errors) in the standard log colour, and shows the exact prompt text it sent to codex in green. It does not log the raw transcripts of files the agent read or commands it ran — those stay in codex's session files if you ever need them.
 
 ## How to start it
 

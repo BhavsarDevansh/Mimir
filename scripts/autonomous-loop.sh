@@ -74,11 +74,13 @@ mkdir -p "$LOG_DIR" "$LOG_FILE_DIR"
 CYAN=
 YELLOW=
 RED=
+GREEN=
 NORMAL=
 if [[ -t 2 ]] && command -v tput >/dev/null 2>&1; then
     CYAN="$(tput setaf 6 2>/dev/null || true)"
     YELLOW="$(tput setaf 3 2>/dev/null || true)"
     RED="$(tput setaf 1 2>/dev/null || true)"
+    GREEN="$(tput setaf 2 2>/dev/null || true)"
     NORMAL="$(tput sgr0 2>/dev/null || true)"
 fi
 
@@ -105,7 +107,7 @@ require() { command -v "$1" >/dev/null 2>&1 || { err "missing required tool: $1"
 # their output, patches, web searches and reasoning are dropped, so the log
 # never persists raw transcripts or the data the agent was reading.
 log_agent_stream() {
-    jq -R -r '
+    jq --unbuffered -R -r '
         (try (fromjson) catch empty)
         | if .type == "item.completed" and .item.type == "agent_message" then
               "AGENT\t" + (.item.text | split("\n") | join("\nAGENT\t"))
@@ -124,6 +126,17 @@ log_agent_stream() {
             emit "$level" "$color" "$line"
         done <<< "$text"
     done
+}
+
+# Log the exact text sent to codex (the prompt file), one line per entry, so
+# prompts stay visible in the log (and terminal) in green without mixing into
+# the agent's conversation record.
+log_prompt() {
+    local prompt_file="$1"
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        emit PROMPT "$GREEN" "$line"
+    done < "$prompt_file"
 }
 
 # Run a codex exec session with a prompt read from stdin.
@@ -147,11 +160,11 @@ run_codex() {
     args+=(-o "$RUN_DIR/last-message.txt")
     if [[ "$DRY_RUN" == "1" ]]; then
         log "DRY RUN: would invoke: codex ${args[*]} - < $prompt_file"
-        log "DRY RUN: prompt contents:"
-        sed 's/^/    | /' "$prompt_file" >&2
+        log_prompt "$prompt_file"
         return 0
     fi
     log "invoking codex exec (prompt in $prompt_file)"
+    log_prompt "$prompt_file"
     # --json turns the transcript into JSONL so log_agent_stream can keep only
     # the agent's conversation; the raw output no longer reaches the log.
     if codex "${args[@]}" --json - < "$prompt_file" 2>&1 | log_agent_stream; then

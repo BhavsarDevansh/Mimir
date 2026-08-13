@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.101.9] — 2026-08-14
+
+### Autonomous loop: visible prompts and live agent logging
+
+- **Prompts logged in green.** `scripts/autonomous-loop.sh` now logs the exact prompt text sent to each `codex exec` session as `[PROMPT]` entries (green on a terminal) in `autonomous.log`, so a run shows activity immediately and the full input is auditable. `log_prompt()` also replaces the dry-run prompt echo.
+- **Live agent messages.** The JSONL filter now runs `jq --unbuffered`, so `[AGENT]` messages are appended to the log the moment codex emits them instead of being held in jq's output buffer until the session exits; an interrupted session no longer loses the messages that already arrived.
+- **Docs:** `docs/autonomous-loop.md` and `docs/wiki/autonomous-loop.md` describe the `[PROMPT]`/`[AGENT]` log format and live streaming.
+- Version bumped 0.101.8 → 0.101.9 (patch — backwards-compatible change to a developer tool).
+
 ## [0.101.8] — 2026-08-14
 
 ### Autonomous loop logs only the agent's conversation

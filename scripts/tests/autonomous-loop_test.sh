@@ -14,7 +14,8 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # Point the loop's log at a temp file before sourcing so emit() writes there.
 export MIMIR_AUTONOMOUS_LOG="$LOG_FILE"
-trap 'rm -f "$LOG_FILE"' EXIT
+PROMPT_FILE="$(mktemp)"
+trap 'rm -f "$LOG_FILE" "$PROMPT_FILE"' EXIT
 
 # shellcheck source=../autonomous-loop.sh
 source "$SCRIPT_DIR/autonomous-loop.sh"
@@ -61,4 +62,11 @@ printf '%s\n' '{"type":"error","message":"You have hit your usage limit."}' \
 logged "usage limit" || fail "codex error not logged"
 logged "turn failed" || fail "turn.failed error not logged"
 
-echo "all autonomous-loop log-filter tests passed"
+# 6. Prompts sent to codex are logged verbatim with a [PROMPT] marker.
+printf 'Implement issue #42.\n\nFollow AGENTS.md strictly.\n' > "$PROMPT_FILE"
+log_prompt "$PROMPT_FILE" >/dev/null 2>&1
+logged "Implement issue #42" || fail "prompt line 1 not logged"
+logged "Follow AGENTS.md strictly" || fail "prompt line 3 not logged"
+grep -q "\[PROMPT\]" "$LOG_FILE" || fail "prompt lines lack the [PROMPT] marker"
+
+echo "all autonomous-loop log tests passed"

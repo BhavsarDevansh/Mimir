@@ -18,6 +18,7 @@
   - **Verify alternatives:** Check if simpler or more modern alternatives exist before committing to a library or pattern.
 - Ensure **performance and security** are at the forefront of all decisions.
 - Use the **smallest data type needed** for efficient memory utilization. Be smart at initialization (e.g., prefer `u8` over `u16` when sufficient), but do not cast existing values defined by libraries unless absolutely necessary.
+- **Test-only infrastructure lives behind off-by-default `test-*` features** (e.g. `test-mock-oauth`, `test-utils`) so production builds never compile it; a crate's own unit tests may compile such modules via `cfg(test)`, and downstream crates opt in through dev-dependencies.
 
 ## Documentation
 - After each set of changes, create/update technical documentation in `docs/`.

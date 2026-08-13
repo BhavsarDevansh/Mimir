@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.100.0] — 2026-08-12
+
+### DRY: shared OAuth fake-browser test doubles (issue #290)
+
+- **`mimir-connectors::test_utils` (feature `test-utils`, off by default).** The `self_callback_opener` fake-browser helper was duplicated verbatim across `mimir-connectors/src/oauth/pkce.rs` (unit tests) and `mimir/src/connector/tests.rs` (CLI add/auth e2e tests), introduced by A4 / #205. The shared module now owns the drift-prone pieces once: `parse_authorize_url` (redirect URI + CSRF state extraction), `callback_url` (code + state echo), and `self_callback_opener(code)` (drives the loopback callback). The crate's own unit tests compile the module via `cfg(test)`; downstream crates opt in with the feature (the `mimir` binary's dev-dependencies enable it). No new dependencies — the helpers only use `reqwest` and `tokio`, both already unconditional.
+- **Both test suites refactored onto the shared helper.** `oauth::pkce` tests dropped their local copy and the two inline variant openers (wrong-state, favicon-probe) now build on `parse_authorize_url` / `callback_url`; `mimir/src/connector/tests.rs` imports `self_callback_opener("auth-code")` at both call sites. The e2e openers (`browser_opener` in `mimir-connectors/tests/oauth_pkce_e2e.rs`, the `$BROWSER` curl script in `mimir/tests/connector_oauth_e2e.rs`) stay separate because they must accept the mock's self-signed certificate and follow the redirect — different mechanics, not the same drift-prone code.
+- **Docs:** `docs/oauth-client.md`, `docs/e2e-testing.md`, `docs/wiki/Testing-and-Benchmarks.md`, `docs/wiki/what-works-now.md` (#290 row removed), `README.md`, `AGENTS.md` (test-only feature convention), and `Mimir-Implementation-Context.md` updated.
+- **Review fixes (PR #297):** `callback_url` now appends `code`/`state` as percent-encoded query pairs via a URL query builder (reserved characters such as `+`, `#`, `%`, `&` are no longer mangled, and an existing query on the redirect URI is preserved with the correct separator), the loopback test bounds every accept/read wait with a 5-second deadline so a broken opener fails fast instead of hanging, and the README documentation references are clickable links.
+- Version bumped 0.99.0 → 0.100.0 (minor — backwards-compatible refactor of test infrastructure).
+
 ## [0.99.0] — 2026-08-12
 
 ### Phase 3 T2 — mock OAuth server + PKCE/rate-limit/supervisor E2E tests (issue #207)

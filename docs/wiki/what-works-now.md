@@ -355,7 +355,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | Connector catalog route + CLI discovery | [#271](https://github.com/BhavsarDevansh/Mimir/issues/271) |
 | Secret ingestion via env/stdin (no process-list leak) | [#270](https://github.com/BhavsarDevansh/Mimir/issues/270) |
 | CLI: `key=value` config pairs cannot express JSON arrays (scopes silently dropped) | [#289](https://github.com/BhavsarDevansh/Mimir/issues/289) |
-| DRY: `self_callback_opener` test helper duplicated across crates | [#290](https://github.com/BhavsarDevansh/Mimir/issues/290) |
 | OS-keyring secret backend | [#188](https://github.com/BhavsarDevansh/Mimir/issues/188) |
 | Supervisor start/resume race | [#266](https://github.com/BhavsarDevansh/Mimir/issues/266) |
 | Enum→wire-string conversion robustness | [#264](https://github.com/BhavsarDevansh/Mimir/issues/264) |

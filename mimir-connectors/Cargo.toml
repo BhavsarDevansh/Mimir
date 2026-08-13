@@ -181,6 +181,13 @@ mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
 
 [features]
 default = ["photos", "calendar", "gmail"]
+## Shared OAuth test doubles (issue #290): the fake-browser `self_callback_opener`
+## and `parse_authorize_url` helpers used by the PKCE flow unit tests and the
+## `mimir` binary's CLI connector tests. Test-only, off by default; the crate's
+## own unit tests compile the module via `cfg(test)` regardless. No extra
+## dependencies: the helpers only use `reqwest` and `tokio`, both already
+## unconditional dependencies.
+test-utils = []
 ## Google Photos / Apple Photos / local photo library ingestion (C1–C2).
 photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"]
 ## Shared OAuth 2.0 client + refresh helpers (issue #240): `oauth2` 5.0.0 with

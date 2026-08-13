@@ -89,7 +89,5 @@ skipped by proximity searches — they have no point to measure distance from.
   failures when many locations are remembered at once.
 - Locations don't carry their own confidence score yet — provenance is via the
   source fact.
-- A *sensitive* "where" fact is held for confirmation like any sensitive fact;
-  its location is applied once you confirm it (follow-up work).
 - Geocoder settings (self-hosted Nominatim endpoint, disable toggle) are not yet
   configurable — the public-instance defaults are used.

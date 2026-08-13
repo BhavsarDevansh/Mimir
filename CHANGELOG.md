@@ -8,6 +8,7 @@
 - **Tests:** integration coverage in `mimir-knowledge/tests/entity_locations_test.rs` (confirm produces a geocoded row with temporal bounds + `source_fact_id`; reject leaves nothing) and a conversational-path unit test in `extract/confirm_tests.rs`.
 - **Docs:** `docs/entity-locations.md` (pending-path section), `docs/pending-fact-confirmation.md`, `docs/knowledge-graph-schema.md` (new table + migration list 045–048), `docs/wiki/entity-locations.md`, and `docs/wiki/what-works-now.md`.
 - **API addition:** `LocationType` now implements `TryFrom<i16>` (matching the other `#[repr(i16)]` enums in `models/enums.rs`), so raw lookup ids convert with a fallible typed conversion instead of a manual match.
+- **Public API:** `queries::entity::{PendingLocationMeta, insert_pending_location_meta, get_pending_location_meta, delete_pending_location_meta}` — the `pending_location_meta` row model and its read/write/delete queries, mirroring the `queries::event` pending-event-meta API.
 - Version bumped 0.101.3 → 0.101.4 (patch — backwards-compatible bug fix).
 
 ## [0.101.3] — 2026-08-13

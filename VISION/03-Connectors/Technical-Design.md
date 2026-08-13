@@ -57,7 +57,7 @@ pub trait Connector: Send + Sync {
 }
 ```
 
-Key differences from the pre-F6 design: `authenticate` takes no arguments (credentials are injected at construction by the factory / secret store, per decision D′), `sync` buffers raw items internally and returns a `SyncOutcome` instead of `Vec<RawEvent>`, `extract` drains that buffer into `Vec<NormalizedFact>` (no `RawEvent` / `ExtractedFact` types exist), and every method takes `&self` (shared-reference friendly, matching the workspace `Tool` trait) so the trait is callable through the shared `Arc<dyn Connector>` storage used by the registry and supervisor.
+Key differences from the pre-F6 design: `authenticate` takes no arguments (credentials are injected at construction by the factory / secret store, per decision D′), `sync` buffers raw items internally and returns a `SyncOutcome` instead of `Vec<RawEvent>`, `extract` drains that buffer into `Vec<NormalizedFact>` (no `RawEvent` or connector-side `ExtractedFact` type exists — the conversational `ExtractedFact` in `mimir-knowledge::extract` is a separate type), and every method takes `&self` (shared-reference friendly, matching the workspace `Tool` trait) so the trait is callable through the shared `Arc<dyn Connector>` storage used by the registry and supervisor.
 
 ### ConnectorFactory
 

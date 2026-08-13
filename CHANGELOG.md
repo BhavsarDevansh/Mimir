@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.101.2] — 2026-08-13
+
+### DRY: RateLimitConfig::nominatim() delegates to Default (issue #223)
+
+- **Single source of truth for the conservative rate-limit preset.** `RateLimitConfig::nominatim()` in `mimir-connectors/src/rate_limit/config.rs` was byte-identical to the `Default` impl (1 req/s, burst 1, no daily quota, exponential backoff), so the two could silently drift apart. The preset now delegates to `Self::default()` and keeps its named constructor for call-site readability; a regression test asserts `nominatim() == default()` so any future divergence fails CI.
+- **Docs:** `docs/connector-rate-limiting.md` (Presets section) notes the preset is the default config, and `docs/wiki/what-works-now.md` drops the resolved #223 item from the Geocoder row.
+- Version bumped 0.101.1 → 0.101.2 (patch — backwards-compatible refactor, no behaviour change).
+
 ## [0.101.1] — 2026-08-13
 
 ### Connector design doc sync (issue #222) + autonomous-loop logging hardening

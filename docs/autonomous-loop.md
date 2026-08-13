@@ -58,6 +58,10 @@ When an issue needs clarification, the agent does not implement it. Instead it a
 
 `run_codex()` writes the prompt to a temp file and pipes it via stdin (`codex exec ... -`). Default sandbox is `workspace-write`. Set `MIMIR_AUTONOMOUS_BYPASS=1` to pass `--dangerously-bypass-approvals-and-sandbox` only when fully unattended full-access operation is explicitly required. Set `MIMIR_AUTONOMOUS_CODEX_ARGS` to a word-split string of extra codex CLI flags that take full control of the provider, sandbox, model and config overrides — for example `"--oss -m deepseek-v4-flash:cloud --yolo --config model_reasoning_effort=max --config model_context_window=1000000"` runs every delegated session on the OSS deepseek backend with full access and a 1M context window. When `MIMIR_AUTONOMOUS_CODEX_ARGS` is set, `MIMIR_AUTONOMOUS_SANDBOX`, `MIMIR_AUTONOMOUS_MODEL` and `MIMIR_AUTONOMOUS_BYPASS` are ignored.
 
+### Conversation-only logging
+
+`run_codex()` invokes codex with `--json` and pipes the JSONL event stream through `log_agent_stream()`, which keeps only the agent's conversational messages (`agent_message` items) and fatal codex errors (`error` / `turn.failed` events) and drops everything else. File contents the agent read, shell commands and their output, patches, web searches and reasoning never reach `autonomous.log` (or the terminal), so the log stays a readable, grep-friendly conversation record and never persists sensitive data. Full raw transcripts remain available in codex's own session files under `~/.codex/sessions/`. The filtering is covered by `scripts/tests/autonomous-loop_test.sh`, which feeds a realistic `codex exec --json` fixture through the filter and asserts transcripts never leak into the log.
+
 ## Configuration (environment variables)
 
 | Variable | Default | Meaning |
@@ -104,7 +108,7 @@ For a foreground or `setsid`-detached run, kill the process (`pkill -f autonomou
 - A `flock` on `${XDG_STATE_HOME:-$HOME/.local/state}/mimir/autonomous.lock` prevents overlapping iterations.
 - Merging only happens when GitHub reports the PR merge state as `CLEAN` and no unresolved review threads remain; a CodeRabbit skip is logged and treated as a clear review only when those merge gates are also satisfied.
 - The agent is instructed never to co-author commits, to follow `AGENTS.md` (including the no-unsafe policy and semantic versioning), and to only touch files referenced by review comments when addressing PR feedback.
-- All actions are timestamped in `autonomous.log`.
+- The orchestrator's actions and the agent's messages are timestamped in `autonomous.log`; the raw codex transcript (file contents, shell commands, patches) is never written to it.
 
 ## System connections
 

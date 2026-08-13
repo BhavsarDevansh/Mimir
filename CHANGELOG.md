@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.101.8] — 2026-08-14
+
+### Autonomous loop logs only the agent's conversation
+
+- **Conversation-only logging.** `scripts/autonomous-loop.sh` now runs `codex exec --json` and filters the JSONL event stream through a new `log_agent_stream()` helper, so `autonomous.log` records the agent's messages (and fatal codex errors) instead of the raw transcript. File contents the agent read, shell commands and their output, patches, web searches and reasoning no longer reach the log; full transcripts remain available in codex's session files under `~/.codex/sessions/`.
+- **Sourceable for tests.** The script's entry point is now guarded (`main` runs only when executed directly), and a new `scripts/tests/autonomous-loop_test.sh` exercises the filter against a realistic `codex exec --json` fixture, asserting that transcript content never leaks into the log.
+- **Docs:** `docs/autonomous-loop.md` gains a "Conversation-only logging" section; `docs/wiki/autonomous-loop.md` describes the log as a conversation record.
+- Version bumped 0.101.7 → 0.101.8 (patch — backwards-compatible change to a developer tool).
+
 ## [0.101.7] — 2026-08-13
 
 ### Entity-location dedup hardened (PR #308 review)

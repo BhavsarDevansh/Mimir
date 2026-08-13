@@ -99,6 +99,33 @@ err()  { emit ERROR "$RED" "$@"; }
 
 require() { command -v "$1" >/dev/null 2>&1 || { err "missing required tool: $1"; exit 1; }; }
 
+# Read `codex exec --json` output (JSONL on stdout, possibly mixed with stray
+# stderr lines) and forward only what belongs in the conversation log: the
+# agent's messages and fatal codex errors. File contents, shell commands and
+# their output, patches, web searches and reasoning are dropped, so the log
+# never persists raw transcripts or the data the agent was reading.
+log_agent_stream() {
+    jq -R -r '
+        (try (fromjson) catch empty)
+        | if .type == "item.completed" and .item.type == "agent_message" then
+              "AGENT\t" + (.item.text | split("\n") | join("\nAGENT\t"))
+          elif .type == "error" then
+              "ERROR\t" + (.message | split("\n") | join("\nERROR\t"))
+          elif .type == "turn.failed" then
+              "ERROR\t" + ((.error.message // "") | split("\n") | join("\nERROR\t"))
+          else empty
+          end
+    ' | while IFS=$'\t' read -r level text; do
+        [[ -n "$level" ]] || continue
+        local color="$CYAN"
+        [[ "$level" == "ERROR" ]] && color="$RED"
+        while IFS= read -r line; do
+            [[ -n "$line" ]] || continue
+            emit "$level" "$color" "$line"
+        done <<< "$text"
+    done
+}
+
 # Run a codex exec session with a prompt read from stdin.
 run_codex() {
     local prompt_file="$1"
@@ -125,7 +152,9 @@ run_codex() {
         return 0
     fi
     log "invoking codex exec (prompt in $prompt_file)"
-    if codex "${args[@]}" - < "$prompt_file" 2>&1 | tee -a "$LOG_FILE"; then
+    # --json turns the transcript into JSONL so log_agent_stream can keep only
+    # the agent's conversation; the raw output no longer reaches the log.
+    if codex "${args[@]}" --json - < "$prompt_file" 2>&1 | log_agent_stream; then
         return 0
     else
         local rc=$?
@@ -512,6 +541,7 @@ run_iteration() {
 # ---------------------------------------------------------------------------
 # Args & main
 # ---------------------------------------------------------------------------
+main() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --once) ONCE=1; shift ;;
@@ -561,3 +591,10 @@ while true; do
     # orphaned sleep holding the flock until its timer expires.
     sleep "$INTERVAL" 9>&-
 done
+}
+
+# Only run the loop when executed directly; sourcing the script (as the tests
+# do) must only define the helpers above.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

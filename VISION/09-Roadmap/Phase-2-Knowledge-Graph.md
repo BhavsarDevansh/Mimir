@@ -27,7 +27,7 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
   - `entity_date_types` — lookup (Birthday, Anniversary, Appointment, Deadline, RecurringEvent)
   - `recurrence_types` — lookup (None, Yearly, Monthly, Weekly, Daily)
   - `entity_locations` — geographic properties (schema + stubs for Phase 2)
-  - `location_types` — lookup (Home, Work, Previous, Frequent, EventLocation)
+  - `location_types` — lookup (Home, Work, Visited, Origin, Current)
   - `facts` — directed, temporal edges between entities
   - `fact_statuses` — lookup (Active, Inferred, Disputed, Corrected, Superseded, Forgotten)
   - `fact_dependencies` — junction: (parent_fact_id, child_fact_id, relation_type_id)

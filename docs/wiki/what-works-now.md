@@ -384,7 +384,7 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | `--no-default-features --all-targets` build | [#277](https://github.com/BhavsarDevansh/Mimir/issues/277) |
 | Intra-doc link warnings in `mimir-connectors` | [#276](https://github.com/BhavsarDevansh/Mimir/issues/276) |
 | `tabled` 0.21 / proc-macro-error2 future rejection | [#275](https://github.com/BhavsarDevansh/Mimir/issues/275) |
-| Stale docs: connectors framework, VISION technical design, location types, markdown reflow | [#274](https://github.com/BhavsarDevansh/Mimir/issues/274), [#260](https://github.com/BhavsarDevansh/Mimir/issues/260), [#222](https://github.com/BhavsarDevansh/Mimir/issues/222), [#224](https://github.com/BhavsarDevansh/Mimir/issues/224), [#245](https://github.com/BhavsarDevansh/Mimir/issues/245) |
+| Stale docs: connectors framework, VISION technical design, markdown reflow | [#274](https://github.com/BhavsarDevansh/Mimir/issues/274), [#260](https://github.com/BhavsarDevansh/Mimir/issues/260), [#245](https://github.com/BhavsarDevansh/Mimir/issues/245) |
 
 ---
 

@@ -30,9 +30,7 @@ Columns: `id`, `entity_id`, `location_type_id`, `address`, `latitude`,
 
 `location_types` (migration `001`) is `Home(1)`, `Work(2)`, `Visited(3)`,
 `Origin(4)`, `Current(5)`, `Geographic(6)` (added in migration `046` for
-Phase 3 C2 / #196), mirrored by `models::enums::LocationType`. (The issue text
-that named `Previous/Frequent/EventLocation` predates Phase 2 and is stale; the
-actual enum is the source of truth.)
+Phase 3 C2 / #196), mirrored by `models::enums::LocationType`.
 
 `Geographic` is distinct from the person-location types above: a `Place`
 entity does not "visit" a location, it *is* one. The Photos connector (C2)

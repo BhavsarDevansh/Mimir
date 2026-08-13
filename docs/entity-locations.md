@@ -108,10 +108,12 @@ the inserted fact's temporal bounds. Per job:
    stored with whatever data it carries and the pipeline never aborts on a
    geocode failure. With no geocoder injected, the missing half stays empty.
 2. **Upsert** via `queries::entity::upsert_location` (shared by the
-   `KnowledgeGraph::upsert_location` facade): close any still-open location of
-   the same `entity_id` + `location_type` whose `valid_from` is before the new
-   `valid_from` (set its `valid_until = new.valid_from`), then insert the new
-   row with `source_fact_id = fact_id`. Atomic in one transaction.
+   `KnowledgeGraph::upsert_location` facade): a same-place re-statement is
+   deduplicated (see [Re-statement deduplication](#re-statement-deduplication-issue-228)),
+   otherwise any still-open location of the same `entity_id` + `location_type`
+   whose `valid_from` is before the new `valid_from` is closed (its
+   `valid_until` set to `new.valid_from`), then the new row is inserted with
+   `source_fact_id = fact_id`. Atomic in one transaction.
 
 `KnowledgeGraph::flush_location_overlays` is a barrier that awaits every
 overlay enqueued before the call, for deterministic graceful shutdown / tests.
@@ -143,6 +145,19 @@ without depending on `mimir-connectors`); the Nominatim default backend lives
 in `mimir-connectors` and is injected by the server at startup
 (`AppState::from_config_with_llm`).
 
+## Re-statement deduplication (issue #228)
+
+Unlike facts — where `insert_fact_in_tx` corroborates a re-statement from an independent source by adding a source row and boosting confidence instead of inserting a duplicate — `entity_locations` originally had no dedup concept: re-stating the same home (same address or coordinates, same `location_type`, a new `valid_from`) closed the prior open-ended row and inserted a duplicate with identical shape but different bounds, creating two rows for one continuous home.
+
+`upsert_location` now treats an incoming location as a **re-statement** when it is the same place as an existing row of the same `entity_id` + `location_type` whose period overlaps it, and folds it into that row instead of superseding:
+
+- **Same-place identity** (`same_place`): a shared attribute that disagrees is a veto — different addresses, or coordinate pairs more than `SAME_PLACE_RADIUS_KM` (0.1 km, roughly consumer-GPS precision at one property) apart, mean different places even when the other attribute alone would suggest a match (a geocoder can return nearby points for different addresses, and vice versa). Otherwise the strongest shared agreement decides: both addresses present and equal, or both coordinate pairs within the radius. Rows sharing no attribute (one address-only, one coords-only) cannot be linked and take the move path.
+- **Temporal overlap** (`queries::fact::ranges_overlap`): the same place at disjoint periods (a gap in between) stays two rows — only overlapping claims merge.
+- **Merge**: the existing row absorbs the interval union of the bounds (earliest definite `valid_from`, latest definite `valid_until`; either side open-ended when any statement is open-ended on that side, so a same-place re-statement never closes an open "currently lives there" row) and any shape fields it is missing (`address` / `latitude` / `longitude` / `timezone` are `COALESCE`-filled). `source_fact_id` is left pointing at the row's original fact — location-level source tracking remains deferred (see the no-confidence note in [Data model](#data-model)).
+- **Return value**: the merged existing row is returned; no new row is inserted and no other rows are closed. When no re-statement matches, the move/supersession path runs exactly as before.
+
+The re-statement lookup runs on a separate read *before* the transaction — a deferred transaction that read first and wrote second would hit the WAL stale-snapshot `SQLITE_BUSY` (issue #236) whenever the supervisor's bookkeeping writes (cursor/status) committed in between, which flaked the photos-connector tests. The merge or move itself is atomic in its own transaction, and the overlay worker's write lock serialises it against ingestion callers, so the lookup cannot go stale on the pipeline paths.
+
 ## Pending (sensitive) path (issue #226)
 
 Sensitive "where" facts land as `pending_confirmation` like any sensitive fact, and the overlay is **not** applied while the fact is pending — no `entity_locations` row exists until the user confirms it. To keep the structured geo data across the confirmation boundary, the sensitive path in `normalize::process_normalized_fact` persists the `NormalizedLocation` shape into the `pending_location_meta` table (migration `048`, the location analogue of `pending_event_meta` for events): typed `location_type_id` FK plus `address` / `latitude` / `longitude` / `timezone`, keyed on the pending `fact_id` with `ON DELETE CASCADE`. The shape insert happens in the **same transaction** as the pending-fact insert (`insert_sensitive_fact`), so a confirmable fact can never exist without the shape confirmation needs to rebuild its row — if either write fails, both roll back and the fact is reported as an error rather than left confirmable without its location payload.
@@ -153,7 +168,8 @@ Sensitive "where" facts land as `pending_confirmation` like any sensitive fact, 
 
 - `KnowledgeGraph::upsert_location(entity_id, location_type, address, lat, lng,
   timezone, valid_from, valid_until, source_fact_id)` — move/supersession
-  semantics; the recommended write path.
+  semantics with same-place re-statement dedup (issue #228); the recommended
+  write path.
 - `KnowledgeGraph::insert_location(...)` — direct seed, no supersession.
 - `KnowledgeGraph::get_locations(entity_id)` — list an entity's locations.
 - `KnowledgeGraph::update_location(id, address, lat, lng, timezone)` — partial
@@ -176,11 +192,16 @@ geocode; coords-only reverse geocode; both-present no-geocode; no-geocoder
 address-only; geocoder-error tolerance; move supersession; connector-provenance
 overlay; a batch of location facts persisted after a flush; correction overlays
 (no-scope and datetime-scope) using the inserted fact's bounds to supersede a
-prior open location; the facade upsert directly; and the sensitive-path
-lifecycle (issue #226) — confirming a sensitive "where" fact produces the same
-geocoded row with the confirmed fact's bounds and `source_fact_id`, while
-rejecting it leaves no overlay and cascade-deletes the persisted shape. The
-conversational path is covered by `extract/confirm_tests.rs`
+prior open location; the facade upsert directly; the sensitive-path lifecycle
+(issue #226) — confirming a sensitive "where" fact produces the same geocoded
+row with the confirmed fact's bounds and `source_fact_id`, while rejecting it
+leaves no overlay and cascade-deletes the persisted shape; and the
+re-statement dedup matrix (issue #228) — open, timeless, identical-bounded,
+earlier-`valid_from` (bounds extension), missing-geo-half fill, coords-only
+within-radius, disjoint-periods-stay-distinct, bounded-does-not-close-open,
+different-address-still-supersedes, and an end-to-end corroborated re-statement
+through `normalize_and_insert`. The conversational path is covered by
+`extract/confirm_tests.rs`
 (`confirm_rebuilds_location_overlay_for_sensitive_where_fact`).
 
 <a id="proximity-query"></a>

@@ -44,11 +44,16 @@ impl KnowledgeGraph {
 
     /// Upsert a location for an entity with move/supersession semantics.
     ///
-    /// Closes any still-open location of the same `entity_id` + `location_type`
-    /// that began before `valid_from` (sets its `valid_until = valid_from`),
-    /// then inserts the new row — modelling a move such as
-    /// "home 2020-2023, home 2023-present". The whole operation is atomic in
-    /// one transaction. Returns the newly inserted location.
+    /// A same-place re-statement (the same address or coordinates as an
+    /// existing row of the same `entity_id` + `location_type` whose period
+    /// overlaps it) is deduplicated instead: the existing row absorbs the
+    /// incoming bounds (interval union) and any shape fields it is missing,
+    /// and is returned — no duplicate row is created (issue #228). Otherwise
+    /// this closes any still-open location of the same `entity_id` +
+    /// `location_type` that began before `valid_from` (sets its
+    /// `valid_until = valid_from`), then inserts the new row — modelling a
+    /// move such as "home 2020-2023, home 2023-present". The whole operation
+    /// is atomic in one transaction. Returns the persisted location.
     ///
     /// Geocoding (filling the missing half of address/coords) is the caller's
     /// responsibility; this method persists exactly what it is given.

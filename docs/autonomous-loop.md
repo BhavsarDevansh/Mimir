@@ -36,11 +36,11 @@ With `MIMIR_AUTONOMOUS_INTERVAL=1800` (30 minutes) a typical issue lifecycle is:
 - `pr_is_draft` — `gh pr view <num> --json isDraft`.
 - `count_unresolved_threads` — paginated `gh api graphql` over `reviewThreads`, counting nodes where `isResolved == false` and `isOutdated == false`. This is the source of truth for "are there open review comments" (CodeRabbit findings land here).
 - `has_changes_requested` — `gh pr view --json reviews` for any `CHANGES_REQUESTED` state.
-- `pr_mergeable` — gates merging on `mergeStateStatus` being `CLEAN`/`BEHIND`/`UNSTABLE`.
+- `pr_mergeable` — gates merging on `mergeStateStatus` being `CLEAN`, so the loop does not auto-merge while checks are failing or GitHub reports the branch behind.
 
 ### CodeRabbit skip handling
 
-`coderabbit_skipped()` inspects `coderabbitai` review bodies for the "out of reviews" / skipped-review message. A skipped review produces no threads, so the PR merges on the normal "no open comments" path; the skip is logged explicitly so the audit trail explains why the merge went ahead.
+`coderabbit_skipped()` inspects `coderabbitai` review bodies for the "out of reviews" / skipped-review message. A skipped review produces no threads, so the PR proceeds through the normal "no open comments" path and still must satisfy the merge-state gate; the skip is logged explicitly so the audit trail explains why CodeRabbit did not block the merge.
 
 ### Issue selection
 
@@ -100,7 +100,7 @@ For a foreground or `setsid`-detached run, kill the process (`pkill -f autonomou
 ## Safety
 
 - A `flock` on `$XDG_STATE_HOME/mimir/autonomous.lock` prevents overlapping iterations.
-- Merging only happens when the PR is mergeable and no unresolved review threads remain; a CodeRabbit skip is logged and treated as a clear review.
+- Merging only happens when GitHub reports the PR merge state as `CLEAN` and no unresolved review threads remain; a CodeRabbit skip is logged and treated as a clear review only when those merge gates are also satisfied.
 - The agent is instructed never to co-author commits, to follow `AGENTS.md` (including the no-unsafe policy and semantic versioning), and to only touch files referenced by review comments when addressing PR feedback.
 - All actions are timestamped in `autonomous.log`.
 

@@ -9,7 +9,7 @@ Mimir can drive its own development. A small script, `scripts/autonomous-loop.sh
 Each cycle the loop checks which git branch you are on:
 
 - **On a feature branch with a draft PR** — it reviews its own diff against `main`, fixes every issue it finds (no matter how small), pushes, and marks the PR ready for review.
-- **On a feature branch with a ready PR** — it looks for outstanding review comments (for example from CodeRabbit). If there are any, it fixes them and pushes. If everything is resolved — or CodeRabbit skipped its review because it is out of reviews for a while — it merges the PR into `main`, switches the local branch to `main` and pulls the latest changes.
+- **On a feature branch with a ready PR** — it looks for outstanding review comments (for example from CodeRabbit). If there are any, it fixes them and pushes. If everything is resolved — or CodeRabbit skipped its review because it is out of reviews for a while — and GitHub reports the PR merge state as clean, it merges the PR into `main`, switches the local branch to `main` and pulls the latest changes.
 - **On a feature branch with no PR** — if the working tree is clean it switches back to `main` and pulls. If there is uncommitted work it leaves things alone for you to handle.
 - **On `main`** — it picks the next unblocked issue (checking the roadmap and vision docs to make sure it is the right one) and implements it as a draft PR, updating docs and running tests as it goes. A typical ticket takes a few 30-minute cycles: implement and open the draft PR, self-review and mark ready, address any review comments, then merge and move on to the next ticket.
 

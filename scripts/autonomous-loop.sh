@@ -117,10 +117,12 @@ count_unresolved_threads() {
     local owner repo
     owner="${owner_repo%%/*}"
     repo="${owner_repo#*/}"
-    local cursor="null"
+    local cursor=""
     local total=0
     while true; do
         local data
+        local -a fields=(-F owner="$owner" -F repo="$repo" -F number="$num")
+        [[ -n "$cursor" ]] && fields+=(-F cursor="$cursor")
         data=$(gh api graphql -f query="
         query(\$owner:String!,\$repo:String!,\$number:Int!,\$cursor:String){
           repository(owner:\$owner,name:\$repo){
@@ -131,7 +133,7 @@ count_unresolved_threads() {
               }
             }
           }
-        }" -F owner="$owner" -F repo="$repo" -F number="$num" -F cursor="$cursor" 2>/dev/null) || return 1
+        }" "${fields[@]}" 2>/dev/null) || return 1
         [[ -z "$data" ]] && return 1
         local count
         count=$(printf '%s' "$data" | jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false and .isOutdated == false)] | length' 2>/dev/null) || return 1
@@ -166,7 +168,7 @@ pr_mergeable() {
     local num="$1"
     local status
     status=$(gh pr view "$num" --json mergeStateStatus --jq '.mergeStateStatus' 2>/dev/null || echo "UNKNOWN")
-    [[ "$status" == "CLEAN" || "$status" == "BEHIND" || "$status" == "UNSTABLE" ]]
+    [[ "$status" == "CLEAN" ]]
 }
 
 # ---------------------------------------------------------------------------

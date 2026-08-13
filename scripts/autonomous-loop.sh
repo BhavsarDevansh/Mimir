@@ -33,9 +33,13 @@ set -euo pipefail
 #
 # Environment:
 #   MIMIR_AUTONOMOUS_INTERVAL   seconds between iterations (default 7200)
-#   MIMIR_AUTONOMOUS_SANDBOX     codex sandbox mode (default danger-full-access)
+#   MIMIR_AUTONOMOUS_SANDBOX     codex sandbox mode (default workspace-write)
 #   MIMIR_AUTONOMOUS_MODEL       override codex model (optional)
 #   MIMIR_AUTONOMOUS_BYPASS      1 => --dangerously-bypass-approvals-and-sandbox
+#   MIMIR_AUTONOMOUS_CODEX_ARGS  extra codex CLI flags (word-split); when set,
+#                                takes full control of provider/sandbox/model
+#                                flags, e.g. "--oss -m deepseek-v4-flash:cloud
+#                                --yolo --config model_reasoning_effort=max"
 #   MIMIR_AUTONOMOUS_LOG         log file (default ~/.local/state/mimir/autonomous.log)
 #   MIMIR_AUTONOMOUS_DRY_RUN     1 => dry run (same as --dry-run)
 
@@ -43,13 +47,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 INTERVAL="${MIMIR_AUTONOMOUS_INTERVAL:-7200}"
-SANDBOX="${MIMIR_AUTONOMOUS_SANDBOX:-danger-full-access}"
+SANDBOX="${MIMIR_AUTONOMOUS_SANDBOX:-workspace-write}"
 MODEL="${MIMIR_AUTONOMOUS_MODEL:-}"
 BYPASS="${MIMIR_AUTONOMOUS_BYPASS:-0}"
+CODEX_ARGS="${MIMIR_AUTONOMOUS_CODEX_ARGS:-}"
 DRY_RUN=0
 ONCE=0
 LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/mimir"
 LOG_FILE="${MIMIR_AUTONOMOUS_LOG:-$LOG_DIR/autonomous.log}"
+LOG_FILE_DIR="$(dirname "$LOG_FILE")"
+ACTIVE_PHASE_LABEL="${MIMIR_AUTONOMOUS_PHASE_LABEL:-phase-3}"
 QUESTION_MARKER_PREFIX="<!-- mimir-autonomous-question:"
 # Issue categories the loop is allowed to implement. Feature development is
 # excluded outright: the loop exists to pay down maintenance, DRY, bug,
@@ -59,6 +66,8 @@ QUALITY_LABELS="bug,refactor,maintenance,performance,security,documentation,test
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+mkdir -p "$LOG_DIR" "$LOG_FILE_DIR"
+
 log()  { printf '%s [INFO] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" | tee -a "$LOG_FILE" >&2; }
 warn() { printf '%s [WARN] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" | tee -a "$LOG_FILE" >&2; }
 err()  { printf '%s [ERROR] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" | tee -a "$LOG_FILE" >&2; }
@@ -69,12 +78,20 @@ require() { command -v "$1" >/dev/null 2>&1 || { err "missing required tool: $1"
 run_codex() {
     local prompt_file="$1"
     local -a args=(exec --cd "$PROJECT_ROOT" --skip-git-repo-check)
-    if [[ "$BYPASS" == "1" ]]; then
-        args+=(--dangerously-bypass-approvals-and-sandbox)
+    if [[ -n "$CODEX_ARGS" ]]; then
+        # Caller-supplied flags take full control (provider, sandbox, model,
+        # config overrides) so the loop can target any codex backend.
+        local -a extra=()
+        read -r -a extra <<<"$CODEX_ARGS"
+        args+=("${extra[@]}")
     else
-        args+=(-s "$SANDBOX")
+        if [[ "$BYPASS" == "1" ]]; then
+            args+=(--dangerously-bypass-approvals-and-sandbox)
+        else
+            args+=(-s "$SANDBOX")
+        fi
+        [[ -n "$MODEL" ]] && args+=(-m "$MODEL")
     fi
-    [[ -n "$MODEL" ]] && args+=(-m "$MODEL")
     args+=(-o "$RUN_DIR/last-message.txt")
     if [[ "$DRY_RUN" == "1" ]]; then
         log "DRY RUN: would invoke: codex ${args[*]} - < $prompt_file"
@@ -95,7 +112,7 @@ run_codex() {
 # Resolve owner/repo from the git remote via gh.
 resolve_repo() {
     gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null \
-        || { err "unable to resolve repo (is gh authenticated?)"; exit 1; }
+        || { err "unable to resolve repo (is gh authenticated?)"; return 1; }
 }
 
 current_branch() { git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD; }
@@ -160,14 +177,14 @@ has_changes_requested() {
     grep -q '^CHANGES_REQUESTED$' <<<"$states"
 }
 
-# True if CodeRabbit skipped its review (e.g. it is out of reviews for a
-# while). The absence of CodeRabbit threads must then not block merging.
+# True if the latest CodeRabbit review hit a documented rate-limit marker. The
+# absence of CodeRabbit threads must then not block merging.
 coderabbit_skipped() {
     local num="$1"
-    local bodies
-    bodies=$(gh pr view "$num" --json reviews \
-        --jq '.reviews[] | select(.author.login == "coderabbitai") | .body // ""' 2>/dev/null || true)
-    grep -qiE 'out of reviews|skipping review|review skipped|skipped.*review|no reviews? (left|remaining)' <<<"$bodies"
+    local body
+    body=$(gh pr view "$num" --json reviews \
+        --jq '[.reviews[] | select(.author.login == "coderabbitai")] | sort_by(.submittedAt // "") | last | .body // ""' 2>/dev/null || true)
+    grep -qiE 'Review limit reached|Review rate limited' <<<"$body"
 }
 
 pr_mergeable() {
@@ -189,7 +206,7 @@ issue_questions_answered() {
     owner="${owner_repo%%/*}"
     repo="${owner_repo#*/}"
     local comments marker_time marker_author
-    comments=$(gh api "repos/$owner/$repo/issues/$num/comments" --jq '.[] | "\(.created_at)\t\(.user.login)\t\((.body|gsub("\n";" ")))"' 2>/dev/null || true)
+    comments=$(gh api --paginate "repos/$owner/$repo/issues/$num/comments?per_page=100" --jq '.[] | "\(.created_at)\t\(.user.login)\t\((.body|gsub("\n";" ")))"' 2>/dev/null || true)
     [[ -z "$comments" ]] && return 1
     # Find the latest comment containing the question marker.
     local marker_line
@@ -198,9 +215,9 @@ issue_questions_answered() {
     marker_time="${marker_line%%	*}"
     local rest="${marker_line#*	}"
     marker_author="${rest%%	*}"
-    # Look for any later comment by a different author.
+    # Look for any later comment by the repository owner.
     if printf '%s\n' "$comments" | awk -F'\t' -v t="$marker_time" -v a="$marker_author" \
-        '$1 > t && $2 != a { found=1 } END { exit !found }'; then
+        -v owner="$owner" '$1 > t && $2 == owner && $2 != a { found=1 } END { exit !found }'; then
         return 0
     fi
     return 1
@@ -237,8 +254,8 @@ candidate_issues() {
     owner="${owner_repo%%/*}"
     repo="${owner_repo#*/}"
     local all current_phase
-    current_phase="phase-3" # active phase per VISION/09-Roadmap
-    all=$(gh issue list --state open --limit 200 --json number,title,labels --jq '.[] | "\(.number)\t\(.title)\t\([.labels[].name]|join(","))"' 2>/dev/null || true)
+    current_phase="$ACTIVE_PHASE_LABEL"
+    all=$(gh issue list --state open --limit 1000 --json number,title,labels --jq '.[] | "\(.number)\t\(.title)\t\([.labels[].name]|join(","))"' 2>/dev/null || true)
     [[ -z "$all" ]] && return 0
     local in_phase="" others="" num title labels
     while IFS=$'\t' read -r num title labels; do
@@ -348,7 +365,9 @@ PROMPT
     gh pr merge "$num" --merge --delete-branch 2>&1 | tee -a "$LOG_FILE" >&2 || { err "merge of PR #$num failed"; return 1; }
     git -C "$PROJECT_ROOT" checkout main 2>&1 | tee -a "$LOG_FILE" >&2
     git -C "$PROJECT_ROOT" pull --ff-only 2>&1 | tee -a "$LOG_FILE" >&2
-    git -C "$PROJECT_ROOT" branch -D "$branch" 2>/dev/null | tee -a "$LOG_FILE" >&2 || true
+    if ! git -C "$PROJECT_ROOT" branch -d "$branch" 2>&1 | tee -a "$LOG_FILE" >&2; then
+        warn "local branch '$branch' was not fully merged; leaving it in place."
+    fi
     log "merged PR #$num and deleted branch '$branch'."
 }
 
@@ -365,7 +384,9 @@ handle_feature_branch() {
         log "tree clean; switching to main and pulling."
         [[ "$DRY_RUN" == "1" ]] || { git -C "$PROJECT_ROOT" checkout main 2>&1 | tee -a "$LOG_FILE" >&2; \
             git -C "$PROJECT_ROOT" pull --ff-only 2>&1 | tee -a "$LOG_FILE" >&2; }
-        [[ "$DRY_RUN" == "1" ]] || git -C "$PROJECT_ROOT" branch -D "$branch" 2>/dev/null || true
+        if [[ "$DRY_RUN" != "1" ]] && ! git -C "$PROJECT_ROOT" branch -d "$branch" 2>&1 | tee -a "$LOG_FILE" >&2; then
+            warn "local branch '$branch' was not fully merged; leaving it in place."
+        fi
         return 0
     fi
     if pr_is_draft "$num"; then
@@ -442,7 +463,7 @@ PROMPT
 run_iteration() {
     mkdir -p "$LOG_DIR" "$RUN_DIR"
     local owner_repo
-    owner_repo=$(resolve_repo)
+    owner_repo=$(resolve_repo) || return 1
     log "=== iteration start (repo: $owner_repo) ==="
     git -C "$PROJECT_ROOT" fetch origin --prune 2>&1 | tee -a "$LOG_FILE" >&2 || warn "git fetch failed"
 
@@ -481,6 +502,7 @@ require git
 require gh
 require codex
 require jq
+require flock
 
 if ! [[ "$INTERVAL" =~ ^[0-9]+$ ]] || [[ "$INTERVAL" -le 0 ]]; then
     err "MIMIR_AUTONOMOUS_INTERVAL must be a positive integer (got '$INTERVAL')"
@@ -490,7 +512,7 @@ fi
 RUN_DIR="$(mktemp -d -t mimir-autonomous.XXXXXX)"
 trap 'rm -rf "$RUN_DIR"' EXIT
 
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" "$LOG_FILE_DIR"
 touch "$LOG_FILE"
 
 # Prevent overlapping iterations (e.g. timer fired while previous still running).

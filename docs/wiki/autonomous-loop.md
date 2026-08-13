@@ -9,8 +9,8 @@ Mimir can drive its own development. A small script, `scripts/autonomous-loop.sh
 Each cycle the loop checks which git branch you are on:
 
 - **On a feature branch with a draft PR** — it reviews its own diff against `main`, fixes every issue it finds (no matter how small), pushes, and marks the PR ready for review.
-- **On a feature branch with a ready PR** — it looks for outstanding review comments (for example from CodeRabbit). If there are any, it fixes them and pushes. If everything is resolved — or CodeRabbit skipped its review because it is out of reviews for a while — and GitHub reports the PR merge state as clean, it merges the PR into `main`, switches the local branch to `main` and pulls the latest changes.
-- **On a feature branch with no PR** — if the working tree is clean it switches back to `main` and pulls. If there is uncommitted work it leaves things alone for you to handle.
+- **On a feature branch with a ready PR** — it looks for outstanding review comments (for example from CodeRabbit). If there are any, it fixes them and pushes. If everything is resolved — or CodeRabbit's latest review reports a documented rate-limit marker — and GitHub reports the PR merge state as clean, it merges the PR into `main`, switches the local branch to `main` and pulls the latest changes.
+- **On a feature branch with no PR** — if the working tree is clean it switches back to `main` and pulls. If the local branch is not fully merged, or if there is uncommitted work, it leaves things alone for you to handle.
 - **On `main`** — it picks the next unblocked code-quality issue (checking the roadmap and vision docs to make sure it is the right one, and skipping anything labelled as feature development) and implements it as a draft PR, updating docs and running tests as it goes. A typical ticket takes a few 30-minute cycles: implement and open the draft PR, self-review and mark ready, address any review comments, then merge and move on to the next ticket.
 
 ## Keeping the issue tracker healthy
@@ -33,7 +33,7 @@ If the loop starts an issue but realises it needs a clarification or a decision 
 - Run it via the provided systemd timer so it survives reboots, or leave a `setsid`-detached run going for a 30-minute cadence.
 - Keep `main` clean; the loop will not start new work on a dirty `main`.
 - Review merged PRs occasionally — the loop follows `AGENTS.md` but a human spot-check keeps it honest.
-- Watch `~/.local/state/mimir/autonomous.log` for a full timestamped audit trail.
+- Watch `MIMIR_AUTONOMOUS_LOG` or `${XDG_STATE_HOME:-$HOME/.local/state}/mimir/autonomous.log` for a full timestamped audit trail.
 
 ## How to start it
 
@@ -42,5 +42,7 @@ scripts/autonomous-loop.sh --once      # try a single run
 scripts/autonomous-loop.sh --dry-run   # preview what it would do
 MIMIR_AUTONOMOUS_INTERVAL=1800 scripts/autonomous-loop.sh   # 30-minute cadence
 ```
+
+The loop delegates all coding to `codex exec`. If your default codex account is unavailable, point the loop at another backend with `MIMIR_AUTONOMOUS_CODEX_ARGS` — for example `MIMIR_AUTONOMOUS_CODEX_ARGS="--oss -m deepseek-v4-flash:cloud --yolo --config model_reasoning_effort=max --config model_context_window=1000000"` runs every delegated session on the OSS deepseek model with full access and a 1M context window. The provided systemd service already ships with this configuration.
 
 For the every-two-hours schedule, install the systemd timer described in `docs/autonomous-loop.md`. To stop a run, kill the `autonomous-loop.sh` process (and any `codex exec` children) or run `systemctl --user disable --now mimir-autonomous.timer`.

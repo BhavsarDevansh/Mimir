@@ -2,8 +2,7 @@
 Description=Run the Mimir autonomous development loop every 2 hours
 
 [Timer]
-OnBootSec=5min
-OnUnitActiveSec=2h
+OnCalendar=*-*-* 00/2:00:00
 AccuracySec=1min
 Persistent=true
 

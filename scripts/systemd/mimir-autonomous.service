@@ -6,10 +6,11 @@ Wants=mimir-autonomous.timer
 Type=oneshot
 ExecStart=%h/Projects/Rust/Mimir/scripts/autonomous-loop.sh --once
 WorkingDirectory=%h/Projects/Rust/Mimir
-# Run with full access so codex can build, test, commit, push, and call gh.
-Environment=MIMIR_AUTONOMOUS_BYPASS=1
 Environment=MIMIR_AUTONOMOUS_INTERVAL=7200
-# Environment=MIMIR_AUTONOMOUS_MODEL=gpt-5.5
-StandardOutput=append:%h/.local/state/mimir/autonomous.log
-StandardError=append:%h/.local/state/mimir/autonomous.log
+# codex launch flags: OSS provider, deepseek model, full access (--yolo), max
+# reasoning effort and a 1M context window. --yolo grants full access, so this
+# service must only run in an environment that is externally sandboxed.
+Environment="MIMIR_AUTONOMOUS_CODEX_ARGS=--oss -m deepseek-v4-flash:cloud --yolo --config model_reasoning_effort=max --config model_context_window=1000000"
+StandardOutput=journal
+StandardError=journal
 TimeoutStartSec=2h

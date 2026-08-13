@@ -9,7 +9,7 @@ A self-driving orchestration script that advances the Mimir repository toward a 
 
 ## Design
 
-```
+```text
 autonomous-loop.sh
 ├── run_iteration()                 # one pass, guarded by flock
 │   ├── git fetch origin --prune
@@ -40,11 +40,11 @@ With `MIMIR_AUTONOMOUS_INTERVAL=1800` (30 minutes) a typical issue lifecycle is:
 
 ### CodeRabbit skip handling
 
-`coderabbit_skipped()` inspects `coderabbitai` review bodies for the "out of reviews" / skipped-review message. A skipped review produces no threads, so the PR proceeds through the normal "no open comments" path and still must satisfy the merge-state gate; the skip is logged explicitly so the audit trail explains why CodeRabbit did not block the merge.
+`coderabbit_skipped()` inspects the latest `coderabbitai` review body for documented rate-limit markers such as "Review limit reached" or "Review rate limited". A skipped review produces no threads, so the PR proceeds through the normal "no open comments" path and still must satisfy the merge-state gate; the skip is logged explicitly so the audit trail explains why CodeRabbit did not block the merge.
 
 ### Issue selection (code quality only)
 
-`candidate_issues()` lists open issues and filters: issues with the `blocked` label are skipped; `help-wanted` issues are skipped unless the repo owner has commented after the agent's most recent question marker; **feature development is excluded** — an issue must carry at least one quality label (`bug`, `refactor`, `maintenance`, `performance`, `security`, `documentation`, `testing`, `build`) or a quality title prefix (`DRY:`, `Robustness:`, `Refactor:`, `Maintenance:`, `Bug:`, `Fix:`, `Flaky`, `Spec drift`, `E2E test`, `Docs:`, `Security:`, `Perf`, `Cleanup`, `Code quality`), and the `feature` label plus `Implement` / `Future:` titles are hard exclusions. Issues carrying the active phase label (`phase-3` per `VISION/09-Roadmap`) are listed first, then everything else, each group sorted by ascending issue number. The top candidates (up to 5) are handed to `codex exec`, which reads the roadmap and `Mimir-Implementation-Context.md` to confirm the right one and then implements it via the `gh-issue-tdd` skill. The prompt additionally instructs the agent never to implement feature development and to fix missing quality/feature labels it encounters.
+`candidate_issues()` lists open issues and filters: issues with the `blocked` label are skipped; `help-wanted` issues are skipped unless the repo owner has commented after the agent's most recent question marker; **feature development is excluded** — an issue must carry at least one quality label (`bug`, `refactor`, `maintenance`, `performance`, `security`, `documentation`, `testing`, `build`) or a quality title prefix (`DRY:`, `Robustness:`, `Refactor:`, `Maintenance:`, `Bug:`, `Fix:`, `Flaky`, `Spec drift`, `E2E test`, `Docs:`, `Security:`, `Perf`, `Cleanup`, `Code quality`), and the `feature` label plus `Implement` / `Future:` titles are hard exclusions. Issues carrying the active phase label (`MIMIR_AUTONOMOUS_PHASE_LABEL`, default `phase-3`) are listed first, then everything else, each group sorted by ascending issue number. The top candidates (up to 5) are handed to `codex exec`, which reads the roadmap and `Mimir-Implementation-Context.md` to confirm the right one and then implements it via the `gh-issue-tdd` skill. The prompt additionally instructs the agent never to implement feature development and to fix missing quality/feature labels it encounters.
 
 ### Issue hygiene
 
@@ -52,21 +52,23 @@ The implementation prompt requires the agent to: fetch the full issue (all field
 
 ### Question / answer protocol
 
-When an issue needs clarification, the agent does not implement it. Instead it adds the `help-wanted` label (`gh issue edit <N> --add-label help-wanted`) and posts a comment whose final line is the hidden marker `<!-- mimir-autonomous-question:N -->`. `issue_questions_answered()` finds the latest comment containing that marker, records its timestamp and author, and returns true only if a later comment by a different author exists. This lets the loop revisit answered tickets on a future run while skipping tickets whose questions are still outstanding, and keeps the loop moving to a different ticket when a human is needed.
+When an issue needs clarification, the agent does not implement it. Instead it adds the `help-wanted` label (`gh issue edit <N> --add-label help-wanted`) and posts a comment whose final line is the hidden marker `<!-- mimir-autonomous-question:N -->`. `issue_questions_answered()` finds the latest comment containing that marker, records its timestamp and author, and returns true only if a later comment by the repository owner exists. This lets the loop revisit answered tickets on a future run while skipping tickets whose questions are still outstanding, and keeps the loop moving to a different ticket when a human is needed.
 
 ### Delegation to `codex exec`
 
-`run_codex()` writes the prompt to a temp file and pipes it via stdin (`codex exec ... -`). Default sandbox is `danger-full-access` because the agent must build, run tests, commit, push, and call `gh`. Set `MIMIR_AUTONOMOUS_BYPASS=1` to pass `--dangerously-bypass-approvals-and-sandbox` for fully unattended operation (used by the systemd unit).
+`run_codex()` writes the prompt to a temp file and pipes it via stdin (`codex exec ... -`). Default sandbox is `workspace-write`. Set `MIMIR_AUTONOMOUS_BYPASS=1` to pass `--dangerously-bypass-approvals-and-sandbox` only when fully unattended full-access operation is explicitly required. Set `MIMIR_AUTONOMOUS_CODEX_ARGS` to a word-split string of extra codex CLI flags that take full control of the provider, sandbox, model and config overrides — for example `"--oss -m deepseek-v4-flash:cloud --yolo --config model_reasoning_effort=max --config model_context_window=1000000"` runs every delegated session on the OSS deepseek backend with full access and a 1M context window. When `MIMIR_AUTONOMOUS_CODEX_ARGS` is set, `MIMIR_AUTONOMOUS_SANDBOX`, `MIMIR_AUTONOMOUS_MODEL` and `MIMIR_AUTONOMOUS_BYPASS` are ignored.
 
 ## Configuration (environment variables)
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `MIMIR_AUTONOMOUS_INTERVAL` | `7200` | Seconds between iterations (loop mode); `1800` gives a 30-minute cadence. |
-| `MIMIR_AUTONOMOUS_SANDBOX` | `danger-full-access` | codex `-s` sandbox mode. |
+| `MIMIR_AUTONOMOUS_SANDBOX` | `workspace-write` | codex `-s` sandbox mode. |
 | `MIMIR_AUTONOMOUS_MODEL` | _unset_ | Override the codex model. |
 | `MIMIR_AUTONOMOUS_BYPASS` | `0` | `1` => `--dangerously-bypass-approvals-and-sandbox`. |
-| `MIMIR_AUTONOMOUS_LOG` | `$XDG_STATE_HOME/mimir/autonomous.log` | Log file path. |
+| `MIMIR_AUTONOMOUS_CODEX_ARGS` | _unset_ | Extra codex CLI flags (word-split); when set, takes full control of provider/sandbox/model flags and ignores `MIMIR_AUTONOMOUS_SANDBOX`, `MIMIR_AUTONOMOUS_MODEL` and `MIMIR_AUTONOMOUS_BYPASS`. |
+| `MIMIR_AUTONOMOUS_LOG` | `${XDG_STATE_HOME:-$HOME/.local/state}/mimir/autonomous.log` | Log file path. |
+| `MIMIR_AUTONOMOUS_PHASE_LABEL` | `phase-3` | Issue label prioritised as the active roadmap phase. |
 | `MIMIR_AUTONOMOUS_DRY_RUN` | `0` | `1` => dry run (print actions, skip codex). |
 
 ## Running
@@ -91,15 +93,15 @@ systemctl --user enable --now mimir-autonomous.timer
 systemctl --user list-timers mimir-autonomous.timer
 ```
 
-The timer fires `OnUnitActiveSec=2h` with `Persistent=true`, so missed runs while the machine was off are caught up on boot. Each run is a `oneshot` invocation of `--once`, so a crashed iteration cannot stall the cadence.
+The timer fires every two hours via `OnCalendar=` with `Persistent=true`, so missed runs while the machine was off are caught up on boot. Each run is a `oneshot` invocation of `--once`, so a crashed iteration cannot stall the cadence.
 
 ### Stopping the loop
 
-For a foreground or `setsid`-detached run, kill the process (`pkill -f autonomous-loop.sh`) and any running `codex exec` child. For the systemd timer, run `systemctl --user disable --now mimir-autonomous.timer`. The `flock` on `$XDG_STATE_HOME/mimir/autonomous.lock` prevents overlapping iterations, so a killed run never leaves a stale lock behind.
+For a foreground or `setsid`-detached run, kill the process (`pkill -f autonomous-loop.sh`) and any running `codex exec` child. For the systemd timer, run `systemctl --user disable --now mimir-autonomous.timer`. The `flock` on `${XDG_STATE_HOME:-$HOME/.local/state}/mimir/autonomous.lock` prevents overlapping iterations, so a killed run never leaves a stale lock behind.
 
 ## Safety
 
-- A `flock` on `$XDG_STATE_HOME/mimir/autonomous.lock` prevents overlapping iterations.
+- A `flock` on `${XDG_STATE_HOME:-$HOME/.local/state}/mimir/autonomous.lock` prevents overlapping iterations.
 - Merging only happens when GitHub reports the PR merge state as `CLEAN` and no unresolved review threads remain; a CodeRabbit skip is logged and treated as a clear review only when those merge gates are also satisfied.
 - The agent is instructed never to co-author commits, to follow `AGENTS.md` (including the no-unsafe policy and semantic versioning), and to only touch files referenced by review comments when addressing PR feedback.
 - All actions are timestamped in `autonomous.log`.

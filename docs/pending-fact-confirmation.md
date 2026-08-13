@@ -27,9 +27,7 @@ automated cleanup job.
    `Disputed` status and `pending_confirmation = TRUE`
    (`mimir-knowledge/src/extract/`, `insert_sensitive_fact`). The fact id is
    added to the in-memory `pending_confirmations` set.
-2. **Confirm** — `KnowledgeGraph::confirm_fact(id)` flips status to `Active`,
-   sets confidence to `1.0`, clears `pending_confirmation`, writes a
-   `StatusChange` audit entry, and runs the inference cascade.
+2. **Confirm** — `KnowledgeGraph::confirm_fact(id)` flips status to `Active`, sets confidence to `1.0`, clears `pending_confirmation`, writes a `StatusChange` audit entry, and runs the inference cascade. It also rebuilds any overlays that were deferred at extraction time: the events-subsystem overlay from `pending_event_meta` (migration 041) and the entity-locations overlay from `pending_location_meta` (migration 048, issue #226 — a confirmed sensitive "where" fact produces the same `entity_locations` row as a non-sensitive one, geocoded with the confirmed fact's temporal bounds and `source_fact_id`). Rejecting hard-deletes the fact, and both meta tables cascade-delete with it, so no orphan overlay rows can be left behind.
 3. **Reject** — `KnowledgeGraph::reject_fact(id, reason)` writes a `Rejected`
    audit entry (with optional reason), clears any `fact_dependencies` rows
    referencing the fact (required by the `ON DELETE RESTRICT` FK from migration

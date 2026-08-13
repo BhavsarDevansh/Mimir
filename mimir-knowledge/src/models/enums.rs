@@ -149,6 +149,22 @@ pub enum LocationType {
     Geographic = 6,
 }
 
+impl TryFrom<i16> for LocationType {
+    type Error = ();
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        match value {
+            x if x == Self::Home as i16 => Ok(Self::Home),
+            x if x == Self::Work as i16 => Ok(Self::Work),
+            x if x == Self::Visited as i16 => Ok(Self::Visited),
+            x if x == Self::Origin as i16 => Ok(Self::Origin),
+            x if x == Self::Current as i16 => Ok(Self::Current),
+            x if x == Self::Geographic as i16 => Ok(Self::Geographic),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Workflow status of a dedup queue entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Type, serde::Serialize, serde::Deserialize)]
 #[repr(i16)]
@@ -368,6 +384,19 @@ mod tests {
         assert_eq!(EventType::try_from(0), Err(()));
         assert_eq!(EventStatus::try_from(99), Err(()));
         assert_eq!(AutoCompletePolicy::try_from(-1), Err(()));
+    }
+
+    #[test]
+    fn location_type_try_from_roundtrip() {
+        assert_eq!(LocationType::try_from(1), Ok(LocationType::Home));
+        assert_eq!(LocationType::try_from(2), Ok(LocationType::Work));
+        assert_eq!(LocationType::try_from(3), Ok(LocationType::Visited));
+        assert_eq!(LocationType::try_from(4), Ok(LocationType::Origin));
+        assert_eq!(LocationType::try_from(5), Ok(LocationType::Current));
+        assert_eq!(LocationType::try_from(6), Ok(LocationType::Geographic));
+        assert_eq!(LocationType::try_from(0), Err(()));
+        assert_eq!(LocationType::try_from(99), Err(()));
+        assert_eq!(LocationType::try_from(-1), Err(()));
     }
 
     #[test]

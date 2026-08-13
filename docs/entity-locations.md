@@ -143,11 +143,11 @@ without depending on `mimir-connectors`); the Nominatim default backend lives
 in `mimir-connectors` and is injected by the server at startup
 (`AppState::from_config_with_llm`).
 
-## Pending (sensitive) path — deferred
+## Pending (sensitive) path (issue #226)
 
-Sensitive location facts land as `pending_confirmation` like any sensitive
-fact, and the overlay is **not** applied until the fact is confirmed. Wiring
-the overlay into `confirm_fact` is tracked as follow-up work (see Issues).
+Sensitive "where" facts land as `pending_confirmation` like any sensitive fact, and the overlay is **not** applied while the fact is pending — no `entity_locations` row exists until the user confirms it. To keep the structured geo data across the confirmation boundary, the sensitive path in `normalize::process_normalized_fact` persists the `NormalizedLocation` shape into the `pending_location_meta` table (migration `048`, the location analogue of `pending_event_meta` for events): typed `location_type_id` FK plus `address` / `latitude` / `longitude` / `timezone`, keyed on the pending `fact_id` with `ON DELETE CASCADE`.
+
+`extract::confirm_fact` then rebuilds the overlay exactly like the non-sensitive path: it reads the persisted shape, re-runs the same geocode-fill + `upsert_location` (`normalize::apply_location_overlay`, called directly rather than enqueued — confirmation is a single user-initiated action, not a batch), using the **confirmed fact's** id and temporal bounds, and consumes the meta row afterwards. Rejecting the pending fact hard-deletes the fact, so the `ON DELETE CASCADE` foreign key removes the meta row automatically — no orphan location row can be left behind. Legacy pending facts that predate the `pending_location_meta` table have no shape and get no overlay, matching the events-subsystem's legacy fallback behaviour. One deliberate asymmetry with the non-sensitive path: `place_anchor` (Phase 3 C2) is not rebuilt — `pending_location_meta` stores the `NormalizedLocation` shape only, so a sensitive Place-object fact gets the subject's location row but no `Geographic` anchor for the place.
 
 ## Facade API
 

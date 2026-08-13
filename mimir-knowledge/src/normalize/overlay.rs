@@ -23,10 +23,12 @@ use crate::queries;
 ///
 /// This runs on the background [`location_overlay_worker`] (not the ingestion
 /// caller's task) so a connector batch of location facts is not gated on the
-/// geocoder's rate limit. Only the non-sensitive (inserted) path enqueues an
-/// overlay today; wiring the pending-confirmation path is tracked as follow-up
-/// work.
-async fn apply_location_overlay(
+/// geocoder's rate limit. The non-sensitive (inserted) path enqueues an
+/// [`OverlayJob::Apply`]; the pending-confirmation path (issue #226) rebuilds
+/// the overlay from `pending_location_meta` on [`confirm_fact`](crate::extract::confirm_fact)
+/// and calls this directly — a single user-initiated action, so the
+/// synchronous call is not a throughput concern.
+pub(crate) async fn apply_location_overlay(
     pool: &sqlx::SqlitePool,
     write_lock: &std::sync::Arc<tokio::sync::Mutex<()>>,
     apply: LocationOverlayApply,

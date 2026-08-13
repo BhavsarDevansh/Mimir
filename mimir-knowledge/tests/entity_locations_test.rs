@@ -81,6 +81,22 @@ fn home_fact(
     }
 }
 
+/// A sensitive "where" fact: the same Home overlay as [`home_fact`], but
+/// flagged `is_sensitive` and carrying a sensitive category so the Rust
+/// sensitivity AND-gate (flag + category) routes it to `pending_confirmation`
+/// instead of the inserted path.
+fn sensitive_home_fact(
+    address: Option<&str>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    valid_from: Option<DateTime<Utc>>,
+) -> NormalizedFact {
+    let mut fact = home_fact(address, latitude, longitude, valid_from);
+    fact.is_sensitive = true;
+    fact.category_ids = vec![230];
+    fact
+}
+
 async fn subject_locations(
     kg: &KnowledgeGraph,
     fact_id_subject: i32,
@@ -549,5 +565,128 @@ async fn ensure_place_coordinates_keeps_single_geographic_row() {
     assert!(
         (row.latitude.unwrap() - 51.5).abs() < 0.1,
         "coords should be near the anchored values; got {row:?}"
+    );
+}
+
+/// A sensitive location fact lands as `pending_confirmation` with no
+/// `entity_locations` row; confirming it must re-run the geocode-fill +
+/// upsert with the confirmed fact's id and temporal bounds (issue #226), so
+/// the row matches what the non-sensitive path would have produced.
+#[tokio::test]
+async fn sensitive_location_fact_gets_overlay_after_confirm() {
+    let (mut kg, _dir) = fresh_kg().await;
+    kg.set_geocoder(Arc::new(
+        MockGeocoder::new().with_forward(Ok(Some(london_result()))),
+    ));
+
+    let outcome = normalize_and_insert(
+        &kg,
+        vec![sensitive_home_fact(
+            Some("10 Downing St, London"),
+            None,
+            None,
+            Some(parse_dt("2024-01-01T00:00:00Z")),
+        )],
+        Provenance::chat(ExtractionMethod::LlmExtraction),
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.pending_confirmation.len(), 1);
+    assert!(
+        outcome.inserted.is_empty(),
+        "sensitive fact must stay pending"
+    );
+
+    let pending = &outcome.pending_confirmation[0];
+    let fact = kg
+        .get_fact(pending.fact_id)
+        .await
+        .unwrap()
+        .expect("pending fact exists");
+
+    // No overlay is created while the fact is still pending.
+    assert!(
+        subject_locations(&kg, fact.subject_id).await.is_empty(),
+        "pending facts must not produce an entity_locations row"
+    );
+
+    kg.confirm_fact(pending.fact_id)
+        .await
+        .expect("confirm should succeed");
+
+    let locs = subject_locations(&kg, fact.subject_id).await;
+    assert_eq!(locs.len(), 1);
+    let loc = &locs[0];
+    assert_eq!(loc.location_type_id, LocationType::Home as i16);
+    assert_eq!(loc.address.as_deref(), Some("10 Downing St, London"));
+    assert!(
+        (loc.latitude.unwrap() - 51.5074).abs() < 1e-6,
+        "confirmed fact's overlay must be forward-geocoded"
+    );
+    assert!((loc.longitude.unwrap() - -0.1278).abs() < 1e-6);
+    assert_eq!(loc.timezone.as_deref(), Some("Europe/London"));
+    assert_eq!(loc.valid_from, Some(parse_dt("2024-01-01T00:00:00Z")));
+    assert_eq!(
+        loc.source_fact_id,
+        Some(pending.fact_id),
+        "location row must link back to the confirmed fact"
+    );
+
+    // The persisted overlay shape is consumed by confirmation.
+    assert!(
+        mimir_knowledge::queries::entity::get_pending_location_meta(kg.pool(), pending.fact_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "pending_location_meta should be removed after confirm"
+    );
+}
+
+/// Rejecting a sensitive location fact hard-deletes the fact; the persisted
+/// overlay shape cascades away and no `entity_locations` row may be left
+/// behind (issue #226).
+#[tokio::test]
+async fn rejecting_sensitive_location_fact_leaves_no_overlay() {
+    let (kg, _dir) = fresh_kg().await;
+    let outcome = normalize_and_insert(
+        &kg,
+        vec![sensitive_home_fact(
+            Some("10 Downing St, London"),
+            None,
+            None,
+            None,
+        )],
+        Provenance::chat(ExtractionMethod::LlmExtraction),
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.pending_confirmation.len(), 1);
+
+    let pending = &outcome.pending_confirmation[0];
+    let fact = kg
+        .get_fact(pending.fact_id)
+        .await
+        .unwrap()
+        .expect("pending fact exists");
+    let subject_id = fact.subject_id;
+
+    kg.reject_fact(pending.fact_id, None)
+        .await
+        .expect("reject should succeed");
+
+    assert!(
+        kg.get_fact(pending.fact_id).await.unwrap().is_none(),
+        "rejected fact must be hard-deleted"
+    );
+    assert!(
+        subject_locations(&kg, subject_id).await.is_empty(),
+        "rejecting a pending location fact must leave no orphan location row"
+    );
+    assert!(
+        mimir_knowledge::queries::entity::get_pending_location_meta(kg.pool(), pending.fact_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "pending_location_meta must cascade-delete with the fact"
     );
 }

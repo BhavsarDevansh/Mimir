@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.101.4] — 2026-08-13
+
+### Sensitive-fact location overlay rebuilt on confirmation (issue #226)
+
+- **Sensitive "where" facts keep their structured geo data across the confirmation boundary.** The entity-locations overlay was only applied on the non-sensitive (inserted) path; a sensitive location fact landed as `pending_confirmation` and `confirm_fact` never re-derived it, so a confirmed sensitive location fact lost its `entity_locations` row entirely. The sensitive path in `normalize::process_normalized_fact` now persists the `NormalizedLocation` shape into a new `pending_location_meta` table (migration `048`, the location analogue of `pending_event_meta`), and `extract::confirm_fact` rebuilds the overlay on confirmation — re-running the same geocode-fill + `upsert_location` with the confirmed fact's id and temporal bounds, then consuming the meta row. Rejecting the pending fact hard-deletes it, so `ON DELETE CASCADE` removes the meta row automatically and no orphan location row can be left behind.
+- **Tests:** integration coverage in `mimir-knowledge/tests/entity_locations_test.rs` (confirm produces a geocoded row with temporal bounds + `source_fact_id`; reject leaves nothing) and a conversational-path unit test in `extract/confirm_tests.rs`.
+- **Docs:** `docs/entity-locations.md` (pending-path section), `docs/pending-fact-confirmation.md`, `docs/knowledge-graph-schema.md` (new table + migration list 045–048), `docs/wiki/entity-locations.md`, and `docs/wiki/what-works-now.md`.
+- **API addition:** `LocationType` now implements `TryFrom<i16>` (matching the other `#[repr(i16)]` enums in `models/enums.rs`), so raw lookup ids convert with a fallible typed conversion instead of a manual match.
+- Version bumped 0.101.3 → 0.101.4 (patch — backwards-compatible bug fix).
+
 ## [0.101.3] — 2026-08-13
 
 ### Location-type spec drift fixed (issue #224)

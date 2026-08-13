@@ -290,6 +290,32 @@ async fn process_normalized_fact(
             }
         }
 
+        // Persist the derived location-overlay shape (issue #226) so
+        // `confirm_fact` can rebuild the `entity_locations` row from the
+        // extracted location type/address/coords/timezone instead of losing
+        // the structured geo data at the confirmation boundary. The overlay
+        // itself is *not* applied while the fact is pending — the row is only
+        // created once the user confirms the fact.
+        if let Some(loc) = &location {
+            if let Err(e) = queries::entity::insert_pending_location_meta(
+                kg.pool(),
+                fact.id,
+                loc.location_type as i16,
+                loc.address.as_deref(),
+                loc.latitude,
+                loc.longitude,
+                loc.timezone.as_deref(),
+            )
+            .await
+            {
+                tracing::warn!(
+                    "failed to persist pending location meta for fact {}: {}",
+                    fact.id,
+                    e
+                );
+            }
+        }
+
         return Ok(ProcessResult::Pending(PendingFact {
             fact_id: fact.id,
             subject_name,

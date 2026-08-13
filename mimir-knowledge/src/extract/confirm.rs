@@ -2,10 +2,11 @@
 
 use crate::inference::CascadeContext;
 use crate::models::audit_log::{ChangeType, ChangedBy};
-use crate::models::enums::{AutoCompletePolicy, EventType, RecurrenceType};
+use crate::models::enums::{AutoCompletePolicy, EventType, LocationType, RecurrenceType};
 use crate::models::event::NewEvent;
 use crate::models::fact::{Fact, FactStatus};
 use crate::models::source::{ExtractionMethod, SourceType};
+use crate::normalize::{LocationOverlayApply, NormalizedLocation, apply_location_overlay};
 use crate::queries;
 use crate::{KnowledgeError, KnowledgeGraph};
 
@@ -167,6 +168,61 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
                 }
             }
         }
+    }
+
+    // Entity-locations overlay (issue #226): sensitive "where" facts return
+    // `Pending` before the location-overlay block in `process_normalized_fact`,
+    // so the structured geo data would otherwise be lost across the
+    // confirmation boundary. Now that the fact is confirmed and Active,
+    // rebuild the `entity_locations` row from the location shape persisted at
+    // extraction time (`pending_location_meta`): re-run the geocode-fill
+    // (address -> coords or coords -> address) and upsert with the *confirmed
+    // fact's* temporal bounds and id, exactly as the non-sensitive path does.
+    // Legacy pending facts that predate the `pending_location_meta` table have
+    // no shape and get no overlay. The fact is already committed as confirmed,
+    // so a rebuild failure must never propagate to the caller — log and
+    // continue (the row is still created without the geocoded half, matching
+    // the non-sensitive path's geocoder-error tolerance).
+    match queries::entity::get_pending_location_meta(kg.pool(), updated.id).await {
+        Ok(Some(meta)) => {
+            let apply = LocationOverlayApply {
+                geocoder: kg.geocoder().cloned(),
+                entity_id: updated.subject_id,
+                location: NormalizedLocation {
+                    location_type: LocationType::try_from(meta.location_type_id)
+                        .unwrap_or(LocationType::Visited),
+                    address: meta.address,
+                    latitude: meta.latitude,
+                    longitude: meta.longitude,
+                    timezone: meta.timezone,
+                },
+                valid_from: updated.valid_from,
+                valid_until: updated.valid_until,
+                fact_id: updated.id,
+                // Place anchoring (Phase 3 C2) is not rebuilt on this path:
+                // `pending_location_meta` stores the NormalizedLocation shape
+                // only, so a sensitive Place-object fact gets the subject's
+                // location row but no `Geographic` anchor for the place.
+                place_anchor: None,
+            };
+            apply_location_overlay(kg.pool(), kg.write_lock(), apply).await;
+            // Meta is consumed; drop it so it cannot drift from the overlay.
+            if let Err(e) =
+                queries::entity::delete_pending_location_meta(kg.pool(), updated.id).await
+            {
+                tracing::warn!(
+                    "failed to clear pending location meta for fact {}: {}",
+                    updated.id,
+                    e
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!(
+            "failed to read pending location meta for confirmed fact {}: {}",
+            updated.id,
+            e
+        ),
     }
 
     // Trigger inference now that the fact is Active and cascade inferred facts.

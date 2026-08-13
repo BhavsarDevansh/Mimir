@@ -130,6 +130,13 @@ fn nominatim_preset_respects_usage_policy() {
     ));
 }
 
+#[test]
+fn nominatim_preset_is_the_default_config() {
+    // The Nominatim preset is intentionally the conservative default, so the
+    // two must never drift apart (issue #223).
+    assert_eq!(RateLimitConfig::nominatim(), RateLimitConfig::default());
+}
+
 // ---------------------------------------------------------------------------
 // Backoff delay progression (pure)
 // ---------------------------------------------------------------------------

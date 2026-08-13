@@ -181,7 +181,9 @@ with a parsed `Retry-After` header.
 
 `RateLimitConfig::nominatim()` ships a policy-compliant preset for the OSM
 Nominatim geocoder (≤ 1 req/s, no burst, no daily quota, exponential backoff).
-The caller is still responsible for sending an identifying `User-Agent`.
+The preset is exactly the conservative `Default` config, so it delegates to
+`Default::default()` (single source of truth, issue #223). The caller is still
+responsible for sending an identifying `User-Agent`.
 
 ## System connections
 

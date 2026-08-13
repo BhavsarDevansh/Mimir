@@ -138,6 +138,7 @@ pub struct RateLimitConfig {
 impl Default for RateLimitConfig {
     /// A conservative default: 1 req/s, burst 1, no daily quota, exponential
     /// backoff. Safe for most public APIs; tighten per service as needed.
+    /// This is also the [`RateLimitConfig::nominatim`] preset.
     fn default() -> Self {
         Self {
             requests_per_second: 1.0,
@@ -151,13 +152,10 @@ impl Default for RateLimitConfig {
 impl RateLimitConfig {
     /// Preset compliant with the OSM Nominatim usage policy: ≤ 1 req/s, no
     /// burst, no daily quota, exponential backoff. The caller is still
-    /// responsible for sending an identifying `User-Agent`.
+    /// responsible for sending an identifying `User-Agent`. This is exactly
+    /// the conservative [`Default`] config, so the preset delegates to it to
+    /// keep a single source of truth (issue #223).
     pub fn nominatim() -> Self {
-        Self {
-            requests_per_second: 1.0,
-            burst_size: 1,
-            daily_quota: None,
-            backoff_strategy: BackoffStrategy::default(),
-        }
+        Self::default()
     }
 }

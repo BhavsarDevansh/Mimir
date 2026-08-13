@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.101.1] — 2026-08-13
+
+### Docs: Connectors Technical-Design.md synced with the locked Connector trait (issue #222)
+
+- **`VISION/03-Connectors/Technical-Design.md` rewritten to match the locked Phase 3 implementation.** The stale pre-F6 interface (authenticate with a config argument, `sync -> Vec<RawEvent>`, `extract(Vec<RawEvent>) -> Vec<ExtractedFact>`, `forget(&mut self)`) is replaced with the actual `Connector` / `ConnectorFactory` traits and `ConnectorContext` from `mimir-connectors/src/connector.rs`, the `NormalizedFact` model from `mimir-knowledge/src/normalize/types.rs`, and the real data types (`ConnectorMode`, `SyncOptions` / `SyncOutcome`, `HealthStatus`, `ConnectorAction` / `ActionResult`, `ConnectorError`). The lifecycle diagram, sync-strategy section, normalization-pipeline examples, rate-limiting pointer, and technology stack were aligned with the code, and a source-of-truth note now points readers at the crate and `VISION/09-Roadmap/Phase-3-Plan.md`.
+- Version bumped 0.101.0 → 0.101.1 (patch — backwards-compatible documentation update).
+
 ## [0.101.0] — 2026-08-13
 
 ### Autonomous development loop

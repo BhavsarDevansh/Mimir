@@ -262,7 +262,13 @@ async fn process_normalized_fact(
     // object text. Rust can only narrow (AND gate) — it never flags a fact as
     // sensitive when the producer did not.
     if crate::sensitivity::is_sensitive(is_sensitive, &new_fact.category_ids, &object) {
-        let fact = insert_sensitive_fact(kg, new_fact, now, relationship_type_id).await?;
+        // The location-overlay shape is persisted inside the same transaction
+        // as the pending fact (issue #226), so a confirmable fact can never
+        // exist without the shape `confirm_fact` needs to rebuild its
+        // `entity_locations` row.
+        let fact =
+            insert_sensitive_fact(kg, new_fact, now, relationship_type_id, location.as_ref())
+                .await?;
 
         // Only add to in-memory cache after successful commit.
         kg.pending_confirmations().write().await.insert(fact.id);
@@ -284,32 +290,6 @@ async fn process_normalized_fact(
             {
                 tracing::warn!(
                     "failed to persist pending event meta for fact {}: {}",
-                    fact.id,
-                    e
-                );
-            }
-        }
-
-        // Persist the derived location-overlay shape (issue #226) so
-        // `confirm_fact` can rebuild the `entity_locations` row from the
-        // extracted location type/address/coords/timezone instead of losing
-        // the structured geo data at the confirmation boundary. The overlay
-        // itself is *not* applied while the fact is pending — the row is only
-        // created once the user confirms the fact.
-        if let Some(loc) = &location {
-            if let Err(e) = queries::entity::insert_pending_location_meta(
-                kg.pool(),
-                fact.id,
-                loc.location_type as i16,
-                loc.address.as_deref(),
-                loc.latitude,
-                loc.longitude,
-                loc.timezone.as_deref(),
-            )
-            .await
-            {
-                tracing::warn!(
-                    "failed to persist pending location meta for fact {}: {}",
                     fact.id,
                     e
                 );

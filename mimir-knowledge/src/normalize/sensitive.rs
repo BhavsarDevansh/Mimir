@@ -4,16 +4,20 @@ use chrono::{DateTime, Utc};
 
 use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::fact::{Fact, FactStatus, NewFact};
+use crate::normalize::types::NormalizedLocation;
+use crate::queries;
 use crate::{KnowledgeError, KnowledgeGraph};
 // ---------------------------------------------------------------------------
 
 /// Insert a sensitive fact atomically with Disputed status and
-/// pending_confirmation=TRUE.
+/// pending_confirmation=TRUE, persisting the location-overlay shape in the
+/// same transaction when the fact carries one (issue #226).
 pub(super) async fn insert_sensitive_fact(
     kg: &KnowledgeGraph,
     new_fact: NewFact,
     now: DateTime<Utc>,
     relationship_type_id: i16,
+    location: Option<&NormalizedLocation>,
 ) -> Result<Fact, KnowledgeError> {
     let confidence = new_fact
         .confidence
@@ -107,6 +111,24 @@ pub(super) async fn insert_sensitive_fact(
             .bind(category_id)
             .execute(&mut *tx)
             .await?;
+    }
+
+    // Persist the location-overlay shape in the same transaction as the fact
+    // (issue #226): a confirmable fact must never exist without the shape
+    // `confirm_fact` needs to rebuild its `entity_locations` row. If either
+    // write fails, both roll back and the caller reports an error instead of
+    // leaving a confirmable fact that would lose its location payload.
+    if let Some(loc) = location {
+        queries::entity::insert_pending_location_meta_in_tx(
+            &mut tx,
+            fact_id,
+            loc.location_type as i16,
+            loc.address.as_deref(),
+            loc.latitude,
+            loc.longitude,
+            loc.timezone.as_deref(),
+        )
+        .await?;
     }
 
     tx.commit().await?;

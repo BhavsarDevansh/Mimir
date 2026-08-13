@@ -342,7 +342,10 @@ async fn confirm_rebuilds_location_overlay_for_sensitive_where_fact() {
                 object: "10 Downing St".to_string(),
                 object_is_entity: false,
                 object_type: None,
-                temporal: None,
+                temporal: Some(Temporal {
+                    valid_from: Some("2024-03-15T12:00:00Z".to_string()),
+                    valid_until: Some("2024-09-15T12:00:00Z".to_string()),
+                }),
                 is_sensitive: true,
                 correction_scope: None,
                 categories: vec!["230".to_string()],
@@ -387,6 +390,20 @@ async fn confirm_rebuilds_location_overlay_for_sensitive_where_fact() {
     );
     assert!((loc.longitude.unwrap() - -0.1278).abs() < 1e-6);
     assert_eq!(loc.timezone.as_deref(), Some("Europe/London"));
+    assert_eq!(
+        loc.valid_from,
+        Some(start),
+        "confirmed fact's overlay must preserve the start bound"
+    );
+    assert_eq!(
+        loc.valid_until,
+        Some(
+            DateTime::parse_from_rfc3339("2024-09-15T12:00:00Z")
+                .unwrap()
+                .into()
+        ),
+        "confirmed fact's overlay must preserve the end bound"
+    );
     assert_eq!(
         loc.source_fact_id,
         Some(fact_id),

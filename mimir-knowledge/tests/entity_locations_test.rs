@@ -579,14 +579,16 @@ async fn sensitive_location_fact_gets_overlay_after_confirm() {
         MockGeocoder::new().with_forward(Ok(Some(london_result()))),
     ));
 
+    let mut fact = sensitive_home_fact(
+        Some("10 Downing St, London"),
+        None,
+        None,
+        Some(parse_dt("2024-01-01T00:00:00Z")),
+    );
+    fact.valid_until = Some(parse_dt("2024-06-30T00:00:00Z"));
     let outcome = normalize_and_insert(
         &kg,
-        vec![sensitive_home_fact(
-            Some("10 Downing St, London"),
-            None,
-            None,
-            Some(parse_dt("2024-01-01T00:00:00Z")),
-        )],
+        vec![fact],
         Provenance::chat(ExtractionMethod::LlmExtraction),
     )
     .await
@@ -626,6 +628,11 @@ async fn sensitive_location_fact_gets_overlay_after_confirm() {
     assert!((loc.longitude.unwrap() - -0.1278).abs() < 1e-6);
     assert_eq!(loc.timezone.as_deref(), Some("Europe/London"));
     assert_eq!(loc.valid_from, Some(parse_dt("2024-01-01T00:00:00Z")));
+    assert_eq!(
+        loc.valid_until,
+        Some(parse_dt("2024-06-30T00:00:00Z")),
+        "confirmed fact's overlay must preserve the end bound"
+    );
     assert_eq!(
         loc.source_fact_id,
         Some(pending.fact_id),

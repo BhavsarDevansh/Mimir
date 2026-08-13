@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.101.5] — 2026-08-13
+
+### Sensitive-fact location overlay hardened (PR #307 review)
+
+- **Atomic pending-fact + location-shape persistence.** The `pending_location_meta` insert now happens in the same transaction as the pending-fact insert (`insert_sensitive_fact`), so a confirmable fact can never exist without the shape confirmation needs to rebuild its `entity_locations` row; if either write fails, both roll back and the fact is reported as an error instead of being left confirmable without its location payload.
+- **Overlay meta consumed only on success.** `apply_location_overlay` now reports whether the `entity_locations` upsert succeeded, and `confirm_fact` deletes `pending_location_meta` only after a successful write — a failed write retains the shape (with a warning) so the overlay can be retried instead of losing the only location payload.
+- **Tests:** the confirm-path tests now supply a bounded `valid_until` and assert the confirmed location row preserves both temporal bounds (`mimir-knowledge/tests/entity_locations_test.rs`, `extract/confirm_tests.rs`).
+- **Docs:** `docs/entity-locations.md`, `docs/pending-fact-confirmation.md`, and `docs/wiki/entity-locations.md` updated for the atomic persistence and retention-on-failure behaviour.
+- Version bumped 0.101.4 → 0.101.5 (patch — backwards-compatible bug fixes).
+
 ## [0.101.4] — 2026-08-13
 
 ### Sensitive-fact location overlay rebuilt on confirmation (issue #226)

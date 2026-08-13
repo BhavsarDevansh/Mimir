@@ -205,15 +205,24 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
                 // location row but no `Geographic` anchor for the place.
                 place_anchor: None,
             };
-            apply_location_overlay(kg.pool(), kg.write_lock(), apply).await;
-            // Meta is consumed; drop it so it cannot drift from the overlay.
-            if let Err(e) =
-                queries::entity::delete_pending_location_meta(kg.pool(), updated.id).await
-            {
+            let overlay_ok = apply_location_overlay(kg.pool(), kg.write_lock(), apply).await;
+            if overlay_ok {
+                // Meta is consumed; drop it so it cannot drift from the overlay.
+                if let Err(e) =
+                    queries::entity::delete_pending_location_meta(kg.pool(), updated.id).await
+                {
+                    tracing::warn!(
+                        "failed to clear pending location meta for fact {}: {}",
+                        updated.id,
+                        e
+                    );
+                }
+            } else {
+                // The overlay write failed; retain the meta so a retry can
+                // rebuild the row instead of losing the only location payload.
                 tracing::warn!(
-                    "failed to clear pending location meta for fact {}: {}",
-                    updated.id,
-                    e
+                    "location overlay rebuild failed for confirmed fact {}; retaining pending_location_meta for retry",
+                    updated.id
                 );
             }
         }

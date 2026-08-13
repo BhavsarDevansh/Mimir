@@ -251,6 +251,39 @@ pub async fn insert_pending_location_meta(
     longitude: Option<f64>,
     timezone: Option<&str>,
 ) -> Result<(), KnowledgeError> {
+    let mut tx = pool.begin().await?;
+    insert_pending_location_meta_in_tx(
+        &mut tx,
+        fact_id,
+        location_type_id,
+        address,
+        latitude,
+        longitude,
+        timezone,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Persist the location-overlay shape for a pending sensitive fact inside an
+/// existing transaction.
+///
+/// The sensitive-fact insert and its overlay shape commit atomically (issue
+/// #226): a confirmable fact must never exist without the shape confirmation
+/// needs to rebuild its `entity_locations` row. Idempotent (`ON CONFLICT DO
+/// UPDATE`) so re-extraction of the same pending fact refreshes the shape
+/// rather than failing.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_pending_location_meta_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    fact_id: i32,
+    location_type_id: i16,
+    address: Option<&str>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    timezone: Option<&str>,
+) -> Result<(), KnowledgeError> {
     sqlx::query(
         "INSERT INTO pending_location_meta \
          (fact_id, location_type_id, address, latitude, longitude, timezone) \
@@ -268,7 +301,7 @@ pub async fn insert_pending_location_meta(
     .bind(latitude)
     .bind(longitude)
     .bind(timezone)
-    .execute(pool)
+    .execute(&mut **tx)
     .await?;
     Ok(())
 }
@@ -294,8 +327,12 @@ pub async fn get_pending_location_meta(
 }
 
 /// Remove the persisted location-overlay shape once the overlay has been
-/// rebuilt on confirmation. Rejecting a fact hard-deletes the row via
-/// `ON DELETE CASCADE`, so this is only needed for the confirm path.
+/// rebuilt on confirmation.
+///
+/// Call only after the overlay write has succeeded: on a failed write the row
+/// must be retained so the rebuild can be retried. Rejecting a fact
+/// hard-deletes the row via `ON DELETE CASCADE`, so this is only needed for
+/// the confirm path.
 pub async fn delete_pending_location_meta(
     pool: &SqlitePool,
     fact_id: i32,

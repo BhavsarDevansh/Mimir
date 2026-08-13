@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.101.0] — 2026-08-13
+
+### Autonomous development loop
+
+- **`scripts/autonomous-loop.sh` (new).** Deterministic bash orchestrator that runs on a configurable cadence (default 2h; `MIMIR_AUTONOMOUS_INTERVAL=1800` for a 30-minute cadence) and drives the whole GitHub lifecycle: on `main` it picks the next unblocked issue (blocked and unanswered `help-wanted` issues are skipped, active phase first), implements it via `codex exec` + the `gh-issue-tdd` skill, and publishes a DRAFT PR; on a feature branch it self-reviews the draft against `main` (fixing every finding), marks it ready, addresses unresolved review threads via the `gh-review-commit` skill, and merges once clean — explicitly logging when CodeRabbit skipped its review. Control flow stays in deterministic bash; only open-ended engineering is delegated to the agent.
+- **Review and merge gates.** Review-thread pagination omits the initial GraphQL cursor and then follows returned cursors, and auto-merge now requires GitHub's `CLEAN` merge state rather than treating behind or unstable PRs as mergeable.
+- **Issue hygiene built into the loop.** The implementation prompt fetches the full issue (all fields plus every comment), validates the spec against the current codebase (updating stale issue bodies with current context), posts exact human requirements with the `help-wanted` label and the `<!-- mimir-autonomous-question:N -->` marker when blocked, files new issues for out-of-scope problems using only existing labels, fixes missing quality/feature labels it encounters, and keeps `README.md`, `docs/wiki/what-works-now.md` and `AGENTS.md` accurate.
+- **Code-quality scope.** `candidate_issues()` now excludes feature development entirely: an issue must carry a quality label (`bug`, `refactor`, `maintenance`, `performance`, `security`, `documentation`, `testing`, `build`) or a quality title prefix, and `feature`-labelled or `Implement`/`Future:`-titled issues are hard exclusions; the implementation prompt repeats the same scope rule.
+- **Optional systemd user timer (`scripts/systemd/`).** `mimir-autonomous.service` + `.timer` run one iteration every 2h with `Persistent=true`, so missed runs are caught up on boot.
+- **Codex launch configuration.** `MIMIR_AUTONOMOUS_CODEX_ARGS` passes extra codex CLI flags (word-split) to every delegated session, taking full control of provider/sandbox/model; the systemd service ships with `--oss -m deepseek-v4-flash:cloud --yolo --config model_reasoning_effort=max --config model_context_window=1000000` so the loop runs on the OSS deepseek backend.
+- **Docs:** `docs/autonomous-loop.md`, `docs/wiki/autonomous-loop.md`, `README.md` (Autonomous Development Loop section) and `AGENTS.md` (Issue Hygiene & Autonomous Loop section) added/updated, with prose on the single-line markdown standard.
+- Version bumped 0.100.0 → 0.101.0 (minor — backwards-compatible new maintenance subsystem).
+
 ## [0.100.0] — 2026-08-12
 
 ### DRY: shared OAuth fake-browser test doubles (issue #290)

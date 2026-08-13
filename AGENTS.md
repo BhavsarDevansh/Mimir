@@ -74,6 +74,13 @@ After implementation is complete and all tests pass:
    - **Markdown prose formatting (all repo `.md` files AND PR/commit messages):** write prose as flowing single-line paragraphs and single-line list items. Do **not** hard-wrap lines with manual newlines inside a paragraph or list item — single newlines render as soft breaks and make the raw text and diffs hard to read. Keep blank lines only between blocks (headers, paragraphs, list items). Applies to `README.md`, `CHANGELOG.md`, `docs/`, `docs/wiki/`, `Mimir-Implementation-Context.md`, and every other `.md` file in the repo.
 6. Do not merge the PR yourself unless explicitly asked.
 
+## Issue Hygiene & Autonomous Loop
+
+- Keep open GitHub issues accurate: whenever you work in an area with open issues, refresh stale issue bodies and comments with the current state of the codebase instead of leaving outdated context in the tracker.
+- When you discover bugs, DRY violations, misplaced code, performance problems, or security concerns outside the current change set, file a new GitHub issue with clear, self-contained context, using only existing repository labels.
+- The repository can be driven by `scripts/autonomous-loop.sh`, which implements issues and maintains pull requests without human intervention. Human- and agent-initiated work must follow the same standards in this file.
+- The autonomous loop only implements code-quality issues (maintenance, DRY, bug fixes, refactors, robustness, performance, security, documentation, testing, build); feature development is out of scope for the loop.
+
 ## Semantic Versioning
 
 - After any work is done on the project — whether a feature, bugfix, refactor, or documentation update — bump the semantic version number in **all** workspace member `Cargo.toml` files (and the workspace root `Cargo.toml` if it declares a version) before committing.

@@ -121,6 +121,10 @@ The full project vision, architecture, and design documentation lives in the `VI
 
 Technical implementation docs (per-subsystem, including OAuth, testing, and the connector framework) live in [docs/](docs/), and user-facing feature docs in [docs/wiki/](docs/wiki/).
 
+## Autonomous Development Loop
+
+Mimir can develop itself: `scripts/autonomous-loop.sh` runs unattended on a configurable cadence (default every 2 hours, e.g. `MIMIR_AUTONOMOUS_INTERVAL=1800` for 30 minutes), picking the next unblocked GitHub issue, implementing it with full TDD and documentation updates, publishing a draft PR, addressing review comments (including CodeRabbit), and merging once reviews are clear — then moving on to the next ticket. It delegates engineering work to `codex exec` subagents, keeps issue hygiene by refreshing stale issue context and filing new issues for out-of-scope problems using the existing labels, and never merges while review threads are open. See [docs/autonomous-loop.md](docs/autonomous-loop.md) (technical) and [docs/wiki/autonomous-loop.md](docs/wiki/autonomous-loop.md) (user-facing). Stop it at any time by killing the loop process or disabling the systemd timer.
+
 ## License
 
 [GNU General Public License v3.0](LICENSE)

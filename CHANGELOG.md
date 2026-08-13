@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.101.1] — 2026-08-13
+
+### Connector design doc sync (issue #222) + autonomous-loop logging hardening
+
+- **`VISION/03-Connectors/Technical-Design.md` rewritten to match the locked Phase 3 implementation.** The stale pre-F6 interface (authenticate with a config argument, `sync -> Vec<RawEvent>`, `extract(Vec<RawEvent>) -> Vec<ExtractedFact>`, `forget(&mut self)`) is replaced with the actual `Connector` / `ConnectorFactory` traits and `ConnectorContext` from `mimir-connectors/src/connector.rs`, the `NormalizedFact` model from `mimir-knowledge/src/normalize/types.rs`, and the real data types (`ConnectorMode`, `SyncOptions` / `SyncOutcome`, `HealthStatus`, `ConnectorAction` / `ActionResult`, `ConnectorError`). The lifecycle diagram, sync-strategy section, normalization-pipeline examples, rate-limiting pointer, and technology stack were aligned with the code (including the scoped note that no connector-side `RawEvent` / `ExtractedFact` types exist), and a source-of-truth note now points readers at the crate and `VISION/09-Roadmap/Phase-3-Plan.md`.
+- **Autonomous-loop logging hardened for headless runs.** Terminal colours are now applied only when stderr is a TTY with terminfo available, so the persistent log file stays plain-text (grep-friendly) and a failing `tput` (systemd timer, `TERM` unset/dumb) can no longer abort the loop under `set -euo pipefail`; unused colour definitions were removed.
+- Version bumped 0.101.0 → 0.101.1 (patch — backwards-compatible documentation update).
+
 ## [0.101.0] — 2026-08-13
 
 ### Autonomous development loop

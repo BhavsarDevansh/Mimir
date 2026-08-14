@@ -424,6 +424,21 @@ pub trait Connector: Send + Sync {
     /// inserts the returned facts through the shared pipeline.
     async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError>;
 
+    /// Opaque connector-side durable state to persist after a successful
+    /// extraction cycle (issue #262).
+    ///
+    /// The supervisor persists the returned value via
+    /// `KnowledgeGraph::update_durable_state` and re-injects it at
+    /// construction (as the `__durable_state` config key), so
+    /// connector-owned state that must survive a daemon restart — the Email
+    /// connector's bounded LLM-extraction retry ledger — lives outside the
+    /// in-memory raw-item buffer. `None` means "nothing changed since the
+    /// last persist"; connectors that keep no durable state leave the
+    /// default.
+    fn durable_state(&self) -> Option<String> {
+        None
+    }
+
     /// Report the buffered server-side removals (tombstones) as the set of
     /// `raw_reference`s whose knowledge-graph facts should be trashed.
     ///

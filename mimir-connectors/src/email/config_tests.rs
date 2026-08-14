@@ -50,6 +50,21 @@ fn cursor_round_trip() {
 }
 
 #[test]
+fn llm_extraction_max_attempts_defaults_and_overrides() {
+    // Absent → the default (3). Explicit value → honoured verbatim.
+    let dto: EmailConfigDto = serde_json::from_value(app_config()).expect("config");
+    assert_eq!(
+        dto.llm_extraction_max_attempts,
+        crate::email::llm::DEFAULT_MAX_LLM_EXTRACTION_ATTEMPTS,
+        "absent field must default"
+    );
+    let mut config = app_config();
+    config["llm_extraction_max_attempts"] = serde_json::json!(5);
+    let dto: EmailConfigDto = serde_json::from_value(config).expect("config");
+    assert_eq!(dto.llm_extraction_max_attempts, 5);
+}
+
+#[test]
 fn from_config_seeds_cursor_and_slug() {
     // The factory extracts `__cursor` from config and passes it as the
     // `cursor` param (mirroring the Calendar connector / supervisor).

@@ -39,9 +39,13 @@
 //! - [`schema`] — LLM tool schema, wire types, and system prompt.
 //! - [`parse`] — LLM-output parsing with Rust-side validation.
 //! - [`message`] — spam classification, body text, subject canonicalisation.
+//! - [`retry`] — the durable, bounded retry ledger for failed prose
+//!   extraction (issue #262): attempt counts, cycle backoff, terminal
+//!   failures, and the persisted ledger format.
 
 mod message;
 mod parse;
+pub(crate) mod retry;
 mod schema;
 
 #[cfg(test)]
@@ -58,6 +62,10 @@ use tracing::{debug, warn};
 use crate::connector::ConnectorError;
 use crate::email::llm::message::{body_text, from_address, is_likely_spam};
 use crate::email::llm::parse::{build_fact, parse_output};
+pub(crate) use crate::email::llm::retry::{
+    DEFAULT_MAX_LLM_EXTRACTION_ATTEMPTS, FailureDisposition, ProseRetryLedger, RetryGate,
+    health_with_terminal,
+};
 use crate::email::llm::schema::{build_system_prompt, email_extraction_tool_schema};
 
 pub(crate) async fn extract_prose_facts(

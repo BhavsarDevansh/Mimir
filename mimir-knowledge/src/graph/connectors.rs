@@ -83,6 +83,20 @@ impl KnowledgeGraph {
         queries::connector::update_sync_cursor(&self.pool, id, cursor, self.now()).await
     }
 
+    /// Persist a connector's opaque durable state (e.g. the Email connector's
+    /// LLM-extraction retry ledger, issue #262). The supervisor calls this
+    /// after each successful extraction cycle with the value returned by the
+    /// connector's `durable_state()` hook (from `mimir-connectors`) and
+    /// re-injects it at construction as `__durable_state`, so retries and
+    /// terminal failures survive daemon restarts. `state = None` clears it.
+    pub async fn update_durable_state(
+        &self,
+        id: i32,
+        state: Option<&str>,
+    ) -> Result<models::connector::Connector, KnowledgeError> {
+        queries::connector::update_durable_state(&self.pool, id, state, self.now()).await
+    }
+
     /// Stamp `last_sync_at` **without** rewriting `sync_cursor`.
     ///
     /// Use this when a connector reports `SyncOutcome::new_cursor = None`

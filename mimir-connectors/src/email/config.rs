@@ -32,6 +32,9 @@ fn default_poll_jitter_secs() -> u64 {
 fn default_idle_timeout_secs() -> u64 {
     DEFAULT_IDLE_TIMEOUT.as_secs()
 }
+fn default_llm_max_attempts() -> u8 {
+    crate::email::llm::DEFAULT_MAX_LLM_EXTRACTION_ATTEMPTS
+}
 
 // ---------------------------------------------------------------------------
 // Config DTO (serde boundary for `config_json`)
@@ -134,6 +137,13 @@ pub struct EmailConfigDto {
     /// Display name override. Defaults to "Gmail".
     #[serde(default)]
     pub display_name: Option<String>,
+    /// Maximum LLM prose-extraction attempts per message before the message
+    /// is marked permanently failed (issue #262). Bounded retries run with
+    /// exponential cycle backoff (1, 2, 4, … cycles); once exhausted the
+    /// message stops consuming LLM calls and is recorded as a terminal
+    /// failure. Defaults to 3. Values below 1 are clamped to 1 at use.
+    #[serde(default = "default_llm_max_attempts")]
+    pub llm_extraction_max_attempts: u8,
 }
 
 // ---------------------------------------------------------------------------

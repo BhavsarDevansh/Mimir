@@ -127,6 +127,40 @@ async fn update_sync_cursor_persists_and_errors_on_missing() {
 }
 
 #[tokio::test]
+async fn durable_state_persists_clears_and_survives_reupsert() {
+    let (kg, _dir) = init_kg().await;
+    let c = kg.upsert_connector(gmail_input("durable")).await.unwrap();
+    assert_eq!(
+        c.durable_state, None,
+        "new rows start with no durable state"
+    );
+
+    let updated = kg
+        .update_durable_state(c.id, Some("ledger-v1"))
+        .await
+        .unwrap();
+    assert_eq!(updated.durable_state.as_deref(), Some("ledger-v1"));
+
+    // A config re-upsert (same slug) must not clobber the durable state:
+    // it is owned by its dedicated mutator, like `sync_cursor`.
+    let reupserted = kg.upsert_connector(gmail_input("durable")).await.unwrap();
+    assert_eq!(
+        reupserted.durable_state.as_deref(),
+        Some("ledger-v1"),
+        "re-upsert must preserve durable state"
+    );
+
+    let cleared = kg.update_durable_state(c.id, None).await.unwrap();
+    assert_eq!(cleared.durable_state, None);
+
+    let err = kg.update_durable_state(i32::MAX, None).await;
+    assert!(matches!(
+        err,
+        Err(mimir_knowledge::KnowledgeError::ConnectorNotFound(_))
+    ));
+}
+
+#[tokio::test]
 async fn touch_last_sync_preserves_cursor_and_stamps_time() {
     let (kg, _dir) = init_kg().await;
     let c = kg.upsert_connector(gmail_input("personal")).await.unwrap();

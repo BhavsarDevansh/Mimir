@@ -438,6 +438,16 @@ pub(super) async fn run_cycle(
         return CycleOutcome::Err(error.to_string());
     }
 
+    // Persist connector-side durable state (e.g. the Email connector's
+    // bounded LLM-extraction retry ledger, issue #262) so retries and
+    // terminal failures survive daemon restarts. `None` means "unchanged"
+    // and skips the write.
+    if let Some(state) = connector.durable_state() {
+        if let Err(error) = kg.update_durable_state(instance_id, Some(&state)).await {
+            return CycleOutcome::Err(error.to_string());
+        }
+    }
+
     // The deletions were trashed, this cycle's facts inserted, and the cursor
     // persisted — only now may the connector drop the acknowledged removals.
     // An acknowledgement failure is not fatal: the removals stay pending and
@@ -636,6 +646,119 @@ mod tests {
         assert!(
             connector.extract_deletions().await.unwrap().is_empty(),
             "the acknowledged tombstones are dropped after a successful cycle"
+        );
+    }
+
+    /// Delegating connector that reports a canned durable state after every
+    /// extraction, simulating the Email connector's LLM-extraction retry
+    /// ledger (issue #262).
+    struct DurableStateConnector {
+        inner: MockConnector,
+        state: String,
+    }
+
+    #[async_trait::async_trait]
+    impl Connector for DurableStateConnector {
+        fn id(&self) -> &str {
+            self.inner.id()
+        }
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+        fn connector_type(&self) -> ConnectorType {
+            self.inner.connector_type()
+        }
+        fn mode(&self) -> ConnectorMode {
+            self.inner.mode()
+        }
+        fn config_schema(&self) -> serde_json::Value {
+            self.inner.config_schema()
+        }
+        async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError> {
+            self.inner.authenticate().await
+        }
+        async fn health(&self) -> Result<HealthStatus, ConnectorError> {
+            self.inner.health().await
+        }
+        async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
+            self.inner.sync(options).await
+        }
+        async fn extract(
+            &self,
+        ) -> Result<Vec<mimir_knowledge::normalize::NormalizedFact>, ConnectorError> {
+            self.inner.extract().await
+        }
+        async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError> {
+            self.inner.extract_deletions().await
+        }
+        async fn acknowledge_deletions(&self, deleted: &[String]) -> Result<(), ConnectorError> {
+            self.inner.acknowledge_deletions(deleted).await
+        }
+        async fn act(
+            &self,
+            action: crate::connector::ConnectorAction,
+        ) -> Result<crate::connector::ActionResult, ConnectorError> {
+            self.inner.act(action).await
+        }
+        async fn forget(&self) -> Result<(), ConnectorError> {
+            self.inner.forget().await
+        }
+        fn durable_state(&self) -> Option<String> {
+            Some(self.state.clone())
+        }
+    }
+
+    /// A connector that reports durable state must have it persisted by the
+    /// cycle (after extraction, alongside the cursor) so retries and
+    /// terminal failures survive daemon restarts.
+    #[tokio::test]
+    async fn cycle_persists_connector_durable_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+                .await
+                .unwrap(),
+        );
+
+        let row = kg
+            .upsert_connector(UpsertConnectorInput {
+                connector_type: ConnectorType::Gmail,
+                slug: "durable-state".to_string(),
+                backend: "mock".to_string(),
+                display_name: "Durable State".to_string(),
+                config_json: "{}".to_string(),
+                status: None,
+                auth_state: None,
+            })
+            .await
+            .unwrap();
+
+        let connector = Arc::new(DurableStateConnector {
+            inner: MockConnector::from_config(json!({
+                "__slug": "durable-state",
+                "mode": "polling",
+                "interval_ms": 1,
+                "jitter_ms": 0,
+            }))
+            .unwrap(),
+            state: "{\"pending\":{}}".to_string(),
+        });
+
+        let outcome = run_cycle(
+            connector,
+            kg.clone(),
+            row.id,
+            ConnectorType::Gmail,
+            SyncOptions::default(),
+        )
+        .await;
+        assert!(matches!(outcome, CycleOutcome::Ok(_)));
+
+        let persisted = kg.get_connector(row.id).await.unwrap().unwrap();
+        assert_eq!(
+            persisted.durable_state.as_deref(),
+            Some("{\"pending\":{}}"),
+            "durable state must be persisted by the cycle"
         );
     }
 }

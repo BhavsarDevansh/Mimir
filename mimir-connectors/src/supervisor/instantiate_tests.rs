@@ -16,6 +16,7 @@ fn row_with_cursor(cursor: Option<&str>) -> ConnectorRow {
         status_id: ConnectorStatus::Active as i16,
         auth_state_id: ConnectorAuthState::Authenticated as i16,
         sync_cursor: cursor.map(str::to_string),
+        durable_state: None,
         last_sync_at: None,
         last_error: None,
         created_at: Utc::now(),
@@ -69,6 +70,53 @@ async fn instantiate_injects_cursor() {
         map.get("__cursor").and_then(|v| v.as_str()),
         Some("v1"),
         "persisted cursor must be injected for incremental connectors"
+    );
+    assert!(
+        map.get("__durable_state")
+            .map(|v| v.is_null())
+            .unwrap_or(false),
+        "absent durable state must be injected as JSON null, not omitted"
+    );
+}
+
+/// `instantiate` must inject the persisted `durable_state` (issue #262) so
+/// connectors can seed durable retry state at construction.
+#[tokio::test]
+async fn instantiate_injects_durable_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = Arc::new(
+        KnowledgeGraph::init(&dir.path().join("kg.db"))
+            .await
+            .unwrap(),
+    );
+    let captured = Arc::new(std::sync::Mutex::new(None::<serde_json::Value>));
+    let capture = captured.clone();
+    let registry = ConnectorRegistry::new();
+    registry
+        .register(
+            ConnectorType::Photos,
+            "local".to_string(),
+            FnConnectorFactory::new(move |config, _ctx| {
+                *capture.lock().unwrap() = Some(config.clone());
+                Ok(Arc::new(crate::MockConnector::default()) as Arc<dyn Connector>)
+            }),
+        )
+        .unwrap();
+    let (_tx, rx) = watch::channel(false);
+    let supervisor =
+        ConnectorSupervisor::new(Arc::new(registry), kg, SupervisorConfig::default(), rx);
+
+    let mut row = row_with_cursor(None);
+    row.durable_state = Some("ledger-v1".to_string());
+    supervisor
+        .instantiate(&row, ConnectorType::Photos)
+        .expect("instantiate succeeds");
+    let config = captured.lock().unwrap().take().expect("config captured");
+    let map = config.as_object().expect("config is an object");
+    assert_eq!(
+        map.get("__durable_state").and_then(|v| v.as_str()),
+        Some("ledger-v1"),
+        "persisted durable state must be injected"
     );
 }
 
@@ -149,6 +197,7 @@ async fn with_secret_store_propagates_into_factory_context() {
         status_id: ConnectorStatus::Active as i16,
         auth_state_id: ConnectorAuthState::Authenticated as i16,
         sync_cursor: None,
+        durable_state: None,
         last_sync_at: None,
         last_error: None,
         created_at: Utc::now(),

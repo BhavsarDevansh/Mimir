@@ -12,6 +12,7 @@ use crate::connector::{
 use crate::email::config::EmailSyncMode;
 use crate::email::connector::EmailConnector;
 use crate::email::imap;
+use crate::email::llm::{FailureDisposition, RetryGate, health_with_terminal};
 use crate::email::{jsonld, llm};
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType};
 
@@ -87,6 +88,7 @@ impl Connector for EmailConnector {
                 "poll_interval_secs": { "type": "integer", "default": 300 },
                 "poll_jitter_secs": { "type": "integer", "default": 30 },
                 "idle_timeout_secs": { "type": "integer", "default": 1680 },
+                "llm_extraction_max_attempts": { "type": "integer", "minimum": 1, "maximum": 255, "default": 3 },
                 "display_name": { "type": "string" }
             }
         })
@@ -102,13 +104,17 @@ impl Connector for EmailConnector {
     }
 
     async fn health(&self) -> Result<HealthStatus, ConnectorError> {
-        match self.probe_capability().await {
-            Ok(_) => Ok(HealthStatus::Online),
-            Err(ConnectorError::NotAuthenticated) => Ok(HealthStatus::NotConfigured),
-            Err(ConnectorError::Authentication(_)) => Ok(HealthStatus::AuthExpired),
-            Err(ConnectorError::Network(_)) => Ok(HealthStatus::Offline),
-            Err(e) => Err(e),
-        }
+        let probe = match self.probe_capability().await {
+            Ok(_) => HealthStatus::Online,
+            Err(ConnectorError::NotAuthenticated) => HealthStatus::NotConfigured,
+            Err(ConnectorError::Authentication(_)) => HealthStatus::AuthExpired,
+            Err(ConnectorError::Network(_)) => HealthStatus::Offline,
+            Err(e) => return Err(e),
+        };
+        Ok(health_with_terminal(
+            probe,
+            self.prose_retry.lock().unwrap().terminal_count(),
+        ))
     }
 
     async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
@@ -150,6 +156,22 @@ impl Connector for EmailConnector {
             // epoch, so qualify the provenance reference as `{uid_validity}:{uid}`
             // (matching the persisted cursor format) to stay globally unique.
             let raw_ref = format!("{}:{}", mail.uid_validity, mail.uid);
+            // Durable retry ledger (issue #262): a message awaiting a bounded
+            // LLM retry skips this cycle during its backoff window (staying
+            // staged); a message whose retry budget is exhausted is dropped
+            // without re-processing, so it stops consuming LLM calls.
+            let gate = self.prose_retry.lock().unwrap().gate(&raw_ref);
+            match gate {
+                RetryGate::Backoff => {
+                    self.buffer.lock().await.push(mail.clone());
+                    continue;
+                }
+                RetryGate::SkippedTerminal => {
+                    debug!(raw_ref, "skipping permanently-failed LLM extraction");
+                    continue;
+                }
+                RetryGate::Attempt => {}
+            }
             if let Some(message) = MessageParser::default().parse(&mail.raw) {
                 // Layers 1-2: deterministic extraction (structured parse). Both
                 // run on the same parsed Message so there is no second MIME
@@ -185,34 +207,70 @@ impl Connector for EmailConnector {
                 // the LLM (avoids duplicate extraction and bounds LLM cost).
                 // When no backend is injected the layer is skipped, leaving
                 // deterministic extraction unchanged.
-                if facts.len() == before {
-                    if let Some(backend) = &self.llm_backend {
-                        match llm::extract_prose_facts(
-                            backend,
-                            self.user_identity.as_deref(),
-                            &message,
-                            &raw_ref,
-                        )
-                        .await
-                        {
-                            Ok(prose_facts) => facts.extend(prose_facts),
-                            // A retryable LLM failure must not become a
-                            // silent empty extraction: the buffer was drained
-                            // and the IMAP cursor advanced, so re-staging the
-                            // raw email keeps it for the next extraction cycle
-                            // (until extraction succeeds or a durable retry /
-                            // terminal-failure policy lands). Deterministic
-                            // facts already collected this cycle are kept, so
-                            // a transient LLM error never blocks them.
-                            Err(error) => {
-                                warn!(
-                                    raw_ref,
-                                    "LLM email extraction failed; re-staging raw email for retry: {error}"
-                                );
-                                self.buffer.lock().await.push(mail.clone());
+                if facts.len() != before {
+                    // A deterministic layer read the message; settle any
+                    // stale retry entry so it cannot resurrect a retry.
+                    self.prose_retry.lock().unwrap().settle(&raw_ref);
+                } else if let Some(backend) = &self.llm_backend {
+                    match llm::extract_prose_facts(
+                        backend,
+                        self.user_identity.as_deref(),
+                        &message,
+                        &raw_ref,
+                    )
+                    .await
+                    {
+                        Ok(prose_facts) => {
+                            // The message was read (facts, or an explicit
+                            // no-facts verdict); settle the ledger.
+                            self.prose_retry.lock().unwrap().settle(&raw_ref);
+                            facts.extend(prose_facts);
+                        }
+                        // A retryable LLM failure must not become a silent
+                        // empty extraction: the buffer was drained and the
+                        // IMAP cursor advanced, so re-staging the raw email
+                        // keeps it for the next extraction cycle. The retry
+                        // is bounded (issue #262): the ledger counts attempts,
+                        // waits an exponential cycle backoff, and records a
+                        // terminal failure once the budget is exhausted.
+                        // Deterministic facts already collected this cycle
+                        // are kept, so a transient LLM error never blocks
+                        // them.
+                        Err(error) => {
+                            let max_attempts =
+                                self.config.llm_extraction_max_attempts.clamp(1, u8::MAX);
+                            let disposition = self.prose_retry.lock().unwrap().record_failure(
+                                &raw_ref,
+                                mail.uid_validity,
+                                mail.uid,
+                                &mail.raw,
+                                max_attempts,
+                                error.to_string(),
+                            );
+                            match disposition {
+                                FailureDisposition::Retry { skip_cycles } => {
+                                    warn!(
+                                        raw_ref,
+                                        skip_cycles,
+                                        "LLM email extraction failed; re-staging raw email for bounded retry: {error}"
+                                    );
+                                    self.buffer.lock().await.push(mail.clone());
+                                }
+                                FailureDisposition::Terminal => {
+                                    warn!(
+                                        raw_ref,
+                                        max_attempts,
+                                        "LLM email extraction permanently failed; skipping message: {error}"
+                                    );
+                                }
                             }
                         }
                     }
+                } else {
+                    // No backend configured: nothing to extract and no retry
+                    // is possible — settle any stale ledger entry so it
+                    // cannot linger across restarts.
+                    self.prose_retry.lock().unwrap().settle(&raw_ref);
                 }
             } else {
                 debug!(uid = mail.uid, "could not parse RFC 822 message; skipping");
@@ -223,6 +281,7 @@ impl Connector for EmailConnector {
 
     async fn forget(&self) -> Result<(), ConnectorError> {
         self.buffer.lock().await.clear();
+        self.prose_retry.lock().unwrap().clear();
         *self.last_uid.lock().await = None;
         if let Some(store) = &self.secret_store {
             store.delete(&self.slug).await.map_err(|e| {
@@ -230,5 +289,9 @@ impl Connector for EmailConnector {
             })?;
         }
         Ok(())
+    }
+
+    fn durable_state(&self) -> Option<String> {
+        self.prose_retry.lock().unwrap().take_durable()
     }
 }

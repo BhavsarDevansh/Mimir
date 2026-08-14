@@ -16,6 +16,13 @@ use crate::KnowledgeError;
 use crate::models::entity_location::EntityLocation;
 use crate::queries::fact::ranges_overlap;
 
+/// Insert a location row inside an existing transaction.
+///
+/// The transaction is the caller's to commit or roll back; used by
+/// [`upsert_location`] for the atomic move/supersession write and exposed for
+/// callers that need to batch a location insert with other writes.
+/// [`insert_location`] is the convenience wrapper that opens its own
+/// transaction (direct-seed path; no supersession).
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_location_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,

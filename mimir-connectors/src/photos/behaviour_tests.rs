@@ -186,10 +186,12 @@ async fn extract_falls_back_when_geocoder_finds_no_match() {
         .await
         .push(gps_raw("a.jpg", 0.0, 0.0));
     let fact = connector.extract().await.unwrap().pop().unwrap();
-    // No place → C1 coords-only `took_photo` fallback; data is not lost.
-    assert_eq!(fact.relationship_type, "took_photo");
-    assert_eq!(fact.object, "a.jpg");
+    // GPS with no place → `visited <coords-label>` fallback (issue #250):
+    // the photo file is provenance (`raw_reference`), never the fact object.
+    assert_eq!(fact.relationship_type, "visited");
+    assert_eq!(fact.object, "0.000, 0.000");
     assert!(!fact.object_is_entity);
+    assert_eq!(fact.raw_reference.as_deref(), Some("a.jpg"));
     assert!(fact.location.is_some());
     // A genuine no-match is cached so the same spot is not re-queried.
     assert_eq!(connector.geocode_cache.lock().await.len(), 1);
@@ -252,10 +254,11 @@ async fn extract_bounds_geocode_retries_to_one_per_spot_per_cycle() {
         gps_raw("d.jpg", 1.0, 1.0),
     ]);
     let facts = connector.extract().await.unwrap();
-    // All four photos degrade to the C1 coords-only fallback; no data lost.
+    // All four photos degrade to the coords-only `visited` fallback; no data
+    // lost (issue #250).
     assert_eq!(facts.len(), 4);
     for fact in &facts {
-        assert_eq!(fact.relationship_type, "took_photo");
+        assert_eq!(fact.relationship_type, "visited");
         assert!(!fact.object_is_entity);
     }
     // One geocode attempt per distinct bucket (2), not per photo (4): the
@@ -292,25 +295,27 @@ async fn extract_falls_back_without_geocoder() {
         .await
         .push(gps_raw("a.jpg", 46.5, 7.5));
     let fact = connector.extract().await.unwrap().pop().unwrap();
-    assert_eq!(fact.relationship_type, "took_photo");
-    assert_eq!(fact.object, "a.jpg");
+    assert_eq!(fact.relationship_type, "visited");
+    assert_eq!(fact.object, "46.500, 7.500");
+    assert_eq!(fact.raw_reference.as_deref(), Some("a.jpg"));
 }
 
 // -- fact conversion --
 #[test]
-fn raw_photo_with_gps_falls_back_to_coords_only_without_place() {
+fn raw_photo_with_gps_falls_back_to_visited_without_place() {
     let raw = RawPhoto {
         rel_path: "2024/IMG_001.jpg".to_string(),
         taken_at: DateTime::<Utc>::from_timestamp(1_715_000_000, 0).unwrap(),
         latitude: Some(46.5),
         longitude: Some(7.5),
     };
-    // No resolved place → C1 coords-only `took_photo` fallback shape.
+    // No resolved place → `visited <coords-label>` fallback (issue #250):
+    // the real-world event is the fact, the photo path is provenance.
     let fact = raw.to_fact("Devansh", None);
     assert_eq!(fact.subject, "Devansh");
     assert_eq!(fact.subject_type, EntityType::Person);
-    assert_eq!(fact.relationship_type, "took_photo");
-    assert_eq!(fact.object, "2024/IMG_001.jpg");
+    assert_eq!(fact.relationship_type, "visited");
+    assert_eq!(fact.object, "46.500, 7.500");
     assert!(!fact.object_is_entity);
     assert_eq!(fact.raw_reference.as_deref(), Some("2024/IMG_001.jpg"));
     let loc = fact.location.expect("location overlay");
@@ -318,6 +323,49 @@ fn raw_photo_with_gps_falls_back_to_coords_only_without_place() {
     assert_eq!(loc.address, None);
     assert!((loc.latitude.unwrap() - 46.5).abs() < 1e-9);
     assert!((loc.longitude.unwrap() - 7.5).abs() < 1e-9);
+}
+
+#[test]
+fn photos_in_same_gps_bucket_share_the_visited_label() {
+    let a = RawPhoto {
+        rel_path: "a.jpg".to_string(),
+        taken_at: DateTime::<Utc>::from_timestamp(1_715_000_000, 0).unwrap(),
+        latitude: Some(46.5001),
+        longitude: Some(7.5001),
+    };
+    let b = RawPhoto {
+        rel_path: "b.jpg".to_string(),
+        taken_at: DateTime::<Utc>::from_timestamp(1_715_000_001, 0).unwrap(),
+        latitude: Some(46.5002),
+        longitude: Some(7.5002),
+    };
+    let fact_a = a.to_fact("Devansh", None);
+    let fact_b = b.to_fact("Devansh", None);
+    // The label comes from the millidegree bucket (the same rounding as the
+    // reverse-geocode cache key), so photos at the same ~111 m spot author
+    // the same object and corroborate into one `visited` fact per spot.
+    assert_eq!(fact_a.relationship_type, "visited");
+    assert_eq!(fact_a.object, fact_b.object);
+    assert_eq!(fact_a.object, "46.500, 7.500");
+
+    // Zero-crossing edge: `+0.0004` and `-0.0004` both round to bucket 0, so
+    // their labels must match too (`-0.000` must not leak into the object).
+    let plus = RawPhoto {
+        rel_path: "plus.jpg".to_string(),
+        taken_at: DateTime::<Utc>::from_timestamp(1_715_000_000, 0).unwrap(),
+        latitude: Some(0.0004),
+        longitude: Some(0.0004),
+    };
+    let minus = RawPhoto {
+        rel_path: "minus.jpg".to_string(),
+        taken_at: DateTime::<Utc>::from_timestamp(1_715_000_000, 0).unwrap(),
+        latitude: Some(-0.0004),
+        longitude: Some(-0.0004),
+    };
+    let fact_plus = plus.to_fact("Devansh", None);
+    let fact_minus = minus.to_fact("Devansh", None);
+    assert_eq!(fact_plus.object, fact_minus.object);
+    assert_eq!(fact_plus.object, "0.000, 0.000");
 }
 
 #[test]
@@ -355,6 +403,12 @@ fn raw_photo_without_gps_has_no_location_overlay() {
     };
     let fact = raw.to_fact("Devansh", None);
     assert!(fact.location.is_none());
+    // No GPS → no real-world visit to express; the literal `took_photo
+    // <rel_path>` record (timestamp-only fact) is kept.
+    assert_eq!(fact.relationship_type, "took_photo");
+    assert_eq!(fact.object, "no_gps.jpg");
+    assert!(!fact.object_is_entity);
+    assert_eq!(fact.raw_reference.as_deref(), Some("no_gps.jpg"));
 }
 
 // -- watcher init / first-scan failure recovery (PR #232 review) --

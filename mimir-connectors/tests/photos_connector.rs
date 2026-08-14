@@ -78,8 +78,10 @@ async fn initial_scan_emits_photo_fact_with_gps() {
     assert_eq!(facts.len(), 1, "one fact per photo");
     let fact = &facts[0];
     assert_eq!(fact.subject, "photos");
-    assert_eq!(fact.relationship_type, "took_photo");
-    assert_eq!(fact.object, "IMG_001.jpg");
+    // No geocoder → the coords-only `visited <coords-label>` fallback (issue
+    // #250): the real-world event is the fact, the photo path is provenance.
+    assert_eq!(fact.relationship_type, "visited");
+    assert_eq!(fact.object, "46.500, 7.500");
     assert_eq!(fact.raw_reference.as_deref(), Some("IMG_001.jpg"));
     let loc = fact.location.as_ref().expect("GPS location overlay");
     assert_eq!(loc.location_type, LocationType::Visited);
@@ -104,7 +106,9 @@ async fn initial_scan_recurses_into_subdirs() {
     let outcome = connector.sync(SyncOptions::default()).await.unwrap();
     assert_eq!(outcome.fetched, 1);
     let facts = connector.extract().await.unwrap();
-    assert_eq!(facts[0].object, "2024/May/pic.tif");
+    assert_eq!(facts[0].object, "46.500, 7.500");
+    assert_eq!(facts[0].relationship_type, "visited");
+    assert_eq!(facts[0].raw_reference.as_deref(), Some("2024/May/pic.tif"));
 }
 
 #[tokio::test]
@@ -227,7 +231,9 @@ async fn push_watcher_stages_new_file() {
     }
     assert_eq!(fetched, 1, "new file staged via the push watcher");
     let facts = connector.extract().await.unwrap();
-    assert_eq!(facts[0].object, "new.jpg");
+    assert_eq!(facts[0].object, "46.500, 7.500");
+    assert_eq!(facts[0].relationship_type, "visited");
+    assert_eq!(facts[0].raw_reference.as_deref(), Some("new.jpg"));
 }
 
 #[tokio::test]
@@ -312,7 +318,7 @@ async fn supervisor_ingests_photo_into_kb_with_location() {
     let supervisor = ConnectorSupervisor::new(Arc::new(registry), kg.clone(), fast_config(), rx);
     assert_eq!(supervisor.restore().await.unwrap(), 1);
 
-    // Wait for the owner entity + took_photo fact + persisted cursor.
+    // Wait for the owner entity + visited fact + persisted cursor.
     let kg2 = kg.clone();
     let row_id = row.id;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
@@ -328,7 +334,7 @@ async fn supervisor_ingests_photo_into_kb_with_location() {
         let facts = kg2.get_facts_by_subject(owner, 100).await.unwrap();
         if facts
             .iter()
-            .any(|f| f.object_literal.as_deref() == Some("IMG_001.jpg"))
+            .any(|f| f.object_literal.as_deref() == Some("46.500, 7.500"))
         {
             // Cursor is persisted by the supervisor in the same cycle, right
             // after the fact insert. Poll for it so a tiny commit-order gap
@@ -363,8 +369,15 @@ async fn supervisor_ingests_photo_into_kb_with_location() {
             // Connector provenance.
             let fact = facts
                 .iter()
-                .find(|f| f.object_literal.as_deref() == Some("IMG_001.jpg"))
+                .find(|f| f.object_literal.as_deref() == Some("46.500, 7.500"))
                 .unwrap();
+            assert_eq!(
+                kg2.relationship_type_name(fact.relationship_type_id)
+                    .await
+                    .as_deref(),
+                Some("visited"),
+                "coords-only photos author a `visited` fact, not a file-path object"
+            );
             let sources = kg2.get_sources_for_fact(fact.id).await.unwrap();
             assert!(sources.iter().any(|s| {
                 s.source_type_id == SourceType::Connector as i16
@@ -378,7 +391,7 @@ async fn supervisor_ingests_photo_into_kb_with_location() {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "took_photo fact never landed"
+            "visited fact never landed"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }

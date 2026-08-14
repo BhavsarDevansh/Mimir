@@ -27,6 +27,12 @@ It is read-only. Mimir never modifies or deletes your photos.
   photo at Rome" — with the timestamp. The place becomes a searchable entity
   in your knowledge graph, and multiple photos at the same place corroborate
   into one stronger fact instead of cluttering the graph.
+- When a photo has GPS but no place name can be resolved (no geocoder, no
+  match, or a temporary geocoder outage), Mimir records **"you visited
+  <coordinates>"** instead — e.g. "you visited 46.500, 7.500" — so the
+  real-world visit is the fact and the photo itself stays as its provenance
+  (the file path is never the fact's object). Photos taken at the same spot
+  corroborate into one fact per spot.
 - It remembers which files it has already processed, so unchanged photos are
   **never re-scanned** — even after you restart Mimir. New and modified photos
   are picked up; deleted photos are dropped from the record on the next full
@@ -85,7 +91,7 @@ place name, photos at the same place corroborate, and the place's coordinates
 are anchored, so proximity queries ("places near this point") resolve places by
 where they are, not just by where you've been. If a place can't be resolved
 (no geocoder, no match, or a transient network error), the photo still records
-a coordinates-only "took a photo" fact, so no data is lost.
+a `visited <coords-label>` fact, with the photo path retained as provenance, so no data is lost.
 
 ### Photos as facts, not entities
 

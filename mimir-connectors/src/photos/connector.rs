@@ -27,9 +27,13 @@ use notify_debouncer_full::DebounceEventResult;
 ///
 /// Push-mode, no-network, no-auth. Watches `watch_dir` recursively with a
 /// debounced `notify` watcher, extracts EXIF GPS + datetime with
-/// `kamadak-exif`, and emits one `took_photo` fact per image with an
-/// optional GPS [`NormalizedLocation`](mimir_knowledge::normalize::NormalizedLocation) overlay. See the module docs for the
-/// ingestion model and the incremental cursor.
+/// `kamadak-exif`, and emits one fact per image — `took_photo_at <place>`
+/// when GPS resolves a place name, `visited <coords-label>` when GPS has no
+/// place name (issue #250), or `took_photo <rel_path>` when there is no GPS —
+/// each with an optional GPS
+/// [`NormalizedLocation`](mimir_knowledge::normalize::NormalizedLocation)
+/// overlay. See the module docs for the ingestion model and the incremental
+/// cursor.
 pub struct PhotosConnector {
     pub(super) slug: String,
     pub(super) display_name: String,
@@ -54,8 +58,8 @@ pub struct PhotosConnector {
     pub(super) events: Mutex<UnboundedReceiver<DebounceEventResult>>,
     /// Shared geocoder used to reverse-geocode EXIF GPS into a place name
     /// during `extract` (Phase 3 C2 / #196). `None` when no geocoder is
-    /// configured; photos with GPS then fall back to the C1 coords-only
-    /// `took_photo` shape so no data is lost.
+    /// configured; photos with GPS then fall back to the coords-only
+    /// `visited <coords-label>` shape (issue #250) so no data is lost.
     geocoder: Option<std::sync::Arc<dyn Geocoder>>,
     /// Coord-dedup cache for reverse geocoding (Phase 3 C2 / #196): rounded
     /// GPS → resolved place short name. Bounds Nominatim calls to one per
@@ -77,12 +81,33 @@ pub struct PhotosConnector {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct GeoKey(i64, i64);
 
+/// Coordinate scale for the reverse-geocode cache bucket: millidegrees
+/// (~111 m at the equator).
+const GEO_BUCKET_SCALE: f64 = 1000.0;
+
 /// Round a coordinate to three decimal places and scale to an integer key.
 pub(super) fn geo_key(latitude: f64, longitude: f64) -> GeoKey {
     GeoKey(
-        (latitude * 1000.0).round() as i64,
-        (longitude * 1000.0).round() as i64,
+        (latitude * GEO_BUCKET_SCALE).round() as i64,
+        (longitude * GEO_BUCKET_SCALE).round() as i64,
     )
+}
+
+impl GeoKey {
+    /// A stable, human-readable label for this GPS bucket (issue #250): the
+    /// millidegree-rounded coordinates formatted to three decimals, e.g.
+    /// `"46.500, 7.500"`. Because the label is derived from the same bucket
+    /// as the reverse-geocode cache key, every photo in a bucket shares it
+    /// (including the zero-crossing case, where `-0.0004` and `+0.0004` both
+    /// land in bucket 0) — coords-only fallback facts therefore corroborate
+    /// per spot just like place facts corroborate per locality.
+    pub(super) fn label(self) -> String {
+        format!(
+            "{:.3}, {:.3}",
+            self.0 as f64 / GEO_BUCKET_SCALE,
+            self.1 as f64 / GEO_BUCKET_SCALE
+        )
+    }
 }
 
 impl std::fmt::Debug for PhotosConnector {
@@ -116,8 +141,8 @@ impl PhotosConnector {
     ///
     /// The geocoder is used in `extract` to reverse-geocode EXIF GPS into a
     /// locality-level place name that becomes the object of a
-    /// `took_photo_at` fact. `None` keeps the C1 coords-only `took_photo`
-    /// fallback shape. `user_identity` is the canonical `[identity] name`
+    /// `took_photo_at` fact. `None` keeps the coords-only `visited` fallback
+    /// shape (issue #250). `user_identity` is the canonical `[identity] name`
     /// (mirroring the Calendar connector): when present it is the subject of
     /// every photo fact; when `None` the per-instance `owner_name` (defaulting
     /// to the slug) is used instead. Construction stays cheap and
@@ -322,7 +347,7 @@ impl Connector for PhotosConnector {
         // admin-triggered sync for the full scan duration (~N seconds). The
         // `std::mem::take` swap replaces the buffer's contents in place while
         // we still hold the lock, and the guard is released at the end of the
-        // block, restoring the C1 hold-time (in-memory map only).
+        // block, restoring the original hold-time (in-memory map only).
         let raws = {
             let mut buffer = self.buffer.lock().await;
             std::mem::take(&mut *buffer)
@@ -341,8 +366,8 @@ impl Connector for PhotosConnector {
             // Reverse-geocode each photo's GPS into a place name (with the
             // coord-dedup cache) before building the fact. Geocode failures
             // are tolerated per-photo — a photo whose GPS cannot be resolved
-            // degrades to the C1 coords-only `took_photo` shape rather than
-            // failing the whole extraction.
+            // degrades to the coords-only `visited` shape (issue #250)
+            // rather than failing the whole extraction.
             let place = self
                 .resolve_place(raw.latitude, raw.longitude, &mut failed_this_cycle)
                 .await;
@@ -372,7 +397,8 @@ impl PhotosConnector {
     /// Resolve a photo's GPS to a locality-level place short name (Phase 3 C2
     /// / #196), using the coord-dedup cache to avoid re-geocoding the same
     /// spot. Returns `None` when there is no geocoder, no GPS, no match, or a
-    /// transient geocode error — the caller then builds the C1 fallback fact.
+    /// transient geocode error — the caller then builds the coords-only
+    /// `visited` fallback fact (issue #250).
     async fn resolve_place(
         &self,
         latitude: Option<f64>,

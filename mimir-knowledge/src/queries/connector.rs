@@ -230,6 +230,49 @@ pub async fn update_durable_state(
     Ok(row)
 }
 
+/// Advance the sync cursor (or stamp `last_sync_at` when the cursor is
+/// unchanged) and persist the connector's durable state in **one
+/// transaction**, so a crash between the two writes cannot advance the
+/// cursor without its durable state (issue #262 / PR #318 review): a
+/// restart would otherwise skip the failed message because the cursor
+/// advanced without its retry record.
+///
+/// `cursor = Some(v)` advances the cursor; `None` leaves it untouched (the
+/// "unchanged" semantics of `SyncOutcome::new_cursor` — unlike
+/// [`update_sync_cursor`], which treats `None` as "clear"). `durable_state =
+/// Some(v)` writes the state; `None` leaves it untouched. `last_sync_at` is
+/// always stamped. Returns [`KnowledgeError::ConnectorNotFound`] when no row
+/// matches `id`.
+pub async fn update_sync_progress_and_durable_state(
+    pool: &SqlitePool,
+    id: i32,
+    cursor: Option<&str>,
+    durable_state: Option<&str>,
+    now: DateTime<Utc>,
+) -> Result<Connector, KnowledgeError> {
+    let mut tx = pool.begin().await?;
+    let row = sqlx::query_as::<_, Connector>(
+        "UPDATE connectors SET \
+             sync_cursor = COALESCE(?, sync_cursor), \
+             durable_state = COALESCE(?, durable_state), \
+             last_sync_at = ?, updated_at = ? \
+         WHERE id = ? \
+         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
+                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
+                   created_at, updated_at",
+    )
+    .bind(cursor)
+    .bind(durable_state)
+    .bind(now)
+    .bind(now)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(KnowledgeError::ConnectorNotFound(id))?;
+    tx.commit().await?;
+    Ok(row)
+}
+
 /// Stamp `last_sync_at` and `updated_at` **without** touching `sync_cursor`.
 ///
 /// Use this when a connector reports `SyncOutcome::new_cursor = None`

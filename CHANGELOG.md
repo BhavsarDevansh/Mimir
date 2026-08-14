@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.106.2] — 2026-08-14
+
+### PR #318 review: atomic retry-ledger persistence, aggregate ledger cap, test/doc hygiene
+
+- **Atomic cursor + durable-state persistence.** The supervisor now persists the sync cursor and the connector's durable state (the Email retry ledger) in one transaction via the new `KnowledgeGraph::update_sync_progress_and_durable_state` (`None`-means-unchanged for both fields), so a crash between the two writes can no longer advance the cursor without its retry record — a restart previously skipped the failed message because the cursor advanced without its ledger entry. `durable_state_persisted` is acknowledged only after the combined commit.
+- **Aggregate persisted-ledger cap.** `durable_json` now sheds raw payloads beyond `MAX_PERSISTED_PENDING_PAYLOADS` (32) per snapshot, so a mailbox-wide LLM outage cannot grow `connectors.durable_state` with one base64 payload per failing message; entries beyond the cap still retry in-process with the full payload (a restart drops them, matching the oversized-payload behaviour).
+- **Hygiene.** Test fixtures consolidated (`llm_tool_response` reuses `llm_tool_message`, the re-stage test reuses `prose_email()`), the three `instantiate_*` tests share a `capturing_supervisor` helper, and the policy-section wording in `docs/email-connector.md` is fixed.
+- **Tests.** New ledger-policy test for the persisted-payload cap and a knowledge-graph test locking the atomic combined persist (advance/unchanged combinations + missing-row error).
+- **Docs.** `docs/connectors-framework.md` (atomic persistence protocol), `docs/email-connector.md`, and `docs/wiki/what-works-now.md` updated.
+- Version bumped 0.106.1 → 0.106.2 (patch — backwards-compatible bug fix and documentation).
+
 ## [0.106.1] — 2026-08-14
 
 ### Email connector: durable retry / terminal-failure policy for LLM prose extraction (issue #262)

@@ -21,24 +21,9 @@ fn connector_with_llm(name: Option<&str>, backend: Option<Arc<dyn LlmBackend>>) 
 }
 
 fn llm_tool_response(json: &str) -> Arc<MockLlmClient> {
-    let tool_call = mimir_core::llm::ToolCall {
-        index: 0,
-        id: "call_1".into(),
-        call_type: "function".into(),
-        function: mimir_core::llm::FunctionCall {
-            name: "extract_email_facts".into(),
-            arguments: json.into(),
-        },
-    };
-    let message = mimir_core::llm::Message {
-        role: "assistant".into(),
-        content: String::new(),
-        tool_calls: Some(vec![tool_call]),
-        tool_call_id: None,
-    };
     Arc::new(
         MockLlmClient::builder()
-            .push_chat_message(message, Default::default())
+            .push_chat_message(llm_tool_message(json), Default::default())
             .build(),
     )
 }
@@ -142,13 +127,7 @@ async fn llm_failure_re_stages_raw_email_for_retry() {
             .build(),
     );
     let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
-    let prose: Vec<u8> = b"From: reception@dentalclinic.com\r\n\
-Subject: Your appointment\r\n\
-Content-Type: text/plain; charset=\"utf-8\"\r\n\
-\r\n\
-See you Tuesday 3pm.\r\n"
-        .to_vec();
-    stage(&connector, prose).await;
+    stage(&connector, prose_email()).await;
     let facts = connector.extract().await.expect("extract");
     assert!(facts.is_empty(), "no deterministic facts for a prose email");
     assert_eq!(mock.system_chat_calls().len(), 1, "LLM was attempted once");

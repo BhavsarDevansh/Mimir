@@ -132,7 +132,7 @@ pub trait Connector: Send + Sync {
 }
 ```
 
-- **`durable_state`** (issue #262) is the generic hook for connector-owned state that must survive a daemon restart. After each successful extraction cycle the supervisor persists the returned opaque string via `KnowledgeGraph::update_durable_state` (the `connectors.durable_state` column) and re-injects it at construction as the `__durable_state` config key — the same read/write pair as `__cursor` / `update_sync_cursor`, for state that is not sync progress. `None` means "unchanged since the last persist" (no write). The Email connector uses it for its bounded, durable LLM-extraction retry ledger; connectors that keep no durable state leave the default. The returned value is **not consumed**: the supervisor calls `durable_state_persisted()` only after the database write succeeds, so a failed write leaves the connector's state dirty and the next cycle re-persists it — a write failure can never silently lose durable state.
+- **`durable_state`** (issue #262) is the generic hook for connector-owned state that must survive a daemon restart. After each successful extraction cycle the supervisor persists the returned opaque string via `KnowledgeGraph::update_sync_progress_and_durable_state` (the `connectors.durable_state` column) and re-injects it at construction as the `__durable_state` config key — the same read/write pair as `__cursor` / `update_sync_cursor`, for state that is not sync progress. `None` means "unchanged since the last persist" (no write). The Email connector uses it for its bounded, durable LLM-extraction retry ledger; connectors that keep no durable state leave the default. The returned value is **not consumed**: the supervisor calls `durable_state_persisted()` only after the combined database commit succeeds, so a failed write leaves the connector's state dirty and the next cycle re-persists it — a write failure can never silently lose durable state.
 
 - **`authenticate`** takes no arguments: credentials are injected at
   construction by the factory (F7) / secret store (F10), per decision D′
@@ -242,7 +242,7 @@ impl ConnectorRegistry {
 
 ## ConnectorSupervisor — supervised lifecycle (F8 / #185)
 
-`ConnectorSupervisor` owns one supervised tokio task per *active* connector instance and centralises spawn, restart-with-backoff, circuit breaker, startup restore, graceful shutdown, cursor persistence, and durable-state persistence. It is the caller that runs the two-step ingestion model end to end: `health` -> `sync` -> `extract` -> `normalize_and_insert`, then `update_sync_cursor` and `update_durable_state`. All status / auth / cursor / durable-state writes go through the `KnowledgeGraph` facade — the supervisor never holds a `sqlx` pool, keeping the `sqlx`-free crate boundary intact.
+`ConnectorSupervisor` owns one supervised tokio task per *active* connector instance and centralises spawn, restart-with-backoff, circuit breaker, startup restore, graceful shutdown, cursor persistence, and durable-state persistence. It is the caller that runs the two-step ingestion model end to end: `health` -> `sync` -> `extract` -> `normalize_and_insert`, then `update_sync_progress_and_durable_state` (the cursor and durable state commit in one transaction). All status / auth / cursor / durable-state writes go through the `KnowledgeGraph` facade — the supervisor never holds a `sqlx` pool, keeping the `sqlx`-free crate boundary intact.
 
 ### Construction
 
@@ -278,7 +278,7 @@ auto-spawned). Rows whose `(type, backend)` has no registered factory, or whose
 `config_json` is invalid, are logged and skipped — one bad connector never
 aborts startup. Returns the number of tasks spawned.
 
-Before handing each row's `config_json` to the factory, the supervisor injects `__slug`, `__ctype`, `__instance_id`, `__cursor`, and `__durable_state` so the connector instance knows which row it represents and can seed its incremental sync cursor and any connector-owned durable state. This is the V1 mechanism for passing instance identity and progress through the minimal `create(config)` factory signature (the LLM/SecretStore construction context is deferred to F10 / the first real backend — decision #2). The `__cursor` injection (C1 / #195) is the read side that complements `KnowledgeGraph::update_sync_cursor` (the write side): it lets an incremental connector — e.g. the Photos file watcher — skip already-processed files across restarts. The `__durable_state` injection (issue #262) is the read side that complements `KnowledgeGraph::update_durable_state` (the write side): the Email connector seeds its bounded LLM-extraction retry ledger from it so pending retries and terminal failures survive restarts. `None` values are injected as JSON `null` (a full first scan / no durable state).
+Before handing each row's `config_json` to the factory, the supervisor injects `__slug`, `__ctype`, `__instance_id`, `__cursor`, and `__durable_state` so the connector instance knows which row it represents and can seed its incremental sync cursor and any connector-owned durable state. This is the V1 mechanism for passing instance identity and progress through the minimal `create(config)` factory signature (the LLM/SecretStore construction context is deferred to F10 / the first real backend — decision #2). The `__cursor` injection (C1 / #195) is the read side that complements `KnowledgeGraph::update_sync_cursor` (the write side): it lets an incremental connector — e.g. the Photos file watcher — skip already-processed files across restarts. The `__durable_state` injection (issue #262) is the read side that complements `KnowledgeGraph::update_sync_progress_and_durable_state` (the write side, committed atomically with the cursor): the Email connector seeds its bounded LLM-extraction retry ledger from it so pending retries and terminal failures survive restarts. `None` values are injected as JSON `null` (a full first scan / no durable state).
 
 ### Per-connector runner loop
 
@@ -292,7 +292,7 @@ pauses the connector and exits), then loops:
    wins, the cycle's `AbortHandle` cancels the in-flight work and the runner
    exits.
 3. Classify the cycle result and act:
-   - **Ok** — reset the failure count, persist sync progress, then clear `last_error` (`set_connector_status(Active, Some(None))`). When `new_cursor` is `Some`, the cursor is advanced/cleared via `update_sync_cursor`; when `None` (unchanged), only `last_sync_at` is stamped via `touch_last_sync`, preserving the existing progress token. Connector-side durable state (`Connector::durable_state`, issue #262) is persisted right after via `update_durable_state` when the connector reports a change, and the connector acknowledges the persist (`durable_state_persisted`) only after the write succeeds.
+   - **Ok** — reset the failure count, persist sync progress, then clear `last_error` (`set_connector_status(Active, Some(None))`). The cursor and connector-side durable state (`Connector::durable_state`, issue #262) are persisted **atomically** in one transaction via `update_sync_progress_and_durable_state`, so a crash between the two writes cannot advance the cursor without its retry ledger (PR #318 review). When `new_cursor` is `Some`, the cursor is advanced/cleared; when `None` (unchanged), only `last_sync_at` is stamped, preserving the existing progress token. The connector acknowledges the persist (`durable_state_persisted`) only after the combined commit succeeds.
    - **Err / Panic** — increment failures, write `last_error` (status stays
      `Active`), exponential backoff; once failures reach `max_failures`, move
      to `Error` and stop auto-restarting (manual `resume` required).
@@ -488,8 +488,8 @@ rule.
 
 `KnowledgeGraph` exposes: `list_connectors`, `get_connector_by_slug`,
 `get_connector` (by id), `upsert_connector`, `update_sync_cursor`,
-`update_durable_state`, `touch_last_sync`, `set_connector_status`, and
-`set_auth_state`.
+`update_durable_state`, `update_sync_progress_and_durable_state`,
+`touch_last_sync`, `set_connector_status`, and `set_auth_state`.
 
 - `upsert_connector` is keyed on `slug`. `slug` and `connector_type` are immutable identity: on conflict it overwrites the mutable config surface (`backend`, `display_name`, `config_json`, `status`, `auth_state`) and bumps `updated_at`; it **preserves** `id`, `created_at`, and the sync-progress fields (`sync_cursor`, `durable_state`, `last_sync_at`, `last_error`), which are owned by their dedicated mutators. Reusing an existing `slug` with a different `ConnectorType` returns `KnowledgeError::ConnectorTypeMismatch` rather than silently rewriting the instance's kind (which would leave the previous backend's type-specific sync state attached to a different connector type). The check is atomic: the `ON CONFLICT DO UPDATE ... WHERE connectors.connector_type_id = excluded.connector_type_id` guard updates zero rows on a mismatch, so `RETURNING` is empty and a clean error is surfaced.
 - `set_connector_status` takes an `Option<Option<String>>` `error` argument:

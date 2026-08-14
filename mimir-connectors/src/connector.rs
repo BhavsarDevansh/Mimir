@@ -428,14 +428,17 @@ pub trait Connector: Send + Sync {
     /// extraction cycle (issue #262).
     ///
     /// The supervisor persists the returned value via
-    /// `KnowledgeGraph::update_durable_state` and re-injects it at
-    /// construction (as the `__durable_state` config key), so
-    /// connector-owned state that must survive a daemon restart — the Email
-    /// connector's bounded LLM-extraction retry ledger — lives outside the
-    /// in-memory raw-item buffer. `None` means "nothing changed since the
-    /// last persist"; connectors that keep no durable state leave the
-    /// default. The returned value is not consumed: after the supervisor's
-    /// database write succeeds it calls
+    /// `KnowledgeGraph::update_sync_progress_and_durable_state` — committed
+    /// in the same transaction as the sync cursor, so a crash between the
+    /// two writes cannot advance the cursor without its durable state (PR
+    /// #318 review) — and re-injects it at construction (as the
+    /// `__durable_state` config key), so connector-owned state that must
+    /// survive a daemon restart — the Email connector's bounded
+    /// LLM-extraction retry ledger — lives outside the in-memory raw-item
+    /// buffer. `None` means "nothing changed since the last persist";
+    /// connectors that keep no durable state leave the default. The
+    /// returned value is not consumed: after the supervisor's combined
+    /// database commit succeeds it calls
     /// [`durable_state_persisted`](Connector::durable_state_persisted), so a
     /// failed write never loses state.
     fn durable_state(&self) -> Option<String> {

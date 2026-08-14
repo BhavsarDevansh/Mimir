@@ -29,7 +29,10 @@
 //!   ledger as clean after the database write succeeds, so a failed write
 //!   keeps the ledger dirty and the next cycle re-persists it. Raw payloads
 //!   above [`MAX_PERSISTED_RAW_BYTES`] are retried in-process but not
-//!   persisted, so an oversized message cannot bloat the durable column.
+//!   persisted, and at most [`MAX_PERSISTED_PENDING_PAYLOADS`] pending
+//!   payloads are persisted per snapshot (entries beyond the cap still
+//!   retry in-process), so a mailbox-wide outage cannot bloat the durable
+//!   column with one base64 payload per failing message.
 //!
 //! The ledger is pure policy over the extraction loop: it never touches the
 //! knowledge graph or the IMAP session (the crate is sqlx-free and the
@@ -61,6 +64,16 @@ pub(crate) const MAX_TERMINAL_FAILURES: usize = 64;
 /// (the pre-#262 behaviour) instead of growing the durable state without
 /// bound.
 pub(crate) const MAX_PERSISTED_RAW_BYTES: usize = 512 * 1024;
+
+/// Cap on the number of pending retries whose raw payload is persisted in
+/// one [`ProseRetryLedger::durable_json`] snapshot, so a mailbox-wide LLM
+/// outage cannot grow `connectors.durable_state` with one base64 payload per
+/// failing message (each payload can be up to
+/// [`MAX_PERSISTED_RAW_BYTES`], which base64 expands by ~33 %). Entries
+/// beyond the cap still retry in-process with the full payload; only their
+/// persisted payload is dropped, so a restart drops them (the pre-#262
+/// behaviour) instead of growing the durable state without bound.
+pub(crate) const MAX_PERSISTED_PENDING_PAYLOADS: usize = 32;
 
 /// Extraction cycles to wait before retrying after the `attempts`-th
 /// failure: exponential backoff (1, 2, 4, …), capped at 8 cycles so a deeply
@@ -298,7 +311,20 @@ impl ProseRetryLedger {
         if !self.dirty {
             return None;
         }
-        match serde_json::to_string(self) {
+        // Serialise a snapshot with the persisted-payload cap applied, so
+        // the in-memory ledger keeps the full payload for every pending
+        // retry while the durable column stays bounded.
+        let mut snapshot = self.clone();
+        let mut kept = 0usize;
+        for pending in snapshot.pending.values_mut() {
+            if pending.raw_b64.is_some() {
+                kept += 1;
+                if kept > MAX_PERSISTED_PENDING_PAYLOADS {
+                    pending.raw_b64 = None;
+                }
+            }
+        }
+        match serde_json::to_string(&snapshot) {
             Ok(json) => Some(json),
             Err(error) => {
                 warn!(%error, "failed to serialize prose-retry ledger; durable state not persisted");
@@ -582,6 +608,48 @@ mod tests {
                 .raw_b64
                 .is_none(),
             "round-trip keeps the payload absent"
+        );
+    }
+
+    #[test]
+    fn persisted_pending_payloads_are_capped_but_in_process_retry_keeps_them() {
+        let mut ledger = ProseRetryLedger::default();
+        let total = MAX_PERSISTED_PENDING_PAYLOADS + 5;
+        for i in 0..total {
+            ledger.record_failure(
+                &format!("17:{i}"),
+                17,
+                i as u32,
+                format!("raw-{i}").as_bytes(),
+                3,
+                format!("e{i}"),
+            );
+        }
+        // The in-memory ledger keeps every payload for in-process retries.
+        assert_eq!(ledger.pending.len(), total);
+        assert_eq!(
+            ledger
+                .pending
+                .values()
+                .filter(|p| p.raw_b64.is_some())
+                .count(),
+            total,
+            "the cap must not shed in-memory payloads"
+        );
+        // The persisted snapshot sheds payloads beyond the cap, but keeps
+        // every pending entry (payload-less entries still retry in-process
+        // and are only dropped by a restart).
+        let json = ledger.durable_json().expect("dirty ledger persists");
+        let restored = ProseRetryLedger::from_json(&json);
+        assert_eq!(restored.pending.len(), total);
+        assert_eq!(
+            restored
+                .pending
+                .values()
+                .filter(|p| p.raw_b64.is_some())
+                .count(),
+            MAX_PERSISTED_PENDING_PAYLOADS,
+            "only the cap's worth of payloads may be persisted"
         );
     }
 

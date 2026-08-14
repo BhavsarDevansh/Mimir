@@ -161,6 +161,62 @@ async fn durable_state_persists_clears_and_survives_reupsert() {
 }
 
 #[tokio::test]
+async fn sync_progress_and_durable_state_commit_atomically() {
+    let (kg, _dir) = init_kg().await;
+    let c = kg.upsert_connector(gmail_input("atomic")).await.unwrap();
+
+    // Cursor + durable state in one transaction.
+    let updated = kg
+        .update_sync_progress_and_durable_state(c.id, Some("cursor-1"), Some("ledger-v1"))
+        .await
+        .unwrap();
+    assert_eq!(updated.sync_cursor.as_deref(), Some("cursor-1"));
+    assert_eq!(updated.durable_state.as_deref(), Some("ledger-v1"));
+    assert!(updated.last_sync_at.is_some());
+
+    // `None` cursor means "unchanged": the progress token is preserved.
+    let touched = kg
+        .update_sync_progress_and_durable_state(c.id, None, Some("ledger-v2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        touched.sync_cursor.as_deref(),
+        Some("cursor-1"),
+        "an unchanged cursor must not be cleared"
+    );
+    assert_eq!(touched.durable_state.as_deref(), Some("ledger-v2"));
+
+    // `None` durable state means "unchanged": the ledger is preserved.
+    let advanced = kg
+        .update_sync_progress_and_durable_state(c.id, Some("cursor-2"), None)
+        .await
+        .unwrap();
+    assert_eq!(advanced.sync_cursor.as_deref(), Some("cursor-2"));
+    assert_eq!(
+        advanced.durable_state.as_deref(),
+        Some("ledger-v2"),
+        "an unchanged durable state must not be cleared"
+    );
+
+    // Both `None` only stamps `last_sync_at`.
+    let stamped = kg
+        .update_sync_progress_and_durable_state(c.id, None, None)
+        .await
+        .unwrap();
+    assert_eq!(stamped.sync_cursor.as_deref(), Some("cursor-2"));
+    assert_eq!(stamped.durable_state.as_deref(), Some("ledger-v2"));
+    assert!(stamped.last_sync_at.is_some());
+
+    let err = kg
+        .update_sync_progress_and_durable_state(i32::MAX, Some("x"), Some("y"))
+        .await;
+    assert!(matches!(
+        err,
+        Err(mimir_knowledge::KnowledgeError::ConnectorNotFound(_))
+    ));
+}
+
+#[tokio::test]
 async fn touch_last_sync_preserves_cursor_and_stamps_time() {
     let (kg, _dir) = init_kg().await;
     let c = kg.upsert_connector(gmail_input("personal")).await.unwrap();

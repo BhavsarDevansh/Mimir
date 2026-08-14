@@ -422,33 +422,43 @@ pub(super) async fn run_cycle(
         return CycleOutcome::Err(error.to_string());
     }
 
-    // Persist sync progress so a mid-sync `mimir stop` does not re-fetch.
+    // Persist sync progress and connector-side durable state (e.g. the
+    // Email connector's bounded LLM-extraction retry ledger, issue #262) in
+    // **one transaction** so a mid-sync `mimir stop` does not re-fetch, and
+    // a crash between the two writes cannot advance the cursor without its
+    // retry record (PR #318 review): a restart would otherwise skip the
+    // failed message because the cursor advanced without its durable state.
     //
     // `SyncOutcome::new_cursor` follows nullable-update semantics: `Some`
     // advances (or clears) the cursor, `None` means "unchanged". Passing
     // `None` to `update_sync_cursor` would *clear* the persisted cursor
-    // (its `None`-clears contract), so we branch: a real cursor value goes
-    // through `update_sync_cursor`; an unchanged cursor only stamps
-    // `last_sync_at` via `touch_last_sync`, preserving the progress token.
+    // (its `None`-clears contract), so the combined persist uses
+    // `None`-means-unchanged semantics: a real cursor value advances the
+    // cursor; an unchanged cursor only stamps `last_sync_at`, preserving the
+    // progress token. `durable_state` is `None` when the connector reports
+    // no change (no write). The connector only acknowledges the persist
+    // (`durable_state_persisted`) after the combined commit succeeds, so a
+    // failed write leaves the connector's state dirty and the next cycle
+    // re-writes it instead of silently losing it.
+    let durable_state = connector.durable_state();
     let persist = match outcome.new_cursor.as_deref() {
-        Some(cursor) => kg.update_sync_cursor(instance_id, Some(cursor)).await,
-        None => kg.touch_last_sync(instance_id).await,
+        Some(cursor) => {
+            kg.update_sync_progress_and_durable_state(
+                instance_id,
+                Some(cursor),
+                durable_state.as_deref(),
+            )
+            .await
+        }
+        None => {
+            kg.update_sync_progress_and_durable_state(instance_id, None, durable_state.as_deref())
+                .await
+        }
     };
     if let Err(error) = persist {
         return CycleOutcome::Err(error.to_string());
     }
-
-    // Persist connector-side durable state (e.g. the Email connector's
-    // bounded LLM-extraction retry ledger, issue #262) so retries and
-    // terminal failures survive daemon restarts. `None` means "unchanged"
-    // and skips the write. The connector only acknowledges the persist
-    // (`durable_state_persisted`) after the write succeeds, so a failed
-    // write leaves the connector's state dirty and the next cycle re-writes
-    // it instead of silently losing it.
-    if let Some(state) = connector.durable_state() {
-        if let Err(error) = kg.update_durable_state(instance_id, Some(&state)).await {
-            return CycleOutcome::Err(error.to_string());
-        }
+    if durable_state.is_some() {
         connector.durable_state_persisted();
     }
 

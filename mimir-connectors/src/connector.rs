@@ -98,6 +98,17 @@ pub struct ConnectorContext {
     pub llm_backend: Option<std::sync::Arc<dyn LlmBackend>>,
 }
 
+/// Normalise a canonical user identity name for storage on a connector or
+/// context: surrounding whitespace is trimmed and an empty/whitespace-only
+/// name becomes `None`, so a misconfigured `[identity]` never authors facts
+/// against an empty-string or padded `Person` entity. Shared by
+/// [`ConnectorContext::with_user_identity`] and the Calendar, Email, and
+/// Photos constructors (DRY).
+pub(crate) fn normalize_user_identity(name: Option<String>) -> Option<String> {
+    name.filter(|n| !n.trim().is_empty())
+        .map(|n| n.trim().to_string())
+}
+
 impl ConnectorContext {
     /// Build a context carrying the supplied geocoder and no secret store.
     pub fn new(geocoder: Option<std::sync::Arc<dyn Geocoder>>) -> Self {
@@ -142,8 +153,7 @@ impl ConnectorContext {
     /// treated as "no identity" so a misconfigured `[identity]` does not emit
     /// facts authored by an empty-string entity.
     pub fn with_user_identity(mut self, name: impl Into<String>) -> Self {
-        let name = name.into().trim().to_string();
-        self.user_identity = if name.is_empty() { None } else { Some(name) };
+        self.user_identity = normalize_user_identity(Some(name.into()));
         self
     }
 

@@ -12,7 +12,11 @@ impl ConnectorFactory for PhotosConnectorFactory {
         config: serde_json::Value,
         ctx: &crate::connector::ConnectorContext,
     ) -> Result<std::sync::Arc<dyn Connector>, ConnectorError> {
-        let connector = PhotosConnector::from_config_with_geocoder(config, ctx.geocoder.clone())?;
+        let connector = PhotosConnector::from_config_with_geocoder(
+            config,
+            ctx.geocoder.clone(),
+            ctx.user_identity.clone(),
+        )?;
         Ok(std::sync::Arc::new(connector) as std::sync::Arc<dyn Connector>)
     }
 }

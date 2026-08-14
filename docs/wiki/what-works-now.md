@@ -1,7 +1,7 @@
 # What Works in Mimir Today
 
 > **Last updated:** 2026-08-14
-> **Version:** 0.102.1
+> **Version:** 0.102.2
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in `CHANGELOG.md`; this file deliberately does not repeat either.
 
 ---
@@ -227,7 +227,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 |---------|--------|----------------------|
 | Framework (F1–F13) | ✅ Works | Crate + feature flags, instance registry, provenance FK, shared `normalize_and_insert`, entity-resolution chain, `Connector` trait, registry + factory dispatch, supervised lifecycle, manual sync triggering, secret store, rate-limit/retry primitives, mock connector ([#179](https://github.com/BhavsarDevansh/Mimir/issues/179)–[#190](https://github.com/BhavsarDevansh/Mimir/issues/190)). |
 | Daemon wiring + routes (A1–A4) | ✅ Works | Registry/supervisor owned by the daemon, startup restore, CRUD/status/sync/pause/resume/tokens/actions/forget routes, `mimir connector` CLI, interactive OAuth PKCE login ([#202](https://github.com/BhavsarDevansh/Mimir/issues/202)–[#205](https://github.com/BhavsarDevansh/Mimir/issues/205)). |
-| Photos (local) | 🟡 Partial | `notify` watcher, EXIF GPS/datetime, incremental cursor, `took_photo` facts, place anchoring. Coords-only fallback uses a file-path object instead of a real-world visit ([#250](https://github.com/BhavsarDevansh/Mimir/issues/250)); `owner_name` is disconnected from the canonical user identity ([#246](https://github.com/BhavsarDevansh/Mimir/issues/246)); `NormalizedFact` boilerplate is duplicated ([#255](https://github.com/BhavsarDevansh/Mimir/issues/255)); RAW formats are deferred. |
+| Photos (local) | 🟡 Partial | `notify` watcher, EXIF GPS/datetime, incremental cursor, `took_photo` facts, place anchoring, canonical user identity ([#246](https://github.com/BhavsarDevansh/Mimir/issues/246)). Coords-only fallback uses a file-path object instead of a real-world visit ([#250](https://github.com/BhavsarDevansh/Mimir/issues/250)); `NormalizedFact` boilerplate is duplicated ([#255](https://github.com/BhavsarDevansh/Mimir/issues/255)); RAW formats are deferred. |
 | Calendar (CalDAV) | 🟡 Partial | PROPFIND + sync-collection incremental sync, app-password + OAuth refresh, event fact cluster, write-back (`create_event`/`update_event`/`delete_event`). Server-side deletions are logged but not propagated to fact lifecycle ([#247](https://github.com/BhavsarDevansh/Mimir/issues/247)); auth error arm duplicated with Email ([#273](https://github.com/BhavsarDevansh/Mimir/issues/273)); enum→wire-string conversion is fragile ([#264](https://github.com/BhavsarDevansh/Mimir/issues/264)); supervisor start/resume race ([#266](https://github.com/BhavsarDevansh/Mimir/issues/266)); forget SQL duplication ([#267](https://github.com/BhavsarDevansh/Mimir/issues/267)). |
 | Email (IMAP) | 🟡 Partial | `LOGIN`/`XOAUTH2`, `UID FETCH` incremental sync, `IDLE` push with polling fallback, iMIP invites, schema.org JSON-LD, LLM prose extraction. LLM-extraction retry is in-memory and unbounded — not restart-safe ([#262](https://github.com/BhavsarDevansh/Mimir/issues/262)); iMIP `CANCEL` invites are skipped ([#283](https://github.com/BhavsarDevansh/Mimir/issues/283)); LLM tool-call parsing is duplicated with the conversational path ([#259](https://github.com/BhavsarDevansh/Mimir/issues/259)); auth error arm duplicated with Calendar ([#273](https://github.com/BhavsarDevansh/Mimir/issues/273)). |
 | OAuth token refresh | ✅ Works | `oauth2` 5.0.0 with `default-features = false` over a custom reqwest 0.13 adapter; redirects disabled, HTTPS/loopback gate, secret-hygiene error mapping ([#240](https://github.com/BhavsarDevansh/Mimir/issues/240)). |
@@ -349,7 +349,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | Email: iMIP CANCEL lifecycle | [#283](https://github.com/BhavsarDevansh/Mimir/issues/283) |
 | Calendar: propagate server-side deletions (tombstones) | [#247](https://github.com/BhavsarDevansh/Mimir/issues/247) |
 | Photos: coords-only `took_photo` fallback semantics | [#250](https://github.com/BhavsarDevansh/Mimir/issues/250) |
-| Photos: `owner_name` vs canonical user identity | [#246](https://github.com/BhavsarDevansh/Mimir/issues/246) |
 | Connector catalog route + CLI discovery | [#271](https://github.com/BhavsarDevansh/Mimir/issues/271) |
 | Secret ingestion via env/stdin (no process-list leak) | [#270](https://github.com/BhavsarDevansh/Mimir/issues/270) |
 | CLI: `key=value` config pairs cannot express JSON arrays (scopes silently dropped) | [#289](https://github.com/BhavsarDevansh/Mimir/issues/289) |

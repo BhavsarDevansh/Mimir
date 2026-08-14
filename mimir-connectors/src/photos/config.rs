@@ -36,8 +36,9 @@ fn default_debounce_ms() -> u64 {
 pub(super) struct PhotosConfigDto {
     /// Absolute path of the directory to watch recursively. Required.
     pub(super) watch_dir: String,
-    /// Display name of the photo-library owner (the fact subject). Defaults
-    /// to the instance slug.
+    /// Display name of the photo-library owner (the fact subject). Used as
+    /// the fallback subject when no canonical user identity is injected
+    /// (issue #246); defaults to the instance slug.
     #[serde(default)]
     pub(super) owner_name: Option<String>,
     /// Debounce window in milliseconds. Defaults to 2000.

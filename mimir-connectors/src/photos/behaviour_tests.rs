@@ -9,6 +9,9 @@ use mimir_core::geocoder::{GeocodeResult, MockGeocoder};
 use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::enums::LocationType;
 
+use crate::connector::{Connector, ConnectorContext, ConnectorFactory, SyncOptions};
+use crate::photos::PhotosConnectorFactory;
+
 use super::logic_tests::fixture;
 
 /// A `MockGeocoder` reverse result for (46.5, 7.5) → "Rome".
@@ -43,6 +46,7 @@ async fn extract_reverse_geocodes_gps_into_took_photo_at_fact() {
     let connector = PhotosConnector::from_config_with_geocoder(
         config,
         Some(Arc::new(rome_geocoder()) as Arc<dyn mimir_core::geocoder::Geocoder>),
+        None,
     )
     .unwrap();
     // Stage two photos at the same spot to exercise the coord-dedup cache.
@@ -67,6 +71,101 @@ async fn extract_reverse_geocodes_gps_into_took_photo_at_fact() {
     assert_eq!(connector.geocode_cache.lock().await.len(), 1);
 }
 
+/// The canonical user identity injected via `ConnectorContext::user_identity`
+/// (issue #246) wins over the per-instance `owner_name` config field, so
+/// photo facts resolve to the same `Person` entity the daemon resolves as
+/// `user_entity_id`.
+#[tokio::test]
+async fn extract_authors_facts_with_canonical_user_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = serde_json::json!({
+        "watch_dir": dir.path().to_string_lossy(),
+        "owner_name": "my-photos",
+    });
+    let connector = PhotosConnector::from_config_with_geocoder(
+        config,
+        Some(Arc::new(rome_geocoder()) as Arc<dyn mimir_core::geocoder::Geocoder>),
+        Some("Devansh".to_string()),
+    )
+    .unwrap();
+    connector
+        .buffer
+        .lock()
+        .await
+        .push(gps_raw("a.jpg", 46.5, 7.5));
+    let fact = connector.extract().await.unwrap().pop().unwrap();
+    assert_eq!(fact.relationship_type, "took_photo_at");
+    assert_eq!(fact.subject, "Devansh");
+    assert_eq!(fact.subject_type, EntityType::Person);
+}
+
+/// Without an injected identity, the per-instance `owner_name` remains the
+/// subject fallback, so a library without a configured `[identity] name`
+/// still produces facts (unlike the Calendar connector, which skips its
+/// primary user fact when no identity is injected).
+#[tokio::test]
+async fn extract_falls_back_to_owner_name_without_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = serde_json::json!({
+        "watch_dir": dir.path().to_string_lossy(),
+        "owner_name": "my-photos",
+    });
+    let connector = PhotosConnector::from_config_with_geocoder(config, None, None).unwrap();
+    connector
+        .buffer
+        .lock()
+        .await
+        .push(gps_raw("a.jpg", 46.5, 7.5));
+    let fact = connector.extract().await.unwrap().pop().unwrap();
+    assert_eq!(fact.subject, "my-photos");
+    assert_eq!(fact.subject_type, EntityType::Person);
+}
+
+/// A whitespace-padded injected identity is trimmed at construction (like
+/// the Calendar/Email connectors), so photo facts never resolve to a
+/// `Person` entity that differs from the canonical trimmed identity.
+#[tokio::test]
+async fn extract_trims_padded_user_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = serde_json::json!({
+        "watch_dir": dir.path().to_string_lossy(),
+        "owner_name": "my-photos",
+    });
+    let connector =
+        PhotosConnector::from_config_with_geocoder(config, None, Some("  Devansh  ".to_string()))
+            .unwrap();
+    connector
+        .buffer
+        .lock()
+        .await
+        .push(gps_raw("a.jpg", 46.5, 7.5));
+    let fact = connector.extract().await.unwrap().pop().unwrap();
+    assert_eq!(fact.subject, "Devansh");
+    assert_eq!(fact.subject_type, EntityType::Person);
+}
+
+/// The factory must forward `ConnectorContext::user_identity` into the
+/// connector (as `CalendarConnectorFactory` does), so a daemon-configured
+/// `[identity] name` reaches photo facts end-to-end.
+#[tokio::test]
+async fn factory_forwards_user_identity_into_connector() {
+    let dir = tempfile::tempdir().unwrap();
+    let watch_dir = dir.path().to_path_buf();
+    fs::copy(fixture("exif.jpg"), watch_dir.join("exif.jpg")).unwrap();
+
+    let config = serde_json::json!({
+        "watch_dir": watch_dir.to_string_lossy(),
+        "owner_name": "my-photos",
+    });
+    let ctx = ConnectorContext::empty().with_user_identity("Devansh");
+    let connector = PhotosConnectorFactory.create(config, &ctx).unwrap();
+    connector.sync(SyncOptions::default()).await.unwrap();
+    let facts = connector.extract().await.unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].subject, "Devansh");
+    assert_eq!(facts[0].subject_type, EntityType::Person);
+}
+
 #[tokio::test]
 async fn extract_falls_back_when_geocoder_finds_no_match() {
     let dir = tempfile::tempdir().unwrap();
@@ -78,6 +177,7 @@ async fn extract_falls_back_when_geocoder_finds_no_match() {
     let connector = PhotosConnector::from_config_with_geocoder(
         config,
         Some(Arc::new(geocoder) as Arc<dyn mimir_core::geocoder::Geocoder>),
+        None,
     )
     .unwrap();
     connector
@@ -142,7 +242,8 @@ async fn extract_bounds_geocode_retries_to_one_per_spot_per_cycle() {
     let counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let geocoder: Arc<dyn mimir_core::geocoder::Geocoder> =
         Arc::new(FailingGeocoder::new(counter.clone()));
-    let connector = PhotosConnector::from_config_with_geocoder(config, Some(geocoder)).unwrap();
+    let connector =
+        PhotosConnector::from_config_with_geocoder(config, Some(geocoder), None).unwrap();
     // Three photos at the same ~100 m bucket, plus one at a different spot.
     connector.buffer.lock().await.extend([
         gps_raw("a.jpg", 46.5001, 7.5001),

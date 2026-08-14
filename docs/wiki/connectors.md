@@ -66,7 +66,7 @@ See `VISION/09-Roadmap/Phase-3-Plan.md` for the full design and issue breakdown,
 
 ## Managing connectors (daemon routes)
 
-The daemon owns the connector framework and exposes the connector management (A1 / #202) and action (A2 / #203) routes. The `ConnectorRegistry` and `ConnectorSupervisor` are constructed at startup: the built-in Photos (`local`), Calendar (`caldav`), and Email (`imap`) factories are registered behind their cargo features, and the supervisor is wired with the shared geocoder, the `FileSecretStore`, the configured user identity (so the Calendar connector authors `user has_event` against the canonical user entity), and the shared `Arc<dyn LlmBackend>` (so the Email prose-extraction layer routes through the system queue). `Active` connector runners are restored at startup and drained on graceful shutdown.
+The daemon owns the connector framework and exposes the connector management (A1 / #202) and action (A2 / #203) routes. The `ConnectorRegistry` and `ConnectorSupervisor` are constructed at startup: the built-in Photos (`local`), Calendar (`caldav`), and Email (`imap`) factories are registered behind their cargo features, and the supervisor is wired with the shared geocoder, the `FileSecretStore`, the configured user identity (so the Calendar connector authors `user has_event` and the Photos connector authors `took_photo_at` against the canonical user entity), and the shared `Arc<dyn LlmBackend>` (so the Email prose-extraction layer routes through the system queue). `Active` connector runners are restored at startup and drained on graceful shutdown.
 
 | Method | Path | Description |
 |--------|------|-------------|

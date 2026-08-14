@@ -48,9 +48,11 @@ The first time it runs against an existing library it ingests every photo once
 
 - Point it at a stable folder (e.g. `~/Pictures` or a synced photo library).
   Avoid pointing it at a temp/download folder that churns constantly.
-- The owner name is the subject of every fact. Set `owner_name` to how you want
-  to be referred to in your knowledge graph (it defaults to the connector's
-  slug).
+- The subject of every fact is your canonical identity — the `[identity] name`
+  in your config — so photo facts line up with the same "you" the rest of
+  Mimir uses (and surface in user-scoped memory sections). `owner_name` is
+  only a fallback for when no identity is configured (it defaults to the
+  connector's slug).
 - Photos without GPS still record a `took_photo` fact with the timestamp —
   useful for "how many photos did I take last year?" — they just don't pin a
   location.
@@ -72,7 +74,9 @@ object like:
 ```
 
 `watch_dir` is required and must exist; the other fields are optional. The
-default extensions cover JPEG, TIFF, HEIF/HEIC, PNG, and WebP.
+default extensions cover JPEG, TIFF, HEIF/HEIC, PNG, and WebP. `owner_name`
+is only used when no `[identity] name` is configured — with an identity set,
+photo facts are authored against it instead.
 
 ## Location enrichment (C2 / #196)
 

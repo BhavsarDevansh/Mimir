@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.102.2] — 2026-08-14
+
+### Photos connector: facts authored against the canonical user identity (issue #246)
+
+- **Canonical identity wins.** `PhotosConnector` now reads `ConnectorContext::user_identity` (the `config.toml` `[identity] name`, injected by the daemon) at construction, and `extract()` authors `took_photo_at` / `took_photo` facts against it — so photo-derived facts resolve to the same `Person` entity the daemon resolves as `user_entity_id` and surface in user-scoped memory sections, instead of a disconnected per-instance `owner_name`.
+- **`owner_name` demoted to fallback.** The per-instance `owner_name` config field (defaulting to the connector slug) is now used only when no identity is injected, so a library without a configured `[identity] name` still produces facts (unlike the Calendar connector, which skips its primary user fact when no identity is injected).
+- **Factory wiring.** `PhotosConnectorFactory::create` forwards `ctx.user_identity` into the connector (as `CalendarConnectorFactory` does), so the daemon's configured identity reaches photo facts end-to-end.
+- **Tests:** subject-precedence (identity over `owner_name`), `None`-identity fallback, and a factory-level end-to-end test (sync → extract) proving the injected identity is used.
+- **Docs:** `docs/photos-connector.md` (new "User identity" section, subject/config/API updates), `docs/wiki/photos-connector.md`, `docs/wiki/connectors.md`, `docs/wiki/what-works-now.md`, and `docs/calendar-connector.md` updated.
+- Version bumped 0.102.1 → 0.102.2 (patch — backwards-compatible bug fix; non-blank `owner_name` values retain the existing fallback behaviour when no identity is configured, while blank or whitespace-only values fall back to the connector slug).
+
 ## [0.102.1] — 2026-08-14
 
 ### Phase 3 deps ledger reconciled with the MSRV-capped icalendar resolution (issue #239)

@@ -42,6 +42,19 @@ impl JobPriority {
             _ => None,
         }
     }
+
+    /// Lowercase wire representation of the priority class.
+    ///
+    /// The HTTP API (`mimir-api-types`) carries priorities as strings, so
+    /// this is the single source of truth for the wire contract — independent
+    /// of the derived `Debug` repr (issue #264).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Maintenance => "maintenance",
+            Self::User => "user",
+        }
+    }
 }
 
 /// Lifecycle status for a recorded job run.
@@ -60,7 +73,13 @@ pub enum JobRunStatus {
 }
 
 impl JobRunStatus {
-    fn as_str(self) -> &'static str {
+    /// Lowercase wire representation of the run status.
+    ///
+    /// Shared by the DB layer and the HTTP API (`mimir-api-types`), so the
+    /// wire contract is independent of the derived `Debug` repr (issue #264).
+    /// Note `TimedOut` maps to `"timed_out"` (underscored), matching the DB
+    /// representation rather than the `Debug`-derived `"timedout"`.
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Running => "running",
             Self::Succeeded => "succeeded",

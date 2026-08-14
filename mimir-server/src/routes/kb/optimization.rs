@@ -28,12 +28,12 @@ pub async fn kb_optimization_status_handler(
 
     Ok(Json(OptimizationStatusResponse {
         job_id: status.job_id,
-        priority: format!("{:?}", status.priority).to_lowercase(),
+        priority: status.priority.as_str().to_string(),
         schedule: status.schedule.map(|s| s.as_hhmm()),
         next_run_at: status.next_run_at.map(|dt| dt.to_rfc3339()),
         last_run: status.last_run.map(|run| OptimizationRunSummary {
             run_id: run.run_id,
-            status: format!("{:?}", run.status).to_lowercase(),
+            status: run.status.as_str().to_string(),
             started_at: run.started_at.to_rfc3339(),
             finished_at: run.finished_at.map(|dt| dt.to_rfc3339()),
             error: run.error,
@@ -62,7 +62,7 @@ pub async fn kb_optimization_run_now_handler(
 
     Ok(Json(OptimizationRunNowResponse {
         run_id: summary.run_id,
-        status: format!("{:?}", summary.status).to_lowercase(),
+        status: summary.status.as_str().to_string(),
         started_at: summary.started_at.to_rfc3339(),
         finished_at: summary.finished_at.map(|dt| dt.to_rfc3339()),
         error: summary.error,

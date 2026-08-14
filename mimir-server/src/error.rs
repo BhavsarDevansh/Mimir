@@ -203,7 +203,7 @@ pub fn trigger_error(e: mimir_connectors::TriggerError) -> Response {
             let detail = format!(
                 "connector {id} is not running (status: {})",
                 status
-                    .map(|s| format!("{s:?}").to_ascii_lowercase())
+                    .map(|s| s.as_str().to_string())
                     .unwrap_or_else(|| "unknown".to_string())
             );
             let body = Json(ApiError::new(detail, "CONNECTOR_NOT_RUNNING"));

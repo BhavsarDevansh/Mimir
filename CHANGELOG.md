@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.107.0] — 2026-08-14
+
+### Robustness: explicit enum→wire-string conversion (issue #264)
+
+- **`as_str()` is now the single source of truth for wire strings.** `ConnectorType`, `ConnectorStatus`, `ConnectorAuthState` (in `mimir-knowledge`) and `JobPriority` (in `mimir-core`) gained explicit `as_str()` methods; `JobRunStatus::as_str()` is now public. The route layer (`mimir-server`) no longer derives wire strings from `format!("{:?}").to_lowercase()` — every call site in the connector routes, the KB optimization status/run-now handlers, the memory condensation handler, and the `CONNECTOR_NOT_RUNNING` error detail now calls `as_str()`, so a variant rename or a custom `Debug` impl can no longer change the API output silently.
+- **Deliberate wire-output change:** `JobRunStatus::TimedOut` now serialises as `"timed_out"` (underscored, matching the DB representation and `JobRunStatus::from_str`) instead of the `Debug`-derived `"timedout"`. All other wire strings are byte-identical to before.
+- **Why `as_str()` over serde `rename_all`:** `mimir-api-types` is deliberately decoupled from `mimir-knowledge`, so serialising the enums through serde in typed route bodies would break that boundary; the explicit methods keep the decoupling and make the input (`parse_connector_type`) and output directions symmetric.
+- **Tests.** New unit tests lock the wire contract for all five enums (every variant, including the `timed_out` spelling); the existing connector-route and optimization-route integration tests pass unchanged.
+- **Docs.** `docs/connector-management.md` (wire-types note), `docs/job-queue.md` (new "Wire strings" section), and `docs/wiki/what-works-now.md` updated.
+- Version bumped 0.106.2 → 0.107.0 (minor — refactor; the `TimedOut` wire spelling is an internal-API change acceptable per the project's internal-API policy).
+
 ## [0.106.2] — 2026-08-14
 
 ### PR #318 review: atomic retry-ledger persistence, aggregate ledger cap, test/doc hygiene

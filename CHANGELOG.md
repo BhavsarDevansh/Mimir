@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.102.1] — 2026-08-14
+
+### Phase 3 deps ledger reconciled with the MSRV-capped icalendar resolution (issue #239)
+
+- **Ledger pins the resolved version.** `VISION/09-Roadmap/Phase-3-Plan.md` §4 now records `icalendar` as 0.17.6 — the latest release compatible with the workspace MSRV 1.85 (0.17.7+ requires Rust 1.88) — instead of the aspirational 0.17.12 that Cargo never resolves under the pinned toolchain. The `calendar` and `gmail` features keep declaring `icalendar = "0.17"`; the declaration is unchanged, only the ledger now documents the actual resolution with the MSRV constraint and a revisit trigger (a feature only available in 0.17.7+).
+- **Ledger rows for `async-imap` and `mail-parser` corrected** to the versions actually declared in `mimir-connectors/Cargo.toml` (0.11.3 and 0.11.5 respectively) while reconciling the table against `Cargo.lock`.
+- **Docs:** `mimir-connectors/Cargo.toml` dependency comment and `docs/calendar-connector.md` dependency table now state the MSRV cap instead of pointing at a follow-up issue; `docs/wiki/what-works-now.md` removes the #239 backlog row (and refreshes its stale version header).
+- Version bumped 0.102.0 → 0.102.1 (patch — backwards-compatible documentation/maintenance fix; no code or dependency changes).
+
 ## [0.102.0] — 2026-08-14
 
 ### Refactor: entity-location queries move to `queries::location` (issue #231)

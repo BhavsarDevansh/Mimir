@@ -80,16 +80,12 @@ notify = { version = "8.2", optional = true }
 notify-debouncer-full = { version = "0.7", optional = true }
 kamadak-exif = { version = "0.6", optional = true }
 
-# C3 (issue #197): CalDAV calendar connector. `icalendar` (0.17.x; latest
-# 0.17.12) is the strongly-typed RFC 5545 parser/builder used to parse CalDAV
+# C3 (issue #197): CalDAV calendar connector. `icalendar` (0.17.x; resolves to
+# 0.17.6 under the workspace MSRV 1.85 — 0.17.7+ requires Rust 1.88; see issue
+# #239) is the strongly-typed RFC 5545 parser/builder used to parse CalDAV
 # VEVENT payloads. Its default features already include `parser` (nom-backed),
 # so no extra feature flag is required for parsing. License MIT/Apache-2.0
-# (GPL-3-compatible). Gated by the `calendar` feature. OAuth token refresh for
-# this connector runs through the shared `oauth` module (issue #240): `oauth2`
-# 5.0.0 is pulled with `default-features = false` so its optional `reqwest`
-# 0.12 dependency never enters the tree — the crate talks HTTP through the
-# workspace's single reqwest 0.13 client via a custom `AsyncHttpClient`
-# adapter (`OAuthHttpClient`, see `src/oauth/http_client.rs`).
+# (GPL-3-compatible). Gated by the `calendar` feature.
 icalendar = { version = "0.17", optional = true }
 # OAuth 2.0 (issue #240): the vetted `oauth2` 5.0.0 protocol implementation
 # (PKCE S256, authorization-code + refresh grants) with `default-features =

@@ -155,7 +155,7 @@ All optional, gated by the `calendar` feature:
 
 | Crate | Version | Role |
 |-------|---------|------|
-| `icalendar` | 0.17.x | Strongly-typed RFC 5545 iCalendar parser (default `parser` feature). **Resolves to 0.17.6 under the workspace MSRV (1.85); 0.17.12 requires Rust 1.88** — see the follow-up issue tracking the deps-ledger / MSRV reconciliation. |
+| `icalendar` | 0.17.6 | Strongly-typed RFC 5545 iCalendar parser (default `parser` feature). **MSRV-capped at 0.17.6 by the workspace MSRV 1.85 — 0.17.7+ requires Rust 1.88; the Phase 3 deps ledger pins this resolution (issue #239).** |
 | `roxmltree` | 0.21 | Pure-Rust read-only DOM XML parser for WebDAV multistatus responses. |
 | `reqwest` | 0.13 (in tree) | HTTP (CalDAV + the `OAuthHttpClient` adapter's transport). |
 | `oauth2` | 5.0.0 (`default-features = false`) | Vetted OAuth 2.0 protocol code (refresh grant + PKCE authorization-code flow, A4 / #205); talks HTTP through the `OAuthHttpClient` adapter over the workspace reqwest 0.13 client (issue #240). Gated by the `oauth` feature. |

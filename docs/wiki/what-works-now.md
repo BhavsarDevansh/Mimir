@@ -1,7 +1,7 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-08-12
-> **Version:** 0.98.0
+> **Last updated:** 2026-08-14
+> **Version:** 0.102.1
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in `CHANGELOG.md`; this file deliberately does not repeat either.
 
 ---
@@ -358,7 +358,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | Enum→wire-string conversion robustness | [#264](https://github.com/BhavsarDevansh/Mimir/issues/264) |
 | DRY: forget SQL, auth error arms, photos boilerplate, LLM parsing, rate-limit default | [#267](https://github.com/BhavsarDevansh/Mimir/issues/267), [#273](https://github.com/BhavsarDevansh/Mimir/issues/273), [#255](https://github.com/BhavsarDevansh/Mimir/issues/255), [#259](https://github.com/BhavsarDevansh/Mimir/issues/259), [#223](https://github.com/BhavsarDevansh/Mimir/issues/223) |
 | Geocoding conversational tool | [#192](https://github.com/BhavsarDevansh/Mimir/issues/192) |
-| Deps ledger: icalendar MSRV pin | [#239](https://github.com/BhavsarDevansh/Mimir/issues/239) |
 
 ### Security & Deployment
 

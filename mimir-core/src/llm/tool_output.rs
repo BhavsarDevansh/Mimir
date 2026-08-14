@@ -103,8 +103,9 @@ fn parse_first_tool_call<T: DeserializeOwned>(
 }
 
 /// Return the JSON text from an assistant reply, stripping a ```fence``` if
-/// the model wrapped its output. Owned: this runs on every fallback parse, so
-/// a leaked allocation per LLM reply would be a slow leak.
+/// the model wrapped its output. Returns an owned `String`: fence stripping
+/// re-joins the inner lines, and callers keep the text after the `Message`
+/// is consumed to retry parsing with a second wire shape.
 fn strip_code_fence(text: &str) -> String {
     let text = text.trim();
     if !text.starts_with("```") {
@@ -202,6 +203,14 @@ mod tests {
             err,
             ToolOutputParseError::TooManyToolCalls { count: 2, .. }
         ));
+    }
+
+    #[test]
+    fn expected_name_rejects_empty_call_list() {
+        let msg = message_with_tool_calls(Vec::new());
+        let err = parse_tool_output::<serde_json::Value>(msg, Some("extract_email_facts"))
+            .expect_err("empty list rejected");
+        assert!(matches!(err, ToolOutputParseError::EmptyToolCalls));
     }
 
     #[test]

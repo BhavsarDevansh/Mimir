@@ -6,11 +6,11 @@ use chrono::{DateTime, Utc};
 use tracing::warn;
 
 use mimir_knowledge::models::entity::EntityType;
-use mimir_knowledge::models::enums::LocationType;
-use mimir_knowledge::models::source::SourceType;
+use mimir_knowledge::models::enums::{LocationType, RecurrenceType};
 use mimir_knowledge::normalize::{NormalizedFact, NormalizedLocation};
 
 use crate::connector::ConnectorError;
+use crate::fact::connector_fact;
 use crate::photos::connector::geo_key;
 use crate::photos::cursor::{FileSig, is_image};
 use crate::photos::exif::read_exif;
@@ -66,27 +66,21 @@ impl RawPhoto {
     /// The C2 "took a photo at `<place>`" fact: the place is a `Place` object
     /// entity, and the location overlay carries coords + the place name.
     pub(super) fn place_fact(&self, owner: &str, place: String) -> NormalizedFact {
-        NormalizedFact {
-            source_type: SourceType::Connector,
-            subject: owner.to_string(),
-            subject_type: EntityType::Person,
-            relationship_type: "took_photo_at".to_string(),
-            object: place.clone(),
-            object_is_entity: true,
-            object_type: Some(EntityType::Place),
-            valid_from: Some(self.taken_at),
-            valid_until: None,
-            is_sensitive: false,
-            is_correction: false,
-            correction_scope: None,
-            category_ids: Vec::new(),
-            recurrence: mimir_knowledge::models::enums::RecurrenceType::None,
-            requires_user_action: false,
-            raw_reference: Some(self.rel_path.clone()),
-            extraction_method: None,
-            event_type: None,
-            location: self.location_overlay_with_address(place),
-        }
+        connector_fact(
+            owner.to_string(),
+            EntityType::Person,
+            "took_photo_at",
+            place.clone(),
+            true,
+            Some(EntityType::Place),
+            Some(self.taken_at),
+            None,
+            RecurrenceType::None,
+            &self.rel_path,
+            None,
+            None,
+            self.location_overlay_with_address(place),
+        )
     }
 
     /// The coords-only fallback (issue #250): an `owner visited <label>`
@@ -98,27 +92,21 @@ impl RawPhoto {
     /// ~111 m spot author the same object and corroborate into one fact per
     /// spot. The photo path stays as `raw_reference` provenance.
     pub(super) fn visited_fact(&self, owner: &str, label: String) -> NormalizedFact {
-        NormalizedFact {
-            source_type: SourceType::Connector,
-            subject: owner.to_string(),
-            subject_type: EntityType::Person,
-            relationship_type: "visited".to_string(),
-            object: label,
-            object_is_entity: false,
-            object_type: None,
-            valid_from: Some(self.taken_at),
-            valid_until: None,
-            is_sensitive: false,
-            is_correction: false,
-            correction_scope: None,
-            category_ids: Vec::new(),
-            recurrence: mimir_knowledge::models::enums::RecurrenceType::None,
-            requires_user_action: false,
-            raw_reference: Some(self.rel_path.clone()),
-            extraction_method: None,
-            event_type: None,
-            location: self.coords_only_overlay(),
-        }
+        connector_fact(
+            owner.to_string(),
+            EntityType::Person,
+            "visited",
+            label,
+            false,
+            None,
+            Some(self.taken_at),
+            None,
+            RecurrenceType::None,
+            &self.rel_path,
+            None,
+            None,
+            self.coords_only_overlay(),
+        )
     }
 
     /// The no-GPS record: an `owner took_photo <rel_path>` literal-object
@@ -127,27 +115,21 @@ impl RawPhoto {
     /// kept for "how many photos did I take" queries; the path is also the
     /// `raw_reference` provenance.
     pub(super) fn took_photo_fact(&self, owner: &str) -> NormalizedFact {
-        NormalizedFact {
-            source_type: SourceType::Connector,
-            subject: owner.to_string(),
-            subject_type: EntityType::Person,
-            relationship_type: "took_photo".to_string(),
-            object: self.rel_path.clone(),
-            object_is_entity: false,
-            object_type: None,
-            valid_from: Some(self.taken_at),
-            valid_until: None,
-            is_sensitive: false,
-            is_correction: false,
-            correction_scope: None,
-            category_ids: Vec::new(),
-            recurrence: mimir_knowledge::models::enums::RecurrenceType::None,
-            requires_user_action: false,
-            raw_reference: Some(self.rel_path.clone()),
-            extraction_method: None,
-            event_type: None,
-            location: None,
-        }
+        connector_fact(
+            owner.to_string(),
+            EntityType::Person,
+            "took_photo",
+            self.rel_path.clone(),
+            false,
+            None,
+            Some(self.taken_at),
+            None,
+            RecurrenceType::None,
+            &self.rel_path,
+            None,
+            None,
+            None,
+        )
     }
 
     /// Location overlay for the place fact: coords + the resolved place name

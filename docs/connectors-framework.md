@@ -43,6 +43,14 @@ pub async fn normalize_and_insert(
   temporal bounds, typed recurrence, validated category ids, sensitivity flag,
   optional correction scope) and the per-fact `raw_reference` (the native item
   id). `source_type` is per-fact (`Connector` for connector facts).
+- **`connector_fact`** (`mimir_connectors::fact`, issue #255) is the single
+  constructor for connector facts: it fills the fixed defaults
+  (`source_type: Connector`, non-sensitive, non-correction, no category ids,
+  no user action) and takes the per-shape fields (subject, relationship,
+  object, entity-ness, temporal bounds, recurrence, raw reference, extraction
+  method, event-type hint, location overlay) as arguments. The Photos, iCal
+  VEVENT (Calendar + Email iMIP), and Email JSON-LD backends all funnel through
+  it, so a new connector cannot silently drift on a default.
 - **Confidence** is `confidence::initial(source_type, connector_type)` with no
   extraction-method discount. Corroboration / supersession / inference are
   inherited from `insert_fact_in_tx`, so cross-connector corroboration (Gmail
@@ -399,7 +407,7 @@ HTTP route are separate Phase 3 issues (A2 action routes / A3 CLI) that call
 
 ## Crate layout
 
-The crate root (`src/lib.rs`) re-exports the public API; each subsystem is a directory with one file per concern. `src/supervisor/` splits lifecycle config, errors, trigger types, the runner (struct + spawning), runtime control (start/stop/pause/resume/trigger dispatch), and the per-connector cycle loop across `config.rs`, `error.rs`, `trigger.rs`, `runner.rs`, `control.rs`, and `cycle.rs`. `src/calendar/` splits `construct`, `credentials`, `sync`, `trait_impl`, and `payload` with the CalDAV transport under `caldav/{client,ical,xml}`. `src/email/` splits `config`, `factory`, `imap`, the connector (`connector/{construct,credentials,extract,session,trait_impl}`), JSON-LD extractors (`jsonld/{facts,html,nodes,reservations,values}`), and the LLM extractor (`llm/{message,parse,schema}`). `src/secrets/` splits `error`, `bundle`, the `SecretStore` trait + slug validation (`store.rs`), the on-disk store (`file.rs`), and the in-memory helper (`memory.rs`). `src/oauth/` splits the `OAuthHttpClient` adapter (`http_client.rs`) from the refresh grant + endpoint gate + error mapping (`refresh.rs`). `src/rate_limit/`, `src/geocoder/`, `src/ical/`, `src/mock/`, and `src/photos/` follow the same pattern.
+The crate root (`src/lib.rs`) re-exports the public API; each subsystem is a directory with one file per concern. `src/supervisor/` splits lifecycle config, errors, trigger types, the runner (struct + spawning), runtime control (start/stop/pause/resume/trigger dispatch), and the per-connector cycle loop across `config.rs`, `error.rs`, `trigger.rs`, `runner.rs`, `control.rs`, and `cycle.rs`. `src/calendar/` splits `construct`, `credentials`, `sync`, `trait_impl`, and `payload` with the CalDAV transport under `caldav/{client,ical,xml}`. `src/email/` splits `config`, `factory`, `imap`, the connector (`connector/{construct,credentials,extract,session,trait_impl}`), JSON-LD extractors (`jsonld/{facts,html,nodes,reservations,values}`), and the LLM extractor (`llm/{message,parse,schema}`). `src/secrets/` splits `error`, `bundle`, the `SecretStore` trait + slug validation (`store.rs`), the on-disk store (`file.rs`), and the in-memory helper (`memory.rs`). `src/oauth/` splits the `OAuthHttpClient` adapter (`http_client.rs`) from the refresh grant + endpoint gate + error mapping (`refresh.rs`). `src/rate_limit/`, `src/geocoder/`, `src/ical/`, `src/mock/`, and `src/photos/` follow the same pattern. `src/fact.rs` is a single-file module owning the shared connector `NormalizedFact` constructor (`connector_fact`, issue #255), so every backend builds facts through one helper.
 
 | Module | Role | Filled by |
 |--------|------|-----------|

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.105.0] — 2026-08-14
+
+### DRY: shared `connector_fact` constructor for connector facts (issue #255)
+
+- **One helper owns the connector defaults.** The Photos connector built `NormalizedFact` struct literals in three places (`place_fact`, `visited_fact`, `took_photo_fact`), each repeating the same connector-level boilerplate (`source_type: Connector`, non-sensitive, non-correction, no category ids, no user action). A new always-compiled `mimir_connectors::fact::connector_fact` — generalized from the Calendar/Email `vevent_fact` helper, renamed for its wider use — now owns those defaults once, with the per-shape fields (subject, relationship, object, entity-ness, temporal bounds, recurrence, raw reference, extraction method, event-type hint, location overlay) as arguments.
+- **All three backends funnel through it.** The iCal VEVENT cluster (`vevent_to_facts`), the Email JSON-LD extractor (`jsonld_fact` wrapper), and all three Photos fact shapes call `connector_fact`; the `vevent_fact` name (misleading once JSON-LD reused it) is gone.
+- **No behaviour change.** Photos facts keep `extraction_method: None` (inheriting the supervisor's `StructuredParse` batch provenance), Calendar/Email facts keep the explicit `Some(StructuredParse)` per-fact override, and every fact field is identical to before. The helper lives in an always-compiled module, so a Photos-only build (`--no-default-features --features photos`) still compiles.
+- **Tests:** a new contract test pins the helper's fixed defaults and the override params (entity vs literal object, location overlay, extraction method), so a future producer cannot silently reintroduce drifted defaults.
+- **Docs:** `docs/photos-connector.md`, `docs/connectors-framework.md`, `docs/refactoring-module-split.md`, and `docs/wiki/what-works-now.md` updated for the shared constructor.
+- Version bumped 0.104.0 → 0.105.0 (minor — internal refactor; no public API or behaviour change).
+
 ## [0.104.0] — 2026-08-14
 
 ### Photos connector: coords-only fallback authors a real-world `visited` fact, not a file-path object (issue #250)

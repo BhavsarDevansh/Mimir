@@ -102,7 +102,10 @@ complements `KnowledgeGraph::update_sync_cursor` (the write side).
 ## Fact shape
 
 Each photo becomes one fact. The shape depends on whether a place could be
-resolved from the GPS:
+resolved from the GPS. All three shapes are built through the shared
+`mimir_connectors::fact::connector_fact` constructor (issue #255), which owns
+the connector-level defaults (`SourceType::Connector`, non-sensitive,
+non-correction, no category ids, no user action) in one place:
 
 ### Place fact (C2, GPS resolved)
 

@@ -111,3 +111,7 @@ Splitting was done case by case, not mechanically. Files that were large but coh
 ## Follow-up (0.102.0, issue #231)
 
 The `entity_locations` query functions were moved out of `queries::entity` into a top-level `queries::location` module (`mimir-knowledge/src/queries/location.rs` with `nearby.rs` alongside), so `queries::entity` owns only the `entities` table and its overlay table has a dedicated module mirroring the per-table layout (`queries::event`, `queries::source`, …). Pure move — no behaviour change; the `KnowledgeGraph` facade and all internal call sites now reference `queries::location::…`.
+
+## Follow-up (0.105.0, issue #255)
+
+The shared `NormalizedFact` constructor (`connector_fact`) was added at `mimir-connectors/src/fact.rs`, owning the fixed connector defaults once and taking per-shape fields as arguments. The calendar, email, iCal, and photos connectors now build facts through this constructor instead of repeating the same boilerplate.

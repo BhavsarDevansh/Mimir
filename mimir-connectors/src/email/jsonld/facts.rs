@@ -3,11 +3,12 @@
 use chrono::{DateTime, Utc};
 use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::enums::{EventType, RecurrenceType};
+use mimir_knowledge::models::source::ExtractionMethod;
 use mimir_knowledge::normalize::NormalizedFact;
 use serde_json::Value;
 
 use crate::email::jsonld::values::{parse_datetime, string_or_name, string_or_name_field};
-use crate::ical::vevent_fact;
+use crate::fact::connector_fact;
 use tracing::debug;
 
 #[allow(clippy::too_many_arguments)]
@@ -22,17 +23,20 @@ pub(super) fn jsonld_fact(
     event_type: Option<EventType>,
     raw_ref: &str,
 ) -> NormalizedFact {
-    vevent_fact(
+    connector_fact(
         subject,
         subject_type,
         relationship_type,
         object,
+        true,
         object_type,
         valid_from,
         valid_until,
         RecurrenceType::None,
-        event_type,
         raw_ref,
+        Some(ExtractionMethod::StructuredParse),
+        event_type,
+        None,
     )
 }
 

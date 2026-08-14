@@ -76,6 +76,7 @@
 //! `--no-default-features` still compiles a working framework + mock harness.
 
 pub mod connector;
+mod fact;
 pub mod geocoder;
 /// Shared iCalendar VEVENT parsing + fact extraction (Phase 3 C4 / #198
 /// and C6 / #200). Needed by both the Calendar and Email backends that

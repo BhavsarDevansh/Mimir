@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tokio::sync::oneshot;
 
 use mimir_knowledge::models::enums::ConnectorStatus;
@@ -7,6 +9,10 @@ use crate::connector::{ActionResult, ConnectorAction, ConnectorMode, SyncOptions
 use super::error::{ActError, SupervisorError};
 use super::runner::{ConnectorHandle, ConnectorSupervisor};
 use super::trigger::{TriggerError, TriggerOutcome, TriggerRequest};
+
+/// How long `shutdown` waits for a runner to exit gracefully on its stop
+/// signal before aborting it as a straggler.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 impl ConnectorSupervisor {
     /// Trigger an immediate sync of the connector with the given instance id,
@@ -103,18 +109,59 @@ impl ConnectorSupervisor {
         self.trigger_sync(row.id, options).await
     }
 
-    /// Gracefully stop every runner: abort in-flight cycles and await exit.
+    /// Gracefully stop every runner: signal each runner, await its exit, then
+    /// abort any straggler and await its in-flight cycle.
     ///
-    /// The shared shutdown `watch` is normally signalled first (so runners exit
-    /// on their own); `abort` is a defensive fallback for stragglers.
+    /// The per-runner stop signal is sent first so each runner aborts and
+    /// awaits its in-flight cycle sub-task before exiting — a runner only
+    /// returns once its cycle task is gone (issue #266). Runners still alive
+    /// after [`SHUTDOWN_GRACE`] are aborted as a defensive fallback for
+    /// stragglers; their cycle handles remain registered in the shared
+    /// `CycleRegistry`, which is drained and awaited afterwards, so no cycle
+    /// task can outlive `shutdown` even on the abort path.
     pub async fn shutdown(&self) {
         let handles: Vec<ConnectorHandle> =
             self.handles.lock().await.drain().map(|(_, h)| h).collect();
+        // Signal every runner to stop (the graceful path: the runner aborts
+        // and awaits its in-flight cycle before exiting).
         for handle in &handles {
-            handle.task.abort();
+            let _ = handle.stop_tx.send(true);
+        }
+        // Await the graceful exits, bounded by the grace period so a
+        // straggler cannot stall daemon shutdown forever. `is_finished()` is
+        // polled rather than awaiting the `JoinHandle` here: the handle is
+        // awaited once below, and a second poll of a completed handle panics.
+        for handle in &handles {
+            let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
+            while !handle.task.is_finished() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+        // Defensive fallback: abort any runner that did not exit, then await
+        // its termination.
+        for handle in &handles {
+            if !handle.task.is_finished() {
+                handle.task.abort();
+            }
         }
         for handle in handles {
             let _ = handle.task.await;
+        }
+        // Abort + await any cycle whose runner was aborted mid-cycle: the
+        // registry retained the handle, so no cycle task outlives `shutdown`
+        // (issue #266).
+        let cycles = self.cycle_tasks.drain().await;
+        for cycle in &cycles {
+            cycle.abort();
+        }
+        for cycle in cycles {
+            // Await only handles that have not already completed: a handle
+            // polled to completion by the runner's select must not be polled
+            // again (tokio panics on that), and a completed cycle needs no
+            // await — its task is already gone.
+            if !cycle.is_finished() {
+                let _ = cycle.await;
+            }
         }
     }
 
@@ -140,25 +187,30 @@ impl ConnectorSupervisor {
     /// Stop a single connector's runner task and remove it from the
     /// supervisor (issue #202 / Phase 3 A1).
     ///
-    /// Aborts the runner in flight (cancelling any pending cycle), awaits its
-    /// termination, and drops the `ConnectorHandle` so a subsequent
-    /// [`restore`](Self::restore) or [`trigger_sync`](Self::trigger_sync)
-    /// will treat the instance as down. The connector row is **not** deleted
-    /// here — row lifecycle is the daemon's responsibility; this only manages
-    /// the in-memory task. Persisting the current sync cursor happens in the
-    /// runner's normal shutdown path; an aborted mid-cycle cycle is treated
-    /// the same as `mimir stop` (the cursor reflects the last *completed*
-    /// sync).
+    /// Signals the runner to stop and awaits its termination: the runner
+    /// aborts and awaits its in-flight cycle before exiting, so no cycle
+    /// outlives `stop` (issue #266 — a detached cycle would keep syncing and
+    /// overlap the next runner's first cycle after a re-spawn). A runner
+    /// still in its auth handshake exits immediately too, so `stop` never
+    /// waits on a slow or hung network handshake. The `ConnectorHandle` is
+    /// dropped so a subsequent [`restore`](Self::restore) or
+    /// [`trigger_sync`](Self::trigger_sync) will treat the instance as down.
+    /// The connector row is **not** deleted here — row lifecycle is the
+    /// daemon's responsibility; this only manages the in-memory task.
+    /// Persisting the current sync cursor happens in the runner's normal
+    /// shutdown path; a stopped mid-cycle cycle is treated the same as
+    /// `mimir stop` (the cursor reflects the last *completed* sync).
     ///
     /// Returns `true` if a runner was stopped, `false` if no live runner exists
     /// for `id` (already finished, never spawned, or previously stopped).
     pub async fn stop(&self, id: i32) -> bool {
         let handle = self.handles.lock().await.remove(&id);
         match handle {
-            // Live runner: abort the in-flight cycle, await its termination,
-            // and report that a runner was stopped.
+            // Live runner: signal it to stop and await its termination (the
+            // runner aborts and awaits its in-flight cycle before exiting),
+            // then report that a runner was stopped.
             Some(handle) if !handle.task.is_finished() => {
-                handle.task.abort();
+                let _ = handle.stop_tx.send(true);
                 let _ = handle.task.await;
                 true
             }
@@ -177,7 +229,10 @@ impl ConnectorSupervisor {
     /// it to [`ConnectorStatus::Active`] (clearing `last_error`), and spawns a
     /// supervised runner. Any existing runner for `id` is stopped first so a
     /// re-spawn never leaves two handles for one instance. Used by
-    /// [`resume`](Self::resume) and (future) reconfig-on-restart.
+    /// [`resume`](Self::resume) and (future) reconfig-on-restart. The
+    /// per-connector lifecycle lock is held across the whole
+    /// stop → instantiate → spawn sequence, so concurrent `start` / `resume`
+    /// calls for the same instance serialise instead of racing (issue #266).
     ///
     /// # Errors
     ///
@@ -188,9 +243,11 @@ impl ConnectorSupervisor {
     /// - [`SupervisorError::Connector`] / [`SupervisorError::Json`] — the
     ///   row's `config_json` could not be parsed or the factory rejected it.
     pub async fn start(&self, id: i32) -> Result<(), SupervisorError> {
-        // Serialise against a concurrent forget cascade for the same
-        // instance: the cascade holds this lock for its whole duration, so a
-        // re-spawn can never sync against a row that is about to be deleted.
+        // Serialise against a concurrent pause / resume and the daemon's
+        // forget cascade for the same instance: the lock is held for the
+        // whole stop → instantiate → spawn sequence, so a re-spawn is
+        // idempotent under concurrency (issue #266) and can never sync
+        // against a row that is about to be deleted.
         let _guard = self.lifecycle_lock(id).await;
 
         let row = self
@@ -225,8 +282,17 @@ impl ConnectorSupervisor {
     /// row that is about to become `Paused`. The status write clears
     /// `last_error` so a paused connector does not display a stale error.
     /// A connector that was never running (no handle) is still transitioned
-    /// to `Paused` so the persisted state reflects the request.
+    /// to `Paused` so the persisted state reflects the request. The
+    /// per-connector lifecycle lock is held across the whole
+    /// stop → status-write sequence, so a concurrent `start` / `resume` can
+    /// never leave a `Paused` row with a live runner (issue #266).
     pub async fn pause(&self, id: i32) -> Result<(), SupervisorError> {
+        // Serialise against a concurrent start/resume (and the daemon's
+        // forget cascade) for the same instance: the lifecycle lock is held
+        // across the whole stop → status-write sequence so a concurrent
+        // re-spawn can never leave a `Paused` row with a live runner
+        // (issue #266).
+        let _guard = self.lifecycle_lock(id).await;
         self.stop(id).await;
         self.kg
             .set_connector_status(id, ConnectorStatus::Paused, Some(None))
@@ -290,8 +356,8 @@ impl ConnectorSupervisor {
     /// half of the cascade. The caller must hold the per-connector
     /// [`lifecycle_lock`](Self::lifecycle_lock) for `id` for the whole
     /// cascade (the daemon's forget route does), so a concurrent
-    /// [`start`](Self::start) / [`resume`](Self::resume) cannot re-spawn the
-    /// runner mid-cleanup.
+    /// [`start`](Self::start) / [`resume`](Self::resume) / [`pause`](Self::pause)
+    /// cannot re-spawn the runner mid-cleanup.
     ///
     /// # Errors
     ///

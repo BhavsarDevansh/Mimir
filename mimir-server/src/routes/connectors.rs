@@ -239,16 +239,19 @@ pub async fn connector_add_handler(
 /// `DELETE /connectors/{id}` — stop the runner (if any), delete the stored
 /// credentials, and delete the row.
 ///
-/// Provenance is detached (the `sources.connector_instance_id` FK is nulled)
-/// so the ingested facts survive with degraded provenance; the full `forget`
-/// cascade is deferred to A2 / #203. The connector's secret-store entry
-/// (keyed by its slug) is deleted **before** the row so that a
-/// secret-deletion failure leaves the instance intact (retryable) rather than
-/// a deleted row with lingering credentials that a later same-slug connector
-/// could load; deleting the secret is idempotent, so an instance that never
-/// stored credentials cleans up as a no-op. Returns `204` on success, `404`
-/// when no row matches `id`, or `500` if credential deletion fails (the
-/// instance is not removed in that case).
+/// The per-connector lifecycle lock is held across the whole
+/// stop → secret-delete → row-delete sequence, so a concurrent `resume` can
+/// never re-spawn a runner for a row that is about to disappear (issue
+/// #266). Provenance is detached (the `sources.connector_instance_id` FK is
+/// nulled) so the ingested facts survive with degraded provenance; the full
+/// `forget` cascade is deferred to A2 / #203. The connector's secret-store
+/// entry (keyed by its slug) is deleted **before** the row so that a
+/// secret-deletion failure leaves the instance intact (retryable) rather
+/// than a deleted row with lingering credentials that a later same-slug
+/// connector could load; deleting the secret is idempotent, so an instance
+/// that never stored credentials cleans up as a no-op. Returns `204` on
+/// success, `404` when no row matches `id`, or `500` if credential deletion
+/// fails (the instance is not removed in that case).
 pub async fn connector_remove_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
@@ -261,6 +264,12 @@ pub async fn connector_remove_handler(
         .await
         .map_err(error::knowledge_error)?
         .ok_or_else(|| error::not_found("connector not found"))?;
+
+    // Serialise the whole removal against lifecycle mutations for this
+    // instance (issue #266): the per-connector lifecycle lock is held across
+    // stop → secret-delete → row-delete, so a concurrent `resume`/`start`
+    // can never re-spawn a runner for a row that is about to disappear.
+    let _guard = state.connector_supervisor.lifecycle_lock(id).await;
 
     // Stop the runner first so a mid-cycle sync cannot write back to a row
     // that is about to disappear. `stop` is a no-op (returns false) when no

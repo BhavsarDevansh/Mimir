@@ -16,13 +16,18 @@ use mimir_core::geocoder::Geocoder;
 use mimir_core::llm::LlmBackend;
 
 use super::config::SupervisorConfig;
-use super::cycle::run_connector;
+use super::cycle::{CycleRegistry, RunnerSignals, run_connector};
 use super::error::SupervisorError;
 use super::trigger::{TRIGGER_CHANNEL_CAPACITY, TriggerRequest};
 
 pub(super) struct ConnectorHandle {
     /// The supervised runner task.
     pub(super) task: JoinHandle<()>,
+    /// Per-runner stop signal. [`ConnectorSupervisor::stop`] sends `true` and
+    /// then awaits the runner task, which aborts and awaits its in-flight
+    /// cycle before exiting — so a stopped connector never leaves a cycle
+    /// running (issue #266).
+    pub(super) stop_tx: watch::Sender<bool>,
     /// The live connector instance (Phase 3 A2 / #203). Kept so
     /// [`ConnectorSupervisor::act`] can dispatch write-back actions to the
     /// running, authenticated instance without re-instantiating it. Cloned
@@ -58,6 +63,12 @@ pub struct ConnectorSupervisor {
     /// connectors that need no injected services are unaffected.
     pub(super) context: ConnectorContext,
     pub(super) handles: Mutex<HashMap<i32, ConnectorHandle>>,
+    /// In-flight cycle tasks for every live runner, keyed by instance id.
+    /// Runners register each cycle's `JoinHandle` here before awaiting it and
+    /// remove it when the cycle ends, so `shutdown()` can abort and await a
+    /// cycle even when its runner had to be aborted — no cycle task outlives
+    /// `shutdown` (issue #266).
+    pub(super) cycle_tasks: CycleRegistry,
     /// Per-connector lifecycle locks serialising lifecycle mutations
     /// (`start` / `resume` vs the daemon's forget cascade) for one instance.
     /// Created on first use and retained; bounded by the number of connector
@@ -93,17 +104,20 @@ impl ConnectorSupervisor {
             shutdown,
             context: ConnectorContext::empty(),
             handles: Mutex::new(HashMap::new()),
+            cycle_tasks: CycleRegistry::default(),
             lifecycle_locks: Mutex::new(HashMap::new()),
         }
     }
 
     /// Acquire the per-connector lifecycle lock for `id`.
     ///
-    /// Serialises lifecycle mutations for one instance: `start` / `resume`
-    /// and the daemon's forget cascade both hold this lock, so a concurrent
-    /// `resume` cannot re-spawn a runner while a forget cascade is deleting
-    /// the row (and a forget cascade cannot trash facts while a resume is
-    /// mid-spawn). The lock is created on first use and retained.
+    /// Serialises lifecycle mutations for one instance: `start` / `resume`,
+    /// `pause`, and the daemon's forget cascade and connector-removal route
+    /// all hold this lock, so a concurrent `resume` cannot re-spawn a runner
+    /// while a cascade is deleting the row (and a cascade cannot trash facts
+    /// or delete a row while a resume is mid-spawn), and a concurrent
+    /// `pause` can never leave a `Paused` row with a live runner
+    /// (issue #266). The lock is created on first use and retained.
     pub async fn lifecycle_lock(&self, id: i32) -> tokio::sync::OwnedMutexGuard<()> {
         let lock = {
             let mut map = self.lifecycle_locks.lock().await;
@@ -246,20 +260,26 @@ impl ConnectorSupervisor {
         let mode = connector.mode();
         let (trigger_tx, trigger_rx) = mpsc::channel(TRIGGER_CHANNEL_CAPACITY);
         let semaphore = Arc::new(Semaphore::new(1));
+        let (stop_tx, stop_rx) = watch::channel(false);
         let handle = tokio::spawn(run_connector(
             // One clone feeds the runner; the other is retained below.
             Arc::clone(&connector),
             self.kg.clone(),
             self.config,
-            self.shutdown.clone(),
+            RunnerSignals {
+                shutdown: self.shutdown.clone(),
+                stop: stop_rx,
+            },
             row.id,
             connector_type,
             trigger_rx,
+            self.cycle_tasks.clone(),
         ));
         self.handles.lock().await.insert(
             row.id,
             ConnectorHandle {
                 task: handle,
+                stop_tx,
                 connector,
                 mode,
                 trigger_tx,

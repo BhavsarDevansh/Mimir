@@ -32,10 +32,9 @@ pub async fn extract_facts(
 ) -> Result<ExtractionOutcome, KnowledgeError> {
     let prompt = build_base_prompt(kg).await?;
     let messages = vec![Message::system(prompt), Message::user(user_message)];
-    let tool = remember_tool_schema();
 
     let (assistant_msg, _usage) = llm
-        .chat_message(messages, Some(vec![tool]))
+        .chat_message(messages, Some(vec![remember_tool_schema().clone()]))
         .await
         .map_err(|e| KnowledgeError::Validation(format!("LLM call failed: {}", e)))?;
 
@@ -68,10 +67,8 @@ pub async fn extract_facts_with_context(
              source-discipline, and novelty-check in this system prompt.",
         ),
     ];
-    let tool = remember_tool_schema();
-
     let (assistant_msg, _usage) = llm
-        .chat_message(llm_messages, Some(vec![tool]))
+        .chat_message(llm_messages, Some(vec![remember_tool_schema().clone()]))
         .await
         .map_err(|e| KnowledgeError::Validation(format!("LLM call failed: {}", e)))?;
 

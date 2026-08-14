@@ -4,6 +4,7 @@
 use chrono::{DateTime, Utc};
 
 use mimir_core::llm::types::Message;
+use mimir_core::llm::{ToolOutputParseError, parse_tool_output};
 
 use crate::KnowledgeError;
 use crate::extract::schema::{Classification, ExtractedFact, ExtractedLocation, RememberOutput};
@@ -17,48 +18,27 @@ use crate::normalize::{NormalizedFact, NormalizedLocation};
 /// Parse the assistant message into a `RememberOutput`.
 ///
 /// Supports both tool-call output and fallback JSON parsing for backends that
-/// do not reliably emit structured tool calls.
+/// do not reliably emit structured tool calls. The tool-call + fence-fallback
+/// dance is shared with the connector extraction path via
+/// [`parse_tool_output`]; the conversational-only bare-`Vec<ExtractedFact>`
+/// fallback is applied here on top.
 pub(super) fn parse_remember_output(
     assistant_msg: Message,
 ) -> Result<RememberOutput, KnowledgeError> {
-    if let Some(tool_calls) = assistant_msg.tool_calls {
-        let first_call = tool_calls.into_iter().next().ok_or_else(|| {
-            KnowledgeError::Validation("LLM tool call list was empty.".to_string())
-        })?;
-
-        return serde_json::from_str(&first_call.function.arguments).map_err(|e| {
-            KnowledgeError::Validation(format!("Failed to parse tool arguments: {}", e))
-        });
-    }
-
-    let text = assistant_msg.content.trim();
-    if text.is_empty() {
-        return Err(KnowledgeError::Validation(
-            "LLM did not emit a tool call.".to_string(),
-        ));
-    }
-
-    let json_text = if text.starts_with("```") {
-        text.lines()
-            .skip_while(|l| l.starts_with("```"))
-            .take_while(|l| !l.starts_with("```"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        text.to_string()
-    };
-
-    let json_text = json_text.trim();
-
-    if let Ok(wrapper) = serde_json::from_str::<RememberOutput>(json_text) {
-        Ok(wrapper)
-    } else if let Ok(facts) = serde_json::from_str::<Vec<ExtractedFact>>(json_text) {
-        Ok(RememberOutput { facts })
-    } else {
-        Err(KnowledgeError::Validation(format!(
-            "LLM did not emit a tool call and response could not be parsed as JSON: {}",
-            json_text.chars().take(200).collect::<String>()
-        )))
+    match parse_tool_output::<RememberOutput>(assistant_msg, None) {
+        Ok(wrapper) => Ok(wrapper),
+        // The conversational path also accepts a bare `Vec<ExtractedFact>`
+        // (no `{"facts": [...]}` wrapper) from backends that skip the wrapper.
+        Err(ToolOutputParseError::InvalidJson { head, text }) => {
+            if let Ok(facts) = serde_json::from_str::<Vec<ExtractedFact>>(&text) {
+                return Ok(RememberOutput { facts });
+            }
+            Err(KnowledgeError::Validation(format!(
+                "LLM did not emit a tool call and response could not be parsed as JSON: {}",
+                head
+            )))
+        }
+        Err(error) => Err(KnowledgeError::Validation(error.to_string())),
     }
 }
 
@@ -326,4 +306,81 @@ pub fn parse_location(loc: &ExtractedLocation) -> Result<NormalizedLocation, Kno
         longitude: loc.longitude,
         timezone: loc.timezone.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mimir_core::llm::types::{FunctionCall, ToolCall};
+
+    fn tool_call_message(arguments: &str) -> Message {
+        Message {
+            role: "assistant".to_string(),
+            content: String::new(),
+            tool_calls: Some(vec![ToolCall {
+                index: 0,
+                id: "call_1".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "remember".to_string(),
+                    arguments: arguments.to_string(),
+                },
+            }]),
+            tool_call_id: None,
+        }
+    }
+
+    fn content_message(content: &str) -> Message {
+        Message {
+            role: "assistant".to_string(),
+            content: content.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    fn fact_json() -> serde_json::Value {
+        serde_json::json!({
+            "classification": "Explicit",
+            "subject": "devansh",
+            "subject_type": "Person",
+            "relationship_type": "favourite_colour",
+            "object": "green",
+            "object_is_entity": false,
+            "is_sensitive": false
+        })
+    }
+
+    #[test]
+    fn tool_call_arguments_parse_into_remember_output() {
+        let msg = tool_call_message(&serde_json::json!({ "facts": [fact_json()] }).to_string());
+        let out = parse_remember_output(msg).expect("tool call parses");
+        assert_eq!(out.facts.len(), 1);
+        assert_eq!(out.facts[0].object, "green");
+    }
+
+    #[test]
+    fn fenced_content_fallback_parses_wrapper() {
+        let text = format!(
+            "```json\n{}\n```",
+            serde_json::json!({ "facts": [fact_json()] })
+        );
+        let out = parse_remember_output(content_message(&text)).expect("fenced wrapper parses");
+        assert_eq!(out.facts.len(), 1);
+    }
+
+    #[test]
+    fn bare_fact_array_fallback_is_wrapped() {
+        let text = serde_json::json!([fact_json()]).to_string();
+        let out = parse_remember_output(content_message(&text)).expect("bare array parses");
+        assert_eq!(out.facts.len(), 1);
+        assert_eq!(out.facts[0].object, "green");
+    }
+
+    #[test]
+    fn invalid_content_is_a_validation_error() {
+        let err = parse_remember_output(content_message("not json at all"))
+            .expect_err("invalid content rejected");
+        assert!(matches!(err, KnowledgeError::Validation(_)));
+    }
 }

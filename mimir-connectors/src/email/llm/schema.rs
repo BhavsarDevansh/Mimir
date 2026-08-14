@@ -1,6 +1,6 @@
 //! LLM tool schema and system prompt for prose fact extraction.
 
-use serde_json;
+use std::sync::LazyLock;
 
 use mimir_knowledge::extract::{ExtractedLocation, Temporal};
 /// Name of the LLM tool the extractor must call. Kept as a single constant so
@@ -49,7 +49,11 @@ pub(super) struct EmailFactOutput {
     pub(super) facts: Vec<EmailFact>,
 }
 
-pub(super) fn email_extraction_tool_schema() -> serde_json::Value {
+/// The `extract_email_facts` tool JSON Schema, built once and shared by every
+/// email extraction call (issue #259). The schema is static — there is no
+/// per-call input — so rebuilding it per email was a steady stream of
+/// identical allocations during a long sync.
+static EMAIL_EXTRACTION_TOOL_SCHEMA: LazyLock<serde_json::Value> = LazyLock::new(|| {
     serde_json::json!({
         "type": "function",
         "function": {
@@ -135,6 +139,10 @@ pub(super) fn email_extraction_tool_schema() -> serde_json::Value {
             }
         }
     })
+});
+
+pub(super) fn email_extraction_tool_schema() -> &'static serde_json::Value {
+    &EMAIL_EXTRACTION_TOOL_SCHEMA
 }
 
 pub(super) fn build_system_prompt(user_identity: Option<&str>) -> String {

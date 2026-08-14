@@ -102,8 +102,7 @@ pub trait Connector: Send + Sync {
     async fn health(&self) -> Result<HealthStatus, ConnectorError>;
     async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError>;
     async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError>;
-    async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError>
-        // default: empty — server-side removals to trash in the KB
+    async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError>  // default: empty — server-side removals to trash in the KB
     async fn act(&self, action: ConnectorAction)   // default: UnsupportedAction
         -> Result<ActionResult, ConnectorError>;
     async fn forget(&self) -> Result<(), ConnectorError>;

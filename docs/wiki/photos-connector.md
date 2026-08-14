@@ -91,7 +91,7 @@ place name, photos at the same place corroborate, and the place's coordinates
 are anchored, so proximity queries ("places near this point") resolve places by
 where they are, not just by where you've been. If a place can't be resolved
 (no geocoder, no match, or a transient network error), the photo still records
-a coordinates-only "took a photo" fact, so no data is lost.
+a `visited <coords-label>` fact, with the photo path retained as provenance, so no data is lost.
 
 ### Photos as facts, not entities
 

@@ -5,7 +5,7 @@ use std::sync::Mutex as StdMutex;
 
 use tokio::sync::Mutex;
 
-use crate::connector::ConnectorError;
+use crate::connector::{ConnectorError, normalize_user_identity};
 use crate::email::config::{
     DEFAULT_DISPLAY_NAME, DEFAULT_SLUG, EmailAuthMethod, EmailConfigDto, parse_cursor,
 };
@@ -64,9 +64,7 @@ impl EmailConnector {
             last_uid: Mutex::new(cursor.as_deref().and_then(parse_cursor)),
             supports_idle: StdMutex::new(None),
             buffer: Mutex::new(Vec::new()),
-            user_identity: user_identity
-                .filter(|n| !n.trim().is_empty())
-                .map(|n| n.trim().to_string()),
+            user_identity: normalize_user_identity(user_identity),
             llm_backend,
         })
     }

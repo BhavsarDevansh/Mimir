@@ -100,9 +100,9 @@ async fn extract_authors_facts_with_canonical_user_identity() {
 }
 
 /// Without an injected identity, the per-instance `owner_name` remains the
-/// subject fallback (mirroring the Calendar connector's `None`-identity
-/// fallback), so a library without a configured `[identity] name` still
-/// produces facts.
+/// subject fallback, so a library without a configured `[identity] name`
+/// still produces facts (unlike the Calendar connector, which skips its
+/// primary user fact when no identity is injected).
 #[tokio::test]
 async fn extract_falls_back_to_owner_name_without_identity() {
     let dir = tempfile::tempdir().unwrap();
@@ -118,6 +118,29 @@ async fn extract_falls_back_to_owner_name_without_identity() {
         .push(gps_raw("a.jpg", 46.5, 7.5));
     let fact = connector.extract().await.unwrap().pop().unwrap();
     assert_eq!(fact.subject, "my-photos");
+    assert_eq!(fact.subject_type, EntityType::Person);
+}
+
+/// A whitespace-padded injected identity is trimmed at construction (like
+/// the Calendar/Email connectors), so photo facts never resolve to a
+/// `Person` entity that differs from the canonical trimmed identity.
+#[tokio::test]
+async fn extract_trims_padded_user_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = serde_json::json!({
+        "watch_dir": dir.path().to_string_lossy(),
+        "owner_name": "my-photos",
+    });
+    let connector =
+        PhotosConnector::from_config_with_geocoder(config, None, Some("  Devansh  ".to_string()))
+            .unwrap();
+    connector
+        .buffer
+        .lock()
+        .await
+        .push(gps_raw("a.jpg", 46.5, 7.5));
+    let fact = connector.extract().await.unwrap().pop().unwrap();
+    assert_eq!(fact.subject, "Devansh");
     assert_eq!(fact.subject_type, EntityType::Person);
 }
 

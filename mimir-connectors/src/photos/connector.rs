@@ -127,6 +127,10 @@ impl PhotosConnector {
         geocoder: Option<std::sync::Arc<dyn Geocoder>>,
         user_identity: Option<String>,
     ) -> Result<Self, ConnectorError> {
+        // Normalise like the Calendar/Email connectors (trim, blank → None)
+        // so a padded identity can never author facts against a `Person`
+        // entity that differs from the canonical trimmed one.
+        let user_identity = crate::connector::normalize_user_identity(user_identity);
         let slug = config
             .get("__slug")
             .and_then(|v| v.as_str())

@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 
 use crate::calendar::CalendarConnector;
 use crate::calendar::caldav::CalDavClient;
-use crate::connector::ConnectorError;
+use crate::connector::{ConnectorError, normalize_user_identity};
 use crate::oauth::OAuthHttpClient;
 use crate::secrets::{SecretBundle, SecretStore};
 
@@ -66,9 +66,7 @@ impl CalendarConnector {
                 .clone()
                 .unwrap_or_else(|| DEFAULT_DISPLAY_NAME.to_string()),
             config: dto,
-            user_identity: user_identity
-                .filter(|n| !n.trim().is_empty())
-                .map(|n| n.trim().to_string()),
+            user_identity: normalize_user_identity(user_identity),
             secret_store,
             http,
             oauth_http,

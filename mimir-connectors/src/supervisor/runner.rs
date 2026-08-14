@@ -105,12 +105,12 @@ impl ConnectorSupervisor {
     /// Acquire the per-connector lifecycle lock for `id`.
     ///
     /// Serialises lifecycle mutations for one instance: `start` / `resume`,
-    /// `pause`, and the daemon's forget cascade all hold this lock, so a
-    /// concurrent `resume` cannot re-spawn a runner while a forget cascade is
-    /// deleting the row (and a forget cascade cannot trash facts while a
-    /// resume is mid-spawn), and a concurrent `pause` can never leave a
-    /// `Paused` row with a live runner (issue #266). The lock is created on
-    /// first use and retained.
+    /// `pause`, and the daemon's forget cascade and connector-removal route
+    /// all hold this lock, so a concurrent `resume` cannot re-spawn a runner
+    /// while a cascade is deleting the row (and a cascade cannot trash facts
+    /// or delete a row while a resume is mid-spawn), and a concurrent
+    /// `pause` can never leave a `Paused` row with a live runner
+    /// (issue #266). The lock is created on first use and retained.
     pub async fn lifecycle_lock(&self, id: i32) -> tokio::sync::OwnedMutexGuard<()> {
         let lock = {
             let mut map = self.lifecycle_locks.lock().await;

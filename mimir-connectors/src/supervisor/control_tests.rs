@@ -5,9 +5,10 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 
-use crate::connector::{ConnectorAction, ConnectorError};
+use crate::connector::{ConnectorAction, ConnectorError, HealthStatus, SyncOptions, SyncOutcome};
 use crate::{ActError, FnConnectorFactory, MockSyncRecorder};
 use mimir_knowledge::models::connector::UpsertConnectorInput;
+use mimir_knowledge::models::enums::ConnectorAuthState;
 
 // -- start / pause / resume / act (Phase 3 A2 / #203) --
 /// Build a supervisor + KG with the mock factory registered, and insert a
@@ -506,4 +507,121 @@ async fn pause_and_start_share_the_per_connector_lifecycle_lock() {
         other => panic!("unexpected final status {other:?}"),
     }
     supervisor.stop(id).await;
+}
+
+/// Test wrapper whose `authenticate()` handshake blocks on a test-owned
+/// gate, so tests can hold a runner mid-handshake and assert lifecycle
+/// behaviour while it is there (issue #266).
+struct GatedAuthConnector {
+    inner: crate::MockConnector,
+    entered: Arc<tokio::sync::Notify>,
+    gate: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait::async_trait]
+impl Connector for GatedAuthConnector {
+    fn id(&self) -> &str {
+        self.inner.id()
+    }
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn connector_type(&self) -> ConnectorType {
+        self.inner.connector_type()
+    }
+    fn mode(&self) -> ConnectorMode {
+        self.inner.mode()
+    }
+    fn config_schema(&self) -> serde_json::Value {
+        self.inner.config_schema()
+    }
+    async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError> {
+        self.entered.notify_one();
+        self.gate.notified().await;
+        Ok(ConnectorAuthState::Authenticated)
+    }
+    async fn health(&self) -> Result<HealthStatus, ConnectorError> {
+        self.inner.health().await
+    }
+    async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
+        self.inner.sync(options).await
+    }
+    async fn extract(
+        &self,
+    ) -> Result<Vec<mimir_knowledge::normalize::NormalizedFact>, ConnectorError> {
+        self.inner.extract().await
+    }
+    async fn forget(&self) -> Result<(), ConnectorError> {
+        self.inner.forget().await
+    }
+}
+
+/// Regression test for issue #266: `stop` must return promptly while the
+/// runner is still in its auth handshake. The graceful stop signals the
+/// runner and awaits its termination, and the handshake is preemptable by
+/// the stop signal — otherwise a slow or hung handshake (an unreachable
+/// IMAP/CalDAV server) would block `stop`, and with it `pause` / `DELETE` /
+/// re-spawn, for the whole network timeout.
+#[tokio::test]
+async fn stop_preempts_an_in_flight_auth_handshake() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = Arc::new(
+        KnowledgeGraph::init(&dir.path().join("kg.db"))
+            .await
+            .unwrap(),
+    );
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let entered_for_factory = Arc::clone(&entered);
+    let gate_for_factory = Arc::clone(&gate);
+    let registry = ConnectorRegistry::new();
+    registry
+        .register(
+            ConnectorType::Gmail,
+            "test".to_string(),
+            FnConnectorFactory::new(move |config, _ctx| {
+                let inner = crate::MockConnector::from_config(config)?;
+                Ok(Arc::new(GatedAuthConnector {
+                    inner,
+                    entered: Arc::clone(&entered_for_factory),
+                    gate: Arc::clone(&gate_for_factory),
+                }) as Arc<dyn Connector>)
+            }),
+        )
+        .unwrap();
+    let (_tx, rx) = watch::channel(false);
+    let supervisor = ConnectorSupervisor::new(
+        Arc::new(registry),
+        Arc::clone(&kg),
+        SupervisorConfig::default(),
+        rx,
+    );
+    let row = kg
+        .create_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Gmail,
+            slug: "gated-auth".to_string(),
+            backend: "test".to_string(),
+            display_name: "Gated Auth".to_string(),
+            config_json: "{}".to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap();
+
+    // Spawn the runner; its auth handshake blocks on the gate.
+    supervisor.start(row.id).await.unwrap();
+    entered.notified().await;
+
+    // `stop` must return while the handshake is still blocked, instead of
+    // waiting for it to complete.
+    let stopped = tokio::time::timeout(Duration::from_secs(1), supervisor.stop(row.id)).await;
+    assert!(
+        stopped.unwrap(),
+        "stop must stop the live runner while it is mid-handshake"
+    );
+    assert_eq!(supervisor.running_count().await, 0);
+
+    // Release the gate so the cancelled handshake future can drop cleanly.
+    gate.notify_one();
 }

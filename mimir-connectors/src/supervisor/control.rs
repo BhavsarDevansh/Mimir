@@ -143,11 +143,13 @@ impl ConnectorSupervisor {
     /// Signals the runner to stop and awaits its termination: the runner
     /// aborts and awaits its in-flight cycle before exiting, so no cycle
     /// outlives `stop` (issue #266 — a detached cycle would keep syncing and
-    /// overlap the next runner's first cycle after a re-spawn). The
-    /// `ConnectorHandle` is dropped so a subsequent [`restore`](Self::restore)
-    /// or [`trigger_sync`](Self::trigger_sync) will treat the instance as
-    /// down. The connector row is **not** deleted here — row lifecycle is
-    /// the daemon's responsibility; this only manages the in-memory task.
+    /// overlap the next runner's first cycle after a re-spawn). A runner
+    /// still in its auth handshake exits immediately too, so `stop` never
+    /// waits on a slow or hung network handshake. The `ConnectorHandle` is
+    /// dropped so a subsequent [`restore`](Self::restore) or
+    /// [`trigger_sync`](Self::trigger_sync) will treat the instance as down.
+    /// The connector row is **not** deleted here — row lifecycle is the
+    /// daemon's responsibility; this only manages the in-memory task.
     /// Persisting the current sync cursor happens in the runner's normal
     /// shutdown path; a stopped mid-cycle cycle is treated the same as
     /// `mimir stop` (the cursor reflects the last *completed* sync).

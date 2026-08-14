@@ -138,8 +138,17 @@ pub(super) async fn run_connector(
     mut trigger_rx: mpsc::Receiver<TriggerRequest>,
 ) {
     // Initial auth handshake. A failed handshake pauses the connector; a
-    // successful one persists the reported auth state.
-    match connector.authenticate().await {
+    // successful one persists the reported auth state. The handshake is
+    // preemptable by the daemon-wide shutdown and the per-runner stop
+    // signal: without the select, a slow or hung handshake (e.g. an
+    // unreachable IMAP/CalDAV server) would block `ConnectorSupervisor::stop`
+    // — which awaits this task — for the whole handshake (issue #266).
+    let auth = tokio::select! {
+        state = connector.authenticate() => state,
+        _ = signals.shutdown.changed() => return,
+        _ = signals.stop.changed() => return,
+    };
+    match auth {
         Ok(state) => {
             if let Err(error) = kg.set_auth_state(instance_id, state).await {
                 warn!(connector_id = instance_id, %error, "failed to persist auth state");

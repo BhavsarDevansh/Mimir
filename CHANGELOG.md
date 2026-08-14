@@ -9,7 +9,7 @@
 - **Factory wiring.** `PhotosConnectorFactory::create` forwards `ctx.user_identity` into the connector (as `CalendarConnectorFactory` does), so the daemon's configured identity reaches photo facts end-to-end.
 - **Tests:** subject-precedence (identity over `owner_name`), `None`-identity fallback, and a factory-level end-to-end test (sync → extract) proving the injected identity is used.
 - **Docs:** `docs/photos-connector.md` (new "User identity" section, subject/config/API updates), `docs/wiki/photos-connector.md`, `docs/wiki/connectors.md`, `docs/wiki/what-works-now.md`, and `docs/calendar-connector.md` updated.
-- Version bumped 0.102.1 → 0.102.2 (patch — backwards-compatible bug fix; `owner_name` behaviour is unchanged when no identity is configured).
+- Version bumped 0.102.1 → 0.102.2 (patch — backwards-compatible bug fix; non-blank `owner_name` values retain the existing fallback behaviour when no identity is configured, while blank or whitespace-only values fall back to the connector slug).
 
 ## [0.102.1] — 2026-08-14
 

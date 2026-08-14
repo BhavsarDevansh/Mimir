@@ -183,6 +183,18 @@ async fn mock_forget_succeeds() {
     mock.forget().await.unwrap();
 }
 
+#[tokio::test]
+async fn extract_deletions_defaults_to_empty() {
+    // The tombstone drain (issue #247) is an optional trait method: a
+    // connector without staged deletions reports no removals, so connectors
+    // without server-side deletions keep the no-op behaviour.
+    let mock = MockConnector::default();
+    assert!(
+        mock.extract_deletions().await.unwrap().is_empty(),
+        "connector without configured deletions reports none"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Object safety: the trait must work behind Arc<dyn Connector>
 // ---------------------------------------------------------------------------

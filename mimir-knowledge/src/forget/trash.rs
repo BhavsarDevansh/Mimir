@@ -148,6 +148,66 @@ pub async fn forget_facts_for_connector(
     })
 }
 
+/// Soft-delete (trash) the facts of one connector instance whose
+/// `sources.raw_reference` is in `raw_references` (issue #247).
+///
+/// The server-side-deletion (tombstone) path: a connector reports the set of
+/// raw items its service removed since the last cycle, and every fact that
+/// instance authored with one of those raw references is trashed via the
+/// shared trash machinery (30-day recovery, inferred-child evaluation,
+/// audit). Idempotent: a raw reference whose facts were already trashed (or
+/// that never existed) simply contributes nothing — mirroring the
+/// `delete_event` 404-is-success semantics. The instance-scoped filter means
+/// a deletion can never touch another connector instance's facts, even when
+/// two instances share a raw reference.
+pub async fn forget_facts_for_connector_raw_references(
+    pool: &SqlitePool,
+    instance_id: i32,
+    raw_references: &[String],
+    changed_by: ChangedBy,
+    now: DateTime<Utc>,
+) -> Result<ForgetResult, KnowledgeError> {
+    let mut seen = HashSet::<&str>::new();
+    let refs: Vec<&str> = raw_references
+        .iter()
+        .map(String::as_str)
+        .filter(|r| !r.is_empty() && seen.insert(*r))
+        .collect();
+    if refs.is_empty() {
+        return Ok(ForgetResult {
+            forgotten_count: 0,
+            backup_path: None,
+        });
+    }
+
+    let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT DISTINCT so.fact_id FROM sources so WHERE so.connector_instance_id = ",
+    );
+    builder.push_bind(instance_id);
+    builder.push(" AND so.raw_reference IN (");
+    let mut separated = builder.separated(", ");
+    for r in &refs {
+        separated.push_bind(r);
+    }
+    separated.push_unseparated(")");
+    let ids: Vec<i32> = builder.build_query_scalar().fetch_all(pool).await?;
+
+    let count = ids.len() as u64;
+    if count == 0 {
+        return Ok(ForgetResult {
+            forgotten_count: 0,
+            backup_path: None,
+        });
+    }
+
+    trash_ids_in_batches(pool, &ids, changed_by, now).await?;
+
+    Ok(ForgetResult {
+        forgotten_count: count,
+        backup_path: None,
+    })
+}
+
 /// Hard-delete all facts after creating a backup.
 async fn forget_all(
     pool: &SqlitePool,

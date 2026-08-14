@@ -75,12 +75,17 @@ and sensitivity gating as any real connector.
   "always_fail": false,         // every sync() returns Err
   "cursor": null,               // static cursor returned by every successful sync()
   "sync_delay_ms": 0,           // artificial delay inside a successful sync()
-  "display_name": null          // defaults to the slug
+  "display_name": null,         // defaults to the slug
+  "deletions": ["m-1"]          // raw_references reported by extract_deletions()
 }
 ```
 
 `config_schema()` returns this schema as a `serde_json::Value` for the future
 `mimir connector add` flow.
+
+## Tombstones (issue #247)
+
+`deletions` lists `raw_reference`s the mock reports as server-side removals via `extract_deletions()` — the mock counterpart of the Calendar connector's CalDAV tombstones. Every `sync()` re-stages the list (a server that keeps re-reporting a tombstone until its cursor advances) and `extract_deletions()` drains it; the supervisor trashes the matching KB facts through the shared trash machinery, which is idempotent (re-reports are no-ops). Use it to test the deletion path end-to-end: emit a fact with `raw_reference` `X` and list `X` in `deletions` to watch the fact land and then be trashed across cycles.
 
 ## Push mode
 

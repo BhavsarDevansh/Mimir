@@ -424,6 +424,20 @@ pub trait Connector: Send + Sync {
     /// inserts the returned facts through the shared pipeline.
     async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError>;
 
+    /// Drain buffered server-side removals (tombstones) into the set of
+    /// `raw_reference`s whose knowledge-graph facts should be trashed.
+    ///
+    /// Called by the supervisor after [`sync`](Self::sync) and
+    /// [`extract`](Self::extract) on every cycle. Each returned string is
+    /// matched against this instance's `sources.raw_reference` rows and the
+    /// matching facts are trashed through the shared trash machinery
+    /// (recoverable for 30 days, inferred children evaluated). Idempotent:
+    /// a removal reported twice trashes nothing the second time. Connectors
+    /// whose services cannot report deletions keep the default empty set.
+    async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError> {
+        Ok(Vec::new())
+    }
+
     /// Optional write-back to the service.
     ///
     /// Default implementation declines the action. Backends that support

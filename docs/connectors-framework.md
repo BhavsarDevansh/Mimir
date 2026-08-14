@@ -102,6 +102,8 @@ pub trait Connector: Send + Sync {
     async fn health(&self) -> Result<HealthStatus, ConnectorError>;
     async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError>;
     async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError>;
+    async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError>
+        // default: empty — server-side removals to trash in the KB
     async fn act(&self, action: ConnectorAction)   // default: UnsupportedAction
         -> Result<ActionResult, ConnectorError>;
     async fn forget(&self) -> Result<(), ConnectorError>;
@@ -115,6 +117,7 @@ pub trait Connector: Send + Sync {
 - **`act`** is optional write-back with a default implementation returning
   `ConnectorError::UnsupportedAction`; backends that support write-back
   (e.g. Calendar event creation in C4) override it.
+- **`extract_deletions`** (issue #247) is the server-side deletion (tombstone) drain: the supervisor calls it every cycle after `extract()` and trashes the returned `raw_reference`s via `KnowledgeGraph::forget_connector_facts_by_raw_reference` (shared trash machinery, idempotent, instance-scoped). The default returns an empty set; the Calendar connector overrides it with its staged CalDAV tombstones.
 - **`forget`** handles connector-local cleanup; the supervisor additionally
   cascades the deletion to knowledge-graph facts with this
   `connector_instance_id` via the existing trash machinery.

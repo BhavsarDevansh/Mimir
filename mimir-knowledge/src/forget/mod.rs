@@ -13,7 +13,10 @@ mod tests;
 mod trash;
 
 pub(crate) use cascade::{evaluate_children, forget_fact_tx};
-pub use trash::{forget_fact, forget_facts, forget_facts_for_connector, hard_delete_expired_trash};
+pub use trash::{
+    forget_fact, forget_facts, forget_facts_for_connector,
+    forget_facts_for_connector_raw_references, hard_delete_expired_trash,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct ForgetFilters {

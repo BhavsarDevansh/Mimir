@@ -180,6 +180,34 @@ async fn sync_stages_canned_facts_and_extract_drains_them() {
 }
 
 #[tokio::test]
+async fn sync_stages_configured_deletions_and_extract_deletions_drains_them() {
+    let config = json!({
+        "__slug": "mock",
+        "facts": [person_fact("Alice", "works_at", "Acme", "m-1")],
+        "deletions": ["m-1", "m-2"],
+    });
+    let mock = MockConnector::from_config(config).unwrap();
+
+    mock.sync(SyncOptions::default()).await.unwrap();
+    assert_eq!(mock.extract().await.unwrap().len(), 1);
+
+    // Tombstones surface separately from facts and drain like the buffer:
+    // re-reported on the next sync (the KB trash path is idempotent), so a
+    // second drain yields nothing until the next sync stages them again.
+    assert_eq!(
+        mock.extract_deletions().await.unwrap(),
+        vec!["m-1".to_string(), "m-2".to_string()]
+    );
+    assert!(mock.extract_deletions().await.unwrap().is_empty());
+
+    mock.sync(SyncOptions::default()).await.unwrap();
+    assert_eq!(
+        mock.extract_deletions().await.unwrap(),
+        vec!["m-1".to_string(), "m-2".to_string()]
+    );
+}
+
+#[tokio::test]
 async fn missing_raw_reference_is_auto_generated_per_fact_index() {
     let mut fact = person_fact("Cara", "knows", "Dan", "x");
     fact.raw_reference = None;
@@ -444,6 +472,10 @@ fn config_schema_describes_mode_and_facts() {
     assert!(
         props.contains_key("act_kind"),
         "act_kind must be listed so a config with it validates against the schema"
+    );
+    assert!(
+        props.contains_key("deletions"),
+        "deletions must be listed so the tombstone knob validates against the schema"
     );
 }
 

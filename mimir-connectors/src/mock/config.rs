@@ -186,6 +186,13 @@ pub(super) struct MockConnectorConfig {
     /// Optional display name; defaults to the slug.
     #[serde(default)]
     pub(super) display_name: Option<String>,
+    /// Raw references (KB `sources.raw_reference` values) to report as
+    /// server-side deletions via `extract_deletions`. Staged by every `sync`
+    /// (drained by `extract_deletions`), mirroring a server that keeps
+    /// re-reporting a tombstone until the cursor advances; the KB trash path
+    /// is idempotent, so re-reports are no-ops.
+    #[serde(default)]
+    pub(super) deletions: Vec<String>,
     /// When set, the mock accepts this `act()` kind and returns a canned
     /// `ActionResult` echoing the payload (Phase 3 A2 / #203).
     #[serde(default)]

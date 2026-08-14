@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.103.0] — 2026-08-14
+
+### Calendar connector: propagate server-side deletions (tombstones) to the KB fact lifecycle (issue #247)
+
+- **Tombstone drain on the connector trait.** New `Connector::extract_deletions()` (default empty) lets a connector report the `raw_reference`s its service removed since the last cycle; the supervisor calls it every cycle after `extract()` and trashes the matching facts before inserting that cycle's insertions (so a raw item deleted and re-created within one window ends up represented by the fresh facts).
+- **Instance-scoped KB trashing.** New `KnowledgeGraph::forget_connector_facts_by_raw_reference(instance_id, raw_references, changed_by)` trashes exactly the facts that instance authored for those `sources.raw_reference` values through the shared trash machinery (30-day recovery, inferred-child cascade, audit). Idempotent: a tombstone reported twice trashes nothing the second time (mirroring `delete_event`'s 404-is-success semantics), and another instance's facts with the same raw reference are never touched. The `events.fact_id` FK cascade removes the events-subsystem overlay with the fact, so a deleted event stops surfacing in "Upcoming" and can never advance as an orphan.
+- **CalDAV surface.** `CalendarConnector::stage` moves `sync-collection` `deleted` hrefs into a tombstone buffer (instead of logging them), `extract_deletions()` drains it, and the extractor now authors each event fact's `raw_reference` as the resource **href** (the server-side item id) so a tombstone maps 1:1 onto the facts — the VEVENT `UID` remains only the Event-entity name fallback. Deletions ride the existing sync-token incremental window, so no new cursor is needed; a trash failure aborts the cycle before the cursor persists, so the next cycle re-reports the deletion.
+- **Mock harness.** `MockConnector` gains a `deletions` config knob (staged by every `sync`, drained by `extract_deletions`) so the deletion path is testable without a real service.
+- **Tests:** KB-level raw-reference trashing (instance/raw-reference scoping, idempotency, overlay cascade), supervisor-level mock tombstone round trip, and a CalDAV E2E test (sync event → Upcoming → server-side deletion → facts trashed, Upcoming hides it, overlay gone).
+- **Docs:** `docs/calendar-connector.md` (new "Server-side deletions" section), `docs/connectors-framework.md` (trait surface), `docs/fact-management.md` (KB API), `docs/mock-connector.md` + `docs/wiki/mock-connector.md` (mock knob), `docs/wiki/calendar-connector.md`, `docs/wiki/connectors.md`, `docs/wiki/what-works-now.md`.
+- Version bumped 0.102.2 → 0.103.0 (minor — backwards-compatible new API surface: defaulted `Connector::extract_deletions` + new `KnowledgeGraph` method; the Calendar connector's raw-reference scheme changes to the resource href, a breaking data-semantics change acceptable per the project's internal-API policy).
+
 ## [0.102.2] — 2026-08-14
 
 ### Photos connector: facts authored against the canonical user identity (issue #246)

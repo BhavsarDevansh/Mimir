@@ -6,6 +6,7 @@ use tokio::task::{AbortHandle, JoinHandle};
 use tracing::{info, warn};
 
 use mimir_knowledge::KnowledgeGraph;
+use mimir_knowledge::models::audit_log::ChangedBy;
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorStatus, ConnectorType};
 use mimir_knowledge::models::source::ExtractionMethod;
 use mimir_knowledge::normalize::{Provenance, normalize_and_insert};
@@ -384,6 +385,26 @@ pub(super) async fn run_cycle(
         Ok(facts) => facts,
         Err(error) => return CycleOutcome::Err(error.to_string()),
     };
+
+    // Drain server-side removals (tombstones) and trash the matching facts
+    // this instance authored. Processed *before* inserting this cycle's
+    // facts so a raw item that was deleted and re-created within one window
+    // ends up represented by the fresh facts rather than trashed after
+    // insertion. A trash failure aborts before the cursor persists, so the
+    // next cycle re-reports the deletions (the sync-token is only persisted
+    // on success).
+    let deletions = match connector.extract_deletions().await {
+        Ok(deletions) => deletions,
+        Err(error) => return CycleOutcome::Err(error.to_string()),
+    };
+    if !deletions.is_empty() {
+        if let Err(error) = kg
+            .forget_connector_facts_by_raw_reference(instance_id, &deletions, ChangedBy::System)
+            .await
+        {
+            return CycleOutcome::Err(error.to_string());
+        }
+    }
 
     // Insert through the shared pipeline (entity resolution, confidence,
     // sensitivity gate, corroboration/supersession inherited). Per-fact

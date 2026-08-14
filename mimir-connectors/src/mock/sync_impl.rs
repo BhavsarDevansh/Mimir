@@ -82,6 +82,8 @@ impl MockConnector {
             sync_calls: AtomicU32::new(0),
             sync_successes: AtomicU32::new(0),
             buffer: Mutex::new(Vec::new()),
+            deletions: parsed.deletions,
+            tombstones: Mutex::new(Vec::new()),
             act_kind: parsed.act_kind,
         })
     }
@@ -287,6 +289,12 @@ impl MockConnector {
                     "type": ["string", "null"],
                     "default": null,
                     "description": "When set, act() accepts this action kind and echoes the payload's native_id / message; any other kind yields UnsupportedAction."
+                },
+                "deletions": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": [],
+                    "description": "Raw references to report as server-side deletions via extract_deletions(). Staged by every sync and drained by extract_deletions(); the KB trash path is idempotent, so re-reports are no-ops."
                 }
             }
         })

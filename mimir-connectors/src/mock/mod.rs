@@ -83,6 +83,11 @@ pub struct MockConnector {
     /// failed/panicked cycles do not consume a batch window.
     sync_successes: AtomicU32,
     buffer: Mutex<Vec<NormalizedFact>>,
+    /// Raw references to report as server-side deletions via
+    /// `extract_deletions` (issue #247), staged into `tombstones` by `sync`.
+    deletions: Vec<String>,
+    /// Staged tombstone raw references awaiting `extract_deletions`.
+    tombstones: Mutex<Vec<String>>,
     /// When set, `act()` accepts this action kind and returns a canned
     /// [`ActionResult`] echoing the payload's `native_id` / `message` (Phase 3
     /// A2 / #203). Any other kind yields `UnsupportedAction`.
@@ -114,6 +119,8 @@ impl Default for MockConnector {
             sync_calls: AtomicU32::new(0),
             sync_successes: AtomicU32::new(0),
             buffer: Mutex::new(Vec::new()),
+            deletions: Vec::new(),
+            tombstones: Mutex::new(Vec::new()),
             act_kind: None,
         }
     }

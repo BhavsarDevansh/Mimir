@@ -16,6 +16,7 @@
 //! row). Adding a connector creates it in `Setup`; activation (spawn a runner)
 //! is the `resume` action.
 
+use std::str::FromStr;
 use std::sync::Arc;
 
 use axum::{
@@ -32,38 +33,35 @@ use mimir_knowledge::models::enums::ConnectorType;
 use crate::error;
 use crate::state::AppState;
 
-/// Map a lowercase wire `connector_type` string to the enum.
+/// Map a wire `connector_type` string to the enum.
 ///
-/// Kept here (not on the enum) because [`mimir_api_types`] is deliberately
-/// decoupled from `mimir-knowledge`, so the wire type is a `String`. Returns
+/// The wire type is a `String` because [`mimir_api_types`] is deliberately
+/// decoupled from `mimir-knowledge`; the string table itself lives on
+/// [`ConnectorType`]'s `FromStr` impl so the input and output directions
+/// share one source of truth (issue #264). Input is normalised to lowercase
+/// before parsing, matching the pre-existing lenient behaviour. Returns
 /// `None` for an unknown kind so the handler can surface a `400 Bad Request`.
 fn parse_connector_type(s: &str) -> Option<ConnectorType> {
-    match s.to_ascii_lowercase().as_str() {
-        "gmail" => Some(ConnectorType::Gmail),
-        "calendar" => Some(ConnectorType::Calendar),
-        "photos" => Some(ConnectorType::Photos),
-        "linkedin" => Some(ConnectorType::LinkedIn),
-        _ => None,
-    }
+    ConnectorType::from_str(&s.to_ascii_lowercase()).ok()
 }
 
-/// Lowercase status string for the wire type, derived from the typed enum so
-/// the wire representation tracks the enum without a hard-coded table.
+/// Lowercase status string for the wire type, via [`ConnectorStatus::as_str`]
+/// so the wire representation tracks the enum without a hard-coded table.
 fn status_string(row: &mimir_knowledge::models::connector::Connector) -> String {
     row.status()
-        .map(|s| format!("{s:?}").to_ascii_lowercase())
+        .map(|s| s.as_str().to_string())
         .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn auth_state_string(row: &mimir_knowledge::models::connector::Connector) -> String {
     row.auth_state()
-        .map(|s| format!("{s:?}").to_ascii_lowercase())
+        .map(|s| s.as_str().to_string())
         .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn connector_type_string(row: &mimir_knowledge::models::connector::Connector) -> String {
     row.connector_type()
-        .map(|t| format!("{t:?}").to_ascii_lowercase())
+        .map(|t| t.as_str().to_string())
         .unwrap_or_else(|| "unknown".to_string())
 }
 

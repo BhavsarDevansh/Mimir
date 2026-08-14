@@ -251,6 +251,41 @@ impl TryFrom<i16> for ConnectorType {
     }
 }
 
+impl ConnectorType {
+    /// Lowercase wire representation of the connector type.
+    ///
+    /// The HTTP API (`mimir-api-types`) carries connector types as strings,
+    /// so this is the single source of truth for the wire contract —
+    /// independent of the derived `Debug` repr (issue #264).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Gmail => "gmail",
+            Self::Calendar => "calendar",
+            Self::Photos => "photos",
+            Self::LinkedIn => "linkedin",
+        }
+    }
+}
+
+impl std::str::FromStr for ConnectorType {
+    type Err = ();
+
+    /// Parse a lowercase wire `connector_type` string back into the enum.
+    ///
+    /// Mirrors [`ConnectorType::as_str`] so the input and output directions
+    /// share one string table (issue #264). Returns `Err(())` for an unknown
+    /// kind so the caller can surface a `400 Bad Request`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "gmail" => Ok(Self::Gmail),
+            "calendar" => Ok(Self::Calendar),
+            "photos" => Ok(Self::Photos),
+            "linkedin" => Ok(Self::LinkedIn),
+            _ => Err(()),
+        }
+    }
+}
+
 impl TryFrom<i16> for ConnectorStatus {
     type Error = ();
 
@@ -261,6 +296,22 @@ impl TryFrom<i16> for ConnectorStatus {
             x if x == Self::Paused as i16 => Ok(Self::Paused),
             x if x == Self::Error as i16 => Ok(Self::Error),
             _ => Err(()),
+        }
+    }
+}
+
+impl ConnectorStatus {
+    /// Lowercase wire representation of the connector lifecycle status.
+    ///
+    /// The HTTP API (`mimir-api-types`) carries statuses as strings, so this
+    /// is the single source of truth for the wire contract — independent of
+    /// the derived `Debug` repr (issue #264).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Setup => "setup",
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Error => "error",
         }
     }
 }
@@ -293,9 +344,25 @@ impl TryFrom<i16> for ConnectorAuthState {
     }
 }
 
+impl ConnectorAuthState {
+    /// Lowercase wire representation of the connector auth state.
+    ///
+    /// The HTTP API (`mimir-api-types`) carries auth states as strings, so
+    /// this is the single source of truth for the wire contract — independent
+    /// of the derived `Debug` repr (issue #264).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unauthenticated => "unauthenticated",
+            Self::Authenticated => "authenticated",
+            Self::Expired => "expired",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn recurrence_type_try_from_valid() {
@@ -455,6 +522,46 @@ mod tests {
         );
         assert_eq!(ConnectorStatus::try_from(0), Err(()));
         assert_eq!(ConnectorAuthState::try_from(9), Err(()));
+    }
+
+    #[test]
+    fn connector_type_as_str_matches_wire_contract() {
+        assert_eq!(ConnectorType::Gmail.as_str(), "gmail");
+        assert_eq!(ConnectorType::Calendar.as_str(), "calendar");
+        assert_eq!(ConnectorType::Photos.as_str(), "photos");
+        assert_eq!(ConnectorType::LinkedIn.as_str(), "linkedin");
+    }
+
+    #[test]
+    fn connector_type_from_str_roundtrips_wire_contract() {
+        for t in [
+            ConnectorType::Gmail,
+            ConnectorType::Calendar,
+            ConnectorType::Photos,
+            ConnectorType::LinkedIn,
+        ] {
+            assert_eq!(ConnectorType::from_str(t.as_str()), Ok(t));
+        }
+        assert_eq!(ConnectorType::from_str("rss"), Err(()));
+        assert_eq!(ConnectorType::from_str(""), Err(()));
+    }
+
+    #[test]
+    fn connector_status_as_str_matches_wire_contract() {
+        assert_eq!(ConnectorStatus::Setup.as_str(), "setup");
+        assert_eq!(ConnectorStatus::Active.as_str(), "active");
+        assert_eq!(ConnectorStatus::Paused.as_str(), "paused");
+        assert_eq!(ConnectorStatus::Error.as_str(), "error");
+    }
+
+    #[test]
+    fn connector_auth_state_as_str_matches_wire_contract() {
+        assert_eq!(
+            ConnectorAuthState::Unauthenticated.as_str(),
+            "unauthenticated"
+        );
+        assert_eq!(ConnectorAuthState::Authenticated.as_str(), "authenticated");
+        assert_eq!(ConnectorAuthState::Expired.as_str(), "expired");
     }
 }
 

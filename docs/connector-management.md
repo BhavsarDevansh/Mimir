@@ -70,6 +70,8 @@ A1: `AddConnectorRequest`, `ConnectorResponse` (carries `item_count`,
 `mimir-connectors`, so connector kind/status are strings and the token
 bundle is re-typed at the server boundary (`to_secret_bundle`).
 
+The lowercase wire strings for `connector_type`, `status`, and `auth_state` are produced by the explicit `as_str()` methods on `ConnectorType`, `ConnectorStatus`, and `ConnectorAuthState` (issue #264) — the single source of truth for the wire contract, independent of the derived `Debug` repr. The input direction (`parse_connector_type`) delegates to `ConnectorType`'s `FromStr` impl over the same strings, so the two directions stay symmetric.
+
 ## Knowledge-graph additions (`mimir-knowledge`)
 
 - `KnowledgeGraph::count_sources_for_connector(id) -> i64` — the derived

@@ -18,6 +18,13 @@ fn job_priority_from_i16_rejects_unknown() {
 }
 
 #[test]
+fn job_priority_as_str_matches_wire_contract() {
+    assert_eq!(JobPriority::System.as_str(), "system");
+    assert_eq!(JobPriority::Maintenance.as_str(), "maintenance");
+    assert_eq!(JobPriority::User.as_str(), "user");
+}
+
+#[test]
 fn job_run_status_roundtrips_through_str() {
     for status in [
         JobRunStatus::Running,
@@ -28,6 +35,15 @@ fn job_run_status_roundtrips_through_str() {
     ] {
         assert_eq!(JobRunStatus::from_str(status.as_str()), status);
     }
+}
+
+#[test]
+fn job_run_status_as_str_matches_wire_contract() {
+    assert_eq!(JobRunStatus::Running.as_str(), "running");
+    assert_eq!(JobRunStatus::Succeeded.as_str(), "succeeded");
+    assert_eq!(JobRunStatus::Failed.as_str(), "failed");
+    assert_eq!(JobRunStatus::TimedOut.as_str(), "timed_out");
+    assert_eq!(JobRunStatus::Cancelled.as_str(), "cancelled");
 }
 
 #[test]

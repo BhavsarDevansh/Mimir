@@ -66,6 +66,10 @@ converted to UTC for daemon state. Key points:
 `JobError::is_not_registered` and `JobError::is_already_running` are documented
 predicate helpers over the error enum (issue #161).
 
+## Wire strings
+
+The HTTP API (`mimir-api-types`) carries job priorities and run statuses as lowercase strings. `JobPriority::as_str()` and `JobRunStatus::as_str()` are the single source of truth for those wire values (issue #264) — independent of the derived `Debug` repr. Note `JobRunStatus::TimedOut` maps to `"timed_out"` (underscored), matching the DB representation rather than the `Debug`-derived `"timedout"`; `JobRunStatus::from_str` parses the same strings, so the two directions stay symmetric.
+
 ## Configuration
 
 ```toml

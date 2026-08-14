@@ -37,16 +37,18 @@ pub(super) struct RawPhoto {
 impl RawPhoto {
     /// Build a [`NormalizedFact`] for this photo (Phase 3 C2 / #196).
     ///
-    /// `owner` is the subject (`Person`). When `place` is the resolved
-    /// locality name, the fact is `owner took_photo_at <place>` with the place
-    /// as a `Place` object entity and a [`NormalizedLocation`] overlay carrying
-    /// the coords *and* the place name as its address — the shared pipeline
-    /// writes a `Visited` `entity_locations` row for the owner and anchors the
-    /// place entity's coordinates. When `place` is `None` (no geocoder, no
-    /// match, or a transient geocode error), the fact degrades to the C1
-    /// coords-only `took_photo <rel_path>` shape so no data is lost. In both
-    /// cases `raw_reference` is the photo's relative path (the native source
-    /// id) and `valid_from` is the EXIF timestamp.
+    /// `owner` is the subject (`Person`): the canonical user identity when
+    /// injected, else the configured owner name (issue #246). When `place`
+    /// is the resolved locality name, the fact is `owner took_photo_at
+    /// <place>` with the place as a `Place` object entity and a
+    /// [`NormalizedLocation`] overlay carrying the coords *and* the place
+    /// name as its address — the shared pipeline writes a `Visited`
+    /// `entity_locations` row for the owner and anchors the place entity's
+    /// coordinates. When `place` is `None` (no geocoder, no match, or a
+    /// transient geocode error), the fact degrades to the C1 coords-only
+    /// `took_photo <rel_path>` shape so no data is lost. In both cases
+    /// `raw_reference` is the photo's relative path (the native source id)
+    /// and `valid_from` is the EXIF timestamp.
     pub(super) fn to_fact(&self, owner: &str, place: Option<String>) -> NormalizedFact {
         match place {
             Some(name) => self.place_fact(owner, name),

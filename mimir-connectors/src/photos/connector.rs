@@ -34,7 +34,18 @@ pub struct PhotosConnector {
     pub(super) slug: String,
     pub(super) display_name: String,
     pub(super) watch_dir: PathBuf,
+    /// Per-instance owner display name (the fact-subject fallback). Used
+    /// only when no canonical user identity is injected (issue #246);
+    /// defaults to the connector slug.
     pub(super) owner_name: String,
+    /// Canonical user identity name (the `config.toml` `[identity] name`),
+    /// injected via [`ConnectorContext::user_identity`](crate::connector::ConnectorContext::user_identity)
+    /// (issue #246). When present, photo facts are authored against this
+    /// identity so they resolve to the same `Person` entity the daemon
+    /// resolves as `user_entity_id` (and surface in user-scoped memory
+    /// sections). When `None`, [`owner_name`](Self::owner_name) is the
+    /// subject fallback.
+    pub(super) user_identity: Option<String>,
     pub(super) debounce: Duration,
     pub(super) extensions: Vec<String>,
     pub(super) cursor: Mutex<PhotosCursor>,
@@ -80,6 +91,7 @@ impl std::fmt::Debug for PhotosConnector {
             .field("slug", &self.slug)
             .field("watch_dir", &self.watch_dir)
             .field("owner_name", &self.owner_name)
+            .field("user_identity", &self.user_identity)
             .field("extensions", &self.extensions)
             .finish_non_exhaustive()
     }
@@ -95,21 +107,25 @@ impl PhotosConnector {
     /// error rather than a construction-time panic, and no watcher thread runs
     /// before the supervisor drives the connector).
     pub fn from_config(config: serde_json::Value) -> Result<Self, ConnectorError> {
-        Self::from_config_with_geocoder(config, None)
+        Self::from_config_with_geocoder(config, None, None)
     }
 
     /// Build a Photos connector from its merged `config_json` value plus a
     /// shared geocoder injected via the [`ConnectorContext`](crate::connector::ConnectorContext)
-    /// (Phase 3 C2 / #196).
+    /// (Phase 3 C2 / #196) and the canonical user identity (issue #246).
     ///
     /// The geocoder is used in `extract` to reverse-geocode EXIF GPS into a
     /// locality-level place name that becomes the object of a
     /// `took_photo_at` fact. `None` keeps the C1 coords-only `took_photo`
-    /// fallback shape. Construction stays cheap and synchronous; the watcher
-    /// is started lazily on the first `sync()`.
+    /// fallback shape. `user_identity` is the canonical `[identity] name`
+    /// (mirroring the Calendar connector): when present it is the subject of
+    /// every photo fact; when `None` the per-instance `owner_name` (defaulting
+    /// to the slug) is used instead. Construction stays cheap and
+    /// synchronous; the watcher is started lazily on the first `sync()`.
     pub fn from_config_with_geocoder(
         config: serde_json::Value,
         geocoder: Option<std::sync::Arc<dyn Geocoder>>,
+        user_identity: Option<String>,
     ) -> Result<Self, ConnectorError> {
         let slug = config
             .get("__slug")
@@ -163,6 +179,7 @@ impl PhotosConnector {
             display_name,
             watch_dir,
             owner_name,
+            user_identity,
             debounce: Duration::from_millis(parsed.debounce_ms),
             extensions,
             cursor: Mutex::new(cursor),
@@ -189,7 +206,7 @@ impl PhotosConnector {
                 },
                 "owner_name": {
                     "type": ["string", "null"],
-                    "description": "Display name of the photo-library owner (the fact subject). Defaults to the connector slug."
+                    "description": "Display name of the photo-library owner (the fact subject). Used only when no canonical user identity ([identity] name) is injected; defaults to the connector slug."
                 },
                 "debounce_ms": {
                     "type": "integer",
@@ -287,7 +304,11 @@ impl Connector for PhotosConnector {
     }
 
     async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError> {
-        let owner = self.owner_name.clone();
+        // The canonical user identity wins when injected (issue #246); the
+        // per-instance `owner_name` (defaulting to the slug) is the fallback
+        // so a library without a configured `[identity] name` still produces
+        // facts.
+        let owner = self.user_identity.as_deref().unwrap_or(&self.owner_name);
         // Drain the buffer into a local Vec and drop the guard *before* the
         // per-photo reverse-geocode loop. `resolve_place` awaits
         // `geocoder.reverse()` — a rate-limited (~1 req/s for Nominatim)
@@ -320,7 +341,7 @@ impl Connector for PhotosConnector {
             let place = self
                 .resolve_place(raw.latitude, raw.longitude, &mut failed_this_cycle)
                 .await;
-            facts.push(raw.to_fact(&owner, place));
+            facts.push(raw.to_fact(owner, place));
         }
         Ok(facts)
     }

@@ -145,9 +145,9 @@ C4 (#198) extends the same context with the canonical **user identity name**
 (`ConnectorContext::user_identity` / `ConnectorSupervisor::with_user_identity`)
 so the connector authors `user has_event <event>` against the same entity the
 daemon resolves as `user_entity_id` (and the event surfaces in the user's
-"Upcoming" section). The Photos connector predates this and carries its own
-disconnected `owner_name` config field — aligning it with the shared identity
-is tracked as a follow-up.
+"Upcoming" section). The Photos connector was aligned with the same shared
+identity in #246: it authors `took_photo_at` / `took_photo` facts against the
+injected identity, keeping `owner_name` only as a `None`-identity fallback.
 
 ## Dependencies
 

@@ -59,7 +59,7 @@ The Calendar connector is the only connector that can write back to its source. 
 - **update_event** — `PUT`s with `If-Match: <etag>` to a known event href.
 - **delete_event** — `DELETE`s an event (idempotent — a 404 is treated as success).
 
-Deleting an event on the server (in another client) also removes the corresponding KB facts automatically: the connector stages the sync-collection tombstone's href and the supervisor trashes the matching facts (recoverable from trash for 30 days) so the event stops surfacing in Upcoming (#247).
+Deleting an event on the server (in another client) also removes the corresponding KB facts automatically: the connector stages the sync-collection tombstone's href and the supervisor trashes the matching facts (recoverable from trash for 30 days) so the event stops surfacing in Upcoming (#247). **Upgrade note (0.103.0):** facts authored before 0.103.0 carry the event `UID` as their raw reference, so href-based tombstones cannot match them and a pre-upgrade deletion would leave the event active in the knowledge graph and Upcoming; if you upgraded from an earlier version, remove each calendar instance's pre-upgrade facts (`mimir connector forget <slug>`, recoverable from trash for 30 days) and trigger a full re-sync so the events are re-authored with href references.
 
 ## Authentication
 

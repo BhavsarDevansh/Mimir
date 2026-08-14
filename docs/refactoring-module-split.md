@@ -107,3 +107,7 @@ Splitting was done case by case, not mechanically. Files that were large but coh
 - `docs/wiki/module-split.md` — user-facing summary.
 - `docs/workspace.md` — crate-level structure.
 - Per-subsystem docs (`docs/connectors-framework.md`, `docs/llm-client.md`, `docs/memory-system.md`, etc.) list the new module locations.
+
+## Follow-up (0.102.0, issue #231)
+
+The `entity_locations` query functions were moved out of `queries::entity` into a top-level `queries::location` module (`mimir-knowledge/src/queries/location.rs` with `nearby.rs` alongside), so `queries::entity` owns only the `entities` table and its overlay table has a dedicated module mirroring the per-table layout (`queries::event`, `queries::source`, …). Pure move — no behaviour change; the `KnowledgeGraph` facade and all internal call sites now reference `queries::location::…`.

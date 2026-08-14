@@ -95,7 +95,7 @@ pub(crate) async fn apply_location_overlay(
     // the rate-limited network call does not block ingestion.
     let _write_guard = write_lock.lock().await;
 
-    let upsert_ok = match queries::entity::upsert_location(
+    let upsert_ok = match queries::location::upsert_location(
         pool,
         entity_id,
         location.location_type as i16,
@@ -126,7 +126,7 @@ pub(crate) async fn apply_location_overlay(
     if let Some(place_id) = place_anchor {
         if let (Some(lat), Some(lng)) = (location.latitude, location.longitude) {
             if let Err(error) =
-                queries::entity::ensure_place_coordinates(pool, place_id, lat, lng, Some(fact_id))
+                queries::location::ensure_place_coordinates(pool, place_id, lat, lng, Some(fact_id))
                     .await
             {
                 tracing::warn!(

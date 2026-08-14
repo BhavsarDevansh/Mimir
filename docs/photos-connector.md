@@ -213,7 +213,7 @@ Two `entity_locations` rows are written per place fact:
   temporal window.
 - **Place `Geographic` row** (new) — the place entity's own coordinates. A
   place does not "move", so this uses a new `LocationType::Geographic` (id 6,
-  migration `046`) and the idempotent `queries::entity::ensure_place_coordinates`:
+  migration `046`) and the idempotent `queries::location::ensure_place_coordinates`:
   if a `Geographic` row for the place already exists its coords are updated in
   place, otherwise a timeless row is inserted. This keeps a single row per
   place (repeated photos don't pile up move-history rows) so `find_nearby`

@@ -6,6 +6,7 @@ pub mod connector;
 pub mod entity;
 pub mod event;
 pub mod fact;
+pub mod location;
 pub mod memory;
 pub mod preference;
 pub mod search;

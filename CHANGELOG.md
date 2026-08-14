@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.102.0] — 2026-08-14
+
+### Refactor: entity-location queries move to `queries::location` (issue #231)
+
+- **New `queries::location` module.** The `entity_locations` / `pending_location_meta` query functions (`insert_location`, `upsert_location`, `get_locations`, `update_location`, `close_prior_open_locations_in_tx`, `ensure_place_coordinates`, the pending-meta helpers, and `find_nearby` in `queries::location::nearby`) moved out of `queries::entity` into a dedicated top-level module, mirroring the per-table layout (`queries::event`, `queries::source`, …). `queries::entity` now owns only the `entities` table (CRUD, dedup, names, predicates).
+- **Pure move, no behaviour change.** The `KnowledgeGraph` facade, the normalize/confirm pipelines, and the integration tests now reference `queries::location::…`; the public `KnowledgeGraph` API is unchanged.
+- **Docs:** `docs/entity-locations.md`, `docs/photos-connector.md`, and `docs/refactoring-module-split.md` updated for the new module path.
+- Version bumped 0.101.9 → 0.102.0 (minor — internal refactor, no public API change).
+
 ## [0.101.9] — 2026-08-14
 
 ### Autonomous loop: visible prompts and live agent logging

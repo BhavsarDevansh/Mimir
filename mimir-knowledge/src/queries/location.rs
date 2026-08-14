@@ -1,4 +1,13 @@
 //! Entity-location persistence: upserts, temporal closes, geocoding anchors.
+//!
+//! Module layout by concern:
+//!
+//! - this module — `entity_locations` / `pending_location_meta` persistence.
+//! - `nearby` — geographic near-by search.
+
+mod nearby;
+
+pub use nearby::find_nearby;
 
 use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;

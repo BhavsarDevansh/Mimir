@@ -107,7 +107,7 @@ the inserted fact's temporal bounds. Per job:
    Geocoder `Err` and `Ok(None)` are logged and tolerated — the location is
    stored with whatever data it carries and the pipeline never aborts on a
    geocode failure. With no geocoder injected, the missing half stays empty.
-2. **Upsert** via `queries::entity::upsert_location` (shared by the
+2. **Upsert** via `queries::location::upsert_location` (shared by the
    `KnowledgeGraph::upsert_location` facade): a same-place re-statement is
    deduplicated (see [Re-statement deduplication](#re-statement-deduplication-issue-228)),
    otherwise any still-open location of the same `entity_id` + `location_type`
@@ -180,7 +180,7 @@ Sensitive "where" facts land as `pending_confirmation` like any sensitive fact, 
   before the call (deterministic shutdown / tests).
 - `KnowledgeGraph::find_nearby(lat, lon, radius_km, at)` — proximity query
   (Phase 3 S4 / #194); see [Proximity query](#proximity-query).
-- `queries::entity::ensure_place_coordinates(place_id, lat, lon, source_fact_id)`
+- `queries::location::ensure_place_coordinates(place_id, lat, lon, source_fact_id)`
   — idempotent anchor for a `Place` entity's `Geographic` coordinates (Phase 3
   C2 / #196). Not (yet) on the `KnowledgeGraph` facade; called by the
   location-overlay worker.

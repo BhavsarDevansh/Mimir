@@ -41,7 +41,7 @@ async fn test_entity_location_stub_roundtrip() {
     assert_eq!(locs.len(), 1);
     assert_eq!(locs[0].latitude, Some(40.7128));
 
-    let updated = mimir_knowledge::queries::entity::update_location(
+    let updated = mimir_knowledge::queries::location::update_location(
         kg.pool(),
         loc.id,
         Some("456 Oak Ave"),

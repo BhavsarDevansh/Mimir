@@ -390,9 +390,10 @@ pub(super) async fn run_cycle(
     // this instance authored. Processed *before* inserting this cycle's
     // facts so a raw item that was deleted and re-created within one window
     // ends up represented by the fresh facts rather than trashed after
-    // insertion. A trash failure aborts before the cursor persists, so the
-    // next cycle re-reports the deletions (the sync-token is only persisted
-    // on success).
+    // insertion. A trash failure aborts before the cursor is persisted, so a
+    // restart resumes from the old sync-token and the deletions are
+    // re-reported (the connector's in-memory token has already advanced, so
+    // an in-process retry does not re-fetch — tracked as a follow-up).
     let deletions = match connector.extract_deletions().await {
         Ok(deletions) => deletions,
         Err(error) => return CycleOutcome::Err(error.to_string()),

@@ -185,14 +185,19 @@ async fn mock_forget_succeeds() {
 
 #[tokio::test]
 async fn extract_deletions_defaults_to_empty() {
-    // The tombstone drain (issue #247) is an optional trait method: a
+    // The tombstone report (issue #247) is an optional trait method: a
     // connector without staged deletions reports no removals, so connectors
-    // without server-side deletions keep the no-op behaviour.
+    // without server-side deletions keep the no-op behaviour. The
+    // acknowledgement half defaults to a no-op too (nothing is buffered).
     let mock = MockConnector::default();
     assert!(
         mock.extract_deletions().await.unwrap().is_empty(),
         "connector without configured deletions reports none"
     );
+    mock.acknowledge_deletions(&["never-staged".to_string()])
+        .await
+        .unwrap();
+    assert!(mock.extract_deletions().await.unwrap().is_empty());
 }
 
 // ---------------------------------------------------------------------------

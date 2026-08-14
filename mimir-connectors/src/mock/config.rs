@@ -187,10 +187,11 @@ pub(super) struct MockConnectorConfig {
     #[serde(default)]
     pub(super) display_name: Option<String>,
     /// Raw references (KB `sources.raw_reference` values) to report as
-    /// server-side deletions via `extract_deletions`. Staged by every `sync`
-    /// (drained by `extract_deletions`), mirroring a server that keeps
-    /// re-reporting a tombstone until the cursor advances; the KB trash path
-    /// is idempotent, so re-reports are no-ops.
+    /// server-side deletions via `extract_deletions`. Staged by every `sync`;
+    /// the supervisor acknowledges processed removals via
+    /// `acknowledge_deletions` (PR #313 review), mirroring a server that
+    /// keeps re-reporting a tombstone until the cursor advances; the KB
+    /// trash path is idempotent, so re-reports are no-ops.
     #[serde(default)]
     pub(super) deletions: Vec<String>,
     /// When set, the mock accepts this `act()` kind and returns a canned

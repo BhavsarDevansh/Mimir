@@ -185,13 +185,22 @@ impl Connector for CalendarConnector {
     }
 
     async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError> {
-        // Issue #247: drain the staged tombstones (the hrefs the server
-        // reported deleted in `sync`). Each href is the `raw_reference` the
+        // Issue #247: report the staged tombstones (the hrefs the server
+        // reported deleted in `sync`) without draining them — the supervisor
+        // acknowledges the processed removals via `acknowledge_deletions`
+        // only after trashing, fact insertion, and cursor persistence all
+        // succeeded, so a failed cycle re-reports them instead of losing
+        // them (PR #313 review). Each href is the `raw_reference` the
         // extractor authored for the deleted event's facts, so the supervisor
-        // trashes exactly those facts. Deletions are part of the sync-token
-        // incremental window, so no new cursor is needed.
+        // trashes exactly those facts.
+        let tombstones = self.tombstones.lock().await;
+        Ok(tombstones.clone())
+    }
+
+    async fn acknowledge_deletions(&self, deleted: &[String]) -> Result<(), ConnectorError> {
         let mut tombstones = self.tombstones.lock().await;
-        Ok(std::mem::take(&mut *tombstones))
+        tombstones.retain(|href| !deleted.contains(href));
+        Ok(())
     }
 
     /// CalDAV write-back (C4 / #198): the only connector with write support.

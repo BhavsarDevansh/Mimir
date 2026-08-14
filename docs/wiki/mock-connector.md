@@ -64,7 +64,7 @@ exists.
 - Give each canned fact a `raw_reference` (it is required for connector
   provenance); the mock auto-generates one (`mock-<slug>-<index>`) if you omit
   it.
-- To test deletion propagation, put the same `raw_reference` in the `deletions` list: the fact lands first, then the tombstone trashes it (reported again on later cycles with no effect).
+- To test deletion propagation, use two cycles: ingest the fact first (e.g. `batch_size: 1` so the first cycle delivers only the fact), then let a later cycle re-stage the same `raw_reference` in `deletions` so the tombstone removes it. Deletions are processed before the same cycle's insertions, so a fact and its tombstone staged in one cycle would leave the fresh insertion in place.
 - The mock is a test harness — do not register it as a real connector in
   production config.
 

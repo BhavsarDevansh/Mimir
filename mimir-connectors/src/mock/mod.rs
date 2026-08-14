@@ -86,7 +86,9 @@ pub struct MockConnector {
     /// Raw references to report as server-side deletions via
     /// `extract_deletions` (issue #247), staged into `tombstones` by `sync`.
     deletions: Vec<String>,
-    /// Staged tombstone raw references awaiting `extract_deletions`.
+    /// Staged tombstone raw references awaiting `extract_deletions`; kept
+    /// until the supervisor acknowledges them via `acknowledge_deletions`
+    /// (PR #313 review) so a failed cycle re-reports them.
     tombstones: Mutex<Vec<String>>,
     /// When set, `act()` accepts this action kind and returns a canned
     /// [`ActionResult`] echoing the payload's `native_id` / `message` (Phase 3

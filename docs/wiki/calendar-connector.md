@@ -30,7 +30,7 @@ not the whole calendar every time) and stages them for the knowledge graph.
 - Each event's iCalendar payload (UID, summary, start/end, location,
   recurrence rule) is parsed and held in an in-memory buffer ready for the
   knowledge graph.
-- When the server reports an event as **deleted** (a `sync-collection` tombstone), the connector trashes that event's facts in the knowledge graph (recoverable from trash for 30 days), so a calendar event you cancel or delete in another client stops surfacing in **Upcoming** instead of living on as a phantom.
+- When the server reports an event as **deleted** (a `sync-collection` tombstone), the connector stages the deletion's href and the supervisor trashes that event's facts in the knowledge graph (recoverable from trash for 30 days), so a calendar event you cancel or delete in another client stops surfacing in **Upcoming** instead of living on as a phantom.
 - The connector keeps the sync-token as its progress marker: across restarts
   it normally resumes from where it left off; a requested full sync or an
   invalidated cursor can require a complete refetch.
@@ -59,7 +59,7 @@ The Calendar connector is the only connector that can write back to its source. 
 - **update_event** — `PUT`s with `If-Match: <etag>` to a known event href.
 - **delete_event** — `DELETE`s an event (idempotent — a 404 is treated as success).
 
-Deleting an event on the server (in another client) also removes the corresponding KB facts automatically: the sync-collection tombstone trashes them (recoverable from trash for 30 days) so the event stops surfacing in Upcoming (#247).
+Deleting an event on the server (in another client) also removes the corresponding KB facts automatically: the connector stages the sync-collection tombstone's href and the supervisor trashes the matching facts (recoverable from trash for 30 days) so the event stops surfacing in Upcoming (#247).
 
 ## Authentication
 

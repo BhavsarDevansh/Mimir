@@ -596,9 +596,13 @@ impl KnowledgeGraph {
     /// connector's reported removals after `sync` and hands them here, so a
     /// remote deletion trashes exactly the facts that instance authored for
     /// that raw item — recoverable from trash (30-day expiry), with the
-    /// shared trash machinery (inferred-child cascade, audit) applied.
-    /// Idempotent: re-reported raw references whose facts are already trashed
-    /// (or that never existed) return a zero count without error.
+    /// shared trash machinery (inferred-child cascade, audit) applied. A fact
+    /// still corroborated by another source is preserved: only the matching
+    /// `sources` row is removed, and the fact is trashed only when no sources
+    /// remain (PR #313 review). Idempotent: re-reported raw references whose
+    /// facts are already trashed (or that never existed) return a zero count
+    /// without error. The returned count is the number of facts actually
+    /// trashed (facts preserved for another source are not counted).
     pub async fn forget_connector_facts_by_raw_reference(
         &self,
         instance_id: i32,

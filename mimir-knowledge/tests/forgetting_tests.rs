@@ -7,6 +7,7 @@ use mimir_knowledge::models::enums::{
 use mimir_knowledge::models::event::NewEvent;
 use mimir_knowledge::models::fact::NewFact;
 use mimir_knowledge::models::source::{ExtractionMethod, SourceType};
+use mimir_knowledge::queries::source::AddSourceRequest;
 use mimir_knowledge::{KnowledgeGraph, forget};
 
 async fn create_person(kg: &KnowledgeGraph, name: &str) -> i32 {
@@ -658,4 +659,101 @@ async fn connector_raw_reference_forget_is_idempotent_and_dismisses_overlay() {
         second.forgotten_count, 0,
         "a re-reported tombstone is a no-op"
     );
+}
+
+/// PR #313 review: a tombstone must only remove the matching `sources` rows.
+/// A fact still corroborated by another connector instance or by a
+/// non-connector source is preserved; only a fact with no remaining sources
+/// is trashed.
+#[tokio::test]
+async fn connector_raw_reference_forget_preserves_facts_with_other_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let alice = create_person(&kg, "Alice").await;
+    let london = create_place(&kg, "London").await;
+    let paris = create_place(&kg, "Paris").await;
+    let instance_1 = register_connector(&kg, "calendar-1").await;
+    let instance_2 = register_connector(&kg, "calendar-2").await;
+
+    // Solely sourced by instance_1/raw-1: trashed by the tombstone.
+    let sole = connector_fact(&kg, alice, london, "visited", instance_1, "raw-1").await;
+
+    // Corroborated by another connector instance: the tombstoned source row
+    // is removed but the fact survives on the remaining source.
+    let corroborated = connector_fact(&kg, alice, paris, "is_in", instance_1, "raw-2").await;
+    kg.add_source_to_fact(AddSourceRequest {
+        fact_id: corroborated,
+        source_type: SourceType::Connector,
+        connector_instance_id: Some(instance_2),
+        connector_type: Some(ConnectorType::Calendar),
+        raw_reference: Some("raw-other".to_string()),
+        extraction_method: Some(ExtractionMethod::StructuredParse),
+        changed_by: ChangedBy::System,
+    })
+    .await
+    .unwrap();
+
+    // Corroborated by a non-connector (user) source: preserved too.
+    let user_corroborated =
+        connector_fact(&kg, alice, london, "lives_in", instance_1, "raw-3").await;
+    kg.add_source_to_fact(AddSourceRequest {
+        fact_id: user_corroborated,
+        source_type: SourceType::UserEdit,
+        connector_instance_id: None,
+        connector_type: None,
+        raw_reference: None,
+        extraction_method: Some(ExtractionMethod::UserInput),
+        changed_by: ChangedBy::System,
+    })
+    .await
+    .unwrap();
+
+    let result = kg
+        .forget_connector_facts_by_raw_reference(
+            instance_1,
+            &[
+                "raw-1".to_string(),
+                "raw-2".to_string(),
+                "raw-3".to_string(),
+            ],
+            ChangedBy::System,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        result.forgotten_count, 1,
+        "only the sole-sourced fact is trashed"
+    );
+
+    assert!(
+        kg.get_fact(sole).await.unwrap().is_none(),
+        "the sole-sourced fact is trashed"
+    );
+    assert!(
+        kg.get_fact(corroborated).await.unwrap().is_some(),
+        "a fact corroborated by another connector instance survives"
+    );
+    assert!(
+        kg.get_fact(user_corroborated).await.unwrap().is_some(),
+        "a fact corroborated by a non-connector source survives"
+    );
+
+    // Only the tombstoned source rows are gone; corroborating rows remain.
+    let corroborated_sources = kg.get_sources_for_fact(corroborated).await.unwrap();
+    assert_eq!(corroborated_sources.len(), 1);
+    assert_eq!(
+        corroborated_sources[0].connector_instance_id,
+        Some(instance_2)
+    );
+    assert_eq!(
+        corroborated_sources[0].raw_reference.as_deref(),
+        Some("raw-other")
+    );
+
+    let user_sources = kg.get_sources_for_fact(user_corroborated).await.unwrap();
+    assert_eq!(user_sources.len(), 1);
+    assert_eq!(user_sources[0].source_type_id, SourceType::UserEdit as i16);
 }

@@ -294,7 +294,7 @@ impl MockConnector {
                     "type": "array",
                     "items": { "type": "string" },
                     "default": [],
-                    "description": "Raw references to report as server-side deletions via extract_deletions(). Staged by every sync and drained by extract_deletions(); the KB trash path is idempotent, so re-reports are no-ops."
+                    "description": "Raw references to report as server-side deletions via extract_deletions(). Staged by every sync and acknowledged by the supervisor via acknowledge_deletions(); the KB trash path is idempotent, so re-reports are no-ops."
                 }
             }
         })

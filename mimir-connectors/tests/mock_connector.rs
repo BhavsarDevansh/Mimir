@@ -180,7 +180,7 @@ async fn sync_stages_canned_facts_and_extract_drains_them() {
 }
 
 #[tokio::test]
-async fn sync_stages_configured_deletions_and_extract_deletions_drains_them() {
+async fn sync_stages_configured_deletions_until_acknowledged() {
     let config = json!({
         "__slug": "mock",
         "facts": [person_fact("Alice", "works_at", "Acme", "m-1")],
@@ -191,14 +191,34 @@ async fn sync_stages_configured_deletions_and_extract_deletions_drains_them() {
     mock.sync(SyncOptions::default()).await.unwrap();
     assert_eq!(mock.extract().await.unwrap().len(), 1);
 
-    // Tombstones surface separately from facts and drain like the buffer:
-    // re-reported on the next sync (the KB trash path is idempotent), so a
-    // second drain yields nothing until the next sync stages them again.
+    // Tombstones surface separately from facts and stay pending until the
+    // supervisor acknowledges them (PR #313 review): a failed cycle must not
+    // lose the removal, so `extract_deletions` re-reports the same set.
     assert_eq!(
         mock.extract_deletions().await.unwrap(),
         vec!["m-1".to_string(), "m-2".to_string()]
     );
-    assert!(mock.extract_deletions().await.unwrap().is_empty());
+    assert_eq!(
+        mock.extract_deletions().await.unwrap(),
+        vec!["m-1".to_string(), "m-2".to_string()],
+        "unacknowledged tombstones must be re-reported"
+    );
+
+    // Acknowledge only the processed removals; the rest stay pending.
+    mock.acknowledge_deletions(&["m-1".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(
+        mock.extract_deletions().await.unwrap(),
+        vec!["m-2".to_string()]
+    );
+    mock.acknowledge_deletions(&["m-2".to_string()])
+        .await
+        .unwrap();
+    assert!(
+        mock.extract_deletions().await.unwrap().is_empty(),
+        "acknowledged tombstones are dropped from the buffer"
+    );
 
     mock.sync(SyncOptions::default()).await.unwrap();
     assert_eq!(

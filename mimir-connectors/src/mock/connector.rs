@@ -132,8 +132,19 @@ impl Connector for MockConnector {
     }
 
     async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError> {
+        let tombstones = self.tombstones.lock().await;
+        // Non-destructive (PR #313 review): the supervisor acknowledges the
+        // processed removals via `acknowledge_deletions` only after the
+        // cycle's trashing, fact insertion, and cursor persistence all
+        // succeeded, so a failed cycle re-reports them on the next cycle
+        // instead of losing the tombstone.
+        Ok(tombstones.clone())
+    }
+
+    async fn acknowledge_deletions(&self, deleted: &[String]) -> Result<(), ConnectorError> {
         let mut tombstones = self.tombstones.lock().await;
-        Ok(std::mem::take(&mut *tombstones))
+        tombstones.retain(|raw| !deleted.contains(raw));
+        Ok(())
     }
 
     async fn act(&self, action: ConnectorAction) -> Result<ActionResult, ConnectorError> {

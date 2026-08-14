@@ -518,7 +518,7 @@ async fn upsert_location_facade_supersedes_directly() {
 /// single-row invariant at the schema level (Phase 3 C2 / #196 review fix).
 #[tokio::test]
 async fn ensure_place_coordinates_keeps_single_geographic_row() {
-    use mimir_knowledge::queries::entity::ensure_place_coordinates;
+    use mimir_knowledge::queries::location::ensure_place_coordinates;
 
     let (kg, _dir) = fresh_kg().await;
     let place = kg
@@ -641,7 +641,7 @@ async fn sensitive_location_fact_gets_overlay_after_confirm() {
 
     // The persisted overlay shape is consumed by confirmation.
     assert!(
-        mimir_knowledge::queries::entity::get_pending_location_meta(kg.pool(), pending.fact_id)
+        mimir_knowledge::queries::location::get_pending_location_meta(kg.pool(), pending.fact_id)
             .await
             .unwrap()
             .is_none(),
@@ -690,7 +690,7 @@ async fn rejecting_sensitive_location_fact_leaves_no_overlay() {
         "rejecting a pending location fact must leave no orphan location row"
     );
     assert!(
-        mimir_knowledge::queries::entity::get_pending_location_meta(kg.pool(), pending.fact_id)
+        mimir_knowledge::queries::location::get_pending_location_meta(kg.pool(), pending.fact_id)
             .await
             .unwrap()
             .is_none(),

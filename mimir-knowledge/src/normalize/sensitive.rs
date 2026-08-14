@@ -119,7 +119,7 @@ pub(super) async fn insert_sensitive_fact(
     // write fails, both roll back and the caller reports an error instead of
     // leaving a confirmable fact that would lose its location payload.
     if let Some(loc) = location {
-        queries::entity::insert_pending_location_meta_in_tx(
+        queries::location::insert_pending_location_meta_in_tx(
             &mut tx,
             fact_id,
             loc.location_type as i16,

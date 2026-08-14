@@ -412,7 +412,7 @@ async fn confirm_rebuilds_location_overlay_for_sensitive_where_fact() {
 
     // The consumed metadata must be cleaned up.
     assert!(
-        queries::entity::get_pending_location_meta(kg.pool(), fact_id)
+        queries::location::get_pending_location_meta(kg.pool(), fact_id)
             .await
             .unwrap()
             .is_none(),

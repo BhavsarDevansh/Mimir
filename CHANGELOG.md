@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.102.0] — 2026-08-14
+
+### Refactor: entity-location queries move to `queries::location` (issue #231)
+
+- **New `queries::location` module.** The `entity_locations` / `pending_location_meta` query functions (`insert_location`, `upsert_location`, `get_locations`, `update_location`, `close_prior_open_locations_in_tx`, `ensure_place_coordinates`, the pending-meta helpers, and `find_nearby` in `queries::location::nearby`) moved out of `queries::entity` into a dedicated top-level module, mirroring the per-table layout (`queries::event`, `queries::source`, …). `queries::entity` now owns only the `entities` table (CRUD, dedup, names, predicates).
+- **Pure move, no behaviour change.** The `KnowledgeGraph` facade, the normalize/confirm pipelines, and the integration tests now reference `queries::location::…`; the public `KnowledgeGraph` API is unchanged.
+- **Breaking (internal API): import-path migration.** The lower-level query paths moved from `queries::entity` to `queries::location`: `queries::entity::insert_location` → `queries::location::insert_location`, and likewise for `upsert_location`, `get_locations`, `update_location`, `close_prior_open_locations_in_tx`, `ensure_place_coordinates`, `insert_location_in_tx`, the pending-meta helpers (`insert_pending_location_meta`, `insert_pending_location_meta_in_tx`, `get_pending_location_meta`, `delete_pending_location_meta`), the `PendingLocationMeta` type, and `queries::entity::find_nearby` → `queries::location::find_nearby` (re-exported from `queries::location::nearby`). Direct callers of these paths must update their imports; the public `KnowledgeGraph` facade is unaffected.
+- **Docs:** `docs/entity-locations.md`, `docs/photos-connector.md`, and `docs/refactoring-module-split.md` updated for the new module path.
+- Version bumped 0.101.9 → 0.102.0 (minor — internal refactor; breaking only for direct importers of the lower-level `queries::entity` query module, which is not a public-facing interface).
+
 ## [0.101.9] — 2026-08-14
 
 ### Autonomous loop: visible prompts and live agent logging

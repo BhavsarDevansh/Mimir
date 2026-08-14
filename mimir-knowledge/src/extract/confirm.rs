@@ -183,7 +183,7 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
     // so a rebuild failure must never propagate to the caller — log and
     // continue (the row is still created without the geocoded half, matching
     // the non-sensitive path's geocoder-error tolerance).
-    match queries::entity::get_pending_location_meta(kg.pool(), updated.id).await {
+    match queries::location::get_pending_location_meta(kg.pool(), updated.id).await {
         Ok(Some(meta)) => {
             let apply = LocationOverlayApply {
                 geocoder: kg.geocoder().cloned(),
@@ -209,7 +209,7 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
             if overlay_ok {
                 // Meta is consumed; drop it so it cannot drift from the overlay.
                 if let Err(e) =
-                    queries::entity::delete_pending_location_meta(kg.pool(), updated.id).await
+                    queries::location::delete_pending_location_meta(kg.pool(), updated.id).await
                 {
                     tracing::warn!(
                         "failed to clear pending location meta for fact {}: {}",

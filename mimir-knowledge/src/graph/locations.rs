@@ -27,7 +27,7 @@ impl KnowledgeGraph {
         valid_until: Option<DateTime<Utc>>,
         source_fact_id: Option<i32>,
     ) -> Result<models::entity_location::EntityLocation, KnowledgeError> {
-        queries::entity::insert_location(
+        queries::location::insert_location(
             &self.pool,
             entity_id,
             location_type as i16,
@@ -79,7 +79,7 @@ impl KnowledgeGraph {
         // insert duplicate rows (or close each other's row) from stale
         // lookups.
         let _write_guard = self.write_lock().lock().await;
-        queries::entity::upsert_location(
+        queries::location::upsert_location(
             self.pool(),
             entity_id,
             location_type as i16,
@@ -99,7 +99,7 @@ impl KnowledgeGraph {
         &self,
         entity_id: i32,
     ) -> Result<Vec<models::entity_location::EntityLocation>, KnowledgeError> {
-        queries::entity::get_locations(&self.pool, entity_id).await
+        queries::location::get_locations(&self.pool, entity_id).await
     }
 
     /// Update a location's mutable fields (address/coords/timezone).
@@ -111,7 +111,7 @@ impl KnowledgeGraph {
         longitude: Option<f64>,
         timezone: Option<&str>,
     ) -> Result<models::entity_location::EntityLocation, KnowledgeError> {
-        queries::entity::update_location(&self.pool, id, address, latitude, longitude, timezone)
+        queries::location::update_location(&self.pool, id, address, latitude, longitude, timezone)
             .await
     }
 
@@ -119,7 +119,7 @@ impl KnowledgeGraph {
     /// sorted nearest-first (Phase 3 S4 / issue #194).
     ///
     /// Coarse SQLite bounding-box pre-filter + exact Haversine post-filter in
-    /// Rust (see [`queries::entity::find_nearby`]). Each result carries its
+    /// Rust (see [`queries::location::find_nearby`]). Each result carries its
     /// exact great-circle `distance_km`.
     ///
     /// Pass `Some(t)` to restrict to locations whose `valid_from`/`valid_until`
@@ -133,6 +133,6 @@ impl KnowledgeGraph {
         radius_km: f64,
         at: Option<DateTime<Utc>>,
     ) -> Result<Vec<models::entity_location::NearbyLocation>, KnowledgeError> {
-        queries::entity::find_nearby(&self.pool, latitude, longitude, radius_km, at).await
+        queries::location::find_nearby(&self.pool, latitude, longitude, radius_km, at).await
     }
 }

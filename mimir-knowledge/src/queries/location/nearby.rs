@@ -7,6 +7,15 @@ use crate::KnowledgeError;
 use crate::geo;
 use crate::models::entity_location::{EntityLocation, NearbyLocation};
 
+/// Find entity locations within `radius_km` of (`lat`, `lon`), sorted
+/// nearest-first (Phase 3 S4 / issue #194).
+///
+/// Coarse SQLite bounding-box pre-filter (via [`crate::geo::bounding_box`])
+/// plus exact Haversine post-filter (via [`crate::geo::haversine_km`]) in
+/// Rust; each result carries its exact great-circle `distance_km`. Pass
+/// `Some(t)` to restrict to locations whose `valid_from`/`valid_until`
+/// window contains `t`; `None` scans all locations regardless of temporal
+/// validity.
 pub async fn find_nearby(
     pool: &SqlitePool,
     lat: f64,

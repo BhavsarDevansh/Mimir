@@ -90,12 +90,11 @@ pub(crate) async fn extract_prose_facts(
         truncate_body(&body),
     );
     let messages = vec![LlmMessage::system(prompt), LlmMessage::user(user_turn)];
-    let tool = email_extraction_tool_schema();
 
     // Propagate LLM/parse failures so `extract()` can re-stage the raw email
     // for retry instead of recording a silent empty success.
     let assistant = backend
-        .system_chat_message(messages, Some(vec![tool]))
+        .system_chat_message(messages, Some(vec![email_extraction_tool_schema().clone()]))
         .await
         .map(|(msg, _usage)| msg)?;
     let output = parse_output(assistant)?;

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.106.0] — 2026-08-14
+
+### DRY: shared LLM tool-output parsing across conversational and connector extraction (issue #259)
+
+- **One parser owns the tool-call + fence-fallback dance.** `mimir-core::llm::parse_tool_output<T>` (new `mimir-core/src/llm/tool_output.rs`) now handles the three-step parse — first `tool_calls` entry's `function.arguments`, else ```fence```-stripped `content`, else error — once, with a shared `ToolOutputParseError` enum that callers map onto their own error types. `mimir-knowledge::extract::parse::parse_remember_output` (conversational `remember` tool) and `mimir-connectors::email::llm::parse::parse_output` (Email C7 / #201 `extract_email_facts` tool) both delegate to it; the email-specific exactly-one-call and tool-name guards are preserved through the shared parser's expected-tool-name check, and the conversational bare-`Vec<ExtractedFact>` fallback is preserved on top of the shared parser. The duplicated `strip_code_fence` helper is gone.
+- **Tool schemas are built once.** `remember_tool_schema()` and `email_extraction_tool_schema()` are now `LazyLock`-cached statics returning `&'static serde_json::Value` (the schemas are static — there is no per-call input), so a long email sync no longer rebuilds the identical schema tree per extraction. `remember_tool_schema`'s return type changes from owned `Value` to `&'static Value` (internal API; callers clone where an owned value is needed).
+- **Tests:** 11 new unit tests for `parse_tool_output` (tool-call, expected-name guards, empty-list, invalid arguments, plain/fenced content fallback, empty content, invalid-JSON text carry) in `mimir-core`, plus 4 new unit tests locking `parse_remember_output`'s wrapper / fenced-wrapper / bare-array fallback behaviour in `mimir-knowledge`. The existing email `parse_output` guard tests and the conversational text-fallback integration tests pass unchanged.
+- **Docs:** `docs/llm-backend.md` (new "Shared Tool-Output Parsing" section), `docs/fact-extraction-pipeline.md`, `docs/email-connector.md`, and `docs/wiki/what-works-now.md` updated.
+- Version bumped 0.105.0 → 0.106.0 (minor — internal refactor; no behaviour change, `remember_tool_schema`'s return type is an internal-API break acceptable per the project's internal-API policy).
+
 ## [0.105.0] — 2026-08-14
 
 ### DRY: shared `connector_fact` constructor for connector facts (issue #255)

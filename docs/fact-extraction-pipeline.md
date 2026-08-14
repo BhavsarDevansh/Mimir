@@ -26,10 +26,10 @@ every turn. Incognito sessions never learn.
 
 ```
 User message
-    → LLM extraction ("remember" tool)                 [extract.rs]
+    → LLM extraction ("remember" tool)                 [extract/pipeline.rs]
     → Conversational adapter:
         predicate canonicalisation + list splitting
-        + parse LLM string fields → NormalizedFact       [extract.rs]
+        + parse LLM string fields → NormalizedFact       [extract/parse.rs]
     → normalize_and_insert(kg, Vec<NormalizedFact>, Provenance)   [normalize.rs]
         → entity resolution (exact name → alias → FTS5 fuzzy ≥ 0.9 → create new,
            restricted to the requested entity type; Phase 3 F5 / #182)
@@ -103,16 +103,19 @@ pub async fn normalize_and_insert(
   flight fact + a Calendar event on overlapping dates) adds a source and boosts
   confidence without creating a duplicate fact.
 
-The conversational adapter (`extracted_to_normalized` in `extract.rs`) does the
+The conversational adapter (`extracted_to_normalized` in `extract/pipeline.rs`) does the
 LLM-output normalisation the shared boundary cannot: predicate canonicalisation
 (so list-splitting sees canonical names), list splitting, and parsing the LLM's
 string-typed fields into the typed `NormalizedFact`. Per-fact canonicalisation
 and parse errors are tolerated and surfaced via `ExtractionOutcome::errors`,
 preserving the previous batch behaviour.
 
+The tool-call + fence-fallback parsing itself is shared with the connector extraction path (issue #259): `mimir-core::llm::parse_tool_output` owns the three-step dance (first `tool_calls` entry's `function.arguments`, else fence-stripped `content`, else error) once, and both `parse_remember_output` and the Email connector's `parse_output` map its `ToolOutputParseError` onto their own error types. The conversational path keeps its bare-`Vec<ExtractedFact>` fallback on top of the shared parser. The `remember` tool schema is built once via `LazyLock` and shared by every extraction call.
+
 ## Files
 
 - `mimir-knowledge/src/extract/` — conversational half: `remember` tool schema, extraction prompts, LLM-output parsing, and the adapter that maps `ExtractedFact` onto `NormalizedFact`/`Provenance`
+- `mimir-core/src/llm/tool_output.rs` — shared LLM tool-output parsing (`parse_tool_output` + `ToolOutputParseError`), used by both the conversational and connector extraction paths
 - `mimir-knowledge/src/normalize/` — shared `normalize_and_insert` boundary (entity resolution, confidence, sensitivity gate, insertion, event overlay) used by both chat and connectors
 - `mimir-knowledge/src/queries/fact/` — `insert_fact_in_tx`, corroboration + supersession paths
 - `mimir-knowledge/src/confidence.rs` — structural confidence model + transactional confidence cascade

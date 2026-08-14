@@ -1,10 +1,13 @@
 //! The `remember` tool JSON Schema exposed to the LLM.
 
+use std::sync::LazyLock;
+
 // ---------------------------------------------------------------------------
 
-/// Build the JSON Schema for the `remember` tool.
-/// Build the JSON Schema for the `remember` tool.
-pub fn remember_tool_schema() -> serde_json::Value {
+/// The `remember` tool JSON Schema, built once and shared by every extraction
+/// call (issue #259). The schema is static — there is no per-call input — so
+/// rebuilding it per extraction was a steady stream of identical allocations.
+static REMEMBER_TOOL_SCHEMA: LazyLock<serde_json::Value> = LazyLock::new(|| {
     serde_json::json!({
         "type": "function",
         "function": {
@@ -121,6 +124,11 @@ pub fn remember_tool_schema() -> serde_json::Value {
             }
         }
     })
+});
+
+/// The `remember` tool JSON Schema, built once and shared.
+pub fn remember_tool_schema() -> &'static serde_json::Value {
+    &REMEMBER_TOOL_SCHEMA
 }
 
 /// Return just the inner `parameters` schema for use with the `Tool` trait.

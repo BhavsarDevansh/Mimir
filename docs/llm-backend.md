@@ -78,3 +78,12 @@ pub llm_client: Arc<dyn LlmBackend>; // new
 The `from_config` constructor uses `Arc::new(LlmClient::new(...))` which coerces
 to `Arc<dyn LlmBackend>` automatically. All route handlers already called methods
 that are now on the trait, so no further changes were needed.
+
+## Shared Tool-Output Parsing
+
+`mimir-core/src/llm/tool_output.rs` owns the parsing of an assistant [`Message`](mimir-core/src/llm/types.rs) into a typed tool output, shared by every LLM tool-call consumer (issue #259):
+
+- `parse_tool_output<T: DeserializeOwned>(message, expected_tool_name)` — takes the first `tool_calls` entry and parses its `function.arguments` as `T`; when there is no tool call it strips a ```fence``` from `content` (if present) and parses the remainder as `T`. When `expected_tool_name` is `Some`, the tool-call path also rejects a multi-call completion and a call to any other tool, so arguments from a different function can never deserialize as `T`.
+- `ToolOutputParseError` — the shared error enum (`EmptyToolCalls`, `TooManyToolCalls`, `UnexpectedToolName`, `InvalidArguments`, `NoToolCall`, `InvalidJson`). Callers map it onto their own error types; `InvalidJson` carries the fence-stripped text so a caller with a second wire shape (the conversational bare-array fallback) can retry the parse.
+
+Consumers: `mimir-knowledge::extract::parse::parse_remember_output` (conversational `remember` tool) and `mimir-connectors::email::llm::parse::parse_output` (Email C7 / #201 `extract_email_facts` tool). Both tool schemas (`remember_tool_schema`, `email_extraction_tool_schema`) are static and built once via `LazyLock`.

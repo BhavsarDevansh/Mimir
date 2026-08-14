@@ -1,5 +1,6 @@
 //! LLM-output parsing and typed-fact construction with Rust-side validation.
 use mimir_core::llm::Message as LlmMessage;
+use mimir_core::llm::parse_tool_output;
 use mimir_knowledge::extract::{
     parse_entity_type, parse_event_type, parse_location, parse_recurrence, parse_temporal_bound,
 };
@@ -13,63 +14,13 @@ use crate::email::llm::message::canonicalise_subject;
 use crate::email::llm::schema::{EMAIL_EXTRACTION_TOOL_NAME, EmailFact, EmailFactOutput};
 
 pub(super) fn parse_output(message: LlmMessage) -> Result<EmailFactOutput, ConnectorError> {
-    if let Some(tool_calls) = message.tool_calls {
-        // A single email needs exactly one `extract_email_facts` call. Reject
-        // a multi-call completion (the prompt asks for one call only) and an
-        // unexpected tool name, so arguments from a different function never
-        // become email facts.
-        if tool_calls.len() > 1 {
-            return Err(ConnectorError::Parse(format!(
-                "LLM returned {n} tool calls; expected exactly one \
-                 `{EMAIL_EXTRACTION_TOOL_NAME}` call.",
-                n = tool_calls.len()
-            )));
-        }
-        let first = tool_calls
-            .into_iter()
-            .next()
-            .ok_or_else(|| ConnectorError::Parse("LLM tool call list was empty.".into()))?;
-        if first.function.name != EMAIL_EXTRACTION_TOOL_NAME {
-            return Err(ConnectorError::Parse(format!(
-                "LLM returned tool call `{name}`; expected \
-                 `{EMAIL_EXTRACTION_TOOL_NAME}`.",
-                name = first.function.name
-            )));
-        }
-        return serde_json::from_str(&first.function.arguments).map_err(|e| {
-            ConnectorError::Parse(format!(
-                "failed to parse {EMAIL_EXTRACTION_TOOL_NAME} arguments: {e}"
-            ))
-        });
-    }
-    let text = message.content.trim();
-    if text.is_empty() {
-        return Err(ConnectorError::Parse(
-            "LLM emitted no tool call for email extraction.".into(),
-        ));
-    }
-    let json_text = strip_code_fence(text);
-    serde_json::from_str::<EmailFactOutput>(&json_text).map_err(|e| {
-        ConnectorError::Parse(format!(
-            "LLM response not parseable as {{\"facts\": [...]}}: {e}; head: {}",
-            json_text.chars().take(200).collect::<String>()
-        ))
-    })
-}
-
-/// Return the JSON text from an assistant reply, stripping a
-/// ```fence``` if the model wrapped its output. Owned (no `Box::leak`):
-/// this runs on every fallback parse, so a leaked allocation per LLM reply
-fn strip_code_fence(text: &str) -> String {
-    let text = text.trim();
-    if !text.starts_with("```") {
-        return text.to_string();
-    }
-    text.lines()
-        .skip_while(|l| l.starts_with("```"))
-        .take_while(|l| !l.starts_with("```"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    // The tool-call + fence-fallback parsing is shared with the
+    // conversational `remember` path (issue #259). The expected-tool-name
+    // guard keeps the email-specific validation: a single email needs exactly
+    // one `extract_email_facts` call, and arguments from a different function
+    // must never become email facts.
+    parse_tool_output::<EmailFactOutput>(message, Some(EMAIL_EXTRACTION_TOOL_NAME))
+        .map_err(|e| ConnectorError::Parse(e.to_string()))
 }
 
 /// Build a single [`NormalizedFact`] from one LLM-emitted [`EmailFact`].

@@ -48,7 +48,6 @@ mod parse;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use facts::vevent_fact;
 pub use facts::vevent_to_facts;
 pub use parse::parse_ical_to_vevents;
 

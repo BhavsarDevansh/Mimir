@@ -25,6 +25,7 @@ Splitting was done case by case, not mechanically. Files that were large but coh
 | `src/email/` | email backend: `config`, `factory`, `imap`, `connector/{construct,credentials,extract,session,trait_impl}`, `jsonld/{facts,html,nodes,reservations,values}`, `llm/{message,parse,schema}` |
 | `src/rate_limit/` | rate limiting: `config`, `error`, `limiter`, `quota`, `retry` |
 | `src/geocoder/` | geocoding: `client`, `parse` |
+| `src/fact.rs` | shared connector `NormalizedFact` constructor (`connector_fact`, issue #255) — fixed connector defaults owned once, per-shape fields as arguments |
 | `src/ical/` | iCal parsing: `parse`, `facts` |
 | `src/mock/` | mock connector harness: `config`, `connector`, `factory`, `recorder`, `sync_impl` |
 | `src/photos/` | photos backend: `config`, `connector`, `cursor`, `exif`, `factory`, `scan`, `sync`, `watcher` |

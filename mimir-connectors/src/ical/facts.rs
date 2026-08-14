@@ -1,13 +1,13 @@
 //! VEVENT → `NormalizedFact` cluster extraction (shared by Calendar and
 //! Email connectors).
 
-use chrono::{DateTime, Utc};
 use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::enums::{EventType, RecurrenceType};
-use mimir_knowledge::models::source::{ExtractionMethod, SourceType};
+use mimir_knowledge::models::source::ExtractionMethod;
 use mimir_knowledge::normalize::NormalizedFact;
 use tracing::debug;
 
+use crate::fact::connector_fact;
 use crate::ical::RawVEvent;
 
 pub fn vevent_to_facts(
@@ -45,17 +45,20 @@ pub fn vevent_to_facts(
 
     // 1. Primary appointment fact (user-scoped when an identity is set).
     if let Some(user) = user_identity {
-        facts.push(vevent_fact(
+        facts.push(connector_fact(
             user.to_string(),
             EntityType::Person,
             "has_event",
             event_name.clone(),
+            true,
             Some(EntityType::Event),
             Some(start),
             valid_until,
             recurrence,
-            Some(EventType::Appointment),
             raw_reference,
+            Some(ExtractionMethod::StructuredParse),
+            Some(EventType::Appointment),
+            None,
         ));
     }
 
@@ -63,17 +66,20 @@ pub fn vevent_to_facts(
     //    bounds: a venue is a property of the event, not a trigger, so it must
     //    not spawn its own events-subsystem overlay.
     if let Some(loc) = non_empty(event.location.as_deref()) {
-        facts.push(vevent_fact(
+        facts.push(connector_fact(
             event_name.clone(),
             EntityType::Event,
             "located_in",
             loc.to_string(),
+            true,
             Some(EntityType::Place),
             None,
             None,
             RecurrenceType::None,
-            None,
             raw_reference,
+            Some(ExtractionMethod::StructuredParse),
+            None,
+            None,
         ));
     }
 
@@ -81,17 +87,20 @@ pub fn vevent_to_facts(
     //    attendance is a relationship, not a trigger, so it carries no temporal
     //    bounds and spawns no overlay.
     for attendee in &event.attendees {
-        facts.push(vevent_fact(
+        facts.push(connector_fact(
             attendee.clone(),
             EntityType::Person,
             "attending",
             event_name.clone(),
+            true,
             Some(EntityType::Event),
             None,
             None,
             RecurrenceType::None,
-            None,
             raw_reference,
+            Some(ExtractionMethod::StructuredParse),
+            None,
+            None,
         ));
     }
 
@@ -135,49 +144,4 @@ fn rrule_to_recurrence(rrule: Option<&str>) -> RecurrenceType {
 /// Trim a string and return it only when non-empty (after trimming).
 fn non_empty(s: Option<&str>) -> Option<&str> {
     s.map(str::trim).filter(|t| !t.is_empty())
-}
-
-/// Build a VEVENT [`NormalizedFact`] with the shared connector defaults filled
-/// in: connector source type, non-sensitive, non-correction, no category ids,
-/// no location overlay.
-///
-/// All three VEVENT fact shapes (`has_event` / `located_in` / `attending`)
-/// share these defaults; the per-shape fields (subject, relationship, object,
-/// recurrence, event-type hint) are the arguments. Collapsing the struct
-/// literals here keeps the extractor readable and ensures the connector-level
-/// invariants (source type, sensitivity, raw reference) stay in one place.
-#[allow(clippy::too_many_arguments)] // constructor helper: every arg maps to a `NormalizedFact` field
-pub(crate) fn vevent_fact(
-    subject: String,
-    subject_type: EntityType,
-    relationship_type: &str,
-    object: String,
-    object_type: Option<EntityType>,
-    valid_from: Option<DateTime<Utc>>,
-    valid_until: Option<DateTime<Utc>>,
-    recurrence: RecurrenceType,
-    event_type: Option<EventType>,
-    raw_ref: &str,
-) -> NormalizedFact {
-    NormalizedFact {
-        source_type: SourceType::Connector,
-        subject,
-        subject_type,
-        relationship_type: relationship_type.to_string(),
-        object,
-        object_is_entity: true,
-        object_type,
-        valid_from,
-        valid_until,
-        is_sensitive: false,
-        is_correction: false,
-        correction_scope: None,
-        category_ids: Vec::new(),
-        recurrence,
-        requires_user_action: false,
-        raw_reference: Some(raw_ref.to_string()),
-        extraction_method: Some(ExtractionMethod::StructuredParse),
-        event_type,
-        location: None,
-    }
 }

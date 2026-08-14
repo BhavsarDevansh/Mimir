@@ -1,7 +1,7 @@
 # What Works in Mimir Today
 
 > **Last updated:** 2026-08-14
-> **Version:** 0.103.1
+> **Version:** 0.105.0
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in `CHANGELOG.md`; this file deliberately does not repeat either.
 
 ---
@@ -227,7 +227,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 |---------|--------|----------------------|
 | Framework (F1–F13) | ✅ Works | Crate + feature flags, instance registry, provenance FK, shared `normalize_and_insert`, entity-resolution chain, `Connector` trait, registry + factory dispatch, supervised lifecycle, manual sync triggering, secret store, rate-limit/retry primitives, mock connector ([#179](https://github.com/BhavsarDevansh/Mimir/issues/179)–[#190](https://github.com/BhavsarDevansh/Mimir/issues/190)). |
 | Daemon wiring + routes (A1–A4) | ✅ Works | Registry/supervisor owned by the daemon, startup restore, CRUD/status/sync/pause/resume/tokens/actions/forget routes, `mimir connector` CLI, interactive OAuth PKCE login ([#202](https://github.com/BhavsarDevansh/Mimir/issues/202)–[#205](https://github.com/BhavsarDevansh/Mimir/issues/205)). |
-| Photos (local) | 🟡 Partial | `notify` watcher, EXIF GPS/datetime, incremental cursor, `took_photo_at`/`visited`/`took_photo` facts, place anchoring, canonical user identity ([#246](https://github.com/BhavsarDevansh/Mimir/issues/246)). Coords-only fallback authors `visited <coords-label>` with the photo path as `raw_reference` provenance ([#250](https://github.com/BhavsarDevansh/Mimir/issues/250)); `NormalizedFact` boilerplate is duplicated ([#255](https://github.com/BhavsarDevansh/Mimir/issues/255)); RAW formats are deferred. |
+| Photos (local) | 🟡 Partial | `notify` watcher, EXIF GPS/datetime, incremental cursor, `took_photo_at`/`visited`/`took_photo` facts, place anchoring, canonical user identity ([#246](https://github.com/BhavsarDevansh/Mimir/issues/246)). Coords-only fallback authors `visited <coords-label>` with the photo path as `raw_reference` provenance ([#250](https://github.com/BhavsarDevansh/Mimir/issues/250)); facts are built through the shared `connector_fact` constructor ([#255](https://github.com/BhavsarDevansh/Mimir/issues/255)); RAW formats are deferred. |
 | Calendar (CalDAV) | 🟡 Partial | PROPFIND + sync-collection incremental sync, app-password + OAuth refresh, event fact cluster, write-back (`create_event`/`update_event`/`delete_event`), server-side deletion → KB fact lifecycle ([#247](https://github.com/BhavsarDevansh/Mimir/issues/247)). Auth error arm duplicated with Email ([#273](https://github.com/BhavsarDevansh/Mimir/issues/273)); enum→wire-string conversion is fragile ([#264](https://github.com/BhavsarDevansh/Mimir/issues/264)); supervisor start/resume race ([#266](https://github.com/BhavsarDevansh/Mimir/issues/266)); forget SQL duplication ([#267](https://github.com/BhavsarDevansh/Mimir/issues/267)). |
 | Email (IMAP) | 🟡 Partial | `LOGIN`/`XOAUTH2`, `UID FETCH` incremental sync, `IDLE` push with polling fallback, iMIP invites, schema.org JSON-LD, LLM prose extraction. LLM-extraction retry is in-memory and unbounded — not restart-safe ([#262](https://github.com/BhavsarDevansh/Mimir/issues/262)); iMIP `CANCEL` invites are skipped ([#283](https://github.com/BhavsarDevansh/Mimir/issues/283)); LLM tool-call parsing is duplicated with the conversational path ([#259](https://github.com/BhavsarDevansh/Mimir/issues/259)); auth error arm duplicated with Calendar ([#273](https://github.com/BhavsarDevansh/Mimir/issues/273)). |
 | OAuth token refresh | ✅ Works | `oauth2` 5.0.0 with `default-features = false` over a custom reqwest 0.13 adapter; redirects disabled, HTTPS/loopback gate, secret-hygiene error mapping ([#240](https://github.com/BhavsarDevansh/Mimir/issues/240)). |
@@ -353,7 +353,7 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | OS-keyring secret backend | [#188](https://github.com/BhavsarDevansh/Mimir/issues/188) |
 | Supervisor start/resume race | [#266](https://github.com/BhavsarDevansh/Mimir/issues/266) |
 | Enum→wire-string conversion robustness | [#264](https://github.com/BhavsarDevansh/Mimir/issues/264) |
-| DRY: forget SQL, auth error arms, photos boilerplate, LLM parsing, rate-limit default | [#267](https://github.com/BhavsarDevansh/Mimir/issues/267), [#273](https://github.com/BhavsarDevansh/Mimir/issues/273), [#255](https://github.com/BhavsarDevansh/Mimir/issues/255), [#259](https://github.com/BhavsarDevansh/Mimir/issues/259), [#223](https://github.com/BhavsarDevansh/Mimir/issues/223) |
+| DRY: forget SQL, auth error arms, LLM parsing, rate-limit default | [#267](https://github.com/BhavsarDevansh/Mimir/issues/267), [#273](https://github.com/BhavsarDevansh/Mimir/issues/273), [#259](https://github.com/BhavsarDevansh/Mimir/issues/259), [#223](https://github.com/BhavsarDevansh/Mimir/issues/223) |
 | Geocoding conversational tool | [#192](https://github.com/BhavsarDevansh/Mimir/issues/192) |
 
 ### Security & Deployment

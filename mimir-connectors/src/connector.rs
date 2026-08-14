@@ -434,10 +434,20 @@ pub trait Connector: Send + Sync {
     /// connector's bounded LLM-extraction retry ledger — lives outside the
     /// in-memory raw-item buffer. `None` means "nothing changed since the
     /// last persist"; connectors that keep no durable state leave the
-    /// default.
+    /// default. The returned value is not consumed: after the supervisor's
+    /// database write succeeds it calls
+    /// [`durable_state_persisted`](Connector::durable_state_persisted), so a
+    /// failed write never loses state.
     fn durable_state(&self) -> Option<String> {
         None
     }
+
+    /// Acknowledge that the last [`durable_state`](Connector::durable_state)
+    /// value was persisted by the supervisor (called only after the
+    /// `update_durable_state` database write succeeded). Connectors use this
+    /// to mark their state clean; a default no-op for connectors that keep
+    /// no durable state.
+    fn durable_state_persisted(&self) {}
 
     /// Report the buffered server-side removals (tombstones) as the set of
     /// `raw_reference`s whose knowledge-graph facts should be trashed.

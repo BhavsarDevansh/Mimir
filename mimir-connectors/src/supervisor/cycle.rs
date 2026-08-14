@@ -441,11 +441,15 @@ pub(super) async fn run_cycle(
     // Persist connector-side durable state (e.g. the Email connector's
     // bounded LLM-extraction retry ledger, issue #262) so retries and
     // terminal failures survive daemon restarts. `None` means "unchanged"
-    // and skips the write.
+    // and skips the write. The connector only acknowledges the persist
+    // (`durable_state_persisted`) after the write succeeds, so a failed
+    // write leaves the connector's state dirty and the next cycle re-writes
+    // it instead of silently losing it.
     if let Some(state) = connector.durable_state() {
         if let Err(error) = kg.update_durable_state(instance_id, Some(&state)).await {
             return CycleOutcome::Err(error.to_string());
         }
+        connector.durable_state_persisted();
     }
 
     // The deletions were trashed, this cycle's facts inserted, and the cursor
@@ -474,7 +478,7 @@ pub(super) async fn run_cycle(
 mod tests {
     use super::*;
 
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
     use serde_json::json;
 
@@ -655,6 +659,7 @@ mod tests {
     struct DurableStateConnector {
         inner: MockConnector,
         state: String,
+        persisted: Arc<AtomicBool>,
     }
 
     #[async_trait::async_trait]
@@ -706,6 +711,9 @@ mod tests {
         fn durable_state(&self) -> Option<String> {
             Some(self.state.clone())
         }
+        fn durable_state_persisted(&self) {
+            self.persisted.store(true, Ordering::Relaxed);
+        }
     }
 
     /// A connector that reports durable state must have it persisted by the
@@ -742,10 +750,11 @@ mod tests {
             }))
             .unwrap(),
             state: "{\"pending\":{}}".to_string(),
+            persisted: Arc::new(AtomicBool::new(false)),
         });
 
         let outcome = run_cycle(
-            connector,
+            connector.clone(),
             kg.clone(),
             row.id,
             ConnectorType::Gmail,
@@ -759,6 +768,10 @@ mod tests {
             persisted.durable_state.as_deref(),
             Some("{\"pending\":{}}"),
             "durable state must be persisted by the cycle"
+        );
+        assert!(
+            connector.persisted.load(Ordering::Relaxed),
+            "the connector must acknowledge a successful persist"
         );
     }
 }

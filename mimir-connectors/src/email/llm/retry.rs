@@ -25,6 +25,11 @@
 //!   after each successful extraction cycle and re-injected at construction
 //!   as the `__durable_state` config key, so a `mimir stop` / restart resumes
 //!   the bounded retry instead of dropping the message.
+//!   Persistence is write-through: the supervisor only acknowledges the
+//!   ledger as clean after the database write succeeds, so a failed write
+//!   keeps the ledger dirty and the next cycle re-persists it. Raw payloads
+//!   above [`MAX_PERSISTED_RAW_BYTES`] are retried in-process but not
+//!   persisted, so an oversized message cannot bloat the durable column.
 //!
 //! The ledger is pure policy over the extraction loop: it never touches the
 //! knowledge graph or the IMAP session (the crate is sqlx-free and the
@@ -46,6 +51,16 @@ pub(crate) const DEFAULT_MAX_LLM_EXTRACTION_ATTEMPTS: u8 = 3;
 /// message permanently fails cannot grow the durable ledger without bound.
 /// The oldest records are dropped first.
 pub(crate) const MAX_TERMINAL_FAILURES: usize = 64;
+
+/// Cap on the raw RFC 822 payload persisted per pending retry. Prose-only
+/// messages are small (the LLM body is capped at 8 KiB), so a message above
+/// this cap almost always carries a large attachment; persisting it would
+/// bloat the `connectors.durable_state` column and re-serialize it on every
+/// backoff cycle. Oversized messages still retry in-process with the full
+/// payload, but their payload is not persisted, so a restart drops them
+/// (the pre-#262 behaviour) instead of growing the durable state without
+/// bound.
+pub(crate) const MAX_PERSISTED_RAW_BYTES: usize = 512 * 1024;
 
 /// Extraction cycles to wait before retrying after the `attempts`-th
 /// failure: exponential backoff (1, 2, 4, …), capped at 8 cycles so a deeply
@@ -76,8 +91,11 @@ pub(crate) struct PendingProse {
     pub uid: u32,
     /// Raw RFC 822 bytes, base64-encoded so the payload survives a restart
     /// without an IMAP re-fetch (the cursor has already advanced past the
-    /// message).
-    pub raw_b64: String,
+    /// message). `None` when the payload exceeds
+    /// [`MAX_PERSISTED_RAW_BYTES`]: the retry still runs in-process, but a
+    /// restart cannot resume it.
+    #[serde(default)]
+    pub raw_b64: Option<String>,
     /// Failed attempts so far (1-based).
     pub attempts: u8,
     /// Last failure reason.
@@ -94,9 +112,11 @@ impl PendingProse {
     }
 
     /// Decoded raw RFC 822 bytes, or `None` when the persisted payload is
-    /// corrupt (the item is then settled and dropped).
+    /// absent or corrupt (the item is then settled and dropped).
     pub fn raw(&self) -> Option<Vec<u8>> {
-        STANDARD.decode(&self.raw_b64).ok()
+        self.raw_b64
+            .as_deref()
+            .and_then(|b64| STANDARD.decode(b64).ok())
     }
 }
 
@@ -141,8 +161,11 @@ pub(crate) enum FailureDisposition {
 /// The durable retry policy state of one Email connector instance.
 ///
 /// Serialised to JSON for the `connectors.durable_state` column (via
-/// [`take_durable`](Self::take_durable)); `dirty` tracks changes since the
-/// last persist and is never serialised.
+/// [`durable_json`](Self::durable_json)); `dirty` tracks changes since the
+/// last successful persist and is never serialised. The supervisor calls
+/// [`mark_persisted`](Self::mark_persisted) only after the database write
+/// succeeds, so a failed write leaves the ledger dirty and the next cycle
+/// re-persists it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct ProseRetryLedger {
@@ -150,17 +173,23 @@ pub(crate) struct ProseRetryLedger {
     pending: BTreeMap<String, PendingProse>,
     /// Terminally failed messages (oldest first, capped).
     terminal: Vec<TerminalProseFailure>,
-    /// Whether the ledger changed since the last [`take_durable`](Self::take_durable).
+    /// Whether the ledger changed since the last successful persist.
     #[serde(skip)]
     dirty: bool,
 }
 
 impl ProseRetryLedger {
     /// Parse a persisted ledger, falling back to an empty one (with a warn)
-    /// when the stored JSON is corrupt.
+    /// when the stored JSON is corrupt. A restored ledger is sanitised so a
+    /// raw reference can never appear both pending and terminal (only
+    /// reachable from hand-edited JSON), and the corrected ledger is marked
+    /// dirty so the next cycle re-persists it.
     pub(crate) fn from_json(json: &str) -> Self {
-        match serde_json::from_str(json) {
-            Ok(ledger) => ledger,
+        match serde_json::from_str::<Self>(json) {
+            Ok(mut ledger) => {
+                ledger.sanitize();
+                ledger
+            }
             Err(error) => {
                 warn!(%error, "invalid persisted prose-retry ledger; starting fresh");
                 Self::default()
@@ -181,9 +210,7 @@ impl ProseRetryLedger {
                 RetryGate::Backoff
             }
             Some(_) => RetryGate::Attempt,
-            None if self.terminal.iter().any(|t| t.raw_ref() == raw_ref) => {
-                RetryGate::SkippedTerminal
-            }
+            None if terminal_contains(&self.terminal, raw_ref) => RetryGate::SkippedTerminal,
             None => RetryGate::Attempt,
         }
     }
@@ -225,6 +252,7 @@ impl ProseRetryLedger {
             .unwrap_or(1);
         if attempts >= max_attempts {
             self.pending.remove(raw_ref);
+            self.terminal.retain(|t| t.raw_ref() != raw_ref);
             self.terminal.push(TerminalProseFailure {
                 uid_validity,
                 uid,
@@ -234,13 +262,23 @@ impl ProseRetryLedger {
             self.trim_terminal();
             return FailureDisposition::Terminal;
         }
+        let raw_b64 = if raw.len() <= MAX_PERSISTED_RAW_BYTES {
+            Some(STANDARD.encode(raw))
+        } else {
+            warn!(
+                raw_ref,
+                size = raw.len(),
+                "raw email exceeds the persisted-retry size cap; the retry will not survive a restart"
+            );
+            None
+        };
         let skip_cycles = backoff_cycles(attempts);
         self.pending.insert(
             raw_ref.to_string(),
             PendingProse {
                 uid_validity,
                 uid,
-                raw_b64: STANDARD.encode(raw),
+                raw_b64,
                 attempts,
                 last_error: error,
                 skip_cycles,
@@ -249,21 +287,30 @@ impl ProseRetryLedger {
         FailureDisposition::Retry { skip_cycles }
     }
 
-    /// Serialise the ledger when it changed since the last persist, marking
-    /// it clean. `None` means nothing new to persist.
-    pub(crate) fn take_durable(&mut self) -> Option<String> {
+    /// Serialise the ledger when it changed since the last successful
+    /// persist. `None` means nothing new to persist. Unlike a "take", this
+    /// does **not** clear the dirty flag: the supervisor calls
+    /// [`mark_persisted`](Self::mark_persisted) only after the database
+    /// write succeeds, so a failed write leaves the ledger dirty and the
+    /// next cycle re-persists it (a durable state that is only read once
+    /// would be silently lost if the write failed).
+    pub(crate) fn durable_json(&self) -> Option<String> {
         if !self.dirty {
             return None;
         }
-        self.dirty = false;
         match serde_json::to_string(self) {
             Ok(json) => Some(json),
             Err(error) => {
-                self.dirty = true;
                 warn!(%error, "failed to serialize prose-retry ledger; durable state not persisted");
                 None
             }
         }
+    }
+
+    /// Mark the ledger clean after the supervisor persisted
+    /// [`durable_json`](Self::durable_json) successfully.
+    pub(crate) fn mark_persisted(&mut self) {
+        self.dirty = false;
     }
 
     /// Pending retries, for re-staging at construction.
@@ -296,6 +343,39 @@ impl ProseRetryLedger {
             self.terminal.drain(..excess);
         }
     }
+
+    /// Normalise a restored ledger: a raw reference may be pending or
+    /// terminal, never both (the terminal record is the stricter state, so
+    /// any shadowed pending entry is dropped), and the terminal list is
+    /// re-capped. Marks the ledger dirty when something was removed so the
+    /// correction is persisted.
+    fn sanitize(&mut self) {
+        let mut changed = false;
+        for terminal in &self.terminal {
+            changed |= self.pending.remove(&terminal.raw_ref()).is_some();
+        }
+        let terminal_len = self.terminal.len();
+        self.trim_terminal();
+        changed |= self.terminal.len() != terminal_len;
+        if changed {
+            self.dirty = true;
+        }
+    }
+}
+
+/// Whether `raw_ref` (`{uid_validity}:{uid}`) matches a terminal record,
+/// comparing numerically so gating a message never allocates a string per
+/// terminal record (the list is capped at [`MAX_TERMINAL_FAILURES`]).
+fn terminal_contains(terminal: &[TerminalProseFailure], raw_ref: &str) -> bool {
+    let Some((validity, uid)) = raw_ref.split_once(':') else {
+        return terminal.iter().any(|t| t.raw_ref() == raw_ref);
+    };
+    let (Ok(validity), Ok(uid)) = (validity.parse::<u32>(), uid.parse::<u32>()) else {
+        return terminal.iter().any(|t| t.raw_ref() == raw_ref);
+    };
+    terminal
+        .iter()
+        .any(|t| t.uid_validity == validity && t.uid == uid)
 }
 
 #[cfg(test)]
@@ -355,7 +435,7 @@ mod tests {
         let pending = ledger.pending.get("17:1").expect("pending entry");
         assert_eq!(pending.attempts, 1);
         assert_eq!(pending.last_error, "queue full");
-        assert_eq!(STANDARD.decode(&pending.raw_b64).unwrap(), b"raw bytes");
+        assert_eq!(pending.raw().as_deref(), Some(b"raw bytes".as_slice()));
     }
 
     #[test]
@@ -411,12 +491,12 @@ mod tests {
         let mut ledger = ProseRetryLedger::default();
         ledger.record_failure("17:1", 17, 1, b"raw bytes", 3, "e1".into());
         ledger.record_failure("99:2", 99, 2, b"other", 1, "fatal".into());
-        let json = ledger.take_durable().expect("dirty ledger serializes");
+        let json = ledger.durable_json().expect("dirty ledger serializes");
         let mut restored = ProseRetryLedger::from_json(&json);
         assert_eq!(restored.pending.len(), 1);
         let pending = restored.pending.get("17:1").expect("pending entry");
         assert_eq!(pending.attempts, 1);
-        assert_eq!(STANDARD.decode(&pending.raw_b64).unwrap(), b"raw bytes");
+        assert_eq!(pending.raw().as_deref(), Some(b"raw bytes".as_slice()));
         assert_eq!(restored.terminal.len(), 1);
         assert_eq!(restored.terminal[0].raw_ref(), "99:2");
         assert!(!restored.dirty, "restored ledger starts clean");
@@ -425,18 +505,84 @@ mod tests {
     }
 
     #[test]
-    fn take_durable_is_dirty_tracking() {
+    fn durable_json_is_dirty_tracking_until_persisted() {
         let mut ledger = ProseRetryLedger::default();
-        assert_eq!(ledger.take_durable(), None, "clean ledger persists nothing");
+        assert_eq!(ledger.durable_json(), None, "clean ledger persists nothing");
         ledger.record_failure("17:1", 17, 1, b"raw", 3, "e".into());
-        assert!(ledger.take_durable().is_some(), "dirty ledger persists");
-        assert_eq!(ledger.take_durable(), None, "second call persists nothing");
+        // Reading the durable state must not clear the dirty flag: the
+        // supervisor acknowledges the persist only after the database write
+        // succeeds, so a failed write leaves the state pending a retry.
+        assert!(ledger.durable_json().is_some(), "dirty ledger persists");
+        assert!(
+            ledger.durable_json().is_some(),
+            "an unacknowledged read must not mark the ledger clean"
+        );
+        ledger.mark_persisted();
+        assert_eq!(
+            ledger.durable_json(),
+            None,
+            "only an acknowledged persist clears the ledger"
+        );
     }
 
     #[test]
     fn from_json_falls_back_on_corrupt_payload() {
         let restored = ProseRetryLedger::from_json("not json");
         assert!(restored.is_empty());
+    }
+
+    #[test]
+    fn from_json_sanitizes_overlapping_pending_and_terminal() {
+        let mut ledger = ProseRetryLedger::default();
+        ledger.record_failure("17:1", 17, 1, b"raw", 1, "boom".into());
+        let mut value: serde_json::Value =
+            serde_json::from_str(&ledger.durable_json().expect("dirty")).unwrap();
+        // Hand-crafted overlap: the same raw reference pending and terminal.
+        value["pending"]["17:1"] = serde_json::json!({
+            "uid_validity": 17,
+            "uid": 1,
+            "raw_b64": "cmF3",
+            "attempts": 1,
+            "last_error": "e",
+            "skip_cycles": 1
+        });
+        let mut restored = ProseRetryLedger::from_json(&value.to_string());
+        assert!(
+            restored.pending.is_empty(),
+            "a terminal record must shadow a pending entry for the same reference"
+        );
+        assert_eq!(restored.gate("17:1"), RetryGate::SkippedTerminal);
+        assert!(
+            restored.dirty,
+            "sanitising a restored ledger must mark it for re-persist"
+        );
+    }
+
+    #[test]
+    fn oversized_raw_is_not_persisted_but_still_retries_in_process() {
+        let mut ledger = ProseRetryLedger::default();
+        let big = vec![b'x'; MAX_PERSISTED_RAW_BYTES + 1];
+        let disposition = ledger.record_failure("17:1", 17, 1, &big, 3, "e".into());
+        assert_eq!(disposition, FailureDisposition::Retry { skip_cycles: 1 });
+        let pending = ledger.pending.get("17:1").expect("pending entry");
+        assert!(
+            pending.raw_b64.is_none(),
+            "oversized payloads must not be persisted"
+        );
+        assert_eq!(pending.raw(), None);
+        assert_eq!(ledger.gate("17:1"), RetryGate::Backoff);
+        assert_eq!(ledger.gate("17:1"), RetryGate::Attempt);
+        let json = ledger.durable_json().expect("dirty ledger persists");
+        let restored = ProseRetryLedger::from_json(&json);
+        assert!(
+            restored
+                .pending
+                .get("17:1")
+                .expect("pending entry")
+                .raw_b64
+                .is_none(),
+            "round-trip keeps the payload absent"
+        );
     }
 
     #[test]
@@ -464,6 +610,6 @@ mod tests {
         ledger.clear();
         assert!(ledger.is_empty());
         assert!(!ledger.dirty);
-        assert_eq!(ledger.take_durable(), None);
+        assert_eq!(ledger.durable_json(), None);
     }
 }

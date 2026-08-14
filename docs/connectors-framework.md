@@ -114,6 +114,9 @@ pub trait Connector: Send + Sync {
         // default: None — no connector-side durable state to persist
         None
     }
+    fn durable_state_persisted(&self) {
+        // default: no-op — no durable state to acknowledge
+    }
     async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError> {
         // default: empty — server-side removals to trash in the KB
         Ok(Vec::new())
@@ -129,7 +132,7 @@ pub trait Connector: Send + Sync {
 }
 ```
 
-- **`durable_state`** (issue #262) is the generic hook for connector-owned state that must survive a daemon restart. After each successful extraction cycle the supervisor persists the returned opaque string via `KnowledgeGraph::update_durable_state` (the `connectors.durable_state` column) and re-injects it at construction as the `__durable_state` config key — the same read/write pair as `__cursor` / `update_sync_cursor`, for state that is not sync progress. `None` means "unchanged since the last persist" (no write). The Email connector uses it for its bounded, durable LLM-extraction retry ledger; connectors that keep no durable state leave the default.
+- **`durable_state`** (issue #262) is the generic hook for connector-owned state that must survive a daemon restart. After each successful extraction cycle the supervisor persists the returned opaque string via `KnowledgeGraph::update_durable_state` (the `connectors.durable_state` column) and re-injects it at construction as the `__durable_state` config key — the same read/write pair as `__cursor` / `update_sync_cursor`, for state that is not sync progress. `None` means "unchanged since the last persist" (no write). The Email connector uses it for its bounded, durable LLM-extraction retry ledger; connectors that keep no durable state leave the default. The returned value is **not consumed**: the supervisor calls `durable_state_persisted()` only after the database write succeeds, so a failed write leaves the connector's state dirty and the next cycle re-persists it — a write failure can never silently lose durable state.
 
 - **`authenticate`** takes no arguments: credentials are injected at
   construction by the factory (F7) / secret store (F10), per decision D′
@@ -289,7 +292,7 @@ pauses the connector and exits), then loops:
    wins, the cycle's `AbortHandle` cancels the in-flight work and the runner
    exits.
 3. Classify the cycle result and act:
-   - **Ok** — reset the failure count, persist sync progress, then clear `last_error` (`set_connector_status(Active, Some(None))`). When `new_cursor` is `Some`, the cursor is advanced/cleared via `update_sync_cursor`; when `None` (unchanged), only `last_sync_at` is stamped via `touch_last_sync`, preserving the existing progress token. Connector-side durable state (`Connector::durable_state`, issue #262) is persisted right after via `update_durable_state` when the connector reports a change.
+   - **Ok** — reset the failure count, persist sync progress, then clear `last_error` (`set_connector_status(Active, Some(None))`). When `new_cursor` is `Some`, the cursor is advanced/cleared via `update_sync_cursor`; when `None` (unchanged), only `last_sync_at` is stamped via `touch_last_sync`, preserving the existing progress token. Connector-side durable state (`Connector::durable_state`, issue #262) is persisted right after via `update_durable_state` when the connector reports a change, and the connector acknowledges the persist (`durable_state_persisted`) only after the write succeeds.
    - **Err / Panic** — increment failures, write `last_error` (status stays
      `Active`), exponential backoff; once failures reach `max_failures`, move
      to `Error` and stop auto-restarting (manual `resume` required).

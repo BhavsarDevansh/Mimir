@@ -54,7 +54,7 @@ Sometimes the LLM cannot read an email — a provider hiccup, a network error, o
 
 - Each message gets a small retry budget (3 attempts by default, configurable via `llm_extraction_max_attempts`) with an increasing wait between attempts, so a stuck message cannot keep burning LLM calls forever.
 - Once the budget is exhausted the message is recorded as **permanently failed with the reason** and skipped; it never consumes another LLM call. A re-fetched message in a new mailbox epoch (a `UIDVALIDITY` change) is treated as a new message and gets a fresh chance.
-- The retry state — including the raw message bytes — is saved with the connector between restarts, so a `mimir stop` or reboot resumes the retry where it left off instead of silently dropping the email.
+- The retry state — including the raw message bytes (capped at 512 KiB: very large messages still retry within the running daemon, but only messages under the cap resume after a restart) — is saved with the connector between restarts, so a `mimir stop` or reboot resumes the retry where it left off instead of silently dropping the email.
 - If any messages have permanently failed, the connector reports itself as **degraded** in its health status so the situation is visible, and "forget" clears the recorded failures along with everything else.
 
 This is a library component today (in `mimir-connectors`); the daemon wiring that turns it on for a running `mimir` daemon lands with #202.

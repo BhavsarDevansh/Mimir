@@ -51,8 +51,9 @@ impl EmailConnector {
         // column persisted after the previous cycle) and re-stage the pending
         // raw RFC 822 bytes into the buffer, so a restart resumes the bounded
         // retry without an IMAP re-fetch (the cursor has advanced past the
-        // message). A pending entry whose payload is undecodable is settled
-        // (dropped) rather than left to linger.
+        // message). A pending entry whose payload is missing or undecodable
+        // (never persisted because it exceeded the size cap, or corrupt) is
+        // settled (dropped) rather than left to linger.
         let mut ledger = config
             .get("__durable_state")
             .and_then(|v| v.as_str())
@@ -80,7 +81,7 @@ impl EmailConnector {
                 None => {
                     warn!(
                         raw_ref = %pending.raw_ref(),
-                        "dropping pending prose retry with undecodable payload"
+                        "dropping pending prose retry with missing or undecodable payload"
                     );
                     ledger.settle(&pending.raw_ref());
                 }

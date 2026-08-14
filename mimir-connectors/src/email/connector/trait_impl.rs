@@ -292,6 +292,10 @@ impl Connector for EmailConnector {
     }
 
     fn durable_state(&self) -> Option<String> {
-        self.prose_retry.lock().unwrap().take_durable()
+        self.prose_retry.lock().unwrap().durable_json()
+    }
+
+    fn durable_state_persisted(&self) {
+        self.prose_retry.lock().unwrap().mark_persisted();
     }
 }

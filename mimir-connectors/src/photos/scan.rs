@@ -44,15 +44,21 @@ impl RawPhoto {
     /// [`NormalizedLocation`] overlay carrying the coords *and* the place
     /// name as its address — the shared pipeline writes a `Visited`
     /// `entity_locations` row for the owner and anchors the place entity's
-    /// coordinates. When `place` is `None` (no geocoder, no match, or a
-    /// transient geocode error), the fact degrades to the C1 coords-only
-    /// `took_photo <rel_path>` shape so no data is lost. In both cases
-    /// `raw_reference` is the photo's relative path (the native source id)
-    /// and `valid_from` is the EXIF timestamp.
+    /// coordinates. When the photo has GPS but no place name resolves (no
+    /// geocoder, no match, or a transient geocode error), the fact expresses
+    /// the real-world event as `owner visited <coords-label>` with the
+    /// coords-only overlay (issue #250) — the photo file is provenance, never
+    /// the fact's object. A photo without GPS keeps the literal
+    /// `took_photo <rel_path>` record (no location data exists to express a
+    /// visit). In all cases `raw_reference` is the photo's relative path
+    /// (the native source id) and `valid_from` is the EXIF timestamp.
     pub(super) fn to_fact(&self, owner: &str, place: Option<String>) -> NormalizedFact {
         match place {
             Some(name) => self.place_fact(owner, name),
-            None => self.coords_only_fact(owner),
+            None => match (self.latitude, self.longitude) {
+                (Some(lat), Some(lng)) => self.visited_fact(owner, coords_label(lat, lng)),
+                _ => self.took_photo_fact(owner),
+            },
         }
     }
 
@@ -82,10 +88,44 @@ impl RawPhoto {
         }
     }
 
-    /// The C1 fallback: a `took_photo <rel_path>` literal-object fact with a
-    /// coords-only location overlay. Used when no geocoder is configured or a
-    /// geocode yields no place name, so a photo's GPS is never dropped.
-    pub(super) fn coords_only_fact(&self, owner: &str) -> NormalizedFact {
+    /// The coords-only fallback (issue #250): an `owner visited <label>`
+    /// fact with a coords-only location overlay. Used when a photo has GPS
+    /// but no place name resolves (no geocoder, no match, or a transient
+    /// geocode error), so the photo's GPS is never dropped. The object is a
+    /// stable millidegree label for the photo's GPS bucket (the same
+    /// rounding as the reverse-geocode cache key), so photos at the same
+    /// ~111 m spot author the same object and corroborate into one fact per
+    /// spot. The photo path stays as `raw_reference` provenance.
+    pub(super) fn visited_fact(&self, owner: &str, label: String) -> NormalizedFact {
+        NormalizedFact {
+            source_type: SourceType::Connector,
+            subject: owner.to_string(),
+            subject_type: EntityType::Person,
+            relationship_type: "visited".to_string(),
+            object: label,
+            object_is_entity: false,
+            object_type: None,
+            valid_from: Some(self.taken_at),
+            valid_until: None,
+            is_sensitive: false,
+            is_correction: false,
+            correction_scope: None,
+            category_ids: Vec::new(),
+            recurrence: mimir_knowledge::models::enums::RecurrenceType::None,
+            requires_user_action: false,
+            raw_reference: Some(self.rel_path.clone()),
+            extraction_method: None,
+            event_type: None,
+            location: self.coords_only_overlay(),
+        }
+    }
+
+    /// The no-GPS record: an `owner took_photo <rel_path>` literal-object
+    /// fact with no location overlay. A photo without GPS evidences no
+    /// real-world visit, so the literal photo record (timestamp only) is
+    /// kept for "how many photos did I take" queries; the path is also the
+    /// `raw_reference` provenance.
+    pub(super) fn took_photo_fact(&self, owner: &str) -> NormalizedFact {
         NormalizedFact {
             source_type: SourceType::Connector,
             subject: owner.to_string(),
@@ -105,7 +145,7 @@ impl RawPhoto {
             raw_reference: Some(self.rel_path.clone()),
             extraction_method: None,
             event_type: None,
-            location: self.coords_only_overlay(),
+            location: None,
         }
     }
 
@@ -126,7 +166,7 @@ impl RawPhoto {
         })
     }
 
-    /// Coords-only location overlay (C1 fallback).
+    /// Coords-only location overlay (coords-only fallback, issue #250).
     pub(super) fn coords_only_overlay(&self) -> Option<NormalizedLocation> {
         let (latitude, longitude) = (self.latitude?, self.longitude?);
         Some(NormalizedLocation {
@@ -137,6 +177,20 @@ impl RawPhoto {
             timezone: None,
         })
     }
+}
+
+/// A stable, human-readable label for a GPS bucket (issue #250): the
+/// millidegree-rounded coordinates formatted to three decimals, e.g.
+/// `"46.500, 7.500"`. The rounding is derived from the same scaled-integer
+/// bucket as the reverse-geocode cache key (`geo_key`), so by construction
+/// every photo in a bucket shares the label (including the zero-crossing
+/// case, where `-0.0004` and `+0.0004` both land in bucket 0) — coords-only
+/// fallback facts therefore corroborate per spot just like place facts
+/// corroborate per locality.
+pub(super) fn coords_label(latitude: f64, longitude: f64) -> String {
+    let lat = (latitude * 1000.0).round() as i64 as f64 / 1000.0;
+    let lng = (longitude * 1000.0).round() as i64 as f64 / 1000.0;
+    format!("{lat:.3}, {lng:.3}")
 }
 
 /// Stage a single file: read its EXIF and build a [`RawPhoto`]. The temporal

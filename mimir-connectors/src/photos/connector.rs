@@ -27,9 +27,13 @@ use notify_debouncer_full::DebounceEventResult;
 ///
 /// Push-mode, no-network, no-auth. Watches `watch_dir` recursively with a
 /// debounced `notify` watcher, extracts EXIF GPS + datetime with
-/// `kamadak-exif`, and emits one `took_photo` fact per image with an
-/// optional GPS [`NormalizedLocation`](mimir_knowledge::normalize::NormalizedLocation) overlay. See the module docs for the
-/// ingestion model and the incremental cursor.
+/// `kamadak-exif`, and emits one fact per image — `took_photo_at <place>`
+/// when GPS resolves a place name, `visited <coords-label>` when GPS has no
+/// place name (issue #250), or `took_photo <rel_path>` when there is no GPS —
+/// each with an optional GPS
+/// [`NormalizedLocation`](mimir_knowledge::normalize::NormalizedLocation)
+/// overlay. See the module docs for the ingestion model and the incremental
+/// cursor.
 pub struct PhotosConnector {
     pub(super) slug: String,
     pub(super) display_name: String,
@@ -54,8 +58,8 @@ pub struct PhotosConnector {
     pub(super) events: Mutex<UnboundedReceiver<DebounceEventResult>>,
     /// Shared geocoder used to reverse-geocode EXIF GPS into a place name
     /// during `extract` (Phase 3 C2 / #196). `None` when no geocoder is
-    /// configured; photos with GPS then fall back to the C1 coords-only
-    /// `took_photo` shape so no data is lost.
+    /// configured; photos with GPS then fall back to the coords-only
+    /// `visited <coords-label>` shape (issue #250) so no data is lost.
     geocoder: Option<std::sync::Arc<dyn Geocoder>>,
     /// Coord-dedup cache for reverse geocoding (Phase 3 C2 / #196): rounded
     /// GPS → resolved place short name. Bounds Nominatim calls to one per
@@ -116,8 +120,8 @@ impl PhotosConnector {
     ///
     /// The geocoder is used in `extract` to reverse-geocode EXIF GPS into a
     /// locality-level place name that becomes the object of a
-    /// `took_photo_at` fact. `None` keeps the C1 coords-only `took_photo`
-    /// fallback shape. `user_identity` is the canonical `[identity] name`
+    /// `took_photo_at` fact. `None` keeps the coords-only `visited` fallback
+    /// shape (issue #250). `user_identity` is the canonical `[identity] name`
     /// (mirroring the Calendar connector): when present it is the subject of
     /// every photo fact; when `None` the per-instance `owner_name` (defaulting
     /// to the slug) is used instead. Construction stays cheap and
@@ -322,7 +326,7 @@ impl Connector for PhotosConnector {
         // admin-triggered sync for the full scan duration (~N seconds). The
         // `std::mem::take` swap replaces the buffer's contents in place while
         // we still hold the lock, and the guard is released at the end of the
-        // block, restoring the C1 hold-time (in-memory map only).
+        // block, restoring the original hold-time (in-memory map only).
         let raws = {
             let mut buffer = self.buffer.lock().await;
             std::mem::take(&mut *buffer)
@@ -341,8 +345,8 @@ impl Connector for PhotosConnector {
             // Reverse-geocode each photo's GPS into a place name (with the
             // coord-dedup cache) before building the fact. Geocode failures
             // are tolerated per-photo — a photo whose GPS cannot be resolved
-            // degrades to the C1 coords-only `took_photo` shape rather than
-            // failing the whole extraction.
+            // degrades to the coords-only `visited` shape (issue #250)
+            // rather than failing the whole extraction.
             let place = self
                 .resolve_place(raw.latitude, raw.longitude, &mut failed_this_cycle)
                 .await;
@@ -372,7 +376,8 @@ impl PhotosConnector {
     /// Resolve a photo's GPS to a locality-level place short name (Phase 3 C2
     /// / #196), using the coord-dedup cache to avoid re-geocoding the same
     /// spot. Returns `None` when there is no geocoder, no GPS, no match, or a
-    /// transient geocode error — the caller then builds the C1 fallback fact.
+    /// transient geocode error — the caller then builds the coords-only
+    /// `visited` fallback fact (issue #250).
     async fn resolve_place(
         &self,
         latitude: Option<f64>,

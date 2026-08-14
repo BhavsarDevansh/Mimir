@@ -19,9 +19,12 @@ C2 (#196) reverse-geocodes the EXIF GPS into a locality-level place name so
 the fact becomes `owner took_photo_at <place>` (the place is a `Place` object
 entity). This enables entity resolution and cross-photo corroboration: photos
 taken at different spots in the same city resolve to one place entity and
-merge into a single corroborated fact rather than fragmenting per photo. The
-connector makes no network calls itself — the reverse geocode reuses the
-shared `Geocoder` injected via the [`ConnectorContext`](#geocoder-injection).
+merge into a single corroborated fact rather than fragmenting per photo. When
+GPS resolves no place name, the coords-only fallback authors `owner visited
+<coords-label>` instead (issue #250) — the photo file is provenance
+(`raw_reference`), never the fact's object. The connector makes no network
+calls itself — the reverse geocode reuses the shared `Geocoder` injected via
+the [`ConnectorContext`](#geocoder-injection).
 
 ## Dependencies
 
@@ -127,21 +130,34 @@ When the reverse geocode yields a locality-level place name:
   `ExtractionMethod::StructuredParse` (set by the supervisor),
   `raw_reference` = the photo's watch-dir-relative path.
 
-### Coords-only fallback (C1 shape)
+### Coords-only fallback (issue #250)
 
-When there is no geocoder, no GPS, a genuine no-match, or a transient geocode
-error, the fact degrades to the C1 shape so no data is lost:
+When there is no geocoder, a genuine no-match, or a transient geocode error
+for a photo **with GPS**, the fact expresses the real-world event the photo
+evidences (`owner visited <coords-derived place> at <time>`) so no data is
+lost — the photo file itself is never the fact's object, only its
+`raw_reference` provenance (the facts-vs-provenance principle from the email
+connector, issue #200):
 
-- **Predicate** — `took_photo`.
-- **Object** — the photo's watch-dir-relative path (literal).
+- **Predicate** — `visited` (an existing canonical predicate; the
+  transitivity rule only fires for entity objects, so literal coords labels
+  do not participate in inference).
+- **Object** — a stable coords-derived label for the photo's GPS bucket,
+  e.g. `"46.500, 7.500"` (millidegree rounding, the same as the
+  reverse-geocode cache key). Photos at the same ~111 m spot author the same
+  label, so they corroborate into one `visited` fact per spot — mirroring
+  the per-locality merge of `took_photo_at` facts.
 - **Location overlay** — `NormalizedLocation { location_type: Visited,
   address: None, latitude, longitude, timezone: None }` (coords only).
 - Everything else (subject, temporal, provenance) as above.
 
-Files with no GPS produce a fact with no location overlay; files with no EXIF
-use the file mtime. Non-image files are skipped at the extension filter
-(default `.jpg .jpeg .tif .tiff .png .heif .heic .webp`; configurable). RAW
-formats (CR2/ARW/NEF) are deferred (they need a dedicated raw-EXIF reader).
+Files **without GPS** keep the literal `took_photo <rel_path>` record with no
+location overlay — there is no real-world visit to express, so the
+timestamp-only photo record remains useful for "how many photos did I take"
+queries. Files with no EXIF use the file mtime. Non-image files are skipped
+at the extension filter (default `.jpg .jpeg .tif .tiff .png .heif .heic
+.webp`; configurable). RAW formats (CR2/ARW/NEF) are deferred (they need a
+dedicated raw-EXIF reader).
 
 ## User identity
 
@@ -149,10 +165,10 @@ The daemon injects the canonical user identity (`config.toml`'s
 `[identity] name`) into every connector via `ConnectorContext::user_identity`
 (the same value it resolves as `user_entity_id`). The Photos connector
 authors every fact against that identity when it is present, so
-`took_photo_at` / `took_photo` facts resolve to the same `Person` entity the
-rest of Mimir uses for the user — photo-derived places surface in user-scoped
-memory sections and queries, and there is a single source of truth for "who
-the user is" (issue #246).
+`took_photo_at` / `visited` / `took_photo` facts resolve to the same `Person`
+entity the rest of Mimir uses for the user — photo-derived places surface in
+user-scoped memory sections and queries, and there is a single source of
+truth for "who the user is" (issue #246).
 
 `owner_name` remains a `config_json` field, but only as a **fallback**: when
 no identity is injected (no `[identity] name` configured), facts are authored
@@ -195,7 +211,7 @@ threaded factory → registry → supervisor:
    `KnowledgeGraph::geocoder()` once the server wires a supervisor (A1).
 3. `PhotosConnector::from_config_with_geocoder(config, geocoder)` stores the
    `Option<Arc<dyn Geocoder>>`; the factory reads it off the context. `None`
-   keeps the C1 coords-only fallback shape.
+   keeps the coords-only `visited` fallback shape (issue #250).
 
 ### Coord-dedup cache
 

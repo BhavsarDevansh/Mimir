@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.104.0] — 2026-08-14
+
+### Photos connector: coords-only fallback authors a real-world `visited` fact, not a file-path object (issue #250)
+
+- **Facts-vs-provenance for coords-only photos.** When a photo has GPS but no place name resolves (no geocoder, a genuine no-match, or a transient geocode error), `RawPhoto::to_fact` now authors `owner visited <coords-label>` instead of the C1 `owner took_photo <rel_path>` shape — the primary fact expresses the real-world event ("you visited <place> at <time>") consistent with the email connector's facts-vs-provenance principle (#200), and the photo's watch-dir-relative path remains only as `raw_reference` provenance. No data is lost.
+- **Stable per-spot label.** The object is a millidegree-rounded coordinate label (e.g. `"46.500, 7.500"`) derived from the same GPS bucket as the reverse-geocode cache key (~111 m), so photos at the same spot author the same object and corroborate into one `visited` fact per spot — mirroring the per-locality merge of `took_photo_at` facts. `visited` is an existing canonical predicate; literal objects do not participate in the transitivity inference rule.
+- **No-GPS photos unchanged.** A photo without GPS evidences no real-world visit, so it keeps the literal `took_photo <rel_path>` timestamp-only record (useful for photo-count queries) with no location overlay. The `entity_locations` `Visited` overlay for coords-only photos is unchanged, so location-history and proximity-query behaviour is preserved.
+- **Tests:** unit, behaviour, and supervisor-level integration tests updated to the `visited` shape (including the landed-fact predicate and `raw_reference` provenance assertions), plus a same-bucket label-equality test and a no-GPS `took_photo` retention test.
+- **Docs:** `docs/photos-connector.md`, `docs/wiki/photos-connector.md`, `docs/wiki/connectors.md`, `docs/wiki/what-works-now.md`, and `README.md` updated for the new fallback shape.
+- Version bumped 0.103.1 → 0.104.0 (minor — the connector's emitted fact data semantics change: coords-only photos now author `visited <coords-label>` facts; existing `took_photo <path>` facts in the KB are untouched, and a connector forget + full re-sync converts them to the new shape).
+
 ## [0.103.1] — 2026-08-14
 
 ### PR #313 review fixes: tombstone retention, multi-source preservation, and legacy Calendar raw-reference upgrade note

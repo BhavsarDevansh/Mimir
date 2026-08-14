@@ -180,6 +180,54 @@ async fn sync_stages_canned_facts_and_extract_drains_them() {
 }
 
 #[tokio::test]
+async fn sync_stages_configured_deletions_until_acknowledged() {
+    let config = json!({
+        "__slug": "mock",
+        "facts": [person_fact("Alice", "works_at", "Acme", "m-1")],
+        "deletions": ["m-1", "m-2"],
+    });
+    let mock = MockConnector::from_config(config).unwrap();
+
+    mock.sync(SyncOptions::default()).await.unwrap();
+    assert_eq!(mock.extract().await.unwrap().len(), 1);
+
+    // Tombstones surface separately from facts and stay pending until the
+    // supervisor acknowledges them (PR #313 review): a failed cycle must not
+    // lose the removal, so `extract_deletions` re-reports the same set.
+    assert_eq!(
+        mock.extract_deletions().await.unwrap(),
+        vec!["m-1".to_string(), "m-2".to_string()]
+    );
+    assert_eq!(
+        mock.extract_deletions().await.unwrap(),
+        vec!["m-1".to_string(), "m-2".to_string()],
+        "unacknowledged tombstones must be re-reported"
+    );
+
+    // Acknowledge only the processed removals; the rest stay pending.
+    mock.acknowledge_deletions(&["m-1".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(
+        mock.extract_deletions().await.unwrap(),
+        vec!["m-2".to_string()]
+    );
+    mock.acknowledge_deletions(&["m-2".to_string()])
+        .await
+        .unwrap();
+    assert!(
+        mock.extract_deletions().await.unwrap().is_empty(),
+        "acknowledged tombstones are dropped from the buffer"
+    );
+
+    mock.sync(SyncOptions::default()).await.unwrap();
+    assert_eq!(
+        mock.extract_deletions().await.unwrap(),
+        vec!["m-1".to_string(), "m-2".to_string()]
+    );
+}
+
+#[tokio::test]
 async fn missing_raw_reference_is_auto_generated_per_fact_index() {
     let mut fact = person_fact("Cara", "knows", "Dan", "x");
     fact.raw_reference = None;
@@ -444,6 +492,10 @@ fn config_schema_describes_mode_and_facts() {
     assert!(
         props.contains_key("act_kind"),
         "act_kind must be listed so a config with it validates against the schema"
+    );
+    assert!(
+        props.contains_key("deletions"),
+        "deletions must be listed so the tombstone knob validates against the schema"
     );
 }
 

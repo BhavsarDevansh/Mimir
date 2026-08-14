@@ -34,6 +34,7 @@ exists.
 - The supervisor starts it like any connector: it runs `health` → `sync` →
   `extract` → inserts the canned facts through the same fact pipeline as a
   conversation (`normalize_and_insert`).
+- It can also report **deletions** (via a `deletions` list in its config): the supervisor then trashes the matching knowledge-graph facts, so the full server-side-deletion path can be tested without a real service.
 - The canned facts land in the knowledge graph with connector provenance, so
   they get the same confidence scoring, corroboration, and sensitivity gating as
   facts you tell Mimir directly.
@@ -63,6 +64,7 @@ exists.
 - Give each canned fact a `raw_reference` (it is required for connector
   provenance); the mock auto-generates one (`mock-<slug>-<index>`) if you omit
   it.
+- To test deletion propagation, use two cycles: ingest the fact first (e.g. `batch_size: 1` so the first cycle delivers only the fact), then let a later cycle re-stage the same `raw_reference` in `deletions` so the tombstone removes it. Deletions are processed before the same cycle's insertions, so a fact and its tombstone staged in one cycle would leave the fresh insertion in place.
 - The mock is a test harness — do not register it as a real connector in
   production config.
 

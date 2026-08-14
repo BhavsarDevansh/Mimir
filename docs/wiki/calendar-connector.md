@@ -1,7 +1,7 @@
 # Calendar Connector
 
 > **Phase:** 3 — Connectors
-> **Status:** Implemented (library + daemon/CLI) — C3 (#197) transport + read/sync, C4 (#198) event → knowledge-graph extraction, events-subsystem integration, write-back, and the interactive OAuth PKCE login (A4 / #205). Server-side deletion → KB fact lifecycle is a follow-up.
+> **Status:** Implemented (library + daemon/CLI) — C3 (#197) transport + read/sync, C4 (#198) event → knowledge-graph extraction, events-subsystem integration, write-back, and the interactive OAuth PKCE login (A4 / #205). Server-side deletions (tombstones) are propagated to the KB fact lifecycle (#247).
 
 ## What it is
 
@@ -30,6 +30,7 @@ not the whole calendar every time) and stages them for the knowledge graph.
 - Each event's iCalendar payload (UID, summary, start/end, location,
   recurrence rule) is parsed and held in an in-memory buffer ready for the
   knowledge graph.
+- When the server reports an event as **deleted** (a `sync-collection` tombstone), the connector stages the deletion's href and the supervisor trashes that event's facts in the knowledge graph (recoverable from trash for 30 days), so a calendar event you cancel or delete in another client stops surfacing in **Upcoming** instead of living on as a phantom.
 - The connector keeps the sync-token as its progress marker: across restarts
   it normally resumes from where it left off; a requested full sync or an
   invalidated cursor can require a complete refetch.
@@ -58,7 +59,7 @@ The Calendar connector is the only connector that can write back to its source. 
 - **update_event** — `PUT`s with `If-Match: <etag>` to a known event href.
 - **delete_event** — `DELETE`s an event (idempotent — a 404 is treated as success).
 
-A delete on the server does not yet remove the corresponding KB fact automatically; that lifecycle is a follow-up.
+Deleting an event on the server (in another client) also removes the corresponding KB facts automatically: the connector stages the sync-collection tombstone's href and the supervisor trashes the matching facts (recoverable from trash for 30 days) so the event stops surfacing in Upcoming (#247). **Upgrade note (0.103.0):** facts authored before 0.103.0 carry the event `UID` as their raw reference, so href-based tombstones cannot match them and a pre-upgrade deletion would leave the event active in the knowledge graph and Upcoming; if you upgraded from an earlier version, remove each calendar instance's pre-upgrade facts (`mimir connector forget <slug>`, recoverable from trash for 30 days) and trigger a full re-sync so the events are re-authored with href references.
 
 ## Authentication
 
@@ -94,6 +95,4 @@ only connector with write support.
   handling is a follow-on.
 - The interactive OAuth login (PKCE) is wired (A4 / #205); Google-specific
   CalDAV sync-token handling remains a follow-on.
-- Event → knowledge-graph extraction and write-back are live (C4 / #198);
-  richer `RRULE` recurrence rules and server-side deletion → KB fact lifecycle
-  are follow-ups.
+- Event → knowledge-graph extraction, write-back, and server-side deletion propagation are live (C4 / #198 + #247); richer `RRULE` recurrence rules are a follow-up.

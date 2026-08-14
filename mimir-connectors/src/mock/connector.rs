@@ -112,6 +112,11 @@ impl Connector for MockConnector {
 
         let fetched = u32::try_from(staged.len()).unwrap_or(u32::MAX);
         self.buffer.lock().await.extend(staged);
+        // Stage the configured deletions for this cycle (issue #247). Unlike
+        // facts they are not batch-windowed: a mock server that keeps
+        // re-reporting a tombstone until its cursor advances is the intended
+        // shape, and the KB trash path is idempotent (re-reports are no-ops).
+        self.tombstones.lock().await.extend(self.deletions.clone());
 
         Ok(SyncOutcome {
             fetched,
@@ -124,6 +129,22 @@ impl Connector for MockConnector {
         let mut buffer = self.buffer.lock().await;
         let drained = std::mem::take(&mut *buffer);
         Ok(drained)
+    }
+
+    async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError> {
+        let tombstones = self.tombstones.lock().await;
+        // Non-destructive (PR #313 review): the supervisor acknowledges the
+        // processed removals via `acknowledge_deletions` only after the
+        // cycle's trashing, fact insertion, and cursor persistence all
+        // succeeded, so a failed cycle re-reports them on the next cycle
+        // instead of losing the tombstone.
+        Ok(tombstones.clone())
+    }
+
+    async fn acknowledge_deletions(&self, deleted: &[String]) -> Result<(), ConnectorError> {
+        let mut tombstones = self.tombstones.lock().await;
+        tombstones.retain(|raw| !deleted.contains(raw));
+        Ok(())
     }
 
     async fn act(&self, action: ConnectorAction) -> Result<ActionResult, ConnectorError> {

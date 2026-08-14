@@ -34,8 +34,21 @@ async fn trash_ids_in_batches(
         tx.commit().await?;
     }
 
+    evaluate_collected_children(pool, all_children, now).await
+}
+
+/// Deduplicate the inferred children collected across trash batches and
+/// evaluate the orphans they leave behind.
+///
+/// Shared by every trash path so the batching boundary never re-evaluates
+/// (or double-trashes) a child reported by two parents in one operation.
+async fn evaluate_collected_children(
+    pool: &SqlitePool,
+    children: Vec<(i32, bool)>,
+    now: DateTime<Utc>,
+) -> Result<(), KnowledgeError> {
     let mut seen = HashSet::new();
-    let deduped: Vec<(i32, bool)> = all_children
+    let deduped: Vec<(i32, bool)> = children
         .into_iter()
         .filter(|(id, _)| seen.insert(*id))
         .collect();
@@ -144,6 +157,109 @@ pub async fn forget_facts_for_connector(
 
     Ok(ForgetResult {
         forgotten_count: count,
+        backup_path: None,
+    })
+}
+
+/// Soft-delete (trash) the facts of one connector instance whose
+/// `sources.raw_reference` is in `raw_references` (issue #247).
+///
+/// The server-side-deletion (tombstone) path: a connector reports the set of
+/// raw items its service removed since the last cycle, and every fact that
+/// instance authored with one of those raw references is trashed via the
+/// shared trash machinery (30-day recovery, inferred-child evaluation,
+/// audit) — **unless the fact is still corroborated by another source**: only
+/// the matching `sources` rows are removed, and the fact itself is trashed
+/// only when no sources remain, so a tombstone from one connector instance
+/// never deletes a fact another connector or a non-connector source still
+/// supports (PR #313 review). Idempotent: a raw reference whose facts were
+/// already trashed (or that never existed) simply contributes nothing —
+/// mirroring the `delete_event` 404-is-success semantics. The
+/// instance-scoped filter means a deletion can never touch another connector
+/// instance's facts, even when two instances share a raw reference.
+pub async fn forget_facts_for_connector_raw_references(
+    pool: &SqlitePool,
+    instance_id: i32,
+    raw_references: &[String],
+    changed_by: ChangedBy,
+    now: DateTime<Utc>,
+) -> Result<ForgetResult, KnowledgeError> {
+    let mut seen = HashSet::<&str>::new();
+    let refs: Vec<&str> = raw_references
+        .iter()
+        .map(String::as_str)
+        .filter(|r| !r.is_empty() && seen.insert(*r))
+        .collect();
+    if refs.is_empty() {
+        return Ok(ForgetResult {
+            forgotten_count: 0,
+            backup_path: None,
+        });
+    }
+
+    let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT DISTINCT so.fact_id FROM sources so WHERE so.connector_instance_id = ",
+    );
+    builder.push_bind(instance_id);
+    builder.push(" AND so.raw_reference IN (");
+    let mut separated = builder.separated(", ");
+    for r in &refs {
+        separated.push_bind(r);
+    }
+    separated.push_unseparated(")");
+    let ids: Vec<i32> = builder.build_query_scalar().fetch_all(pool).await?;
+
+    if ids.is_empty() {
+        return Ok(ForgetResult {
+            forgotten_count: 0,
+            backup_path: None,
+        });
+    }
+
+    // Remove only the matching `sources` rows, then trash a fact only when no
+    // sources remain — both inside the same transaction — so the
+    // preserve-or-trash decision is atomic with the source removal.
+    let mut all_children: Vec<(i32, bool)> = Vec::new();
+    let mut trashed: u64 = 0;
+    for chunk in ids.chunks(TRASH_BATCH_SIZE) {
+        let mut tx = pool.begin().await?;
+        for fact_id in chunk {
+            let mut delete =
+                sqlx::QueryBuilder::<sqlx::Sqlite>::new("DELETE FROM sources WHERE fact_id = ");
+            delete.push_bind(*fact_id);
+            delete.push(" AND connector_instance_id = ");
+            delete.push_bind(instance_id);
+            delete.push(" AND raw_reference IN (");
+            let mut separated = delete.separated(", ");
+            for r in &refs {
+                separated.push_bind(r);
+            }
+            separated.push_unseparated(")");
+            let removed = delete.build().execute(&mut *tx).await?;
+            if removed.rows_affected() == 0 {
+                continue;
+            }
+
+            let remaining: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM sources WHERE fact_id = ?")
+                    .bind(fact_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            if remaining > 0 {
+                // The fact is still corroborated by another source: keep the
+                // fact, only the tombstoned source row is gone.
+                continue;
+            }
+
+            all_children.extend(forget_fact_tx(&mut tx, *fact_id, changed_by, now).await?);
+            trashed += 1;
+        }
+        tx.commit().await?;
+    }
+
+    evaluate_collected_children(pool, all_children, now).await?;
+    Ok(ForgetResult {
+        forgotten_count: trashed,
         backup_path: None,
     })
 }

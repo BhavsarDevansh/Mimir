@@ -224,6 +224,88 @@ async fn polling_mock_syncs_canned_facts_into_kb() {
 }
 
 // ---------------------------------------------------------------------------
+// Tombstones: server-side deletions flow through the supervisor into the KB
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn mock_tombstones_trash_kb_facts_and_are_idempotent() {
+    let (kg, _dir) = init_kg().await;
+    // `batch_size: 1` delivers the fact on the first successful sync and the
+    // deletion is re-staged every sync, so the flow is: cycle 1 inserts the
+    // fact (the tombstone trashes nothing yet), cycle 2 trashes it, and every
+    // later cycle re-reports the tombstone with a no-op (idempotent).
+    let config = json!({
+        "__slug": "tomb",
+        "mode": "polling",
+        "interval_ms": 100,
+        "jitter_ms": 0,
+        "batch_size": 1,
+        "facts": [literal_fact("Alice Tomb", "works_at", "Acme", "m-del-1")],
+        "deletions": ["m-del-1"],
+    });
+    let row = kg
+        .upsert_connector(upsert_mock("tomb", config))
+        .await
+        .unwrap();
+    let kg = Arc::new(kg);
+
+    let (_tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = ConnectorSupervisor::new(mock_registry(), kg.clone(), fast_config(), rx);
+    assert_eq!(supervisor.restore().await.unwrap(), 1);
+
+    // The fact lands first.
+    wait_for(
+        || async {
+            let Some(alice) = entity_id(&kg, "Alice Tomb").await else {
+                return false;
+            };
+            !kg.get_facts_by_subject(alice, 100)
+                .await
+                .unwrap()
+                .is_empty()
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+
+    // The tombstone cycle trashes it; re-reported tombstones stay no-ops.
+    wait_for(
+        || async {
+            let Some(alice) = entity_id(&kg, "Alice Tomb").await else {
+                return true;
+            };
+            let no_facts = kg
+                .get_facts_by_subject(alice, 100)
+                .await
+                .unwrap()
+                .is_empty();
+            let in_trash = !kg.list_trash(100, 0).await.unwrap().is_empty();
+            no_facts && in_trash
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+
+    // Give re-staged tombstones a cycle to prove they do not error and the
+    // facts do not resurrect.
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    let alice = entity_id(&kg, "Alice Tomb").await.expect("entity persists");
+    assert!(
+        kg.get_facts_by_subject(alice, 100)
+            .await
+            .unwrap()
+            .is_empty(),
+        "trashed facts must not resurrect on re-reported tombstones"
+    );
+    assert_eq!(
+        kg.get_connector(row.id).await.unwrap().unwrap().status(),
+        Some(ConnectorStatus::Active)
+    );
+
+    supervisor.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
 // Push: the self-paced loop also lands facts
 // ---------------------------------------------------------------------------
 

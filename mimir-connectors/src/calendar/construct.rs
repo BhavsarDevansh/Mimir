@@ -72,6 +72,7 @@ impl CalendarConnector {
             oauth_http,
             sync_token: Mutex::new(cursor.filter(|c| !c.is_empty())),
             buffer: Mutex::new(Vec::new()),
+            tombstones: Mutex::new(Vec::new()),
         })
     }
 

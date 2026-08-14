@@ -20,9 +20,9 @@
 //! future-dated / recurring events in the user's "Upcoming" section. C4
 //! also adds the only connector write-back: `act()` creates/updates/deletes
 //! remote events via CalDAV `PUT`/`DELETE`. Server-side deletions
-//! (tombstones) are logged but not yet propagated to the KB (tracked as a
-//! follow-up); the daemon `AppState` wiring + `mimir connector …` CLI land
-//! in A1–A3 (#202–#204).
+//! (tombstones) are staged in `sync` and propagated to the KB fact lifecycle
+//! via `extract_deletions` (issue #247); the daemon `AppState` wiring +
+//! `mimir connector …` CLI land in A1–A3 (#202–#204).
 //!
 //! # Credentials
 //!
@@ -183,6 +183,10 @@ pub struct CalendarConnector {
     sync_token: Mutex<Option<String>>,
     /// Staged parsed VEVENTs awaiting extraction (drained by `extract`).
     buffer: Mutex<Vec<RawCalDavEvent>>,
+    /// Staged server-side deletions — the hrefs (raw references) of resources
+    /// the server reported deleted since the prior sync-token (drained by
+    /// `extract_deletions`, issue #247).
+    tombstones: Mutex<Vec<String>>,
 }
 
 /// Constructs [`CalendarConnector`] instances from their persisted

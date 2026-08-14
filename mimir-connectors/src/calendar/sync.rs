@@ -1,5 +1,5 @@
-//! Sync staging: parsed CalDAV resources into the event buffer and
-//! event-to-fact conversion.
+//! Sync staging: parsed CalDAV resources into the event buffer, server-side
+//! deletions into the tombstone buffer, and event-to-fact conversion.
 
 use tracing::{debug, warn};
 
@@ -11,6 +11,20 @@ use mimir_knowledge::normalize::NormalizedFact;
 impl CalendarConnector {
     /// Stage the changed resources of a sync result into the buffer (parsed),
     /// returning the number of VEVENTs staged.
+    ///
+    /// **Legacy raw-reference boundary (0.103.0):** facts authored before
+    /// 0.103.0 carry the VEVENT `UID` as their `raw_reference` (with an href
+    /// fallback), while the tombstones staged here are hrefs and deletion
+    /// matches `sources.raw_reference` exactly — so a server-side deletion of
+    /// a pre-0.103.0 fact cannot trash it and the deleted event would keep
+    /// surfacing in the knowledge graph and "Upcoming". The required cleanup
+    /// is to remove each Calendar instance's pre-upgrade facts
+    /// (connector-forget, recoverable from trash) and trigger a full re-sync
+    /// so events are re-authored with href references. Automatic
+    /// reconciliation is deliberately not attempted: a deleted resource
+    /// carries no UID (only its href), and recurring events can share a UID
+    /// across resources, so trashing by UID can remove facts that will not be
+    /// re-inserted. See `docs/calendar-connector.md` and the CHANGELOG.
     pub(super) async fn stage(&self, result: SyncCollectionResult) -> Result<u32, ConnectorError> {
         let mut count = 0u32;
         for res in result.changed {
@@ -26,11 +40,12 @@ impl CalendarConnector {
             }
         }
         for href in &result.deleted {
-            // Server-side deletions (tombstones) are logged but not yet
-            // propagated to the KB: surfacing a deletion needs a way for the
-            // connector to report removals (extract only yields facts), so
-            // trashing the corresponding facts is tracked as a follow-up.
-            debug!(href = %href, "CalDAV reports deleted event; fact lifecycle deferred");
+            // Server-side deletions (tombstones): the href is the
+            // `raw_reference` the extractor authors (see `event_to_facts`),
+            // so staging it lets `extract_deletions` report the removal and
+            // the supervisor trash exactly the facts this instance authored
+            // for the deleted resource (issue #247).
+            self.tombstones.lock().await.push(href.clone());
         }
         Ok(count)
     }
@@ -56,16 +71,20 @@ impl CalendarConnector {
     pub(super) fn event_to_facts(&self, event: &RawCalDavEvent) -> Vec<NormalizedFact> {
         // The VEVENT → fact cluster (`has_event` / `located_in` / `attending`)
         // is shared with the Email iMIP extraction in
-        // [`crate::ical::vevent_to_facts`] (DRY). The CalDAV connector supplies
-        // the user identity and the provenance `raw_reference` (the VEVENT UID,
-        // falling back to the resource href) and delegates; entity resolution,
+        // [`crate::ical::vevent_to_facts`] (DRY). The CalDAV connector
+        // supplies the user identity and the provenance `raw_reference` (the
+        // resource href, see below) and delegates; entity resolution,
         // confidence, and the events-subsystem overlay run in the shared
         // `normalize_and_insert` pipeline.
-        let raw_ref = event
-            .vevent
-            .uid
-            .clone()
-            .unwrap_or_else(|| event.href.clone());
+        // The raw_reference is the CalDAV resource href — the server-side item
+        // id that sync-collection deletions (tombstones) report — so a
+        // server-side deletion maps 1:1 onto the authored facts (issue #247).
+        // The VEVENT UID remains only the Event-entity name fallback.
+        // Compatibility boundary: facts authored before 0.103.0 used the
+        // VEVENT UID as their raw_reference, so href tombstones cannot match
+        // them; the required cleanup (connector-forget + full re-sync) is
+        // documented in `docs/calendar-connector.md` and the CHANGELOG.
+        let raw_ref = event.href.clone();
         crate::ical::vevent_to_facts(self.user_identity.as_deref(), &event.vevent, &raw_ref)
     }
 

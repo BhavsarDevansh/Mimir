@@ -107,6 +107,8 @@ confidence is tracked in #51.
 
 `hard_delete_expired_trash()` removes trash rows whose `expires_at` has passed.
 
+`forget_connector_facts(instance_id)` trashes every fact a connector instance sourced (the connector-removal cascade), and `forget_connector_facts_by_raw_reference(instance_id, raw_references)` trashes only the facts that instance authored for the given `sources.raw_reference` values — the server-side-deletion (tombstone) path connectors use when their service reports a removed item (issue #247). The tombstone path removes only the matching `sources` rows and trashes a fact only when no sources remain, so a fact still corroborated by another connector or a non-connector source survives (PR #313 review). Both are idempotent, instance-scoped, and route through the same trash machinery; the `events.fact_id` FK cascade removes any events-subsystem overlay with the fact.
+
 ---
 
 ## Public API (`KnowledgeGraph`)

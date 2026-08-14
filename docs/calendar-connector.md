@@ -2,7 +2,7 @@
 
 > **Phase:** 3 — Connectors (C3 / issue #197, C4 / issue #198)
 > **Feature flag:** `calendar` (default). Framework + mock stay built without it.
-> **Status:** Implemented (library + daemon/CLI integration). C3 (#197) delivers transport + read/sync; C4 (#198) adds event → KB fact extraction, events-subsystem (#74) integration, and CalDAV write-back (`act`). The daemon `AppState` wiring (A1 / #202), action routes (A2 / #203), the `mimir connector …` CLI (A3 / #204), and the interactive OAuth PKCE login (A4 / #205) are integrated. Server-side deletion → KB fact lifecycle is tracked as a follow-up (the extractor only yields facts).
+> **Status:** Implemented (library + daemon/CLI integration). C3 (#197) delivers transport + read/sync; C4 (#198) adds event → KB fact extraction, events-subsystem (#74) integration, and CalDAV write-back (`act`). Issue #247 propagates server-side deletions (tombstones) to the KB fact lifecycle. The daemon `AppState` wiring (A1 / #202), action routes (A2 / #203), the `mimir connector …` CLI (A3 / #204), and the interactive OAuth PKCE login (A4 / #205) are integrated.
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
@@ -68,10 +68,7 @@ One round trip per cycle (paged when truncated), via the
    the supervisor to persist via `KnowledgeGraph::update_sync_cursor`.
 4. Each changed resource's `calendar-data` is parsed with `icalendar` into a
    `RawCalDavEvent` and staged. A `<response>` with no `calendar-data` is a
-   tombstone **only** when its `<status>` is an explicit `404`/`410`; other
-   statuses (`403` permission denied, `423` locked, `507` truncated, …) are
-   logged and skipped so a transient server error never purges a live event
-   (C4 / #198 owns fact lifecycle for deletions).
+   tombstone **only** when its `<status>` is an explicit `404`/`410`; other statuses (`403` permission denied, `423` locked, `507` truncated, …) are logged and skipped so a transient server error never purges a live event. Tombstones are staged and propagated to the KB fact lifecycle (issue #247, below).
 5. A truncated result set (RFC 6578 §6.5) is signalled with HTTP `507`
    (Insufficient Storage) carrying a partial multistatus body plus an
    advancing `sync-token`. The connector pages with the new token — re-issuing
@@ -117,7 +114,19 @@ Dates are parsed to UTC at staging time: `DTSTART`/`DTEND` may be UTC (`…Z`), 
 
 The `event_type: Option<EventType>` hint added to `NormalizedFact` is the mechanism: connectors that know the event kind supply it; chat leaves it `None` so the existing `Task`/`Reminder` derivation is unchanged.
 
-Server-side deletions (tombstones) are logged during `sync` but not yet propagated to the KB — surfacing a deletion needs a way for the connector to report removals (`extract` only yields facts), so trashing the corresponding facts is tracked as a follow-up.
+## Server-side deletions (tombstones) → KB fact lifecycle (#247)
+
+Deleting an event in another calendar client must not leave a phantom fact behind: `sync` already receives the deletion from the server's `sync-collection` window (a `404`/`410` response whose href is the deleted resource), and the connector now surfaces it to the knowledge graph:
+
+1. **Staging** — `CalendarConnector::stage` moves each deleted href into a tombstone buffer instead of logging and dropping it.
+2. **Raw reference identity** — the extractor authors every event fact's `raw_reference` as the CalDAV resource **href** (the server-side item id; previously the VEVENT `UID` with an href fallback). Sync-collection deletions report hrefs, so the tombstone maps 1:1 onto the facts.
+3. **Trait surface** — `Connector::extract_deletions()` (new, default empty) reports the tombstone buffer **without draining it**; the supervisor calls it every cycle after `extract()` and hands the result to `KnowledgeGraph::forget_connector_facts_by_raw_reference(instance_id, raw_references, ChangedBy::System)`, then calls `Connector::acknowledge_deletions()` only after the cycle's trashing, fact insertion, and cursor persistence all succeeded (PR #313 review).
+4. **KB trashing** — exactly the facts this instance authored with those raw references are trashed through the shared trash machinery (30-day recovery, inferred-child cascade, audit). The `events.fact_id` FK cascade-removes the events-subsystem overlay, so the event stops surfacing in "Upcoming" (one-time and recurring) and can never be advanced as an orphan. Idempotent: a tombstone reported twice trashes nothing the second time (mirroring `delete_event`'s 404-is-success semantics). A fact still corroborated by another connector or non-connector source is preserved — only its matching `sources` row is removed (PR #313 review).
+5. **Cursor** — deletions arrive inside the sync-token incremental window, so no new cursor is needed. Pending tombstones are retained until the supervisor acknowledges them: a trash failure aborts the cycle before the cursor is persisted, the next in-process cycle re-reports the retained removals, and a restart resumes from the old sync-token and re-fetches the window (PR #313 review). The remaining in-memory-token gap — losing a failed cycle's *changed-event* buffer — is tracked as #314.
+
+**Upgrade note (0.103.0):** facts authored before 0.103.0 carry the VEVENT `UID` as their `raw_reference` (with an href fallback), so href-based tombstones cannot match them and pre-upgrade deletions would leave phantom events active. The required cleanup is to remove the pre-upgrade facts of each Calendar instance (the connector-forget action trashes them, recoverable for 30 days) and trigger a full re-sync so the events are re-authored with href references — the compatibility boundary is deliberate: the href is the only server-side id that survives deletion.
+
+The same trait + KB path is available to any connector whose service reports removals (the Email connector's iMIP `CANCEL` lifecycle is tracked separately as #283).
 
 ## Write-back (C4 / #198)
 

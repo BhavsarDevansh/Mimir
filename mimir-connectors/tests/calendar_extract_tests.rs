@@ -68,7 +68,10 @@ async fn extract_emits_event_location_attendee_facts_with_identity() {
     assert_eq!(primary.object_type, Some(EntityType::Event));
     assert_eq!(primary.recurrence, RecurrenceType::Weekly);
     assert_eq!(primary.event_type, Some(EventType::Appointment));
-    assert_eq!(primary.raw_reference.as_deref(), Some("meet-1@test"));
+    // The raw_reference is the CalDAV resource href (issue #247): server-side
+    // deletions (sync-collection tombstones) report hrefs, so facts must be
+    // addressable by the href for the tombstone → trash mapping to be 1:1.
+    assert_eq!(primary.raw_reference.as_deref(), Some("/cal/meet-1.ics"));
     // TZID Europe/London on 2025-07-03 09:00 BST → 08:00 UTC.
     assert_eq!(
         primary.valid_from,

@@ -589,6 +589,38 @@ impl KnowledgeGraph {
         Ok(result)
     }
 
+    /// Soft-delete (trash) the facts of one connector instance whose
+    /// `sources.raw_reference` is in `raw_references` (issue #247).
+    ///
+    /// The server-side-deletion (tombstone) path: the supervisor drains a
+    /// connector's reported removals after `sync` and hands them here, so a
+    /// remote deletion trashes exactly the facts that instance authored for
+    /// that raw item — recoverable from trash (30-day expiry), with the
+    /// shared trash machinery (inferred-child cascade, audit) applied. A fact
+    /// still corroborated by another source is preserved: only the matching
+    /// `sources` row is removed, and the fact is trashed only when no sources
+    /// remain (PR #313 review). Idempotent: re-reported raw references whose
+    /// facts are already trashed (or that never existed) return a zero count
+    /// without error. The returned count is the number of facts actually
+    /// trashed (facts preserved for another source are not counted).
+    pub async fn forget_connector_facts_by_raw_reference(
+        &self,
+        instance_id: i32,
+        raw_references: &[String],
+        changed_by: models::audit_log::ChangedBy,
+    ) -> Result<forget::ForgetResult, KnowledgeError> {
+        let result = forget::forget_facts_for_connector_raw_references(
+            &self.pool,
+            instance_id,
+            raw_references,
+            changed_by,
+            self.now(),
+        )
+        .await?;
+        self.set_condensation_dirty();
+        Ok(result)
+    }
+
     /// Restore a single fact from trash.
     pub async fn restore_fact(
         &self,

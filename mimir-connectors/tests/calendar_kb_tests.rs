@@ -145,3 +145,165 @@ async fn entity_id(kg: &KnowledgeGraph, name: &str) -> Option<i32> {
     let results = kg.search_entities(name, 10).await.unwrap();
     results.into_iter().next().map(|r| r.entity.id)
 }
+
+/// Issue #247: a server-side deletion (CalDAV sync-collection tombstone)
+/// must trash the corresponding connector-provenanced facts and stop the
+/// event surfacing in "Upcoming".
+#[tokio::test]
+async fn calendar_server_side_deletion_trashes_facts_and_hides_upcoming_event() {
+    let (kg, _dir) = init_kg().await;
+    let server = MockServer::start().await;
+    let cal_url = format!("{}/cal/personal/", server.uri());
+
+    // Health probe (Online) — PROPFIND resourcetype for every cycle.
+    Mock::given(wiremock::matchers::method("PROPFIND"))
+        .and(wiremock::matchers::path("/cal/personal/"))
+        .respond_with(
+            ResponseTemplate::new(207).set_body_string(
+                "<?xml version=\"1.0\"?><d:multistatus xmlns:d=\"DAV:\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\">\
+<d:response><d:href>/cal/personal/</d:href><d:propstat><d:prop>\
+<d:resourcetype><d:collection/><cal:calendar/></d:resourcetype></d:prop>\
+<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>",
+            ),
+        )
+        .mount(&server)
+        .await;
+
+    // Cycle 1: a future-dated one-time event (now + 5 days) so it lands
+    // inside the 30-day Upcoming horizon.
+    let start = Utc::now() + ChronoDuration::days(5);
+    let start_ical = start.format("%Y%m%dT%H%M%SZ").to_string();
+    let ical = format!(
+        "BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\n\
+UID:future-1@test\nSUMMARY:Dentist\n\
+DTSTART:{start_ical}\nLOCATION:London\nEND:VEVENT\nEND:VCALENDAR"
+    );
+    mount_sync(
+        &server,
+        "/cal/personal/",
+        None,
+        sync_body("tomb-1", &[("/cal/future-1.ics", &ical)], &[]),
+    )
+    .await;
+
+    // Cycle 2: the same event is reported deleted (tombstone href only).
+    mount_sync(
+        &server,
+        "/cal/personal/",
+        Some("tomb-1"),
+        sync_body("tomb-2", &[], &["/cal/future-1.ics"]),
+    )
+    .await;
+
+    let config = app_password_config(&cal_url);
+    let _row = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Calendar,
+            slug: "calendar-personal".to_string(),
+            backend: "caldav".to_string(),
+            display_name: "Calendar".to_string(),
+            config_json: config.to_string(),
+            status: Some(ConnectorStatus::Active),
+            auth_state: Some(ConnectorAuthState::Authenticated),
+        })
+        .await
+        .unwrap();
+    let kg = Arc::new(kg);
+
+    let registry = ConnectorRegistry::new();
+    registry
+        .register(ConnectorType::Calendar, "caldav", CalendarConnectorFactory)
+        .unwrap();
+    let (_shutdown_tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = ConnectorSupervisor::new(Arc::new(registry), kg.clone(), fast_config(), rx)
+        .with_secret_store(store_with_app_password().await)
+        .with_user_identity("Devansh");
+
+    assert_eq!(supervisor.restore().await.unwrap(), 1);
+
+    // Wait for the user entity + its `has_event` fact to land.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    let devansh = loop {
+        let devansh = entity_id(&kg, "Devansh").await;
+        if let Some(uid) = devansh {
+            if !kg.get_facts_by_subject(uid, 100).await.unwrap().is_empty() {
+                break uid;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "event fact never landed"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+
+    let upcoming = kg.render_upcoming_section(devansh, 30, 10).await.unwrap();
+    assert!(
+        upcoming.contains("Dentist"),
+        "future event surfaces in Upcoming: {upcoming}"
+    );
+    let has_event_fact = kg
+        .get_facts_by_subject(devansh, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|f| f.object_literal.is_none())
+        .expect("has_event fact");
+    let event = kg
+        .get_event_by_fact(has_event_fact.id)
+        .await
+        .unwrap()
+        .expect("overlay");
+    assert_eq!(event.event_type(), Some(EventType::Appointment));
+
+    // Wait for the tombstone cycle: the facts must be trashed and the event
+    // must stop surfacing in Upcoming.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let empty = kg
+            .get_facts_by_subject(devansh, 100)
+            .await
+            .unwrap()
+            .is_empty();
+        if empty {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "deleted event facts were never trashed"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let upcoming = kg.render_upcoming_section(devansh, 30, 10).await.unwrap();
+    assert!(
+        !upcoming.contains("Dentist"),
+        "deleted event must not surface in Upcoming: {upcoming}"
+    );
+
+    // The event's secondary facts (located_in) are trashed too, and the
+    // events-subsystem overlay is gone with the fact (the `events.fact_id`
+    // FK cascades), so no phantom event can keep surfacing.
+    let dentist = entity_id(&kg, "Dentist").await;
+    if let Some(id) = dentist {
+        assert!(
+            kg.get_facts_by_subject(id, 100).await.unwrap().is_empty(),
+            "secondary facts of the deleted event must be trashed"
+        );
+    }
+    assert!(
+        kg.get_event_by_fact(has_event_fact.id)
+            .await
+            .unwrap()
+            .is_none(),
+        "deleted event's overlay must be cascade-removed"
+    );
+
+    // The trashed facts are recoverable from trash (30-day expiry).
+    assert!(
+        !kg.list_trash(100, 0).await.unwrap().is_empty(),
+        "deleted event facts must land in trash"
+    );
+
+    supervisor.shutdown().await;
+}

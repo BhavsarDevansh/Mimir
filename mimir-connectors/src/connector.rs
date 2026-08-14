@@ -424,6 +424,39 @@ pub trait Connector: Send + Sync {
     /// inserts the returned facts through the shared pipeline.
     async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError>;
 
+    /// Report the buffered server-side removals (tombstones) as the set of
+    /// `raw_reference`s whose knowledge-graph facts should be trashed.
+    ///
+    /// Called by the supervisor after [`sync`](Self::sync) and
+    /// [`extract`](Self::extract) on every cycle. Each returned string is
+    /// matched against this instance's `sources.raw_reference` rows and the
+    /// matching facts are trashed through the shared trash machinery
+    /// (recoverable for 30 days, inferred children evaluated). Idempotent:
+    /// a removal reported twice trashes nothing the second time.
+    ///
+    /// The report is **non-destructive**: the pending tombstones stay
+    /// buffered until the supervisor calls [`acknowledge_deletions`] after
+    /// the cycle's trashing, fact insertion, and cursor persistence all
+    /// succeeded, so a transient failure re-reports the same removals on the
+    /// next cycle instead of losing them. Connectors whose services cannot
+    /// report deletions keep the default empty set.
+    async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError> {
+        Ok(Vec::new())
+    }
+
+    /// Drop the acknowledged server-side removals from the connector's
+    /// pending tombstone buffer.
+    ///
+    /// Called by the supervisor only after the cycle's deletion trashing,
+    /// fact insertion, and cursor persistence all succeeded, with exactly the
+    /// `raw_reference`s [`extract_deletions`](Self::extract_deletions)
+    /// returned this cycle. Connectors that buffer deletions must remove the
+    /// acknowledged references so a fully processed removal is not
+    /// re-reported forever; the default implementation has no buffer.
+    async fn acknowledge_deletions(&self, _deleted: &[String]) -> Result<(), ConnectorError> {
+        Ok(())
+    }
+
     /// Optional write-back to the service.
     ///
     /// Default implementation declines the action. Backends that support

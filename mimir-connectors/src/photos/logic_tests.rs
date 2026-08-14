@@ -192,6 +192,17 @@ fn config_uses_slug_when_owner_absent() {
     let connector = PhotosConnector::from_config(config).unwrap();
     assert_eq!(connector.owner_name, "my-photos");
     assert_eq!(connector.id(), "my-photos");
+
+    // A whitespace-only `owner_name` is treated as absent (trimmed to
+    // empty), so the slug default still applies and no fact is authored
+    // against a blank subject.
+    let config = serde_json::json!({
+        "watch_dir": dir.path().to_string_lossy(),
+        "__slug": "my-photos",
+        "owner_name": "   ",
+    });
+    let connector = PhotosConnector::from_config(config).unwrap();
+    assert_eq!(connector.owner_name, "my-photos");
 }
 
 // -- signature --

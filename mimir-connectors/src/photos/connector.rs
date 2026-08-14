@@ -151,10 +151,11 @@ impl PhotosConnector {
             )));
         }
 
-        let owner_name = parsed
-            .owner_name
-            .filter(|name| !name.is_empty())
-            .unwrap_or(slug.clone());
+        // Normalise like the identity (trim, blank → None) so the documented
+        // "defaults to the connector slug" holds even for a whitespace-only
+        // `owner_name`, and no fact is ever authored against a blank subject.
+        let owner_name =
+            crate::connector::normalize_user_identity(parsed.owner_name).unwrap_or(slug.clone());
         let display_name = format!("{DEFAULT_DISPLAY_NAME} ({slug})");
 
         let extensions = parsed

@@ -350,7 +350,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | Secret ingestion via env/stdin (no process-list leak) | [#270](https://github.com/BhavsarDevansh/Mimir/issues/270) |
 | CLI: `key=value` config pairs cannot express JSON arrays (scopes silently dropped) | [#289](https://github.com/BhavsarDevansh/Mimir/issues/289) |
 | OS-keyring secret backend | [#188](https://github.com/BhavsarDevansh/Mimir/issues/188) |
-| Supervisor start/resume race | [#266](https://github.com/BhavsarDevansh/Mimir/issues/266) |
 | DRY: forget SQL, auth error arms, rate-limit default | [#267](https://github.com/BhavsarDevansh/Mimir/issues/267), [#273](https://github.com/BhavsarDevansh/Mimir/issues/273), [#223](https://github.com/BhavsarDevansh/Mimir/issues/223) |
 | Geocoding conversational tool | [#192](https://github.com/BhavsarDevansh/Mimir/issues/192) |
 

@@ -406,10 +406,9 @@ async fn act_reinstantiates_after_runner_exits_naturally() {
 /// are serialised, so the leak window never opens.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_start_resume_leaves_single_runner() {
-    let recorder = Arc::new(MockSyncRecorder::default());
     let (supervisor, _kg, recorder, id, _dir, _tx) = supervisor_with_row_and_recorder(
-        r#"{"sync_delay_ms": 500, "interval_ms": 100000}"#,
-        Arc::clone(&recorder),
+        r#"{"sync_delay_ms": 5000, "interval_ms": 100000}"#,
+        Arc::new(MockSyncRecorder::default()),
     )
     .await;
 
@@ -437,7 +436,10 @@ async fn concurrent_start_resume_leaves_single_runner() {
     assert!(supervisor.is_running(id).await);
     // Wait for the surviving runner's sync to be in flight, then give a
     // hypothetical leaked runner a grace window to start its own sync: a
-    // leaked task would overlap the tracked runner's sync.
+    // leaked task would overlap the tracked runner's sync. The sync delay
+    // (5 s) is far longer than the observation window (300 ms), so the
+    // tracked runner is still mid-sync when the window closes even on a
+    // loaded CI runner — a leak cannot hide behind a completed sync.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while recorder.max_concurrent() < 1 {
         assert!(
@@ -623,5 +625,151 @@ async fn stop_preempts_an_in_flight_auth_handshake() {
     assert_eq!(supervisor.running_count().await, 0);
 
     // Release the gate so the cancelled handshake future can drop cleanly.
+    gate.notify_one();
+}
+
+/// Test wrapper whose `sync()` blocks on a test-owned gate, so a runner can
+/// be held mid-cycle while `shutdown` runs (issue #266 regression test).
+struct GatedSyncConnector {
+    inner: crate::MockConnector,
+    entered: Arc<tokio::sync::Notify>,
+    gate: Arc<tokio::sync::Notify>,
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Sets a shared flag when dropped, proving the cycle future was fully
+/// cancelled (its stack unwound) rather than merely having abort requested.
+///
+/// `Drop` sleeps briefly before setting the flag: task cancellation is
+/// asynchronous, so without the sleep a shutdown that merely *requested*
+/// cancellation (without awaiting the cycle) could race the flag and pass
+/// the regression test for the wrong reason on a fast machine.
+struct SyncDropFlag(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for SyncDropFlag {
+    fn drop(&mut self) {
+        std::thread::sleep(Duration::from_millis(200));
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl Connector for GatedSyncConnector {
+    fn id(&self) -> &str {
+        self.inner.id()
+    }
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn connector_type(&self) -> ConnectorType {
+        self.inner.connector_type()
+    }
+    fn mode(&self) -> ConnectorMode {
+        self.inner.mode()
+    }
+    fn config_schema(&self) -> serde_json::Value {
+        self.inner.config_schema()
+    }
+    async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError> {
+        self.inner.authenticate().await
+    }
+    async fn health(&self) -> Result<HealthStatus, ConnectorError> {
+        self.inner.health().await
+    }
+    async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
+        let _dropped = SyncDropFlag(Arc::clone(&self.dropped));
+        self.entered.notify_one();
+        self.gate.notified().await;
+        self.inner.sync(options).await
+    }
+    async fn extract(
+        &self,
+    ) -> Result<Vec<mimir_knowledge::normalize::NormalizedFact>, ConnectorError> {
+        self.inner.extract().await
+    }
+    async fn forget(&self) -> Result<(), ConnectorError> {
+        self.inner.forget().await
+    }
+}
+
+/// Regression test for issue #266: `ConnectorSupervisor::shutdown` must not
+/// return while a runner's in-flight cycle task is still alive. `shutdown`
+/// signals every runner first (the graceful path aborts and awaits the cycle
+/// inside the runner) and, for the abort fallback, retains the cycle
+/// `JoinHandle` in a registry so it is aborted and awaited after the runner
+/// exits. Without that, an aborted runner drops the cycle handle un-awaited
+/// and the cycle task can outlive `shutdown`, writing facts after teardown.
+/// The gated sync holds a cycle in flight while `shutdown` runs; the drop
+/// flag proves the cycle future was fully cancelled before `shutdown`
+/// returned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shutdown_awaits_an_in_flight_cycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = Arc::new(
+        KnowledgeGraph::init(&dir.path().join("kg.db"))
+            .await
+            .unwrap(),
+    );
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let entered_for_factory = Arc::clone(&entered);
+    let gate_for_factory = Arc::clone(&gate);
+    let dropped_for_factory = Arc::clone(&dropped);
+    let registry = ConnectorRegistry::new();
+    registry
+        .register(
+            ConnectorType::Gmail,
+            "test".to_string(),
+            FnConnectorFactory::new(move |config, _ctx| {
+                let inner = crate::MockConnector::from_config(config)?;
+                Ok(Arc::new(GatedSyncConnector {
+                    inner,
+                    entered: Arc::clone(&entered_for_factory),
+                    gate: Arc::clone(&gate_for_factory),
+                    dropped: Arc::clone(&dropped_for_factory),
+                }) as Arc<dyn Connector>)
+            }),
+        )
+        .unwrap();
+    // Keep the watch sender alive: dropping it closes the channel, which the
+    // runner treats as a shutdown signal.
+    let (_tx, rx) = watch::channel(false);
+    let supervisor = ConnectorSupervisor::new(
+        Arc::new(registry),
+        Arc::clone(&kg),
+        SupervisorConfig::default(),
+        rx,
+    );
+    let row = kg
+        .create_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Gmail,
+            slug: "gated-sync".to_string(),
+            backend: "test".to_string(),
+            display_name: "Gated Sync".to_string(),
+            config_json: "{}".to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap();
+
+    // Spawn the runner; its first cycle blocks on the gate mid-sync.
+    supervisor.start(row.id).await.unwrap();
+    entered.notified().await;
+
+    // `shutdown` runs WITHOUT the daemon-wide watch being signalled first:
+    // the supervisor itself must signal the runner and await the in-flight
+    // cycle's termination.
+    supervisor.shutdown().await;
+
+    // The cycle future must be gone (fully cancelled) by the time `shutdown`
+    // returns — a detached cycle would still be blocked on the gate here.
+    assert!(
+        dropped.load(std::sync::atomic::Ordering::SeqCst),
+        "shutdown must not return while the in-flight cycle task is alive"
+    );
+    // Release the gate so the (already cancelled) sync future can unwind
+    // cleanly if it is ever resumed.
     gate.notify_one();
 }

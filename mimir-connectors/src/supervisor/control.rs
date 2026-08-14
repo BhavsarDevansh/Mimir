@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tokio::sync::oneshot;
 
 use mimir_knowledge::models::enums::ConnectorStatus;
@@ -7,6 +9,10 @@ use crate::connector::{ActionResult, ConnectorAction, ConnectorMode, SyncOptions
 use super::error::{ActError, SupervisorError};
 use super::runner::{ConnectorHandle, ConnectorSupervisor};
 use super::trigger::{TriggerError, TriggerOutcome, TriggerRequest};
+
+/// How long `shutdown` waits for a runner to exit gracefully on its stop
+/// signal before aborting it as a straggler.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 impl ConnectorSupervisor {
     /// Trigger an immediate sync of the connector with the given instance id,
@@ -103,18 +109,59 @@ impl ConnectorSupervisor {
         self.trigger_sync(row.id, options).await
     }
 
-    /// Gracefully stop every runner: abort in-flight cycles and await exit.
+    /// Gracefully stop every runner: signal each runner, await its exit, then
+    /// abort any straggler and await its in-flight cycle.
     ///
-    /// The shared shutdown `watch` is normally signalled first (so runners exit
-    /// on their own); `abort` is a defensive fallback for stragglers.
+    /// The per-runner stop signal is sent first so each runner aborts and
+    /// awaits its in-flight cycle sub-task before exiting — a runner only
+    /// returns once its cycle task is gone (issue #266). Runners still alive
+    /// after [`SHUTDOWN_GRACE`] are aborted as a defensive fallback for
+    /// stragglers; their cycle handles remain registered in the shared
+    /// `CycleRegistry`, which is drained and awaited afterwards, so no cycle
+    /// task can outlive `shutdown` even on the abort path.
     pub async fn shutdown(&self) {
         let handles: Vec<ConnectorHandle> =
             self.handles.lock().await.drain().map(|(_, h)| h).collect();
+        // Signal every runner to stop (the graceful path: the runner aborts
+        // and awaits its in-flight cycle before exiting).
         for handle in &handles {
-            handle.task.abort();
+            let _ = handle.stop_tx.send(true);
+        }
+        // Await the graceful exits, bounded by the grace period so a
+        // straggler cannot stall daemon shutdown forever. `is_finished()` is
+        // polled rather than awaiting the `JoinHandle` here: the handle is
+        // awaited once below, and a second poll of a completed handle panics.
+        for handle in &handles {
+            let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
+            while !handle.task.is_finished() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+        // Defensive fallback: abort any runner that did not exit, then await
+        // its termination.
+        for handle in &handles {
+            if !handle.task.is_finished() {
+                handle.task.abort();
+            }
         }
         for handle in handles {
             let _ = handle.task.await;
+        }
+        // Abort + await any cycle whose runner was aborted mid-cycle: the
+        // registry retained the handle, so no cycle task outlives `shutdown`
+        // (issue #266).
+        let cycles = self.cycle_tasks.drain().await;
+        for cycle in &cycles {
+            cycle.abort();
+        }
+        for cycle in cycles {
+            // Await only handles that have not already completed: a handle
+            // polled to completion by the runner's select must not be polled
+            // again (tokio panics on that), and a completed cycle needs no
+            // await — its task is already gone.
+            if !cycle.is_finished() {
+                let _ = cycle.await;
+            }
         }
     }
 

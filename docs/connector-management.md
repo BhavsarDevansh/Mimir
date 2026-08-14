@@ -34,10 +34,7 @@ After the knowledge graph and its geocoder are built, the daemon:
 4. Stores `connector_registry` and `connector_supervisor` on `AppState`
    behind `Arc`.
 
-On `AppState::shutdown()` (called from the graceful-drain path after the
-shared shutdown watch fires), the supervisor's `shutdown()` aborts every
-runner and awaits its termination before the runtime tears down, persisting
-the last completed sync cursor.
+On `AppState::shutdown()` (called from the graceful-drain path after the shared shutdown watch fires), the supervisor's `shutdown()` signals every runner and awaits its termination (aborting stragglers only after a grace period) before the runtime tears down, persisting the last completed sync cursor; in-flight cycle handles are registered with the supervisor and awaited too, so no cycle task can outlive `shutdown` (issue #266).
 
 ## Routes (`routes/connectors.rs`)
 

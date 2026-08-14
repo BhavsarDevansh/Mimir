@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::{AbortHandle, JoinHandle};
 use tracing::{info, warn};
 
@@ -56,6 +57,42 @@ impl Drop for CycleAbortGuard {
         if let Some(abort) = self.abort.take() {
             abort.abort();
         }
+    }
+}
+
+/// Registry of in-flight cycle tasks shared with the supervisor, keyed by
+/// instance id.
+///
+/// The runner registers each cycle's [`JoinHandle`] before awaiting it and
+/// removes the entry once the cycle ends. `ConnectorSupervisor::shutdown`
+/// drains the registry after runners exit so a cycle whose runner had to be
+/// aborted (the straggler fallback) is still aborted and awaited — a
+/// `JoinHandle` dropped un-awaited would let the cycle task outlive
+/// `shutdown` and keep writing facts after teardown (issue #266).
+#[derive(Clone, Default)]
+pub(super) struct CycleRegistry {
+    tasks: Arc<Mutex<HashMap<i32, JoinHandle<CycleOutcome>>>>,
+}
+
+impl CycleRegistry {
+    /// Register `handle` for `instance_id`, replacing any previous entry.
+    pub(super) async fn insert(&self, instance_id: i32, handle: JoinHandle<CycleOutcome>) {
+        self.tasks.lock().await.insert(instance_id, handle);
+    }
+
+    /// Remove and return the registered handle for `instance_id`.
+    pub(super) async fn remove(&self, instance_id: i32) -> Option<JoinHandle<CycleOutcome>> {
+        self.tasks.lock().await.remove(&instance_id)
+    }
+
+    /// Drain every registered cycle handle (used by `shutdown`'s fallback).
+    pub(super) async fn drain(&self) -> Vec<JoinHandle<CycleOutcome>> {
+        self.tasks
+            .lock()
+            .await
+            .drain()
+            .map(|(_, handle)| handle)
+            .collect()
     }
 }
 
@@ -128,6 +165,7 @@ pub(super) enum NextEvent {
 /// the chosen [`SyncOptions`], classify the result, apply backoff /
 /// circuit-breaker / auth-expiry / shutdown policy, and reply to any waiting
 /// trigger caller.
+#[allow(clippy::too_many_arguments)] // each arg is a distinct runner input (connector, services, signals, channels, cycle registry)
 pub(super) async fn run_connector(
     connector: Arc<dyn Connector>,
     kg: Arc<KnowledgeGraph>,
@@ -136,6 +174,7 @@ pub(super) async fn run_connector(
     instance_id: i32,
     connector_type: ConnectorType,
     mut trigger_rx: mpsc::Receiver<TriggerRequest>,
+    cycles: CycleRegistry,
 ) {
     // Initial auth handshake. A failed handshake pauses the connector; a
     // successful one persists the reported auth state. The handshake is
@@ -220,7 +259,7 @@ pub(super) async fn run_connector(
 
         // Run one cycle in an isolated sub-task so a connector panic surfaces as
         // a `JoinError::is_panic` rather than unwinding the runner itself.
-        let mut handle: JoinHandle<CycleOutcome> = tokio::spawn(run_cycle(
+        let handle: JoinHandle<CycleOutcome> = tokio::spawn(run_cycle(
             connector.clone(),
             kg.clone(),
             instance_id,
@@ -233,27 +272,49 @@ pub(super) async fn run_connector(
         // detached cycle would keep syncing and writing facts after the
         // connector was stopped (issue #266).
         let mut cycle_abort = CycleAbortGuard::new(abort.clone());
+        // Register the cycle handle with the supervisor before awaiting it so
+        // `shutdown()` can still abort and await it if this runner is itself
+        // aborted mid-cycle; the registry lock is held across the await so
+        // the handle is always reachable.
+        cycles.insert(instance_id, handle).await;
 
-        let result = tokio::select! {
-            res = &mut handle => match res {
-                Ok(CycleOutcome::Ok(outcome)) => CycleResult::Ok(outcome),
-                Ok(CycleOutcome::AuthExpired) => CycleResult::AuthExpired,
-                Ok(CycleOutcome::Err(message)) => CycleResult::Err(message),
-                Err(join) if join.is_panic() => CycleResult::Panic,
-                Err(_) => CycleResult::Cancelled,
-            },
-            _ = signals.shutdown.changed() => CycleResult::Shutdown,
-            _ = signals.stop.changed() => CycleResult::Shutdown,
+        let result = {
+            let mut tasks = cycles.tasks.lock().await;
+            let handle = tasks
+                .get_mut(&instance_id)
+                .expect("cycle handle must be registered before awaiting");
+            tokio::select! {
+                res = &mut *handle => match res {
+                    Ok(CycleOutcome::Ok(outcome)) => CycleResult::Ok(outcome),
+                    Ok(CycleOutcome::AuthExpired) => CycleResult::AuthExpired,
+                    Ok(CycleOutcome::Err(message)) => CycleResult::Err(message),
+                    Err(join) if join.is_panic() => CycleResult::Panic,
+                    Err(_) => CycleResult::Cancelled,
+                },
+                _ = signals.shutdown.changed() => CycleResult::Shutdown,
+                _ = signals.stop.changed() => CycleResult::Shutdown,
+            }
         };
         cycle_abort.disarm();
 
+        // The cycle ended: take the handle back out of the registry. It stays
+        // registered while the runner is alive so `shutdown()`'s registry
+        // drain can always reach it, even if this runner is aborted mid-cycle.
+        let handle = cycles
+            .remove(instance_id)
+            .await
+            .expect("cycle handle must remain registered until the cycle ends");
         if matches!(result, CycleResult::Shutdown) {
-            // The select dropped its borrow of the cycle's `JoinHandle`, so
-            // the sub-task is detached: abort it and await its termination
-            // before exiting, so the caller of `stop` (which awaits this
-            // runner) knows no cycle is still running (issue #266).
+            // Abort the sub-task and await its termination before exiting, so
+            // the caller of `stop` (which awaits this runner) knows no cycle
+            // is still running (issue #266).
             abort.abort();
-            let _ = handle.await;
+            // Await only when the cycle is still running: if it completed in
+            // the same instant the shutdown signal won the select, the handle
+            // was already polled to completion and must not be polled again.
+            if !handle.is_finished() {
+                let _ = handle.await;
+            }
         }
 
         // Report the outcome to a waiting trigger caller before applying

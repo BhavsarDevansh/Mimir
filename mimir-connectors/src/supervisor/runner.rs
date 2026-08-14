@@ -16,7 +16,7 @@ use mimir_core::geocoder::Geocoder;
 use mimir_core::llm::LlmBackend;
 
 use super::config::SupervisorConfig;
-use super::cycle::{RunnerSignals, run_connector};
+use super::cycle::{CycleRegistry, RunnerSignals, run_connector};
 use super::error::SupervisorError;
 use super::trigger::{TRIGGER_CHANNEL_CAPACITY, TriggerRequest};
 
@@ -63,6 +63,12 @@ pub struct ConnectorSupervisor {
     /// connectors that need no injected services are unaffected.
     pub(super) context: ConnectorContext,
     pub(super) handles: Mutex<HashMap<i32, ConnectorHandle>>,
+    /// In-flight cycle tasks for every live runner, keyed by instance id.
+    /// Runners register each cycle's `JoinHandle` here before awaiting it and
+    /// remove it when the cycle ends, so `shutdown()` can abort and await a
+    /// cycle even when its runner had to be aborted — no cycle task outlives
+    /// `shutdown` (issue #266).
+    pub(super) cycle_tasks: CycleRegistry,
     /// Per-connector lifecycle locks serialising lifecycle mutations
     /// (`start` / `resume` vs the daemon's forget cascade) for one instance.
     /// Created on first use and retained; bounded by the number of connector
@@ -98,6 +104,7 @@ impl ConnectorSupervisor {
             shutdown,
             context: ConnectorContext::empty(),
             handles: Mutex::new(HashMap::new()),
+            cycle_tasks: CycleRegistry::default(),
             lifecycle_locks: Mutex::new(HashMap::new()),
         }
     }
@@ -266,6 +273,7 @@ impl ConnectorSupervisor {
             row.id,
             connector_type,
             trigger_rx,
+            self.cycle_tasks.clone(),
         ));
         self.handles.lock().await.insert(
             row.id,

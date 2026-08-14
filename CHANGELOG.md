@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.107.1] — 2026-08-14
+
+### Robustness: per-connector lifecycle serialisation + graceful runner stop (issue #266)
+
+- **Regression tests lock the serialisation invariant.** A burst of concurrent `start` / `resume` calls on one instance leaves exactly one live runner with no overlapping syncs (`concurrent_start_resume_leaves_single_runner`, multi-threaded, sync-recorder-verified), and `pause` / `start` demonstrably queue on the same per-connector lifecycle lock (`pause_and_start_share_the_per_connector_lifecycle_lock`). The per-connector `lifecycle_lock` itself landed with #268; these tests guard it against regression.
+- **`pause` now holds the per-connector lifecycle lock** across the whole stop → status-write sequence, like `start` / `resume` and the daemon's forget cascade. A concurrent `pause` + `start` can no longer leave a `Paused` row with a live runner that keeps syncing.
+- **`stop` is now graceful and cycle-complete.** `ConnectorSupervisor::stop` signals the runner over a per-runner `watch` channel and awaits its termination; the runner aborts and awaits its in-flight cycle sub-task before exiting, so a stopped connector can no longer keep syncing or writing facts after `stop` returns, and a re-spawn's first cycle never overlaps the previous runner's last cycle (previously the aborted runner detached its in-flight cycle, which kept running — reproduced as `max_concurrent == 6` under an 8-way start burst). A `Drop` guard on the cycle's `AbortHandle` covers the abort fallback path (`shutdown()`).
+- **Docs.** `docs/connectors-framework.md` (new "Lifecycle control" section), `docs/connector-management.md` (stop/pause/resume semantics), `docs/wiki/connectors.md`, and `docs/wiki/what-works-now.md` updated; issue #305's pause/resume flake is closed by the graceful stop.
+- Version bumped 0.107.0 → 0.107.1 (patch — backwards-compatible robustness fix).
+
 ## [0.107.0] — 2026-08-14
 
 ### Robustness: explicit enum→wire-string conversion (issue #264)

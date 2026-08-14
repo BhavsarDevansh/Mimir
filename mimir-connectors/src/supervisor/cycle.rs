@@ -18,6 +18,47 @@ use crate::connector::{
 use super::config::SupervisorConfig;
 use super::trigger::{TriggerOutcome, TriggerRequest};
 
+/// The signals a runner observes: the daemon-wide shutdown channel and the
+/// per-runner stop channel (issue #266). Grouped so [`run_connector`] and
+/// [`wait_next`] take one signals argument instead of two receivers.
+pub(super) struct RunnerSignals {
+    pub(super) shutdown: watch::Receiver<bool>,
+    pub(super) stop: watch::Receiver<bool>,
+}
+
+/// Aborts the in-flight cycle sub-task when the runner task is dropped.
+///
+/// The runner runs each cycle in an isolated sub-task so a connector panic
+/// cannot unwind the runner. When the runner task is aborted (the
+/// `ConnectorSupervisor::shutdown` fallback path), the sub-task would
+/// otherwise be detached and keep running to completion — overlapping the
+/// next runner's cycle and writing facts after the connector was stopped.
+/// Holding the cycle's [`AbortHandle`] in a guard that aborts on [`Drop`]
+/// propagates the runner's cancellation to the in-flight cycle (issue #266).
+struct CycleAbortGuard {
+    abort: Option<AbortHandle>,
+}
+
+impl CycleAbortGuard {
+    fn new(abort: AbortHandle) -> Self {
+        Self { abort: Some(abort) }
+    }
+
+    /// Disarm after the cycle completed normally, so dropping the guard does
+    /// not abort a finished task.
+    fn disarm(&mut self) {
+        self.abort = None;
+    }
+}
+
+impl Drop for CycleAbortGuard {
+    fn drop(&mut self) {
+        if let Some(abort) = self.abort.take() {
+            abort.abort();
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Runner task (one per active connector)
 // ---------------------------------------------------------------------------
@@ -82,15 +123,16 @@ pub(super) enum NextEvent {
 ///
 /// Performs an initial auth handshake, then repeatedly: decide what should
 /// start the next cycle (the polling interval, a manual sync trigger, or
-/// shutdown), run one cycle in an isolated sub-task (so a connector panic
-/// does not kill the runner) with the chosen [`SyncOptions`], classify the
-/// result, apply backoff / circuit-breaker / auth-expiry / shutdown policy,
-/// and reply to any waiting trigger caller.
+/// the daemon-wide shutdown or the per-runner stop signal), run one cycle in
+/// an isolated sub-task (so a connector panic does not kill the runner) with
+/// the chosen [`SyncOptions`], classify the result, apply backoff /
+/// circuit-breaker / auth-expiry / shutdown policy, and reply to any waiting
+/// trigger caller.
 pub(super) async fn run_connector(
     connector: Arc<dyn Connector>,
     kg: Arc<KnowledgeGraph>,
     config: SupervisorConfig,
-    mut shutdown: watch::Receiver<bool>,
+    mut signals: RunnerSignals,
     instance_id: i32,
     connector_type: ConnectorType,
     mut trigger_rx: mpsc::Receiver<TriggerRequest>,
@@ -133,7 +175,7 @@ pub(super) async fn run_connector(
     loop {
         // Authoritative shutdown check (catches a signal that arrived while the
         // previous select's `changed()` future was dropped without resolving).
-        if *shutdown.borrow_and_update() {
+        if *signals.shutdown.borrow_and_update() || *signals.stop.borrow_and_update() {
             break;
         }
 
@@ -146,7 +188,7 @@ pub(super) async fn run_connector(
         } else {
             match wait_next(
                 &mode,
-                &mut shutdown,
+                &mut signals,
                 &mut trigger_rx,
                 last_failed,
                 failures,
@@ -169,7 +211,7 @@ pub(super) async fn run_connector(
 
         // Run one cycle in an isolated sub-task so a connector panic surfaces as
         // a `JoinError::is_panic` rather than unwinding the runner itself.
-        let handle: JoinHandle<CycleOutcome> = tokio::spawn(run_cycle(
+        let mut handle: JoinHandle<CycleOutcome> = tokio::spawn(run_cycle(
             connector.clone(),
             kg.clone(),
             instance_id,
@@ -177,20 +219,33 @@ pub(super) async fn run_connector(
             options,
         ));
         let abort: AbortHandle = handle.abort_handle();
+        // If this runner task is itself aborted (the `shutdown()` fallback
+        // path), abort the in-flight cycle instead of detaching it — a
+        // detached cycle would keep syncing and writing facts after the
+        // connector was stopped (issue #266).
+        let mut cycle_abort = CycleAbortGuard::new(abort.clone());
 
         let result = tokio::select! {
-            res = handle => match res {
+            res = &mut handle => match res {
                 Ok(CycleOutcome::Ok(outcome)) => CycleResult::Ok(outcome),
                 Ok(CycleOutcome::AuthExpired) => CycleResult::AuthExpired,
                 Ok(CycleOutcome::Err(message)) => CycleResult::Err(message),
                 Err(join) if join.is_panic() => CycleResult::Panic,
                 Err(_) => CycleResult::Cancelled,
             },
-            _ = shutdown.changed() => {
-                abort.abort();
-                CycleResult::Shutdown
-            }
+            _ = signals.shutdown.changed() => CycleResult::Shutdown,
+            _ = signals.stop.changed() => CycleResult::Shutdown,
         };
+        cycle_abort.disarm();
+
+        if matches!(result, CycleResult::Shutdown) {
+            // The select dropped its borrow of the cycle's `JoinHandle`, so
+            // the sub-task is detached: abort it and await its termination
+            // before exiting, so the caller of `stop` (which awaits this
+            // runner) knows no cycle is still running (issue #266).
+            abort.abort();
+            let _ = handle.await;
+        }
 
         // Report the outcome to a waiting trigger caller before applying
         // lifecycle policy that may exit the loop (so the caller is never
@@ -302,9 +357,9 @@ pub(super) async fn record_failure(
 }
 
 /// Wait for the event that should start the next cycle: the polling interval
-/// elapsing, a manual sync trigger, or shutdown. After a failed cycle the wait
-/// is exponential backoff (still preemptable by a trigger) instead of the
-/// polling interval.
+/// elapsing, a manual sync trigger, the daemon-wide shutdown, or the
+/// per-runner stop signal. After a failed cycle the wait is exponential
+/// backoff (still preemptable by a trigger) instead of the polling interval.
 ///
 /// Push-mode connectors loop immediately on success (they block inside `sync`
 /// waiting for service events, so there is no polling interval to wait on);
@@ -312,7 +367,7 @@ pub(super) async fn record_failure(
 /// channel is never selected in the push success arm.
 pub(super) async fn wait_next(
     mode: &ConnectorMode,
-    shutdown: &mut watch::Receiver<bool>,
+    signals: &mut RunnerSignals,
     trigger_rx: &mut mpsc::Receiver<TriggerRequest>,
     last_failed: bool,
     failures: u32,
@@ -333,7 +388,8 @@ pub(super) async fn wait_next(
             Some(req) => NextEvent::Trigger(req),
             None => NextEvent::Shutdown,
         },
-        _ = shutdown.changed() => NextEvent::Shutdown,
+        _ = signals.shutdown.changed() => NextEvent::Shutdown,
+        _ = signals.stop.changed() => NextEvent::Shutdown,
     }
 }
 

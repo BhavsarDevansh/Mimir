@@ -48,8 +48,8 @@ the last completed sync cursor.
 | `GET` | `/connectors/{id}` | `connector_show_handler` | `404` when missing |
 | `DELETE` | `/connectors/{id}` | `connector_remove_handler` | `stop(id)`, delete the slug-keyed secret-store entry (idempotent), then `delete_connector`; detaches provenance (FK nulled, facts survive); `204` (`404` missing, `500` if credential deletion fails and the row is left intact) |
 | `POST` | `/connectors/{id}/sync` | `connector_sync_handler` | Manual sync trigger (F9); maps `TriggerOutcome` → `SyncConnectorResponse`; `404` unknown, `409` not running / push-mode (A2 / #203) |
-| `POST` | `/connectors/{id}/pause` | `connector_pause_handler` | `stop(id)` + `set_connector_status(Paused)`; returns the updated `ConnectorResponse` (A2 / #203) |
-| `POST` | `/connectors/{id}/resume` | `connector_resume_handler` | `start(id)` (re-spawn + `Active`); returns the updated `ConnectorResponse` (A2 / #203) |
+| `POST` | `/connectors/{id}/pause` | `connector_pause_handler` | Lifecycle-locked `stop(id)` + `set_connector_status(Paused)`; returns the updated `ConnectorResponse` (A2 / #203, hardened in #266) |
+| `POST` | `/connectors/{id}/resume` | `connector_resume_handler` | Lifecycle-locked `start(id)` (re-spawn + `Active`); returns the updated `ConnectorResponse` (A2 / #203, hardened in #266) |
 | `POST` | `/connectors/{id}/tokens` | `connector_tokens_handler` | Ingest a `SecretBundle` (keyed by slug), flip `auth_state` → `Authenticated` (credentials present, not validated); loopback-only; returns the updated `ConnectorResponse` (A2 / #203) |
 | `POST` | `/connectors/{id}/actions` | `connector_actions_handler` | Dispatch `{ kind, payload }` to `Connector::act` (C4 write-back); `400` on `UnsupportedAction`, `401` on auth failure (A2 / #203) |
 | `POST` | `/connectors/{id}/forget` | `connector_forget_handler` | Loopback-only cascade: lifecycle-lock the instance → mark `Paused` → `supervisor.forget(id)` (stop runner + connector-local cleanup) → delete the secret → trash the sourced facts → delete the row; returns `ForgetConnectorResponse` (A2 / #203) |
@@ -97,13 +97,7 @@ The lowercase wire strings for `connector_type`, `status`, and `auth_state` are 
 
 ## Supervisor addition (`mimir-connectors`)
 
-`ConnectorSupervisor::stop(id) -> bool` aborts a single *live* runner,
-awaits its termination, and removes it from the handle map. A stale handle
-whose task already finished naturally (e.g. an unauthenticated connector whose
-runner exited at the auth handshake) is cleaned up but reports `false`, as do
-never-spawned or already-stopped ids; only a genuinely running task reports
-`true`. This is the per-instance counterpart of `shutdown()`; `DELETE` uses it
-so a mid-cycle sync cannot write back to a vanishing row.
+`ConnectorSupervisor::stop(id) -> bool` gracefully stops a single *live* runner: it signals the runner over a per-runner `watch` channel and awaits its termination — the runner aborts and awaits its in-flight cycle sub-task before exiting, so no cycle outlives `stop` (issue #266). The handle is then removed from the map. A stale handle whose task already finished naturally (e.g. an unauthenticated connector whose runner exited at the auth handshake) is cleaned up but reports `false`, as do never-spawned or already-stopped ids; only a genuinely running task reports `true`. This is the per-instance counterpart of `shutdown()`; `DELETE` uses it so a mid-cycle sync cannot write back to a vanishing row.
 
 `ConnectorSupervisor::secret_store() -> Option<Arc<dyn SecretStore>>` exposes
 the shared credential store (injected via `with_secret_store`) so the removal
@@ -113,44 +107,14 @@ the secret *before* the row: a secret-deletion failure aborts the removal
 never left in an ambiguous state and a later same-slug connector can never
 load a deleted instance's stored credentials.
 
-A2 / #203 adds four supervisor methods — three lifecycle methods (`start` /
-`pause` / `resume`) and one action method (`act`). Each row's
-`ConnectorHandle` now also retains the live `Arc<dyn Connector>` (cloned from
-the one moved into the runner) so write-back actions dispatch to the
-authenticated instance:
+A2 / #203 adds four supervisor methods — three lifecycle methods (`start` / `pause` / `resume`) and one action method (`act`). Each row's `ConnectorHandle` now also retains the live `Arc<dyn Connector>` (cloned from the one moved into the runner) so write-back actions dispatch to the authenticated instance:
 
-- `ConnectorSupervisor::start(id) -> Result<(), SupervisorError>` — loads the
-  row, instantiates via the registry, stops any existing runner first (so
-  re-spawn is idempotent), transitions to `Active` (clearing `last_error`),
-  and spawns a supervised runner. The shared spawn logic lives in a private
-  `spawn_into` used by both `restore()` (startup batch) and `start()` (single
-  resume / re-spawn).
-- `ConnectorSupervisor::pause(id)` — `stop(id)` then `set_connector_status(Paused)`;
-  a connector that was never running is still transitioned to `Paused`.
-- `ConnectorSupervisor::resume(id)` — thin wrapper over `start(id)`, also
-  covering re-spawn-after-circuit-breaker (an `Error` connector that exhausted
-  its restart budget).
-- `ConnectorSupervisor::act(id, action) -> Result<ActionResult, ActError>` —
-  dispatches a `ConnectorAction` to the live connector only when its runner is
-  still alive (checked via `task.is_finished()`, mirroring `trigger_sync`); a
-  handle left by a runner that exited naturally (auth-expiry, circuit-breaker,
-  panic) is dropped and the connector is re-instantiated from the row, so a
-  write-back never reuses stale in-memory credentials (e.g. after fresh ones
-  are stored via `POST /connectors/{id}/tokens`). Backends like the Calendar
-  connector re-read credentials inside `act`, so they do not depend on the
-  runner's auth handshake. `ActError` carries `NotFound` / `UnknownType` /
-  `Knowledge` / `Connector`; the server maps `UnsupportedAction` → `400`,
-  auth failures → `401`, and `Network` → `502`.
-- `ConnectorSupervisor::forget(id) -> Result<(), SupervisorError>` — the
-  connector-local half of the forget cascade: stops the runner and invokes
-  `Connector::forget()` on the live instance when its runner is still alive
-  (so in-memory state such as the Photos watcher is torn down), or on a
-  freshly re-instantiated instance otherwise. The knowledge-graph fact trash
-  and row deletion are the daemon's responsibility.
-- `ConnectorSupervisor::lifecycle_lock(id) -> OwnedMutexGuard<()>` — a
-  per-connector lock serialising lifecycle mutations: `start` / `resume` and
-  the forget cascade both hold it, so a concurrent `resume` cannot re-spawn a
-  runner while a forget cascade is deleting the row.
+- `ConnectorSupervisor::start(id) -> Result<(), SupervisorError>` — loads the row, instantiates via the registry, stops any existing runner first (so re-spawn is idempotent), transitions to `Active` (clearing `last_error`), and spawns a supervised runner. The shared spawn logic lives in a private `spawn_into` used by both `restore()` (startup batch) and `start()` (single resume / re-spawn). The per-connector `lifecycle_lock` is held across the whole stop → instantiate → spawn sequence, so concurrent `start` / `resume` calls for one instance serialise instead of racing (issue #266).
+- `ConnectorSupervisor::pause(id)` — lifecycle-locked `stop(id)` then `set_connector_status(Paused)`; a connector that was never running is still transitioned to `Paused`. Holding the lock means a concurrent `start` / `resume` can never leave a `Paused` row with a live runner (issue #266).
+- `ConnectorSupervisor::resume(id)` — thin wrapper over `start(id)`, also covering re-spawn-after-circuit-breaker (an `Error` connector that exhausted its restart budget).
+- `ConnectorSupervisor::act(id, action) -> Result<ActionResult, ActError>` — dispatches a `ConnectorAction` to the live connector only when its runner is still alive (checked via `task.is_finished()`, mirroring `trigger_sync`); a handle left by a runner that exited naturally (auth-expiry, circuit-breaker, panic) is dropped and the connector is re-instantiated from the row, so a write-back never reuses stale in-memory credentials (e.g. after fresh ones are stored via `POST /connectors/{id}/tokens`). Backends like the Calendar connector re-read credentials inside `act`, so they do not depend on the runner's auth handshake. `ActError` carries `NotFound` / `UnknownType` / `Knowledge` / `Connector`; the server maps `UnsupportedAction` → `400`, auth failures → `401`, and `Network` → `502`.
+- `ConnectorSupervisor::forget(id) -> Result<(), SupervisorError>` — the connector-local half of the forget cascade: stops the runner and invokes `Connector::forget()` on the live instance when its runner is still alive (so in-memory state such as the Photos watcher is torn down), or on a freshly re-instantiated instance otherwise. The knowledge-graph fact trash and row deletion are the daemon's responsibility.
+- `ConnectorSupervisor::lifecycle_lock(id) -> OwnedMutexGuard<()>` — a per-connector lock serialising lifecycle mutations: `start` / `resume`, `pause`, and the forget cascade all hold it, so a concurrent `resume` cannot re-spawn a runner while a forget cascade is deleting the row, and a concurrent `pause` can never leave a `Paused` row with a live runner (issue #266).
 
 The forget cascade (`POST /connectors/{id}/forget`) is loopback-only and
 serialised per connector: it marks the instance `Paused` (with `last_error =
@@ -196,19 +160,7 @@ The `mimir` binary's `connector` command group (`mimir/src/connector/`) plumbs t
   FK nulled, `connector_type_id` retained). A2 adds `forget_connector_facts`
   (trashes only the target connector's sourced facts, leaves other connectors'
   facts intact, and is a no-op returning zero for a connector with no sources).
-- `mimir-connectors`: `ConnectorSupervisor::stop` aborts one live runner
-  without affecting the others, returns `false` for an already-finished runner
-  while cleaning up its stale handle, and reports no action on re-stop /
-  unknown id. A2 adds: `start` spawns a runner and flips `Active` (and returns
-  `ConnectorNotFound` for an unknown id), `pause` stops the runner and flips
-  `Paused`, `resume` re-spawns after pause, `act` dispatches to the live
-  connector (and re-instantiates when not running), `act` re-instantiates
-  from the row after the runner exits naturally (auth-fail) so it never
-  reuses a stale in-memory connector, `act` returns `UnsupportedAction` for
-  an unconfigured kind, `act` returns `NotFound` for an unknown id, and
-  `forget` stops the runner and invokes the connector's local `forget()` on
-  the live instance (re-instantiating when not running, `ConnectorNotFound`
-  for an unknown id).
+- `mimir-connectors`: `ConnectorSupervisor::stop` gracefully stops one live runner (signal + await; the runner aborts and awaits its in-flight cycle before exiting) without affecting the others, returns `false` for an already-finished runner while cleaning up its stale handle, and reports no action on re-stop / unknown id. A2 adds: `start` spawns a runner and flips `Active` (and returns `ConnectorNotFound` for an unknown id), `pause` stops the runner and flips `Paused`, `resume` re-spawns after pause, `act` dispatches to the live connector (and re-instantiates when not running), `act` re-instantiates from the row after the runner exits naturally (auth-fail) so it never reuses a stale in-memory connector, `act` returns `UnsupportedAction` for an unconfigured kind, `act` returns `NotFound` for an unknown id, and `forget` stops the runner and invokes the connector's local `forget()` on the live instance (re-instantiating when not running, `ConnectorNotFound` for an unknown id). Issue #266 hardens the lifecycle methods: `start` / `resume` / `pause` hold the per-connector `lifecycle_lock` across their whole stop → status-write / spawn sequence, so concurrent lifecycle calls for one instance serialise (no leaked runner, no `Paused` row with a live runner, no overlapping sync cycles).
 
 ## Out of scope (tracked)
 

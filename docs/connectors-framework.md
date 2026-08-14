@@ -312,6 +312,12 @@ the in-flight cycle (no cursor advance) and the next restart resumes from the
 last persisted cursor, re-fetching at most the abandoned batch. `shutdown()`
 aborts and joins all handles as a defensive fallback for stragglers.
 
+### Lifecycle control: `start` / `pause` / `resume` (A2 / #203, hardened in #266)
+
+`ConnectorSupervisor::start(id)` (re-spawn one runner, used by `resume`), `pause(id)`, and the daemon's forget cascade are **lifecycle mutations** and are serialised per connector by a `lifecycle_lock` — a `Mutex<()>` keyed by instance id, created on first use and retained. `start` / `resume` hold it across the whole stop → instantiate → spawn sequence, and `pause` holds it across stop → status-write, so concurrent lifecycle calls for one instance queue instead of racing: a re-spawn never leaks a runner task, and a concurrent `pause` + `start` can never leave a `Paused` row with a live runner (issue #266).
+
+`stop(id)` is graceful: it signals the runner over a per-runner `watch` channel and awaits its termination. The runner aborts and awaits its in-flight cycle sub-task before exiting, so no cycle outlives `stop` — a stopped connector cannot keep syncing or writing facts, and a re-spawn's first cycle never overlaps the previous runner's last cycle. A `Drop` guard on the cycle's `AbortHandle` covers the abort fallback path (`shutdown()`), so an aborted runner still cancels its in-flight cycle instead of detaching it.
+
 ### `yield-on-user-activity` deferred
 
 Decision D of the Phase 3 plan calls for connectors to yield to user activity.

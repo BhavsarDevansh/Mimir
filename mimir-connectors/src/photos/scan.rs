@@ -11,6 +11,7 @@ use mimir_knowledge::models::source::SourceType;
 use mimir_knowledge::normalize::{NormalizedFact, NormalizedLocation};
 
 use crate::connector::ConnectorError;
+use crate::photos::connector::geo_key;
 use crate::photos::cursor::{FileSig, is_image};
 use crate::photos::exif::read_exif;
 
@@ -56,7 +57,7 @@ impl RawPhoto {
         match place {
             Some(name) => self.place_fact(owner, name),
             None => match (self.latitude, self.longitude) {
-                (Some(lat), Some(lng)) => self.visited_fact(owner, coords_label(lat, lng)),
+                (Some(lat), Some(lng)) => self.visited_fact(owner, geo_key(lat, lng).label()),
                 _ => self.took_photo_fact(owner),
             },
         }
@@ -177,20 +178,6 @@ impl RawPhoto {
             timezone: None,
         })
     }
-}
-
-/// A stable, human-readable label for a GPS bucket (issue #250): the
-/// millidegree-rounded coordinates formatted to three decimals, e.g.
-/// `"46.500, 7.500"`. The rounding is derived from the same scaled-integer
-/// bucket as the reverse-geocode cache key (`geo_key`), so by construction
-/// every photo in a bucket shares the label (including the zero-crossing
-/// case, where `-0.0004` and `+0.0004` both land in bucket 0) — coords-only
-/// fallback facts therefore corroborate per spot just like place facts
-/// corroborate per locality.
-pub(super) fn coords_label(latitude: f64, longitude: f64) -> String {
-    let lat = (latitude * 1000.0).round() as i64 as f64 / 1000.0;
-    let lng = (longitude * 1000.0).round() as i64 as f64 / 1000.0;
-    format!("{lat:.3}, {lng:.3}")
 }
 
 /// Stage a single file: read its EXIF and build a [`RawPhoto`]. The temporal

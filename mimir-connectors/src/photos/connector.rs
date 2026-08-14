@@ -81,12 +81,33 @@ pub struct PhotosConnector {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct GeoKey(i64, i64);
 
+/// Coordinate scale for the reverse-geocode cache bucket: millidegrees
+/// (~111 m at the equator).
+const GEO_BUCKET_SCALE: f64 = 1000.0;
+
 /// Round a coordinate to three decimal places and scale to an integer key.
 pub(super) fn geo_key(latitude: f64, longitude: f64) -> GeoKey {
     GeoKey(
-        (latitude * 1000.0).round() as i64,
-        (longitude * 1000.0).round() as i64,
+        (latitude * GEO_BUCKET_SCALE).round() as i64,
+        (longitude * GEO_BUCKET_SCALE).round() as i64,
     )
+}
+
+impl GeoKey {
+    /// A stable, human-readable label for this GPS bucket (issue #250): the
+    /// millidegree-rounded coordinates formatted to three decimals, e.g.
+    /// `"46.500, 7.500"`. Because the label is derived from the same bucket
+    /// as the reverse-geocode cache key, every photo in a bucket shares it
+    /// (including the zero-crossing case, where `-0.0004` and `+0.0004` both
+    /// land in bucket 0) — coords-only fallback facts therefore corroborate
+    /// per spot just like place facts corroborate per locality.
+    pub(super) fn label(self) -> String {
+        format!(
+            "{:.3}, {:.3}",
+            self.0 as f64 / GEO_BUCKET_SCALE,
+            self.1 as f64 / GEO_BUCKET_SCALE
+        )
+    }
 }
 
 impl std::fmt::Debug for PhotosConnector {

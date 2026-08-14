@@ -166,6 +166,7 @@ Migrations are strictly ordered by foreign-key dependencies:
 39. `046` — `Geographic` location type (id 6) for place coordinate anchoring (#196)
 40. `047` — Partial unique index on `entity_locations(entity_id)` scoped to `location_type_id = 6` (single `Geographic` row per place) (#196)
 41. `048` — `pending_location_meta` cache for sensitive-fact location shape across the confirmation boundary (#226)
+42. `049` — `connectors.durable_state` column: opaque, connector-owned durable state persisted by the supervisor (the Email connector's bounded LLM-extraction retry ledger) (#262)
 
 ---
 

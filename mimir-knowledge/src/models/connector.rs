@@ -23,6 +23,11 @@ pub struct Connector {
     pub status_id: i16,
     pub auth_state_id: i16,
     pub sync_cursor: Option<String>,
+    /// Opaque, connector-owned durable state (e.g. the Email connector's
+    /// LLM-extraction retry ledger, issue #262), persisted by the supervisor
+    /// after each successful extraction cycle and re-injected at
+    /// construction. `None` when the connector keeps no durable state.
+    pub durable_state: Option<String>,
     pub last_sync_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -58,9 +63,9 @@ impl Connector {
 /// identity: on conflict the mutable config surface (`backend`,
 /// `display_name`, `config_json`, `status`, `auth_state`) is overwritten and
 /// `updated_at` is bumped, while `id`, `created_at`, and the sync-progress
-/// fields (`sync_cursor`, `last_sync_at`, `last_error`) are preserved because
-/// they are owned by dedicated mutators. Reusing an existing `slug` with a
-/// different `connector_type` returns
+/// fields (`sync_cursor`, `durable_state`, `last_sync_at`, `last_error`) are
+/// preserved because they are owned by dedicated mutators. Reusing an
+/// existing `slug` with a different `connector_type` returns
 /// [`crate::KnowledgeError::ConnectorTypeMismatch`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpsertConnectorInput {

@@ -16,6 +16,7 @@ fn row_with_cursor(cursor: Option<&str>) -> ConnectorRow {
         status_id: ConnectorStatus::Active as i16,
         auth_state_id: ConnectorAuthState::Authenticated as i16,
         sync_cursor: cursor.map(str::to_string),
+        durable_state: None,
         last_sync_at: None,
         last_error: None,
         created_at: Utc::now(),
@@ -23,12 +24,16 @@ fn row_with_cursor(cursor: Option<&str>) -> ConnectorRow {
     }
 }
 
-/// `instantiate` must inject the persisted `sync_cursor` (alongside the
-/// existing identity keys) so incremental connectors can seed their
-/// in-memory cursor at construction (C1 / #195). A `None` cursor is
-/// injected as JSON `null`.
-#[tokio::test]
-async fn instantiate_injects_cursor() {
+/// Build a supervisor whose Photos/local factory captures the injected
+/// config, plus the capture handle, the temp dir (kept alive for the
+/// SQLite file), and the shutdown sender (kept alive so the supervisor's
+/// watch receiver stays open).
+async fn capturing_supervisor() -> (
+    ConnectorSupervisor,
+    Arc<std::sync::Mutex<Option<serde_json::Value>>>,
+    tempfile::TempDir,
+    watch::Sender<bool>,
+) {
     let dir = tempfile::tempdir().unwrap();
     let kg = Arc::new(
         KnowledgeGraph::init(&dir.path().join("kg.db"))
@@ -48,9 +53,19 @@ async fn instantiate_injects_cursor() {
             }),
         )
         .unwrap();
-    let (_tx, rx) = watch::channel(false);
+    let (tx, rx) = watch::channel(false);
     let supervisor =
         ConnectorSupervisor::new(Arc::new(registry), kg, SupervisorConfig::default(), rx);
+    (supervisor, captured, dir, tx)
+}
+
+/// `instantiate` must inject the persisted `sync_cursor` (alongside the
+/// existing identity keys) so incremental connectors can seed their
+/// in-memory cursor at construction (C1 / #195). A `None` cursor is
+/// injected as JSON `null`.
+#[tokio::test]
+async fn instantiate_injects_cursor() {
+    let (supervisor, captured, _dir, _tx) = capturing_supervisor().await;
 
     let connector = supervisor.instantiate(&row_with_cursor(Some("v1")), ConnectorType::Photos);
     assert!(connector.is_ok());
@@ -70,32 +85,37 @@ async fn instantiate_injects_cursor() {
         Some("v1"),
         "persisted cursor must be injected for incremental connectors"
     );
+    assert!(
+        map.get("__durable_state")
+            .map(|v| v.is_null())
+            .unwrap_or(false),
+        "absent durable state must be injected as JSON null, not omitted"
+    );
+}
+
+/// `instantiate` must inject the persisted `durable_state` (issue #262) so
+/// connectors can seed durable retry state at construction.
+#[tokio::test]
+async fn instantiate_injects_durable_state() {
+    let (supervisor, captured, _dir, _tx) = capturing_supervisor().await;
+
+    let mut row = row_with_cursor(None);
+    row.durable_state = Some("ledger-v1".to_string());
+    supervisor
+        .instantiate(&row, ConnectorType::Photos)
+        .expect("instantiate succeeds");
+    let config = captured.lock().unwrap().take().expect("config captured");
+    let map = config.as_object().expect("config is an object");
+    assert_eq!(
+        map.get("__durable_state").and_then(|v| v.as_str()),
+        Some("ledger-v1"),
+        "persisted durable state must be injected"
+    );
 }
 
 #[tokio::test]
 async fn instantiate_injects_null_cursor_when_absent() {
-    let dir = tempfile::tempdir().unwrap();
-    let kg = Arc::new(
-        KnowledgeGraph::init(&dir.path().join("kg.db"))
-            .await
-            .unwrap(),
-    );
-    let captured = Arc::new(std::sync::Mutex::new(None::<serde_json::Value>));
-    let capture = captured.clone();
-    let registry = ConnectorRegistry::new();
-    registry
-        .register(
-            ConnectorType::Photos,
-            "local".to_string(),
-            FnConnectorFactory::new(move |config, _ctx| {
-                *capture.lock().unwrap() = Some(config.clone());
-                Ok(Arc::new(crate::MockConnector::default()) as Arc<dyn Connector>)
-            }),
-        )
-        .unwrap();
-    let (_tx, rx) = watch::channel(false);
-    let supervisor =
-        ConnectorSupervisor::new(Arc::new(registry), kg, SupervisorConfig::default(), rx);
+    let (supervisor, captured, _dir, _tx) = capturing_supervisor().await;
 
     // Assert the result instead of discarding it, so a construction
     // regression surfaces directly rather than failing later on the
@@ -149,6 +169,7 @@ async fn with_secret_store_propagates_into_factory_context() {
         status_id: ConnectorStatus::Active as i16,
         auth_state_id: ConnectorAuthState::Authenticated as i16,
         sync_cursor: None,
+        durable_state: None,
         last_sync_at: None,
         last_error: None,
         created_at: Utc::now(),

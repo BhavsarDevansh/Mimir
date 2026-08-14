@@ -15,7 +15,7 @@ use crate::models::enums::{ConnectorAuthState, ConnectorStatus};
 pub async fn list_connectors(pool: &SqlitePool) -> Result<Vec<Connector>, KnowledgeError> {
     let rows = sqlx::query_as::<_, Connector>(
         "SELECT id, connector_type_id, slug, backend, display_name, config_json, \
-         status_id, auth_state_id, sync_cursor, last_sync_at, last_error, created_at, updated_at \
+         status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, created_at, updated_at \
          FROM connectors ORDER BY id",
     )
     .fetch_all(pool)
@@ -30,7 +30,7 @@ pub async fn get_connector_by_slug(
 ) -> Result<Option<Connector>, KnowledgeError> {
     let row = sqlx::query_as::<_, Connector>(
         "SELECT id, connector_type_id, slug, backend, display_name, config_json, \
-         status_id, auth_state_id, sync_cursor, last_sync_at, last_error, created_at, updated_at \
+         status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, created_at, updated_at \
          FROM connectors WHERE slug = ?",
     )
     .bind(slug)
@@ -46,7 +46,7 @@ pub async fn get_connector(
 ) -> Result<Option<Connector>, KnowledgeError> {
     let row = sqlx::query_as::<_, Connector>(
         "SELECT id, connector_type_id, slug, backend, display_name, config_json, \
-         status_id, auth_state_id, sync_cursor, last_sync_at, last_error, created_at, updated_at \
+         status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, created_at, updated_at \
          FROM connectors WHERE id = ?",
     )
     .bind(id)
@@ -61,11 +61,12 @@ pub async fn get_connector(
 /// `slug` and `connector_type` are immutable identity: on conflict only the
 /// mutable surface (`backend`, `display_name`, `config_json`, `status`,
 /// `auth_state`) is overwritten and `updated_at` is bumped, while `id`,
-/// `created_at`, and the sync-progress fields (`sync_cursor`, `last_sync_at`,
-/// `last_error`) are preserved. Reusing an existing `slug` with a *different*
-/// `ConnectorType` returns [`KnowledgeError::ConnectorTypeMismatch`] rather
-/// than silently rewriting the instance's kind (which would leave the previous
-/// backend's type-specific sync state attached to a different connector type).
+/// `created_at`, and the sync-progress fields (`sync_cursor`,
+/// `durable_state`, `last_sync_at`, `last_error`) are preserved. Reusing an
+/// existing `slug` with a *different* `ConnectorType` returns
+/// [`KnowledgeError::ConnectorTypeMismatch`] rather than silently rewriting
+/// the instance's kind (which would leave the previous backend's
+/// type-specific sync state attached to a different connector type).
 ///
 /// `connector_type` is the typed `ConnectorType` enum whose variants map to the
 /// seeded `connector_types` rows, so the FK is guaranteed valid; the
@@ -100,7 +101,7 @@ pub async fn upsert_connector(
             updated_at = excluded.updated_at \
          WHERE connectors.connector_type_id = excluded.connector_type_id \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(connector_type_id)
@@ -149,7 +150,7 @@ pub async fn create_connector(
           created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(connector_type_id)
@@ -189,7 +190,7 @@ pub async fn update_sync_cursor(
         "UPDATE connectors SET sync_cursor = ?, last_sync_at = ?, updated_at = ? \
          WHERE id = ? \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(cursor)
@@ -199,6 +200,76 @@ pub async fn update_sync_cursor(
     .fetch_optional(pool)
     .await?
     .ok_or(KnowledgeError::ConnectorNotFound(id))?;
+    Ok(row)
+}
+
+/// Persist a connector's opaque durable state (issue #262), stamping
+/// `updated_at` but **not** `last_sync_at` (the state is written after
+/// extraction, not a sync-progress event).
+///
+/// `state = None` clears the stored state. Returns
+/// [`KnowledgeError::ConnectorNotFound`] when no row matches `id`.
+pub async fn update_durable_state(
+    pool: &SqlitePool,
+    id: i32,
+    state: Option<&str>,
+    now: DateTime<Utc>,
+) -> Result<Connector, KnowledgeError> {
+    let row = sqlx::query_as::<_, Connector>(
+        "UPDATE connectors SET durable_state = ?, updated_at = ? WHERE id = ? \
+         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
+                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
+                   created_at, updated_at",
+    )
+    .bind(state)
+    .bind(now)
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(KnowledgeError::ConnectorNotFound(id))?;
+    Ok(row)
+}
+
+/// Advance the sync cursor (or stamp `last_sync_at` when the cursor is
+/// unchanged) and persist the connector's durable state in **one
+/// transaction**, so a crash between the two writes cannot advance the
+/// cursor without its durable state (issue #262 / PR #318 review): a
+/// restart would otherwise skip the failed message because the cursor
+/// advanced without its retry record.
+///
+/// `cursor = Some(v)` advances the cursor; `None` leaves it untouched (the
+/// "unchanged" semantics of `SyncOutcome::new_cursor` — unlike
+/// [`update_sync_cursor`], which treats `None` as "clear"). `durable_state =
+/// Some(v)` writes the state; `None` leaves it untouched. `last_sync_at` is
+/// always stamped. Returns [`KnowledgeError::ConnectorNotFound`] when no row
+/// matches `id`.
+pub async fn update_sync_progress_and_durable_state(
+    pool: &SqlitePool,
+    id: i32,
+    cursor: Option<&str>,
+    durable_state: Option<&str>,
+    now: DateTime<Utc>,
+) -> Result<Connector, KnowledgeError> {
+    let mut tx = pool.begin().await?;
+    let row = sqlx::query_as::<_, Connector>(
+        "UPDATE connectors SET \
+             sync_cursor = COALESCE(?, sync_cursor), \
+             durable_state = COALESCE(?, durable_state), \
+             last_sync_at = ?, updated_at = ? \
+         WHERE id = ? \
+         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
+                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
+                   created_at, updated_at",
+    )
+    .bind(cursor)
+    .bind(durable_state)
+    .bind(now)
+    .bind(now)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(KnowledgeError::ConnectorNotFound(id))?;
+    tx.commit().await?;
     Ok(row)
 }
 
@@ -217,7 +288,7 @@ pub async fn touch_last_sync(
         "UPDATE connectors SET last_sync_at = ?, updated_at = ? \
          WHERE id = ? \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(now)
@@ -265,7 +336,7 @@ pub async fn set_connector_status(
            updated_at = ? \
          WHERE id = ? \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(status as i16)
@@ -290,7 +361,7 @@ pub async fn set_auth_state(
     let row = sqlx::query_as::<_, Connector>(
         "UPDATE connectors SET auth_state_id = ?, updated_at = ? WHERE id = ? \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(auth_state as i16)

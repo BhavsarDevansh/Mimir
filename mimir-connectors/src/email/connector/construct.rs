@@ -10,9 +10,12 @@ use crate::email::config::{
     DEFAULT_DISPLAY_NAME, DEFAULT_SLUG, EmailAuthMethod, EmailConfigDto, parse_cursor,
 };
 use crate::email::connector::EmailConnector;
+use crate::email::imap;
+use crate::email::llm::ProseRetryLedger;
 use crate::oauth::OAuthHttpClient;
 use crate::secrets::SecretStore;
 use mimir_core::llm::LlmBackend;
+use tracing::warn;
 
 /// Build a connector from its parsed configuration, a shared secret store
 /// (optional), and the supervisor-injected cursor.
@@ -43,6 +46,19 @@ impl EmailConnector {
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .unwrap_or_else(|| DEFAULT_SLUG.to_string());
+        // Seed the durable LLM-extraction retry ledger (issue #262) from the
+        // supervisor-injected `__durable_state` (the `connectors.durable_state`
+        // column persisted after the previous cycle) and re-stage the pending
+        // raw RFC 822 bytes into the buffer, so a restart resumes the bounded
+        // retry without an IMAP re-fetch (the cursor has advanced past the
+        // message). A pending entry whose payload is missing or undecodable
+        // (never persisted because it exceeded the size cap, or corrupt) is
+        // settled (dropped) rather than left to linger.
+        let mut ledger = config
+            .get("__durable_state")
+            .and_then(|v| v.as_str())
+            .map(ProseRetryLedger::from_json)
+            .unwrap_or_default();
         let dto: EmailConfigDto = serde_json::from_value(config)
             .map_err(|e| ConnectorError::Config(format!("invalid email config: {e}")))?;
         // Only an OAuth-configured connector needs the hardened OAuth client;
@@ -52,6 +68,25 @@ impl EmailConnector {
             EmailAuthMethod::OAuth { .. } => Some(OAuthHttpClient::new()?),
             EmailAuthMethod::AppPassword { .. } => None,
         };
+        let pending_items: Vec<_> = ledger.pending().cloned().collect();
+        let mut buffer = Vec::with_capacity(pending_items.len());
+        for pending in pending_items {
+            match pending.raw() {
+                Some(raw) => buffer.push(imap::RawEmail {
+                    uid: pending.uid,
+                    uid_validity: pending.uid_validity,
+                    internal_date: None,
+                    raw,
+                }),
+                None => {
+                    warn!(
+                        raw_ref = %pending.raw_ref(),
+                        "dropping pending prose retry with missing or undecodable payload"
+                    );
+                    ledger.settle(&pending.raw_ref());
+                }
+            }
+        }
         Ok(Self {
             slug,
             display_name: dto
@@ -63,7 +98,8 @@ impl EmailConnector {
             oauth_http,
             last_uid: Mutex::new(cursor.as_deref().and_then(parse_cursor)),
             supports_idle: StdMutex::new(None),
-            buffer: Mutex::new(Vec::new()),
+            buffer: Mutex::new(buffer),
+            prose_retry: StdMutex::new(ledger),
             user_identity: normalize_user_identity(user_identity),
             llm_backend,
         })

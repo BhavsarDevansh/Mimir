@@ -64,6 +64,14 @@ pub struct EmailConnector {
     pub(crate) supports_idle: StdMutex<Option<bool>>,
     /// Staged raw RFC 822 messages awaiting extraction (drained by `extract`).
     buffer: Mutex<Vec<imap::RawEmail>>,
+    /// Durable LLM-extraction retry ledger (issue #262): pending retries
+    /// with attempt counts + exponential cycle backoff, and terminal
+    /// failures with reasons. Persisted by the supervisor via
+    /// [`Connector::durable_state`](crate::connector::Connector::durable_state)
+    /// and re-injected at construction (`__durable_state`), so bounded
+    /// retries survive daemon restarts. A `std::sync::Mutex` (never held
+    /// across an `await`).
+    prose_retry: StdMutex<crate::email::llm::ProseRetryLedger>,
     /// Canonical user identity name (the `config.toml` `[identity] name`),
     /// injected via [`ConnectorContext::user_identity`] so connector-sourced
     /// facts that are user-scoped — iMIP invite extraction's

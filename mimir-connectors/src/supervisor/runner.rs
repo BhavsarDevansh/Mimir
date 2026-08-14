@@ -314,6 +314,15 @@ impl ConnectorSupervisor {
                 "__cursor".to_string(),
                 serde_json::to_value(&row.sync_cursor)?,
             );
+            // Inject the persisted durable state (issue #262) so connectors
+            // that keep restart-safe state — e.g. the Email connector's
+            // LLM-extraction retry ledger — can seed it at construction.
+            // `None` is injected as JSON `null`, which connectors interpret
+            // as "no durable state".
+            map.insert(
+                "__durable_state".to_string(),
+                serde_json::to_value(&row.durable_state)?,
+            );
         }
         Ok(self.registry.create_with_context(
             connector_type,

@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.106.2] — 2026-08-14
+
+### PR #318 review: atomic retry-ledger persistence, aggregate ledger cap, test/doc hygiene
+
+- **Atomic cursor + durable-state persistence.** The supervisor now persists the sync cursor and the connector's durable state (the Email retry ledger) in one transaction via the new `KnowledgeGraph::update_sync_progress_and_durable_state` (`None`-means-unchanged for both fields), so a crash between the two writes can no longer advance the cursor without its retry record — a restart previously skipped the failed message because the cursor advanced without its ledger entry. `durable_state_persisted` is acknowledged only after the combined commit.
+- **Aggregate persisted-ledger cap.** `durable_json` now sheds raw payloads beyond `MAX_PERSISTED_PENDING_PAYLOADS` (32) per snapshot, so a mailbox-wide LLM outage cannot grow `connectors.durable_state` with one base64 payload per failing message; entries beyond the cap still retry in-process with the full payload (a restart drops them, matching the oversized-payload behaviour).
+- **Hygiene.** Test fixtures consolidated (`llm_tool_response` reuses `llm_tool_message`, the re-stage test reuses `prose_email()`), the three `instantiate_*` tests share a `capturing_supervisor` helper, and the policy-section wording in `docs/email-connector.md` is fixed.
+- **Tests.** New ledger-policy test for the persisted-payload cap and a knowledge-graph test locking the atomic combined persist (advance/unchanged combinations + missing-row error).
+- **Docs.** `docs/connectors-framework.md` (atomic persistence protocol), `docs/email-connector.md`, and `docs/wiki/what-works-now.md` updated.
+- Version bumped 0.106.1 → 0.106.2 (patch — backwards-compatible bug fix and documentation).
+
+## [0.106.1] — 2026-08-14
+
+### Email connector: durable retry / terminal-failure policy for LLM prose extraction (issue #262)
+
+- **Bounded, restart-safe retries.** The Email connector's LLM prose-extraction retry is no longer an unbounded, in-memory re-stage loop. A new per-instance retry ledger (`mimir-connectors/src/email/llm/retry.rs`) bounds each message to `llm_extraction_max_attempts` attempts (default 3, configurable, minimum 1) with exponential cycle backoff (1, 2, 4, … capped at 8), and records a **terminal failure** with the last error once the budget is exhausted — the message stops consuming LLM calls and is no longer re-staged, while deterministic-layer facts are still never blocked by an LLM failure.
+- **Durability across restarts.** The ledger (pending items with their raw RFC 822 bytes base64-encoded, plus capped terminal-failure records) is persisted by the supervisor after each successful extraction cycle via a new generic `KnowledgeGraph::update_durable_state` (`connectors.durable_state` column, migration 049) and re-injected at connector construction as `__durable_state`, so a `mimir stop` / restart resumes the bounded retry instead of dropping the message. `Connector` gains defaulted `durable_state()` / `durable_state_persisted()` hooks; the supervisor persists the state after `extract()` alongside the sync cursor and acknowledges the write only after it succeeds, so a failed database write is re-attempted next cycle instead of silently losing the ledger. Persisted raw payloads are capped at 512 KiB (larger messages still retry in-process; a restart drops them) so the durable column cannot grow without bound.
+- **Surfacing.** A non-empty terminal-failure backlog makes the Email connector's `health()` report `Degraded` (reachable, but repeated per-message failures) instead of `Online`; `forget` clears the ledger.
+- **Tests.** 14 new unit tests for the ledger policy (including write-through persist acknowledgement, overlap sanitisation of restored ledgers, and the persisted-raw size cap), 4 new cascade tests (bounded-failure → terminal, success-within-budget settles, `max_attempts: 1` fails terminal immediately, restart-resume from a captured `__durable_state` without an IMAP re-fetch), a supervisor-cycle persistence + acknowledgement test, an instantiate injection test, a config default/override test, and a knowledge-graph `update_durable_state` facade test.
+- **Docs.** `docs/email-connector.md` (new "Failure and retry policy" section + config), `docs/connectors-framework.md` (trait hook, supervisor persistence, schema, facade list), `docs/knowledge-graph-schema.md` (migration 049), `docs/wiki/email-connector.md`, and `docs/wiki/what-works-now.md` updated.
+- Version bumped 0.106.0 → 0.106.1 (patch — backwards-compatible bug-fix/robustness; the new column and trait default are additive).
+
 ## [0.106.0] — 2026-08-14
 
 ### DRY: shared LLM tool-output parsing across conversational and connector extraction (issue #259)

@@ -83,6 +83,48 @@ impl KnowledgeGraph {
         queries::connector::update_sync_cursor(&self.pool, id, cursor, self.now()).await
     }
 
+    /// Persist a connector's opaque durable state (e.g. the Email connector's
+    /// LLM-extraction retry ledger, issue #262). The supervisor calls this
+    /// after each successful extraction cycle with the value returned by the
+    /// connector's `durable_state()` hook (from `mimir-connectors`) and
+    /// re-injects it at construction as `__durable_state`, so retries and
+    /// terminal failures survive daemon restarts. `state = None` clears it.
+    pub async fn update_durable_state(
+        &self,
+        id: i32,
+        state: Option<&str>,
+    ) -> Result<models::connector::Connector, KnowledgeError> {
+        queries::connector::update_durable_state(&self.pool, id, state, self.now()).await
+    }
+
+    /// Advance the sync cursor (or stamp `last_sync_at` when the cursor is
+    /// unchanged) and persist the connector's durable state in one
+    /// transaction, so a crash between the two writes cannot advance the
+    /// cursor without its durable state (issue #262 / PR #318 review). The
+    /// supervisor uses this instead of [`Self::update_sync_cursor`] /
+    /// [`Self::touch_last_sync`] followed by [`Self::update_durable_state`]:
+    /// the cursor and the retry ledger must commit together, or a restart
+    /// would skip a failed message whose retry record was lost.
+    ///
+    /// `cursor = None` means "unchanged" (the `SyncOutcome::new_cursor`
+    /// semantics — unlike [`Self::update_sync_cursor`], where `None`
+    /// clears); `durable_state = None` means "unchanged" too.
+    pub async fn update_sync_progress_and_durable_state(
+        &self,
+        id: i32,
+        cursor: Option<&str>,
+        durable_state: Option<&str>,
+    ) -> Result<models::connector::Connector, KnowledgeError> {
+        queries::connector::update_sync_progress_and_durable_state(
+            &self.pool,
+            id,
+            cursor,
+            durable_state,
+            self.now(),
+        )
+        .await
+    }
+
     /// Stamp `last_sync_at` **without** rewriting `sync_cursor`.
     ///
     /// Use this when a connector reports `SyncOutcome::new_cursor = None`

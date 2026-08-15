@@ -189,6 +189,14 @@ fn parse_config_scalar_honors_double_quotes() {
     assert_eq!(parse_config_scalar("0755"), serde_json::json!(755));
     assert_eq!(parse_config_scalar("true"), serde_json::json!(true));
     assert_eq!(parse_config_scalar("\"0755"), serde_json::json!("\"0755"));
+    assert_eq!(
+        parse_config_scalar("\"[1, 2, 3]\""),
+        serde_json::json!("[1, 2, 3]")
+    );
+    assert_eq!(
+        parse_config_scalar("\"{not json}\""),
+        serde_json::json!("{not json}")
+    );
 }
 
 #[test]

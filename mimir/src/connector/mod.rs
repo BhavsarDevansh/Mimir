@@ -121,9 +121,10 @@ fn parse_duration(input: &str) -> Result<u64, String> {
 /// into one configuration object.
 ///
 /// Dotted keys nest (`auth.kind=app_password` → `{"auth": {"kind":
-/// "app_password"}}`); scalar values are parsed as booleans, numbers, or
-/// strings. The daemon remains the source of truth for schema validation at
-/// instance construction (A3 / #204).
+/// "app_password"}}`); scalar values are parsed as booleans, numbers, JSON
+/// arrays/objects, or strings (see [`parse_config_scalar`]). The daemon
+/// remains the source of truth for schema validation at instance
+/// construction (A3 / #204).
 fn merge_config(pairs: &[String], config_json: Option<&str>) -> Result<serde_json::Value, String> {
     let mut config = match config_json {
         Some(raw) => {

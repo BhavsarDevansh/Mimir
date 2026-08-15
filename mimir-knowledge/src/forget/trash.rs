@@ -366,14 +366,14 @@ async fn hard_delete_all_facts(pool: &SqlitePool) -> Result<u64, KnowledgeError>
 // Core per-fact forget logic
 // ---------------------------------------------------------------------------
 
-async fn query_matching_fact_ids(
-    pool: &SqlitePool,
-    filters: &ForgetFilters,
-) -> Result<Vec<i32>, KnowledgeError> {
-    let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-        "SELECT f.id FROM facts f JOIN entities s ON s.id = f.subject_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN relationship_types rt ON rt.id = f.relationship_type_id WHERE 1=1",
-    );
-
+/// Push the shared [`ForgetFilters`] WHERE clauses onto `builder`.
+///
+/// Both [`query_matching_fact_ids`] and [`has_sensitive_match`] build the
+/// same `facts f JOIN entities s … LEFT JOIN relationship_types rt` base and
+/// filter set; only the `SELECT` prefix, the `WHERE rt.sensitive` prefix, and
+/// the `LIMIT 1` suffix differ. Keeping the clauses in one helper guarantees
+/// the two queries cannot drift when a filter field is added.
+fn push_forget_filters(builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, filters: &ForgetFilters) {
     if let Some(id) = filters.fact_id {
         builder.push(" AND f.id = ");
         builder.push_bind(id);
@@ -408,6 +408,16 @@ async fn query_matching_fact_ids(
         builder.push(" AND f.created_at <= ");
         builder.push_bind(to);
     }
+}
+
+async fn query_matching_fact_ids(
+    pool: &SqlitePool,
+    filters: &ForgetFilters,
+) -> Result<Vec<i32>, KnowledgeError> {
+    let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT f.id FROM facts f JOIN entities s ON s.id = f.subject_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN relationship_types rt ON rt.id = f.relationship_type_id WHERE 1=1",
+    );
+    push_forget_filters(&mut builder, filters);
 
     let ids: Vec<i32> = builder.build_query_scalar::<i32>().fetch_all(pool).await?;
     Ok(ids)
@@ -420,41 +430,7 @@ async fn has_sensitive_match(
     let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
         "SELECT 1 FROM facts f JOIN entities s ON s.id = f.subject_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN relationship_types rt ON rt.id = f.relationship_type_id WHERE rt.sensitive = TRUE",
     );
-
-    if let Some(id) = filters.fact_id {
-        builder.push(" AND f.id = ");
-        builder.push_bind(id);
-    }
-    if let Some(ref pred) = filters.predicate {
-        builder.push(" AND rt.name = ");
-        builder.push_bind(pred);
-    }
-    if let Some(ref subj) = filters.subject {
-        builder.push(" AND s.name = ");
-        builder.push_bind(subj);
-    }
-    if let Some(ref ent) = filters.entity {
-        builder.push(" AND (s.name = ");
-        builder.push_bind(ent);
-        builder.push(" OR o.name = ");
-        builder.push_bind(ent);
-        builder.push(")");
-    }
-    if let Some(ref src) = filters.source {
-        builder.push(" AND f.id IN (SELECT so.fact_id FROM sources so WHERE so.connector_instance_id IN (SELECT id FROM connectors WHERE slug = ");
-        builder.push_bind(src);
-        builder.push(") OR so.source_type_id = (SELECT id FROM source_types WHERE name = ");
-        builder.push_bind(src);
-        builder.push("))");
-    }
-    if let Some(from) = filters.from {
-        builder.push(" AND f.created_at >= ");
-        builder.push_bind(from);
-    }
-    if let Some(to) = filters.to {
-        builder.push(" AND f.created_at <= ");
-        builder.push_bind(to);
-    }
+    push_forget_filters(&mut builder, filters);
     builder.push(" LIMIT 1");
 
     let row = builder.build().fetch_optional(pool).await?;
@@ -471,4 +447,268 @@ pub async fn hard_delete_expired_trash(
         .await?;
 
     Ok(result.rows_affected())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::KnowledgeGraph;
+    use crate::models::connector::UpsertConnectorInput;
+    use crate::models::entity::EntityType;
+    use crate::models::enums::ConnectorType;
+    use crate::models::fact::NewFact;
+    use crate::models::source::{ExtractionMethod, SourceType};
+    use chrono::Duration;
+    use sqlx::Execute;
+
+    fn all_filters() -> ForgetFilters {
+        ForgetFilters {
+            fact_id: Some(7),
+            predicate: Some("visited".to_string()),
+            subject: Some("Alice".to_string()),
+            entity: Some("London".to_string()),
+            source: Some("gmail".to_string()),
+            from: Some(Utc::now() - Duration::days(30)),
+            to: Some(Utc::now()),
+            all: false,
+        }
+    }
+
+    #[test]
+    fn push_forget_filters_emits_identical_clauses_for_both_bases() {
+        let mut ids_builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "SELECT f.id FROM facts f JOIN entities s ON s.id = f.subject_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN relationship_types rt ON rt.id = f.relationship_type_id WHERE 1=1",
+        );
+        push_forget_filters(&mut ids_builder, &all_filters());
+        let ids_sql = ids_builder.build().sql();
+
+        let mut sensitive_builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "SELECT 1 FROM facts f JOIN entities s ON s.id = f.subject_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN relationship_types rt ON rt.id = f.relationship_type_id WHERE rt.sensitive = TRUE",
+        );
+        push_forget_filters(&mut sensitive_builder, &all_filters());
+        sensitive_builder.push(" LIMIT 1");
+        let sensitive_sql = sensitive_builder.build().sql();
+
+        let expected_clauses = " AND f.id = ? AND rt.name = ? AND s.name = ? AND (s.name = ? OR o.name = ?) AND f.id IN (SELECT so.fact_id FROM sources so WHERE so.connector_instance_id IN (SELECT id FROM connectors WHERE slug = ?) OR so.source_type_id = (SELECT id FROM source_types WHERE name = ?)) AND f.created_at >= ? AND f.created_at <= ?";
+        assert_eq!(
+            ids_sql,
+            "SELECT f.id FROM facts f JOIN entities s ON s.id = f.subject_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN relationship_types rt ON rt.id = f.relationship_type_id WHERE 1=1".to_string() + expected_clauses
+        );
+        assert_eq!(
+            sensitive_sql,
+            "SELECT 1 FROM facts f JOIN entities s ON s.id = f.subject_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN relationship_types rt ON rt.id = f.relationship_type_id WHERE rt.sensitive = TRUE".to_string() + expected_clauses + " LIMIT 1"
+        );
+    }
+
+    async fn insert_fact(
+        kg: &KnowledgeGraph,
+        subject_id: i32,
+        relationship_type: &str,
+        object_id: Option<i32>,
+        object_literal: Option<String>,
+        source_type: SourceType,
+        connector_instance_id: Option<i32>,
+    ) -> i32 {
+        kg.insert_fact(NewFact {
+            subject_id,
+            relationship_type: relationship_type.to_string(),
+            object_id,
+            object_literal,
+            valid_from: None,
+            valid_until: None,
+            source_type,
+            connector_instance_id,
+            connector_type: connector_instance_id.map(|_| ConnectorType::Calendar),
+            raw_reference: connector_instance_id.map(|_| "evt-1".to_string()),
+            extraction_method: Some(ExtractionMethod::StructuredParse),
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn matching_and_sensitive_queries_agree_on_every_filter_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = KnowledgeGraph::init(&dir.path().join("forget_filter_test.db"))
+            .await
+            .unwrap();
+        let pool = kg.pool();
+
+        let alice = kg
+            .create_entity("Alice", EntityType::Person, &[])
+            .await
+            .unwrap()
+            .id;
+        let london = kg
+            .create_entity("London", EntityType::Place, &[])
+            .await
+            .unwrap()
+            .id;
+        let paris = kg
+            .create_entity("Paris", EntityType::Place, &[])
+            .await
+            .unwrap()
+            .id;
+
+        let visited = insert_fact(
+            &kg,
+            alice,
+            "visited",
+            Some(london),
+            None,
+            SourceType::UserEdit,
+            None,
+        )
+        .await;
+        let allergy = insert_fact(
+            &kg,
+            alice,
+            "allergy",
+            None,
+            Some("peanuts".to_string()),
+            SourceType::UserEdit,
+            None,
+        )
+        .await;
+        let allergy_pred_id = kg
+            .get_relationship_type_id("allergy")
+            .await
+            .unwrap()
+            .unwrap();
+        sqlx::query("UPDATE relationship_types SET sensitive = TRUE WHERE id = ?")
+            .bind(allergy_pred_id)
+            .execute(pool)
+            .await
+            .unwrap();
+
+        let instance = kg
+            .upsert_connector(UpsertConnectorInput {
+                connector_type: ConnectorType::Calendar,
+                slug: "cal".to_string(),
+                backend: "caldav".to_string(),
+                display_name: "cal".to_string(),
+                config_json: "{}".to_string(),
+                status: None,
+                auth_state: None,
+            })
+            .await
+            .unwrap()
+            .id;
+        let in_paris = insert_fact(
+            &kg,
+            alice,
+            "is_in",
+            Some(paris),
+            None,
+            SourceType::Connector,
+            Some(instance),
+        )
+        .await;
+
+        // Pin created_at to known RFC3339 timestamps so the from/to filters
+        // are deterministic (sqlx binds DateTime<Utc> as RFC3339 text).
+        let now = Utc::now();
+        for (id, age_days) in [(visited, 10), (allergy, 5), (in_paris, 1)] {
+            sqlx::query("UPDATE facts SET created_at = ? WHERE id = ?")
+                .bind(now - Duration::days(age_days))
+                .bind(id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+
+        let cases: Vec<(ForgetFilters, Vec<i32>, bool)> = vec![
+            (
+                ForgetFilters {
+                    fact_id: Some(visited),
+                    ..Default::default()
+                },
+                vec![visited],
+                false,
+            ),
+            (
+                ForgetFilters {
+                    predicate: Some("allergy".to_string()),
+                    ..Default::default()
+                },
+                vec![allergy],
+                true,
+            ),
+            (
+                ForgetFilters {
+                    subject: Some("Alice".to_string()),
+                    ..Default::default()
+                },
+                vec![visited, allergy, in_paris],
+                true,
+            ),
+            (
+                ForgetFilters {
+                    entity: Some("London".to_string()),
+                    ..Default::default()
+                },
+                vec![visited],
+                false,
+            ),
+            (
+                ForgetFilters {
+                    source: Some("UserEdit".to_string()),
+                    ..Default::default()
+                },
+                vec![visited, allergy],
+                true,
+            ),
+            (
+                ForgetFilters {
+                    source: Some("cal".to_string()),
+                    ..Default::default()
+                },
+                vec![in_paris],
+                false,
+            ),
+            (
+                ForgetFilters {
+                    from: Some(now - Duration::days(7)),
+                    ..Default::default()
+                },
+                vec![allergy, in_paris],
+                true,
+            ),
+            (
+                ForgetFilters {
+                    to: Some(now - Duration::days(7)),
+                    ..Default::default()
+                },
+                vec![visited],
+                false,
+            ),
+            (
+                ForgetFilters {
+                    from: Some(now - Duration::days(7)),
+                    to: Some(now - Duration::days(2)),
+                    ..Default::default()
+                },
+                vec![allergy],
+                true,
+            ),
+        ];
+
+        for (filters, mut expected_ids, expected_sensitive) in cases {
+            let mut ids = query_matching_fact_ids(pool, &filters).await.unwrap();
+            ids.sort_unstable();
+            expected_ids.sort_unstable();
+            assert_eq!(ids, expected_ids, "matching ids for {filters:?}");
+            assert_eq!(
+                has_sensitive_match(pool, &filters).await.unwrap(),
+                expected_sensitive,
+                "sensitive match for {filters:?}"
+            );
+        }
+    }
 }

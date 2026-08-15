@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.109.0] — 2026-08-15
+
+### DRY: shared forget fact-filter SQL builder (issue #267)
+
+- **`push_forget_filters` is the single home for the `ForgetFilters` WHERE clauses.** `mimir-knowledge/src/forget/trash.rs` previously copy-pasted every filter clause (`fact_id`, `predicate`, `subject`, `entity`, `source`, `from`, `to` — including the connector-source subquery) between `query_matching_fact_ids` (the bulk-forget id list) and `has_sensitive_match` (the sensitive-predicate safeguard); both now push through the shared helper, so a new filter field is added in exactly one place and the two queries cannot drift. Pure refactor — no behaviour change.
+- **Tests.** A SQL-shape unit test locks the exact clauses both queries emit, and a behavioural test runs both queries against a real DB across every filter field (including the connector-slug and source-type `source` paths and a pinned `created_at` window) asserting the id list and sensitive flag agree.
+- **Docs.** `docs/fact-management.md` (new "Bulk forget matching" section, stale `forget.rs` → `forget/` module reference) and `docs/wiki/what-works-now.md` (Calendar row and DRY backlog no longer list #267) updated.
+- Version bumped 0.108.0 → 0.109.0 (minor — internal refactor; no public API or behaviour change).
+
 ## [0.108.0] — 2026-08-15
 
 ### Feature: connector catalog — discover registered types/backends (issue #271)

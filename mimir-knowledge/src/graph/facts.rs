@@ -1,7 +1,7 @@
 use crate::graph::KnowledgeGraph;
 use crate::*;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -31,8 +31,6 @@ impl KnowledgeGraph {
         &self,
         facts: Vec<models::fact::NewFact>,
     ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
-        use std::collections::HashSet;
-
         if facts.is_empty() {
             return Ok(Vec::new());
         }
@@ -80,6 +78,25 @@ impl KnowledgeGraph {
             }
         }
 
+        // Resolve connector reliability scores once per distinct connector type
+        // so batch-inserted connector facts get their adjusted table score
+        // instead of the hardcoded 0.80 fallback (issue #292).
+        let mut connector_scores: HashMap<ConnectorType, f32> = HashMap::new();
+        for new_fact in &facts {
+            if new_fact.confidence.is_none() && new_fact.source_type == SourceType::Connector {
+                if let Some(connector_type) = new_fact.connector_type {
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        connector_scores.entry(connector_type)
+                    {
+                        let score =
+                            crate::confidence::connector_reliability(&self.pool, connector_type)
+                                .await?;
+                        entry.insert(score);
+                    }
+                }
+            }
+        }
+
         for new_fact in &facts {
             let relationship_type_id = self
                 .ensure_relationship_type_in_tx(&mut tx, &new_fact.relationship_type)
@@ -87,6 +104,11 @@ impl KnowledgeGraph {
 
             let confidence = if let Some(conf) = new_fact.confidence {
                 conf
+            } else if new_fact.source_type == SourceType::Connector {
+                new_fact
+                    .connector_type
+                    .and_then(|ct| connector_scores.get(&ct).copied())
+                    .unwrap_or_else(|| crate::confidence::initial(new_fact.source_type, None))
             } else {
                 crate::confidence::initial(new_fact.source_type, None)
             };
@@ -210,13 +232,7 @@ impl KnowledgeGraph {
                             "connector_instance_id {instance_id} has unknown connector_type_id {instance_type_id}"
                         ))
                     })?;
-                let db_score: Option<f32> = sqlx::query_scalar(
-                    "SELECT score FROM connector_reliability WHERE connector_type_id = ?",
-                )
-                .bind(instance_type_id)
-                .fetch_optional(&self.pool)
-                .await?;
-                Some(db_score.unwrap_or_else(|| confidence::default_connector_score(resolved_ct)))
+                Some(confidence::connector_reliability(&self.pool, resolved_ct).await?)
             } else {
                 None
             };

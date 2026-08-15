@@ -197,7 +197,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | SQLite schema & migrations | ✅ Works | In `mimir-knowledge` crate; WAL mode, write-serialisation lock. |
 | Entity CRUD | ✅ Works | Types, aliases, deduplication, dates, and locations (the "locations (stubs)" note is stale — the full write path landed in [#193](https://github.com/BhavsarDevansh/Mimir/issues/193)). |
 | Fact CRUD | ✅ Works | Temporal bounds, statuses, dependencies, cascade forget. |
-| Confidence model | ✅ Works | Graph-derived; no LLM involvement, no decay; corroboration boosts up to 0.95. |
+| Confidence model | ✅ Works | Graph-derived; no LLM involvement, no decay; corroboration boosts up to 0.95; adjusted per-connector reliability scores flow through every fact-insert path, including the connector pipeline ([#292](https://github.com/BhavsarDevansh/Mimir/issues/292)). |
 | Inference engine (Rust) | ✅ Works | Transitivity, contradiction, propagation, threshold rules; deterministic and transparent. |
 | Provenance tracking | ✅ Works | Source tracking with `connector_instance_id` FK + `raw_reference` + typed audit log with `change_type`/`changed_by`. |
 | Forgetting system | ✅ Works | Trash (30-day retention), cascade forget, restore, bulk operations with safeguards. |

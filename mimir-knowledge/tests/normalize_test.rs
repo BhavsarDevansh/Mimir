@@ -698,3 +698,38 @@ async fn photos_at_same_place_corroborate_and_anchor_place_coords() {
         "place should be anchored with a Geographic coordinate row; got {place_locs:?}"
     );
 }
+
+#[tokio::test]
+async fn adjusted_reliability_score_reaches_normalize_and_insert() {
+    let (kg, _dir) = fresh_kg().await;
+    let calendar_instance = upsert(&kg, ConnectorType::Calendar, "calendar-1").await;
+
+    // Drop the Calendar score below its 0.90 seed: the pipeline must read the
+    // connector_reliability table rather than the hardcoded default (issue
+    // #292), so an adjusted score reaches the connector pipeline.
+    kg.adjust_connector_reliability(ConnectorType::Calendar, -0.05)
+        .await
+        .unwrap();
+
+    let outcome = normalize_and_insert(
+        &kg,
+        vec![rome_event(
+            "cal-evt-292",
+            Some(parse_dt("2026-05-07T00:00:00Z")),
+        )],
+        Provenance::connector(
+            calendar_instance,
+            ConnectorType::Calendar,
+            ExtractionMethod::StructuredParse,
+        ),
+    )
+    .await
+    .expect("connector insert should succeed");
+    assert!(outcome.errors.is_empty(), "errors: {:?}", outcome.errors);
+    assert_eq!(outcome.inserted.len(), 1);
+    assert!(
+        (outcome.inserted[0].confidence - 0.85).abs() < 1e-5,
+        "expected adjusted Calendar reliability 0.85, got {}",
+        outcome.inserted[0].confidence
+    );
+}

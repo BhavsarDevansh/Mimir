@@ -372,6 +372,14 @@ pub async fn adjust_connector_reliability(
 }
 
 /// Load the current reliability score for a connector.
+///
+/// This is the single confidence-resolution helper for every fact-insert
+/// path: `insert_fact` / `insert_fact_internal`, `insert_facts_batch`, and
+/// the shared `normalize_and_insert` pipeline all read the
+/// `connector_reliability` table through this function, falling back to the
+/// seeded default only when no row exists (issue #292). Only future
+/// extractions are affected; existing fact confidence is never retroactively
+/// changed.
 pub async fn connector_reliability(
     pool: &SqlitePool,
     connector_type: ConnectorType,

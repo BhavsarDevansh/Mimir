@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.110.2] — 2026-08-15
+
+### Confidence: adjusted connector reliability scores now reach the connector pipeline (issue #292)
+
+- **`confidence::connector_reliability` is the single confidence-resolution helper for every fact-insert path.** `normalize_and_insert` (the connector ingestion pipeline) previously computed confidence from `confidence::initial`'s hardcoded defaults, and `insert_facts_batch` passed `None` as the connector type, so `adjust_connector_reliability` had no effect on connector ingestion. Both paths now read the `connector_reliability` table: the pipeline resolves the score once per batch from the provenance's connector type, and the batch path resolves per distinct connector type (one query per type, cached across the batch). `insert_fact`'s inline table read was refactored onto the same helper. Adjusted scores therefore reach connector extractions immediately; non-connector source types keep their existing `confidence::initial` defaults.
+- **Tests.** Integration tests adjust the Calendar score and assert `normalize_and_insert` inserts at the adjusted score, and adjust the Photos score while leaving Calendar at its seed to prove `insert_facts_batch` resolves per-type table scores (0.85 / 0.90) instead of the 0.80 fallback.
+- **Docs.** `docs/Confidence-Model.md`, `docs/connectors-framework.md`, `VISION/03-Connectors/Technical-Design.md`, `Mimir-Implementation-Context.md`, and `docs/wiki/what-works-now.md` updated.
+- Version bumped 0.110.1 → 0.110.2 (patch — backwards-compatible bug fix).
+
 ## [0.110.1] — 2026-08-15
 
 ### CLI: `key=value` config pairs now express JSON arrays and objects (issue #289)

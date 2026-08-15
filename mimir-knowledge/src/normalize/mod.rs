@@ -10,10 +10,13 @@
 //!
 //! # Confidence
 //!
-//! Confidence is `confidence::initial(source_type, connector_type)` — the
-//! per-source-type / per-connector reliability score. There is **no
-//! extraction-method discount**: a structurally-parsed calendar fact and an
-//! LLM-extracted email fact of the same source type start at the same score.
+//! Confidence is the per-source-type / per-connector reliability score:
+//! connector provenance reads the `connector_reliability` table via
+//! `confidence::connector_reliability` (falling back to the seeded defaults
+//! when no row exists), while other source types use
+//! `confidence::initial` directly. There is **no extraction-method discount**:
+//! a structurally-parsed calendar fact and an LLM-extracted email fact of the
+//! same source type start at the same score.
 //!
 //! # Sensitivity
 //!

@@ -8,25 +8,47 @@ use crate::email::connector::EmailConnector;
 /// Layer 1 of the extraction cascade (C6 / #200): iMIP calendar invites.
 ///
 /// Walks every MIME part of the message for `text/calendar` parts whose
-/// iMIP `METHOD` is `REQUEST` (a meeting request) or `REPLY` (an attendee
-/// response), parses each embedded VEVENT via the shared
-/// [`crate::ical::parse_ical_to_vevents`], and turns it into the appointment
-/// fact cluster via [`crate::ical::vevent_to_facts`]. The full `parts` walk
-/// (not only `attachments()`) catches a `text/calendar` part nested inside
+/// iMIP `METHOD` is `REQUEST` (a meeting request), `REPLY` (an attendee
+/// response), or `CANCEL` (a deletion lifecycle signal), parses each
+/// embedded VEVENT via the shared [`crate::ical::parse_ical_to_vevents`],
+/// and turns it into the appointment fact cluster via
+/// [`crate::ical::vevent_to_facts`]. The full `parts` walk (not only
+/// `attachments()`) catches a `text/calendar` part nested inside
 /// `multipart/alternative` that carries no `Content-Disposition: attachment`
 /// header and is therefore classified as a body part by `mail-parser`.
-/// `PUBLISH` (often marketing webinars) and `CANCEL` (deletion lifecycle)
-/// are skipped for now — `CANCEL` → KB fact lifecycle is tracked
-/// separately. Every fact is provenanced with `raw_ref` (the email's
-/// `UIDVALIDITY`-qualified IMAP UID) and authored against the injected
-/// [`user_identity`](Self::user_identity) when set.
+/// `PUBLISH` (often marketing webinars) is skipped.
+///
+/// **Fact keying (issue #283).** REQUEST/REPLY facts are provenanced with
+/// the VEVENT `UID` as `raw_reference` — the stable iMIP identity RFC 5546
+/// requires every method (REQUEST → REPLY → CANCEL) to share — so a CANCEL
+/// maps 1:1 onto the facts the original invite authored. A VEVENT without a
+/// `UID` (invalid per RFC 5545, tolerated by the lenient parser) falls back
+/// to the email's `UIDVALIDITY`-qualified IMAP UID (`raw_ref`), preserving
+/// the pre-#283 keying for malformed invites. The JSON-LD and LLM cascade
+/// layers keep the email UID — they have no CANCEL lifecycle.
+///
+/// **CANCEL handling.** A `CANCEL` part emits no facts; each VEVENT `UID` is
+/// buffered as a tombstone (reported via
+/// [`Connector::extract_deletions`](crate::connector::Connector::extract_deletions)
+/// and trashed through the shared #247 machinery), so a cancelled meeting
+/// stops surfacing in "Upcoming". A CANCEL VEVENT without a `UID` cannot be
+/// mapped and is skipped. `SEQUENCE` is not consulted in V1: the knowledge
+/// graph does not store the original sequence, so a CANCEL trashes by `UID`
+/// regardless of sequence.
+///
+/// The returned `bool` reports whether the message carried a handled iMIP
+/// part (REQUEST/REPLY/CANCEL), so the cascade gate in
+/// [`Connector::extract`](crate::connector::Connector::extract) treats a
+/// CANCEL — which emits no facts — as read and skips the LLM layer instead
+/// of letting the cancellation prose author junk facts.
 impl EmailConnector {
     pub(super) fn extract_invites(
         &self,
         message: &mail_parser::Message<'_>,
         raw_ref: &str,
-    ) -> Vec<mimir_knowledge::normalize::NormalizedFact> {
+    ) -> (Vec<mimir_knowledge::normalize::NormalizedFact>, bool) {
         let mut facts = Vec::new();
+        let mut handled = false;
         for part in &message.parts {
             if !part.is_content_type("text", "calendar") {
                 continue;
@@ -75,20 +97,45 @@ impl EmailConnector {
                 (None, None) => None,
             };
             match method.as_deref() {
-                Some("REQUEST") | Some("REPLY") => {}
+                Some("REQUEST") | Some("REPLY") => {
+                    handled = true;
+                    for vevent in crate::ical::parse_ical_to_vevents(ical) {
+                        // Key the cluster by the VEVENT UID (the stable iMIP
+                        // identity a CANCEL maps onto); fall back to the
+                        // email reference for UID-less VEVENTs.
+                        let reference = vevent.uid.as_deref().unwrap_or(raw_ref);
+                        facts.extend(crate::ical::vevent_to_facts(
+                            self.user_identity.as_deref(),
+                            &vevent,
+                            reference,
+                        ));
+                    }
+                }
+                Some("CANCEL") => {
+                    handled = true;
+                    for vevent in crate::ical::parse_ical_to_vevents(ical) {
+                        match vevent.uid.as_deref() {
+                            Some(uid) => {
+                                // Buffer the removal; the supervisor trashes
+                                // the facts this instance authored for the
+                                // UID after `extract` (issue #283, #247).
+                                self.tombstones.lock().unwrap().push(uid.to_string());
+                            }
+                            None => {
+                                debug!(
+                                    raw_ref,
+                                    "skipping CANCEL VEVENT with no UID; cannot map to prior facts"
+                                );
+                            }
+                        }
+                    }
+                }
                 other => {
                     debug!(raw_ref, method = ?other, "skipping text/calendar part: unsupported/absent METHOD");
                     continue;
                 }
             }
-            for vevent in crate::ical::parse_ical_to_vevents(ical) {
-                facts.extend(crate::ical::vevent_to_facts(
-                    self.user_identity.as_deref(),
-                    &vevent,
-                    raw_ref,
-                ));
-            }
         }
-        facts
+        (facts, handled)
     }
 }

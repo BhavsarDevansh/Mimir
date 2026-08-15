@@ -72,6 +72,13 @@ pub struct EmailConnector {
     /// retries survive daemon restarts. A `std::sync::Mutex` (never held
     /// across an `await`).
     prose_retry: StdMutex<crate::email::llm::ProseRetryLedger>,
+    /// Buffered iMIP `CANCEL` VEVENT UIDs awaiting the supervisor's
+    /// deletion pass (issue #283): `extract_invites` stages each cancelled
+    /// event's UID here, [`Connector::extract_deletions`] reports it, and
+    /// the supervisor trashes the facts this instance authored for that
+    /// `raw_reference` (the #247 tombstone machinery) before acknowledging.
+    /// A `std::sync::Mutex` (never held across an `await`).
+    tombstones: StdMutex<Vec<String>>,
     /// Canonical user identity name (the `config.toml` `[identity] name`),
     /// injected via [`ConnectorContext::user_identity`] so connector-sourced
     /// facts that are user-scoped — iMIP invite extraction's

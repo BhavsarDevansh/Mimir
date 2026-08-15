@@ -100,6 +100,7 @@ impl EmailConnector {
             supports_idle: StdMutex::new(None),
             buffer: Mutex::new(buffer),
             prose_retry: StdMutex::new(ledger),
+            tombstones: StdMutex::new(Vec::new()),
             user_identity: normalize_user_identity(user_identity),
             llm_backend,
         })

@@ -22,6 +22,18 @@ pub(super) fn connector_with_identity(name: Option<&str>) -> EmailConnector {
 /// location and two attendees). The plain-text body is included so the
 /// calendar part is a real attachment, not the message body.
 pub(super) fn invite_email(method: &str) -> Vec<u8> {
+    invite_email_with_uid(method, Some("dentist-1@example.com"))
+}
+
+/// Like [`invite_email`] but omits the VEVENT `UID` property, so the
+/// no-UID fallback paths (a REQUEST keyed by the email reference; a CANCEL
+/// buffering no tombstone) can be exercised.
+pub(super) fn invite_email_without_uid(method: &str) -> Vec<u8> {
+    invite_email_with_uid(method, None)
+}
+
+fn invite_email_with_uid(method: &str, uid: Option<&str>) -> Vec<u8> {
+    let uid_line = uid.map(|u| format!("UID:{u}\n")).unwrap_or_default();
     format!(
         r#"From: dentist@example.com
 To: devansh@example.com
@@ -43,8 +55,7 @@ BEGIN:VCALENDAR
 VERSION:2.0
 METHOD:{method}
 BEGIN:VEVENT
-UID:dentist-1@example.com
-SUMMARY:Dentist appointment
+{uid_line}SUMMARY:Dentist appointment
 DTSTART:20991120T140000Z
 DTEND:20991120T150000Z
 LOCATION:123 Main St
@@ -54,110 +65,14 @@ END:VEVENT
 END:VCALENDAR
 --bnd--
 "#,
-        method = method
+        method = method,
+        uid_line = uid_line
     )
     // RFC 5322/MIME require CRLF line endings and an IMAP `BODY.PEEK[]`
     // fetch returns CRLF, so normalise the bare-LF raw string to CRLF
     // rather than relying on the parser's leniency.
     .replace('\n', "\r\n")
     .into_bytes()
-}
-
-pub(super) fn plain_email() -> Vec<u8> {
-    b"From: marketing@retailer.com\r\n\
-To: devansh@example.com\r\n\
-Subject: 20% off everything\r\n\
-Date: Sat, 20 Nov 2025 14:22:01 -0800\r\n\
-MIME-Version: 1.0\r\n\
-Content-Type: text/plain; charset=\"utf-8\"\r\n\
-\r\n\
-Sale! Sale! Sale!\r\n"
-        .to_vec()
-}
-
-fn parse(bytes: &[u8]) -> mail_parser::Message<'_> {
-    mail_parser::MessageParser::default()
-        .parse(bytes)
-        .expect("fixture must parse")
-}
-
-#[test]
-fn extract_invites_emits_appointment_cluster_for_request_method() {
-    let connector = connector_with_identity(Some("Devansh"));
-    let bytes = invite_email("REQUEST");
-    let message = parse(&bytes);
-    let facts = connector.extract_invites(&message, "42");
-    // 1 primary (has_event) + 1 location + 2 attendees = 4.
-    assert_eq!(facts.len(), 4);
-    let primary = facts
-        .iter()
-        .find(|f| f.relationship_type == "has_event")
-        .unwrap();
-    assert_eq!(primary.subject, "Devansh");
-    assert_eq!(primary.subject_type, EntityType::Person);
-    assert_eq!(primary.object, "Dentist appointment");
-    assert_eq!(primary.object_type, Some(EntityType::Event));
-    assert!(primary.valid_from.is_some());
-    assert!(primary.valid_until.is_some());
-    assert_eq!(primary.event_type, Some(EventType::Appointment));
-    assert_eq!(primary.raw_reference.as_deref(), Some("42"));
-    // Location fact carries no temporal bounds.
-    let loc = facts
-        .iter()
-        .find(|f| f.relationship_type == "located_in")
-        .unwrap();
-    assert_eq!(loc.object, "123 Main St");
-    assert_eq!(loc.object_type, Some(EntityType::Place));
-    assert!(loc.valid_from.is_none());
-    assert!(loc.valid_until.is_none());
-    // Two attendee facts, no temporal bounds.
-    let attendees: Vec<&NormalizedFact> = facts
-        .iter()
-        .filter(|f| f.relationship_type == "attending")
-        .collect();
-    assert_eq!(attendees.len(), 2);
-    assert!(attendees.iter().all(|a| a.valid_from.is_none()));
-    assert_eq!(attendees[0].subject, "Devansh");
-    assert_eq!(attendees[1].subject, "Dr Smith");
-}
-
-#[test]
-fn extract_invites_emits_facts_for_reply_method() {
-    let connector = connector_with_identity(Some("Devansh"));
-    let bytes = invite_email("REPLY");
-    let message = parse(&bytes);
-    let facts = connector.extract_invites(&message, "7");
-    // Same cluster shape as REQUEST.
-    assert!(facts.iter().any(|f| f.relationship_type == "has_event"));
-    assert_eq!(
-        facts
-            .iter()
-            .filter(|f| f.relationship_type == "attending")
-            .count(),
-        2
-    );
-}
-
-#[test]
-fn extract_invites_skips_publish_method() {
-    let connector = connector_with_identity(Some("Devansh"));
-    let bytes = invite_email("PUBLISH");
-    let message = parse(&bytes);
-    assert!(
-        connector.extract_invites(&message, "9").is_empty(),
-        "PUBLISH (often marketing webinars) is skipped for now"
-    );
-}
-
-#[test]
-fn extract_invites_skips_cancel_method() {
-    let connector = connector_with_identity(Some("Devansh"));
-    let bytes = invite_email("CANCEL");
-    let message = parse(&bytes);
-    assert!(
-        connector.extract_invites(&message, "9").is_empty(),
-        "CANCEL lifecycle is tracked separately; no facts here"
-    );
 }
 
 /// Like [`invite_email`] but lets the MIME `method` parameter and the
@@ -169,7 +84,7 @@ fn invite_email_split_method(mime_method: Option<&str>, body_method: Option<&str
         None => "text/calendar; charset=\"utf-8\"".to_string(),
     };
     let cal_method_line = body_method
-        .map(|m| format!("METHOD:{m}\r\n"))
+        .map(|m| format!("METHOD:{m}\n"))
         .unwrap_or_default();
     format!(
         r#"From: dentist@example.com
@@ -209,6 +124,160 @@ END:VCALENDAR
     .into_bytes()
 }
 
+pub(super) fn plain_email() -> Vec<u8> {
+    b"From: marketing@retailer.com\r\n\
+To: devansh@example.com\r\n\
+Subject: 20% off everything\r\n\
+Date: Sat, 20 Nov 2025 14:22:01 -0800\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+\r\n\
+Sale! Sale! Sale!\r\n"
+        .to_vec()
+}
+
+fn parse(bytes: &[u8]) -> mail_parser::Message<'_> {
+    mail_parser::MessageParser::default()
+        .parse(bytes)
+        .expect("fixture must parse")
+}
+
+#[test]
+fn extract_invites_emits_appointment_cluster_for_request_method() {
+    let connector = connector_with_identity(Some("Devansh"));
+    let bytes = invite_email("REQUEST");
+    let message = parse(&bytes);
+    let (facts, handled) = connector.extract_invites(&message, "42");
+    assert!(handled, "REQUEST is a handled iMIP part");
+    // 1 primary (has_event) + 1 location + 2 attendees = 4.
+    assert_eq!(facts.len(), 4);
+    let primary = facts
+        .iter()
+        .find(|f| f.relationship_type == "has_event")
+        .unwrap();
+    assert_eq!(primary.subject, "Devansh");
+    assert_eq!(primary.subject_type, EntityType::Person);
+    assert_eq!(primary.object, "Dentist appointment");
+    assert_eq!(primary.object_type, Some(EntityType::Event));
+    assert!(primary.valid_from.is_some());
+    assert!(primary.valid_until.is_some());
+    assert_eq!(primary.event_type, Some(EventType::Appointment));
+    // Facts are keyed by the VEVENT UID — the stable iMIP identity shared
+    // across REQUEST → REPLY → CANCEL — not the email's IMAP UID, so a
+    // CANCEL can map onto them (issue #283).
+    assert_eq!(
+        primary.raw_reference.as_deref(),
+        Some("dentist-1@example.com")
+    );
+    // Location fact carries no temporal bounds.
+    let loc = facts
+        .iter()
+        .find(|f| f.relationship_type == "located_in")
+        .unwrap();
+    assert_eq!(loc.object, "123 Main St");
+    assert_eq!(loc.object_type, Some(EntityType::Place));
+    assert!(loc.valid_from.is_none());
+    assert!(loc.valid_until.is_none());
+    // Two attendee facts, no temporal bounds.
+    let attendees: Vec<&NormalizedFact> = facts
+        .iter()
+        .filter(|f| f.relationship_type == "attending")
+        .collect();
+    assert_eq!(attendees.len(), 2);
+    assert!(attendees.iter().all(|a| a.valid_from.is_none()));
+    assert_eq!(attendees[0].subject, "Devansh");
+    assert_eq!(attendees[1].subject, "Dr Smith");
+}
+
+#[test]
+fn extract_invites_emits_facts_for_reply_method() {
+    let connector = connector_with_identity(Some("Devansh"));
+    let bytes = invite_email("REPLY");
+    let message = parse(&bytes);
+    let (facts, handled) = connector.extract_invites(&message, "7");
+    assert!(handled, "REPLY is a handled iMIP part");
+    // Same cluster shape as REQUEST.
+    assert!(facts.iter().any(|f| f.relationship_type == "has_event"));
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|f| f.relationship_type == "attending")
+            .count(),
+        2
+    );
+    assert!(
+        facts
+            .iter()
+            .all(|f| f.raw_reference.as_deref() == Some("dentist-1@example.com")),
+        "REPLY facts are keyed by the VEVENT UID: {facts:?}"
+    );
+}
+
+#[test]
+fn extract_invites_skips_publish_method() {
+    let connector = connector_with_identity(Some("Devansh"));
+    let bytes = invite_email("PUBLISH");
+    let message = parse(&bytes);
+    let (facts, handled) = connector.extract_invites(&message, "9");
+    assert!(
+        facts.is_empty(),
+        "PUBLISH (often marketing webinars) is skipped for now"
+    );
+    assert!(!handled, "PUBLISH is not a handled iMIP part");
+}
+
+#[tokio::test]
+async fn extract_invites_buffers_cancel_uid_as_tombstone() {
+    let connector = connector_with_identity(Some("Devansh"));
+    let bytes = invite_email("CANCEL");
+    let message = parse(&bytes);
+    let (facts, handled) = connector.extract_invites(&message, "9");
+    assert!(facts.is_empty(), "CANCEL emits no facts");
+    assert!(handled, "CANCEL counts as a read iMIP part (cascade gate)");
+    assert_eq!(
+        connector.extract_deletions().await.expect("deletions"),
+        vec!["dentist-1@example.com".to_string()],
+        "the CANCEL VEVENT UID is buffered as a tombstone"
+    );
+}
+
+#[tokio::test]
+async fn extract_invites_cancel_without_uid_buffers_nothing() {
+    let connector = connector_with_identity(Some("Devansh"));
+    let bytes = invite_email_without_uid("CANCEL");
+    let message = parse(&bytes);
+    let (facts, handled) = connector.extract_invites(&message, "9");
+    assert!(facts.is_empty(), "CANCEL emits no facts");
+    assert!(handled, "the CANCEL part is still read");
+    assert!(
+        connector
+            .extract_deletions()
+            .await
+            .expect("deletions")
+            .is_empty(),
+        "a CANCEL VEVENT without a UID cannot be mapped to prior facts"
+    );
+}
+
+#[test]
+fn extract_invites_falls_back_to_email_ref_when_vevent_has_no_uid() {
+    let connector = connector_with_identity(Some("Devansh"));
+    let bytes = invite_email_without_uid("REQUEST");
+    let message = parse(&bytes);
+    let (facts, handled) = connector.extract_invites(&message, "42");
+    assert!(handled, "REQUEST is a handled iMIP part");
+    assert!(
+        facts.iter().any(|f| f.relationship_type == "has_event"),
+        "a UID-less VEVENT still extracts (SUMMARY names the event)"
+    );
+    assert!(
+        facts
+            .iter()
+            .all(|f| f.raw_reference.as_deref() == Some("42")),
+        "a UID-less VEVENT falls back to the email reference: {facts:?}"
+    );
+}
+
 #[test]
 fn extract_invites_skips_conflicting_mime_and_body_method() {
     let connector = connector_with_identity(Some("Devansh"));
@@ -216,10 +285,12 @@ fn extract_invites_skips_conflicting_mime_and_body_method() {
     // honoured as REQUEST (which would create appointment facts).
     let bytes = invite_email_split_method(Some("REQUEST"), Some("CANCEL"));
     let message = parse(&bytes);
+    let (facts, handled) = connector.extract_invites(&message, "9");
     assert!(
-        connector.extract_invites(&message, "9").is_empty(),
+        facts.is_empty(),
         "a part whose MIME `method` and body `METHOD` disagree is not a valid iMIP object"
     );
+    assert!(!handled, "a conflicting-METHOD part is not handled");
 }
 
 #[test]
@@ -229,10 +300,12 @@ fn extract_invites_skips_conflicting_supported_and_unsupported_method() {
     // conflict is rejected before the supported/unsupported filter runs.
     let bytes = invite_email_split_method(Some("REPLY"), Some("PUBLISH"));
     let message = parse(&bytes);
+    let (facts, handled) = connector.extract_invites(&message, "9");
     assert!(
-        connector.extract_invites(&message, "9").is_empty(),
+        facts.is_empty(),
         "conflicting METHOD values are rejected regardless of which side is supported"
     );
+    assert!(!handled, "a conflicting-METHOD part is not handled");
 }
 
 #[test]
@@ -241,7 +314,8 @@ fn extract_invites_falls_back_to_body_method_when_mime_absent() {
     // No MIME `method` parameter; the body `METHOD:REQUEST` is the source.
     let bytes = invite_email_split_method(None, Some("REQUEST"));
     let message = parse(&bytes);
-    let facts = connector.extract_invites(&message, "7");
+    let (facts, handled) = connector.extract_invites(&message, "7");
+    assert!(handled, "the body METHOD is honoured");
     assert!(
         facts.iter().any(|f| f.relationship_type == "has_event"),
         "the iCalendar body `METHOD` property is used when the MIME parameter is absent"
@@ -253,10 +327,12 @@ fn extract_invites_skips_when_neither_method_source_present() {
     let connector = connector_with_identity(Some("Devansh"));
     let bytes = invite_email_split_method(None, None);
     let message = parse(&bytes);
+    let (facts, handled) = connector.extract_invites(&message, "9");
     assert!(
-        connector.extract_invites(&message, "9").is_empty(),
+        facts.is_empty(),
         "no METHOD from either source → unsupported/absent → skipped"
     );
+    assert!(!handled, "no METHOD means nothing was handled");
 }
 
 #[test]
@@ -265,7 +341,9 @@ fn extract_invites_skips_plain_email() {
     let bytes = plain_email();
     let message = parse(&bytes);
     // No text/calendar part → no facts. A marketing email produces nothing.
-    assert!(connector.extract_invites(&message, "1").is_empty());
+    let (facts, handled) = connector.extract_invites(&message, "1");
+    assert!(facts.is_empty());
+    assert!(!handled, "a plain email has no iMIP part");
 }
 
 #[test]
@@ -273,7 +351,8 @@ fn extract_invites_skips_primary_when_no_user_identity() {
     let connector = connector_with_identity(None);
     let bytes = invite_email("REQUEST");
     let message = parse(&bytes);
-    let facts = connector.extract_invites(&message, "42");
+    let (facts, handled) = connector.extract_invites(&message, "42");
+    assert!(handled);
     // No user identity → no primary has_event; the event is still captured
     // via its location + attendee facts.
     assert!(facts.iter().all(|f| f.relationship_type != "has_event"));

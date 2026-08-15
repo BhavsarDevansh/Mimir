@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.110.0] — 2026-08-15
+
+### Email connector: iMIP CANCEL invites now trash the cancelled event's facts (issue #283)
+
+- **CANCEL is no longer skipped.** A `text/calendar; method=CANCEL` iMIP part emits no facts; each cancelled VEVENT's `UID` is buffered as a tombstone and reported via `Connector::extract_deletions`, and the supervisor trashes the facts this instance authored for that `raw_reference` through the shared #247 machinery (`KnowledgeGraph::forget_connector_facts_by_raw_reference` — recoverable for 30 days, idempotent, non-destructive until the cycle's trashing, insertion, and cursor persistence all succeed). A cancelled meeting therefore stops surfacing in "Upcoming" and its events-subsystem overlay is cascade-deleted with the facts. A CANCEL VEVENT without a `UID` cannot be mapped and is skipped; `SEQUENCE` is not consulted in V1 (the KB does not store the original sequence). A handled CANCEL also counts as "read" for the extraction cascade gate, so the LLM layer never runs on cancellation prose.
+- **iMIP facts are keyed by the VEVENT `UID`.** REQUEST/REPLY facts now carry the VEVENT `UID` as their `raw_reference` — the stable iMIP identity RFC 5546 requires every method (REQUEST → REPLY → CANCEL) to share — so a CANCEL maps 1:1 onto the facts the original invite authored. A VEVENT without a `UID` (invalid per RFC 5545, tolerated by the lenient parser) falls back to the email's `UIDVALIDITY`-qualified IMAP UID, preserving the pre-#283 keying for malformed invites. The JSON-LD and LLM layers keep the email UID — they have no CANCEL lifecycle.
+- **Legacy raw-reference boundary.** Facts authored before 0.110.0 carry the email's `UIDVALIDITY`-qualified IMAP UID as their `raw_reference`, so CANCEL tombstones cannot match them. The required cleanup is to remove each Email instance's pre-upgrade facts (connector-forget, recoverable from trash) and trigger a full re-sync so invites are re-authored with VEVENT-UID references — the same documented boundary the Calendar connector adopted in 0.103.0 (#247).
+- **Tests.** Unit tests cover the CANCEL tombstone buffer (and the UID-less CANCEL no-op), the UID-less-REQUEST email-reference fallback, and the VEVENT-UID keying of REQUEST/REPLY clusters; a KB integration test stages a REQUEST then a CANCEL and proves the full lifecycle — the buffered UID trashes all four cluster facts, the events-subsystem overlay is cascade-deleted, the removal is acknowledged, and a re-report is an idempotent no-op.
+- **Docs.** `docs/email-connector.md` (C6 section: CANCEL lifecycle, fact keying, legacy boundary; testing section), `docs/wiki/email-connector.md`, `docs/connectors-framework.md` (tombstone trait surface now names the Email connector), `docs/wiki/what-works-now.md`, and `README.md` updated.
+- Version bumped 0.109.0 → 0.110.0 (minor — bug fix plus the Email iMIP raw-reference scheme change, a breaking data-semantics change acceptable per the project's internal-API policy; mirrors the 0.103.0 Calendar precedent).
+
 ## [0.109.0] — 2026-08-15
 
 ### DRY: shared forget fact-filter SQL builder (issue #267)

@@ -163,12 +163,13 @@ fn extract_invites_emits_appointment_cluster_for_request_method() {
     assert!(primary.valid_from.is_some());
     assert!(primary.valid_until.is_some());
     assert_eq!(primary.event_type, Some(EventType::Appointment));
-    // Facts are keyed by the VEVENT UID — the stable iMIP identity shared
-    // across REQUEST → REPLY → CANCEL — not the email's IMAP UID, so a
-    // CANCEL can map onto them (issue #283).
+    // Facts are keyed by the VEVENT UID namespaced as `imip:{uid}` — the
+    // stable iMIP identity shared across REQUEST → REPLY → CANCEL, kept
+    // disjoint from the email-UID space the JSON-LD / LLM layers write — so
+    // a CANCEL can map onto them (issue #283).
     assert_eq!(
         primary.raw_reference.as_deref(),
-        Some("dentist-1@example.com")
+        Some("imip:dentist-1@example.com")
     );
     // Location fact carries no temporal bounds.
     let loc = facts
@@ -210,8 +211,8 @@ fn extract_invites_emits_facts_for_reply_method() {
     assert!(
         facts
             .iter()
-            .all(|f| f.raw_reference.as_deref() == Some("dentist-1@example.com")),
-        "REPLY facts are keyed by the VEVENT UID: {facts:?}"
+            .all(|f| f.raw_reference.as_deref() == Some("imip:dentist-1@example.com")),
+        "REPLY facts are keyed by the namespaced VEVENT UID: {facts:?}"
     );
 }
 
@@ -240,8 +241,8 @@ async fn extract_invites_buffers_cancel_uid_as_tombstone() {
     assert!(handled, "CANCEL counts as a read iMIP part (cascade gate)");
     assert_eq!(
         connector.extract_deletions().await.expect("deletions"),
-        vec!["dentist-1@example.com".to_string()],
-        "the CANCEL VEVENT UID is buffered as a tombstone"
+        vec!["imip:dentist-1@example.com".to_string()],
+        "the CANCEL VEVENT UID is buffered as a namespaced tombstone"
     );
 }
 
@@ -272,8 +273,78 @@ async fn extract_cancel_in_same_batch_drops_request_facts_for_the_uid() {
     );
     assert_eq!(
         connector.extract_deletions().await.expect("deletions"),
-        vec!["dentist-1@example.com".to_string()],
+        vec!["imip:dentist-1@example.com".to_string()],
         "the CANCEL tombstone is still reported for the supervisor's trash pass"
+    );
+}
+
+#[tokio::test]
+async fn extract_cancel_before_request_in_same_batch_drops_request_facts() {
+    let connector = connector_with_identity(Some("Devansh"));
+    // A CANCEL staged *before* its REQUEST in the same sync batch: buffer
+    // order is not guaranteed to match iMIP order (re-staged LLM retries are
+    // pushed to the back of the buffer, and mail delivery can invert order).
+    // The tombstone filter must run after the whole message loop, not only
+    // at CANCEL time, or the REQUEST facts would be inserted after the
+    // supervisor's trash pass and survive.
+    connector.buffer.lock().await.push(imap::RawEmail {
+        uid: 42,
+        uid_validity: 1,
+        internal_date: None,
+        raw: invite_email("CANCEL"),
+    });
+    connector.buffer.lock().await.push(imap::RawEmail {
+        uid: 43,
+        uid_validity: 1,
+        internal_date: None,
+        raw: invite_email("REQUEST"),
+    });
+    let facts = connector.extract().await.expect("extract");
+    assert!(
+        facts.is_empty(),
+        "the CANCEL must win even when staged before its REQUEST: {facts:?}"
+    );
+    assert_eq!(
+        connector.extract_deletions().await.expect("deletions"),
+        vec!["imip:dentist-1@example.com".to_string()],
+        "the CANCEL tombstone is still reported for the supervisor's trash pass"
+    );
+}
+
+#[tokio::test]
+async fn cancel_tombstones_survive_restart_via_durable_state() {
+    // A CANCEL is consumed by `extract` and the IMAP cursor has already
+    // advanced past it, so if the daemon stops between `extract` and the
+    // supervisor's deletion pass the tombstone must be restored from the
+    // persisted durable state or the cancellation is lost permanently.
+    let connector = connector_with_identity(Some("Devansh"));
+    connector.buffer.lock().await.push(imap::RawEmail {
+        uid: 42,
+        uid_validity: 1,
+        internal_date: None,
+        raw: invite_email("CANCEL"),
+    });
+    connector.extract().await.expect("extract");
+    let durable = connector
+        .durable_state()
+        .expect("the buffered tombstone makes the durable state dirty");
+
+    // Restart: a fresh connector seeded from the persisted state re-reports
+    // the pending tombstone so the supervisor's trash pass is not lost.
+    let mut config = app_config();
+    config["__durable_state"] = serde_json::Value::String(durable);
+    let restarted = EmailConnector::from_config_with_deps(
+        config,
+        None,
+        Some("Devansh".to_string()),
+        None,
+        None,
+    )
+    .expect("config");
+    assert_eq!(
+        restarted.extract_deletions().await.expect("deletions"),
+        vec!["imip:dentist-1@example.com".to_string()],
+        "a restart between extract and the deletion pass re-reports the CANCEL"
     );
 }
 
@@ -311,8 +382,8 @@ fn extract_invites_falls_back_to_email_ref_when_vevent_has_no_uid() {
     assert!(
         facts
             .iter()
-            .all(|f| f.raw_reference.as_deref() == Some("42")),
-        "a UID-less VEVENT falls back to the email reference: {facts:?}"
+            .all(|f| f.raw_reference.as_deref() == Some("imip-email:42")),
+        "a UID-less VEVENT falls back to the namespaced email reference: {facts:?}"
     );
 }
 

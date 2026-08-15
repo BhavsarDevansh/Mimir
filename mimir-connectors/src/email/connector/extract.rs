@@ -19,33 +19,39 @@ use crate::email::connector::EmailConnector;
 /// `PUBLISH` (often marketing webinars) is skipped.
 ///
 /// **Fact keying (issue #283).** REQUEST/REPLY facts are provenanced with
-/// the VEVENT `UID` as `raw_reference` — the stable iMIP identity RFC 5546
-/// requires every method (REQUEST → REPLY → CANCEL) to share — so a CANCEL
-/// maps 1:1 onto the facts the original invite authored. A VEVENT without a
-/// `UID` (invalid per RFC 5545, tolerated by the lenient parser) falls back
-/// to the email's `UIDVALIDITY`-qualified IMAP UID (`raw_ref`), preserving
-/// the pre-#283 keying for malformed invites. The JSON-LD and LLM cascade
-/// layers keep the email UID — they have no CANCEL lifecycle.
+/// the VEVENT `UID` namespaced as `imip:{uid}` as `raw_reference` — the
+/// stable iMIP identity RFC 5546 requires every method (REQUEST → REPLY →
+/// CANCEL) to share — so a CANCEL maps 1:1 onto the facts the original
+/// invite authored. The `imip:` prefix keeps the sender-controlled iMIP
+/// identity space disjoint from the `{uid_validity}:{uid}` references the
+/// JSON-LD and LLM cascade layers write, so a crafted `UID` can never
+/// address another layer's facts. A VEVENT without a `UID` (invalid per
+/// RFC 5545, tolerated by the lenient parser) falls back to the email's
+/// `UIDVALIDITY`-qualified IMAP UID (`raw_ref`) in its own `imip-email:`
+/// namespace. The JSON-LD and LLM cascade layers keep the email UID — they
+/// have no CANCEL lifecycle.
 ///
-/// **CANCEL handling.** A `CANCEL` part emits no facts; each VEVENT `UID` is
-/// buffered as a tombstone (reported via
+/// **CANCEL handling.** A `CANCEL` part emits no facts; each cancelled
+/// VEVENT's namespaced reference (`imip:{uid}`) is buffered as a tombstone
+/// (reported via
 /// [`Connector::extract_deletions`](crate::connector::Connector::extract_deletions)
 /// and trashed through the shared #247 machinery), so a cancelled meeting
 /// stops surfacing in "Upcoming". A CANCEL VEVENT without a `UID` cannot be
 /// mapped and is skipped. `SEQUENCE` is not consulted in V1: the knowledge
 /// graph does not store the original sequence, so a CANCEL trashes by `UID`
-/// regardless of sequence. A CANCEL also drops any facts already staged in
-/// `facts` for the same `UID` (a REQUEST and its CANCEL arriving in one sync
-/// window): the CANCEL is the later signal, so the cancelled event is not
-/// (re-)inserted by the same cycle that trashed its prior facts.
+/// regardless of sequence. The tombstone buffer is part of the connector's
+/// durable state, so a restart between `extract` and the supervisor's
+/// deletion pass re-reports the removals instead of losing them.
 ///
 /// The returned `bool` reports whether the message carried a handled iMIP
 /// part (REQUEST/REPLY/CANCEL), so the cascade gate in
 /// [`Connector::extract`](crate::connector::Connector::extract) treats a
 /// CANCEL — which emits no facts — as read and skips the LLM layer instead
 /// of letting the cancellation prose author junk facts. REQUEST/REPLY facts
-/// are appended to `facts` (the batch being built by the caller), so a CANCEL
-/// later in the same batch can drop them.
+/// are appended to `facts` (the batch being built by the caller); the
+/// caller's post-loop tombstone filter drops any fact whose `raw_reference`
+/// matches a buffered CANCEL, so a CANCEL wins over a same-batch REQUEST
+/// regardless of message order.
 impl EmailConnector {
     pub(super) fn extract_invites(
         &self,
@@ -105,14 +111,21 @@ impl EmailConnector {
                 Some("REQUEST") | Some("REPLY") => {
                     handled = true;
                     for vevent in crate::ical::parse_ical_to_vevents(ical) {
-                        // Key the cluster by the VEVENT UID (the stable iMIP
-                        // identity a CANCEL maps onto); fall back to the
-                        // email reference for UID-less VEVENTs.
-                        let reference = vevent.uid.as_deref().unwrap_or(raw_ref);
+                        // Namespace the iMIP identity space (`imip:`) so a
+                        // sender-chosen VEVENT UID can never collide with the
+                        // `{uid_validity}:{uid}` references the JSON-LD and
+                        // LLM layers write (a crafted `UID:17:99` CANCEL must
+                        // not address another layer's facts). A UID-less
+                        // VEVENT falls back to the email reference in its own
+                        // `imip-email:` namespace.
+                        let reference = match vevent.uid.as_deref() {
+                            Some(uid) => format!("imip:{uid}"),
+                            None => format!("imip-email:{raw_ref}"),
+                        };
                         facts.extend(crate::ical::vevent_to_facts(
                             self.user_identity.as_deref(),
                             &vevent,
-                            reference,
+                            &reference,
                         ));
                     }
                 }
@@ -123,16 +136,16 @@ impl EmailConnector {
                             Some(uid) => {
                                 // Buffer the removal; the supervisor trashes
                                 // the facts this instance authored for the
-                                // UID after `extract` (issue #283, #247).
-                                self.tombstones.lock().unwrap().push(uid.to_string());
-                                // Drop any facts this batch already staged
-                                // for the same UID (a REQUEST and its CANCEL
-                                // in one sync window): the supervisor trashes
-                                // *before* inserting this cycle's facts, so
-                                // without this the cancelled event's fresh
-                                // facts would be inserted after the trash and
-                                // survive. The CANCEL is the later signal.
-                                facts.retain(|f| f.raw_reference.as_deref() != Some(uid));
+                                // namespaced reference after `extract` (issue
+                                // #283, #247). The caller (`extract`) drops
+                                // any facts this batch staged for the same
+                                // reference after the message loop, so a
+                                // CANCEL wins over a same-batch REQUEST
+                                // regardless of message order.
+                                self.prose_retry
+                                    .lock()
+                                    .unwrap()
+                                    .push_tombstone(format!("imip:{uid}"));
                             }
                             None => {
                                 debug!(

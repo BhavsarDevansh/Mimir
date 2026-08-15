@@ -510,13 +510,14 @@ async fn imap_sync_then_extract_yields_invite_facts() {
             .count(),
         2
     );
-    // Provenance `raw_reference` is the VEVENT UID (the stable iMIP identity
-    // a CANCEL maps onto, issue #283), not the staged message's IMAP UID.
+    // Provenance `raw_reference` is the namespaced VEVENT UID (the stable
+    // iMIP identity a CANCEL maps onto, issue #283), not the staged
+    // message's IMAP UID.
     assert!(
         facts
             .iter()
-            .all(|f| f.raw_reference.as_deref() == Some("dentist-1@example.com")),
-        "raw_reference must be the VEVENT UID: {facts:?}"
+            .all(|f| f.raw_reference.as_deref() == Some("imip:dentist-1@example.com")),
+        "raw_reference must be the namespaced VEVENT UID: {facts:?}"
     );
     assert!(
         connector.buffer.lock().await.is_empty(),

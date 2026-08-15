@@ -175,8 +175,8 @@ async fn extract_funnels_into_kb_with_resolution_and_provenance() {
     assert_eq!(dr_smith_attending.object_id, Some(event));
 
     // Provenance: every fact has one Connector source tied to the instance,
-    // with the VEVENT UID as `raw_reference` (the stable iMIP identity a
-    // CANCEL maps onto, issue #283) and StructuredParse method.
+    // with the namespaced VEVENT UID as `raw_reference` (the stable iMIP
+    // identity a CANCEL maps onto, issue #283) and StructuredParse method.
     for f in &outcome.inserted {
         let sources = kg.get_sources_for_fact(f.id).await.unwrap();
         assert!(
@@ -184,7 +184,7 @@ async fn extract_funnels_into_kb_with_resolution_and_provenance() {
                 s.source_type_id == mimir_knowledge::models::source::SourceType::Connector as i16
                     && s.connector_instance_id == Some(instance_id)
                     && s.connector_type_id == Some(ConnectorType::Gmail as i16)
-                    && s.raw_reference.as_deref() == Some("dentist-1@example.com")
+                    && s.raw_reference.as_deref() == Some("imip:dentist-1@example.com")
                     && s.extraction_method_id == Some(ExtractionMethod::StructuredParse as i16)
             }),
             "missing connector provenance on fact {}: {:?}",
@@ -263,7 +263,7 @@ async fn cancel_invite_trashes_previously_extracted_facts() {
     let facts = connector.extract().await.expect("extract");
     assert!(facts.is_empty(), "CANCEL emits no facts");
     let deletions = connector.extract_deletions().await.expect("deletions");
-    assert_eq!(deletions, vec!["dentist-1@example.com".to_string()]);
+    assert_eq!(deletions, vec!["imip:dentist-1@example.com".to_string()]);
 
     // The supervisor's trash path (issue #247 machinery) removes exactly the
     // facts this instance authored for the cancelled event.

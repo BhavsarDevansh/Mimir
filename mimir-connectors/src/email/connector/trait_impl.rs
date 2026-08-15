@@ -284,13 +284,34 @@ impl Connector for EmailConnector {
                 debug!(uid = mail.uid, "could not parse RFC 822 message; skipping");
             }
         }
+        // Issue #283: a CANCEL must win over a same-batch REQUEST regardless
+        // of message order. `extract_invites` buffers each CANCEL's
+        // namespaced reference as a tombstone; the supervisor trashes
+        // *before* inserting this cycle's facts, so any fact whose
+        // `raw_reference` matches a pending tombstone must be dropped here
+        // or the cancelled event would be inserted after the trash and
+        // survive. Filtering once after the message loop (not only at CANCEL
+        // time) covers a CANCEL staged before its REQUEST in the same batch:
+        // buffer order is not guaranteed to match iMIP order (re-staged LLM
+        // retries are pushed to the back of the buffer, and mail delivery
+        // can invert order). The `imip:` namespace keeps the filter from
+        // ever touching JSON-LD / LLM facts, whose references live in the
+        // `{uid_validity}:{uid}` space.
+        let ledger = self.prose_retry.lock().unwrap();
+        let tombstones = ledger.tombstones();
+        if !tombstones.is_empty() {
+            facts.retain(|f| {
+                !f.raw_reference
+                    .as_deref()
+                    .is_some_and(|r| tombstones.iter().any(|t| t.as_str() == r))
+            });
+        }
         Ok(facts)
     }
 
     async fn forget(&self) -> Result<(), ConnectorError> {
         self.buffer.lock().await.clear();
         self.prose_retry.lock().unwrap().clear();
-        self.tombstones.lock().unwrap().clear();
         *self.last_uid.lock().await = None;
         if let Some(store) = &self.secret_store {
             store.delete(&self.slug).await.map_err(|e| {
@@ -301,21 +322,25 @@ impl Connector for EmailConnector {
     }
 
     async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError> {
-        // Issue #283: report the buffered iMIP CANCEL VEVENT UIDs without
+        // Issue #283: report the buffered iMIP CANCEL references without
         // draining them — the supervisor acknowledges the processed
         // removals via `acknowledge_deletions` only after trashing, fact
         // insertion, and cursor persistence all succeeded, so a failed cycle
         // re-reports them instead of losing them (the #247 retention
-        // contract). Each UID is the `raw_reference` the iMIP layer authors
-        // for the cancelled event's facts, so the supervisor trashes exactly
-        // those facts.
-        let tombstones = self.tombstones.lock().unwrap();
-        Ok(tombstones.clone())
+        // contract). Each reference is the namespaced `raw_reference` the
+        // iMIP layer authors for the cancelled event's facts, so the
+        // supervisor trashes exactly those facts. The buffer is part of the
+        // durable state, so a restart between `extract` and the deletion
+        // pass re-reports the removals instead of losing them.
+        let ledger = self.prose_retry.lock().unwrap();
+        Ok(ledger.tombstones().to_vec())
     }
 
     async fn acknowledge_deletions(&self, deleted: &[String]) -> Result<(), ConnectorError> {
-        let mut tombstones = self.tombstones.lock().unwrap();
-        tombstones.retain(|uid| !deleted.contains(uid));
+        self.prose_retry
+            .lock()
+            .unwrap()
+            .acknowledge_deletions(deleted);
         Ok(())
     }
 

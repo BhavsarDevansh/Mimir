@@ -82,7 +82,7 @@ async fn llm_layer_not_invoked_for_cancel_email() {
     );
     assert_eq!(
         connector.extract_deletions().await.expect("deletions"),
-        vec!["dentist-1@example.com".to_string()],
+        vec!["imip:dentist-1@example.com".to_string()],
         "the CANCEL tombstone is still buffered for the supervisor"
     );
 }

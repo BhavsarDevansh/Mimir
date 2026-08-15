@@ -51,11 +51,7 @@ pub async fn normalize_and_insert(
   method, event-type hint, location overlay) as arguments. The Photos, iCal
   VEVENT (Calendar + Email iMIP), and Email JSON-LD backends all funnel through
   it, so a new connector cannot silently drift on a default.
-- **Confidence** is `confidence::initial(source_type, connector_type)` with no
-  extraction-method discount. Corroboration / supersession / inference are
-  inherited from `insert_fact_in_tx`, so cross-connector corroboration (Gmail
-  flight + Calendar event on overlapping dates) is an explicit acceptance
-  criterion, not an accident.
+- **Confidence** is the per-source-type / per-connector reliability score read from the `connector_reliability` table (`confidence::connector_reliability`, seeded defaults as fallback) with no extraction-method discount. Corroboration / supersession / inference are inherited from `insert_fact_in_tx`, so cross-connector corroboration (Gmail flight + Calendar event on overlapping dates) is an explicit acceptance criterion, not an accident.
 
 Because `mimir-connectors` depends on `mimir-knowledge`, it reaches these types
 directly; it never needs a parallel insert path.
@@ -235,11 +231,7 @@ return unordered results.
   `--no-default-features`. The mock is fully configurable (mode, cadence,
   canned facts, health/auth, failure/panic injection) and is the T1
   sync→extract→insert→query vehicle.
-- **Reliability stays per-type.** Confidence for connector facts is
-  `confidence::initial(SourceType::Connector, connector_type)`, keyed on the
-  type axis only. The registry never branches reliability on `backend`; an
-  instance reports the same `connector_type()` regardless of which backend
-  constructed it.
+- **Reliability stays per-type.** Confidence for connector facts is the `connector_reliability` table score for the type (via `confidence::connector_reliability`, seeded defaults as fallback), keyed on the type axis only. The registry never branches reliability on `backend`; an instance reports the same `connector_type()` regardless of which backend constructed it.
 - **Construction context (forward-looking).** `create` takes only `config` for
   V1, matching the issue spec. Decision D′ of the Phase 3 plan states that
   connectors receive the shared `Arc<dyn LlmBackend>` at construction and F10

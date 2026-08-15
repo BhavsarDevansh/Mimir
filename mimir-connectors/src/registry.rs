@@ -10,11 +10,12 @@
 //!
 //! # Reliability stays per-type
 //!
-//! Confidence for connector-sourced facts is
-//! `confidence::initial(SourceType::Connector, connector_type)` (see
-//! `mimir-knowledge`), keyed on the type axis only. The registry never
-//! branches reliability on `backend`; the same `connector_type()` is reported
-//! regardless of which backend constructed the instance.
+//! Confidence for connector-sourced facts is the `connector_reliability`
+//! table score for the type (`confidence::connector_reliability` in
+//! `mimir-knowledge`, seeded defaults as fallback), keyed on the type axis
+//! only. The registry never branches reliability on `backend`; the same
+//! `connector_type()` is reported regardless of which backend constructed the
+//! instance.
 //!
 //! # Concurrency
 //!

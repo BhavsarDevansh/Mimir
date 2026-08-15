@@ -41,6 +41,21 @@ pub async fn normalize_and_insert(
     let now = kg.now();
     let mut outcome = ExtractionOutcome::default();
 
+    // Connector confidence comes from the `connector_reliability` table, not
+    // the hardcoded defaults, so adjusted scores reach the pipeline (issue
+    // #292). Resolved once per batch because provenance is batch-level. The
+    // lookup uses the same connector-provenance gate as
+    // `process_normalized_fact`: both the instance id and the type must be
+    // present, so a partially initialised `Provenance` (type without
+    // instance) never applies a connector score.
+    let connector_confidence: Option<f32> =
+        match (provenance.connector_type, provenance.connector_instance_id) {
+            (Some(connector_type), Some(_)) => {
+                Some(kg.connector_reliability(connector_type).await?)
+            }
+            _ => None,
+        };
+
     for mut fact in facts {
         // Serialise this fact's writes with the background overlay worker
         // (issue #236). Without the lock, the worker could commit a location
@@ -71,7 +86,16 @@ pub async fn normalize_and_insert(
         fact.relationship_type = canonical_name
             .unwrap_or_else(|| crate::normalize_alias(&fact.relationship_type).unwrap_or_default());
 
-        match process_normalized_fact(kg, fact, now, relationship_type_id, provenance).await {
+        match process_normalized_fact(
+            kg,
+            fact,
+            now,
+            relationship_type_id,
+            provenance,
+            connector_confidence,
+        )
+        .await
+        {
             Ok(ProcessResult::Inserted(f)) => outcome.inserted.push(f),
             Ok(ProcessResult::Pending(p)) => outcome.pending_confirmation.push(p),
             Err(error) => outcome.errors.push(error),
@@ -91,6 +115,7 @@ async fn process_normalized_fact(
     now: DateTime<Utc>,
     relationship_type_id: i16,
     provenance: Provenance,
+    connector_confidence: Option<f32>,
 ) -> Result<ProcessResult, KnowledgeError> {
     // The original subject string is captured before `resolve_entity` shadows it
     // with the resolved `Entity`, so the pending-confirmation result and the
@@ -201,8 +226,11 @@ async fn process_normalized_fact(
     }
 
     // Confidence: reliability score for the source type / connector kind, with
-    // NO extraction-method discount.
-    let confidence = crate::confidence::initial(source_type, provenance.connector_type);
+    // NO extraction-method discount. Connector facts use the
+    // `connector_reliability` table score resolved once per batch (issue
+    // #292); other source types keep the `confidence::initial` defaults.
+    let confidence =
+        crate::confidence::resolve_initial_confidence(None, source_type, connector_confidence);
 
     // Validate and collect category IDs.
     let mut valid_category_ids = Vec::new();

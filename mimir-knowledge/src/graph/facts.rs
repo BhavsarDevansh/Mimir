@@ -1,9 +1,12 @@
 use crate::graph::KnowledgeGraph;
 use crate::*;
 
-use std::collections::HashSet;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
+
+use sqlx::SqlitePool;
 
 use crate::inference::CascadeContext;
 use crate::inference::rules::threshold::{RELATIONSHIP_TYPE_REJECTED_ACTION, ThresholdRule};
@@ -26,13 +29,13 @@ impl KnowledgeGraph {
     }
 
     /// Insert multiple facts atomically in a single transaction.
+    /// Connector-provenance facts resolve their instance's registered type,
+    /// validating a supplied `connector_type` and deriving an omitted one.
     /// Skips rule-engine passes; callers should trigger them separately if needed.
     pub async fn insert_facts_batch(
         &self,
         facts: Vec<models::fact::NewFact>,
     ) -> Result<Vec<models::fact::Fact>, KnowledgeError> {
-        use std::collections::HashSet;
-
         if facts.is_empty() {
             return Ok(Vec::new());
         }
@@ -80,16 +83,52 @@ impl KnowledgeGraph {
             }
         }
 
+        // Resolve each distinct connector instance to its registered type
+        // before caching reliability scores, mirroring `insert_fact_internal`:
+        // the registered instance is the identity, so a supplied
+        // `connector_type` must match it and an omitted one is derived from
+        // it. Caching the resolved type per instance and the score per
+        // resolved type keeps the batch path on the same confidence
+        // resolution as the single-insert path (issue #292).
+        let mut instance_types: HashMap<i32, ConnectorType> = HashMap::new();
+        let mut connector_scores: HashMap<ConnectorType, f32> = HashMap::new();
+        for new_fact in &facts {
+            let Some(instance_id) = new_fact.connector_instance_id else {
+                continue;
+            };
+            let resolved_type = match instance_types.entry(instance_id) {
+                Entry::Occupied(entry) => *entry.get(),
+                Entry::Vacant(entry) => {
+                    let resolved = resolve_connector_instance_type(&self.pool, instance_id).await?;
+                    entry.insert(resolved);
+                    resolved
+                }
+            };
+            ensure_connector_type_matches(instance_id, resolved_type, new_fact.connector_type)?;
+            if new_fact.confidence.is_none()
+                && new_fact.source_type == SourceType::Connector
+                && let Entry::Vacant(entry) = connector_scores.entry(resolved_type)
+            {
+                let score =
+                    crate::confidence::connector_reliability(&self.pool, resolved_type).await?;
+                entry.insert(score);
+            }
+        }
+
         for new_fact in &facts {
             let relationship_type_id = self
                 .ensure_relationship_type_in_tx(&mut tx, &new_fact.relationship_type)
                 .await?;
 
-            let confidence = if let Some(conf) = new_fact.confidence {
-                conf
-            } else {
-                crate::confidence::initial(new_fact.source_type, None)
-            };
+            let connector_score = new_fact
+                .connector_instance_id
+                .and_then(|instance_id| instance_types.get(&instance_id).copied())
+                .and_then(|ct| connector_scores.get(&ct).copied());
+            let confidence = crate::confidence::resolve_initial_confidence(
+                new_fact.confidence,
+                new_fact.source_type,
+                connector_score,
+            );
 
             let fact = queries::fact::insert_fact_in_tx(
                 &mut tx,
@@ -174,49 +213,10 @@ impl KnowledgeGraph {
                                 .to_string(),
                         ));
                 }
-                let instance_type_id: Option<i16> =
-                    sqlx::query_scalar("SELECT connector_type_id FROM connectors WHERE id = ?")
-                        .bind(instance_id)
-                        .fetch_optional(&self.pool)
-                        .await?;
-                let instance_type_id = instance_type_id.ok_or_else(|| {
-                    KnowledgeError::Validation(format!(
-                        "connector instance {instance_id} not found"
-                    ))
-                })?;
-                if let Some(ct) = new_fact.connector_type {
-                    if (ct as i16) != instance_type_id {
-                        return Err(KnowledgeError::Validation(format!(
-                            "connector_instance_id {instance_id} has type {instance_type_id} but connector_type was supplied as {}",
-                            ct as i16
-                        )));
-                    }
-                } else {
-                    // Derive the denormalised connector_type from the instance.
-                    // If the instance's type id is outside the seeded ConnectorType
-                    // enum (e.g. a connector_types row added before the enum was
-                    // extended), surface a validation error rather than panicking.
-                    new_fact.connector_type = match ConnectorType::try_from(instance_type_id) {
-                        Ok(ct) => Some(ct),
-                        Err(()) => {
-                            return Err(KnowledgeError::Validation(format!(
-                                "connector_instance_id {instance_id} has unknown connector_type_id {instance_type_id}"
-                            )));
-                        }
-                    };
-                }
-                let resolved_ct = new_fact.connector_type.ok_or_else(|| {
-                        KnowledgeError::Validation(format!(
-                            "connector_instance_id {instance_id} has unknown connector_type_id {instance_type_id}"
-                        ))
-                    })?;
-                let db_score: Option<f32> = sqlx::query_scalar(
-                    "SELECT score FROM connector_reliability WHERE connector_type_id = ?",
-                )
-                .bind(instance_type_id)
-                .fetch_optional(&self.pool)
-                .await?;
-                Some(db_score.unwrap_or_else(|| confidence::default_connector_score(resolved_ct)))
+                let resolved_ct = resolve_connector_instance_type(&self.pool, instance_id).await?;
+                ensure_connector_type_matches(instance_id, resolved_ct, new_fact.connector_type)?;
+                new_fact.connector_type = Some(resolved_ct);
+                Some(confidence::connector_reliability(&self.pool, resolved_ct).await?)
             } else {
                 None
             };
@@ -668,4 +668,45 @@ impl KnowledgeGraph {
     ) -> Result<Vec<models::audit_log::AuditLogEntry>, KnowledgeError> {
         queries::fact::get_audit_log(&self.pool, fact_id).await
     }
+}
+
+/// Resolve the registered connector type for an instance, erroring when the
+/// instance does not exist or its type id is outside the seeded
+/// [`ConnectorType`] enum (e.g. a `connector_types` row added before the enum
+/// was extended).
+async fn resolve_connector_instance_type(
+    pool: &SqlitePool,
+    instance_id: i32,
+) -> Result<ConnectorType, KnowledgeError> {
+    let instance_type_id: Option<i16> =
+        sqlx::query_scalar("SELECT connector_type_id FROM connectors WHERE id = ?")
+            .bind(instance_id)
+            .fetch_optional(pool)
+            .await?;
+    let instance_type_id = instance_type_id.ok_or_else(|| {
+        KnowledgeError::Validation(format!("connector instance {instance_id} not found"))
+    })?;
+    ConnectorType::try_from(instance_type_id).map_err(|()| {
+        KnowledgeError::Validation(format!(
+            "connector_instance_id {instance_id} has unknown connector_type_id {instance_type_id}"
+        ))
+    })
+}
+
+/// Enforce that a denormalised `connector_type` (when supplied) matches the
+/// registered type of the connector instance.
+fn ensure_connector_type_matches(
+    instance_id: i32,
+    resolved_type: ConnectorType,
+    supplied_type: Option<ConnectorType>,
+) -> Result<(), KnowledgeError> {
+    if let Some(ct) = supplied_type {
+        if ct != resolved_type {
+            return Err(KnowledgeError::Validation(format!(
+                "connector_instance_id {instance_id} has type {} but connector_type was supplied as {}",
+                resolved_type as i16, ct as i16
+            )));
+        }
+    }
+    Ok(())
 }

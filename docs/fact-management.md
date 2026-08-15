@@ -31,7 +31,7 @@ Indexes: `subject_id`, `object_id`, `predicate_id`, `fact_status_id`, `valid_fro
 
 Junction table with `ON DELETE RESTRICT` on both FKs (`parent_fact_id`,
 `child_fact_id` → `facts(id)`). This prevents SQLite from cascading deletes;
-deletion orchestration is handled in Rust (`forget.rs`) so that child inference
+deletion orchestration is handled in Rust (`forget/`) so that child inference
 chains can be re-evaluated before removal.
 
 ### `sources` table
@@ -106,6 +106,10 @@ confidence is tracked in #51.
      `facts.confidence`, and write a `confidence_change` audit entry.
 
 `hard_delete_expired_trash()` removes trash rows whose `expires_at` has passed.
+
+### Bulk forget matching
+
+`forget_facts()` matches facts through `ForgetFilters` (fact id, predicate, subject, entity, source, `from`/`to` window). The two queries that consume the filters — `query_matching_fact_ids` (the id list for trashing) and `has_sensitive_match` (the sensitive-predicate safeguard) — share one `push_forget_filters` builder in `forget/trash.rs`, so a new filter field is added in exactly one place and the two queries cannot drift (issue #267).
 
 `forget_connector_facts(instance_id)` trashes every fact a connector instance sourced (the connector-removal cascade), and `forget_connector_facts_by_raw_reference(instance_id, raw_references)` trashes only the facts that instance authored for the given `sources.raw_reference` values — the server-side-deletion (tombstone) path connectors use when their service reports a removed item (issue #247). The tombstone path removes only the matching `sources` rows and trashes a fact only when no sources remain, so a fact still corroborated by another connector or a non-connector source survives (PR #313 review). Both are idempotent, instance-scoped, and route through the same trash machinery; the `events.fact_id` FK cascade removes any events-subsystem overlay with the fact.
 

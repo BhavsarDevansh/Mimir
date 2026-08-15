@@ -263,8 +263,8 @@ type FactoryFn = Arc<
         + Sync,
 >;
 
-/// A [`ConnectorFactory`] backed by an `Fn(serde_json::Value) -> Result<…>`
-/// closure.
+/// A [`ConnectorFactory`] backed by an
+/// `Fn(serde_json::Value, &ConnectorContext) -> Result<…>` closure.
 ///
 /// Convenient for registering simple backends and for tests without defining a
 /// dedicated factory struct. The closure must be `Send + Sync + 'static`.

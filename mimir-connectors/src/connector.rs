@@ -52,9 +52,10 @@ use mimir_knowledge::normalize::NormalizedFact;
 /// signature to a construction context once connectors needed shared
 /// dependencies beyond their `config_json`. The Photos connector (C2) is the
 /// first: it reverse-geocodes EXIF GPS into a place name at extraction time,
-/// so it needs the shared [`Geocoder`]. Future fields (the shared
-/// `Arc<dyn LlmBackend>`, the `SecretStore`) will be added here as the
-/// backends that need them land.
+/// so it needs the shared [`Geocoder`]. The Calendar and Email connectors
+/// (C3 / C5) load credentials from the shared [`SecretStore`], the daemon
+/// injects the canonical user identity name (A1), and the Email connector's
+/// LLM extraction (C7) clones the shared `Arc<dyn LlmBackend>`.
 ///
 /// The context is passed by shared reference to [`ConnectorFactory::create`];
 /// factories clone out whatever `Arc` they need (`Option<Arc<_>>::clone` is
@@ -508,21 +509,20 @@ pub trait Connector: Send + Sync {
 /// Constructs a [`Connector`] instance from its persisted configuration.
 ///
 /// The registry (F7 / issue #184) maps `(connector_type, backend)` to one
-/// `ConnectorFactory`. When the supervisor (F8) or the `connector add` CLI
-/// path needs to instantiate a configured connector, it looks up the factory
-/// for the row's `(type, backend)` and calls [`ConnectorFactory::create`]
-/// with the `config_json` parsed value.
+/// `ConnectorFactory`. When the supervisor (F8) needs to instantiate a
+/// configured connector, it looks up the factory for the row's `(type,
+/// backend)` and calls [`ConnectorFactory::create`] with the `config_json`
+/// parsed value and the shared-services [`ConnectorContext`].
 ///
 /// # Construction context
 ///
-/// For Phase 3 V1 `create` takes only the config payload, matching the issue
-/// spec. Decision D′ of the Phase 3 plan states that connectors receive the
-/// shared `Arc<dyn LlmBackend>` at construction, and F10 will inject
-/// credentials via the `SecretStore`; those dependencies land with F8 / F10
-/// and are not yet available. When they arrive the factory signature will be
-/// extended to accept a construction context — a breaking change to an
-/// internal API, which is explicitly acceptable per the project's breaking
-/// changes policy.
+/// `create` takes the config payload plus a [`ConnectorContext`] carrying the
+/// shared services a backend may need at construction: the [`Geocoder`]
+/// (Photos reverse geocoding, C2 / #196), the [`SecretStore`] (Calendar /
+/// Email credentials, F10 / #187), the canonical user identity name (A1), and
+/// the shared `Arc<dyn LlmBackend>` (Email LLM extraction, C7 / #201, routed
+/// through the shared pool's system queue per decision D′). Backends that
+/// need no shared services ignore the context.
 ///
 /// # Object safety
 ///

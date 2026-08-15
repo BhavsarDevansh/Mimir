@@ -176,8 +176,11 @@ as the `backend` column on `connectors` (F2). Adding a new backend is a new
 
 ```rust
 pub trait ConnectorFactory: Send + Sync {
-    fn create(&self, config: serde_json::Value)
-        -> Result<Arc<dyn Connector>, ConnectorError>;
+    fn create(
+        &self,
+        config: serde_json::Value,
+        ctx: &ConnectorContext,
+    ) -> Result<Arc<dyn Connector>, ConnectorError>;
 }
 
 pub struct ConnectorRegistry { /* RwLock<HashMap<(ConnectorType, String), Arc<dyn ConnectorFactory>>> */ }
@@ -202,6 +205,10 @@ impl ConnectorRegistry {
     pub fn create(
         &self, connector_type: ConnectorType, backend: &str, config: serde_json::Value,
     ) -> Result<Arc<dyn Connector>, ConnectorError>;
+    pub fn create_with_context(
+        &self, connector_type: ConnectorType, backend: &str, config: serde_json::Value,
+        ctx: &ConnectorContext,
+    ) -> Result<Arc<dyn Connector>, ConnectorError>;
 }
 ```
 
@@ -210,6 +217,8 @@ type then backend (wire-string form) so output is deterministic — it backs the
 daemon's `GET /connectors/catalog` discovery route and `mimir connector
 catalog` (issue #271). `backends_for` / `registered_types` predate it and
 return unordered results.
+
+`ConnectorContext` carries the shared services injected at construction: an optional `Arc<dyn Geocoder>` (Photos reverse geocoding, C2 / #196), an optional `Arc<dyn SecretStore>` (Calendar / Email credentials, F10 / #187), the canonical user identity name (A1), and an optional `Arc<dyn LlmBackend>` (Email LLM extraction, C7 / #201, routed through the shared pool's system queue per decision D′). `create_with_context` forwards the context to the factory; `create` is the config-only convenience path that passes `ConnectorContext::empty()`.
 
 ### Design notes
 
@@ -221,23 +230,10 @@ return unordered results.
   `ConnectorError::BackendAlreadyRegistered` on a repeated `(type, backend)`
   rather than silently shadowing the existing factory. `register_arc` is the
   pre-built-`Arc` variant.
-- **Dispatch errors.** `create` returns `ConnectorError::BackendNotFound` when
-  no factory is registered for the requested pair.
-- **`FnConnectorFactory`.** A closure-backed `ConnectorFactory` (`new<F:
-  Fn(serde_json::Value) -> Result<…> + Send + Sync + 'static>`) for simple
-  backends and tests. `MockConnectorFactory` (always-compiled, F13 / #190)
-  produces `MockConnector`s from their `config_json`, keeping the registry
-  exercisable under every feature combination, including
-  `--no-default-features`. The mock is fully configurable (mode, cadence,
-  canned facts, health/auth, failure/panic injection) and is the T1
-  sync→extract→insert→query vehicle.
+- **Dispatch errors.** `create` / `create_with_context` return `ConnectorError::BackendNotFound` when no factory is registered for the requested pair.
+- **`FnConnectorFactory`.** A closure-backed `ConnectorFactory` (`new<F: Fn(serde_json::Value, &ConnectorContext) -> Result<…> + Send + Sync + 'static>`) for simple backends and tests. `MockConnectorFactory` (always-compiled, F13 / #190) produces `MockConnector`s from their `config_json`, keeping the registry exercisable under every feature combination, including `--no-default-features`. The mock is fully configurable (mode, cadence, canned facts, health/auth, failure/panic injection) and is the T1 sync→extract→insert→query vehicle.
 - **Reliability stays per-type.** Confidence for connector facts is the `connector_reliability` table score for the type (via `confidence::connector_reliability`, seeded defaults as fallback), keyed on the type axis only. The registry never branches reliability on `backend`; an instance reports the same `connector_type()` regardless of which backend constructed it.
-- **Construction context (forward-looking).** `create` takes only `config` for
-  V1, matching the issue spec. Decision D′ of the Phase 3 plan states that
-  connectors receive the shared `Arc<dyn LlmBackend>` at construction and F10
-  injects credentials via `SecretStore`; those land with F8 / F10, at which
-  point the factory signature will be extended to accept a construction
-  context — an acceptable breaking change to an internal API.
+- **Construction context.** The factory signature takes the construction context directly (the Phase 3 plan's decision D′ anticipated this extension; it landed with C2 / #196 and F10 / #187 rather than remaining a forward-looking note). The supervisor (F8) is the only production constructor: it calls `create_with_context` with the daemon-wide context built in `mimir-server` (`with_secret_store` / `with_geocoder` / `with_user_identity` / `with_llm_backend`). The config-only `create` is the convenience path for callers with no services to inject (tests, and any non-supervisor construction). Backends that need no shared services ignore `ctx`.
 
 ## ConnectorSupervisor — supervised lifecycle (F8 / #185)
 
@@ -277,7 +273,7 @@ auto-spawned). Rows whose `(type, backend)` has no registered factory, or whose
 `config_json` is invalid, are logged and skipped — one bad connector never
 aborts startup. Returns the number of tasks spawned.
 
-Before handing each row's `config_json` to the factory, the supervisor injects `__slug`, `__ctype`, `__instance_id`, `__cursor`, and `__durable_state` so the connector instance knows which row it represents and can seed its incremental sync cursor and any connector-owned durable state. This is the V1 mechanism for passing instance identity and progress through the minimal `create(config)` factory signature (the LLM/SecretStore construction context is deferred to F10 / the first real backend — decision #2). The `__cursor` injection (C1 / #195) is the read side that complements `KnowledgeGraph::update_sync_cursor` (the write side): it lets an incremental connector — e.g. the Photos file watcher — skip already-processed files across restarts. The `__durable_state` injection (issue #262) is the read side that complements `KnowledgeGraph::update_sync_progress_and_durable_state` (the write side, committed atomically with the cursor): the Email connector seeds its bounded LLM-extraction retry ledger from it so pending retries and terminal failures survive restarts. `None` values are injected as JSON `null` (a full first scan / no durable state).
+Before handing each row's `config_json` to the factory, the supervisor injects `__slug`, `__ctype`, `__instance_id`, `__cursor`, and `__durable_state` so the connector instance knows which row it represents and can seed its incremental sync cursor and any connector-owned durable state. This is the V1 mechanism for passing instance identity and progress through the factory's `config` argument; the shared-services `ConnectorContext` (geocoder, secret store, user identity, LLM backend) is injected separately via the supervisor's `create_with_context` call. The `__cursor` injection (C1 / #195) is the read side that complements `KnowledgeGraph::update_sync_cursor` (the write side): it lets an incremental connector — e.g. the Photos file watcher — skip already-processed files across restarts. The `__durable_state` injection (issue #262) is the read side that complements `KnowledgeGraph::update_sync_progress_and_durable_state` (the write side, committed atomically with the cursor): the Email connector seeds its bounded LLM-extraction retry ledger from it so pending retries and terminal failures survive restarts. `None` values are injected as JSON `null` (a full first scan / no durable state).
 
 ### Per-connector runner loop
 

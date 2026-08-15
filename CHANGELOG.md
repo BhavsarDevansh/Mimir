@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.111.1] — 2026-08-15
+
+### Docs: connectors-framework.md ConnectorFactory signature synced with the landed ConnectorContext (issue #301)
+
+- **`docs/connectors-framework.md` factory section now matches the code.** The `ConnectorFactory` API block documents `create(config, ctx)` with the shared-services `ConnectorContext` (optional `Geocoder`, `SecretStore`, user identity, `LlmBackend`), the `ConnectorRegistry` API listing includes `create_with_context` (the supervisor's construction path) alongside the config-only `create` convenience path, the `FnConnectorFactory` closure shape is `Fn(serde_json::Value, &ConnectorContext) -> Result<…>`, and the "Construction context (forward-looking)" note is replaced with the landed state (which callers pass which context). The startup-restore paragraph no longer claims the construction context is deferred.
+- **Stale doc comments in `mimir-connectors` fixed.** The `ConnectorFactory` trait and `ConnectorContext` struct doc comments in `src/connector.rs` and the `FnConnectorFactory` doc comment in `src/registry.rs` described the pre-`ConnectorContext` factory signature ("will be extended when F8 / F10 land"); they now describe the landed signature and context fields.
+- Version bumped 0.111.0 → 0.111.1 (patch — documentation-only).
+
 ## [0.111.0] — 2026-08-15
 
 ### Testing: shared wiremock token-endpoint mock for the PKCE suites (issue #298)

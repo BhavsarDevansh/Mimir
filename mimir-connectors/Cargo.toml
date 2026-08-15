@@ -19,6 +19,11 @@ mimir-core = { path = "../mimir-core" }
 mimir-knowledge = { path = "../mimir-knowledge" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# `wiremock` backs the shared token-endpoint mock in `test_utils`
+# (`mount_token_endpoint`, issue #298). Optional so production builds never
+# compile it; the crate's own unit tests still get it from `[dev-dependencies]`
+# when the `test-utils` feature is off.
+wiremock = { version = "0.6", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
 async-trait = "0.1"
@@ -177,13 +182,13 @@ mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
 
 [features]
 default = ["photos", "calendar", "gmail"]
-## Shared OAuth test doubles (issue #290): the fake-browser `self_callback_opener`
-## and `parse_authorize_url` helpers used by the PKCE flow unit tests and the
-## `mimir` binary's CLI connector tests. Test-only, off by default; the crate's
-## own unit tests compile the module via `cfg(test)` regardless. No extra
-## dependencies: the helpers only use `reqwest` and `tokio`, both already
-## unconditional dependencies.
-test-utils = []
+## Shared OAuth test doubles (issues #290, #298): the fake-browser
+## `self_callback_opener` and `parse_authorize_url` helpers plus the
+## `mount_token_endpoint` wiremock mock used by the PKCE flow unit tests and
+## the `mimir` binary's CLI connector tests. Test-only, off by default; the
+## crate's own unit tests compile the module via `cfg(test)` regardless.
+## `wiremock` is optional so production builds never compile it.
+test-utils = ["dep:wiremock"]
 ## Google Photos / Apple Photos / local photo library ingestion (C1–C2).
 photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"]
 ## Shared OAuth 2.0 client + refresh helpers (issue #240): `oauth2` 5.0.0 with

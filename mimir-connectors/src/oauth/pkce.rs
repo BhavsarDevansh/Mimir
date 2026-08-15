@@ -338,9 +338,10 @@ const SUCCESS_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{callback_url, parse_authorize_url, self_callback_opener};
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use crate::test_utils::{
+        callback_url, mount_token_endpoint, parse_authorize_url, self_callback_opener,
+    };
+    use wiremock::MockServer;
 
     fn flow_config(token_endpoint: &str) -> PkceFlowConfig {
         PkceFlowConfig {
@@ -428,17 +429,7 @@ mod tests {
     #[tokio::test]
     async fn run_pkce_flow_exchanges_code_and_returns_bundle() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "access_token": "ya29.access",
-                "token_type": "Bearer",
-                "refresh_token": "rt",
-                "expires_in": 3600,
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
+        mount_token_endpoint(&server, 1).await;
 
         let bundle = run_pkce_flow(
             &flow_config(&format!("{}/token", server.uri())),
@@ -468,15 +459,7 @@ mod tests {
     #[tokio::test]
     async fn run_pkce_flow_aborts_on_state_mismatch_without_exchanging() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "access_token": "ya29.access",
-                "token_type": "Bearer",
-            })))
-            .expect(0)
-            .mount(&server)
-            .await;
+        mount_token_endpoint(&server, 0).await;
 
         // A hostile/buggy callback with the wrong state must abort the flow
         // before any code is exchanged.
@@ -507,15 +490,7 @@ mod tests {
     #[tokio::test]
     async fn run_pkce_flow_times_out_without_callback() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "access_token": "ya29.access",
-                "token_type": "Bearer",
-            })))
-            .expect(0)
-            .mount(&server)
-            .await;
+        mount_token_endpoint(&server, 0).await;
 
         let opener = |_url: &str| {}; // no browser, no callback
         let err = run_pkce_flow(
@@ -654,15 +629,7 @@ mod tests {
         // A browser typically requests /favicon.ico after the callback page;
         // here it arrives *before* the real callback and must not abort.
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "access_token": "ya29.access",
-                "token_type": "Bearer",
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
+        mount_token_endpoint(&server, 1).await;
 
         let opener = |url: &str| {
             let url = url.to_string();

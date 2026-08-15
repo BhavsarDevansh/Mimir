@@ -104,11 +104,11 @@ pub mod rate_limit;
 pub mod registry;
 pub mod secrets;
 pub mod supervisor;
-/// Shared OAuth test doubles (Phase 3 / issue #290): a fake-browser opener
-/// and authorize-URL parsing used by the PKCE flow's unit tests and the
-/// `mimir` binary's CLI connector tests. Test-only, gated by the
-/// `test-utils` feature (off by default); also compiled for this crate's own
-/// unit tests via `cfg(test)`.
+/// Shared OAuth test doubles (Phase 3 / issues #290, #298): a fake-browser
+/// opener, authorize-URL parsing, and the wiremock token-endpoint mock used
+/// by the PKCE flow's unit tests and the `mimir` binary's CLI connector
+/// tests. Test-only, gated by the `test-utils` feature (off by default);
+/// also compiled for this crate's own unit tests via `cfg(test)`.
 #[cfg(any(feature = "test-utils", test))]
 pub mod test_utils;
 

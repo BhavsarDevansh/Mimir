@@ -348,7 +348,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 |-----------|-------|
 | Connector catalog route + CLI discovery | [#271](https://github.com/BhavsarDevansh/Mimir/issues/271) |
 | Secret ingestion via env/stdin (no process-list leak) | [#270](https://github.com/BhavsarDevansh/Mimir/issues/270) |
-| CLI: `key=value` config pairs cannot express JSON arrays (scopes silently dropped) | [#289](https://github.com/BhavsarDevansh/Mimir/issues/289) |
 | OS-keyring secret backend | [#188](https://github.com/BhavsarDevansh/Mimir/issues/188) |
 | DRY: auth error arms, rate-limit default | [#273](https://github.com/BhavsarDevansh/Mimir/issues/273), [#223](https://github.com/BhavsarDevansh/Mimir/issues/223) |
 | Geocoding conversational tool | [#192](https://github.com/BhavsarDevansh/Mimir/issues/192) |

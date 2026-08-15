@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.110.1] — 2026-08-15
+
+### CLI: `key=value` config pairs now express JSON arrays and objects (issue #289)
+
+- **`parse_config_scalar` parses JSON arrays/objects.** A `key=value` value that starts with `[` or `{` is attempted as JSON — `auth.scopes=["https://mail.google.com/"]` reaches the merged config as an array instead of a plain string — and falls back to the string form when the JSON does not parse, so existing string values like `[unterminated` keep working. The OAuth PKCE flow's `auth.scopes` reader (`oauth_flow_config` in `mimir/src/connector/oauth.rs`) previously dropped a string-typed scopes value silently, producing an authorize URL with no scopes; array values from `key=value` pairs now reach the flow, and the `--config-json` workaround is no longer needed for array-typed keys.
+- **Tests.** Unit tests cover scalar parsing of JSON arrays/objects (including empty `[]`/`{}`), the malformed-JSON string fallback, array/object values reaching the merged config through dotted keys, and `oauth_flow_config` receiving scopes supplied as a `key=value` pair.
+- **Docs.** `docs/cli.md`, `docs/connector-management.md`, `docs/wiki/cli-commands.md` (including the `auth.scopes` example), and `docs/wiki/what-works-now.md` (open-items row removed) updated.
+- Version bumped 0.110.0 → 0.110.1 (patch — backwards-compatible bug fix).
+
 ## [0.110.0] — 2026-08-15
 
 ### Email connector: iMIP CANCEL invites now trash the cancelled event's facts (issue #283)

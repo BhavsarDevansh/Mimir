@@ -151,9 +151,12 @@ fn merge_config(pairs: &[String], config_json: Option<&str>) -> Result<serde_jso
     Ok(config)
 }
 
-/// Parse a `key=value` config value as a boolean, number, or string. A
-/// value wrapped in double quotes is always a string (`account="0755"`
-/// keeps the leading zero instead of becoming the number 755).
+/// Parse a `key=value` config value as a boolean, number, JSON array/object,
+/// or string. A value wrapped in double quotes is always a string
+/// (`account="0755"` keeps the leading zero instead of becoming the number
+/// 755); a value that starts with `[` or `{` is parsed as JSON (e.g.
+/// `auth.scopes=["a","b"]`), falling back to a plain string when the JSON
+/// does not parse (issue #289).
 fn parse_config_scalar(raw: &str) -> serde_json::Value {
     if raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"') {
         return serde_json::Value::String(raw[1..raw.len() - 1].to_string());
@@ -171,6 +174,11 @@ fn parse_config_scalar(raw: &str) -> serde_json::Value {
     {
         if let Some(number) = serde_json::Number::from_f64(number) {
             return serde_json::Value::Number(number);
+        }
+    }
+    if raw.starts_with('[') || raw.starts_with('{') {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
+            return parsed;
         }
     }
     serde_json::Value::String(raw.to_string())

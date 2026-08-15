@@ -140,6 +140,7 @@ async fn test_connector_catalog_lists_registered_backend_pairs() {
         }]
     );
 }
+
 #[tokio::test]
 async fn test_connector_add_rejects_existing_slug() {
     let mock = Arc::new(MockLlmClient::builder().build());

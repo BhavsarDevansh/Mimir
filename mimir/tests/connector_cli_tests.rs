@@ -335,6 +335,109 @@ async fn connector_add_rejects_unregistered_backend_before_credential_prompt() {
     );
 }
 
+#[tokio::test]
+async fn connector_add_rejects_unknown_type_with_supported_pairs_hint() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/connectors/catalog"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
+                entries: vec![ConnectorCatalogEntry {
+                    connector_type: "gmail".to_string(),
+                    backend: "imap".to_string(),
+                }],
+            }),
+        )
+        .mount(&server)
+        .await;
+    // Fail loud if the CLI still POSTs after the pre-flight rejection.
+    Mock::given(method("POST"))
+        .and(path("/connectors"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let (stdout, stderr, status) = run_mimir(
+        &[
+            "connector",
+            "add",
+            "dropbox",
+            "--backend",
+            "api",
+            "--password",
+            "hunter2",
+        ],
+        &server.uri(),
+    );
+    assert!(
+        !status.success(),
+        "add must reject an unknown connector type.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("unknown connector type 'dropbox'"),
+        "expected an unknown-type rejection, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("gmail/imap"),
+        "expected the supported-pairs hint, got: {stderr}"
+    );
+    assert!(stdout.is_empty(), "expected no stdout, got: {stdout}");
+
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        requests.iter().all(|r| r.url.path() != "/connectors"),
+        "POST /connectors must not run after a pre-flight rejection"
+    );
+}
+
+#[tokio::test]
+async fn connector_add_rejects_when_daemon_has_no_backends() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/connectors/catalog"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse { entries: vec![] }),
+        )
+        .mount(&server)
+        .await;
+    // Fail loud if the CLI still POSTs after the pre-flight rejection.
+    Mock::given(method("POST"))
+        .and(path("/connectors"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let (stdout, stderr, status) = run_mimir(
+        &[
+            "connector",
+            "add",
+            "gmail",
+            "--backend",
+            "imap",
+            "--password",
+            "hunter2",
+        ],
+        &server.uri(),
+    );
+    assert!(
+        !status.success(),
+        "add must reject when the daemon has no backends.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("no connector backends registered"),
+        "expected an empty-catalog rejection, got: {stderr}"
+    );
+    assert!(stdout.is_empty(), "expected no stdout, got: {stdout}");
+
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        requests.iter().all(|r| r.url.path() != "/connectors"),
+        "POST /connectors must not run after a pre-flight rejection"
+    );
+}
+
 #[test]
 fn connector_auth_rejects_both_flags() {
     let (stdout, stderr, status) = run_mimir(

@@ -1,4 +1,4 @@
-//! Shared OAuth test doubles (Phase 3 / issue #290).
+//! Shared OAuth test doubles (Phase 3 / issues #290, #298).
 //!
 //! The interactive PKCE flow (A4 / #205) accepts an `open_browser` callback:
 //! production code opens the user's browser, but tests inject a fake browser
@@ -6,12 +6,16 @@
 //! GETs the loopback callback with a canned code — exactly what a real
 //! browser does. The flow's unit tests (`oauth::pkce`), the CLI connector
 //! tests (`mimir/src/connector/tests.rs`), and the flow's inline variant
-//! openers all used to re-implement this parsing locally, so the shared
-//! helpers live here once.
+//! openers all used to re-implement this parsing locally, and both suites
+//! used to inline the wiremock token-endpoint mock for the code exchange,
+//! so the shared helpers live here once.
 //!
 //! Test-only infrastructure, gated by the `test-utils` feature (off by
 //! default). The crate's own unit tests compile it via `cfg(test)`, and
 //! downstream crates opt in with the feature.
+
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Query parameters the fake browser needs from the authorize URL.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +75,27 @@ pub fn self_callback_opener(code: &'static str) -> impl Fn(&str) + Send + Sync {
             let _ = reqwest::get(callback).await;
         });
     }
+}
+
+/// Mount a wiremock token endpoint that answers the PKCE code exchange.
+///
+/// The response is the canonical OAuth token shape (access token, token
+/// type, refresh token, expiry) so the shape cannot drift between the PKCE
+/// flow's unit tests and the CLI connector tests. `expected_calls` is the
+/// number of POSTs the test expects; wiremock fails the test if the actual
+/// count differs.
+pub async fn mount_token_endpoint(server: &MockServer, expected_calls: u64) {
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "ya29.access",
+            "token_type": "Bearer",
+            "refresh_token": "rt",
+            "expires_in": 3600,
+        })))
+        .expect(expected_calls)
+        .mount(server)
+        .await;
 }
 
 #[cfg(test)]
@@ -168,5 +193,23 @@ mod tests {
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             .await
             .expect("respond");
+    }
+
+    #[tokio::test]
+    async fn mount_token_endpoint_answers_the_code_exchange() {
+        let server = MockServer::start().await;
+        mount_token_endpoint(&server, 1).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{}/token", server.uri()))
+            .send()
+            .await
+            .expect("token request");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let body: serde_json::Value = response.json().await.expect("token body");
+        assert_eq!(body["access_token"], "ya29.access");
+        assert_eq!(body["token_type"], "Bearer");
+        assert_eq!(body["refresh_token"], "rt");
+        assert_eq!(body["expires_in"], 3600);
     }
 }

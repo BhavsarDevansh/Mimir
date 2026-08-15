@@ -6,7 +6,7 @@ use mimir_api_types::{
 };
 use mimir_client::MimirClient;
 use mimir_connectors::SecretBundle;
-use mimir_connectors::test_utils::self_callback_opener;
+use mimir_connectors::test_utils::{mount_token_endpoint, self_callback_opener};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_json, body_partial_json, method, path},
@@ -41,21 +41,6 @@ async fn mount_list(server: &MockServer, connectors: Vec<ConnectorResponse>) {
         .respond_with(
             ResponseTemplate::new(200).set_body_json(&ConnectorListResponse { connectors }),
         )
-        .mount(server)
-        .await;
-}
-
-/// Mount a wiremock token endpoint that answers the PKCE code exchange.
-async fn mount_token_endpoint(server: &MockServer) {
-    Mock::given(method("POST"))
-        .and(path("/token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "access_token": "ya29.access",
-            "token_type": "Bearer",
-            "refresh_token": "rt",
-            "expires_in": 3600,
-        })))
-        .expect(1)
         .mount(server)
         .await;
 }
@@ -471,7 +456,7 @@ async fn add_with_oauth_config_runs_pkce_flow_and_ingests_tokens() {
         .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
         .mount(&daemon)
         .await;
-    mount_token_endpoint(&token_server).await;
+    mount_token_endpoint(&token_server, 1).await;
 
     handle_connector_add_with_opener(
         "calendar".to_string(),
@@ -584,7 +569,7 @@ async fn auth_with_oauth_config_runs_pkce_flow_and_ingests_tokens() {
         .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
         .mount(&daemon)
         .await;
-    mount_token_endpoint(&token_server).await;
+    mount_token_endpoint(&token_server, 1).await;
 
     handle_connector_auth_with_opener(
         "calendar".to_string(),

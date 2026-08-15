@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.111.0] — 2026-08-15
+
+### Testing: shared wiremock token-endpoint mock for the PKCE suites (issue #298)
+
+- **`mimir_connectors::test_utils::mount_token_endpoint(server, expected_calls)` is the single wiremock token-endpoint mock for the PKCE code exchange.** The PKCE flow's unit tests (`oauth::pkce`) inlined the same `POST /token` mock in four tests and the CLI connector tests (`mimir/src/connector/tests.rs`) carried a fifth private copy; all five call sites now mount the shared helper, which owns the canonical token-response shape (access token, token type, refresh token, expiry) and takes the per-test `expect(N)` count as a parameter, so the response shape can no longer drift between suites and a flow change cannot silently desynchronise the expected call count. The helper lives in the `test-utils` feature module (off by default) next to the #290 fake-browser doubles; `wiremock` became an optional dependency of `mimir-connectors` enabled by `test-utils` (the crate's own unit tests still get it from dev-dependencies), so production builds never compile it.
+- **Tests.** A unit test mounts the helper and asserts the canonical response body; the existing PKCE flow tests (expect 0/1 call counts) and the two CLI PKCE tests exercise the helper through the real flow.
+- **Docs.** `docs/e2e-testing.md`, `docs/oauth-client.md`, `docs/wiki/Testing-and-Benchmarks.md`, and `Mimir-Implementation-Context.md` updated.
+- Version bumped 0.110.2 → 0.111.0 (minor — backwards-compatible refactor).
+
 ## [0.110.2] — 2026-08-15
 
 ### Confidence: adjusted connector reliability scores now reach the connector pipeline (issue #292)

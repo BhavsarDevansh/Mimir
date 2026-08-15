@@ -45,7 +45,15 @@ impl CalendarConnector {
             // so staging it lets `extract_deletions` report the removal and
             // the supervisor trash exactly the facts this instance authored
             // for the deleted resource (issue #247).
-            self.tombstones.lock().await.push(href.clone());
+            let mut tombstones = self.tombstones.lock().await;
+            // Dedupe: a failed cycle re-syncs from the last confirmed cursor
+            // (issue #314), so the server re-reports the same deletions and
+            // the pending buffer must not accumulate duplicates across
+            // repeated failures (the trash path is idempotent, but the
+            // buffer would grow unbounded).
+            if !tombstones.contains(href) {
+                tombstones.push(href.clone());
+            }
         }
         Ok(count)
     }

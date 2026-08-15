@@ -34,6 +34,7 @@ not the whole calendar every time) and stages them for the knowledge graph.
 - The connector keeps the sync-token as its progress marker: across restarts
   it normally resumes from where it left off; a requested full sync or an
   invalidated cursor can require a complete refetch.
+- Syncs are **failure-safe**: the progress marker only advances after a sync cycle fully succeeded (fetch → extract → insert → save). If a cycle fails part-way (a temporary extraction problem, for example), the next cycle re-syncs from the last saved marker and re-processes the events that cycle had fetched — nothing is silently skipped, so you never lose an event from your knowledge graph to a transient glitch ([#314](https://github.com/BhavsarDevansh/Mimir/issues/314)).
 
 > **C3 vs C4:** #197 did the *transport* — fetching and parsing your
 > events. #198 turns those events into knowledge-graph facts (with locations

@@ -179,7 +179,11 @@ pub struct CalendarConnector {
     oauth_http: Option<OAuthHttpClient>,
     /// In-memory incremental cursor (the last persisted sync-token). Seeded
     /// from `__cursor` at construction; the supervisor persists the value
-    /// returned by [`sync`](Connector::sync) via `update_sync_cursor`.
+    /// returned by [`sync`](Connector::sync) via `update_sync_cursor` and
+    /// hands it back through [`Connector::on_cycle_succeeded`] only after a
+    /// fully successful cycle, so a cycle that fails after `sync` re-syncs
+    /// from the last confirmed cursor on the next in-process cycle (issue
+    /// #314).
     sync_token: Mutex<Option<String>>,
     /// Staged parsed VEVENTs awaiting extraction (drained by `extract`).
     buffer: Mutex<Vec<RawCalDavEvent>>,

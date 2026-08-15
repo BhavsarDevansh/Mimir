@@ -88,6 +88,12 @@ async fn incremental_sync_uses_persisted_sync_token() {
     assert_eq!(first.fetched, 1);
     assert_eq!(first.new_cursor.as_deref(), Some("token-1"));
     connector.extract().await.unwrap(); // drain
+    // The supervisor adopts the persisted cursor only after a fully
+    // successful cycle (issue #314); the unit-level equivalent is calling
+    // `on_cycle_succeeded` with the cursor the cycle would have persisted.
+    connector
+        .on_cycle_succeeded(first.new_cursor.as_deref())
+        .await;
 
     // Second (non-full) sync must send token-1; the incremental mock only
     // matches a body containing `<d:sync-token>token-1</d:sync-token>`.

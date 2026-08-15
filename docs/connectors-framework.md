@@ -122,6 +122,10 @@ pub trait Connector: Send + Sync {
         let _ = deleted;
         Ok(())
     }
+    async fn on_cycle_succeeded(&self, new_cursor: Option<&str>) {
+        // default: no-op — cursor adoption is per-connector (issue #314)
+        let _ = new_cursor;
+    }
     async fn act(&self, action: ConnectorAction)   // default: UnsupportedAction
         -> Result<ActionResult, ConnectorError>;
     async fn forget(&self) -> Result<(), ConnectorError>;
@@ -138,6 +142,7 @@ pub trait Connector: Send + Sync {
   `ConnectorError::UnsupportedAction`; backends that support write-back
   (e.g. Calendar event creation in C4) override it.
 - **`extract_deletions`** (issue #247) is the server-side deletion (tombstone) report: the supervisor calls it every cycle after `extract()` and trashes the returned `raw_reference`s via `KnowledgeGraph::forget_connector_facts_by_raw_reference` (shared trash machinery, idempotent, instance-scoped). The report is **non-destructive** — the supervisor calls **`acknowledge_deletions`** only after the cycle's trashing, fact insertion, and cursor persistence all succeeded, so a failed cycle re-reports the same removals instead of losing them (PR #313 review). The defaults return an empty set / a no-op; the Calendar connector overrides both with its staged CalDAV tombstones, and the Email connector overrides both with its staged iMIP `CANCEL` VEVENT UIDs (issue #283).
+- **`on_cycle_succeeded`** (issue #314) is the failure-safe cursor-adoption hook: the supervisor calls it (default no-op) after a cycle fully succeeded — extraction, trashing, fact insertion, and cursor/durable-state persistence all committed — with the persisted `SyncOutcome::new_cursor`, so the connector may adopt it as its in-memory progress marker. Connectors must **not** advance an in-memory cursor inside `sync`: the persisted cursor advances only on success, so an earlier adoption would skip a failed cycle's window on the next in-process cycle. The Calendar connector implements it (its `sync` no longer advances `sync_token`); connectors whose progress lives solely in the persisted column — or that re-deliver failed windows by other means, such as the Email connector's durable retry ledger (issue #262) — leave the default.
 - **`forget`** handles connector-local cleanup; the supervisor additionally
   cascades the deletion to knowledge-graph facts with this
   `connector_instance_id` via the existing trash machinery.
@@ -237,7 +242,7 @@ return unordered results.
 
 ## ConnectorSupervisor — supervised lifecycle (F8 / #185)
 
-`ConnectorSupervisor` owns one supervised tokio task per *active* connector instance and centralises spawn, restart-with-backoff, circuit breaker, startup restore, graceful shutdown, cursor persistence, and durable-state persistence. It is the caller that runs the two-step ingestion model end to end: `health` -> `sync` -> `extract` -> `normalize_and_insert`, then `update_sync_progress_and_durable_state` (the cursor and durable state commit in one transaction). All status / auth / cursor / durable-state writes go through the `KnowledgeGraph` facade — the supervisor never holds a `sqlx` pool, keeping the `sqlx`-free crate boundary intact.
+`ConnectorSupervisor` owns one supervised tokio task per *active* connector instance and centralises spawn, restart-with-backoff, circuit breaker, startup restore, graceful shutdown, cursor persistence, and durable-state persistence. It is the caller that runs the two-step ingestion model end to end: `health` -> `sync` -> `extract` -> `normalize_and_insert`, then `update_sync_progress_and_durable_state` (the cursor and durable state commit in one transaction), then `Connector::on_cycle_succeeded` so the connector adopts the persisted cursor only after the cycle fully succeeded (issue #314). All status / auth / cursor / durable-state writes go through the `KnowledgeGraph` facade — the supervisor never holds a `sqlx` pool, keeping the `sqlx`-free crate boundary intact.
 
 ### Construction
 
@@ -287,7 +292,7 @@ pauses the connector and exits), then loops:
    wins, the cycle's `AbortHandle` cancels the in-flight work and the runner
    exits.
 3. Classify the cycle result and act:
-   - **Ok** — reset the failure count, persist sync progress, then clear `last_error` (`set_connector_status(Active, Some(None))`). The cursor and connector-side durable state (`Connector::durable_state`, issue #262) are persisted **atomically** in one transaction via `update_sync_progress_and_durable_state`, so a crash between the two writes cannot advance the cursor without its retry ledger (PR #318 review). When `new_cursor` is `Some`, the cursor is advanced/cleared; when `None` (unchanged), only `last_sync_at` is stamped, preserving the existing progress token. The connector acknowledges the persist (`durable_state_persisted`) only after the combined commit succeeds.
+   - **Ok** — reset the failure count, persist sync progress, then clear `last_error` (`set_connector_status(Active, Some(None))`). The cursor and connector-side durable state (`Connector::durable_state`, issue #262) are persisted **atomically** in one transaction via `update_sync_progress_and_durable_state`, so a crash between the two writes cannot advance the cursor without its retry ledger (PR #318 review). When `new_cursor` is `Some`, the cursor is advanced/cleared; when `None` (unchanged), only `last_sync_at` is stamped, preserving the existing progress token. The connector acknowledges the persist (`durable_state_persisted`) only after the combined commit succeeds, and adopts the persisted cursor via `Connector::on_cycle_succeeded` (issue #314) — never inside `sync` — so a failed cycle re-syncs from the last confirmed cursor on the next in-process cycle.
    - **Err / Panic** — increment failures, write `last_error` (status stays
      `Active`), exponential backoff; once failures reach `max_failures`, move
      to `Error` and stop auto-restarting (manual `resume` required).

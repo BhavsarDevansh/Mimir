@@ -588,6 +588,18 @@ pub(super) async fn run_cycle(
         connector.durable_state_persisted();
     }
 
+    // The cursor (and any durable state) is persisted — only now may the
+    // connector adopt it as its in-memory progress marker. The adoption is
+    // deliberately deferred past `sync`/`extract`/insert/persist so a cycle
+    // that fails part-way re-syncs from the last confirmed cursor on the
+    // next in-process cycle instead of skipping the failed window (issue
+    // #314). The call is infallible: if it fails, the DB cursor is already
+    // committed and the next cycle re-syncs from the stale in-memory marker
+    // (an idempotent re-statement, never data loss).
+    connector
+        .on_cycle_succeeded(outcome.new_cursor.as_deref())
+        .await;
+
     // The deletions were trashed, this cycle's facts inserted, and the cursor
     // persisted — only now may the connector drop the acknowledged removals.
     // An acknowledgement failure is not fatal: the removals stay pending and
@@ -908,6 +920,150 @@ mod tests {
         assert!(
             connector.persisted.load(Ordering::Relaxed),
             "the connector must acknowledge a successful persist"
+        );
+    }
+
+    /// Delegating connector that fails the first `extract()` call and records
+    /// every cursor adopted via `on_cycle_succeeded`, so a test can pin the
+    /// supervisor contract: the connector is handed the new cursor only after
+    /// a cycle fully succeeded (issue #314).
+    struct FailFirstExtractCursorRecorder {
+        inner: MockConnector,
+        failed: AtomicBool,
+        adopted: Mutex<Vec<Option<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Connector for FailFirstExtractCursorRecorder {
+        fn id(&self) -> &str {
+            self.inner.id()
+        }
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+        fn connector_type(&self) -> ConnectorType {
+            self.inner.connector_type()
+        }
+        fn mode(&self) -> ConnectorMode {
+            self.inner.mode()
+        }
+        fn config_schema(&self) -> serde_json::Value {
+            self.inner.config_schema()
+        }
+        async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError> {
+            self.inner.authenticate().await
+        }
+        async fn health(&self) -> Result<HealthStatus, ConnectorError> {
+            self.inner.health().await
+        }
+        async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
+            self.inner.sync(options).await
+        }
+        async fn extract(
+            &self,
+        ) -> Result<Vec<mimir_knowledge::normalize::NormalizedFact>, ConnectorError> {
+            if !self.failed.swap(true, Ordering::SeqCst) {
+                return Err(ConnectorError::Parse(
+                    "injected transient extract failure".to_string(),
+                ));
+            }
+            self.inner.extract().await
+        }
+        async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError> {
+            self.inner.extract_deletions().await
+        }
+        async fn acknowledge_deletions(&self, deleted: &[String]) -> Result<(), ConnectorError> {
+            self.inner.acknowledge_deletions(deleted).await
+        }
+        async fn on_cycle_succeeded(&self, new_cursor: Option<&str>) {
+            self.adopted
+                .lock()
+                .await
+                .push(new_cursor.map(str::to_string));
+        }
+        async fn act(
+            &self,
+            action: crate::connector::ConnectorAction,
+        ) -> Result<crate::connector::ActionResult, ConnectorError> {
+            self.inner.act(action).await
+        }
+        async fn forget(&self) -> Result<(), ConnectorError> {
+            self.inner.forget().await
+        }
+    }
+
+    /// Issue #314: the supervisor hands the connector the new sync cursor
+    /// only after a fully successful cycle. A cycle that fails after `sync`
+    /// (extract error) must not advance the connector's in-memory cursor —
+    /// the next in-process cycle then re-syncs from the last confirmed cursor
+    /// and re-processes the failed window instead of skipping it.
+    #[tokio::test]
+    async fn cycle_adopts_new_cursor_only_after_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+                .await
+                .unwrap(),
+        );
+
+        let row = kg
+            .upsert_connector(UpsertConnectorInput {
+                connector_type: ConnectorType::Gmail,
+                slug: "cursor-adoption".to_string(),
+                backend: "mock".to_string(),
+                display_name: "Cursor Adoption".to_string(),
+                config_json: "{}".to_string(),
+                status: None,
+                auth_state: None,
+            })
+            .await
+            .unwrap();
+
+        let connector = Arc::new(FailFirstExtractCursorRecorder {
+            inner: MockConnector::from_config(json!({
+                "__slug": "cursor-adoption",
+                "facts": [
+                    { "subject": "Alice", "relationship_type": "works_at", "object": "Acme" }
+                ],
+                "cursor": "tok-1",
+            }))
+            .unwrap(),
+            failed: AtomicBool::new(false),
+            adopted: Mutex::new(Vec::new()),
+        });
+
+        // Cycle 1: `sync` staged the fact, `extract` fails — the cursor must
+        // NOT be adopted, so the next cycle re-syncs from the last confirmed
+        // cursor.
+        let first = run_cycle(
+            connector.clone(),
+            kg.clone(),
+            row.id,
+            ConnectorType::Gmail,
+            SyncOptions::default(),
+        )
+        .await;
+        assert!(matches!(first, CycleOutcome::Err(_)));
+        assert!(
+            connector.adopted.lock().await.is_empty(),
+            "a failed cycle must not adopt the new cursor"
+        );
+
+        // Cycle 2: succeeds — the supervisor must hand the persisted cursor
+        // to the connector so the next cycle is incremental.
+        let second = run_cycle(
+            connector.clone(),
+            kg.clone(),
+            row.id,
+            ConnectorType::Gmail,
+            SyncOptions::default(),
+        )
+        .await;
+        assert!(matches!(second, CycleOutcome::Ok(_)));
+        assert_eq!(
+            connector.adopted.lock().await.as_slice(),
+            &[Some("tok-1".to_string())],
+            "the connector adopts the cursor only after a successful cycle"
         );
     }
 }

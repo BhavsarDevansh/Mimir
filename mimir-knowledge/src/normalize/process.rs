@@ -5,7 +5,6 @@ use chrono::{DateTime, Utc};
 
 use crate::models::entity::EntityType;
 use crate::models::fact::{Fact, NewFact};
-use crate::models::source::SourceType;
 use crate::normalize::corrections::handle_correction;
 use crate::normalize::entities::resolve_entity;
 use crate::normalize::events::event_from_extraction;
@@ -223,11 +222,8 @@ async fn process_normalized_fact(
     // NO extraction-method discount. Connector facts use the
     // `connector_reliability` table score resolved once per batch (issue
     // #292); other source types keep the `confidence::initial` defaults.
-    let confidence = if source_type == SourceType::Connector {
-        connector_confidence.unwrap_or_else(|| crate::confidence::initial(source_type, None))
-    } else {
-        crate::confidence::initial(source_type, None)
-    };
+    let confidence =
+        crate::confidence::resolve_initial_confidence(None, source_type, connector_confidence);
 
     // Validate and collect category IDs.
     let mut valid_category_ids = Vec::new();

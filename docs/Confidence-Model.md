@@ -141,7 +141,7 @@ Stored in `connector_reliability` table (one row per `ConnectorType`).
   - Corroborated by independent source → `+0.01`
 - Scores are clamped to `[0.0, 1.0]`.
 - Only affects **future** extractions; existing fact confidence is never retroactively changed.
-- Every fact-insert path reads the table through the single `confidence::connector_reliability` helper: `insert_fact` / `insert_fact_internal`, `insert_facts_batch`, and the shared `normalize_and_insert` connector pipeline (issue #292), so an adjusted score reaches connector extractions immediately.
+- Every fact-insert path reads the table through the single `confidence::connector_reliability` helper: `insert_fact` / `insert_fact_internal`, `insert_facts_batch` (for connector-provenance facts carrying a `connector_instance_id`), and the shared `normalize_and_insert` connector pipeline (issue #292), so an adjusted score reaches connector extractions immediately.
 
 ## Schema Changes
 

@@ -393,6 +393,25 @@ pub async fn connector_reliability(
     Ok(score.unwrap_or_else(|| default_connector_score(connector_type)))
 }
 
+/// Resolve the initial confidence for a fact at insert time.
+///
+/// Explicit confidence wins; otherwise connector-sourced facts use the
+/// `connector_reliability` table score (falling back to the seeded default),
+/// and every other source type uses the [`initial`] default.
+pub fn resolve_initial_confidence(
+    explicit: Option<f32>,
+    source_type: SourceType,
+    connector_score: Option<f32>,
+) -> f32 {
+    if let Some(conf) = explicit {
+        conf
+    } else if source_type == SourceType::Connector {
+        connector_score.unwrap_or_else(|| initial(source_type, None))
+    } else {
+        initial(source_type, None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,6 +453,30 @@ mod tests {
     #[test]
     fn initial_inference_is_zero() {
         assert_eq!(initial(SourceType::Inference, None), 0.0);
+    }
+
+    #[test]
+    fn resolve_initial_confidence_precedence() {
+        // Explicit confidence wins over the connector table score.
+        assert_eq!(
+            resolve_initial_confidence(Some(0.42), SourceType::Connector, Some(0.90)),
+            0.42
+        );
+        // Connector facts use the table score when present.
+        assert_eq!(
+            resolve_initial_confidence(None, SourceType::Connector, Some(0.85)),
+            0.85
+        );
+        // Connector facts fall back to the seeded default without a score.
+        assert_eq!(
+            resolve_initial_confidence(None, SourceType::Connector, None),
+            0.80
+        );
+        // Non-connector source types ignore the connector score.
+        assert_eq!(
+            resolve_initial_confidence(None, SourceType::Import, Some(0.85)),
+            0.80
+        );
     }
 
     #[test]

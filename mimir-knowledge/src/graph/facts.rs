@@ -1,6 +1,7 @@
 use crate::graph::KnowledgeGraph;
 use crate::*;
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -78,16 +79,20 @@ impl KnowledgeGraph {
             }
         }
 
-        // Resolve connector reliability scores once per distinct connector type
-        // so batch-inserted connector facts get their adjusted table score
-        // instead of the hardcoded 0.80 fallback (issue #292).
+        // Resolve connector reliability scores once per distinct connector
+        // type so batch-inserted connector-provenance facts get their adjusted
+        // table score instead of the hardcoded 0.80 fallback (issue #292).
+        // Mirrors `insert_fact_internal`: the table score applies only to
+        // facts carrying a `connector_instance_id`, so both public insert
+        // paths resolve the same confidence for the same `NewFact`.
         let mut connector_scores: HashMap<ConnectorType, f32> = HashMap::new();
         for new_fact in &facts {
-            if new_fact.confidence.is_none() && new_fact.source_type == SourceType::Connector {
+            if new_fact.confidence.is_none()
+                && new_fact.source_type == SourceType::Connector
+                && new_fact.connector_instance_id.is_some()
+            {
                 if let Some(connector_type) = new_fact.connector_type {
-                    if let std::collections::hash_map::Entry::Vacant(entry) =
-                        connector_scores.entry(connector_type)
-                    {
+                    if let Entry::Vacant(entry) = connector_scores.entry(connector_type) {
                         let score =
                             crate::confidence::connector_reliability(&self.pool, connector_type)
                                 .await?;
@@ -102,16 +107,18 @@ impl KnowledgeGraph {
                 .ensure_relationship_type_in_tx(&mut tx, &new_fact.relationship_type)
                 .await?;
 
-            let confidence = if let Some(conf) = new_fact.confidence {
-                conf
-            } else if new_fact.source_type == SourceType::Connector {
+            let connector_score = if new_fact.connector_instance_id.is_some() {
                 new_fact
                     .connector_type
                     .and_then(|ct| connector_scores.get(&ct).copied())
-                    .unwrap_or_else(|| crate::confidence::initial(new_fact.source_type, None))
             } else {
-                crate::confidence::initial(new_fact.source_type, None)
+                None
             };
+            let confidence = crate::confidence::resolve_initial_confidence(
+                new_fact.confidence,
+                new_fact.source_type,
+                connector_score,
+            );
 
             let fact = queries::fact::insert_fact_in_tx(
                 &mut tx,

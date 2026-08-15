@@ -444,6 +444,33 @@ async fn adjusted_reliability_score_reaches_insert_facts_batch() {
         .unwrap();
     let alice = create_person(&kg, "Alice").await;
 
+    let photo_instance = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Photos,
+            slug: "photos-292".to_string(),
+            backend: "mock".to_string(),
+            display_name: "Photos".to_string(),
+            config_json: "{}".to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap()
+        .id;
+    let calendar_instance = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Calendar,
+            slug: "calendar-292".to_string(),
+            backend: "mock".to_string(),
+            display_name: "Calendar".to_string(),
+            config_json: "{}".to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap()
+        .id;
+
     // Raise Photos above its 0.80 seed: the batch path must read the table per
     // connector type instead of the hardcoded 0.80 fallback (issue #292).
     kg.adjust_connector_reliability(ConnectorType::Photos, 0.05)
@@ -458,7 +485,7 @@ async fn adjusted_reliability_score_reaches_insert_facts_batch() {
         valid_from: None,
         valid_until: None,
         source_type: SourceType::Connector,
-        connector_instance_id: None,
+        connector_instance_id: Some(photo_instance),
         connector_type: Some(ConnectorType::Photos),
         raw_reference: Some("photo-292".to_string()),
         extraction_method: Some(mimir_knowledge::models::source::ExtractionMethod::StructuredParse),
@@ -476,7 +503,7 @@ async fn adjusted_reliability_score_reaches_insert_facts_batch() {
         valid_from: None,
         valid_until: None,
         source_type: SourceType::Connector,
-        connector_instance_id: None,
+        connector_instance_id: Some(calendar_instance),
         connector_type: Some(ConnectorType::Calendar),
         raw_reference: Some("cal-292".to_string()),
         extraction_method: Some(mimir_knowledge::models::source::ExtractionMethod::StructuredParse),

@@ -132,7 +132,7 @@ Stop conditions: `depth >= max_depth`, `visited.len() >= max_nodes`, or empty fr
 
 ## Batch Insertion
 
-`KnowledgeGraph::insert_facts_batch(Vec<NewFact>)` inserts multiple facts atomically in a single SQLite transaction. It resolves relationship types, validates categories, resolves connector reliability scores per distinct connector type (so batch-inserted connector facts get their adjusted table score), writes rows via `queries::fact::insert_fact_in_tx`, assigns categories, and bumps centrality — all inside one `BEGIN … COMMIT` block. Rule-engine passes are skipped; callers should trigger them separately if needed.
+`KnowledgeGraph::insert_facts_batch(Vec<NewFact>)` inserts multiple facts atomically in a single SQLite transaction. It resolves relationship types, validates categories, resolves connector reliability scores per distinct connector type for connector-provenance facts (so batch-inserted connector facts with a `connector_instance_id` get their adjusted table score), writes rows via `queries::fact::insert_fact_in_tx`, assigns categories, and bumps centrality — all inside one `BEGIN … COMMIT` block. Rule-engine passes are skipped; callers should trigger them separately if needed.
 
 ## Targeted Predicate Lookup
 

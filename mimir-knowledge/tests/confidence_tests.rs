@@ -540,3 +540,114 @@ async fn adjusted_reliability_score_reaches_insert_facts_batch() {
         calendar.confidence
     );
 }
+
+#[tokio::test]
+async fn batch_derives_omitted_connector_type_from_registered_instance() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+    let alice = create_person(&kg, "Alice").await;
+
+    let calendar_instance = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Calendar,
+            slug: "calendar-292-omitted".to_string(),
+            backend: "mock".to_string(),
+            display_name: "Calendar".to_string(),
+            config_json: "{}".to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap()
+        .id;
+
+    // Raise Calendar above its 0.90 seed so the test proves the score came
+    // from the registered instance's type, not the generic 0.80 fallback.
+    kg.adjust_connector_reliability(ConnectorType::Calendar, 0.05)
+        .await
+        .unwrap();
+
+    let inserted = kg
+        .insert_facts_batch(vec![NewFact {
+            subject_id: alice,
+            relationship_type: "has_event".to_string(),
+            object_id: None,
+            object_literal: Some("Trip to Rome".to_string()),
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::Connector,
+            connector_instance_id: Some(calendar_instance),
+            connector_type: None,
+            raw_reference: Some("cal-292-omitted".to_string()),
+            extraction_method: Some(
+                mimir_knowledge::models::source::ExtractionMethod::StructuredParse,
+            ),
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        }])
+        .await
+        .unwrap();
+
+    assert!(
+        (inserted[0].confidence - 0.95).abs() < 1e-5,
+        "expected derived Calendar score 0.95, got {}",
+        inserted[0].confidence
+    );
+}
+
+#[tokio::test]
+async fn batch_rejects_connector_type_mismatching_registered_instance() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+    let alice = create_person(&kg, "Alice").await;
+
+    let calendar_instance = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Calendar,
+            slug: "calendar-292-mismatch".to_string(),
+            backend: "mock".to_string(),
+            display_name: "Calendar".to_string(),
+            config_json: "{}".to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap()
+        .id;
+
+    let error = kg
+        .insert_facts_batch(vec![NewFact {
+            subject_id: alice,
+            relationship_type: "has_event".to_string(),
+            object_id: None,
+            object_literal: Some("Trip to Rome".to_string()),
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::Connector,
+            connector_instance_id: Some(calendar_instance),
+            connector_type: Some(ConnectorType::Photos),
+            raw_reference: Some("cal-292-mismatch".to_string()),
+            extraction_method: Some(
+                mimir_knowledge::models::source::ExtractionMethod::StructuredParse,
+            ),
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        }])
+        .await
+        .expect_err("mismatched connector_type must be rejected");
+
+    assert!(
+        error.to_string().contains("connector_instance_id"),
+        "expected instance/type mismatch error, got: {error}"
+    );
+}

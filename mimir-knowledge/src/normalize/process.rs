@@ -43,11 +43,18 @@ pub async fn normalize_and_insert(
 
     // Connector confidence comes from the `connector_reliability` table, not
     // the hardcoded defaults, so adjusted scores reach the pipeline (issue
-    // #292). Resolved once per batch because provenance is batch-level.
-    let connector_confidence: Option<f32> = match provenance.connector_type {
-        Some(connector_type) => Some(kg.connector_reliability(connector_type).await?),
-        None => None,
-    };
+    // #292). Resolved once per batch because provenance is batch-level. The
+    // lookup uses the same connector-provenance gate as
+    // `process_normalized_fact`: both the instance id and the type must be
+    // present, so a partially initialised `Provenance` (type without
+    // instance) never applies a connector score.
+    let connector_confidence: Option<f32> =
+        match (provenance.connector_type, provenance.connector_instance_id) {
+            (Some(connector_type), Some(_)) => {
+                Some(kg.connector_reliability(connector_type).await?)
+            }
+            _ => None,
+        };
 
     for mut fact in facts {
         // Serialise this fact's writes with the background overlay worker

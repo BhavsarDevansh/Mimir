@@ -367,7 +367,7 @@ pub enum ConnectorCommands {
     Add {
         /// Connector type (gmail, calendar, photos).
         connector_type: String,
-        /// Backend (imap, caldav, local, ...).
+        /// Backend (run `mimir connector catalog` for the daemon's supported set).
         #[arg(long)]
         backend: String,
         /// Configuration as `key=value` pairs (dotted keys nest, e.g. `auth.kind=app_password`).
@@ -407,6 +407,12 @@ pub enum ConnectorCommands {
         #[arg(long)]
         token: Option<String>,
         /// Output raw JSON instead of a summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the connector types and backends the daemon supports.
+    Catalog {
+        /// Output raw JSON instead of a table.
         #[arg(long)]
         json: bool,
     },

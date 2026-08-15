@@ -406,6 +406,17 @@ mimir connector add calendar --backend caldav --config-json '{"calendar_url":"ht
 
 Config is given as `key=value` pairs with dotted nesting (`auth.kind=app_password`) plus an optional `--config-json` base object. Scalar values are parsed as booleans, numbers, or strings. OAuth configs (`auth.kind=oauth`) run the interactive PKCE login (A4 / #205) instead of prompting: the CLI opens the provider's authorize URL in your browser (printed first for headless/SSH sessions), receives the redirect on an ephemeral loopback listener, exchanges the code, and POSTs the token bundle to the daemon — the instance becomes `authenticated`. The flow waits up to 5 minutes for the callback; if it times out, the flow aborts and you re-run the command to start a new login. `--slug` defaults to the connector type and `--name` to its title-cased form.
 
+Before prompting for credentials, `add` asks the daemon for its catalog and fails fast if the requested `(connector_type, backend)` pair is not registered — no more discovering a typo after an interactive credential flow (issue #271).
+
+### `mimir connector catalog`
+
+List the connector types and backends the daemon can actually construct. The daemon's registry is populated at startup from its build features, so this is the authoritative answer to "what can I connect?" — run it before `add`, and use it as the source for backend names:
+
+```bash
+mimir connector catalog          # table of supported type/backend pairs
+mimir connector catalog --json   # structured output for scripts
+```
+
 ### `mimir connector list` / `status`
 
 ```bash

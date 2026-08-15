@@ -195,6 +195,20 @@ impl ConnectorRegistry {
             .collect::<Vec<_>>()
     }
 
+    /// List every registered `(connector_type, backend)` pair, sorted by
+    /// type then backend (both in their wire-string form) so callers get a
+    /// deterministic listing. The catalog route and CLI surface use this so
+    /// the order a user sees never depends on `HashMap` iteration order.
+    pub fn pairs(&self) -> Vec<(ConnectorType, String)> {
+        let mut pairs = self
+            .read()
+            .keys()
+            .map(|(ct, backend)| (*ct, backend.clone()))
+            .collect::<Vec<_>>();
+        pairs.sort_by(|a, b| (a.0.as_str(), &a.1).cmp(&(b.0.as_str(), &b.1)));
+        pairs
+    }
+
     /// Construct a connector instance for `(type, backend)` from its config.
     ///
     /// Looks up the registered factory and delegates to

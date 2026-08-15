@@ -58,6 +58,28 @@ pub struct ConnectorListResponse {
     pub connectors: Vec<ConnectorResponse>,
 }
 
+/// One registered `(connector_type, backend)` pair from the daemon's
+/// `ConnectorRegistry` — a backend the daemon can actually construct
+/// (feature-gated registrations included). `connector_type` is the lowercase
+/// wire string (`gmail` / `calendar` / `photos`), matching
+/// [`AddConnectorRequest`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConnectorCatalogEntry {
+    pub connector_type: String,
+    pub backend: String,
+}
+
+/// `GET /connectors/catalog` response — every registered
+/// `(connector_type, backend)` pair, sorted by type then backend.
+///
+/// This is the discovery surface for `mimir connector add`: users (and
+/// future shell completion / interactive wizards) can learn which backends
+/// the daemon supports without guessing (issue #271).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConnectorCatalogResponse {
+    pub entries: Vec<ConnectorCatalogEntry>,
+}
+
 // ---------------------------------------------------------------------------
 // Connector action routes (Phase 3 A2 / issue #203)
 // ---------------------------------------------------------------------------

@@ -2,11 +2,13 @@
 //!
 //! `GET /connectors` and `GET /connectors/{id}` surface registered connector
 //! instances with derived item counts (computed from the `sources` table).
-//! `POST /connectors` registers a new instance keyed on `slug`, validating the
-//! `(connector_type, backend)` pair against the daemon's
-//! [`ConnectorRegistry`] so an unregistered backend is rejected up front.
-//! `DELETE /connectors/{id}` stops the runner (if any) and deletes the row,
-//! detaching provenance so ingested facts survive with degraded provenance.
+//! `GET /connectors/catalog` lists every `(connector_type, backend)` pair the
+//! daemon can construct (issue #271). `POST /connectors` registers a new
+//! instance keyed on `slug`, validating the `(connector_type, backend)` pair
+//! against the daemon's [`ConnectorRegistry`] so an unregistered backend is
+//! rejected up front. `DELETE /connectors/{id}` stops the runner (if any) and
+//! deletes the row, detaching provenance so ingested facts survive with
+//! degraded provenance.
 //!
 //! Action routes (A2 / #203): `POST /connectors/{id}/sync` (manual sync),
 //! `POST /connectors/{id}/pause` / `resume` (lifecycle control), `POST
@@ -26,7 +28,10 @@ use axum::{
     response::Response,
 };
 
-use mimir_api_types::{AddConnectorRequest, ConnectorListResponse, ConnectorResponse};
+use mimir_api_types::{
+    AddConnectorRequest, ConnectorCatalogEntry, ConnectorCatalogResponse, ConnectorListResponse,
+    ConnectorResponse,
+};
 use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::enums::ConnectorType;
 
@@ -167,6 +172,31 @@ pub async fn connectors_list_handler(
         })
         .collect();
     Ok(Json(ConnectorListResponse { connectors }))
+}
+
+/// `GET /connectors/catalog` — every registered `(connector_type, backend)`
+/// pair the daemon can construct, sorted by type then backend.
+///
+/// The registry is populated at startup from the daemon's cargo features
+/// (`photos` / `calendar` / `gmail`, plus the test mock under
+/// `mock-connector`), so the catalog is the authoritative discovery surface
+/// for `mimir connector add` (issue #271) — users never have to guess a
+/// backend string, and shell completion / interactive wizards can build on
+/// it later. The static path takes precedence over `GET /connectors/{id}`,
+/// so `catalog` is never mistaken for an instance id.
+pub async fn connector_catalog_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ConnectorCatalogResponse>, Response> {
+    let entries = state
+        .connector_registry
+        .pairs()
+        .into_iter()
+        .map(|(connector_type, backend)| ConnectorCatalogEntry {
+            connector_type: connector_type.as_str().to_string(),
+            backend,
+        })
+        .collect();
+    Ok(Json(ConnectorCatalogResponse { entries }))
 }
 
 /// `GET /connectors/{id}` — a single instance with its derived item count.

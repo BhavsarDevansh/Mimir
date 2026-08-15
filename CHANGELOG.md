@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.108.0] — 2026-08-15
+
+### Feature: connector catalog — discover registered types/backends (issue #271)
+
+- **`GET /connectors/catalog` is the authoritative discovery surface.** It returns every registered `(connector_type, backend)` pair from the daemon's `ConnectorRegistry` (`ConnectorCatalogResponse` with sorted `ConnectorCatalogEntry { connector_type, backend }` entries), populated at request time so feature-gated registrations (`photos`/`calendar`/`gmail`, plus the `mock-connector` test backend) are reflected automatically. The registry gained `ConnectorRegistry::pairs()`, which sorts by type then backend (wire-string form) so output never depends on `HashMap` iteration order. The static path wins over `GET /connectors/{id}`.
+- **`mimir connector catalog` renders the catalog.** `mimir-client::connector_catalog()` plumbs the route; the CLI shows a type/backend table (or `--json`), so users never have to guess backend strings. The `--backend` help text now points at the command.
+- **`mimir connector add` pre-flights the pair before prompting.** A typo'd or feature-disabled `(connector_type, backend)` now fails immediately with the supported set for that type (or the full supported-pairs list for an unknown type) instead of failing at `POST /connectors` with a 400 after the credential prompt or the whole interactive OAuth PKCE flow. The daemon stays authoritative — the POST still validates — so this is a UX fast-fail, not a security boundary.
+- **Tests.** Registry unit test (sorted pairs), server route integration test, CLI wiremock tests (catalog table/JSON round-trip, pre-flight rejection with no POST), and a daemon E2E test asserting the catalog advertises exactly the feature-gated registrations (`photos/local`, `calendar/caldav`, `gmail/imap`, `gmail/test`).
+- **Docs.** `docs/connector-management.md` (route table + wire types), `docs/cli.md`, `docs/wiki/cli-commands.md`, `docs/wiki/connectors.md`, `docs/wiki/what-works-now.md`, `README.md`, and `VISION/03-Connectors/Technical-Design.md` (new "Registry Discovery" section) updated.
+- Version bumped 0.107.1 → 0.108.0 (minor — new feature).
+
 ## [0.107.1] — 2026-08-14
 
 ### Robustness: per-connector lifecycle serialisation + graceful runner stop (issue #266)

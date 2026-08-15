@@ -342,3 +342,36 @@ fn second_connector_corroboration_boosts_confidence() {
 
     daemon.stop();
 }
+
+#[test]
+fn connector_catalog_advertises_feature_gated_backends() {
+    let daemon = TestDaemon::start();
+
+    // The test daemon builds mimir-server with the default features plus
+    // `mock-connector`, so the catalog must advertise exactly the four
+    // registered pairs — proving the route reflects the daemon's actual
+    // feature-gated registrations rather than a hard-coded list (issue
+    // #271).
+    let catalog = daemon.run_cli_json(&["connector", "catalog", "--json"]);
+    let entries = catalog["entries"].as_array().unwrap();
+    let pairs: Vec<(String, String)> = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry["connector_type"].as_str().unwrap().to_string(),
+                entry["backend"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        pairs,
+        vec![
+            ("calendar".to_string(), "caldav".to_string()),
+            ("gmail".to_string(), "imap".to_string()),
+            ("gmail".to_string(), "test".to_string()),
+            ("photos".to_string(), "local".to_string()),
+        ]
+    );
+
+    daemon.stop();
+}

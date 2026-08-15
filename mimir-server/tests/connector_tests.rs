@@ -106,6 +106,40 @@ async fn test_connector_add_list_show_remove_round_trip() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_connector_catalog_lists_registered_backend_pairs() {
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock).await;
+    let app = mimir_server::build_app(state.clone());
+
+    // The test harness registers only the `gmail/test` mock pair, so the
+    // catalog must surface exactly that — proving the route reflects the
+    // registry rather than a hard-coded list.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/connectors/catalog")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let catalog: mimir_api_types::ConnectorCatalogResponse =
+        serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        catalog.entries,
+        vec![mimir_api_types::ConnectorCatalogEntry {
+            connector_type: "gmail".to_string(),
+            backend: "test".to_string(),
+        }]
+    );
+}
 #[tokio::test]
 async fn test_connector_add_rejects_existing_slug() {
     let mock = Arc::new(MockLlmClient::builder().build());

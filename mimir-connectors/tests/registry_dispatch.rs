@@ -147,6 +147,52 @@ fn backends_for_type_lists_all_registered_backends() {
     assert_eq!(backends, vec!["mock-graph", "mock-imap"]);
 }
 
+#[test]
+fn pairs_lists_all_registered_pairs_sorted_by_type_then_backend() {
+    let registry = ConnectorRegistry::new();
+    registry
+        .register(
+            ConnectorType::Gmail,
+            "imap",
+            fake_factory("imap", ConnectorType::Gmail),
+        )
+        .unwrap();
+    registry
+        .register(
+            ConnectorType::Photos,
+            "local",
+            fake_factory("local", ConnectorType::Photos),
+        )
+        .unwrap();
+    registry
+        .register(
+            ConnectorType::Calendar,
+            "caldav",
+            fake_factory("caldav", ConnectorType::Calendar),
+        )
+        .unwrap();
+    registry
+        .register(
+            ConnectorType::Gmail,
+            "graph",
+            fake_factory("graph", ConnectorType::Gmail),
+        )
+        .unwrap();
+
+    // Registered in arbitrary order; pairs() must return a deterministic
+    // sorted-by-(type, backend) list for stable wire output and table UX.
+    let pairs = registry.pairs();
+    assert_eq!(
+        pairs,
+        vec![
+            (ConnectorType::Calendar, "caldav".to_string()),
+            (ConnectorType::Gmail, "graph".to_string()),
+            (ConnectorType::Gmail, "imap".to_string()),
+            (ConnectorType::Photos, "local".to_string()),
+        ]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Multi-backend dispatch (core acceptance)
 // ---------------------------------------------------------------------------

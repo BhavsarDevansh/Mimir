@@ -1,4 +1,5 @@
-//! Durable LLM-extraction retry ledger (issue #262).
+//! Durable Email-connector state: the LLM-extraction retry ledger (issue
+//! #262) plus the buffered iMIP `CANCEL` tombstones (issue #283).
 //!
 //! The Email connector's prose-extraction layer (C7 / #201) retries failed
 //! LLM calls by re-staging the raw email for the next extraction cycle.
@@ -33,6 +34,14 @@
 //!   payloads are persisted per snapshot (entries beyond the cap still
 //!   retry in-process), so a mailbox-wide outage cannot bloat the durable
 //!   column with one base64 payload per failing message.
+//! - **iMIP tombstones.** The ledger also carries the connector's buffered
+//!   iMIP `CANCEL` references (issue #283): each cancelled VEVENT's
+//!   namespaced reference is staged during `extract`, reported via
+//!   [`Connector::extract_deletions`](crate::connector::Connector::extract_deletions),
+//!   and persisted with the ledger, so a restart between `extract` and the
+//!   supervisor's deletion pass re-reports the removals instead of losing
+//!   them (the CANCEL email is consumed by `extract` and the IMAP cursor
+//!   has already advanced past it, so the message is never re-fetched).
 //!
 //! The ledger is pure policy over the extraction loop: it never touches the
 //! knowledge graph or the IMAP session (the crate is sqlx-free and the
@@ -171,7 +180,8 @@ pub(crate) enum FailureDisposition {
     Terminal,
 }
 
-/// The durable retry policy state of one Email connector instance.
+/// The durable state of one Email connector instance: the bounded
+/// prose-retry policy plus the buffered iMIP `CANCEL` tombstones.
 ///
 /// Serialised to JSON for the `connectors.durable_state` column (via
 /// [`durable_json`](Self::durable_json)); `dirty` tracks changes since the
@@ -186,6 +196,14 @@ pub(crate) struct ProseRetryLedger {
     pending: BTreeMap<String, PendingProse>,
     /// Terminally failed messages (oldest first, capped).
     terminal: Vec<TerminalProseFailure>,
+    /// Buffered iMIP `CANCEL` references awaiting the supervisor's deletion
+    /// pass (issue #283): `extract_invites` stages each cancelled event's
+    /// namespaced reference here, `Connector::extract_deletions` reports it,
+    /// and the supervisor trashes the facts this instance authored for that
+    /// `raw_reference` (the #247 tombstone machinery) before acknowledging.
+    /// Persisted with the ledger so a restart between `extract` and the
+    /// deletion pass re-reports the removals instead of losing them.
+    tombstones: Vec<String>,
     /// Whether the ledger changed since the last successful persist.
     #[serde(skip)]
     dirty: bool,
@@ -237,6 +255,30 @@ impl ProseRetryLedger {
         let terminal_before = self.terminal.len();
         self.terminal.retain(|t| t.raw_ref() != raw_ref);
         if had_pending || self.terminal.len() != terminal_before {
+            self.dirty = true;
+        }
+    }
+
+    /// Buffer an iMIP `CANCEL` reference for the supervisor's deletion pass
+    /// (issue #283). Marks the ledger dirty so the tombstone is persisted
+    /// with the next durable-state write.
+    pub(crate) fn push_tombstone(&mut self, reference: String) {
+        self.tombstones.push(reference);
+        self.dirty = true;
+    }
+
+    /// The buffered iMIP `CANCEL` references awaiting the deletion pass.
+    pub(crate) fn tombstones(&self) -> &[String] {
+        &self.tombstones
+    }
+
+    /// Drop the references the supervisor trashed and acknowledged. Marks
+    /// the ledger dirty when anything was removed so the reduced set is
+    /// persisted.
+    pub(crate) fn acknowledge_deletions(&mut self, deleted: &[String]) {
+        let before = self.tombstones.len();
+        self.tombstones.retain(|t| !deleted.contains(t));
+        if self.tombstones.len() != before {
             self.dirty = true;
         }
     }
@@ -349,10 +391,11 @@ impl ProseRetryLedger {
         self.terminal.len()
     }
 
-    /// Whether the ledger holds no pending retries and no terminal failures.
+    /// Whether the ledger holds no pending retries, no terminal failures,
+    /// and no buffered tombstones.
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.pending.is_empty() && self.terminal.is_empty()
+        self.pending.is_empty() && self.terminal.is_empty() && self.tombstones.is_empty()
     }
 
     /// Drop every record without marking the ledger dirty (used by `forget`,
@@ -360,6 +403,7 @@ impl ProseRetryLedger {
     pub(crate) fn clear(&mut self) {
         self.pending.clear();
         self.terminal.clear();
+        self.tombstones.clear();
         self.dirty = false;
     }
 
@@ -549,6 +593,33 @@ mod tests {
             None,
             "only an acknowledged persist clears the ledger"
         );
+    }
+
+    #[test]
+    fn tombstones_round_trip_and_track_dirty() {
+        let mut ledger = ProseRetryLedger::default();
+        assert_eq!(ledger.durable_json(), None, "clean ledger persists nothing");
+        ledger.push_tombstone("imip:dentist-1@example.com".to_string());
+        assert!(ledger.dirty, "a buffered tombstone marks the ledger dirty");
+        assert_eq!(ledger.tombstones(), &["imip:dentist-1@example.com"]);
+        let json = ledger.durable_json().expect("dirty ledger serializes");
+        let mut restored = ProseRetryLedger::from_json(&json);
+        assert_eq!(
+            restored.tombstones(),
+            &["imip:dentist-1@example.com"],
+            "tombstones survive the durable round-trip"
+        );
+        restored.acknowledge_deletions(&["imip:dentist-1@example.com".to_string()]);
+        assert!(
+            restored.tombstones().is_empty(),
+            "acknowledged tombstones are dropped"
+        );
+        assert!(
+            restored.dirty,
+            "acknowledging a removal marks the ledger dirty"
+        );
+        restored.mark_persisted();
+        assert_eq!(restored.durable_json(), None);
     }
 
     #[test]

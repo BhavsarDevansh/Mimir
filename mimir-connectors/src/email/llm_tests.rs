@@ -67,6 +67,27 @@ async fn llm_layer_not_invoked_when_deterministic_layer_already_read_the_email()
 }
 
 #[tokio::test]
+async fn llm_layer_not_invoked_for_cancel_email() {
+    // A CANCEL emits no facts but is still a handled iMIP part, so layer 3
+    // must NOT run even when a backend is configured: cancellation prose
+    // must never author junk facts (issue #283 cascade gate).
+    let mock = llm_tool_response(r#"{"facts": []}"#);
+    let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
+    stage(&connector, invite_email("CANCEL")).await;
+    let facts = connector.extract().await.expect("extract");
+    assert!(facts.is_empty(), "CANCEL emits no facts: {facts:?}");
+    assert!(
+        mock.system_chat_calls().is_empty(),
+        "LLM must not run on cancellation prose"
+    );
+    assert_eq!(
+        connector.extract_deletions().await.expect("deletions"),
+        vec!["imip:dentist-1@example.com".to_string()],
+        "the CANCEL tombstone is still buffered for the supervisor"
+    );
+}
+
+#[tokio::test]
 async fn llm_layer_extracts_prose_when_no_deterministic_facts() {
     // A plain-prose appointment email yields nothing from layers 1-2, so
     // layer 3 runs and the LLM's validated facts are appended with

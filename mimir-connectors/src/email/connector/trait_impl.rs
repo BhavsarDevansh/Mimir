@@ -128,9 +128,12 @@ impl Connector for EmailConnector {
         // C6 / #200 + #249: drain the staged RFC 822 messages and run a
         // deterministic (structured-parse) extraction *cascade* over each. The
         // cascade has two layers today:
-        //   1. iMIP calendar invites (`text/calendar; method=REQUEST | REPLY`)
-        //      parsed into the same VEVENT fact cluster the Calendar connector
-        //      emits, via the shared [`crate::ical`] module (C6 / #200).
+        //   1. iMIP calendar invites (`text/calendar; method=REQUEST | REPLY
+        //      | CANCEL`) parsed into the same VEVENT fact cluster the
+        //      Calendar connector emits, via the shared [`crate::ical`]
+        //      module (C6 / #200). REQUEST/REPLY facts are keyed by the
+        //      VEVENT UID; a CANCEL emits no facts and stages its UID as a
+        //      tombstone (issue #283).
         //   2. schema.org JSON-LD (`<script type="application/ld+json">` in
         //      HTML parts) parsed into typed fact clusters for Order,
         //      ParcelDelivery, FlightReservation, LodgingReservation,
@@ -178,7 +181,7 @@ impl Connector for EmailConnector {
                 // parse, and both tag their facts with
                 // `extraction_method = StructuredParse`.
                 let before = facts.len();
-                facts.extend(self.extract_invites(&message, &raw_ref));
+                let imip_handled = self.extract_invites(&message, &raw_ref, &mut facts);
                 // Layer 2: schema.org JSON-LD deterministic extraction
                 // (#249). Scans HTML parts for <script type="application/ld+json">
                 // and emits typed facts for recognised schema.org types
@@ -201,15 +204,20 @@ impl Connector for EmailConnector {
 
                 // Layer 3: LLM extraction (C7 / #201) — the last-resort layer
                 // for unstructured prose a deterministic layer cannot read.
-                // Only run it when layers 1-2 produced *no* facts for this
-                // message, so a deterministic layer already read the email
-                // (machine-readable invite / JSON-LD) is never re-processed by
-                // the LLM (avoids duplicate extraction and bounds LLM cost).
-                // When no backend is injected the layer is skipped, leaving
-                // deterministic extraction unchanged.
-                if facts.len() != before {
-                    // A deterministic layer read the message; settle any
-                    // stale retry entry so it cannot resurrect a retry.
+                // Only run it when layers 1-2 produced *no* facts and no iMIP
+                // part was handled for this message (a CANCEL emits no facts,
+                // and a REQUEST/REPLY whose VEVENT failed to parse emits none
+                // either), so a deterministic layer already read the email
+                // (machine-readable invite / JSON-LD) is never re-processed
+                // by the LLM (avoids duplicate extraction and bounds LLM
+                // cost). When no backend is injected the layer is skipped,
+                // leaving deterministic extraction unchanged.
+                if facts.len() != before || imip_handled {
+                    // A deterministic layer read the message (facts, or an
+                    // iMIP lifecycle signal like a CANCEL that emits none);
+                    // settle any stale retry entry so it cannot resurrect a
+                    // retry, and skip the LLM layer so cancellation prose
+                    // cannot author junk facts.
                     self.prose_retry.lock().unwrap().settle(&raw_ref);
                 } else if let Some(backend) = &self.llm_backend {
                     match llm::extract_prose_facts(
@@ -276,6 +284,28 @@ impl Connector for EmailConnector {
                 debug!(uid = mail.uid, "could not parse RFC 822 message; skipping");
             }
         }
+        // Issue #283: a CANCEL must win over a same-batch REQUEST regardless
+        // of message order. `extract_invites` buffers each CANCEL's
+        // namespaced reference as a tombstone; the supervisor trashes
+        // *before* inserting this cycle's facts, so any fact whose
+        // `raw_reference` matches a pending tombstone must be dropped here
+        // or the cancelled event would be inserted after the trash and
+        // survive. Filtering once after the message loop (not only at CANCEL
+        // time) covers a CANCEL staged before its REQUEST in the same batch:
+        // buffer order is not guaranteed to match iMIP order (re-staged LLM
+        // retries are pushed to the back of the buffer, and mail delivery
+        // can invert order). The `imip:` namespace keeps the filter from
+        // ever touching JSON-LD / LLM facts, whose references live in the
+        // `{uid_validity}:{uid}` space.
+        let ledger = self.prose_retry.lock().unwrap();
+        let tombstones = ledger.tombstones();
+        if !tombstones.is_empty() {
+            facts.retain(|f| {
+                !f.raw_reference
+                    .as_deref()
+                    .is_some_and(|r| tombstones.iter().any(|t| t.as_str() == r))
+            });
+        }
         Ok(facts)
     }
 
@@ -288,6 +318,29 @@ impl Connector for EmailConnector {
                 ConnectorError::Authentication(format!("secret delete failed: {e}"))
             })?;
         }
+        Ok(())
+    }
+
+    async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError> {
+        // Issue #283: report the buffered iMIP CANCEL references without
+        // draining them — the supervisor acknowledges the processed
+        // removals via `acknowledge_deletions` only after trashing, fact
+        // insertion, and cursor persistence all succeeded, so a failed cycle
+        // re-reports them instead of losing them (the #247 retention
+        // contract). Each reference is the namespaced `raw_reference` the
+        // iMIP layer authors for the cancelled event's facts, so the
+        // supervisor trashes exactly those facts. The buffer is part of the
+        // durable state, so a restart between `extract` and the deletion
+        // pass re-reports the removals instead of losing them.
+        let ledger = self.prose_retry.lock().unwrap();
+        Ok(ledger.tombstones().to_vec())
+    }
+
+    async fn acknowledge_deletions(&self, deleted: &[String]) -> Result<(), ConnectorError> {
+        self.prose_retry
+            .lock()
+            .unwrap()
+            .acknowledge_deletions(deleted);
         Ok(())
     }
 

@@ -46,14 +46,17 @@ impl EmailConnector {
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .unwrap_or_else(|| DEFAULT_SLUG.to_string());
-        // Seed the durable LLM-extraction retry ledger (issue #262) from the
+        // Seed the durable connector state (issues #262, #283) from the
         // supervisor-injected `__durable_state` (the `connectors.durable_state`
-        // column persisted after the previous cycle) and re-stage the pending
-        // raw RFC 822 bytes into the buffer, so a restart resumes the bounded
-        // retry without an IMAP re-fetch (the cursor has advanced past the
-        // message). A pending entry whose payload is missing or undecodable
-        // (never persisted because it exceeded the size cap, or corrupt) is
-        // settled (dropped) rather than left to linger.
+        // column persisted after the previous cycle): the bounded
+        // LLM-extraction retry ledger (re-staging the pending raw RFC 822
+        // bytes into the buffer, so a restart resumes the retry without an
+        // IMAP re-fetch — the cursor has advanced past the message) and the
+        // buffered iMIP `CANCEL` tombstones (so a restart between `extract`
+        // and the supervisor's deletion pass re-reports the removals). A
+        // pending entry whose payload is missing or undecodable (never
+        // persisted because it exceeded the size cap, or corrupt) is settled
+        // (dropped) rather than left to linger.
         let mut ledger = config
             .get("__durable_state")
             .and_then(|v| v.as_str())

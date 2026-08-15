@@ -2,6 +2,7 @@ use super::*;
 
 use crate::email::imap;
 use mimir_knowledge::KnowledgeGraph;
+use mimir_knowledge::models::audit_log::ChangedBy;
 use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::enums::{ConnectorStatus, EventType};
 use mimir_knowledge::models::source::ExtractionMethod;
@@ -174,8 +175,8 @@ async fn extract_funnels_into_kb_with_resolution_and_provenance() {
     assert_eq!(dr_smith_attending.object_id, Some(event));
 
     // Provenance: every fact has one Connector source tied to the instance,
-    // with the `UIDVALIDITY`-qualified UID as `raw_reference` and
-    // StructuredParse method.
+    // with the namespaced VEVENT UID as `raw_reference` (the stable iMIP
+    // identity a CANCEL maps onto, issue #283) and StructuredParse method.
     for f in &outcome.inserted {
         let sources = kg.get_sources_for_fact(f.id).await.unwrap();
         assert!(
@@ -183,7 +184,7 @@ async fn extract_funnels_into_kb_with_resolution_and_provenance() {
                 s.source_type_id == mimir_knowledge::models::source::SourceType::Connector as i16
                     && s.connector_instance_id == Some(instance_id)
                     && s.connector_type_id == Some(ConnectorType::Gmail as i16)
-                    && s.raw_reference.as_deref() == Some("123:42")
+                    && s.raw_reference.as_deref() == Some("imip:dentist-1@example.com")
                     && s.extraction_method_id == Some(ExtractionMethod::StructuredParse as i16)
             }),
             "missing connector provenance on fact {}: {:?}",
@@ -191,6 +192,117 @@ async fn extract_funnels_into_kb_with_resolution_and_provenance() {
             sources
         );
     }
+}
+
+#[tokio::test]
+async fn cancel_invite_trashes_previously_extracted_facts() {
+    let (kg, _dir) = init_kg().await;
+    let row = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Gmail,
+            slug: "gmail-personal".to_string(),
+            backend: "imap".to_string(),
+            display_name: "Gmail".to_string(),
+            config_json: "{}".to_string(),
+            status: Some(ConnectorStatus::Active),
+            auth_state: Some(ConnectorAuthState::Authenticated),
+        })
+        .await
+        .unwrap();
+    let instance_id = row.id;
+
+    let connector = connector_with_identity(Some("Devansh"));
+    // Stage the REQUEST, extract, and insert the appointment cluster.
+    connector.buffer.lock().await.push(imap::RawEmail {
+        uid: 42,
+        uid_validity: 123,
+        internal_date: None,
+        raw: invite_email("REQUEST"),
+    });
+    let facts = connector.extract().await.expect("extract");
+    assert_eq!(facts.len(), 4);
+    let outcome = normalize_and_insert(
+        &kg,
+        facts,
+        Provenance::connector(
+            instance_id,
+            ConnectorType::Gmail,
+            ExtractionMethod::StructuredParse,
+        ),
+    )
+    .await
+    .expect("normalize_and_insert");
+    assert_eq!(outcome.inserted.len(), 4);
+    let mut has_event = None;
+    for f in &outcome.inserted {
+        if kg
+            .relationship_type_name(f.relationship_type_id)
+            .await
+            .as_deref()
+            == Some("has_event")
+        {
+            has_event = Some(f);
+            break;
+        }
+    }
+    let has_event = has_event.expect("has_event fact");
+    let has_event_id = has_event.id;
+    assert!(
+        kg.get_event_by_fact(has_event_id).await.unwrap().is_some(),
+        "the appointment has an events-subsystem overlay"
+    );
+
+    // Stage the CANCEL (a different email, same VEVENT UID), extract (no
+    // facts), and report the buffered tombstone.
+    connector.buffer.lock().await.push(imap::RawEmail {
+        uid: 43,
+        uid_validity: 123,
+        internal_date: None,
+        raw: invite_email("CANCEL"),
+    });
+    let facts = connector.extract().await.expect("extract");
+    assert!(facts.is_empty(), "CANCEL emits no facts");
+    let deletions = connector.extract_deletions().await.expect("deletions");
+    assert_eq!(deletions, vec!["imip:dentist-1@example.com".to_string()]);
+
+    // The supervisor's trash path (issue #247 machinery) removes exactly the
+    // facts this instance authored for the cancelled event.
+    let result = kg
+        .forget_connector_facts_by_raw_reference(instance_id, &deletions, ChangedBy::System)
+        .await
+        .expect("trash");
+    assert_eq!(result.forgotten_count, 4, "all four cluster facts trashed");
+    assert!(
+        kg.get_fact(has_event_id).await.unwrap().is_none(),
+        "the cancelled event's fact is trashed"
+    );
+    assert!(
+        kg.get_event_by_fact(has_event_id).await.unwrap().is_none(),
+        "the events-subsystem overlay is cascade-deleted with the fact"
+    );
+
+    // Acknowledge: the processed removal is dropped from the buffer, and a
+    // re-report (e.g. a duplicate CANCEL) is an idempotent no-op.
+    connector
+        .acknowledge_deletions(&deletions)
+        .await
+        .expect("acknowledge");
+    assert!(
+        connector
+            .extract_deletions()
+            .await
+            .expect("deletions")
+            .is_empty(),
+        "acknowledged tombstones are dropped"
+    );
+    let again = kg
+        .forget_connector_facts_by_raw_reference(instance_id, &deletions, ChangedBy::System)
+        .await
+        .expect("idempotent trash");
+    assert_eq!(
+        again.forgotten_count, 0,
+        "a CANCEL with no prior facts is a no-op"
+    );
 }
 
 #[tokio::test]

@@ -404,7 +404,7 @@ mimir connector add gmail --backend imap host=imap.fastmail.com auth.kind=app_pa
 mimir connector add calendar --backend caldav --config-json '{"calendar_url":"https://dav.example.com/cal","auth":{"kind":"app_password","username":"me@example.com"}}' --slug work-cal
 ```
 
-Config is given as `key=value` pairs with dotted nesting (`auth.kind=app_password`) plus an optional `--config-json` base object. Scalar values are parsed as booleans, numbers, or strings. OAuth configs (`auth.kind=oauth`) run the interactive PKCE login (A4 / #205) instead of prompting: the CLI opens the provider's authorize URL in your browser (printed first for headless/SSH sessions), receives the redirect on an ephemeral loopback listener, exchanges the code, and POSTs the token bundle to the daemon — the instance becomes `authenticated`. The flow waits up to 5 minutes for the callback; if it times out, the flow aborts and you re-run the command to start a new login. `--slug` defaults to the connector type and `--name` to its title-cased form.
+Config is given as `key=value` pairs with dotted nesting (`auth.kind=app_password`) plus an optional `--config-json` base object. Scalar values are parsed as booleans, numbers, or strings; values starting with `[` or `{` are parsed as JSON arrays/objects (e.g. `'auth.scopes=["a","b"]'`), falling back to a plain string when the JSON does not parse (issue #289). OAuth configs (`auth.kind=oauth`) run the interactive PKCE login (A4 / #205) instead of prompting: the CLI opens the provider's authorize URL in your browser (printed first for headless/SSH sessions), receives the redirect on an ephemeral loopback listener, exchanges the code, and POSTs the token bundle to the daemon — the instance becomes `authenticated`. The flow waits up to 5 minutes for the callback; if it times out, the flow aborts and you re-run the command to start a new login. `--slug` defaults to the connector type and `--name` to its title-cased form.
 
 Before prompting for credentials, `add` asks the daemon for its catalog and fails fast if the requested `(connector_type, backend)` pair is not registered — no more discovering a typo after an interactive credential flow (issue #271).
 
@@ -448,10 +448,10 @@ mimir connector auth gmail --password 'app-pw'     # app-password backend
 mimir connector auth gmail                          # interactive: pick the kind, then enter the secret
 ```
 
-The credential kind comes from the flag (`--password` / `--token` are mutually exclusive), an interactive selection when neither is given, or the `auth.kind` of a re-supplied config (`--config-json` / `key=value` pairs). An `auth.kind=oauth` config runs the interactive PKCE login (A4 / #205) instead of prompting — the daemon does not expose the stored config on the wire, so the OAuth fields (`auth.auth_uri`, `auth.token_endpoint`, `auth.client_id`, optional `auth.client_secret` / `auth.scopes`) are re-supplied. `auth.scopes` is a JSON array, which the `key=value` parser cannot express (values are silently dropped, [#289](https://github.com/BhavsarDevansh/Mimir/issues/289)) — supply it through `--config-json` until that issue is fixed:
+The credential kind comes from the flag (`--password` / `--token` are mutually exclusive), an interactive selection when neither is given, or the `auth.kind` of a re-supplied config (`--config-json` / `key=value` pairs). An `auth.kind=oauth` config runs the interactive PKCE login (A4 / #205) instead of prompting — the daemon does not expose the stored config on the wire, so the OAuth fields (`auth.auth_uri`, `auth.token_endpoint`, `auth.client_id`, optional `auth.client_secret` / `auth.scopes`) are re-supplied. `auth.scopes` is a JSON array — pass it as a JSON value in the `key=value` pair (issue #289):
 
 ```bash
-mimir connector auth gmail auth.kind=oauth auth.auth_uri=https://accounts.google.com/o/oauth2/v2/auth auth.token_endpoint=https://oauth2.googleapis.com/token auth.client_id=... auth.username=you@gmail.com
+mimir connector auth gmail auth.kind=oauth auth.auth_uri=https://accounts.google.com/o/oauth2/v2/auth auth.token_endpoint=https://oauth2.googleapis.com/token auth.client_id=... auth.username=you@gmail.com 'auth.scopes=["https://mail.google.com/"]'
 ```
 
 After re-authing an expired connector, run `mimir connector resume <slug>` to restart its runner.

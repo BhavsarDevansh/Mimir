@@ -189,6 +189,95 @@ fn parse_config_scalar_honors_double_quotes() {
     assert_eq!(parse_config_scalar("0755"), serde_json::json!(755));
     assert_eq!(parse_config_scalar("true"), serde_json::json!(true));
     assert_eq!(parse_config_scalar("\"0755"), serde_json::json!("\"0755"));
+    assert_eq!(
+        parse_config_scalar("\"[1, 2, 3]\""),
+        serde_json::json!("[1, 2, 3]")
+    );
+    assert_eq!(
+        parse_config_scalar("\"{not json}\""),
+        serde_json::json!("{not json}")
+    );
+}
+
+#[test]
+fn parse_config_scalar_parses_json_arrays_and_objects() {
+    assert_eq!(
+        parse_config_scalar(
+            r#"["https://mail.google.com/", "https://www.googleapis.com/auth/calendar.readonly"]"#
+        ),
+        serde_json::json!([
+            "https://mail.google.com/",
+            "https://www.googleapis.com/auth/calendar.readonly"
+        ])
+    );
+    assert_eq!(
+        parse_config_scalar("[1, 2, 3]"),
+        serde_json::json!([1, 2, 3])
+    );
+    assert_eq!(parse_config_scalar("[]"), serde_json::json!([]));
+    assert_eq!(
+        parse_config_scalar(r#"{"interval_seconds": 900}"#),
+        serde_json::json!({"interval_seconds": 900})
+    );
+    assert_eq!(parse_config_scalar("{}"), serde_json::json!({}));
+}
+
+#[test]
+fn parse_config_scalar_falls_back_to_string_for_malformed_json() {
+    assert_eq!(
+        parse_config_scalar("[unterminated"),
+        serde_json::json!("[unterminated")
+    );
+    assert_eq!(
+        parse_config_scalar("{not json}"),
+        serde_json::json!("{not json}")
+    );
+    assert_eq!(parse_config_scalar("["), serde_json::json!("["));
+}
+
+#[test]
+fn merge_config_json_arrays_reach_merged_config() {
+    let merged = merge_config(
+        &[
+            "auth.kind=oauth".to_string(),
+            r#"auth.scopes=["https://mail.google.com/", "https://www.googleapis.com/auth/calendar.readonly"]"#.to_string(),
+        ],
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        merged["auth"]["scopes"],
+        serde_json::json!([
+            "https://mail.google.com/",
+            "https://www.googleapis.com/auth/calendar.readonly"
+        ])
+    );
+}
+
+#[test]
+fn merge_config_json_objects_reach_merged_config() {
+    let merged = merge_config(&["limits={\"max_items\": 50}".to_string()], None).unwrap();
+    assert_eq!(merged["limits"], serde_json::json!({"max_items": 50}));
+}
+
+#[test]
+fn oauth_flow_config_scopes_from_key_value_pairs() {
+    let merged = merge_config(
+        &[
+            "auth.kind=oauth".to_string(),
+            "auth.auth_uri=https://oauth.example.com/authorize".to_string(),
+            "auth.token_endpoint=https://oauth.example.com/token".to_string(),
+            "auth.client_id=test-client".to_string(),
+            r#"auth.scopes=["scope-a", "scope-b"]"#.to_string(),
+        ],
+        None,
+    )
+    .unwrap();
+    let flow = oauth_flow_config(&merged).expect("merged config should drive the flow");
+    assert_eq!(
+        flow.scopes.as_deref(),
+        Some(&["scope-a".to_string(), "scope-b".to_string()][..])
+    );
 }
 
 #[test]

@@ -218,6 +218,10 @@ async fn main() {
                 )
                 .await;
             }
+            cli::ConnectorCommands::Catalog { json } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                connector::handle_connector_catalog(json, &base_url).await;
+            }
             cli::ConnectorCommands::Status { slug, json } => {
                 ensure_daemon(&base_url, &mut daemon_started).await;
                 connector::handle_connector_status(slug, json, &base_url).await;

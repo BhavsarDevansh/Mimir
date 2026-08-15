@@ -1,7 +1,7 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-08-14
-> **Version:** 0.107.0
+> **Last updated:** 2026-08-15
+> **Version:** 0.108.0
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in `CHANGELOG.md`; this file deliberately does not repeat either.
 
 ---
@@ -116,7 +116,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | `mimir tool enable/disable/permission` | ✅ Works | Change tool permission levels (saved to `tools.toml`). |
 | `mimir skill list/show/add/delete/enable/disable` | ✅ Works | Manage skills (built-in, user-added). Generated-skill lifecycle is not implemented ([#20](https://github.com/BhavsarDevansh/Mimir/issues/20)). |
 | `mimir kb` | ✅ Works | All `mimir kb` commands route through daemon HTTP (no direct DB access); audit, CRUD, trash, pending confirmation, categories, and optimization are supported. The old "migrate kb to daemon routes" issue [#90](https://github.com/BhavsarDevansh/Mimir/issues/90) appears resolved. |
-| `mimir connector` | 🟡 Partial | Ten subcommands (add, auth, list, status, sync, pause, resume, remove, forget, act) plumbing the daemon routes, including the interactive OAuth PKCE login (A4 / [#205](https://github.com/BhavsarDevansh/Mimir/issues/205)) for `auth.kind=oauth` configs. `--password`/`--token` flags leak secrets to the process list ([#270](https://github.com/BhavsarDevansh/Mimir/issues/270)); there is no way to discover registered types/backends ([#271](https://github.com/BhavsarDevansh/Mimir/issues/271)). |
+| `mimir connector` | 🟡 Partial | Eleven subcommands (add, auth, catalog, list, status, sync, pause, resume, remove, forget, act) plumbing the daemon routes, including the interactive OAuth PKCE login (A4 / [#205](https://github.com/BhavsarDevansh/Mimir/issues/205)) for `auth.kind=oauth` configs. `mimir connector catalog` lists the daemon's registered `(connector_type, backend)` pairs and `add` pre-flights the requested pair against it before prompting ([#271](https://github.com/BhavsarDevansh/Mimir/issues/271)). `--password`/`--token` flags leak secrets to the process list ([#270](https://github.com/BhavsarDevansh/Mimir/issues/270)). |
 
 ### Chat & Conversation
 
@@ -226,7 +226,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
 | Framework (F1–F13) | ✅ Works | Crate + feature flags, instance registry, provenance FK, shared `normalize_and_insert`, entity-resolution chain, `Connector` trait, registry + factory dispatch, supervised lifecycle, manual sync triggering, secret store, rate-limit/retry primitives, mock connector ([#179](https://github.com/BhavsarDevansh/Mimir/issues/179)–[#190](https://github.com/BhavsarDevansh/Mimir/issues/190)). |
-| Daemon wiring + routes (A1–A4) | ✅ Works | Registry/supervisor owned by the daemon, startup restore, CRUD/status/sync/pause/resume/tokens/actions/forget routes, `mimir connector` CLI, interactive OAuth PKCE login ([#202](https://github.com/BhavsarDevansh/Mimir/issues/202)–[#205](https://github.com/BhavsarDevansh/Mimir/issues/205)). Enum→wire strings (`connector_type`/`status`/`auth_state`, job priority/run status) come from explicit `as_str()` methods, not `Debug` formatting ([#264](https://github.com/BhavsarDevansh/Mimir/issues/264)). |
+| Daemon wiring + routes (A1–A4) | ✅ Works | Registry/supervisor owned by the daemon, startup restore, CRUD/status/catalog/sync/pause/resume/tokens/actions/forget routes, `mimir connector` CLI, interactive OAuth PKCE login ([#202](https://github.com/BhavsarDevansh/Mimir/issues/202)–[#205](https://github.com/BhavsarDevansh/Mimir/issues/205)). The catalog route exposes every registered `(connector_type, backend)` pair, and `add` pre-flights against it before prompting ([#271](https://github.com/BhavsarDevansh/Mimir/issues/271)). Enum→wire strings (`connector_type`/`status`/`auth_state`, job priority/run status) come from explicit `as_str()` methods, not `Debug` formatting ([#264](https://github.com/BhavsarDevansh/Mimir/issues/264)). |
 | Photos (local) | 🟡 Partial | `notify` watcher, EXIF GPS/datetime, incremental cursor, `took_photo_at`/`visited`/`took_photo` facts, place anchoring, canonical user identity ([#246](https://github.com/BhavsarDevansh/Mimir/issues/246)). Coords-only fallback authors `visited <coords-label>` with the photo path as `raw_reference` provenance ([#250](https://github.com/BhavsarDevansh/Mimir/issues/250)); facts are built through the shared `connector_fact` constructor ([#255](https://github.com/BhavsarDevansh/Mimir/issues/255)); RAW formats are deferred. |
 | Calendar (CalDAV) | 🟡 Partial | PROPFIND + sync-collection incremental sync, app-password + OAuth refresh, event fact cluster, write-back (`create_event`/`update_event`/`delete_event`), server-side deletion → KB fact lifecycle ([#247](https://github.com/BhavsarDevansh/Mimir/issues/247)). Auth error arm duplicated with Email ([#273](https://github.com/BhavsarDevansh/Mimir/issues/273)); forget SQL duplication ([#267](https://github.com/BhavsarDevansh/Mimir/issues/267)). |
 | Email (IMAP) | 🟡 Partial | `LOGIN`/`XOAUTH2`, `UID FETCH` incremental sync, `IDLE` push with polling fallback, iMIP invites, schema.org JSON-LD, LLM prose extraction with bounded retry + terminal failures, persisted atomically with the sync cursor so retries survive restarts ([#262](https://github.com/BhavsarDevansh/Mimir/issues/262)). iMIP `CANCEL` invites are skipped ([#283](https://github.com/BhavsarDevansh/Mimir/issues/283)); auth error arm duplicated with Calendar ([#273](https://github.com/BhavsarDevansh/Mimir/issues/273)). LLM tool-call parsing is now shared with the conversational path via `mimir-core::llm::parse_tool_output`, and both tool schemas are built once via `LazyLock` ([#259](https://github.com/BhavsarDevansh/Mimir/issues/259)). |
@@ -280,6 +280,7 @@ The daemon exposes an OpenAI-compatible chat endpoint plus Mimir-specific manage
 | `POST` | `/stop` | Graceful shutdown (loopback only) |
 | `GET` | `/connectors` | List registered connector instances with derived item counts |
 | `POST` | `/connectors` | Register a new connector instance (add-only; validates the backend) |
+| `GET` | `/connectors/catalog` | List registered `(connector_type, backend)` pairs the daemon can construct |
 | `GET` | `/connectors/{id}` | Show a single connector instance with its item count |
 | `DELETE` | `/connectors/{id}` | Stop the runner, delete the instance and its stored credentials (detaches provenance) |
 | `POST` | `/connectors/{id}/sync` | Trigger a manual sync |

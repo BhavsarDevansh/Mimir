@@ -1,4 +1,6 @@
-use mimir_api_types::{AddConnectorRequest, ConnectorListResponse, ConnectorResponse};
+use mimir_api_types::{
+    AddConnectorRequest, ConnectorCatalogResponse, ConnectorListResponse, ConnectorResponse,
+};
 
 use crate::MimirClient;
 use crate::error::ClientError;
@@ -10,6 +12,13 @@ impl MimirClient {
     /// List every registered connector instance with derived item counts.
     pub async fn connectors(&self) -> Result<ConnectorListResponse, ClientError> {
         self.get_json(&self.url("connectors"), &()).await
+    }
+
+    /// Fetch the daemon's connector catalog: every registered
+    /// `(connector_type, backend)` pair the daemon can construct,
+    /// sorted by type then backend (issue #271).
+    pub async fn connector_catalog(&self) -> Result<ConnectorCatalogResponse, ClientError> {
+        self.get_json(&self.url("connectors/catalog"), &()).await
     }
 
     /// Fetch a single connector instance by id.

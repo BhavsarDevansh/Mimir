@@ -2,6 +2,7 @@
 //! credentials.
 
 use mimir_api_types::{AddConnectorRequest, IngestTokenRequest};
+use mimir_client::MimirClient;
 
 use super::oauth::{ingest_oauth_bundle, open_in_browser, run_oauth_flow_with_opener};
 use super::{
@@ -68,6 +69,7 @@ pub(crate) async fn handle_connector_add_with_opener(
     opener: &(dyn Fn(&str) + Send + Sync),
 ) {
     let client = make_client(base_url);
+    validate_backend(&client, &connector_type, &backend).await;
     let merged =
         merge_config(&config, config_json.as_deref()).unwrap_or_else(|e| exit_with_error(e));
     let slug = slug.unwrap_or_else(|| connector_type.to_ascii_lowercase());
@@ -138,6 +140,52 @@ pub(crate) async fn handle_connector_add_with_opener(
     println!(
         "Next: run `mimir connector resume {slug}` to activate it, then `mimir connector sync {slug}` to sync."
     );
+}
+
+/// Pre-flight check against the daemon's catalog so a typo'd
+/// `(connector_type, backend)` pair fails before the credential prompt or
+/// OAuth flow (issue #271). The daemon remains authoritative — `POST
+/// /connectors` still validates the pair — so this is a UX fast-fail, not a
+/// security boundary.
+async fn validate_backend(client: &MimirClient, connector_type: &str, backend: &str) {
+    let catalog = client
+        .connector_catalog()
+        .await
+        .unwrap_or_else(|e| exit_with_error(render_client_error(e)));
+    let normalized_type = connector_type.to_ascii_lowercase();
+    if catalog
+        .entries
+        .iter()
+        .any(|entry| entry.connector_type == normalized_type && entry.backend == backend)
+    {
+        return;
+    }
+    let type_backends = catalog
+        .entries
+        .iter()
+        .filter(|entry| entry.connector_type == normalized_type)
+        .map(|entry| entry.backend.as_str())
+        .collect::<Vec<_>>();
+    let message = if type_backends.is_empty() {
+        if catalog.entries.is_empty() {
+            exit_with_error(
+                "the daemon has no connector backends registered (check its build features)",
+            );
+        }
+        let supported = catalog
+            .entries
+            .iter()
+            .map(|entry| format!("{}/{}", entry.connector_type, entry.backend))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("unknown connector type '{connector_type}'; supported pairs: {supported}")
+    } else {
+        format!(
+            "connector type '{connector_type}' does not support backend '{backend}'; supported backends: {}",
+            type_backends.join(", ")
+        )
+    };
+    exit_with_error(message);
 }
 
 /// Render the exit message when credential ingest fails after the instance

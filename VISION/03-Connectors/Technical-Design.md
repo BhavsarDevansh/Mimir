@@ -75,6 +75,10 @@ pub trait ConnectorFactory: Send + Sync {
 
 `ConnectorContext` carries the shared services injected at construction: an optional `Arc<dyn Geocoder>` (Photos reverse geocoding, S3), an optional `Arc<dyn SecretStore>` (Calendar / Email credentials, F10), the canonical user identity name, and an optional `Arc<dyn LlmBackend>` (Email LLM extraction, C7, routed through the shared pool's system queue per decision D′).
 
+### Registry Discovery
+
+`ConnectorRegistry::pairs()` lists every registered `(connector_type, backend)` pair, sorted by type then backend (wire-string form) so output is deterministic regardless of `HashMap` iteration order. The daemon exposes this as `GET /connectors/catalog` (`ConnectorCatalogResponse`, populated from the registry at request time — feature-gated registrations like the `mock-connector` test backend are reflected automatically), `mimir-client::connector_catalog()` plumbs it, and `mimir connector catalog` renders it as a table or `--json`. `mimir connector add` pre-flights the requested pair against the catalog before prompting for credentials, so a typo'd backend fails immediately with the supported set instead of after an interactive flow (issue #271). Per-backend config metadata (e.g. a factory-level config schema) is intentionally **not** part of V1 — the factory trait carries no metadata today — and can be added later without breaking the wire shape.
+
 ## Data Types
 
 ### ConnectorMode

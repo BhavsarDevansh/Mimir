@@ -17,10 +17,10 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::routes::{
     chat_handler, chat_stream_handler, connector_actions_handler, connector_add_handler,
-    connector_forget_handler, connector_pause_handler, connector_remove_handler,
-    connector_resume_handler, connector_show_handler, connector_sync_handler,
-    connector_tokens_handler, connectors_list_handler, create_category, delete_category,
-    kb_audit_handler, kb_browse_handler, kb_confirm_fact_handler, kb_edit_handler,
+    connector_catalog_handler, connector_forget_handler, connector_pause_handler,
+    connector_remove_handler, connector_resume_handler, connector_show_handler,
+    connector_sync_handler, connector_tokens_handler, connectors_list_handler, create_category,
+    delete_category, kb_audit_handler, kb_browse_handler, kb_confirm_fact_handler, kb_edit_handler,
     kb_forget_handler, kb_optimization_run_now_handler, kb_optimization_status_handler,
     kb_pending_handler, kb_profile_handler, kb_query_handler, kb_reject_fact_handler,
     kb_show_handler, kb_trash_empty_handler, kb_trash_list_handler, kb_trash_restore_handler,
@@ -126,6 +126,7 @@ pub fn build_app(state: Arc<AppState>) -> Router {
             "/connectors",
             get(connectors_list_handler).post(connector_add_handler),
         )
+        .route("/connectors/catalog", get(connector_catalog_handler))
         .route(
             "/connectors/{id}",
             get(connector_show_handler).delete(connector_remove_handler),

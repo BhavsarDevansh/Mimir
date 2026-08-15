@@ -19,6 +19,7 @@ pub(crate) use crate::cli_util::{exit_with_error, make_client, print_json};
 mod actions;
 mod add;
 mod auth;
+mod catalog;
 mod lifecycle;
 mod oauth;
 mod query;
@@ -29,6 +30,7 @@ mod tests;
 pub use actions::handle_connector_act;
 pub use add::handle_connector_add;
 pub use auth::handle_connector_auth;
+pub use catalog::handle_connector_catalog;
 pub use lifecycle::{
     handle_connector_forget, handle_connector_pause, handle_connector_remove,
     handle_connector_resume,

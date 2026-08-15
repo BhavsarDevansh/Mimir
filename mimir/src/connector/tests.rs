@@ -1,8 +1,8 @@
 //! Unit + wiremock-backed tests for the connector CLI module.
 
 use mimir_api_types::{
-    ActionResultResponse, ConnectorListResponse, ConnectorResponse, ForgetConnectorResponse,
-    SyncConnectorResponse,
+    ActionResultResponse, ConnectorCatalogEntry, ConnectorCatalogResponse, ConnectorListResponse,
+    ConnectorResponse, ForgetConnectorResponse, SyncConnectorResponse,
 };
 use mimir_client::MimirClient;
 use mimir_connectors::SecretBundle;
@@ -279,6 +279,18 @@ async fn resolve_connector_matches_slug_from_list() {
 async fn add_with_app_password_ingests_credentials() {
     let server = MockServer::start().await;
     let created = connector_fixture(1, "gmail");
+    Mock::given(method("GET"))
+        .and(path("/connectors/catalog"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
+                entries: vec![ConnectorCatalogEntry {
+                    connector_type: "gmail".to_string(),
+                    backend: "imap".to_string(),
+                }],
+            }),
+        )
+        .mount(&server)
+        .await;
     Mock::given(method("POST"))
         .and(path("/connectors"))
         .and(body_json(serde_json::json!({
@@ -341,6 +353,18 @@ async fn add_with_oauth_config_runs_pkce_flow_and_ingests_tokens() {
     let daemon = MockServer::start().await;
     let token_server = MockServer::start().await;
     let created = connector_fixture(1, "calendar");
+    Mock::given(method("GET"))
+        .and(path("/connectors/catalog"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
+                entries: vec![ConnectorCatalogEntry {
+                    connector_type: "calendar".to_string(),
+                    backend: "caldav".to_string(),
+                }],
+            }),
+        )
+        .mount(&daemon)
+        .await;
     Mock::given(method("POST"))
         .and(path("/connectors"))
         .respond_with(ResponseTemplate::new(201).set_body_json(&created))

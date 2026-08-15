@@ -24,9 +24,9 @@ pub use chat::{
     StreamItem, ToolCallInfo, ToolCallStartInfo, Usage,
 };
 pub use connectors::{
-    ActionResultResponse, AddConnectorRequest, ConnectorActionRequest, ConnectorListResponse,
-    ConnectorResponse, ForgetConnectorResponse, IngestTokenRequest, SyncConnectorRequest,
-    SyncConnectorResponse,
+    ActionResultResponse, AddConnectorRequest, ConnectorActionRequest, ConnectorCatalogEntry,
+    ConnectorCatalogResponse, ConnectorListResponse, ConnectorResponse, ForgetConnectorResponse,
+    IngestTokenRequest, SyncConnectorRequest, SyncConnectorResponse,
 };
 pub use kb::{
     AuditQueryRequest, AuditQueryResponse, AuditRow, BrowseEdge, BrowseRequest, BrowseResponse,

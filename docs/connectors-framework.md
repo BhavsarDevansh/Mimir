@@ -202,11 +202,18 @@ impl ConnectorRegistry {
         -> Option<Arc<dyn ConnectorFactory>>;
     pub fn backends_for(&self, connector_type: ConnectorType) -> Vec<String>;
     pub fn registered_types(&self) -> Vec<ConnectorType>;
+    pub fn pairs(&self) -> Vec<(ConnectorType, String)>;
     pub fn create(
         &self, connector_type: ConnectorType, backend: &str, config: serde_json::Value,
     ) -> Result<Arc<dyn Connector>, ConnectorError>;
 }
 ```
+
+`pairs()` lists every registered `(connector_type, backend)` pair, sorted by
+type then backend (wire-string form) so output is deterministic — it backs the
+daemon's `GET /connectors/catalog` discovery route and `mimir connector
+catalog` (issue #271). `backends_for` / `registered_types` predate it and
+return unordered results.
 
 ### Design notes
 

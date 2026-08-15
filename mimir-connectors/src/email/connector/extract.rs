@@ -34,20 +34,25 @@ use crate::email::connector::EmailConnector;
 /// stops surfacing in "Upcoming". A CANCEL VEVENT without a `UID` cannot be
 /// mapped and is skipped. `SEQUENCE` is not consulted in V1: the knowledge
 /// graph does not store the original sequence, so a CANCEL trashes by `UID`
-/// regardless of sequence.
+/// regardless of sequence. A CANCEL also drops any facts already staged in
+/// `facts` for the same `UID` (a REQUEST and its CANCEL arriving in one sync
+/// window): the CANCEL is the later signal, so the cancelled event is not
+/// (re-)inserted by the same cycle that trashed its prior facts.
 ///
 /// The returned `bool` reports whether the message carried a handled iMIP
 /// part (REQUEST/REPLY/CANCEL), so the cascade gate in
 /// [`Connector::extract`](crate::connector::Connector::extract) treats a
 /// CANCEL — which emits no facts — as read and skips the LLM layer instead
-/// of letting the cancellation prose author junk facts.
+/// of letting the cancellation prose author junk facts. REQUEST/REPLY facts
+/// are appended to `facts` (the batch being built by the caller), so a CANCEL
+/// later in the same batch can drop them.
 impl EmailConnector {
     pub(super) fn extract_invites(
         &self,
         message: &mail_parser::Message<'_>,
         raw_ref: &str,
-    ) -> (Vec<mimir_knowledge::normalize::NormalizedFact>, bool) {
-        let mut facts = Vec::new();
+        facts: &mut Vec<mimir_knowledge::normalize::NormalizedFact>,
+    ) -> bool {
         let mut handled = false;
         for part in &message.parts {
             if !part.is_content_type("text", "calendar") {
@@ -120,6 +125,14 @@ impl EmailConnector {
                                 // the facts this instance authored for the
                                 // UID after `extract` (issue #283, #247).
                                 self.tombstones.lock().unwrap().push(uid.to_string());
+                                // Drop any facts this batch already staged
+                                // for the same UID (a REQUEST and its CANCEL
+                                // in one sync window): the supervisor trashes
+                                // *before* inserting this cycle's facts, so
+                                // without this the cancelled event's fresh
+                                // facts would be inserted after the trash and
+                                // survive. The CANCEL is the later signal.
+                                facts.retain(|f| f.raw_reference.as_deref() != Some(uid));
                             }
                             None => {
                                 debug!(
@@ -136,6 +149,6 @@ impl EmailConnector {
                 }
             }
         }
-        (facts, handled)
+        handled
     }
 }

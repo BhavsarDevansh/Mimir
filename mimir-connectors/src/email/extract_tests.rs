@@ -147,7 +147,8 @@ fn extract_invites_emits_appointment_cluster_for_request_method() {
     let connector = connector_with_identity(Some("Devansh"));
     let bytes = invite_email("REQUEST");
     let message = parse(&bytes);
-    let (facts, handled) = connector.extract_invites(&message, "42");
+    let mut facts = Vec::new();
+    let handled = connector.extract_invites(&message, "42", &mut facts);
     assert!(handled, "REQUEST is a handled iMIP part");
     // 1 primary (has_event) + 1 location + 2 attendees = 4.
     assert_eq!(facts.len(), 4);
@@ -194,7 +195,8 @@ fn extract_invites_emits_facts_for_reply_method() {
     let connector = connector_with_identity(Some("Devansh"));
     let bytes = invite_email("REPLY");
     let message = parse(&bytes);
-    let (facts, handled) = connector.extract_invites(&message, "7");
+    let mut facts = Vec::new();
+    let handled = connector.extract_invites(&message, "7", &mut facts);
     assert!(handled, "REPLY is a handled iMIP part");
     // Same cluster shape as REQUEST.
     assert!(facts.iter().any(|f| f.relationship_type == "has_event"));
@@ -218,7 +220,8 @@ fn extract_invites_skips_publish_method() {
     let connector = connector_with_identity(Some("Devansh"));
     let bytes = invite_email("PUBLISH");
     let message = parse(&bytes);
-    let (facts, handled) = connector.extract_invites(&message, "9");
+    let mut facts = Vec::new();
+    let handled = connector.extract_invites(&message, "9", &mut facts);
     assert!(
         facts.is_empty(),
         "PUBLISH (often marketing webinars) is skipped for now"
@@ -231,7 +234,8 @@ async fn extract_invites_buffers_cancel_uid_as_tombstone() {
     let connector = connector_with_identity(Some("Devansh"));
     let bytes = invite_email("CANCEL");
     let message = parse(&bytes);
-    let (facts, handled) = connector.extract_invites(&message, "9");
+    let mut facts = Vec::new();
+    let handled = connector.extract_invites(&message, "9", &mut facts);
     assert!(facts.is_empty(), "CANCEL emits no facts");
     assert!(handled, "CANCEL counts as a read iMIP part (cascade gate)");
     assert_eq!(
@@ -242,11 +246,44 @@ async fn extract_invites_buffers_cancel_uid_as_tombstone() {
 }
 
 #[tokio::test]
+async fn extract_cancel_in_same_batch_drops_request_facts_for_the_uid() {
+    let connector = connector_with_identity(Some("Devansh"));
+    // A REQUEST and its CANCEL for the same VEVENT UID arrive in one sync
+    // batch (both fetched since the last cursor). The supervisor trashes
+    // *before* inserting this cycle's facts, so the CANCEL — the later
+    // signal — must also drop the batch's fresh REQUEST facts, or the
+    // cancelled event would be inserted after the trash and survive.
+    connector.buffer.lock().await.push(imap::RawEmail {
+        uid: 42,
+        uid_validity: 1,
+        internal_date: None,
+        raw: invite_email("REQUEST"),
+    });
+    connector.buffer.lock().await.push(imap::RawEmail {
+        uid: 43,
+        uid_validity: 1,
+        internal_date: None,
+        raw: invite_email("CANCEL"),
+    });
+    let facts = connector.extract().await.expect("extract");
+    assert!(
+        facts.is_empty(),
+        "the CANCEL (later signal) must win over the same-batch REQUEST: {facts:?}"
+    );
+    assert_eq!(
+        connector.extract_deletions().await.expect("deletions"),
+        vec!["dentist-1@example.com".to_string()],
+        "the CANCEL tombstone is still reported for the supervisor's trash pass"
+    );
+}
+
+#[tokio::test]
 async fn extract_invites_cancel_without_uid_buffers_nothing() {
     let connector = connector_with_identity(Some("Devansh"));
     let bytes = invite_email_without_uid("CANCEL");
     let message = parse(&bytes);
-    let (facts, handled) = connector.extract_invites(&message, "9");
+    let mut facts = Vec::new();
+    let handled = connector.extract_invites(&message, "9", &mut facts);
     assert!(facts.is_empty(), "CANCEL emits no facts");
     assert!(handled, "the CANCEL part is still read");
     assert!(
@@ -264,7 +301,8 @@ fn extract_invites_falls_back_to_email_ref_when_vevent_has_no_uid() {
     let connector = connector_with_identity(Some("Devansh"));
     let bytes = invite_email_without_uid("REQUEST");
     let message = parse(&bytes);
-    let (facts, handled) = connector.extract_invites(&message, "42");
+    let mut facts = Vec::new();
+    let handled = connector.extract_invites(&message, "42", &mut facts);
     assert!(handled, "REQUEST is a handled iMIP part");
     assert!(
         facts.iter().any(|f| f.relationship_type == "has_event"),
@@ -285,7 +323,8 @@ fn extract_invites_skips_conflicting_mime_and_body_method() {
     // honoured as REQUEST (which would create appointment facts).
     let bytes = invite_email_split_method(Some("REQUEST"), Some("CANCEL"));
     let message = parse(&bytes);
-    let (facts, handled) = connector.extract_invites(&message, "9");
+    let mut facts = Vec::new();
+    let handled = connector.extract_invites(&message, "9", &mut facts);
     assert!(
         facts.is_empty(),
         "a part whose MIME `method` and body `METHOD` disagree is not a valid iMIP object"
@@ -300,7 +339,8 @@ fn extract_invites_skips_conflicting_supported_and_unsupported_method() {
     // conflict is rejected before the supported/unsupported filter runs.
     let bytes = invite_email_split_method(Some("REPLY"), Some("PUBLISH"));
     let message = parse(&bytes);
-    let (facts, handled) = connector.extract_invites(&message, "9");
+    let mut facts = Vec::new();
+    let handled = connector.extract_invites(&message, "9", &mut facts);
     assert!(
         facts.is_empty(),
         "conflicting METHOD values are rejected regardless of which side is supported"
@@ -314,7 +354,8 @@ fn extract_invites_falls_back_to_body_method_when_mime_absent() {
     // No MIME `method` parameter; the body `METHOD:REQUEST` is the source.
     let bytes = invite_email_split_method(None, Some("REQUEST"));
     let message = parse(&bytes);
-    let (facts, handled) = connector.extract_invites(&message, "7");
+    let mut facts = Vec::new();
+    let handled = connector.extract_invites(&message, "7", &mut facts);
     assert!(handled, "the body METHOD is honoured");
     assert!(
         facts.iter().any(|f| f.relationship_type == "has_event"),
@@ -327,7 +368,8 @@ fn extract_invites_skips_when_neither_method_source_present() {
     let connector = connector_with_identity(Some("Devansh"));
     let bytes = invite_email_split_method(None, None);
     let message = parse(&bytes);
-    let (facts, handled) = connector.extract_invites(&message, "9");
+    let mut facts = Vec::new();
+    let handled = connector.extract_invites(&message, "9", &mut facts);
     assert!(
         facts.is_empty(),
         "no METHOD from either source → unsupported/absent → skipped"
@@ -341,7 +383,8 @@ fn extract_invites_skips_plain_email() {
     let bytes = plain_email();
     let message = parse(&bytes);
     // No text/calendar part → no facts. A marketing email produces nothing.
-    let (facts, handled) = connector.extract_invites(&message, "1");
+    let mut facts = Vec::new();
+    let handled = connector.extract_invites(&message, "1", &mut facts);
     assert!(facts.is_empty());
     assert!(!handled, "a plain email has no iMIP part");
 }
@@ -351,7 +394,8 @@ fn extract_invites_skips_primary_when_no_user_identity() {
     let connector = connector_with_identity(None);
     let bytes = invite_email("REQUEST");
     let message = parse(&bytes);
-    let (facts, handled) = connector.extract_invites(&message, "42");
+    let mut facts = Vec::new();
+    let handled = connector.extract_invites(&message, "42", &mut facts);
     assert!(handled);
     // No user identity → no primary has_event; the event is still captured
     // via its location + attendee facts.

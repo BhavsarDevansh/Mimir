@@ -181,8 +181,7 @@ impl Connector for EmailConnector {
                 // parse, and both tag their facts with
                 // `extraction_method = StructuredParse`.
                 let before = facts.len();
-                let (invite_facts, imip_handled) = self.extract_invites(&message, &raw_ref);
-                facts.extend(invite_facts);
+                let imip_handled = self.extract_invites(&message, &raw_ref, &mut facts);
                 // Layer 2: schema.org JSON-LD deterministic extraction
                 // (#249). Scans HTML parts for <script type="application/ld+json">
                 // and emits typed facts for recognised schema.org types
@@ -206,8 +205,9 @@ impl Connector for EmailConnector {
                 // Layer 3: LLM extraction (C7 / #201) — the last-resort layer
                 // for unstructured prose a deterministic layer cannot read.
                 // Only run it when layers 1-2 produced *no* facts and no iMIP
-                // lifecycle signal (a CANCEL emits none) for this message, so
-                // a deterministic layer already read the email
+                // part was handled for this message (a CANCEL emits no facts,
+                // and a REQUEST/REPLY whose VEVENT failed to parse emits none
+                // either), so a deterministic layer already read the email
                 // (machine-readable invite / JSON-LD) is never re-processed
                 // by the LLM (avoids duplicate extraction and bounds LLM
                 // cost). When no backend is injected the layer is skipped,

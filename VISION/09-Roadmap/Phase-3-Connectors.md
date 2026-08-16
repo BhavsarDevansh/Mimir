@@ -1,6 +1,6 @@
 # Phase 3: Connectors
 
-> **Status:** Implemented — framework (F1–F13), all three backends (C1–C7), CLI/server (A1–A4), and testing (T1–T2) have landed. The detailed implementation plan in `VISION/09-Roadmap/Phase-3-Plan.md` tracks issue numbers and per-item status; this file is the high-level deliverable checklist.
+> **Status:** Implemented — framework (F1–F10, F12–F13; F11 keyring deferred), all three backends (C1–C7), CLI/server (A1–A4), and testing (T1–T2) have landed. The detailed issue breakdown and design decisions live in `VISION/09-Roadmap/Phase-3-Plan.md`; this file is the high-level deliverable checklist.
 >
 > **Last Updated:** 2026-08-16
 
@@ -45,8 +45,8 @@ Build the connector framework and implement 3 core connectors: Email, Calendar, 
 ### 3.5 Normalization Pipeline
 - [x] Common schema for all extracted facts (F4 / #181)
 - [x] Entity resolution (match to existing entities) (F5 / #182)
-- [x] Temporal normalization (parse all date formats) (F4 / #181)
-- [x] Confidence scoring per extraction method (F4 / #181)
+- [x] Temporal normalization — typed `valid_from` / `valid_until` bounds, per-backend date parsing (F4 / #181)
+- [x] Confidence scoring per source/connector type (F4 / #181)
 
 ### 3.6 CLI Management
 - [x] `mimir connector add <name>` (A3 / #204)

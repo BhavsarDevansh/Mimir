@@ -87,6 +87,13 @@ async fn failed_cycle_rescans_staged_photos_on_next_sync() {
     let second = connector.sync(SyncOptions::default()).await.unwrap();
     assert_eq!(second.fetched, 1, "the failed window must be re-scanned");
     assert!(second.new_cursor.is_some());
+    // The failed cycle never drained the buffer, so the re-scan must dedupe
+    // against the still-staged photo instead of staging a second copy.
+    assert_eq!(
+        connector.buffer.lock().await.len(),
+        1,
+        "the re-scan must not duplicate an item that is still staged"
+    );
 
     // The cycle now succeeds: adopt the persisted cursor.
     connector

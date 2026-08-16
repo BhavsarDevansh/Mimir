@@ -313,17 +313,7 @@ impl Connector for PhotosConnector {
         // re-runs the scan instead of skipping it and missing every
         // pre-existing file until a restart.
         if self.first_cycle.swap(false, Ordering::SeqCst) {
-            match self.initial_scan(options).await {
-                Ok(result) => {
-                    self.rescan_pending
-                        .store(result.cursor_changed, Ordering::SeqCst);
-                    return Ok(outcome(result));
-                }
-                Err(error) => {
-                    self.first_cycle.store(true, Ordering::SeqCst);
-                    return Err(error);
-                }
-            }
+            return self.scan_pass(options, &self.first_cycle).await;
         }
 
         // Issue #332: a previous cycle staged items (or moved the cursor) but
@@ -333,17 +323,7 @@ impl Connector for PhotosConnector {
         // blocking on the watcher — the scan classifies against the
         // un-advanced in-memory cursor and re-stages the failed window.
         if self.rescan_pending.swap(false, Ordering::SeqCst) {
-            match self.initial_scan(options).await {
-                Ok(result) => {
-                    self.rescan_pending
-                        .store(result.cursor_changed, Ordering::SeqCst);
-                    return Ok(outcome(result));
-                }
-                Err(error) => {
-                    self.rescan_pending.store(true, Ordering::SeqCst);
-                    return Err(error);
-                }
-            }
+            return self.scan_pass(options, &self.rescan_pending).await;
         }
 
         // Push wait: block for the next debounced event batch, then process it.
@@ -444,6 +424,28 @@ impl Connector for PhotosConnector {
 }
 
 impl PhotosConnector {
+    /// Run one scan pass for the first-cycle or pending-re-scan path (issue
+    /// #332): scan from the last confirmed cursor, record whether the
+    /// computed cursor moved, and restore `restore_on_error` on failure so
+    /// the supervisor's retry re-runs the same pass instead of skipping it.
+    async fn scan_pass(
+        &self,
+        options: SyncOptions,
+        restore_on_error: &AtomicBool,
+    ) -> Result<SyncOutcome, ConnectorError> {
+        match self.initial_scan(options).await {
+            Ok(result) => {
+                self.rescan_pending
+                    .store(result.cursor_changed, Ordering::SeqCst);
+                Ok(outcome(result))
+            }
+            Err(error) => {
+                restore_on_error.store(true, Ordering::SeqCst);
+                Err(error)
+            }
+        }
+    }
+
     /// Resolve a photo's GPS to a locality-level place short name (Phase 3 C2
     /// / #196), using the coord-dedup cache to avoid re-geocoding the same
     /// spot. Returns `None` when there is no geocoder, no GPS, no match, or a

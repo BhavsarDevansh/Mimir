@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use notify_debouncer_full::DebounceEventResult;
@@ -78,7 +78,21 @@ impl PhotosConnector {
             .await
             .map_err(|join| ConnectorError::Other(format!("photo scan task failed: {join}")))??;
         let count = staged.len();
-        self.buffer.lock().await.extend(staged);
+        // Issue #332: a cycle that failed between `sync` and `extract` leaves
+        // the staged photos in the buffer, and the pending re-scan re-stages
+        // the same window from the last confirmed cursor. Dedupe against the
+        // buffer by relative path (the cursor key) so `extract` never emits
+        // duplicate facts for a photo that is still staged (mirroring the
+        // Email connector's staged-buffer dedupe).
+        {
+            let mut buffer = self.buffer.lock().await;
+            let mut seen: HashSet<String> = buffer.iter().map(|raw| raw.rel_path.clone()).collect();
+            for raw in staged {
+                if seen.insert(raw.rel_path.clone()) {
+                    buffer.push(raw);
+                }
+            }
+        }
         Ok(ScanResult {
             fetched: count,
             cursor_changed: changed,

@@ -401,7 +401,7 @@ async fn nightly_batch_does_not_duplicate_inferred_facts() {
     let count_before = inferred_before.len();
 
     // Run nightly optimization once
-    mimir_knowledge::optimization::run_nightly_optimization(&tg.kg)
+    mimir_knowledge::optimization::run_nightly_optimization(&tg.kg, &tg.backup_dir())
         .await
         .unwrap();
 
@@ -416,7 +416,7 @@ async fn nightly_batch_does_not_duplicate_inferred_facts() {
     );
 
     // Run nightly optimization again
-    mimir_knowledge::optimization::run_nightly_optimization(&tg.kg)
+    mimir_knowledge::optimization::run_nightly_optimization(&tg.kg, &tg.backup_dir())
         .await
         .unwrap();
 

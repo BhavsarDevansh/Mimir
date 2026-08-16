@@ -41,4 +41,4 @@ The optimizer checks whether you are actively chatting. If you have interacted w
 ## Troubleshooting
 
 - **"Job not registered"** – the daemon is not running. Start it with `mimir start`.
-- **Backup already exists** – if you run optimization twice in one day, the backup gets a numeric suffix (e.g. `knowledge-2026-06-04-1.db`).
+- **Backup already exists** – if you run optimization twice in one day, the backup gets a numeric suffix (e.g. `knowledge-2026-06-04-1.db`). Each run always gets its own uniquely named file, so overlapping runs never overwrite each other's snapshots.

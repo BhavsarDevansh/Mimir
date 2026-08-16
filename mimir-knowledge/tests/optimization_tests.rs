@@ -63,7 +63,7 @@ async fn deterministic_dedup_merges_identical_fact_triples() {
 
     let runner = OptimizationRunner::new(
         &graph.kg,
-        OptimizationConfig::for_test(graph._dir.path().join("backups")),
+        OptimizationConfig::for_test(graph.backup_dir()),
         None,
     );
 
@@ -140,7 +140,7 @@ async fn semantic_dedup_queues_uncertain_llm_candidate() {
     );
     let runner = OptimizationRunner::new(
         &graph.kg,
-        OptimizationConfig::for_test(graph._dir.path().join("backups")),
+        OptimizationConfig::for_test(graph.backup_dir()),
         Some(llm),
     );
 
@@ -191,7 +191,7 @@ async fn dormant_cleanup_forgets_old_disputed_non_user_fact() {
 
     let runner = OptimizationRunner::new(
         &graph.kg,
-        OptimizationConfig::for_test(graph._dir.path().join("backups")),
+        OptimizationConfig::for_test(graph.backup_dir()),
         None,
     );
 
@@ -242,7 +242,7 @@ async fn semantic_dedup_sends_strict_json_prompt_to_llm() {
     let llm: Arc<dyn LlmBackend> = mock.clone();
     let runner = OptimizationRunner::new(
         &graph.kg,
-        OptimizationConfig::for_test(graph._dir.path().join("backups")),
+        OptimizationConfig::for_test(graph.backup_dir()),
         Some(llm),
     );
 
@@ -432,7 +432,7 @@ async fn confidence_recalc_recalculates_stale_inferred_root() {
 
     let runner = OptimizationRunner::new(
         &graph.kg,
-        OptimizationConfig::for_test(graph._dir.path().join("backups")),
+        OptimizationConfig::for_test(graph.backup_dir()),
         None,
     );
     runner.run_pass(PassName::ConfidenceRecalc).await.unwrap();
@@ -473,7 +473,7 @@ async fn confidence_recalc_clears_stale_non_inferred_root_without_audit() {
 
     let runner = OptimizationRunner::new(
         &graph.kg,
-        OptimizationConfig::for_test(graph._dir.path().join("backups")),
+        OptimizationConfig::for_test(graph.backup_dir()),
         None,
     );
     runner.run_pass(PassName::ConfidenceRecalc).await.unwrap();
@@ -484,5 +484,51 @@ async fn confidence_recalc_clears_stale_non_inferred_root_without_audit() {
     assert_eq!(
         audit_count_for(&graph.kg, fact.id, ChangeType::ConfidenceChange as i16).await,
         0
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Regression: concurrent full runs sharing one backup directory (issue #241)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn concurrent_full_runs_with_shared_backup_dir_do_not_corrupt_each_other() {
+    // Regression test for #241: `create_backup` picked its filename with a
+    // check-then-act sequence (`try_exists` + `VACUUM INTO`), so two
+    // optimization runs sharing a backup directory could select the same file
+    // and one would fail under parallel load (the flaky
+    // `test_pending_confirmation_ttl_cleanup` failure). The filename
+    // reservation must be atomic so concurrent runs never collide.
+    let backup_dir = tempfile::tempdir().unwrap();
+    for _ in 0..5 {
+        let graph1 = TestGraph::new().await;
+        let graph2 = TestGraph::new().await;
+        let runner1 = OptimizationRunner::new(
+            &graph1.kg,
+            OptimizationConfig::for_test(backup_dir.path().to_path_buf()),
+            None,
+        );
+        let runner2 = OptimizationRunner::new(
+            &graph2.kg,
+            OptimizationConfig::for_test(backup_dir.path().to_path_buf()),
+            None,
+        );
+        let (result1, result2) = tokio::join!(runner1.run_all(), runner2.run_all());
+        result1.unwrap();
+        result2.unwrap();
+    }
+
+    // Both runs must have actually written their backups.
+    let mut backup_count = 0;
+    let mut entries = tokio::fs::read_dir(backup_dir.path()).await.unwrap();
+    while let Some(entry) = entries.next_entry().await.unwrap() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with("knowledge-") && name.ends_with(".db") {
+            backup_count += 1;
+        }
+    }
+    assert!(
+        backup_count >= 2,
+        "expected at least 2 backups, found {backup_count}"
     );
 }

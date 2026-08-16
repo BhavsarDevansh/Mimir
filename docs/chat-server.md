@@ -15,6 +15,10 @@ The Mimir chat server is an Axum HTTP daemon that runs in-process as part of the
 | `POST` | `/chat` | Blocking chat completion |
 | `POST` | `/chat/stream` | SSE streaming chat completion |
 
+## Loopback Guard
+
+Destructive and sensitive routes are loopback-only: the `require_loopback` middleware in `mimir-server/src/app.rs` rejects non-loopback callers with `403 Forbidden` before the handler runs, so a daemon bound to a LAN address never accepts remote mutations. Gated routes: `POST /memory/refresh`, `POST /kb/optimization/run-now`, `POST /kb/facts/forget`, `POST /kb/facts/{id}/confirm`, `POST /kb/facts/{id}/reject`, `GET /kb/pending`, `DELETE /kb/trash`, `POST /kb/trash/restore`, `POST /connectors/{id}/tokens`, `POST /connectors/{id}/forget`, and `POST /stop`. Read-only KB routes (`/kb/query`, `/kb/audit`, `/kb/browse`, `/kb/profile`, `GET /kb/trash`) stay open for remote inspection.
+
 ### Request/Response Schemas
 
 #### `POST /chat`

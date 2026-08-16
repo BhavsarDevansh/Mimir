@@ -21,6 +21,16 @@ pub use mimir_core::{
 };
 pub use mimir_server::state::AppState;
 
+/// A loopback `ConnectInfo` extension for requests to loopback-gated routes.
+pub fn loopback_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
+    axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+}
+
+/// A non-loopback `ConnectInfo` extension for loopback-rejection tests.
+pub fn non_loopback_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
+    axum::extract::ConnectInfo(std::net::SocketAddr::from(([192, 168, 1, 1], 0)))
+}
+
 /// Build an `AppState` suitable for tests, using a temporary directory
 /// for the context database.
 pub async fn test_state_with_config(

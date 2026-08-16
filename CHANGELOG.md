@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.116.1] — 2026-08-17
+
+### KB daemon-route cleanup and loopback gating (issue #90)
+
+- Issue #90's migration was already completed by issue #61 (PR #121): every `mimir kb` command talks to the daemon over HTTP and the CLI has no direct SQLite access. This change set removes the last leftover — the unused `mimir-knowledge` dependency in `mimir/Cargo.toml` (orphaned when the CLI moved to `mimir-client`).
+- Destructive KB routes are now loopback-only, matching the existing guard on optimization run-now, pending confirm/reject, connector credentials, and stop: `POST /kb/facts/forget`, `DELETE /kb/trash`, and `POST /kb/trash/restore` reject non-loopback callers with `403 Forbidden`, so a daemon bound to a LAN address can be inspected but not mutated remotely. Read-only KB routes stay open.
+- Tests: three new non-loopback rejection tests in `mimir-server/tests/kb_query_tests.rs`, and the forget/restore/trash roundtrip now attaches loopback `ConnectInfo`.
+- Docs updated: `docs/chat-server.md` (loopback guard route list), `docs/wiki/server.md` (loopback-only routes), `docs/wiki/cli-commands.md` (destructive KB commands are local-only).
+- Version bumped 0.116.0 → 0.116.1 (patch — cleanup and security hardening).
+
 ## [0.116.0] — 2026-08-17
 
 ### Autonomous loop: feature tickets at lower priority with an ask-first flow

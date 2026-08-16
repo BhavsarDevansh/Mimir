@@ -18,7 +18,6 @@ mimir-core = { path = "../mimir-core" }
 mimir-server = { path = "../mimir-server" }
 mimir-client = { path = "../mimir-client" }
 mimir-api-types = { path = "../mimir-api-types" }
-mimir-knowledge = { path = "../mimir-knowledge" }
 # A4 (issue #205): the interactive PKCE loopback login runs in the CLI
 # process (the daemon never runs a transient HTTP server). The flow lives in
 # `mimir-connectors::oauth::pkce` (built on the shared `OAuthHttpClient`

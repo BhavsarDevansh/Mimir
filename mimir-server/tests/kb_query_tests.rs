@@ -581,6 +581,7 @@ async fn test_kb_forget_restore_trash_roundtrip() {
                 .method("POST")
                 .uri("/kb/facts/forget")
                 .header("Content-Type", "application/json")
+                .extension(loopback_connect_info())
                 .body(Body::from(
                     serde_json::json!({"fact_id": fact.id}).to_string(),
                 ))
@@ -616,9 +617,69 @@ async fn test_kb_forget_restore_trash_roundtrip() {
                 .method("POST")
                 .uri("/kb/trash/restore")
                 .header("Content-Type", "application/json")
+                .extension(loopback_connect_info())
                 .body(Body::from(serde_json::json!({"all": true}).to_string()))
                 .unwrap(),
         )
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn test_kb_forget_rejects_non_loopback() {
+    let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/kb/facts/forget")
+                .header("Content-Type", "application/json")
+                .extension(non_loopback_connect_info())
+                .body(Body::from(serde_json::json!({"fact_id": 1}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_kb_trash_empty_rejects_non_loopback() {
+    let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/kb/trash")
+                .extension(non_loopback_connect_info())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_kb_trash_restore_rejects_non_loopback() {
+    let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/kb/trash/restore")
+                .header("Content-Type", "application/json")
+                .extension(non_loopback_connect_info())
+                .body(Body::from(serde_json::json!({"all": true}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }

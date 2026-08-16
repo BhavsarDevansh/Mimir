@@ -292,6 +292,7 @@ pub(super) async fn init_scheduler(
     let timeout_minutes = cfg.knowledge.optimization.timeout_minutes;
     let schedule_time = cfg.knowledge.optimization.schedule_time.clone();
     let pending_cleanup_retention_days = cfg.knowledge.pending_cleanup.retention_days;
+    let resource_limits = optimization_resource_limits(cfg);
     let schedule =
         mimir_core::job_queue::DailySchedule::parse(&cfg.knowledge.optimization.schedule_time)?;
 
@@ -342,7 +343,8 @@ pub(super) async fn init_scheduler(
                 Ok(())
             })
         },
-    );
+    )
+    .with_resource_limits(resource_limits);
     job_queue.register(opt_job).await?;
 
     // Register memory condensation job.
@@ -453,6 +455,24 @@ pub(super) async fn init_scheduler(
     }
 
     Ok((scheduler, scheduler_shutdown_rx))
+}
+
+/// Best-effort resource limits for the knowledge-optimization job, derived
+/// from `[knowledge.optimization]` (issue #91). A `cpu_cores` of 0 means "no
+/// affinity limit" and is mapped to `None`.
+pub(super) fn optimization_resource_limits(
+    cfg: &Config,
+) -> mimir_core::job_queue::JobResourceLimits {
+    mimir_core::job_queue::JobResourceLimits {
+        cpu_cores: (cfg.knowledge.optimization.cpu_cores > 0)
+            .then_some(cfg.knowledge.optimization.cpu_cores),
+        nice_level: Some(cfg.knowledge.optimization.nice_level),
+        memory_limit_bytes: cfg
+            .knowledge
+            .optimization
+            .memory_limit_mb
+            .map(|mb| u64::from(mb) * 1024 * 1024),
+    }
 }
 
 /// Initialise the connector framework: register the built-in backend factories

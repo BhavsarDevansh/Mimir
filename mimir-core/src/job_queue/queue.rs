@@ -3,21 +3,31 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use chrono::Utc;
 use sqlx::{Row, SqlitePool, sqlite::SqliteConnectOptions};
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
 use crate::job_queue::{
-    DailySchedule, Job, JobContext, JobError, JobHandler, JobPriority, JobRunStatus, JobRunSummary,
-    JobStatus,
+    DailySchedule, Job, JobContext, JobError, JobHandler, JobPriority, JobResourceLimits,
+    JobRunStatus, JobRunSummary, JobStatus, ResourceGuard,
 };
+
+/// A registered job definition plus its in-process handler.
+#[derive(Clone)]
+struct RegisteredJob {
+    handler: Arc<JobHandler>,
+    limits: JobResourceLimits,
+}
 
 #[derive(Clone)]
 pub struct JobQueue {
     pool: SqlitePool,
-    handlers: Arc<RwLock<HashMap<String, Arc<JobHandler>>>>,
+    handlers: Arc<RwLock<HashMap<String, RegisteredJob>>>,
+    running_tokens: Arc<Mutex<HashMap<String, CancellationToken>>>,
     timeout: Arc<RwLock<Duration>>,
 }
 
@@ -32,6 +42,13 @@ impl std::fmt::Debug for JobQueue {
 }
 
 impl JobQueue {
+    /// Lock the running-token registry, recovering from poisoning.
+    fn running_tokens(&self) -> std::sync::MutexGuard<'_, HashMap<String, CancellationToken>> {
+        self.running_tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Initialize the queue database and schema.
     pub async fn init(db_path: impl AsRef<Path>) -> Result<Self, JobError> {
         let path = db_path.as_ref();
@@ -51,6 +68,7 @@ impl JobQueue {
         Ok(Self {
             pool,
             handlers: Arc::new(RwLock::new(HashMap::new())),
+            running_tokens: Arc::new(Mutex::new(HashMap::new())),
             timeout: Arc::new(RwLock::new(Duration::from_secs(120 * 60))),
         })
     }
@@ -85,13 +103,23 @@ impl JobQueue {
         .execute(&self.pool)
         .await?;
 
-        self.handlers.write().await.insert(job.id, job.handler);
+        self.handlers.write().await.insert(
+            job.id,
+            RegisteredJob {
+                handler: job.handler,
+                limits: job.limits,
+            },
+        );
         Ok(())
     }
 
     /// Execute a registered job immediately.
+    ///
+    /// The handler runs on a fresh dedicated thread with the job's best-effort
+    /// resource limits applied, under the queue's timeout and a per-run
+    /// cancellation token (see [`JobQueue::cancel`]).
     pub async fn run_now(&self, job_id: &str) -> Result<JobRunSummary, JobError> {
-        let handler = self
+        let registered = self
             .handlers
             .read()
             .await
@@ -119,15 +147,66 @@ impl JobQueue {
         .fetch_one(&self.pool)
         .await?;
 
+        let token = CancellationToken::new();
+        self.running_tokens()
+            .insert(job_id.to_string(), token.clone());
+
         let timeout = *self.timeout.read().await;
-        let result =
-            tokio::time::timeout(timeout, handler(JobContext::new(job_id.to_string()))).await;
+        let job_id_owned = job_id.to_string();
+        let handler = registered.handler;
+        let limits = registered.limits;
+        let token_inner = token.clone();
+        let handle = tokio::runtime::Handle::current();
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+
+        // Run the handler on a fresh dedicated thread so per-job resource
+        // limits (CPU affinity, nice, cgroup memory) apply for the whole run
+        // and thread-local state (affinity, nice) is discarded when the
+        // thread exits, never leaking into pooled threads (issue #91).
+        let thread = match std::thread::Builder::new()
+            .name(format!("mimir-job-{job_id}"))
+            .spawn(move || {
+                let _guard = ResourceGuard::apply(limits, &job_id_owned);
+                let ctx = JobContext::new(job_id_owned, token_inner.clone());
+                let result = handle.block_on(async {
+                    tokio::select! {
+                        result = handler(ctx) => result,
+                        _ = token_inner.cancelled() => Err(JobError::Cancelled),
+                        _ = tokio::time::sleep(timeout) => Err(JobError::TimedOut),
+                    }
+                });
+                let _ = result_tx.send(result);
+            }) {
+            Ok(thread) => thread,
+            Err(e) => {
+                self.running_tokens().remove(job_id);
+                return Err(JobError::Io(e));
+            }
+        };
+
+        let result = match result_rx.await {
+            Ok(result) => result,
+            // The sender is dropped during unwind, so a closed channel means
+            // the job thread panicked.
+            Err(_) => Err(JobError::Handler("job thread panicked".to_string())),
+        };
+        // The thread has already signalled completion; detach it so the OS
+        // cleans up the exited thread without blocking the async task.
+        drop(thread);
         let (status, error) = match result {
-            Ok(Ok(())) => (JobRunStatus::Succeeded, None),
-            Ok(Err(e)) => (JobRunStatus::Failed, Some(e.to_string())),
-            Err(_) => (JobRunStatus::TimedOut, Some("job timed out".to_string())),
+            Ok(()) if token.is_cancelled() => {
+                (JobRunStatus::Cancelled, Some("job cancelled".to_string()))
+            }
+            Ok(()) => (JobRunStatus::Succeeded, None),
+            Err(JobError::Cancelled) => {
+                (JobRunStatus::Cancelled, Some("job cancelled".to_string()))
+            }
+            Err(JobError::TimedOut) => (JobRunStatus::TimedOut, Some("job timed out".to_string())),
+            Err(e) => (JobRunStatus::Failed, Some(e.to_string())),
         };
         let finished_at = Utc::now();
+
+        self.running_tokens().remove(job_id);
 
         sqlx::query("UPDATE job_runs SET status = ?, finished_at = ?, error = ? WHERE id = ?")
             .bind(status.as_str())
@@ -145,6 +224,35 @@ impl JobQueue {
             finished_at: Some(finished_at),
             error,
         })
+    }
+
+    /// Request cancellation of a running job.
+    ///
+    /// Cooperative handlers observe the token via [`JobContext::cancelled`]
+    /// and exit cleanly; non-cooperative handlers are dropped when the run
+    /// future is cancelled. Returns `true` if a running job was found.
+    pub fn cancel(&self, job_id: &str) -> bool {
+        let token = self.running_tokens().get(job_id).cloned();
+        match token {
+            Some(token) => {
+                token.cancel();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Request cancellation of every running job (used during daemon shutdown).
+    pub fn cancel_all(&self) {
+        let tokens: Vec<CancellationToken> = self.running_tokens().values().cloned().collect();
+        for token in tokens {
+            token.cancel();
+        }
+    }
+
+    /// Returns `true` if the job currently has an in-flight run.
+    pub async fn is_running(&self, job_id: &str) -> bool {
+        self.running_tokens().contains_key(job_id)
     }
 
     /// Return status for a known job, including its most recent run.

@@ -360,6 +360,28 @@ fn test_env_override_events_schedule_times_empty_ignored() {
 }
 
 #[test]
+fn test_optimization_config_memory_limit_defaults_to_none() {
+    let config = Config::default();
+    assert_eq!(config.knowledge.optimization.memory_limit_mb, None);
+}
+
+#[test]
+fn test_optimization_config_parses_memory_limit_mb() {
+    let toml_str = r#"
+        [knowledge.optimization]
+        cpu_cores = 2
+        nice_level = 5
+        timeout_minutes = 60
+        schedule_time = "02:00"
+        memory_limit_mb = 2048
+    "#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.knowledge.optimization.cpu_cores, 2);
+    assert_eq!(config.knowledge.optimization.nice_level, 5);
+    assert_eq!(config.knowledge.optimization.memory_limit_mb, Some(2048));
+}
+
+#[test]
 fn test_env_override_events_horizon_days() {
     let mut config = Config::default();
     config.apply_env_overrides_with(|key| {

@@ -10,8 +10,14 @@ All background jobs — memory condensation, nightly knowledge graph optimizatio
 2. **Debounce** — Rapid successive submissions reset a timer (default 5 s). The job is only considered ready after the timer elapses.
 3. **Cooldown** — After the debounce, the scheduler waits until no user activity has occurred for a cooldown period (default 60 s).
 4. **Idle gate** — The scheduler also checks that the LLM worker pool is completely idle (no queued or in-flight jobs) before dispatching.
-5. **No mid-flight cancellation** — Once a job starts, it runs to completion even if a user message arrives.
+5. **No user-triggered cancellation** — Once a job starts, it runs to completion even if a user message arrives; only daemon shutdown cancels in-flight jobs.
 6. **Scheduled-job poll** — Every 60 s the scheduler checks the durable queue for jobs whose `next_run_at` has passed and submits them through the same flow.
+
+## Cancellation & resource limits (issue #91)
+
+Each run gets a `tokio_util::sync::CancellationToken` exposed through `JobContext::cancellation_token()`. Cooperative handlers `tokio::select!` on `ctx.cancellation_token().cancelled()` at checkpoint boundaries so long-running passes can persist state and exit cleanly; non-cooperative handlers are dropped when the run future is cancelled. `JobQueue::cancel(job_id)` cancels one running job, `JobQueue::cancel_all()` cancels every running job (called by `BackgroundScheduler::shutdown()` so daemon shutdown never waits for a long job), and a cancelled run is recorded as `JobRunStatus::Cancelled` in `job_runs` even when the handler returns `Ok(())` after observing the token.
+
+Jobs may declare best-effort `JobResourceLimits` via `Job::with_resource_limits(...)`: `cpu_cores` (Linux CPU affinity), `nice_level` (POSIX scheduling priority), and `memory_limit_bytes` (Linux cgroup v2 `memory.max`). Enforcement is OS-specific and never fails the job — unsupported platforms, missing permissions, or unwritable cgroup filesystems degrade to a debug log and the job runs without the limit. Each run executes on a fresh dedicated thread (named `mimir-job-<id>`) so thread-local limits (affinity, nice) are discarded when the thread exits and never leak into pooled threads; the process-wide cgroup move is restored on drop.
 
 ## Typed Job Identifiers
 
@@ -33,8 +39,13 @@ pub enum DaemonJob {
 - `JobQueue::init(path)` — create or open the queue database.
 - `JobQueue::register(job)` — persist a job definition and store its handler.
 - `JobQueue::run_now(job_id)` — execute a job immediately, recording the run.
+- `JobQueue::cancel(job_id)` — request cancellation of a running job (returns whether one was found).
+- `JobQueue::cancel_all()` — request cancellation of every running job (daemon shutdown).
+- `JobQueue::is_running(job_id)` — whether the job has an in-flight run.
 - `JobQueue::status(job_id)` — get schedule and last run for a job.
 - `JobQueue::list_jobs()` — list all registered jobs with status.
+- `Job::with_resource_limits(limits)` — attach best-effort CPU/nice/memory limits to a job.
+- `JobContext::cancellation_token()` / `JobContext::is_cancelled()` — observe cancellation from inside a handler.
 
 ### BackgroundScheduler
 
@@ -76,8 +87,15 @@ The HTTP API (`mimir-api-types`) carries job priorities and run statuses as lowe
 [scheduler]
 debounce_seconds = 5
 cooldown_seconds = 60
+
+[knowledge.optimization]
+cpu_cores = 1
+nice_level = 10
+timeout_minutes = 120
+schedule_time = "02:00"
+# memory_limit_mb = 2048  # Optional: best-effort cgroup v2 memory cap (MiB)
 ```
 
 ## Integration
 
-The daemon initialises the scheduler in `AppState::from_config_with_llm`, registers the `knowledge.optimization` job in the durable `JobQueue`, and starts the dispatch loop in `start_server_with_llm_and_listener`. The condensation dirty signal from `KnowledgeGraph` drives memory condensation via a `tokio::sync::Notify` listener that submits the job through the scheduler.
+The daemon initialises the scheduler in `AppState::from_config_with_llm`, registers the `knowledge.optimization` job in the durable `JobQueue` with the configured `cpu_cores`/`nice_level`/`memory_limit_mb` resource limits, and starts the dispatch loop in `start_server_with_llm_and_listener`. The condensation dirty signal from `KnowledgeGraph` drives memory condensation via a `tokio::sync::Notify` listener that submits the job through the scheduler.

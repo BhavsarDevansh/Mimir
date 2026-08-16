@@ -40,6 +40,14 @@ mimir memory --refresh
 
 Triggers memory condensation immediately, bypassing the scheduler's debounce and cooldown.
 
+## Shutdown behaviour
+
+When Mimir shuts down, any background job that is still running is asked to stop. Jobs that cooperate with the cancellation signal (the nightly optimization does) finish their current step cleanly and exit; jobs that do not are stopped at the next await point. The run is recorded as `cancelled` in the job history, so `mimir kb optimization --status` shows what happened.
+
+## Resource limits
+
+The nightly optimization job runs with the resource limits from `[knowledge.optimization]` in `config.toml`: `cpu_cores` (how many CPUs it may use, Linux), `nice_level` (how much it yields to other programs), and the optional `memory_limit_mb` (a best-effort memory cap on Linux systems with a writable cgroup v2 setup). These limits are best-effort — if your system cannot apply one, Mimir logs it and runs the job anyway.
+
 ## Best practices
 
 - Let the nightly schedule handle routine maintenance.

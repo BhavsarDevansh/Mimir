@@ -146,6 +146,7 @@ cpu_cores = 1
 nice_level = 10
 timeout_minutes = 120
 schedule_time = "02:00"
+# memory_limit_mb = 2048  # Optional: best-effort cgroup v2 memory cap (MiB)
 
 [knowledge.pending_cleanup]
 retention_days = 7

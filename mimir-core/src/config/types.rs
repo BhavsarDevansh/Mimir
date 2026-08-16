@@ -163,6 +163,9 @@ pub struct KnowledgeOptimizationConfig {
     pub nice_level: i8,
     pub timeout_minutes: u16,
     pub schedule_time: String,
+    /// Best-effort per-job memory cap (MiB) applied while the optimization
+    /// job runs (Linux cgroup v2 only; skipped when unavailable).
+    pub memory_limit_mb: Option<u16>,
 }
 
 /// How eagerly the agent initiates actions on its own.
@@ -273,6 +276,7 @@ impl Default for KnowledgeOptimizationConfig {
             nice_level: 10,
             timeout_minutes: 120,
             schedule_time: "03:00".to_string(),
+            memory_limit_mb: None,
         }
     }
 }

@@ -1,4 +1,6 @@
-use super::builder::{init_connector_framework, init_knowledge_graph, init_scheduler};
+use super::builder::{
+    init_connector_framework, init_knowledge_graph, init_scheduler, optimization_resource_limits,
+};
 use super::warn_err;
 use mimir_core::config::Config;
 use mimir_core::llm::MockLlmClient;
@@ -124,6 +126,27 @@ async fn init_scheduler_registers_system_jobs() {
             "missing job {expected}"
         );
     }
+}
+
+#[test]
+fn optimization_resource_limits_derive_from_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = test_config(&temp);
+    config.knowledge.optimization.cpu_cores = 2;
+    config.knowledge.optimization.nice_level = 5;
+    config.knowledge.optimization.memory_limit_mb = Some(2048);
+
+    let limits = optimization_resource_limits(&config);
+    assert_eq!(limits.cpu_cores, Some(2));
+    assert_eq!(limits.nice_level, Some(5));
+    assert_eq!(limits.memory_limit_bytes, Some(2048 * 1024 * 1024));
+
+    // A zero cpu_cores value means "no affinity limit".
+    config.knowledge.optimization.cpu_cores = 0;
+    config.knowledge.optimization.memory_limit_mb = None;
+    let limits = optimization_resource_limits(&config);
+    assert_eq!(limits.cpu_cores, None);
+    assert_eq!(limits.memory_limit_bytes, None);
 }
 
 #[tokio::test]

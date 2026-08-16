@@ -1,10 +1,21 @@
 # Changelog
 
+## [0.114.1] — 2026-08-16
+
+### PR #336 review fixes
+
+- **Cancellation documented as best-effort.** `JobQueue::cancel`/`cancel_all` only signal the run's `CancellationToken`; the dedicated run thread is neither aborted nor joined, so synchronous or blocking work can keep running until it finishes. `docs/job-queue.md` and `docs/wiki/job-queue.md` now describe this boundary, and `docs/job-queue.md` no longer claims user activity is the only non-cancellation path.
+- **Run-now HTTP statuses.** `POST /memory/refresh` and `POST /kb/optimization/run-now` now return `409 Conflict` when the run was cancelled and `504 Gateway Timeout` when it timed out, instead of `200 OK` with a cancelled/timed-out summary body.
+- **Spawn-failure cleanup.** If the dedicated job thread cannot be spawned, the `job_runs` row is finalized as `Failed` with `finished_at` and the spawn error persisted, so the run no longer stays `Running` across restarts.
+- **Config widening.** `memory_limit_mb` is now `Option<u32>` so caps above 65535 MiB can be expressed.
+- **Build/tests.** `nix` explicitly enables the `process` feature, and the Linux-only cgroup tests are gated to `target_os = "linux"` so `mimir-core` compiles on other platforms.
+- Version bumped 0.114.0 → 0.114.1 (patch — review fixes).
+
 ## [0.114.0] — 2026-08-16
 
 ### JobQueue resource-limit enforcement and graceful cancellation (issue #91)
 
-- **Graceful cancellation.** Each job run now carries a `tokio_util::sync::CancellationToken` exposed via `JobContext::cancellation_token()`; cooperative handlers `tokio::select!` on it at checkpoint boundaries and exit cleanly, non-cooperative handlers are dropped at the next await point, and cancelled runs are recorded as `JobRunStatus::Cancelled` in `job_runs` (persisted across restarts). `JobQueue::cancel(job_id)` cancels one running job, `JobQueue::cancel_all()` cancels every running job, and `BackgroundScheduler::shutdown()` calls `cancel_all()` so daemon shutdown never waits for a long-running job.
+- **Graceful cancellation.** Each job run now carries a `tokio_util::sync::CancellationToken` exposed via `JobContext::cancellation_token()`; cooperative handlers `tokio::select!` on it at checkpoint boundaries and exit cleanly, and cancelled runs are recorded as `JobRunStatus::Cancelled` in `job_runs` (persisted across restarts). Cancellation is best-effort: the token only signals the run, and the dedicated run thread is neither aborted nor joined, so synchronous or blocking work can keep running until it finishes. `JobQueue::cancel(job_id)` cancels one running job, `JobQueue::cancel_all()` cancels every running job, and `BackgroundScheduler::shutdown()` calls `cancel_all()` so daemon shutdown never waits for a long-running job.
 - **Best-effort per-job resource limits.** `Job::with_resource_limits(...)` attaches `JobResourceLimits` (`cpu_cores`, `nice_level`, `memory_limit_bytes`). Enforcement is OS-specific and never fails the job: Linux CPU affinity via `nix::sched`, POSIX `nice` via `rustix::process`, and a Linux cgroup v2 `memory.max` cap when the cgroup filesystem is writable. Each run executes on a fresh dedicated thread (named `mimir-job-<id>`) so thread-local limits are discarded on exit and never leak into pooled threads; the process-wide cgroup move is restored on drop.
 - **Configuration.** `[knowledge.optimization]` now wires `cpu_cores` and `nice_level` (previously parsed but unused) into the optimization job, and gains an optional `memory_limit_mb` (default unset) for the best-effort cgroup v2 memory cap.
 - **Tests.** `mimir-core` gains unit + integration coverage: cancellation of running jobs (cooperative and non-cooperative), `cancel_all`, cancelled-status persistence across queue reopen, scheduler shutdown cancelling an in-flight job, resource limits applying during a run (Linux), cgroup path parsing, and config parsing/defaults for `memory_limit_mb`.

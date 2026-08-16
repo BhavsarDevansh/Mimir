@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteConnectOptions};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -76,6 +76,24 @@ impl JobQueue {
     /// Set the default timeout for subsequent manual or scheduled runs.
     pub async fn set_default_timeout(&self, timeout: Duration) {
         *self.timeout.write().await = timeout;
+    }
+
+    /// Finalize a run row with its terminal status, finish time, and error.
+    async fn finalize_run(
+        &self,
+        run_id: i64,
+        status: JobRunStatus,
+        error: Option<String>,
+    ) -> Result<DateTime<Utc>, JobError> {
+        let finished_at = Utc::now();
+        sqlx::query("UPDATE job_runs SET status = ?, finished_at = ?, error = ? WHERE id = ?")
+            .bind(status.as_str())
+            .bind(finished_at)
+            .bind(&error)
+            .bind(run_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(finished_at)
     }
 
     /// Register or update a job definition and in-process handler.
@@ -184,6 +202,12 @@ impl JobQueue {
             Ok(thread) => thread,
             Err(e) => {
                 self.running_tokens().remove(job_id);
+                self.finalize_run(
+                    run_id,
+                    JobRunStatus::Failed,
+                    Some(format!("failed to spawn job thread: {e}")),
+                )
+                .await?;
                 return Err(JobError::Io(e));
             }
         };
@@ -208,17 +232,8 @@ impl JobQueue {
             Err(JobError::TimedOut) => (JobRunStatus::TimedOut, Some("job timed out".to_string())),
             Err(e) => (JobRunStatus::Failed, Some(e.to_string())),
         };
-        let finished_at = Utc::now();
-
         self.running_tokens().remove(job_id);
-
-        sqlx::query("UPDATE job_runs SET status = ?, finished_at = ?, error = ? WHERE id = ?")
-            .bind(status.as_str())
-            .bind(finished_at)
-            .bind(&error)
-            .bind(run_id)
-            .execute(&self.pool)
-            .await?;
+        let finished_at = self.finalize_run(run_id, status, error.clone()).await?;
 
         Ok(JobRunSummary {
             run_id,

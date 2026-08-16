@@ -51,7 +51,8 @@ pub async fn memory_handler(State(state): State<Arc<AppState>>) -> Result<String
 /// bypassing the scheduler's debounce, cooldown, and idle gates.
 pub async fn memory_refresh_handler(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<OptimizationRunNowResponse>, StatusCode> {
+) -> Result<(StatusCode, Json<OptimizationRunNowResponse>), StatusCode> {
+    use mimir_core::job_queue::JobRunStatus;
     use mimir_core::scheduler::DaemonJob;
     let summary = state
         .scheduler
@@ -68,11 +69,20 @@ pub async fn memory_refresh_handler(
             }
         })?;
 
-    Ok(Json(OptimizationRunNowResponse {
-        run_id: summary.run_id,
-        status: summary.status.as_str().to_string(),
-        started_at: summary.started_at.to_rfc3339(),
-        finished_at: summary.finished_at.map(|dt| dt.to_rfc3339()),
-        error: summary.error,
-    }))
+    let status = match summary.status {
+        JobRunStatus::Cancelled => StatusCode::CONFLICT,
+        JobRunStatus::TimedOut => StatusCode::GATEWAY_TIMEOUT,
+        _ => StatusCode::OK,
+    };
+
+    Ok((
+        status,
+        Json(OptimizationRunNowResponse {
+            run_id: summary.run_id,
+            status: summary.status.as_str().to_string(),
+            started_at: summary.started_at.to_rfc3339(),
+            finished_at: summary.finished_at.map(|dt| dt.to_rfc3339()),
+            error: summary.error,
+        }),
+    ))
 }

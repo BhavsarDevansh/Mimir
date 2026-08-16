@@ -30,7 +30,7 @@ urlencoding = "2.1"
 tokio-util = "0.7"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nix = { version = "0.31", features = ["sched"] }
+nix = { version = "0.31", features = ["process", "sched"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["process"] }

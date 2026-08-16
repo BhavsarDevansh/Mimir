@@ -126,3 +126,92 @@ async fn test_memory_refresh_already_running_returns_409() {
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
+
+#[tokio::test]
+async fn test_memory_refresh_cancelled_returns_409() {
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock).await;
+
+    // Register a non-cooperative slow job so the run-now cancellation branch
+    // wins and the run is recorded as cancelled.
+    let slow_job = mimir_core::job_queue::Job::new(
+        "memory.condensation",
+        mimir_core::job_queue::JobPriority::System,
+        None,
+        true,
+        |_ctx: mimir_core::job_queue::JobContext| {
+            Box::pin(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                Ok(())
+            })
+        },
+    );
+    state.job_queue.register(slow_job).await.unwrap();
+
+    let app = mimir_server::build_app(Arc::clone(&state));
+    let jq = Arc::clone(&state.job_queue);
+    let response_task = tokio::spawn(async move {
+        app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/memory/refresh")
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    0,
+                ))))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    });
+
+    // Give the run a moment to start, then cancel it.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(jq.cancel("memory.condensation"));
+
+    let response = response_task.await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn test_memory_refresh_timed_out_returns_504() {
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock).await;
+
+    let slow_job = mimir_core::job_queue::Job::new(
+        "memory.condensation",
+        mimir_core::job_queue::JobPriority::System,
+        None,
+        true,
+        |_ctx: mimir_core::job_queue::JobContext| {
+            Box::pin(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                Ok(())
+            })
+        },
+    );
+    state.job_queue.register(slow_job).await.unwrap();
+    state
+        .job_queue
+        .set_default_timeout(std::time::Duration::from_millis(100))
+        .await;
+
+    let app = mimir_server::build_app(Arc::clone(&state));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/memory/refresh")
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    0,
+                ))))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+}

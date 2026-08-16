@@ -165,7 +165,7 @@ pub struct KnowledgeOptimizationConfig {
     pub schedule_time: String,
     /// Best-effort memory cap (MiB) for the whole process while the
     /// optimization job runs (Linux cgroup v2 only; skipped when unavailable).
-    pub memory_limit_mb: Option<u16>,
+    pub memory_limit_mb: Option<u32>,
 }
 
 /// How eagerly the agent initiates actions on its own.

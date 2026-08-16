@@ -241,7 +241,7 @@ fn sanitize_cgroup_name(job_id: &str) -> String {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 
@@ -273,7 +273,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn resource_guard_applies_and_restores_limits() {
         use nix::sched::{CpuSet, sched_getaffinity};

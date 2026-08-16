@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.116.0] — 2026-08-17
+
+### Autonomous loop: feature tickets at lower priority with an ask-first flow
+
+- `scripts/autonomous-loop.sh` no longer ignores feature-development tickets: `candidate_issues()` now classifies open issues into quality work and feature work (`is_feature_issue()` uses the `feature` label — authoritative even alongside quality labels — plus `Implement:` / `Future:` title prefixes) and lists every quality candidate before any feature ticket, keeping the active-phase-first ordering within each class. Unclassifiable issues remain excluded.
+- The implementation prompt now requires an in-depth requirements analysis for feature tickets before any branch is created; if scope, design, acceptance criteria, priority, or direction are missing or ambiguous, the agent posts its questions with the `<!-- mimir-autonomous-question:N -->` marker, adds the `help-wanted` label, and ends the iteration without creating a branch. The loop skips that ticket until the owner answers in the comments or removes the `help-wanted` label, and then treats the answers as binding context. If further questions arise while implementing a feature, the agent posts them, re-adds the label, and stops before pushing anything. Code-quality work always outranks feature tickets.
+- Docs updated: `AGENTS.md` (loop scope), `README.md`, `docs/autonomous-loop.md` (issue selection and question/answer protocol) and `docs/wiki/autonomous-loop.md` (user-facing flow); `scripts/tests/autonomous-loop_test.sh` gained classification tests for feature vs quality issues.
+- Version bumped 0.115.4 → 0.116.0 (minor — new loop capability).
+
 ## [0.115.4] — 2026-08-16
 
 ### Docs: refresh stale connectors framework + Phase 3 roadmap docs (issue #274)

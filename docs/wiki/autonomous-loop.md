@@ -2,7 +2,7 @@
 
 ## What it is
 
-Mimir can drive its own development. A small script, `scripts/autonomous-loop.sh`, wakes up on a configurable cadence (default every two hours, or every 30 minutes with `MIMIR_AUTONOMOUS_INTERVAL=1800`) and asks one question: "what should I work on next?" It then either finishes off an open pull request or picks up a code-quality issue from the GitHub backlog — maintenance, DRY, bug fixes, refactors, robustness, performance, security, documentation, testing, and build work — writing code, running tests, updating docs, and publishing its work as a draft pull request, all on its own. Feature development is deliberately out of scope for the loop.
+Mimir can drive its own development. A small script, `scripts/autonomous-loop.sh`, wakes up on a configurable cadence (default every two hours, or every 30 minutes with `MIMIR_AUTONOMOUS_INTERVAL=1800`) and asks one question: "what should I work on next?" It then either finishes off an open pull request or picks up an issue from the GitHub backlog — maintenance, DRY, bug fixes, refactors, robustness, performance, security, documentation, testing, and build work first, then feature-development tickets at lower priority — writing code, running tests, updating docs, and publishing its work as a draft pull request, all on its own.
 
 ## How it works
 
@@ -11,7 +11,7 @@ Each cycle the loop checks which git branch you are on:
 - **On a feature branch with a draft PR** — it reviews its own diff against `main`, fixes every issue it finds (no matter how small), pushes, and marks the PR ready for review.
 - **On a feature branch with a ready PR** — it looks for outstanding review comments (for example from CodeRabbit). If there are any, it fixes them and pushes. If everything is resolved — or CodeRabbit's latest review reports a documented rate-limit marker — and GitHub reports the PR merge state as clean, it merges the PR into `main`, switches the local branch to `main` and pulls the latest changes.
 - **On a feature branch with no PR** — if the working tree is clean it switches back to `main` and pulls. If the local branch is not fully merged, or if there is uncommitted work, it leaves things alone for you to handle.
-- **On `main`** — it picks the next unblocked code-quality issue (checking the roadmap and vision docs to make sure it is the right one, and skipping anything labelled as feature development) and implements it as a draft PR, updating docs and running tests as it goes. A typical ticket takes a few 30-minute cycles: implement and open the draft PR, self-review and mark ready, address any review comments, then merge and move on to the next ticket.
+- **On `main`** — it picks the next unblocked issue, checking the roadmap and vision docs to make sure it is the right one. Code-quality work always comes first; feature tickets are only picked up when no quality work is waiting. A feature ticket gets an in-depth requirements analysis first, and is only implemented once its direction is clear. A typical ticket takes a few 30-minute cycles: implement and open the draft PR, self-review and mark ready, address any review comments, then merge and move on to the next ticket.
 
 ## Keeping the issue tracker healthy
 
@@ -19,7 +19,7 @@ While working, the loop also keeps GitHub itself in good shape: it refreshes sta
 
 ## When it needs your help
 
-If the loop starts an issue but realises it needs a clarification or a decision that only a human can make, it will not guess. Instead it: adds the `help-wanted` label to the issue and posts its questions as a comment on the issue. When you answer those questions in a follow-up comment, the loop notices on a future run and goes ahead with the implementation. In the meantime it moves on to another ticket that is ready, so progress never stalls.
+If the loop starts an issue but realises it needs a clarification or a decision that only a human can make, it will not guess. Instead it adds the `help-wanted` label to the issue and posts its questions as a comment on the issue. This is how feature tickets are handled by default: before implementing a feature the loop analyses the requirements in depth, and if anything is missing or ambiguous — scope, design, acceptance criteria, priorities — it asks you and moves on to other work until you reply. When you answer the questions (and remove the `help-wanted` label, if you like), the loop notices on a future run, reads your answers as context, and goes ahead with the implementation. If it still has further questions later, it posts them and puts the `help-wanted` label back, so nothing is ever implemented on guesswork. In the meantime it works on other tickets, so progress never stalls.
 
 ## Use cases
 

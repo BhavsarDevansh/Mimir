@@ -69,4 +69,31 @@ logged "Implement issue #42" || fail "prompt line 1 not logged"
 logged "Follow AGENTS.md strictly" || fail "prompt line 3 not logged"
 grep -q "\[PROMPT\]" "$LOG_FILE" || fail "prompt lines lack the [PROMPT] marker"
 
-echo "all autonomous-loop log tests passed"
+# 7. Issue classification: feature tickets (feature label, or Implement /
+#    Future: titles) are never quality work, but stay candidates at lower
+#    priority than quality issues.
+is_feature_issue "Implement a widget" "bug" \
+    || fail "Implement: title should classify as feature work"
+is_feature_issue "Future: connectors v2" "" \
+    || fail "Future: title should classify as feature work"
+is_feature_issue "Widget builder" "feature" \
+    || fail "feature label should classify as feature work"
+is_feature_issue "Fix crash" "bug" \
+    && fail "bug-labelled issue classified as feature work"
+
+# 8. Quality classification still excludes feature work, with labels taking
+#    precedence over title heuristics exactly as before.
+is_quality_issue "Fix crash" "bug" || fail "bug label should be quality work"
+is_quality_issue "DRY: dedupe config" "" || fail "DRY: title should be quality work"
+is_quality_issue "Implement tests" "testing" \
+    || fail "quality label should win over an Implement: title"
+is_quality_issue "Implement a widget" "feature" \
+    && fail "feature label must not classify as quality work"
+is_quality_issue "Implement a widget" "bug,feature" \
+    && fail "feature label must win over quality labels"
+is_quality_issue "Implement a widget" "" \
+    && fail "unlabelled feature title classified as quality work"
+is_quality_issue "Widget builder" "" \
+    && fail "unclassifiable issue classified as quality work"
+
+echo "all autonomous-loop tests passed"

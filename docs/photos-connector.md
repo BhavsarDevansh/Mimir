@@ -54,10 +54,7 @@ The connector runs in `ConnectorMode::Push`:
    run) this ingests the whole library; after a restart it skips already-
    processed files. Deleted entries are pruned so the cursor tracks the live
    library.
-2. **Subsequent `sync()` calls** block on the notify event channel until
-   debounced filesystem events arrive, then stage only the new/changed image
-   files. The supervisor loops immediately after a successful push cycle, so
-   `sync()` is the "wait for events" blocking point.
+2. **Subsequent `sync()` calls** block on the notify event channel until debounced filesystem events arrive, then stage only the new/changed image files. After a cycle that failed before the supervisor confirmed its cursor, the next `sync()` re-scans the directory from the last confirmed cursor instead of blocking (issue #332 — see [Incremental cursor](#incremental-cursor)). The supervisor loops immediately after a successful push cycle, so `sync()` is the "wait for events" blocking point.
 3. `extract()` drains the staged raw photos into typed `NormalizedFact`s.
    The buffer guard is released *before* the per-photo reverse-geocode loop
    (the buffer is `std::mem::take`-drained into a local `Vec` under the lock),
@@ -81,6 +78,8 @@ differs. `sync()` reports `new_cursor = Some(json)` only when the cursor
 actually moved, so an unchanged push cycle returns `None` and the supervisor
 just stamps `last_sync_at` (the nullable-cursor contract). `SyncOptions::full`
 clears the cursor first → re-ingests everything.
+
+**Failure-safe adoption (issue #332).** The scan/event pass computes the next cursor but does **not** adopt it into the connector's in-memory map — the supervisor persists the reported cursor and hands it back via `Connector::on_cycle_succeeded` only after a fully successful cycle, so a cycle that fails after `sync` (extract/insert/persist error) leaves the in-memory cursor at the last confirmed state. Because the file watcher does not re-deliver consumed events, the next in-process `sync` re-scans the watch directory from that cursor (classifying the failed window's files as new/changed again) instead of blocking on the watcher, so no staged photo is lost until a restart. The re-scan is driven by an internal `rescan_pending` flag: set whenever a pass reports a moved cursor, cleared by `on_cycle_succeeded`; a failed re-scan restores it so the supervisor's retry re-scans again.
 
 The cursor is O(N) in library size and rewritten on each change; acceptable for
 V1 (syncs are infrequent). A dedicated/compacted cursor table is future work.

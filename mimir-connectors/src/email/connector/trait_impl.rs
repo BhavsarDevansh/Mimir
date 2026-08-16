@@ -9,7 +9,7 @@ use tracing::{debug, warn};
 use crate::connector::{
     Connector, ConnectorError, ConnectorMode, HealthStatus, SyncOptions, SyncOutcome,
 };
-use crate::email::config::EmailSyncMode;
+use crate::email::config::{EmailSyncMode, parse_cursor};
 use crate::email::connector::EmailConnector;
 use crate::email::imap;
 use crate::email::llm::{FailureDisposition, RetryGate, health_with_terminal};
@@ -120,6 +120,22 @@ impl Connector for EmailConnector {
     async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
         let session = self.open_session().await?;
         self.run_sync(session, options).await
+    }
+
+    async fn on_cycle_succeeded(&self, new_cursor: Option<&str>) {
+        // Adopt the persisted cursor as the in-memory progress marker only
+        // now that the supervisor confirmed the whole cycle succeeded (issue
+        // #332, mirroring #314). Advancing inside `run_sync` would skip the
+        // failed cycle's staged mail on the next in-process cycle: the
+        // persisted cursor is only updated on a fully successful cycle, so
+        // the in-memory marker must never run ahead of it. `None` means
+        // "cursor unchanged" and leaves the marker as-is.
+        if let Some(cursor) = new_cursor {
+            match parse_cursor(cursor) {
+                Some(parsed) => *self.last_uid.lock().await = Some(parsed),
+                None => warn!(cursor, "ignoring unparseable email cursor from supervisor"),
+            }
+        }
     }
 
     async fn extract(

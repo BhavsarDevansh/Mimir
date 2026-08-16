@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.111.3] — 2026-08-16
+
+### Email and Photos connectors: failure-safe in-memory cursor advance (issue #332)
+
+- **The Email and Photos connectors no longer advance their in-memory cursors inside `Connector::sync`.** The Calendar connector's #314 pattern (the persisted `connectors.sync_cursor` is the single source of truth and only advances on a fully successful cycle; the supervisor hands it back via `Connector::on_cycle_succeeded`) now covers all three backends. The Email connector's `run_sync` no longer writes `last_uid` after the IMAP fetch — its durable LLM-extraction retry ledger (issue #262) only covers LLM-layer failures inside `extract`, so a hard extract/insert/persist failure previously lost the staged mail until a restart; the next in-process cycle now re-fetches the failed window from the last confirmed cursor. The Photos connector's scan/event passes return the computed `PhotosCursor` without adopting it, and a new `rescan_pending` flag makes the next in-process `sync` re-scan the watch directory from the last confirmed cursor when a previous cycle failed — required because the file watcher does not re-deliver consumed events. A cycle that fails after `sync` therefore re-processes its staged items on the next in-process cycle for all three connectors; restart recovery and manual full syncs remain available but are no longer required.
+- **Tests.** `mimir-connectors/src/email/imap_tests.rs::failed_cycle_reprocesses_staged_mail_on_next_sync` pins the Email contract (a failed cycle re-fetches the same window; the cursor is adopted only via `on_cycle_succeeded`, after which the next cycle is incremental), and the two cursor tests now assert the marker stays put until adoption. `mimir-connectors/src/photos/behaviour_tests.rs` gains `sync_reports_cursor_without_advancing_in_memory` and `failed_cycle_rescans_staged_photos_on_next_sync`; `mimir-connectors/tests/photos_connector.rs::failed_extract_cycle_reprocesses_staged_photos_on_next_cycle` drives a real Photos connector through the supervisor — the first automatic cycle fails at `extract` after staging the photo, the retry cycle re-scans from the last confirmed cursor, and the photo's fact lands in the KB with the cursor persisted.
+- **Docs.** `docs/email-connector.md`, `docs/photos-connector.md` (new "Failure-safe adoption (#332)" section), `docs/connectors-framework.md`, `docs/wiki/email-connector.md`, `docs/wiki/photos-connector.md`, `docs/wiki/what-works-now.md`, and `Mimir-Implementation-Context.md` updated.
+- Version bumped 0.111.2 → 0.111.3 (patch — backwards-compatible bug fix).
+
 ## [0.111.2] — 2026-08-16
 
 ### Calendar connector: failure-safe in-memory sync-token advance (issue #314)

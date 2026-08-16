@@ -71,6 +71,13 @@ pub struct PhotosConnector {
     /// `true` until the first `sync()` completes its initial scan. Drives the
     /// once-per-run full scan before the connector blocks on watch events.
     pub(super) first_cycle: AtomicBool,
+    /// `true` when the last `sync()` produced a new cursor that the
+    /// supervisor has not yet confirmed via [`Connector::on_cycle_succeeded`]
+    /// (issue #332). The next `sync()` then re-scans from the last confirmed
+    /// cursor instead of blocking on the watcher, because the file watcher
+    /// does not re-deliver consumed events — a failed cycle's staged photos
+    /// would otherwise be lost until a restart.
+    pub(super) rescan_pending: AtomicBool,
     pub(super) started: AtomicBool,
 }
 
@@ -219,6 +226,7 @@ impl PhotosConnector {
             geocoder,
             geocode_cache: Mutex::new(HashMap::new()),
             first_cycle: AtomicBool::new(true),
+            rescan_pending: AtomicBool::new(false),
             started: AtomicBool::new(false),
         })
     }
@@ -306,9 +314,33 @@ impl Connector for PhotosConnector {
         // pre-existing file until a restart.
         if self.first_cycle.swap(false, Ordering::SeqCst) {
             match self.initial_scan(options).await {
-                Ok(result) => return Ok(self.outcome(result).await),
+                Ok(result) => {
+                    self.rescan_pending
+                        .store(result.cursor_changed, Ordering::SeqCst);
+                    return Ok(outcome(result));
+                }
                 Err(error) => {
                     self.first_cycle.store(true, Ordering::SeqCst);
+                    return Err(error);
+                }
+            }
+        }
+
+        // Issue #332: a previous cycle staged items (or moved the cursor) but
+        // failed before the supervisor confirmed the new cursor via
+        // `on_cycle_succeeded`. The file watcher does not re-deliver consumed
+        // events, so re-scan from the last confirmed cursor instead of
+        // blocking on the watcher — the scan classifies against the
+        // un-advanced in-memory cursor and re-stages the failed window.
+        if self.rescan_pending.swap(false, Ordering::SeqCst) {
+            match self.initial_scan(options).await {
+                Ok(result) => {
+                    self.rescan_pending
+                        .store(result.cursor_changed, Ordering::SeqCst);
+                    return Ok(outcome(result));
+                }
+                Err(error) => {
+                    self.rescan_pending.store(true, Ordering::SeqCst);
                     return Err(error);
                 }
             }
@@ -330,7 +362,24 @@ impl Connector for PhotosConnector {
                 ));
             }
         };
-        Ok(self.outcome(result).await)
+        self.rescan_pending
+            .store(result.cursor_changed, Ordering::SeqCst);
+        Ok(outcome(result))
+    }
+
+    async fn on_cycle_succeeded(&self, new_cursor: Option<&str>) {
+        // The cycle fully succeeded: nothing is pending a re-scan, and the
+        // persisted cursor becomes the in-memory progress marker (issue
+        // #332). `None` means "cursor unchanged" and leaves the marker as-is.
+        self.rescan_pending.store(false, Ordering::SeqCst);
+        if let Some(json) = new_cursor {
+            match PhotosCursor::from_json(Some(json)) {
+                Ok(cursor) => *self.cursor.lock().await = cursor,
+                Err(error) => {
+                    tracing::warn!(%error, "ignoring unparseable photos cursor from supervisor");
+                }
+            }
+        }
     }
 
     async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError> {
@@ -389,6 +438,7 @@ impl Connector for PhotosConnector {
         }
         self.started.store(false, Ordering::SeqCst);
         self.first_cycle.store(true, Ordering::SeqCst);
+        self.rescan_pending.store(false, Ordering::SeqCst);
         Ok(())
     }
 }
@@ -447,23 +497,23 @@ impl PhotosConnector {
     }
 }
 
-impl PhotosConnector {
-    /// Build a [`SyncOutcome`] for `fetched` files, advancing the persisted
-    /// cursor.
-    async fn outcome(&self, result: ScanResult) -> SyncOutcome {
-        // Only report the cursor when it actually moved; an unchanged push
-        // cycle returns `new_cursor = None` so the supervisor just stamps
-        // `last_sync_at` without rewriting the progress token.
-        let new_cursor = if result.cursor_changed {
-            Some(self.cursor.lock().await.to_json())
-        } else {
-            None
-        };
-        SyncOutcome {
-            fetched: u32::try_from(result.fetched).unwrap_or(u32::MAX),
-            new_cursor,
-            fetched_at: Utc::now(),
-        }
+/// Build a [`SyncOutcome`] for a scan/event pass, reporting the computed
+/// cursor (not the in-memory one — the supervisor persists it and hands it
+/// back via [`Connector::on_cycle_succeeded`] only after a fully successful
+/// cycle, issue #332).
+fn outcome(result: ScanResult) -> SyncOutcome {
+    // Only report the cursor when it actually moved; an unchanged push
+    // cycle returns `new_cursor = None` so the supervisor just stamps
+    // `last_sync_at` without rewriting the progress token.
+    let new_cursor = if result.cursor_changed {
+        Some(result.cursor.to_json())
+    } else {
+        None
+    };
+    SyncOutcome {
+        fetched: u32::try_from(result.fetched).unwrap_or(u32::MAX),
+        new_cursor,
+        fetched_at: Utc::now(),
     }
 }
 

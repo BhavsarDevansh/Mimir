@@ -37,6 +37,7 @@ It is read-only. Mimir never modifies or deletes your photos.
   **never re-scanned** — even after you restart Mimir. New and modified photos
   are picked up; deleted photos are dropped from the record on the next full
   scan (a restart).
+- Sync is **failure-safe**: Mimir only records how far it got after a sync fully succeeds (scan, extract, and knowledge-graph insert all complete). If a sync fails part-way, the next run re-scans the same files instead of skipping them, so no photo is silently lost.
 
 The first time it runs against an existing library it ingests every photo once
 (to learn the history). After that it only reacts to changes.

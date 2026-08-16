@@ -21,9 +21,11 @@ impl PhotosConnector {
         // Reset the cursor for a full re-ingest under a brief lock, then
         // snapshot it. The filesystem walk + per-file EXIF parse are blocking
         // I/O that can touch thousands of files, so they run off the tokio
-        // worker thread via `spawn_blocking`; the cursor is written back only
-        // after a successful scan (a failed scan leaves the prior cursor
-        // intact so the supervisor's retry starts from the last good state).
+        // worker thread via `spawn_blocking`. The computed cursor is returned
+        // (not written back): the supervisor persists it and hands it back
+        // via `on_cycle_succeeded` only after a fully successful cycle, so a
+        // failed scan/cycle leaves the in-memory cursor at the last confirmed
+        // state and the supervisor's retry re-scans from it (issue #332).
         let mut cursor = {
             let mut guard = self.cursor.lock().await;
             if options.full {
@@ -76,21 +78,27 @@ impl PhotosConnector {
             .await
             .map_err(|join| ConnectorError::Other(format!("photo scan task failed: {join}")))??;
         let count = staged.len();
-        *self.cursor.lock().await = cursor;
         self.buffer.lock().await.extend(staged);
         Ok(ScanResult {
             fetched: count,
             cursor_changed: changed,
+            cursor,
         })
     }
 
     /// Process one debounced event batch: collect changed image paths, stage
-    /// new/changed ones, and update the cursor.
+    /// new/changed ones, and compute the next cursor (returned, not adopted —
+    /// see [`initial_scan`](Self::initial_scan) for the failure-safe contract,
+    /// issue #332).
     pub(super) async fn process_events(
         &self,
         events: &DebounceEventResult,
     ) -> Result<ScanResult, ConnectorError> {
-        let mut cursor = self.cursor.lock().await;
+        // Snapshot the last confirmed cursor; the computed next cursor is
+        // returned for the supervisor to persist and hand back via
+        // `on_cycle_succeeded` (issue #332). Cloning under the brief lock
+        // also releases the guard before the per-file EXIF parses below.
+        let mut cursor = self.cursor.lock().await.clone();
         let mut changed = false;
         let mut staged = Vec::new();
         let event_paths = match events {
@@ -108,6 +116,7 @@ impl PhotosConnector {
                 return Ok(ScanResult {
                     fetched: 0,
                     cursor_changed: false,
+                    cursor,
                 });
             }
         };
@@ -156,6 +165,7 @@ impl PhotosConnector {
         Ok(ScanResult {
             fetched: count,
             cursor_changed: changed,
+            cursor,
         })
     }
 }

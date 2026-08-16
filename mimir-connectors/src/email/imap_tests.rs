@@ -235,7 +235,7 @@ fn app_password_auth() -> ImapAuth {
 }
 
 #[tokio::test]
-async fn polling_incremental_sync_advances_cursor() {
+async fn polling_incremental_sync_reports_cursor_without_advancing_in_memory() {
     let cfg = FakeCfg {
         messages: vec![
             (10u32, b"msg-10".to_vec()),
@@ -245,17 +245,32 @@ async fn polling_incremental_sync_advances_cursor() {
         ..Default::default()
     };
     let (connector, session) = harness(cfg).await;
-    // First sync (full, no cursor): fetches all 3, cursor → 17:12.
+    // First sync (full, no cursor): fetches all 3, reports cursor 17:12.
     let outcome = connector.run_sync(session, SyncOptions::default()).await;
     let outcome = outcome.expect("sync ok");
     assert_eq!(outcome.fetched, 3);
     assert_eq!(outcome.new_cursor.as_deref(), Some("17:12"));
-    assert_eq!(*connector.last_uid.lock().await, Some((17, 12)));
+    // Issue #332: the in-memory marker must NOT advance inside `sync` — the
+    // supervisor persists the reported cursor and hands it back via
+    // `on_cycle_succeeded` only after a fully successful cycle, so a failed
+    // cycle re-syncs from the last confirmed cursor.
+    assert_eq!(
+        *connector.last_uid.lock().await,
+        None,
+        "in-memory cursor must not advance before the cycle succeeds"
+    );
     let staged = connector.buffer.lock().await;
     assert_eq!(staged.len(), 3);
     assert_eq!(staged[0].uid, 10);
     assert_eq!(staged[2].uid, 12);
     assert_eq!(staged[2].raw, b"msg-12");
+    drop(staged);
+
+    // The supervisor's post-success adoption advances the marker.
+    connector
+        .on_cycle_succeeded(outcome.new_cursor.as_deref())
+        .await;
+    assert_eq!(*connector.last_uid.lock().await, Some((17, 12)));
 }
 
 #[tokio::test]
@@ -318,7 +333,80 @@ async fn uidvalidity_reset_triggers_full_resync() {
         .expect("sync ok");
     assert_eq!(outcome.fetched, 1);
     assert_eq!(outcome.new_cursor.as_deref(), Some("99:1"));
+    // Issue #332: the marker stays at the last confirmed cursor until the
+    // cycle succeeds.
+    assert_eq!(*connector.last_uid.lock().await, Some((17, 11)));
+    connector
+        .on_cycle_succeeded(outcome.new_cursor.as_deref())
+        .await;
     assert_eq!(*connector.last_uid.lock().await, Some((99, 1)));
+}
+
+/// Issue #332: a cycle that fails after `sync` (extract/insert/persist
+/// error) must not lose the staged mail. The in-memory cursor only advances
+/// via `on_cycle_succeeded`, so the next in-process cycle re-fetches the
+/// failed window from the last confirmed cursor instead of skipping it.
+#[tokio::test]
+async fn failed_cycle_reprocesses_staged_mail_on_next_sync() {
+    let messages = vec![
+        (10u32, b"msg-10".to_vec()),
+        (11, b"msg-11".to_vec()),
+        (12, b"msg-12".to_vec()),
+    ];
+    let (connector, session) = harness(FakeCfg {
+        messages: messages.clone(),
+        ..Default::default()
+    })
+    .await;
+
+    // Cycle 1: `sync` succeeds, but the cycle fails later (no adoption).
+    let first = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("sync ok");
+    assert_eq!(first.fetched, 3);
+    assert_eq!(first.new_cursor.as_deref(), Some("17:12"));
+    assert_eq!(
+        *connector.last_uid.lock().await,
+        None,
+        "a failed cycle must not advance the in-memory cursor"
+    );
+
+    // Cycle 2: re-syncs from the last confirmed cursor (none) and
+    // re-processes the same window.
+    let (_, session2) = harness(FakeCfg {
+        messages: messages.clone(),
+        ..Default::default()
+    })
+    .await;
+    let second = connector
+        .run_sync(session2, SyncOptions::default())
+        .await
+        .expect("sync ok");
+    assert_eq!(second.fetched, 3, "the failed window must be re-fetched");
+    assert_eq!(second.new_cursor.as_deref(), Some("17:12"));
+
+    // The cycle now succeeds: adopt the persisted cursor.
+    connector
+        .on_cycle_succeeded(second.new_cursor.as_deref())
+        .await;
+    assert_eq!(*connector.last_uid.lock().await, Some((17, 12)));
+
+    // Cycle 3: incremental from the adopted cursor — no re-fetch.
+    let (_, session3) = harness(FakeCfg {
+        messages: messages.clone(),
+        ..Default::default()
+    })
+    .await;
+    let third = connector
+        .run_sync(session3, SyncOptions::default())
+        .await
+        .expect("sync ok");
+    assert_eq!(
+        third.fetched, 0,
+        "the adopted cursor makes the next cycle incremental"
+    );
+    assert!(third.new_cursor.is_none());
 }
 
 #[tokio::test]

@@ -112,20 +112,25 @@ impl EmailConnector {
         let fetched = u32::try_from(messages.len()).unwrap_or(u32::MAX);
         self.buffer.lock().await.extend(messages);
 
-        // Advance the cursor: persist on a full/first sync or when new mail
+        // Report the cursor: persist on a full/first sync or when new mail
         // arrived; leave it unchanged when an incremental cycle fetched
-        // nothing (the supervisor skips a no-op cursor write).
+        // nothing (the supervisor skips a no-op cursor write). The in-memory
+        // marker is deliberately NOT advanced here — the supervisor persists
+        // the reported cursor and hands it back via
+        // `Connector::on_cycle_succeeded` only after a fully successful
+        // cycle, so a cycle that fails after `sync` re-syncs from the last
+        // confirmed cursor on the next in-process cycle instead of skipping
+        // the failed window (issue #332, mirroring #314).
         let new_cursor = match (last_uid, max_uid) {
             (None, _) => Some(encode_cursor(uid_validity, max_uid)),
             (Some(prev), max) if max > prev => Some(encode_cursor(uid_validity, max)),
             _ => None,
         };
-        *self.last_uid.lock().await = Some((uid_validity, max_uid));
 
         debug!(
             fetched,
             uid_validity,
-            last_uid = max_uid,
+            reported_last_uid = max_uid,
             idle,
             "email sync cycle complete"
         );

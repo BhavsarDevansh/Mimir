@@ -12,15 +12,24 @@ use mimir_knowledge::normalize::{NormalizedFact, NormalizedLocation};
 use crate::connector::ConnectorError;
 use crate::fact::connector_fact;
 use crate::photos::connector::geo_key;
-use crate::photos::cursor::{FileSig, is_image};
+use crate::photos::cursor::{FileSig, PhotosCursor, is_image};
 use crate::photos::exif::read_exif;
 
-/// Result of a scan/event pass: how many files were staged and whether the
+/// Result of a scan/event pass: how many files were staged, whether the
 /// cursor actually moved (so `sync` can report `new_cursor = None` for an
-/// unchanged push cycle, matching the supervisor's nullable-cursor contract).
+/// unchanged push cycle, matching the supervisor's nullable-cursor
+/// contract), and the computed next cursor.
+///
+/// The computed cursor is **not** adopted into the connector's in-memory
+/// state by the scan — the supervisor persists it and hands it back via
+/// `Connector::on_cycle_succeeded` only after a fully successful cycle, so a
+/// cycle that fails after `sync` re-scans from the last confirmed cursor on
+/// the next in-process cycle instead of skipping the failed window (issue
+/// #332, mirroring #314).
 pub(super) struct ScanResult {
     pub(super) fetched: usize,
     pub(super) cursor_changed: bool,
+    pub(super) cursor: PhotosCursor,
 }
 
 /// A staged raw photo awaiting extraction.

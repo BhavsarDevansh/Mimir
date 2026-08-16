@@ -430,13 +430,17 @@ async fn failed_extract_cycle_reprocesses_staged_events_on_next_cycle() {
     .await;
 
     let kg = Arc::new(kg);
+    let mut cfg = app_password_config(&cal_url);
+    // Only the test's manual triggers may drive cycles after the first
+    // automatic one; a short poll interval would race the assertions below.
+    cfg["poll_interval_secs"] = serde_json::json!(3600);
     let row = kg
         .upsert_connector(UpsertConnectorInput {
             connector_type: ConnectorType::Calendar,
             slug: "calendar-personal".to_string(),
             backend: "caldav-failing".to_string(),
             display_name: "Calendar".to_string(),
-            config_json: app_password_config(&cal_url).to_string(),
+            config_json: cfg.to_string(),
             status: Some(ConnectorStatus::Active),
             auth_state: Some(ConnectorAuthState::Authenticated),
         })
@@ -477,8 +481,10 @@ async fn failed_extract_cycle_reprocesses_staged_events_on_next_cycle() {
     assert_eq!(supervisor.restore().await.unwrap(), 1);
 
     // Wait for the supervisor's first automatic cycle to fail at `extract`.
-    // The runner is serial, so once the flag fires the failing cycle is over
-    // and the retry trigger below runs a fresh cycle.
+    // `failed_once` is set at the start of `extract`, before the cycle
+    // finishes; the retry trigger below is safe because
+    // `trigger_sync_by_slug` queues the request on the runner's channel and
+    // the serial runner processes it only after the current cycle returns.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
     while !failed_once.load(Ordering::SeqCst) {
         assert!(

@@ -55,10 +55,8 @@
 ## Branching Workflow
 - **Always create a new branch before starting work.** Never commit directly to `main`.
 - Use the following branch naming conventions:
-  - Features / enhancements: `feat/[task-name]`  
-    Example: `feat/configuration-system`, `feat/issue-2-config`
-  - Bug fixes: `bugfix/[bug-description]`  
-    Example: `bugfix/config-parse-error`, `bugfix/issue-5-env-override`
+  - Features / enhancements: `feat/[task-name]` Example: `feat/configuration-system`, `feat/issue-2-config`
+  - Bug fixes: `bugfix/[bug-description]` Example: `bugfix/config-parse-error`, `bugfix/issue-5-env-override`
 - Branch names should be lowercase, use hyphens instead of spaces, and be descriptive enough to identify the issue or task.
 
 ## Finishing Work
@@ -68,8 +66,7 @@ After implementation is complete and all tests pass:
 3. Commit with a clear, descriptive message summarising what was done.
 4. Push the branch to the remote (`git push origin [branch-name]`).
 5. Create a Pull Request (PR) that links back to the original issue.
-   - The PR description should contain a closing statement such as:  
-     `Closes #2` or `Fixes #5`
+   - The PR description should contain a closing statement such as: `Closes #2` or `Fixes #5`
    - Summarise the key changes and reference any updated documentation.
    - **Markdown prose formatting (all repo `.md` files AND PR/commit messages):** write prose as flowing single-line paragraphs and single-line list items. Do **not** hard-wrap lines with manual newlines inside a paragraph or list item — single newlines render as soft breaks and make the raw text and diffs hard to read. Keep blank lines only between blocks (headers, paragraphs, list items). Applies to `README.md`, `CHANGELOG.md`, `docs/`, `docs/wiki/`, `Mimir-Implementation-Context.md`, and every other `.md` file in the repo.
 6. Do not merge the PR yourself unless explicitly asked.

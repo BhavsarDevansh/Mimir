@@ -39,16 +39,9 @@ When a queue is at capacity, `enqueue_chat()` (and its streaming variant) return
 
 ## Constructor Safety
 
-`LlmWorkerPool::new` is **all-or-nothing**: it builds every worker's `reqwest`-backed
-`LlmClient` up front into a `Vec` and only spawns worker tasks once *all* clients have
-succeeded. If any `LlmClient::new_direct` fails, `new` returns `Err` with no worker tasks
-spawned, so no detached/orphaned tasks are left behind. This avoids the partial-startup
-hazard where a later-iteration build failure would leave earlier workers spawned with
-no `LlmWorkerPool` handle to signal shutdown.
+`LlmWorkerPool::new` is **all-or-nothing**: it builds every worker's `reqwest`-backed `LlmClient` up front into a `Vec` and only spawns worker tasks once *all* clients have succeeded. If any `LlmClient::new_direct` fails, `new` returns `Err` with no worker tasks spawned, so no detached/orphaned tasks are left behind. This avoids the partial-startup hazard where a later-iteration build failure would leave earlier workers spawned with no `LlmWorkerPool` handle to signal shutdown.
 
-A successful `new` registers exactly `worker_threads` join handles, each joined by
-`shutdown()`. The regression test `test_pool_spawns_exactly_configured_workers` guards
-this invariant.
+A successful `new` registers exactly `worker_threads` join handles, each joined by `shutdown()`. The regression test `test_pool_spawns_exactly_configured_workers` guards this invariant.
 
 ## Job Types
 

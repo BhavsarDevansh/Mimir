@@ -1,7 +1,9 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-08-15
-> **Version:** 0.108.0
+> **Last updated:** 2026-08-16
+>
+> **Version:** 0.115.1
+>
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in `CHANGELOG.md`; this file deliberately does not repeat either.
 
 ---
@@ -373,7 +375,7 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | `--no-default-features --all-targets` build | [#277](https://github.com/BhavsarDevansh/Mimir/issues/277) |
 | Intra-doc link warnings in `mimir-connectors` | [#276](https://github.com/BhavsarDevansh/Mimir/issues/276) |
 | `tabled` 0.21 / proc-macro-error2 future rejection | [#275](https://github.com/BhavsarDevansh/Mimir/issues/275) |
-| Stale docs: connectors framework, VISION technical design, markdown reflow | [#274](https://github.com/BhavsarDevansh/Mimir/issues/274), [#260](https://github.com/BhavsarDevansh/Mimir/issues/260), [#245](https://github.com/BhavsarDevansh/Mimir/issues/245) |
+| Stale docs: connectors framework, VISION technical design | [#274](https://github.com/BhavsarDevansh/Mimir/issues/274), [#260](https://github.com/BhavsarDevansh/Mimir/issues/260) |
 
 ---
 

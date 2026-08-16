@@ -1,6 +1,7 @@
 # Email Connector
 
 > **Phase:** 3 — Connectors
+>
 > **Status:** Implemented (library + daemon/CLI) — C5 transport (#199) + C6 structured extraction (#200, calendar invites) + #249 (schema.org JSON-LD deterministic extraction) + C7 LLM extraction (#201, unstructured prose) + the interactive OAuth PKCE login (A4 / #205).
 
 ## What it is

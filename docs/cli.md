@@ -46,14 +46,9 @@ Runs the Mimir HTTP server in the foreground (in-process, no separate binary). U
 
 Creates Mimir directories and default configuration files. Idempotent.
 
-On **Linux**, after creating config and memory files, you are prompted:
-`Install systemd user service for auto-start? [y/N]:`.
-Answering **yes** generates a hardened systemd user service file,
-runs `systemctl --user daemon-reload`, and `systemctl --user enable --now mimir`.
-If any step fails, manual `systemctl` instructions are printed as a fallback.
+On **Linux**, after creating config and memory files, you are prompted: `Install systemd user service for auto-start? [y/N]:`. Answering **yes** generates a hardened systemd user service file, runs `systemctl --user daemon-reload`, and `systemctl --user enable --now mimir`. If any step fails, manual `systemctl` instructions are printed as a fallback.
 
-On **macOS**, a note about future launchd support is shown.
-On **Windows**, the step is skipped silently.
+On **macOS**, a note about future launchd support is shown. On **Windows**, the step is skipped silently.
 
 ### `mimir ask <query>`
 
@@ -107,13 +102,7 @@ All commands resolve slugs client-side against `GET /connectors` (there is no by
 
 ### `mimir kb` date filters
 
-KB audit and forget commands accept `--from`/`--to` date filters via
-`mimir/src/kb/mod.rs::parse_datetime`. Strings with an explicit timezone offset (RFC3339,
-e.g. `2020-06-15T10:30:00Z` or `...+02:00`) are preserved as UTC. Offsetless
-datetimes (`2020-06-15T10:30:00`, `2020-06-15 10:30:00`) and date-only inputs
-(`2020-06-15`) are interpreted in the CLI/daemon **local timezone** (sharing
-`DailySchedule::naive_to_utc_local`), so user-authored local times behave
-intuitively rather than being silently shifted to UTC (issue #168).
+KB audit and forget commands accept `--from`/`--to` date filters via `mimir/src/kb/mod.rs::parse_datetime`. Strings with an explicit timezone offset (RFC3339, e.g. `2020-06-15T10:30:00Z` or `...+02:00`) are preserved as UTC. Offsetless datetimes (`2020-06-15T10:30:00`, `2020-06-15 10:30:00`) and date-only inputs (`2020-06-15`) are interpreted in the CLI/daemon **local timezone** (sharing `DailySchedule::naive_to_utc_local`), so user-authored local times behave intuitively rather than being silently shifted to UTC (issue #168).
 
 ## Key Design Decisions
 

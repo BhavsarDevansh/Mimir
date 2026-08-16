@@ -1,9 +1,13 @@
 # Phase 3: Connectors — Implementation Plan
 
 > **Status:** Designed. All eight architectural decisions (A–H) locked.
+>
 > **Created:** 2026-07-01
+>
 > **Depends on:** Phase 1 (Core Agent), Phase 2 (Knowledge Graph)
+>
 > **GitHub:** https://github.com/BhavsarDevansh/Mimir
+>
 > **Scope:** Connector framework + one backend per type (Photos, Calendar, Email) + CLI/server + tests. Cloud photos, Microsoft Graph calendar, RSS, etc. are follow-on work enabled by the multi-backend factory.
 
 ---
@@ -163,8 +167,7 @@ F2,F7,F8,F10 ──────────────────────�
 F4,F7 ─> F13 ──────────────────────────────────────┘
 ```
 
-Critical path (first vertical slice): **F1 → F6 → F7 → F8 → C1 → C2** (Photos).
-OAuth connectors path: **F10 → C3 / C5 → A4** (the interactive PKCE flow landed in v0.97.0).
+Critical path (first vertical slice): **F1 → F6 → F7 → F8 → C1 → C2** (Photos). OAuth connectors path: **F10 → C3 / C5 → A4** (the interactive PKCE flow landed in v0.97.0).
 
 ## 7. Out of scope (follow-on issues, enabled by this framework)
 - Cloud photo backends (Apple Photos library, Nextcloud, Google Photos)

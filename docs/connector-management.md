@@ -1,38 +1,23 @@
 # Connector Management (server) — `mimir-server::routes::connectors`
 
 > **Phase:** 3 — Connectors (A1 / issue #202, A2 / issue #203, A3 / issue #204)
+>
 > **Status:** A1 (CRUD/status), A2 (action routes + token ingest + forget cascade), A3 (the `mimir connector …` CLI), and A4 (the interactive OAuth PKCE loopback flow) implemented.
+>
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose
 
-Wires the `ConnectorRegistry` and `ConnectorSupervisor` into the daemon's
-`AppState` and exposes the connector instance CRUD/status HTTP surface. This
-is the first server-facing piece of the connector framework: everything below
-(F2–F13, C1–C7) was library-only until A1.
+Wires the `ConnectorRegistry` and `ConnectorSupervisor` into the daemon's `AppState` and exposes the connector instance CRUD/status HTTP surface. This is the first server-facing piece of the connector framework: everything below (F2–F13, C1–C7) was library-only until A1.
 
 ## Startup wiring (`AppState::from_config_with_llm`)
 
 After the knowledge graph and its geocoder are built, the daemon:
 
-1. Constructs an empty `ConnectorRegistry` and registers the built-in
-   factories, gated by forwarded cargo features on `mimir-server`
-   (`photos` → `PhotosConnectorFactory` under backend `"local"`, `calendar`
-   → `CalendarConnectorFactory` under `"caldav"`, `gmail` →
-   `EmailConnectorFactory` under `"imap"`). The mock factory is registered
-   only under `#[cfg(test)]` so a release daemon never advertises a test
-   connector.
-2. Constructs a `ConnectorSupervisor` over the registry and knowledge graph,
-   subscribing to the daemon-wide `shutdown_tx` watch channel, and chains the
-   builders: `with_secret_store(FileSecretStore)` (best-effort — a missing
-   secrets dir disables credentials but does not abort startup),
-   `with_geocoder` (the same `Arc<dyn Geocoder>` the KG holds), `with_user_identity(cfg.identity.name)`
-   (C4 / #198), and `with_llm_backend(llm_client)` (C7 / #201 — enables the
-   Email prose-extraction system-queue path).
-3. Calls `supervisor.restore()` to spawn a runner for every `Active` instance;
-   restore is best-effort and never aborts daemon startup.
-4. Stores `connector_registry` and `connector_supervisor` on `AppState`
-   behind `Arc`.
+1. Constructs an empty `ConnectorRegistry` and registers the built-in factories, gated by forwarded cargo features on `mimir-server` (`photos` → `PhotosConnectorFactory` under backend `"local"`, `calendar` → `CalendarConnectorFactory` under `"caldav"`, `gmail` → `EmailConnectorFactory` under `"imap"`). The mock factory is registered only under `#[cfg(test)]` so a release daemon never advertises a test connector.
+2. Constructs a `ConnectorSupervisor` over the registry and knowledge graph, subscribing to the daemon-wide `shutdown_tx` watch channel, and chains the builders: `with_secret_store(FileSecretStore)` (best-effort — a missing secrets dir disables credentials but does not abort startup), `with_geocoder` (the same `Arc<dyn Geocoder>` the KG holds), `with_user_identity(cfg.identity.name)` (C4 / #198), and `with_llm_backend(llm_client)` (C7 / #201 — enables the Email prose-extraction system-queue path).
+3. Calls `supervisor.restore()` to spawn a runner for every `Active` instance; restore is best-effort and never aborts daemon startup.
+4. Stores `connector_registry` and `connector_supervisor` on `AppState` behind `Arc`.
 
 On `AppState::shutdown()` (called from the graceful-drain path after the shared shutdown watch fires), the supervisor's `shutdown()` signals every runner and awaits its termination (aborting stragglers only after a grace period) before the runtime tears down, persisting the last completed sync cursor; in-flight cycle handles are registered with the supervisor and awaited too, so no cycle task can outlive `shutdown` (issue #266).
 
@@ -54,60 +39,22 @@ On `AppState::shutdown()` (called from the graceful-drain path after the shared 
 
 ### Wire types (`mimir-api-types`)
 
-A1: `AddConnectorRequest`, `ConnectorResponse` (carries `item_count`,
-`status`/`auth_state` as lowercase strings, RFC-3339 timestamps),
-`ConnectorListResponse`, and `ConnectorCatalogResponse` (a
-`ConnectorCatalogEntry { connector_type, backend }` list, sorted by type
-then backend — populated from the daemon's `ConnectorRegistry` at request
-time, so feature-gated registrations are reflected automatically; the static
-path wins over `GET /connectors/{id}`). A2 adds the action-route types:
-`SyncConnectorRequest` (`full`, optional `since` seconds),
-`SyncConnectorResponse` (a `status`-tagged enum mirroring `TriggerOutcome`:
-`ok { fetched, new_cursor }` / `auth_expired` / `failed { message }`),
-`IngestTokenRequest` (a `kind`-tagged enum mirroring `SecretBundle`:
-`oauth` / `api_token` / `app_password`, with RFC-3339 `expires_at` string),
-`ConnectorActionRequest` (`kind` + `payload`), `ActionResultResponse`
-(mirrors `ActionResult`), and `ForgetConnectorResponse` (`forgotten_count`).
-`mimir-api-types` stays decoupled from `mimir-knowledge` and
-`mimir-connectors`, so connector kind/status are strings and the token
-bundle is re-typed at the server boundary (`to_secret_bundle`).
+A1: `AddConnectorRequest`, `ConnectorResponse` (carries `item_count`, `status`/`auth_state` as lowercase strings, RFC-3339 timestamps), `ConnectorListResponse`, and `ConnectorCatalogResponse` (a `ConnectorCatalogEntry { connector_type, backend }` list, sorted by type then backend — populated from the daemon's `ConnectorRegistry` at request time, so feature-gated registrations are reflected automatically; the static path wins over `GET /connectors/{id}`). A2 adds the action-route types: `SyncConnectorRequest` (`full`, optional `since` seconds), `SyncConnectorResponse` (a `status`-tagged enum mirroring `TriggerOutcome`: `ok { fetched, new_cursor }` / `auth_expired` / `failed { message }`), `IngestTokenRequest` (a `kind`-tagged enum mirroring `SecretBundle`: `oauth` / `api_token` / `app_password`, with RFC-3339 `expires_at` string), `ConnectorActionRequest` (`kind` + `payload`), `ActionResultResponse` (mirrors `ActionResult`), and `ForgetConnectorResponse` (`forgotten_count`). `mimir-api-types` stays decoupled from `mimir-knowledge` and `mimir-connectors`, so connector kind/status are strings and the token bundle is re-typed at the server boundary (`to_secret_bundle`).
 
 The lowercase wire strings for `connector_type`, `status`, and `auth_state` are produced by the explicit `as_str()` methods on `ConnectorType`, `ConnectorStatus`, and `ConnectorAuthState` (issue #264) — the single source of truth for the wire contract, independent of the derived `Debug` repr. The input direction (`parse_connector_type`) delegates to `ConnectorType`'s `FromStr` impl over the same strings, so the two directions stay symmetric.
 
 ## Knowledge-graph additions (`mimir-knowledge`)
 
-- `KnowledgeGraph::count_sources_for_connector(id) -> i64` — the derived
-  "items ingested" metric for a single instance (`SELECT COUNT(*) FROM sources
-  WHERE connector_instance_id = ?`); used by the show route.
-- `KnowledgeGraph::count_sources_by_connector() -> HashMap<i32, i64>` — every
-  instance's count in one `GROUP BY connector_instance_id` query; used by the
-  list route so item counts stay O(1) round-trips regardless of instance count.
-- `KnowledgeGraph::delete_connector(id)` — nulls every
-  `sources.connector_instance_id` referencing the row (the FK has no `ON
-  DELETE` clause, so a raw `DELETE` would violate it), then deletes the row,
-  in one transaction. Used by the `DELETE` (detach) route. Returns
-  `ConnectorNotFound` when no row matches.
-- `KnowledgeGraph::forget_connector_facts(id, changed_by) -> ForgetResult`
-  (A2 / #203) — the `forget` cascade: soft-deletes (trashes) every fact whose
-  `sources` row carries `connector_instance_id = id` via the shared
-  `forget_fact_tx` trash machinery, so the facts are recoverable from trash
-  (30-day expiry) rather than hard-deleted. `sources` rows are
-  cascade-deleted with their facts (the `sources.fact_id` FK is `ON DELETE
-  CASCADE`). No `--yes` / `--confirm-sensitive` gate applies — a connector
-  `forget` is an explicit admin action removing *all* of the connector's
-  facts. Used by the `POST /connectors/{id}/forget` route.
+- `KnowledgeGraph::count_sources_for_connector(id) -> i64` — the derived "items ingested" metric for a single instance (`SELECT COUNT(*) FROM sources WHERE connector_instance_id = ?`); used by the show route.
+- `KnowledgeGraph::count_sources_by_connector() -> HashMap<i32, i64>` — every instance's count in one `GROUP BY connector_instance_id` query; used by the list route so item counts stay O(1) round-trips regardless of instance count.
+- `KnowledgeGraph::delete_connector(id)` — nulls every `sources.connector_instance_id` referencing the row (the FK has no `ON DELETE` clause, so a raw `DELETE` would violate it), then deletes the row, in one transaction. Used by the `DELETE` (detach) route. Returns `ConnectorNotFound` when no row matches.
+- `KnowledgeGraph::forget_connector_facts(id, changed_by) -> ForgetResult` (A2 / #203) — the `forget` cascade: soft-deletes (trashes) every fact whose `sources` row carries `connector_instance_id = id` via the shared `forget_fact_tx` trash machinery, so the facts are recoverable from trash (30-day expiry) rather than hard-deleted. `sources` rows are cascade-deleted with their facts (the `sources.fact_id` FK is `ON DELETE CASCADE`). No `--yes` / `--confirm-sensitive` gate applies — a connector `forget` is an explicit admin action removing *all* of the connector's facts. Used by the `POST /connectors/{id}/forget` route.
 
 ## Supervisor addition (`mimir-connectors`)
 
 `ConnectorSupervisor::stop(id) -> bool` gracefully stops a single *live* runner: it removes the handle from the map, signals the runner over a per-runner `watch` channel, and awaits its termination — the runner aborts and awaits its in-flight cycle sub-task (and preempts a pending auth handshake) before exiting, so nothing outlives `stop` (issue #266). A stale handle whose task already finished naturally (e.g. an unauthenticated connector whose runner exited at the auth handshake) is cleaned up but reports `false`, as do never-spawned or already-stopped ids; only a genuinely running task reports `true`. This is the per-instance counterpart of `shutdown()`; `DELETE` uses it so a mid-cycle sync cannot write back to a vanishing row.
 
-`ConnectorSupervisor::secret_store() -> Option<Arc<dyn SecretStore>>` exposes
-the shared credential store (injected via `with_secret_store`) so the removal
-route can delete a connector's slug-keyed secret. The `DELETE` route deletes
-the secret *before* the row: a secret-deletion failure aborts the removal
-(`500`) and leaves the instance intact, so the database and secret store are
-never left in an ambiguous state and a later same-slug connector can never
-load a deleted instance's stored credentials.
+`ConnectorSupervisor::secret_store() -> Option<Arc<dyn SecretStore>>` exposes the shared credential store (injected via `with_secret_store`) so the removal route can delete a connector's slug-keyed secret. The `DELETE` route deletes the secret *before* the row: a secret-deletion failure aborts the removal (`500`) and leaves the instance intact, so the database and secret store are never left in an ambiguous state and a later same-slug connector can never load a deleted instance's stored credentials.
 
 A2 / #203 adds four supervisor methods — three lifecycle methods (`start` / `pause` / `resume`) and one action method (`act`). Each row's `ConnectorHandle` now also retains the live `Arc<dyn Connector>` (cloned from the one moved into the runner) so write-back actions dispatch to the authenticated instance:
 
@@ -120,22 +67,11 @@ A2 / #203 adds four supervisor methods — three lifecycle methods (`start` / `p
 
 The `DELETE /connectors/{id}` route holds the same per-connector lifecycle lock across its whole stop → secret-delete → row-delete sequence, so a concurrent `resume` can never re-spawn a runner for a row that is about to disappear (issue #266).
 
-The forget cascade (`POST /connectors/{id}/forget`) is loopback-only and
-serialised per connector: it marks the instance `Paused` (with `last_error =
-"forget in progress"`) so an aborted cascade leaves a state a retry can reason
-about, deletes the secret *before* the irreversible fact trash (a
-credential-deletion failure aborts with nothing destroyed), then trashes the
-facts and deletes the row. If a later step fails, the residual state is a
-`Paused`, credential-less row whose facts may already be trashed — retrying
-the cascade is idempotent and self-heals.
+The forget cascade (`POST /connectors/{id}/forget`) is loopback-only and serialised per connector: it marks the instance `Paused` (with `last_error = "forget in progress"`) so an aborted cascade leaves a state a retry can reason about, deletes the secret *before* the irreversible fact trash (a credential-deletion failure aborts with nothing destroyed), then trashes the facts and deletes the row. If a later step fails, the residual state is a `Paused`, credential-less row whose facts may already be trashed — retrying the cascade is idempotent and self-heals.
 
 ## Feature forwarding
 
-`mimir-server` declares `photos`/`calendar`/`gmail` features (default = all
-three) that forward to `mimir-connectors`, so the route layer can
-`#[cfg(feature = "...")]`-gate each factory registration against the same
-flag that compiles the backend module. Disabling a feature removes both the
-backend and its daemon registration.
+`mimir-server` declares `photos`/`calendar`/`gmail` features (default = all three) that forward to `mimir-connectors`, so the route layer can `#[cfg(feature = "...")]`-gate each factory registration against the same flag that compiles the backend module. Disabling a feature removes both the backend and its daemon registration.
 
 ## CLI (`mimir connector`, A3 / #204)
 
@@ -143,32 +79,10 @@ The `mimir` binary's `connector` command group (`mimir/src/connector/`) plumbs t
 
 ## Tests
 
-- `mimir-server` integration tests (`routes/connectors.rs` via `oneshot`):
-  add/list/show/remove round-trip, `409` on existing slug, `400` on
-  unregistered backend, `400` on unknown connector type, a concurrent
-  same-slug `POST` test verifying exactly one `201` and one `409`, `404` on
-  deleting an unknown id, and a removal test verifying the slug-keyed
-  secret-store entry is deleted (and cannot be loaded by a later same-slug
-  connector). A2 adds: sync trigger returns `ok` (and `404` unknown),
-  pause/resume flip the status (and `404` unknown), token ingest flips
-  `auth_state` to `authenticated` and stores the secret (plus `400` on a
-  malformed OAuth expiry and `404` unknown), action dispatch returns the
-  `ActionResult` (plus `400` on an unsupported kind and `404` unknown), and the
-  forget cascade trashes the sourced facts and removes the row (plus `404`
-  unknown). A new `MockConnector` config (`act_kind`) backs the action tests.
-- `mimir-knowledge`: `count_sources_for_connector` (zero for unknown),
-  `count_sources_by_connector` (one `GROUP BY` query), `delete_connector`
-  (removes row, `ConnectorNotFound` on missing), `create_connector`
-  (atomic insert, `ConnectorSlugConflict` on a duplicate, concurrent same-slug
-  creates yield one winner), and provenance-detach preservation (facts survive,
-  FK nulled, `connector_type_id` retained). A2 adds `forget_connector_facts`
-  (trashes only the target connector's sourced facts, leaves other connectors'
-  facts intact, and is a no-op returning zero for a connector with no sources).
+- `mimir-server` integration tests (`routes/connectors.rs` via `oneshot`): add/list/show/remove round-trip, `409` on existing slug, `400` on unregistered backend, `400` on unknown connector type, a concurrent same-slug `POST` test verifying exactly one `201` and one `409`, `404` on deleting an unknown id, and a removal test verifying the slug-keyed secret-store entry is deleted (and cannot be loaded by a later same-slug connector). A2 adds: sync trigger returns `ok` (and `404` unknown), pause/resume flip the status (and `404` unknown), token ingest flips `auth_state` to `authenticated` and stores the secret (plus `400` on a malformed OAuth expiry and `404` unknown), action dispatch returns the `ActionResult` (plus `400` on an unsupported kind and `404` unknown), and the forget cascade trashes the sourced facts and removes the row (plus `404` unknown). A new `MockConnector` config (`act_kind`) backs the action tests.
+- `mimir-knowledge`: `count_sources_for_connector` (zero for unknown), `count_sources_by_connector` (one `GROUP BY` query), `delete_connector` (removes row, `ConnectorNotFound` on missing), `create_connector` (atomic insert, `ConnectorSlugConflict` on a duplicate, concurrent same-slug creates yield one winner), and provenance-detach preservation (facts survive, FK nulled, `connector_type_id` retained). A2 adds `forget_connector_facts` (trashes only the target connector's sourced facts, leaves other connectors' facts intact, and is a no-op returning zero for a connector with no sources).
 - `mimir-connectors`: `ConnectorSupervisor::stop` gracefully stops one live runner (signal + await; the runner aborts and awaits its in-flight cycle before exiting) without affecting the others, returns `false` for an already-finished runner while cleaning up its stale handle, and reports no action on re-stop / unknown id. A2 adds: `start` spawns a runner and flips `Active` (and returns `ConnectorNotFound` for an unknown id), `pause` stops the runner and flips `Paused`, `resume` re-spawns after pause, `act` dispatches to the live connector (and re-instantiates when not running), `act` re-instantiates from the row after the runner exits naturally (auth-fail) so it never reuses a stale in-memory connector, `act` returns `UnsupportedAction` for an unconfigured kind, `act` returns `NotFound` for an unknown id, and `forget` stops the runner and invokes the connector's local `forget()` on the live instance (re-instantiating when not running, `ConnectorNotFound` for an unknown id). Issue #266 hardens the lifecycle methods: `start` / `resume` / `pause` hold the per-connector `lifecycle_lock` across their whole stop → status-write / spawn sequence, so concurrent lifecycle calls for one instance serialise (no leaked runner, no `Paused` row with a live runner, no overlapping sync cycles).
 
 ## Out of scope (tracked)
 
-- Reconfig-on-restart (edit a connector's `config_json` and restart its
-  runner) — deferred; the `start(id)` supervisor method added in A2 is the
-  foundation, but a `PATCH /connectors/{id}` route is not yet exposed. Today
-  the only way to change a connector's config is to delete and re-add it.
+- Reconfig-on-restart (edit a connector's `config_json` and restart its runner) — deferred; the `start(id)` supervisor method added in A2 is the foundation, but a `PATCH /connectors/{id}` route is not yet exposed. Today the only way to change a connector's config is to delete and re-add it.

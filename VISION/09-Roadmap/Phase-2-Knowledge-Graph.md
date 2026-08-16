@@ -1,6 +1,7 @@
 # Phase 2: Knowledge Graph
 
 > **Status:** Fully designed. See `VISION/02-Knowledge-Graph/Phase-2-Design-Discussion.md` for all locked decisions.
+>
 > **Last Updated:** 2026-05-30
 
 ## Goal

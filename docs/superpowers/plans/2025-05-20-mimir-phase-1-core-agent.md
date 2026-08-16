@@ -260,6 +260,7 @@ async fn main() -> Result<()> {
 - [ ] **Step 5: Verify compilation**
 
 Run: `cargo check --workspace`
+
 Expected: Clean compile, no errors
 
 - [ ] **Step 6: Commit**
@@ -306,6 +307,7 @@ mod tests {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p mimir-core test_load_default_config`
+
 Expected: FAIL with "Config not defined"
 
 - [ ] **Step 3: Write minimal implementation**
@@ -413,6 +415,7 @@ pub mod config;
 - [ ] **Step 5: Run tests**
 
 Run: `cargo test -p mimir-core test_load_default_config test_config_from_env`
+
 Expected: PASS
 
 - [ ] **Step 6: Commit**
@@ -652,6 +655,7 @@ bytes = "1.9"
 - [ ] **Step 6: Verify compilation**
 
 Run: `cargo check -p mimir-core`
+
 Expected: Clean compile
 
 - [ ] **Step 7: Commit**
@@ -911,6 +915,7 @@ pub mod memory;
 - [ ] **Step 6: Run tests**
 
 Run: `cargo test -p mimir-core memory::manager`
+
 Expected: PASS (3 tests)
 
 - [ ] **Step 7: Commit**
@@ -1023,6 +1028,7 @@ pub mod context;
 - [ ] **Step 3: Run tests**
 
 Run: `cargo test -p mimir-core context`
+
 Expected: PASS
 
 - [ ] **Step 4: Commit**
@@ -1179,6 +1185,7 @@ mod tests {
 - [ ] **Step 4: Run tests**
 
 Run: `cargo test -p mimir-core personality`
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -1324,6 +1331,7 @@ async-trait = "0.1"
 - [ ] **Step 4: Run tests**
 
 Run: `cargo test -p mimir-core tools::registry`
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -1469,6 +1477,7 @@ async fn main() -> Result<()> {
 - [ ] **Step 4: Verify compilation**
 
 Run: `cargo check -p mimir-server`
+
 Expected: Clean compile
 
 - [ ] **Step 5: Commit**
@@ -1662,6 +1671,7 @@ uuid = { version = "1.11", features = ["v4"] }
 - [ ] **Step 3: Verify compilation**
 
 Run: `cargo check --workspace`
+
 Expected: Clean compile
 
 - [ ] **Step 4: Commit**
@@ -1832,6 +1842,7 @@ impl MemoryManager {
 - [ ] **Step 3: Run integration tests**
 
 Run: `cargo test --workspace`
+
 Expected: All tests pass
 
 - [ ] **Step 4: Commit**
@@ -1879,6 +1890,7 @@ futures = "0.3"
 - [ ] **Step 2: Verify full workspace builds**
 
 Run: `cargo build --workspace`
+
 Expected: Successful build
 
 - [ ] **Step 3: Commit**

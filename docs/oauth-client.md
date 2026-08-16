@@ -1,8 +1,11 @@
 # OAuth Client & Token Refresh (mimir-connectors)
 
 > **Phase:** 3 — Connectors
+>
 > **Issue:** #240 (oauth2/reqwest reconciliation), #205 (PKCE loopback flow)
+>
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md` §4
+>
 > **Landed in:** v0.96.0 (refresh), v0.97.0 (PKCE flow)
 
 ## Purpose

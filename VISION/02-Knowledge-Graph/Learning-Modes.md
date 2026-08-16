@@ -10,7 +10,9 @@ The user directly tells the agent something about themselves.
 
 **Trigger:** Direct assertions in natural language.
 > "My favourite colour is blue."
+>
 > "I am allergic to peanuts."
+>
 > "My sister's birthday is March 15th."
 
 **Overwrite Rule:** Explicit statements **overwrite** existing facts on the same subject-predicate.
@@ -35,6 +37,7 @@ The user mentions something incidentally, not as a direct assertion.
 
 **Trigger:** Mention in passing during conversation.
 > "I like Mondays because the office is quiet."
+>
 > "Blue is a nice colour."
 
 **Overwrite Rule:** Casual mentions **do NOT overwrite** existing facts.
@@ -124,8 +127,7 @@ Once confirmed, sensitive facts are treated as high-confidence and protected:
 | **Casual (0.2–0.4)** | Coexist | Coexist | Coexist | Coexist |
 | **Inference (0.3–0.6)** | Coexist | Coexist | Coexist | Coexist |
 
-**Coexist:** Both facts stored. Higher confidence fact presented as primary.
-**Overwrite:** New fact replaces old fact. Old fact soft-deleted with reason.
+**Coexist:** Both facts stored. Higher confidence fact presented as primary. **Overwrite:** New fact replaces old fact. Old fact soft-deleted with reason.
 
 ## Teaching Examples
 

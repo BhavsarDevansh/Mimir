@@ -17,8 +17,7 @@ pub async fn ensure_daemon_running(
 
 ### Parameters
 
-- `base_url` — The daemon HTTP API base URL, e.g. `http://127.0.0.1:8080`. The helper probes `{base_url}/health`.
-  Resolved from `MIMIR_BASE_URL` → `server.bind_addr` (config) → compiled default; see [CLI base URL](#cli-base-url) below.
+- `base_url` — The daemon HTTP API base URL, e.g. `http://127.0.0.1:8080`. The helper probes `{base_url}/health`. Resolved from `MIMIR_BASE_URL` → `server.bind_addr` (config) → compiled default; see [CLI base URL](#cli-base-url) below.
 - `already_tried` — A shared mutable flag passed from `main.rs`. It guarantees that **at most one** auto-start attempt is made per CLI invocation, even if multiple client commands were (hypothetically) triggered.
 
 ### Error Variants (`DaemonGuardError`)

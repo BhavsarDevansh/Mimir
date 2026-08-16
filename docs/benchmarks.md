@@ -2,19 +2,13 @@
 
 ## Overview
 
-Criterion `0.8.2` with the `async_tokio` feature is used for all benchmarks.
-Benchmarks are located in `mimir-core/benches/` and compiled as standalone
-binaries (`harness = false`).
+Criterion `0.8.2` with the `async_tokio` feature is used for all benchmarks. Benchmarks are located in `mimir-core/benches/` and compiled as standalone binaries (`harness = false`).
 
 ## Design Principles
 
-- **Stateful ops use `iter_batched`**: Database and file-backed benchmarks
-  create fresh state per iteration to avoid cross-run contamination.
-- **`std::hint::black_box`**: Prevents the compiler from optimising away pure
-  computations (e.g. `usage_pct()`).
-- **Synchronous runner for nested async**: `b.iter_batched` with an explicit
-  `rt.block_on(...)` avoids "Cannot start a runtime from within a runtime" panics
-  that occur when `rt.block_on` is called inside a `b.to_async(&rt)` closure.
+- **Stateful ops use `iter_batched`**: Database and file-backed benchmarks create fresh state per iteration to avoid cross-run contamination.
+- **`std::hint::black_box`**: Prevents the compiler from optimising away pure computations (e.g. `usage_pct()`).
+- **Synchronous runner for nested async**: `b.iter_batched` with an explicit `rt.block_on(...)` avoids "Cannot start a runtime from within a runtime" panics that occur when `rt.block_on` is called inside a `b.to_async(&rt)` closure.
 
 ## Suites
 
@@ -73,9 +67,7 @@ cargo bench -p mimir-knowledge --bench kg_benchmarks -- entity_resolution_exact
 
 ## Pure-helper suites (non-hotpath coverage)
 
-Three suites were added on the `tests-and-benchmarks` branch to benchmark
-deterministic pure helpers that are easy to skip when focusing only on the
-hotpath. All use `std::hint::black_box` to defeat optimisation.
+Three suites were added on the `tests-and-benchmarks` branch to benchmark deterministic pure helpers that are easy to skip when focusing only on the hotpath. All use `std::hint::black_box` to defeat optimisation.
 
 ### `mimir-api-types` — `wire_types`
 
@@ -90,10 +82,7 @@ cargo bench -p mimir-api-types --bench wire_types
 
 ## `mimir-client` — `sse_parser`
 
-Added in v0.56.0 (issue #164) to cover the client-side SSE stream parser on
-the partial-event accumulation path (many chunks with no delimiter followed by
-a terminator). It compares the legacy O(n²) full-buffer rescan against the
-fixed cursor-based scan with a 1 MiB event cap.
+Added in v0.56.0 (issue #164) to cover the client-side SSE stream parser on the partial-event accumulation path (many chunks with no delimiter followed by a terminator). It compares the legacy O(n²) full-buffer rescan against the fixed cursor-based scan with a 1 MiB event cap.
 
 | Benchmark | What it measures |
 |-----------|------------------|
@@ -104,8 +93,7 @@ fixed cursor-based scan with a 1 MiB event cap.
 cargo bench -p mimir-client --bench sse_parser
 ```
 
-Indicative results: 1024 chunks 31.5 ms → 542 µs (~58×); 4096 chunks 494.9 ms →
-1.21 ms (~408×).
+Indicative results: 1024 chunks 31.5 ms → 542 µs (~58×); 4096 chunks 494.9 ms → 1.21 ms (~408×).
 
 ### `mimir-core` — `pure_helpers`
 

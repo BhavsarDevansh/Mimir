@@ -101,8 +101,7 @@ trait Skill: Send + Sync {
 The agent can discover new skills it needs:
 
 ### User-Driven
-User says: "Can you summarize my weekly Spotify listening?"
-Agent does not have this skill, so:
+User says: "Can you summarize my weekly Spotify listening?" Agent does not have this skill, so:
 1. Checks if existing skills can compose to achieve this
 2. If not, attempts with generic LLM + tools (Phase 1)
 3. If used repeatedly, extracts a heuristic (Phase 2)

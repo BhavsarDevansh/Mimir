@@ -80,12 +80,12 @@ Reasoning Engine notes Hypothesis 2 lacks confirmation about tour contents.
 
 **Verbose mode:**
 > You were last at the Colosseum on **May 5, 2025**.
-> 
+>
 > I found:
 > - A photo taken at the Colosseum on that date
 > - You were in Rome from May 3–7
 > - You took a "Roman History Tour" that included the Colosseum
-> 
+>
 > You were also there on April 12, 2022.
 
 ### 8. Knowledge Graph Update

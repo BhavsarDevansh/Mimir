@@ -60,6 +60,7 @@ async fn ensure_relationship_type_creates_new_type_and_self_alias() {
 - [ ] **Step 3: Run tests to confirm they fail**
 
 Run: `cargo test --package mimir-knowledge --test relationship_type_dag_test -- ensure_relationship_type_resolves_alias_to_canonical ensure_relationship_type_creates_new_type_and_self_alias -v`
+
 Expected: FAIL — alias not resolved, self-alias not created.
 
 - [ ] **Step 4: Commit**
@@ -208,6 +209,7 @@ PRAGMA foreign_keys = ON;
 - [ ] **Step 2: Verify migration runs in tests**
 
 Run: `cargo test --package mimir-knowledge --test migrations_test`
+
 Expected: PASS.
 
 - [ ] **Step 3: Commit**
@@ -344,11 +346,13 @@ pub async fn get_relationship_type_id(
 - [ ] **Step 3: Run targeted tests**
 
 Run: `cargo test --package mimir-knowledge --test relationship_type_dag_test`
+
 Expected: PASS.
 
 - [ ] **Step 4: Run knowledge-graph package tests**
 
 Run: `cargo test --package mimir-knowledge`
+
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -409,11 +413,13 @@ async fn normalize_predicate(kg: &KnowledgeGraph, pred: &str) -> Result<String, 
 - [ ] **Step 3: Run extraction tests**
 
 Run: `cargo test --package mimir-knowledge --test extraction_test`
+
 Expected: PASS.
 
 - [ ] **Step 4: Run full workspace tests**
 
 Run: `cargo test --workspace`
+
 Expected: PASS.
 
 - [ ] **Step 5: Commit**

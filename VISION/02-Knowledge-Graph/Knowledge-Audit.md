@@ -113,8 +113,7 @@ Facts needing review (12):
 [Review all] [Review individually] [Dismiss]
 ```
 
-**Surprise Me Mode:**
-The agent occasionally surfaces unexpected facts it has inferred:
+**Surprise Me Mode:** The agent occasionally surfaces unexpected facts it has inferred:
 ```
 🔍 Interesting Inference
 

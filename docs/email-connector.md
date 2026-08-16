@@ -1,8 +1,11 @@
 # Email Connector (IMAP) — `mimir-connectors::email`
 
 > **Phase:** 3 — Connectors (C5 / issue #199)
+>
 > **Feature flag:** `gmail` (default). Framework + mock stay built without it.
+>
 > **Status:** Implemented (library + daemon/CLI integration). C5 transport (#199) + C6 structured extraction (#200, iMIP calendar invites) + #249 (schema.org JSON-LD deterministic extraction) + C7 LLM extraction (#201, unstructured prose, with the bounded durable retry / terminal-failure policy from #262) are done. The daemon `AppState` wiring (A1 / #202), action routes (A2 / #203), the `mimir connector …` CLI (A3 / #204), and the interactive OAuth PKCE login (A4 / #205) are integrated.
+>
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
 ## Purpose

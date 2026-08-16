@@ -1,0 +1,12 @@
+[package]
+name = "md-reflow"
+version = "0.1.0"
+edition = "2021"
+description = "Reflow markdown prose to single-line paragraphs (Mimir AGENTS.md standard)"
+license = "GPL-3.0"
+publish = false
+
+[dependencies]
+pulldown-cmark = "0.13.4"
+
+[workspace]

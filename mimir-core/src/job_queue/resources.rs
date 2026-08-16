@@ -4,7 +4,9 @@
 //! a cgroup v2 memory cap for the duration of a job run, then restores the
 //! previous state on drop. Every operation is best-effort: unsupported
 //! platforms, missing permissions, or unwritable cgroup filesystems degrade
-//! to a debug log and the job runs without the limit (issue #91).
+//! to a debug log and the job runs without the limit (issue #91). The cgroup
+//! memory cap is process-wide: the whole process is moved into the job
+//! cgroup, so the cap applies to the entire daemon while the job runs.
 
 #[cfg(target_os = "linux")]
 use std::path::PathBuf;
@@ -106,11 +108,14 @@ fn apply_cpu_affinity(cores: u8) -> Option<nix::sched::CpuSet> {
 fn apply_nice(target: i8) -> Option<i32> {
     use rustix::process::{getpriority_process, setpriority_process};
 
+    // `nice` is only defined for -20..=19; clamp out-of-range values rather
+    // than silently dropping the limit.
+    let target = i32::from(target).clamp(-20, 19);
     let current = getpriority_process(None).ok()?;
-    if current == i32::from(target) {
+    if current == target {
         return None;
     }
-    match setpriority_process(None, i32::from(target)) {
+    match setpriority_process(None, target) {
         Ok(()) => Some(current),
         Err(e) => {
             debug!(error = %e, target, "failed to apply nice level for job");
@@ -153,6 +158,9 @@ impl CgroupSnapshot {
 /// not writable (no delegation).
 #[cfg(target_os = "linux")]
 fn apply_memory_limit(bytes: u64, job_id: &str) -> Option<CgroupSnapshot> {
+    if bytes == 0 {
+        return None;
+    }
     let parent = own_cgroup_v2_dir()?;
     let child = parent.join(format!(
         "mimir-job-{}-{}",

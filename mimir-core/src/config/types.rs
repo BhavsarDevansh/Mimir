@@ -163,8 +163,8 @@ pub struct KnowledgeOptimizationConfig {
     pub nice_level: i8,
     pub timeout_minutes: u16,
     pub schedule_time: String,
-    /// Best-effort per-job memory cap (MiB) applied while the optimization
-    /// job runs (Linux cgroup v2 only; skipped when unavailable).
+    /// Best-effort memory cap (MiB) for the whole process while the
+    /// optimization job runs (Linux cgroup v2 only; skipped when unavailable).
     pub memory_limit_mb: Option<u16>,
 }
 

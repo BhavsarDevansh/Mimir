@@ -32,7 +32,7 @@ nice_level = 10
 # memory_limit_mb = 2048  # Optional: best-effort memory cap (Linux cgroup v2)
 ```
 
-`cpu_cores` limits how many CPUs the optimizer may use (Linux), `nice_level` makes it yield to your other programs, and `memory_limit_mb` optionally caps its memory on systems with a writable cgroup v2 setup. All limits are best-effort: if your system cannot apply one, the optimizer still runs.
+`cpu_cores` limits how many CPUs the optimizer may use (Linux), `nice_level` makes it yield to your other programs, and `memory_limit_mb` optionally caps the Mimir process's memory while the optimizer runs (Linux systems with a writable cgroup v2 setup). All limits are best-effort: if your system cannot apply one, the optimizer still runs.
 
 ## What if I use Mimir while it runs?
 

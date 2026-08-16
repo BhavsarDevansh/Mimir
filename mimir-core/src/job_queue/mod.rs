@@ -221,7 +221,9 @@ pub struct JobResourceLimits {
     pub cpu_cores: Option<u8>,
     /// Scheduling priority (`nice` value, -20..=19) for the job's thread.
     pub nice_level: Option<i8>,
-    /// Best-effort memory cap in bytes (Linux cgroup v2 `memory.max`).
+    /// Best-effort memory cap in bytes (Linux cgroup v2 `memory.max`); the
+    /// whole process is moved into the job cgroup, so the cap applies to the
+    /// entire daemon while the job runs.
     pub memory_limit_bytes: Option<u64>,
 }
 

@@ -166,7 +166,7 @@ impl JobQueue {
         let thread = match std::thread::Builder::new()
             .name(format!("mimir-job-{job_id}"))
             .spawn(move || {
-                let _guard = ResourceGuard::apply(limits, &job_id_owned);
+                let guard = ResourceGuard::apply(limits, &job_id_owned);
                 let ctx = JobContext::new(job_id_owned, token_inner.clone());
                 let result = handle.block_on(async {
                     tokio::select! {
@@ -175,6 +175,10 @@ impl JobQueue {
                         _ = tokio::time::sleep(timeout) => Err(JobError::TimedOut),
                     }
                 });
+                // Restore resource limits before signalling completion so a
+                // subsequent run can never observe (or clobber) the previous
+                // run's thread/process state (issue #91).
+                drop(guard);
                 let _ = result_tx.send(result);
             }) {
             Ok(thread) => thread,
@@ -228,7 +232,7 @@ impl JobQueue {
 
     /// Request cancellation of a running job.
     ///
-    /// Cooperative handlers observe the token via [`JobContext::cancelled`]
+    /// Cooperative handlers observe the token via [`JobContext::is_cancelled`]
     /// and exit cleanly; non-cooperative handlers are dropped when the run
     /// future is cancelled. Returns `true` if a running job was found.
     pub fn cancel(&self, job_id: &str) -> bool {

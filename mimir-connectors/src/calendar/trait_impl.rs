@@ -155,16 +155,24 @@ impl Connector for CalendarConnector {
                 break;
             }
         }
-        // Advance the in-memory cursor so the next in-process cycle is
-        // incremental; the supervisor persists `new_cursor` separately.
-        if let Some(tok) = &new_cursor {
-            *self.sync_token.lock().await = Some(tok.clone());
-        }
         Ok(SyncOutcome {
             fetched,
             new_cursor,
             fetched_at: Utc::now(),
         })
+    }
+
+    async fn on_cycle_succeeded(&self, new_cursor: Option<&str>) {
+        // Adopt the persisted cursor as the in-memory progress marker only
+        // now that the supervisor confirmed the whole cycle succeeded (issue
+        // #314). Advancing inside `sync` would skip the failed cycle's
+        // changed events on the next in-process cycle: the persisted cursor
+        // is only updated on a fully successful cycle, so the in-memory
+        // marker must never run ahead of it. `None` means "cursor unchanged"
+        // and leaves the marker as-is.
+        if let Some(tok) = new_cursor {
+            *self.sync_token.lock().await = Some(tok.to_string());
+        }
     }
 
     async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError> {

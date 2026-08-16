@@ -415,8 +415,34 @@ pub trait Connector: Send + Sync {
     /// Fetch raw items from the service into the connector's internal buffer.
     ///
     /// Does **not** extract facts or touch the knowledge graph. Returns sync
-    /// stats and an updated cursor for the supervisor to persist.
+    /// stats and an updated cursor for the supervisor to persist. The
+    /// connector must **not** adopt the returned cursor into its own
+    /// in-memory state here — the supervisor persists it first and hands it
+    /// back via [`on_cycle_succeeded`](Self::on_cycle_succeeded) once the
+    /// cycle fully succeeded, so a failed cycle re-syncs from the last
+    /// confirmed cursor (issue #314). Connectors that re-deliver failed
+    /// windows by other means (e.g. a durable retry ledger, issue #262) may
+    /// keep their own in-memory progress.
     async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError>;
+
+    /// Called by the supervisor after a cycle fully succeeded — `sync`
+    /// fetched, `extract` drained, deletions trashed, facts inserted, and
+    /// the returned cursor persisted via
+    /// `KnowledgeGraph::update_sync_progress_and_durable_state` — so the
+    /// connector may adopt the persisted cursor as its in-memory progress
+    /// marker for the next incremental sync.
+    ///
+    /// Failure-safe incremental sync (issue #314): the persisted
+    /// `connectors.sync_cursor` advances only on a fully successful cycle, so
+    /// an in-memory cursor adopted earlier (inside [`sync`](Self::sync))
+    /// would skip the failed cycle's window on the next in-process cycle —
+    /// only a daemon restart, which re-seeds from the persisted cursor,
+    /// would recover it. `new_cursor` is the cursor the supervisor just
+    /// persisted (`None` means unchanged). Connectors whose progress lives
+    /// solely in the persisted column — or that re-deliver failed windows by
+    /// other means (e.g. a durable retry ledger, issue #262) — leave the
+    /// default no-op.
+    async fn on_cycle_succeeded(&self, _new_cursor: Option<&str>) {}
 
     /// Drain buffered raw items into typed, parsed normalized facts.
     ///

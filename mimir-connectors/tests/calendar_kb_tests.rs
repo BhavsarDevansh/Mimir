@@ -6,17 +6,23 @@
 #![cfg(feature = "calendar")]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use mimir_connectors::{CalendarConnectorFactory, ConnectorRegistry, ConnectorSupervisor};
+use mimir_connectors::{
+    ActionResult, CalendarConnectorFactory, Connector, ConnectorAction, ConnectorError,
+    ConnectorFactory, ConnectorMode, ConnectorRegistry, ConnectorSupervisor, FnConnectorFactory,
+    HealthStatus, SupervisorConfig, SyncOptions, SyncOutcome, TriggerOutcome,
+};
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::enums::{
     ConnectorAuthState, ConnectorStatus, ConnectorType, EventType,
 };
+use mimir_knowledge::normalize::NormalizedFact;
 
 mod common;
 use common::*;
@@ -304,6 +310,239 @@ DTSTART:{start_ical}\nLOCATION:London\nEND:VEVENT\nEND:VCALENDAR"
         !kg.list_trash(100, 0).await.unwrap().is_empty(),
         "deleted event facts must land in trash"
     );
+
+    supervisor.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #314: failure-safe sync-token advance
+// ---------------------------------------------------------------------------
+
+/// Delegating connector that fails the first `extract()` call, simulating a
+/// transient extraction failure *after* `sync` already staged the changed
+/// events. Every other operation — including the cursor adoption in
+/// `on_cycle_succeeded` — delegates to the inner calendar connector, so the
+/// wrapper only injects the failure (issue #314).
+struct FailFirstExtractConnector {
+    inner: Arc<dyn Connector>,
+    /// Set once the injected extract failure has fired, so the test can wait
+    /// for the failing cycle instead of racing the supervisor's first
+    /// automatic cycle.
+    failed_once: Arc<AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl Connector for FailFirstExtractConnector {
+    fn id(&self) -> &str {
+        self.inner.id()
+    }
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn connector_type(&self) -> ConnectorType {
+        self.inner.connector_type()
+    }
+    fn mode(&self) -> ConnectorMode {
+        self.inner.mode()
+    }
+    fn config_schema(&self) -> serde_json::Value {
+        self.inner.config_schema()
+    }
+    async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError> {
+        self.inner.authenticate().await
+    }
+    async fn health(&self) -> Result<HealthStatus, ConnectorError> {
+        self.inner.health().await
+    }
+    async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
+        self.inner.sync(options).await
+    }
+    async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError> {
+        if !self.failed_once.swap(true, Ordering::SeqCst) {
+            return Err(ConnectorError::Parse(
+                "injected transient extract failure".to_string(),
+            ));
+        }
+        self.inner.extract().await
+    }
+    async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError> {
+        self.inner.extract_deletions().await
+    }
+    async fn acknowledge_deletions(&self, deleted: &[String]) -> Result<(), ConnectorError> {
+        self.inner.acknowledge_deletions(deleted).await
+    }
+    async fn on_cycle_succeeded(&self, new_cursor: Option<&str>) {
+        self.inner.on_cycle_succeeded(new_cursor).await;
+    }
+    async fn act(&self, action: ConnectorAction) -> Result<ActionResult, ConnectorError> {
+        self.inner.act(action).await
+    }
+    async fn forget(&self) -> Result<(), ConnectorError> {
+        self.inner.forget().await
+    }
+}
+
+/// Issue #314: a cycle that fails *after* `sync` (extract error) must not
+/// lose the staged changed events. The in-memory sync-token may only advance
+/// once the supervisor persisted the new cursor, so the next in-process cycle
+/// re-syncs from the last confirmed cursor and re-processes the failed
+/// window.
+#[tokio::test]
+async fn failed_extract_cycle_reprocesses_staged_events_on_next_cycle() {
+    let (kg, _dir) = init_kg().await;
+    let server = MockServer::start().await;
+    let cal_url = format!("{}/cal/personal/", server.uri());
+
+    // Health probe (Online) — PROPFIND resourcetype for every cycle.
+    Mock::given(wiremock::matchers::method("PROPFIND"))
+        .and(wiremock::matchers::path("/cal/personal/"))
+        .respond_with(
+            ResponseTemplate::new(207).set_body_string(
+                "<?xml version=\"1.0\"?><d:multistatus xmlns:d=\"DAV:\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\">\
+<d:response><d:href>/cal/personal/</d:href><d:propstat><d:prop>\
+<d:resourcetype><d:collection/><cal:calendar/></d:resourcetype></d:prop>\
+<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>",
+            ),
+        )
+        .mount(&server)
+        .await;
+
+    // Window 1 (no cursor): event A + token-1. Mounted twice — the failed
+    // first cycle and the retry cycle both re-sync from "no cursor".
+    for _ in 0..2 {
+        mount_sync(
+            &server,
+            "/cal/personal/",
+            None,
+            sync_body("token-1", &[("/cal/a.ics", ICAL_EVENT)], &[]),
+        )
+        .await;
+    }
+    // Window 2 (token-1): event B + token-2. Only reachable after the
+    // connector adopted token-1 — a premature in-memory advance (the bug)
+    // would fetch this window instead of re-processing event A's window.
+    mount_sync(
+        &server,
+        "/cal/personal/",
+        Some("token-1"),
+        sync_body("token-2", &[("/cal/b.ics", ICAL_RECURRING)], &[]),
+    )
+    .await;
+
+    let kg = Arc::new(kg);
+    let mut cfg = app_password_config(&cal_url);
+    // Only the test's manual triggers may drive cycles after the first
+    // automatic one; a short poll interval would race the assertions below.
+    cfg["poll_interval_secs"] = serde_json::json!(3600);
+    let row = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Calendar,
+            slug: "calendar-personal".to_string(),
+            backend: "caldav-failing".to_string(),
+            display_name: "Calendar".to_string(),
+            config_json: cfg.to_string(),
+            status: Some(ConnectorStatus::Active),
+            auth_state: Some(ConnectorAuthState::Authenticated),
+        })
+        .await
+        .unwrap();
+
+    let failed_once = Arc::new(AtomicBool::new(false));
+    let registry = ConnectorRegistry::new();
+    registry
+        .register(
+            ConnectorType::Calendar,
+            "caldav-failing",
+            FnConnectorFactory::new({
+                let failed_once = Arc::clone(&failed_once);
+                move |config, ctx| {
+                    let inner = CalendarConnectorFactory.create(config, ctx)?;
+                    Ok(Arc::new(FailFirstExtractConnector {
+                        inner,
+                        failed_once: Arc::clone(&failed_once),
+                    }) as Arc<dyn Connector>)
+                }
+            }),
+        )
+        .unwrap();
+    let (_shutdown_tx, rx) = tokio::sync::watch::channel(false);
+    // A deliberately slow backoff keeps the runner from auto-retrying the
+    // failed cycle before the test's manual trigger arrives (the trigger
+    // preempts the backoff sleep) — the test owns the cycle sequencing from
+    // here on.
+    let config = SupervisorConfig {
+        max_failures: 5,
+        base_backoff: Duration::from_secs(30),
+        max_backoff: Duration::from_secs(30),
+    };
+    let supervisor = ConnectorSupervisor::new(Arc::new(registry), kg.clone(), config, rx)
+        .with_secret_store(store_with_app_password().await);
+
+    assert_eq!(supervisor.restore().await.unwrap(), 1);
+
+    // Wait for the supervisor's first automatic cycle to fail at `extract`.
+    // `failed_once` is set at the start of `extract`, before the cycle
+    // finishes; the retry trigger below is safe because
+    // `trigger_sync_by_slug` queues the request on the runner's channel and
+    // the serial runner processes it only after the current cycle returns.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    while !failed_once.load(Ordering::SeqCst) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "injected extract failure never fired"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // Retry cycle: must re-sync from the last confirmed cursor (none) and
+    // re-process event A's window.
+    let outcome = supervisor
+        .trigger_sync_by_slug("calendar-personal", SyncOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome,
+        TriggerOutcome::Ok {
+            fetched: 1,
+            new_cursor: Some("token-1".to_string()),
+        }
+    );
+
+    // The failed window's facts landed in the knowledge graph.
+    let event = entity_id(&kg, "Trip to Rome")
+        .await
+        .expect("event from the failed window must be re-processed");
+    assert!(
+        !kg.get_facts_by_subject(event, 100)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the re-processed event's located_in fact must be inserted"
+    );
+    assert!(
+        entity_id(&kg, "Rome").await.is_some(),
+        "the located_in object (Rome) must resolve"
+    );
+
+    // The next cycle must be incremental from the adopted cursor (token-1):
+    // it fetches only window 2 (event B).
+    let outcome = supervisor
+        .trigger_sync_by_slug("calendar-personal", SyncOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome,
+        TriggerOutcome::Ok {
+            fetched: 1,
+            new_cursor: Some("token-2".to_string()),
+        }
+    );
+    let row = kg
+        .get_connector(row.id)
+        .await
+        .unwrap()
+        .expect("connector row");
+    assert_eq!(row.sync_cursor.as_deref(), Some("token-2"));
 
     supervisor.shutdown().await;
 }

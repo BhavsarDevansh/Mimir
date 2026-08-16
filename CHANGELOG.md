@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.111.2] — 2026-08-16
+
+### Calendar connector: failure-safe in-memory sync-token advance (issue #314)
+
+- **The Calendar connector no longer advances its in-memory `sync_token` inside `Connector::sync`.** The supervisor persisted `connectors.sync_cursor` is the single source of truth and only advances on a fully successful cycle; the new `Connector::on_cycle_succeeded(new_cursor)` trait method (default no-op) hands the persisted cursor back to the connector after the cycle's extraction, trashing, fact insertion, and cursor/durable-state persistence all succeeded. A cycle that fails after `sync` (extract error, trash error, hard `normalize_and_insert` error, or persist error) therefore leaves the in-memory marker at the last confirmed cursor, and the next in-process cycle re-syncs from it — the server re-reports the failed window's changed events and deletions, so no staged event or tombstone is permanently lost until a restart or manual full sync (the previous behaviour). Restart recovery and manual full syncs remain available, but are no longer required. Tombstone staging now dedupes by href so repeated re-syncs of a failed window cannot grow the pending deletion buffer.
+- **Tests.** `mimir-connectors/tests/calendar_kb_tests.rs::failed_extract_cycle_reprocesses_staged_events_on_next_cycle` drives a real CalDAV connector through the supervisor: the first automatic cycle fails at `extract` after staging event A, a manual trigger re-syncs from the last confirmed cursor (no token) and event A's facts land in the KB, and the second trigger (the third cycle) syncs incrementally from the adopted token-1 (proving the cursor advanced only after success). `mimir-connectors/src/supervisor/cycle.rs::cycle_adopts_new_cursor_only_after_success` pins the supervisor contract — the connector is handed the new cursor only after a successful cycle, never after a failed one. The unit-level `incremental_sync_uses_persisted_sync_token` test now adopts the cursor between syncs the way the supervisor does.
+- **Docs.** `docs/calendar-connector.md` (new "Failure-safe cursor adoption (#314)" section + sync-protocol/tombstone updates), `docs/connectors-framework.md` (trait + supervisor cycle), `docs/wiki/calendar-connector.md`, `docs/wiki/what-works-now.md`, and `Mimir-Implementation-Context.md` updated.
+- Version bumped 0.111.1 → 0.111.2 (patch — backwards-compatible bug fix).
+
 ## [0.111.1] — 2026-08-15
 
 ### Docs: connectors-framework.md ConnectorFactory signature synced with the landed ConnectorContext (issue #301)

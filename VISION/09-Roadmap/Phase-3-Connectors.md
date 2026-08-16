@@ -22,7 +22,7 @@ Build the connector framework and implement 3 core connectors: Email, Calendar, 
 - [x] OAuth 2.0 authentication (C5 / #199)
 - [x] IMAP IDLE for real-time sync (C5 / #199)
 - [x] Email fetching and parsing (C5 / #199)
-- [x] Fact extraction (LLM-based for structured data) (C7 / #201)
+- [x] Fact extraction: deterministic cascade with LLM fallback (C6–C7 / #200, #201, #249)
 - [x] Extract: flight confirmations, bookings, dates, contacts (C6 / #200, #249, C7 / #201)
 - [x] Incremental sync (track last UID) (C5 / #199)
 
@@ -67,7 +67,7 @@ Build the connector framework and implement 3 core connectors: Email, Calendar, 
 - Facts automatically extracted and inserted into KB — met: all backends funnel through the shared `normalize_and_insert` pipeline
 - User can add/remove connectors via CLI — met: `mimir connector` subcommands (A3 / #204)
 - Incremental sync works (no re-fetching everything) — met: per-connector persisted cursors (Photos file signature, CalDAV sync token, IMAP UIDVALIDITY-safe UID)
-- Rate limits respected — met: shared F12 rate limiter + retry/backoff primitives
+- Rate limits respected — partial: shared F12 rate limiter + retry/backoff primitives landed and the geocoder uses them; Calendar CalDAV and Email IMAP outbound calls do not yet
 
 ## Dependencies
 - Phase 1 (Core Agent) — complete

@@ -17,7 +17,7 @@ Every night Mimir performs a multi-step health check on your knowledge graph:
 - Merged facts are marked **Superseded**, not deleted, so you can still trace their history.
 - Forgotten facts go to the **Trash** for 30 days before permanent removal.
 - Pending confirmations older than 7 days are automatically rejected and deleted.
-- A backup is created before any changes begin.
+- A backup is created before any changes begin; it is written to a temporary staging file and only appears as a complete `.db` file once the copy finishes, so a backup is never left half-written.
 
 ## Configuration
 

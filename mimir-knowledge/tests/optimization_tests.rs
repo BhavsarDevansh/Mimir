@@ -518,17 +518,39 @@ async fn concurrent_full_runs_with_shared_backup_dir_do_not_corrupt_each_other()
         result2.unwrap();
     }
 
-    // Both runs must have actually written their backups.
+    // Every run must have published a complete backup: no staging files may
+    // remain, and every `.db` file must be a queryable database — a pruning
+    // pass must never unlink an in-progress backup (issue #338 review).
     let mut backup_count = 0;
+    let mut staging_files = Vec::new();
+    let mut backup_paths = Vec::new();
     let mut entries = tokio::fs::read_dir(backup_dir.path()).await.unwrap();
     while let Some(entry) = entries.next_entry().await.unwrap() {
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with("knowledge-") && name.ends_with(".db") {
             backup_count += 1;
+            backup_paths.push(entry.path());
+        } else if name.ends_with(".staging") {
+            staging_files.push(name);
         }
     }
     assert!(
         backup_count >= 2,
         "expected at least 2 backups, found {backup_count}"
     );
+    assert!(
+        staging_files.is_empty(),
+        "staging files must not remain: {staging_files:?}"
+    );
+    for path in &backup_paths {
+        let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display()))
+            .await
+            .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM facts")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        pool.close().await;
+    }
 }

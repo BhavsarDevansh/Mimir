@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.114.3] — 2026-08-16
+
+### PR #338 review fix: never expose an in-progress backup as a completed `.db` file
+
+- **Root cause.** `create_backup` reserved the final `knowledge-YYYY-MM-DD.db` path and ran `VACUUM INTO` directly into it, so once the copy wrote its first bytes the file was no longer zero-length and `prune_backups` treated it as a real backup; with more than seven concurrent runs a pruning pass could unlink an older in-progress backup, leaving the completed copy without a directory entry.
+- **Fix.** `VACUUM INTO` now writes to a staging path (`knowledge-YYYY-MM-DD.db.staging`) that `prune_backups` never matches, and the completed backup is published to the reserved `.db` path with an atomic rename only after the copy succeeds. Failed runs remove both the reservation and any partial staging file; a staging orphan from a crashed run is cleared by the next run before `VACUUM INTO`.
+- **Tests.** New unit tests cover the publish-without-leftovers contract, orphaned-staging cleanup, and pruning never removing staging files; the concurrent shared-backup-dir regression test now also asserts no staging files remain and every published backup is a queryable database.
+- **Docs.** `docs/nightly-optimization.md` and `docs/wiki/nightly-optimization.md` updated.
+- Version bumped 0.114.2 → 0.114.3 (patch — bug fix).
+
 ## [0.114.2] — 2026-08-16
 
 ### Flaky test fix: nightly-optimization backup race (issue #241)

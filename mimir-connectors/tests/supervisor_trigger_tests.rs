@@ -1,5 +1,6 @@
 //! Manual sync triggering: preemption, options forwarding, concurrency, and error cases.
 
+#![cfg(feature = "test-mock-connector")]
 use std::sync::Arc;
 use std::time::Duration;
 

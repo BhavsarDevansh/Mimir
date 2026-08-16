@@ -1,7 +1,9 @@
 # Fact Extraction Pipeline
 
 > **Issues:** #55, #181 (Phase 3 F4 — shared normalize/insert boundary)
+>
 > **Phase:** 2 — Knowledge Graph (boundary shared with Phase 3 connectors)
+>
 > **Version:** 0.65.0
 
 ## Overview
@@ -10,17 +12,9 @@ The fact extraction pipeline transforms a raw user message into structured, vali
 
 ## Trigger
 
-Learning is **LLM-orchestrated** (Issue #137). The conversational LLM calls the
-`remember` tool during the chat turn to persist facts it judges worth keeping, so
-extraction happens inline as part of the response and does not learn from chitchat.
-The deterministic Rust pipeline (validation, confidence, entity resolution,
-sensitive gating, insertion) runs when the tool executes — the LLM only supplies
-structured facts; it cannot set confidence or override policy.
+Learning is **LLM-orchestrated** (Issue #137). The conversational LLM calls the `remember` tool during the chat turn to persist facts it judges worth keeping, so extraction happens inline as part of the response and does not learn from chitchat. The deterministic Rust pipeline (validation, confidence, entity resolution, sensitive gating, insertion) runs when the tool executes — the LLM only supplies structured facts; it cannot set confidence or override policy.
 
-The [`Librarian Agent`](../librarian-agent.md) and
-`KnowledgeGraph::extract_facts_with_context` remain as an on-demand library API
-(for future bulk import or specialist agents) but are no longer auto-invoked after
-every turn. Incognito sessions never learn.
+The [`Librarian Agent`](../librarian-agent.md) and `KnowledgeGraph::extract_facts_with_context` remain as an on-demand library API (for future bulk import or specialist agents) but are no longer auto-invoked after every turn. Incognito sessions never learn.
 
 ## Architecture
 
@@ -41,42 +35,22 @@ User message
         → inference engine trigger
 ```
 
-Connectors build `NormalizedFact`s directly from structured/LLM-extracted items
-and call the same `normalize_and_insert` with a connector `Provenance`, so
-connector-sourced facts get identical confidence scoring, corroboration,
-supersession, and sensitivity gating as facts you tell Mimir directly.
+Connectors build `NormalizedFact`s directly from structured/LLM-extracted items and call the same `normalize_and_insert` with a connector `Provenance`, so connector-sourced facts get identical confidence scoring, corroboration, supersession, and sensitivity gating as facts you tell Mimir directly.
 
 ## Corroboration (#79)
 
-Corroboration is resolved **inside `insert_fact_in_tx`** for every insert path
-(extraction, batch insert, direct `KnowledgeGraph::insert_fact`), within the
-same transaction as supersession. When a new **non-explicit** fact covers the
-same claim as an existing fact — same `subject_id + relationship_type_id +
-object`, temporally overlapping `valid_from`/`valid_until` — and the existing
-fact is `Active` (or awaiting confirmation):
+Corroboration is resolved **inside `insert_fact_in_tx`** for every insert path (extraction, batch insert, direct `KnowledgeGraph::insert_fact`), within the same transaction as supersession. When a new **non-explicit** fact covers the same claim as an existing fact — same `subject_id + relationship_type_id + object`, temporally overlapping `valid_from`/`valid_until` — and the existing fact is `Active` (or awaiting confirmation):
 
 1. **No new facts row** is created; the existing fact is returned.
 2. A new `sources` row is inserted against the existing fact (provenance).
-3. If the existing fact is **non-explicit and non-inferred**, its confidence is
-   boosted by `+0.05`, capped at `0.95`. Explicit facts stay at `1.0`; inferred
-   fact confidence is structural (recalculated from parents) and is not
-   boosted.
-4. `SourceAdded` and `ConfidenceChange` audit entries are written and
-   `stale_confidence` is cleared; the confidence change cascades to all inferred
-   children comprehensively within the transaction.
+3. If the existing fact is **non-explicit and non-inferred**, its confidence is boosted by `+0.05`, capped at `0.95`. Explicit facts stay at `1.0`; inferred fact confidence is structural (recalculated from parents) and is not boosted.
+4. `SourceAdded` and `ConfidenceChange` audit entries are written and `stale_confidence` is cleared; the confidence change cascades to all inferred children comprehensively within the transaction.
 
-The corroboration path runs **before** supersession, so an explicit statement
-still supersedes rather than corroborates. A re-statement from an identical
-source (`(source_type, connector_instance_id, raw_reference)` already recorded) is a
-**no-op** — it is not an independent source and would collide with the
-`sources` UNIQUE index. Non-overlapping temporal ranges never corroborate;
-they form a timeline of separate facts.
+The corroboration path runs **before** supersession, so an explicit statement still supersedes rather than corroborates. A re-statement from an identical source (`(source_type, connector_instance_id, raw_reference)` already recorded) is a **no-op** — it is not an independent source and would collide with the `sources` UNIQUE index. Non-overlapping temporal ranges never corroborate; they form a timeline of separate facts.
 
 ## Shared normalize/insert boundary (#181, Phase 3 F4)
 
-The resolve → confidence → sensitivity-gate → insert orchestration is extracted
-from the conversational path into a single reusable function so that chat
-learning and connector ingestion funnel through one deterministic Rust pipeline:
+The resolve → confidence → sensitivity-gate → insert orchestration is extracted from the conversational path into a single reusable function so that chat learning and connector ingestion funnel through one deterministic Rust pipeline:
 
 ```rust
 pub async fn normalize_and_insert(
@@ -86,29 +60,11 @@ pub async fn normalize_and_insert(
 ) -> Result<ExtractionOutcome, KnowledgeError>
 ```
 
-- **`Provenance`** (one per call) carries the batch-level origin: the connector
-  instance id + connector type (for connector syncs) and the `extraction_method`
-  (`LlmExtraction` for chat, `StructuredParse` for structurally-parsed connector
-  items). Conversational learning uses `Provenance::chat`.
-- **`NormalizedFact`** (one per fact) carries the typed fact content — entity
-  types, parsed temporal bounds, typed `RecurrenceType`, validated category ids,
-  the sensitivity flag, the optional correction scope, and the per-fact
-  `raw_reference` (the native source item id, e.g. an email UID). `source_type`
-  is per-fact because a single chat batch may mix `Explicit` (`UserEdit`) and
-  `Casual` (`Interaction`) facts; connectors set `Connector`.
-- **Confidence** is `confidence::initial(source_type, connector_type)` — the
-  per-source-type / per-connector reliability score with **no extraction-method
-  discount**. Corroboration, supersession, and inference are inherited for free
-  from `insert_fact_in_tx`, so a cross-connector corroboration (e.g. a Gmail
-  flight fact + a Calendar event on overlapping dates) adds a source and boosts
-  confidence without creating a duplicate fact.
+- **`Provenance`** (one per call) carries the batch-level origin: the connector instance id + connector type (for connector syncs) and the `extraction_method` (`LlmExtraction` for chat, `StructuredParse` for structurally-parsed connector items). Conversational learning uses `Provenance::chat`.
+- **`NormalizedFact`** (one per fact) carries the typed fact content — entity types, parsed temporal bounds, typed `RecurrenceType`, validated category ids, the sensitivity flag, the optional correction scope, and the per-fact `raw_reference` (the native source item id, e.g. an email UID). `source_type` is per-fact because a single chat batch may mix `Explicit` (`UserEdit`) and `Casual` (`Interaction`) facts; connectors set `Connector`.
+- **Confidence** is `confidence::initial(source_type, connector_type)` — the per-source-type / per-connector reliability score with **no extraction-method discount**. Corroboration, supersession, and inference are inherited for free from `insert_fact_in_tx`, so a cross-connector corroboration (e.g. a Gmail flight fact + a Calendar event on overlapping dates) adds a source and boosts confidence without creating a duplicate fact.
 
-The conversational adapter (`extracted_to_normalized` in `extract/pipeline.rs`) does the
-LLM-output normalisation the shared boundary cannot: predicate canonicalisation
-(so list-splitting sees canonical names), list splitting, and parsing the LLM's
-string-typed fields into the typed `NormalizedFact`. Per-fact canonicalisation
-and parse errors are tolerated and surfaced via `ExtractionOutcome::errors`,
-preserving the previous batch behaviour.
+The conversational adapter (`extracted_to_normalized` in `extract/pipeline.rs`) does the LLM-output normalisation the shared boundary cannot: predicate canonicalisation (so list-splitting sees canonical names), list splitting, and parsing the LLM's string-typed fields into the typed `NormalizedFact`. Per-fact canonicalisation and parse errors are tolerated and surfaced via `ExtractionOutcome::errors`, preserving the previous batch behaviour.
 
 The tool-call + fence-fallback parsing itself is shared with the connector extraction path (issue #259): `mimir-core::llm::parse_tool_output` owns the three-step dance (first `tool_calls` entry's `function.arguments`, else fence-stripped `content`, else error) once, and both `parse_remember_output` and the Email connector's `parse_output` map its `ToolOutputParseError` onto their own error types. The conversational path keeps its bare-`Vec<ExtractedFact>` fallback on top of the shared parser. The `remember` tool schema is built once via `LazyLock` and shared by every extraction call.
 
@@ -153,23 +109,11 @@ The extraction prompt defines role, schema, classification criteria, and a softe
 
 ## Entity Resolution
 
-1. Search by name via `queries::entity::get_by_name_typed` (exact name → exact
-   alias → FTS5 fuzzy), restricted to entities of the LLM-provided
-   `subject_type` / `object_type`. Cross-type matches are dropped so a name
-   like "Apple" resolved as a `Concept` never merges into the `Organization`
-   "Apple Inc".
-2. Apply the resolution policy (`pick_resolution`): an exact-name or
-   exact-alias hit always resolves to the existing entity; a fuzzy hit resolves
-   only when its normalised score is ≥ `FUZZY_RESOLVE_THRESHOLD` (0.9), otherwise
-   it is treated as a miss. Results are sorted by score descending (alias 1.1 >
-   exact name 1.0 ≥ fuzzy), so only the best same-type candidate is inspected.
+1. Search by name via `queries::entity::get_by_name_typed` (exact name → exact alias → FTS5 fuzzy), restricted to entities of the LLM-provided `subject_type` / `object_type`. Cross-type matches are dropped so a name like "Apple" resolved as a `Concept` never merges into the `Organization` "Apple Inc".
+2. Apply the resolution policy (`pick_resolution`): an exact-name or exact-alias hit always resolves to the existing entity; a fuzzy hit resolves only when its normalised score is ≥ `FUZZY_RESOLVE_THRESHOLD` (0.9), otherwise it is treated as a miss. Results are sorted by score descending (alias 1.1 > exact name 1.0 ≥ fuzzy), so only the best same-type candidate is inspected.
 3. If no candidate resolves, create a new entity with the LLM-provided type.
 
-> **Phase 3 F5 / #182:** the chain is shared by chat extraction and connector
-> ingestion. Entity names are globally unique (case-insensitive) by schema, so
-> the cross-type guard matters for token-overlap / fuzzy matches rather than
-> identical names. Alias creation stays explicit via `preferred_name`; fuzzy
-> resolution does not auto-learn aliases.
+> **Phase 3 F5 / #182:** the chain is shared by chat extraction and connector ingestion. Entity names are globally unique (case-insensitive) by schema, so the cross-type guard matters for token-overlap / fuzzy matches rather than identical names. Alias creation stays explicit via `preferred_name`; fuzzy resolution does not auto-learn aliases.
 
 ## Confidence Assignment
 
@@ -196,34 +140,19 @@ Confidence is **never** taken from the LLM. It is derived from classification:
 
 ### Scope-less Correction (`None`)
 
-- The shared `normalize_and_insert` boundary gates corrections on the
-  `is_correction` flag (set by the chat adapter from the LLM `Correction`
-  classification), **not** on `correction_scope` being present.
-- When the LLM emits `Correction` but omits `correction_scope`, `handle_correction`
-  receives `None` and defaults the new fact's `valid_from` to `now`, so the
-  correction takes effect from the current moment onward.
-- The insert temporal-overlap logic then closes the sole open-ended predecessor
-  at `now`, mirroring the explicit-datetime path.
+- The shared `normalize_and_insert` boundary gates corrections on the `is_correction` flag (set by the chat adapter from the LLM `Correction` classification), **not** on `correction_scope` being present.
+- When the LLM emits `Correction` but omits `correction_scope`, `handle_correction` receives `None` and defaults the new fact's `valid_from` to `now`, so the correction takes effect from the current moment onward.
+- The insert temporal-overlap logic then closes the sole open-ended predecessor at `now`, mirroring the explicit-datetime path.
 - Connectors never set `is_correction`, so this path is conversational-only.
 
 ## Sensitive Fact Confirmation
 
 ### Rust Sensitivity Gate (#142)
 
-Sensitivity is validated in Rust, not delegated to the LLM. The LLM provides an
-initial `is_sensitive` flag, but Rust applies a deterministic **AND gate** using
-two independent signals in `mimir-knowledge/src/sensitivity.rs`:
+Sensitivity is validated in Rust, not delegated to the LLM. The LLM provides an initial `is_sensitive` flag, but Rust applies a deterministic **AND gate** using two independent signals in `mimir-knowledge/src/sensitivity.rs`:
 
-1. **Category check** (`is_sensitive_by_category`) — does the fact belong to a
-   known sensitive catalogue category? The `SENSITIVE_CATEGORIES` constant
-   lists the Dewey-Decimal category IDs that require confirmation (health,
-   allergies, financial, romantic, cultural/religious, values/philosophy).
-2. **Content check** (`is_sensitive_by_content`) — does the fact's object text
-   contain a sensitive keyword as a **whole word** (e.g. "allergic", "diabetes",
-   "salary", "debt", "divorce", "citizenship")? Word-boundary matching prevents
-   benign words that merely contain a keyword (e.g. "hospitality" contains
-   "hospital", "indebted" contains "debt", "visage" contains "visa") from being
-   confirmed sensitive. This is the fallback for miscategorised facts.
+1. **Category check** (`is_sensitive_by_category`) — does the fact belong to a known sensitive catalogue category? The `SENSITIVE_CATEGORIES` constant lists the Dewey-Decimal category IDs that require confirmation (health, allergies, financial, romantic, cultural/religious, values/philosophy).
+2. **Content check** (`is_sensitive_by_content`) — does the fact's object text contain a sensitive keyword as a **whole word** (e.g. "allergic", "diabetes", "salary", "debt", "divorce", "citizenship")? Word-boundary matching prevents benign words that merely contain a keyword (e.g. "hospitality" contains "hospital", "indebted" contains "debt", "visage" contains "visa") from being confirmed sensitive. This is the fallback for miscategorised facts.
 
 The combined `is_sensitive(llm_flag, category_ids, object)` function implements:
 
@@ -233,10 +162,7 @@ The combined `is_sensitive(llm_flag, category_ids, object)` function implements:
 | sensitive | non-sensitive | **non-sensitive** (Rust overrides) |
 | non-sensitive | anything | **non-sensitive** |
 
-Rust can only **narrow** the LLM's assessment — it never flags a fact as
-sensitive when the LLM did not. This eliminates the false-positive problem where
-benign preferences ("I don't like chihuahuas", "I live in a small flat") were
-routed into pending confirmation.
+Rust can only **narrow** the LLM's assessment — it never flags a fact as sensitive when the LLM did not. This eliminates the false-positive problem where benign preferences ("I don't like chihuahuas", "I live in a small flat") were routed into pending confirmation.
 
 ### Pending Flow
 
@@ -298,8 +224,7 @@ pub async fn normalize_and_insert(
 ) -> Result<ExtractionOutcome, KnowledgeError>
 ```
 
-`ExtractionOutcome` and `PendingFact` are defined in `mimir_knowledge::normalize`
-and re-exported from `mimir_knowledge::extract` for existing callers.
+`ExtractionOutcome` and `PendingFact` are defined in `mimir_knowledge::normalize` and re-exported from `mimir_knowledge::extract` for existing callers.
 
 ## Testing
 

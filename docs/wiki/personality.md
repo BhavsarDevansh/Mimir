@@ -45,18 +45,9 @@ as starting context, not exhaustive):
 [condensed memory text]
 ```
 
-The **operating principles** are appended to every preset — built-in or
-custom — so the behavioural contract (honesty, retrieval, learning) holds
-regardless of personality tone. They tell the LLM that the injected facts are a
-curated subset, not a complete record: when the core facts are insufficient it
-should dispatch a retrieval agent via the `retrieve_context` tool rather than
-inventing answers, and it should persist anything worth saving by calling
-`remember`. The lower-level `kg_query`/`kg_search`/`kg_related` tools are the
-retrieval agent's internal tools and are not surfaced to the core LLM.
+The **operating principles** are appended to every preset — built-in or custom — so the behavioural contract (honesty, retrieval, learning) holds regardless of personality tone. They tell the LLM that the injected facts are a curated subset, not a complete record: when the core facts are insufficient it should dispatch a retrieval agent via the `retrieve_context` tool rather than inventing answers, and it should persist anything worth saving by calling `remember`. The lower-level `kg_query`/`kg_search`/`kg_related` tools are the retrieval agent's internal tools and are not surfaced to the core LLM.
 
-If no memory facts exist yet, the core-facts block is omitted — but the
-operating principles are still appended so the "do not invent facts" and
-"call `remember`" rules always apply.
+If no memory facts exist yet, the core-facts block is omitted — but the operating principles are still appended so the "do not invent facts" and "call `remember`" rules always apply.
 
 ## How to Select a Preset
 

@@ -43,10 +43,13 @@ gmail = ["mimir-connectors/gmail"]
 ## Register the mock connector factory (test harness) in the daemon registry.
 ## Enabled by the CLI e2e suite so `mimir connector` exercises a real
 ## add → resume → sync → pause → remove cycle against an in-process daemon.
-mock-connector = []
+mock-connector = ["mimir-connectors/test-mock-connector"]
 
 [dev-dependencies]
 mimir-client = { path = "../mimir-client" }
 mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
+# The configurable mock connector test harness (F13 / #190) for the connector
+# CRUD/status route tests; test-only, off in production builds.
+mimir-connectors = { path = "../mimir-connectors", features = ["test-mock-connector"] }
 reqwest = { version = "0.13", features = ["json"] }
 tempfile = "3"

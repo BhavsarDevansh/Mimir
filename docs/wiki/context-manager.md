@@ -2,8 +2,7 @@
 
 ## What Is Persisted?
 
-Mimir remembers every conversation you have.  Each chat is stored as a **session**
-containing:
+Mimir remembers every conversation you have.  Each chat is stored as a **session** containing:
 
 - A **system prompt** that defines Mimir's personality and rules for that session.
 - Every **user message** you send.
@@ -11,32 +10,24 @@ containing:
 - **Token counts** (when available) so Mimir knows how large the conversation is.
 - **Timestamps** for audit and debugging.
 
-All data lives in a single SQLite file on your device (`~/.local/share/mimir/context.db`
-by default).  The context database itself never leaves your machine, but messages
-are transmitted to remote LLM endpoints depending on your provider and
-configuration.  Review your LLM endpoint settings and provider privacy policies
-before using remote models.
+All data lives in a single SQLite file on your device (`~/.local/share/mimir/context.db` by default).  The context database itself never leaves your machine, but messages are transmitted to remote LLM endpoints depending on your provider and configuration.  Review your LLM endpoint settings and provider privacy policies before using remote models.
 
 ## How Window Sizing Works
 
-To keep LLM requests fast and within token limits, Mimir trims old conversation
-history automatically.  Two knobs control this:
+To keep LLM requests fast and within token limits, Mimir trims old conversation history automatically.  Two knobs control this:
 
 | Setting | Default | What it does |
 |---------|---------|-------------|
 | `max_turns` | 20 | Hard cap on the number of back-and-forth exchanges kept. |
 | `max_tokens` | 4096 | Soft cap on the total token count of the conversation. |
 
-When either limit is exceeded, Mimir **drops the oldest complete pairs** of
-(user, assistant) messages.  The system prompt is never removed.
+When either limit is exceeded, Mimir **drops the oldest complete pairs** of (user, assistant) messages.  The system prompt is never removed.
 
 ### Example
 
-If `max_turns = 20` and you send 25 messages, the first 5 exchanges are
-deleted.  The system prompt plus the most recent 20 exchanges remain.
+If `max_turns = 20` and you send 25 exchanges, the first 5 exchanges are deleted.  The system prompt plus the most recent 20 exchanges remain.
 
-If token usage is known and the total exceeds `max_tokens`, Mimir drops
-oldest pairs until the count is back under budget.
+If token usage is known and the total exceeds `max_tokens`, Mimir drops oldest pairs until the count is back under budget.
 
 ## Configuring Limits
 
@@ -53,10 +44,8 @@ You can change the defaults in three ways (highest priority last):
 
 ## Persistence Behaviour
 
-- **Sessions survive restarts.**  If you close and reopen Mimir, your
-  conversation picks up where it left off.
-- **Sessions are deleted** only when you explicitly call `delete_session` or
-  erase the database file.
+- **Sessions survive restarts.**  If you close and reopen Mimir, your conversation picks up where it left off.
+- **Sessions are deleted** only when you explicitly call `delete_session` or erase the database file.
 - **WAL mode** is enabled for safe concurrent reads and writes.
 
 ## Ephemeral vs. Stored Data
@@ -71,8 +60,6 @@ You can change the defaults in three ways (highest priority last):
 
 ## Best Practices
 
-- Keep `max_turns` modest (10–30) for most use-cases; LLM quality degrades with
-  very long contexts anyway.
-- If you run a local model with a small context window, lower `max_tokens`
-  accordingly.
+- Keep `max_turns` modest (10–30) for most use-cases; LLM quality degrades with very long contexts anyway.
+- If you run a local model with a small context window, lower `max_tokens` accordingly.
 - Move `db_path` to a fast SSD if you notice latency during heavy usage.

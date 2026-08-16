@@ -1,7 +1,9 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-08-15
-> **Version:** 0.108.0
+> **Last updated:** 2026-08-16
+>
+> **Version:** 0.115.1
+>
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in `CHANGELOG.md`; this file deliberately does not repeat either.
 
 ---
@@ -234,7 +236,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | OAuth token refresh | ✅ Works | `oauth2` 5.0.0 with `default-features = false` over a custom reqwest 0.13 adapter; redirects disabled, HTTPS/loopback gate, secret-hygiene error mapping ([#240](https://github.com/BhavsarDevansh/Mimir/issues/240)). |
 | OAuth PKCE login (A4) | ✅ Works | Interactive loopback flow for the first token: ephemeral loopback listener, browser-opened authorize URL (printed first for headless sessions), CSRF state validation, code exchange, token POST to the daemon ([#205](https://github.com/BhavsarDevansh/Mimir/issues/205)). E2E-tested against an in-process mock OAuth server (HTTPS authorize + HTTP token endpoints, PKCE S256 validation, one-time codes) at both the flow level and the real CLI + daemon level ([#207](https://github.com/BhavsarDevansh/Mimir/issues/207)). |
 | OS-keyring secret backend | ❌ Not implemented | Opt-in `keyring` backend, deferred ([#188](https://github.com/BhavsarDevansh/Mimir/issues/188)). |
-| Mock connector | ✅ Works | Config-driven, always compiled; polling/push modes, failure injection, tombstone (`deletions`) reporting ([#190](https://github.com/BhavsarDevansh/Mimir/issues/190), [#247](https://github.com/BhavsarDevansh/Mimir/issues/247)). |
+| Mock connector | ✅ Works | Config-driven, gated by the `test-mock-connector` feature; polling/push modes, failure injection, tombstone (`deletions`) reporting ([#190](https://github.com/BhavsarDevansh/Mimir/issues/190), [#247](https://github.com/BhavsarDevansh/Mimir/issues/247)). |
 | Rate limiting + retry | ✅ Works | Per-instance GCRA limiter, daily quota, retry/backoff with `Retry-After` honouring ([#189](https://github.com/BhavsarDevansh/Mimir/issues/189)). |
 | Geocoder | ✅ Works | OSM Nominatim forward/reverse with rate limiting ([#191](https://github.com/BhavsarDevansh/Mimir/issues/191)). Not configurable ([#227](https://github.com/BhavsarDevansh/Mimir/issues/227)); conversational geocoding tool deferred ([#192](https://github.com/BhavsarDevansh/Mimir/issues/192)). |
 | Push-mode manual sync | ❌ Not implemented | `trigger_sync` returns `PushUnsupported` for push connectors (deferred in F9 / [#186](https://github.com/BhavsarDevansh/Mimir/issues/186)). |
@@ -373,7 +375,7 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | `--no-default-features --all-targets` build | [#277](https://github.com/BhavsarDevansh/Mimir/issues/277) |
 | Intra-doc link warnings in `mimir-connectors` | [#276](https://github.com/BhavsarDevansh/Mimir/issues/276) |
 | `tabled` 0.21 / proc-macro-error2 future rejection | [#275](https://github.com/BhavsarDevansh/Mimir/issues/275) |
-| Stale docs: connectors framework, VISION technical design, markdown reflow | [#274](https://github.com/BhavsarDevansh/Mimir/issues/274), [#260](https://github.com/BhavsarDevansh/Mimir/issues/260), [#245](https://github.com/BhavsarDevansh/Mimir/issues/245) |
+| Stale docs: connectors framework, VISION technical design | [#274](https://github.com/BhavsarDevansh/Mimir/issues/274), [#260](https://github.com/BhavsarDevansh/Mimir/issues/260) |
 
 ---
 

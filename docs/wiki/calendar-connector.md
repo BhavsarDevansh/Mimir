@@ -1,46 +1,25 @@
 # Calendar Connector
 
 > **Phase:** 3 — Connectors
+>
 > **Status:** Implemented (library + daemon/CLI) — C3 (#197) transport + read/sync, C4 (#198) event → knowledge-graph extraction, events-subsystem integration, write-back, and the interactive OAuth PKCE login (A4 / #205). Server-side deletions (tombstones) are propagated to the KB fact lifecycle (#247).
 
 ## What it is
 
-The Calendar connector reads your CalDAV calendar (Apple iCloud, Nextcloud,
-Fastmail, and similar) into Mimir, **staging** your events so the knowledge
-graph can answer **what events you have, where, and when** — C4 (#198) turns
-those staged events into facts (with locations and attendees resolved to
-entities) and can write events back to the calendar. It speaks CalDAV — the open calendar protocol your calendar server
-already supports — so it works with any compliant server, no vendor lock-in.
+The Calendar connector reads your CalDAV calendar (Apple iCloud, Nextcloud, Fastmail, and similar) into Mimir, **staging** your events so the knowledge graph can answer **what events you have, where, and when** — C4 (#198) turns those staged events into facts (with locations and attendees resolved to entities) and can write events back to the calendar. It speaks CalDAV — the open calendar protocol your calendar server already supports — so it works with any compliant server, no vendor lock-in.
 
-It is a background sync worker: it periodically pulls new/changed events
-using CalDAV's **sync-token** protocol (only the deltas since the last sync,
-not the whole calendar every time) and stages them for the knowledge graph.
+It is a background sync worker: it periodically pulls new/changed events using CalDAV's **sync-token** protocol (only the deltas since the last sync, not the whole calendar every time) and stages them for the knowledge graph.
 
 ## How it works
 
-- You point it at a calendar URL and give it either an **app-specific
-  password** (iCloud/Fastmail/Nextcloud) or an **OAuth** token (Google). The
-  secret lives in Mimir's permission-checked secret store (`0600`); the
-  current backend stores credentials in plaintext at rest, never in plain
-  config.
-- Each sync issues one CalDAV `sync-collection` request. The first time it
-  fetches everything and gets a **sync-token**; every later sync sends that
-  token back and receives only what changed (new/updated/deleted events) plus a
-  fresh token. So syncs are cheap and incremental.
-- Each event's iCalendar payload (UID, summary, start/end, location,
-  recurrence rule) is parsed and held in an in-memory buffer ready for the
-  knowledge graph.
+- You point it at a calendar URL and give it either an **app-specific password** (iCloud/Fastmail/Nextcloud) or an **OAuth** token (Google). The secret lives in Mimir's permission-checked secret store (`0600`); the current backend stores credentials in plaintext at rest, never in plain config.
+- Each sync issues one CalDAV `sync-collection` request. The first time it fetches everything and gets a **sync-token**; every later sync sends that token back and receives only what changed (new/updated/deleted events) plus a fresh token. So syncs are cheap and incremental.
+- Each event's iCalendar payload (UID, summary, start/end, location, recurrence rule) is parsed and held in an in-memory buffer ready for the knowledge graph.
 - When the server reports an event as **deleted** (a `sync-collection` tombstone), the connector stages the deletion's href and the supervisor trashes that event's facts in the knowledge graph (recoverable from trash for 30 days), so a calendar event you cancel or delete in another client stops surfacing in **Upcoming** instead of living on as a phantom.
-- The connector keeps the sync-token as its progress marker: across restarts
-  it normally resumes from where it left off; a requested full sync or an
-  invalidated cursor can require a complete refetch.
+- The connector keeps the sync-token as its progress marker: across restarts it normally resumes from where it left off; a requested full sync or an invalidated cursor can require a complete refetch.
 - Syncs are **failure-safe**: the progress marker only advances after a sync cycle fully succeeded (fetch → extract → insert → save). If a cycle fails part-way (a temporary extraction problem, for example), the next cycle re-syncs from the last saved marker and re-processes the events that cycle had fetched — nothing is silently skipped, so you never lose an event from your knowledge graph to a transient glitch ([#314](https://github.com/BhavsarDevansh/Mimir/issues/314)).
 
-> **C3 vs C4:** #197 did the *transport* — fetching and parsing your
-> events. #198 turns those events into knowledge-graph facts (with locations
-> and attendees resolved to entities, recurring events advanced by the
-> events & reminders subsystem) and adds write-back to create/update/delete
-> remote events.
+> **C3 vs C4:** #197 did the *transport* — fetching and parsing your events. #198 turns those events into knowledge-graph facts (with locations and attendees resolved to entities, recurring events advanced by the events & reminders subsystem) and adds write-back to create/update/delete remote events.
 
 ## How events become knowledge (C4 / #198)
 
@@ -64,36 +43,19 @@ Deleting an event on the server (in another client) also removes the correspondi
 
 ## Authentication
 
-- **App password** — best for iCloud/Fastmail/Nextcloud. Generate an
-  app-specific password in your provider's settings; Mimir uses HTTP Basic
-  auth. Your username is in the connector config; the password is stored
-  securely.
-- **OAuth (Google)** — the connector stores your access + refresh token and
-  **refreshes** the access token automatically before each sync when it
-  expires. The initial sign-in is the interactive OAuth PKCE dance (A4 /
-  #205): `mimir connector add calendar … auth.kind=oauth …` opens the
-  provider's authorize URL in your browser, receives the redirect on a
-  loopback listener, and stores the exchanged token bundle.
+- **App password** — best for iCloud/Fastmail/Nextcloud. Generate an app-specific password in your provider's settings; Mimir uses HTTP Basic auth. Your username is in the connector config; the password is stored securely.
+- **OAuth (Google)** — the connector stores your access + refresh token and **refreshes** the access token automatically before each sync when it expires. The initial sign-in is the interactive OAuth PKCE dance (A4 / #205): `mimir connector add calendar … auth.kind=oauth …` opens the provider's authorize URL in your browser, receives the redirect on a loopback listener, and stores the exchanged token bundle.
 
-Mimir can also write back to your calendar: creating, updating, or deleting
-remote events via CalDAV `PUT`/`DELETE` (added in C4 / #198). This is the
-only connector with write support.
+Mimir can also write back to your calendar: creating, updating, or deleting remote events via CalDAV `PUT`/`DELETE` (added in C4 / #198). This is the only connector with write support.
 
 ## Use cases
 
-- "What do I have on Thursday?" — your calendar events become queryable
-  knowledge, cross-referenced with everything else Mimir knows (once C4 turns
-  staged events into facts).
-- Recurring events (birthdays, standups) sync once and advance automatically
-  via the events & reminders subsystem (once C4 lands).
-- Travel: a calendar event "Trip to Rome" can corroborate a flight email and
-  photos taken in Rome into one coherent picture.
+- "What do I have on Thursday?" — your calendar events become queryable knowledge, cross-referenced with everything else Mimir knows.
+- Recurring events (birthdays, standups) sync once and advance automatically via the events & reminders subsystem.
+- Travel: a calendar event "Trip to Rome" can corroborate a flight email and photos taken in Rome into one coherent picture.
 
 ## Known limitations (V1)
 
-- Google's CalDAV sync-token support is non-standard; the generic client works
-  against fully RFC 6578-compliant servers (iCloud, Nextcloud). Google-specific
-  handling is a follow-on.
-- The interactive OAuth login (PKCE) is wired (A4 / #205); Google-specific
-  CalDAV sync-token handling remains a follow-on.
+- Google's CalDAV sync-token support is non-standard; the generic client works against fully RFC 6578-compliant servers (iCloud, Nextcloud). Google-specific handling is a follow-on.
+- The interactive OAuth login (PKCE) is wired (A4 / #205); Google-specific CalDAV sync-token handling remains a follow-on.
 - Event → knowledge-graph extraction, write-back, and server-side deletion propagation are live (C4 / #198 + #247); richer `RRULE` recurrence rules are a follow-up.

@@ -38,12 +38,7 @@ By extracting the wire types into a zero-dependency crate (only `serde`), both t
 - **`ChatResponse`** — `session_id`, `response`, `usage`
 - **`StatusResponse`** — Rich health and runtime metadata (see `mimir-server` docs)
 - **`Usage`** — `prompt_tokens`, `completion_tokens`, `total_tokens`
-- **Sparse-field hygiene (issue #160)** — All `Option<T>` wire fields use
-  `#[serde(skip_serializing_if = "Option::is_none")]`, including the
-  knowledge-graph wire types (`AuditRow`, `CategoryResponse`,
-  `CategoryDetailResponse`, `TrashRow`, `OptimizationStatusResponse`,
-  `OptimizationRunNowResponse`, `OptimizationRunSummary`). Sparse rows no longer
-  emit `null`, shrinking payloads 42–75% per row.
+- **Sparse-field hygiene (issue #160)** — All `Option<T>` wire fields use `#[serde(skip_serializing_if = "Option::is_none")]`, including the knowledge-graph wire types (`AuditRow`, `CategoryResponse`, `CategoryDetailResponse`, `TrashRow`, `OptimizationStatusResponse`, `OptimizationRunNowResponse`, `OptimizationRunSummary`). Sparse rows no longer emit `null`, shrinking payloads 42–75% per row.
 - **`StreamItem`** — `Text(String)` | `Usage(Usage)` (client-side parsed SSE output)
 
 ## `mimir-client`
@@ -58,29 +53,20 @@ By extracting the wire types into a zero-dependency crate (only `serde`), both t
 
 ### Construction
 
-`MimirClient::new(base_url)` builds a `reqwest::Client` with the default 10 s
-connect timeout and 120 s total timeout. It panics if the client cannot be
-built; callers that prefer a fallible path (e.g. explicit timeouts, or graceful
-startup on misconfigured TLS backends) use `MimirClient::try_new(base_url,
-connect_timeout, timeout) -> Result<Self, ClientError>` (issue #165). Build
-failures map to `ClientError::Connection`.
+`MimirClient::new(base_url)` builds a `reqwest::Client` with the default 10 s connect timeout and 120 s total timeout. It panics if the client cannot be built; callers that prefer a fallible path (e.g. explicit timeouts, or graceful startup on misconfigured TLS backends) use `MimirClient::try_new(base_url, connect_timeout, timeout) -> Result<Self, ClientError>` (issue #165). Build failures map to `ClientError::Connection`.
 
-`try_new` validates `base_url` up front (it must parse as a base URL) and
-strips trailing slashes, so malformed input is rejected and endpoint paths
-never contain a double slash.
+`try_new` validates `base_url` up front (it must parse as a base URL) and strips trailing slashes, so malformed input is rejected and endpoint paths never contain a double slash.
 
 ### Request helpers (DRY)
 
-Every method routes through a small set of private helpers so the
-status-check + JSON-decode + error-mapping logic is centralised (issue #167):
+Every method routes through a small set of private helpers so the status-check + JSON-decode + error-mapping logic is centralised (issue #167):
 
 - `send_response(req)` — send + status check, returns the raw `reqwest::Response`.
 - `send_json::<T>(req)` — `send_response` + `.json::<T>()`, mapping reqwest errors to `ClientError`.
 - `get_json::<T, P>(url, &query)` / `post_json::<T, B>(url, &body)` — convenience wrappers.
 - `check_status(resp)` — status-only validation returning `Result<(), ClientError>`.
 
-`stop` keeps bespoke status handling because a 503 response (server already
-shutting down) must be treated as success.
+`stop` keeps bespoke status handling because a 503 response (server already shutting down) must be treated as success.
 
 ### SSE Parsing
 
@@ -92,11 +78,7 @@ The parser accumulates bytes into a buffer, splits on `\n\n` (SSE event boundari
 - `event: usage` → parse JSON as `Usage` → `StreamItem::Usage`
 - `event: error` → `ClientError::Server`
 
-The buffer is capped at 1 MiB (`MAX_SSE_EVENT_SIZE`); a stream that never emits
-a delimiter produces `ClientError::Connection("SSE event exceeded max size")`
-instead of growing unbounded. The delimiter scan resumes from the last
-inspected offset and uses SIMD-accelerated `memchr::memmem`, so accumulation is
-linear rather than quadratic (issue #164).
+The buffer is capped at 1 MiB (`MAX_SSE_EVENT_SIZE`); a stream that never emits a delimiter produces `ClientError::Connection("SSE event exceeded max size")` instead of growing unbounded. The delimiter scan resumes from the last inspected offset and uses SIMD-accelerated `memchr::memmem`, so accumulation is linear rather than quadratic (issue #164).
 
 ### Methods
 

@@ -1,6 +1,7 @@
 # Categories & Aliases
 
 > **Added:** 0.49.0 (Issue #135)
+>
 > **Crate:** `mimir-knowledge`
 
 ## What it is

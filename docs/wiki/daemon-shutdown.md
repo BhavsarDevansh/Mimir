@@ -32,9 +32,7 @@ When shutdown is triggered:
 - The SQLite database pool is closed, flushing any pending writes.
 - LLM worker threads are stopped and their HTTP connections closed.
 
-The daemon runs indefinitely while no shutdown is requested — there is no
-idle or lifetime timeout. The 30-second limit bounds only the drain of
-in-flight requests after a shutdown signal (Ctrl-C, `SIGTERM`, or `mimir stop`).
+The daemon runs indefinitely while no shutdown is requested — there is no idle or lifetime timeout. The 30-second limit bounds only the drain of in-flight requests after a shutdown signal (Ctrl-C, `SIGTERM`, or `mimir stop`).
 
 ## SIGTERM and systemd
 
@@ -42,8 +40,7 @@ in-flight requests after a shutdown signal (Ctrl-C, `SIGTERM`, or `mimir stop`).
 
 ## Finding Out Why the Daemon Stopped
 
-The daemon now logs the **cause** of every shutdown to the journal, just before
-it stops, so an unexplained stop can be diagnosed instead of guessed at:
+The daemon now logs the **cause** of every shutdown to the journal, just before it stops, so an unexplained stop can be diagnosed instead of guessed at:
 
 - `mimir stop` / `POST /stop` → `Shutdown requested via /stop endpoint from <peer>.`
 - `Ctrl-C` / `SIGINT`        → `Shutdown triggered by interrupt (Ctrl-C).`
@@ -56,15 +53,9 @@ To investigate an unexpected stop:
 journalctl --user -u mimir -n 50 --no-pager
 ```
 
-Look for the attribution line immediately above `Server shut down gracefully.`.
-If you instead see `Server future resolved without a shutdown trigger`, the
-daemon exited for a reason other than a stop request (e.g. a listener error) —
-report it.
+Look for the attribution line immediately above `Server shut down gracefully.`. If you instead see `Server future resolved without a shutdown trigger`, the daemon exited for a reason other than a stop request (e.g. a listener error) — report it.
 
-> Tip: if you want the daemon to come back automatically after a graceful stop
-> (e.g. across logouts), set `Restart=always` in the systemd unit and run
-> `loginctl enable-linger <user>`. With the default `Restart=on-failure`, a
-> *clean* stop is not restarted.
+> Tip: if you want the daemon to come back automatically after a graceful stop (e.g. across logouts), set `Restart=always` in the systemd unit and run `loginctl enable-linger <user>`. With the default `Restart=on-failure`, a *clean* stop is not restarted.
 
 ## Best Practices
 

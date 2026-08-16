@@ -12,9 +12,13 @@ use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use mimir_connectors::{
-    CalendarConnector, Connector, ConnectorError, ConnectorRegistry, ConnectorSupervisor,
-    FnConnectorFactory, InMemorySecretStore, MockConnector, MockConnectorFactory, MockSyncRecorder,
-    SecretBundle, SecretStore, SupervisorConfig,
+    CalendarConnector, ConnectorRegistry, ConnectorSupervisor, InMemorySecretStore, SecretBundle,
+    SecretStore, SupervisorConfig,
+};
+#[cfg(feature = "test-mock-connector")]
+use mimir_connectors::{
+    Connector, ConnectorError, FnConnectorFactory, MockConnector, MockConnectorFactory,
+    MockSyncRecorder,
 };
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::connector::UpsertConnectorInput;
@@ -267,8 +271,9 @@ pub fn with_slug(slug: &str, extra: serde_json::Value) -> String {
 
 /// Build a registry whose `MockConnectorFactory` reads behaviour entirely from
 /// `config_json` (including the row slug/type, smuggled in by the supervisor at
-/// restore time). The mock is always compiled (F13 / #190), so this is the
-/// single connector used by every lifecycle test.
+/// restore time). The mock is the single connector used by every lifecycle
+/// test.
+#[cfg(feature = "test-mock-connector")]
 pub fn test_registry() -> Arc<ConnectorRegistry> {
     let registry = ConnectorRegistry::new();
     for ctype in [
@@ -287,6 +292,7 @@ pub fn test_registry() -> Arc<ConnectorRegistry> {
 /// constructed `MockConnector`, so the F9 trigger tests can observe the
 /// `SyncOptions` each `sync()` receives and the peak concurrency. The recorder
 /// is attached via [`MockConnector::with_recorder`] (not the config path).
+#[cfg(feature = "test-mock-connector")]
 pub fn recording_registry(recorder: Arc<MockSyncRecorder>) -> Arc<ConnectorRegistry> {
     let registry = ConnectorRegistry::new();
     for ctype in [

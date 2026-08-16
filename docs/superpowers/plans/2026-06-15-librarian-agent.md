@@ -88,6 +88,7 @@ Modify `mimir-core/src/lib.rs` to include and re-export them.
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p mimir-core conversation_turn_stores_messages identity_holds_name_and_entity_id -- --nocapture`
+
 Expected: FAIL (modules/files not yet in lib.rs)
 
 - [ ] **Step 3: Wire modules and run tests again**
@@ -100,6 +101,7 @@ pub mod identity;
 ```
 
 Run: `cargo test -p mimir-core conversation_turn_stores_messages identity_holds_name_and_entity_id -- --nocapture`
+
 Expected: PASS
 
 - [ ] **Step 4: Commit**
@@ -371,6 +373,7 @@ mod tests {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p mimir-core runtime_dispatches_registered_agent identical_goals_are_deduped -- --nocapture`
+
 Expected: FAIL (agents module not in lib.rs)
 
 - [ ] **Step 3: Wire modules and run tests again**
@@ -384,6 +387,7 @@ pub mod agents;
 Add to `mimir-core/Cargo.toml` if `anyhow` is not already a dependency. Check first.
 
 Run: `cargo test -p mimir-core runtime_dispatches_registered_agent identical_goals_are_deduped -- --nocapture`
+
 Expected: PASS
 
 - [ ] **Step 4: Commit**
@@ -584,6 +588,7 @@ pub async fn extract_facts_with_context(
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p mimir-knowledge goal_hashable_for_dedupe -- --nocapture`
+
 Expected: FAIL (librarian module not in lib.rs, extract_facts_with_context missing)
 
 - [ ] **Step 3: Implement and run tests**
@@ -591,6 +596,7 @@ Expected: FAIL (librarian module not in lib.rs, extract_facts_with_context missi
 Implement the above, ensuring `extract.rs` parser/processor is refactored cleanly.
 
 Run: `cargo test -p mimir-knowledge goal_hashable_for_dedupe -- --nocapture`
+
 Expected: PASS
 
 - [ ] **Step 4: Commit**
@@ -665,6 +671,7 @@ if !incognito && !full_response.is_empty() {
 - [ ] **Step 4: Run server tests**
 
 Run: `cargo test -p mimir-server chat_librarian -- --nocapture`
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -710,6 +717,7 @@ Using a temp directory and `KnowledgeGraph::init_with_clock`, create a user enti
 - [ ] **Step 3: Run tests**
 
 Run: `cargo test -p mimir-knowledge --test librarian_agent -- --nocapture`
+
 Expected: PASS
 
 - [ ] **Step 4: Commit**

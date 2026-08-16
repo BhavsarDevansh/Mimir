@@ -1,6 +1,7 @@
 # Autonomous Development Loop
 
 > **Component:** `scripts/autonomous-loop.sh` (+ optional `scripts/systemd/` user timer)
+>
 > **Status:** Active
 
 ## Purpose

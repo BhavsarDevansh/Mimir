@@ -66,10 +66,8 @@ Revoke: agent revoke calendar
 
 Or via natural language:
 > "Automatically add events to my calendar from any source."
-> 
-> Understood. I will add events to your calendar from emails, messages, and any other source without asking.
-> I will still notify you after I do so you can review.
-> Say "stop auto-adding calendar events" at any time to revoke.
+>
+> Understood. I will add events to your calendar from emails, messages, and any other source without asking. I will still notify you after I do so you can review. Say "stop auto-adding calendar events" at any time to revoke.
 
 ## Permission Storage
 
@@ -103,9 +101,8 @@ Revoked: All permissions. Agent reverted to observation-only mode.
 
 Natural language revocation works too:
 > "Stop adding emails to my calendar."
-> 
-> Noted. I will no longer add events from emails to your calendar.
-> I have deleted the permission. Events I already added remain.
+>
+> Noted. I will no longer add events from emails to your calendar. I have deleted the permission. Events I already added remain.
 
 ## Sensitivity-Aware Permissions
 

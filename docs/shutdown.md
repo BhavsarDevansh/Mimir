@@ -14,12 +14,7 @@ When any of these signals fire, the server enters graceful shutdown:
 - In-flight requests are allowed to drain for up to `GRACEFUL_DRAIN_TIMEOUT` (30 s).
 - After the drain completes (or the drain bound elapses), `AppState::shutdown()` cleans up resources in order.
 
-> **Serving lifetime is unbounded.** The daemon runs indefinitely while no
-> shutdown is requested. The 30-second bound applies **only** to the
-> post-signal drain phase — it is not a lifetime/idle timeout. An earlier
-> implementation wrapped the entire server future in `tokio::time::timeout`,
-> which caused the daemon to self-terminate 30 s after start; the two-phase
-> `serve_with_bounded_drain` fixes this.
+> **Serving lifetime is unbounded.** The daemon runs indefinitely while no shutdown is requested. The 30-second bound applies **only** to the post-signal drain phase — it is not a lifetime/idle timeout. An earlier implementation wrapped the entire server future in `tokio::time::timeout`, which caused the daemon to self-terminate 30 s after start; the two-phase `serve_with_bounded_drain` fixes this.
 
 ## Resource Cleanup Order
 
@@ -52,32 +47,13 @@ The broadcast is sent while the runtime is still fully alive, so the tasks are g
 
 ## Trigger Architecture
 
-There is exactly **one** OS-signal listener per process. `serve_with_bounded_drain`
-spawns `spawn_os_signal_shutdown`, a dedicated task that races `ctrl_c()` and
-`SIGTERM` (Unix) and, on either, sends `true` on the shared `shutdown_tx` watch
-channel — the same channel the `/stop` endpoint writes to. Both axum's
-`with_graceful_shutdown` future and the phase-1 serving loop observe that channel
-through `watch_shutdown`, which first inspects the current watch value via
-`borrow_and_update()` and only then awaits `changed()`. This guards against the
-subscription race: because `spawn_os_signal_shutdown` is spawned **before**
-`graceful_rx`/`trigger_rx` are created with `subscribe()`, a SIGTERM/Ctrl-C
-arriving in that gap sends `true` before any receiver exists. A freshly
-subscribed receiver's `changed()` only wakes on *future* updates, so without
-the upfront value check the already-fired trigger would be missed and the
-server would wait indefinitely. Checking the current value first means an
-already-fired trigger returns immediately, while later triggers are still
-caught by `changed()`.
+There is exactly **one** OS-signal listener per process. `serve_with_bounded_drain` spawns `spawn_os_signal_shutdown`, a dedicated task that races `ctrl_c()` and `SIGTERM` (Unix) and, on either, sends `true` on the shared `shutdown_tx` watch channel — the same channel the `/stop` endpoint writes to. Both axum's `with_graceful_shutdown` future and the phase-1 serving loop observe that channel through `watch_shutdown`, which first inspects the current watch value via `borrow_and_update()` and only then awaits `changed()`. This guards against the subscription race: because `spawn_os_signal_shutdown` is spawned **before** `graceful_rx`/`trigger_rx` are created with `subscribe()`, a SIGTERM/Ctrl-C arriving in that gap sends `true` before any receiver exists. A freshly subscribed receiver's `changed()` only wakes on *future* updates, so without the upfront value check the already-fired trigger would be missed and the server would wait indefinitely. Checking the current value first means an already-fired trigger returns immediately, while later triggers are still caught by `changed()`.
 
-This avoids the previous race where two independent `shutdown_signal` futures
-each built their own `ctrl_c()`/`SIGTERM` listeners: the phase-1 waiter could
-observe a signal before axum's graceful-shutdown future had registered interest,
-leaving axum still accepting connections until the drain bound kicked in. With a
-single listener fanning into one shared trigger, both phases fire in lockstep.
+This avoids the previous race where two independent `shutdown_signal` futures each built their own `ctrl_c()`/`SIGTERM` listeners: the phase-1 waiter could observe a signal before axum's graceful-shutdown future had registered interest, leaving axum still accepting connections until the drain bound kicked in. With a single listener fanning into one shared trigger, both phases fire in lockstep.
 
 ## Shutdown Trigger Attribution
 
-Every code path that fires the shared `shutdown_tx` watch trigger now logs the
-**cause** of the shutdown *before* sending, via the `ShutdownSource` enum:
+Every code path that fires the shared `shutdown_tx` watch trigger now logs the **cause** of the shutdown *before* sending, via the `ShutdownSource` enum:
 
 | Variant | Origin | Log line (example) |
 |---|---|---|
@@ -85,33 +61,18 @@ Every code path that fires the shared `shutdown_tx` watch trigger now logs the
 | `Terminate` | `SIGTERM` | `Shutdown triggered by SIGTERM (signal).` |
 | `Interrupt` | `Ctrl-C` / `SIGINT` | `Shutdown triggered by interrupt (Ctrl-C).` |
 
-`ShutdownSource::attribution()` returns the human-readable line; the
-`/stop` handler additionally captures the requesting peer's `SocketAddr`
-through an axum `ConnectInfo` extractor (loopback-guaranteed by the
-`require_loopback` middleware).
+`ShutdownSource::attribution()` returns the human-readable line; the `/stop` handler additionally captures the requesting peer's `SocketAddr` through an axum `ConnectInfo` extractor (loopback-guaranteed by the `require_loopback` middleware).
 
-This was added because all three paths previously emitted the identical line
-`Server shut down gracefully.`, which recorded *that* the daemon stopped but
-not *what* stopped it. An unexplained stop on 2026-06-30 (systemd recorded no
-`Stopping`/`Stopped` lifecycle line, so the trigger came from within the
-process) was impossible to attribute from the journal.
+This was added because all three paths previously emitted the identical line `Server shut down gracefully.`, which recorded *that* the daemon stopped but not *what* stopped it. An unexplained stop on 2026-06-30 (systemd recorded no `Stopping`/`Stopped` lifecycle line, so the trigger came from within the process) was impossible to attribute from the journal.
 
 ### Untriggered exits are no longer mislabelled
 
-`serve_with_bounded_drain` distinguishes two exit outcomes through the pure
-`server_exit_message(triggered: bool)` helper:
+`serve_with_bounded_drain` distinguishes two exit outcomes through the pure `server_exit_message(triggered: bool)` helper:
 
-- **`true`** — the shared trigger fired first (Phase 2 drain completed):
-  `Server shut down gracefully.`
-- **`false`** — the server future resolved on its own *without* any trigger
-  firing first (e.g. a fatal listener error), logged at `warn!` level as
-  `Server future resolved without a shutdown trigger; exiting.`
+- **`true`** — the shared trigger fired first (Phase 2 drain completed): `Server shut down gracefully.`
+- **`false`** — the server future resolved on its own *without* any trigger firing first (e.g. a fatal listener error), logged at `warn!` level as `Server future resolved without a shutdown trigger; exiting.`
 
-Previously both outcomes logged `Server shut down gracefully.`, so a
-non-graceful server exit was misreported as graceful and masked the real
-cause. `server_exit_message` is a pure function so the
-"untriggered ≠ graceful" invariant is unit-tested without capturing log
-output.
+Previously both outcomes logged `Server shut down gracefully.`, so a non-graceful server exit was misreported as graceful and masked the real cause. `server_exit_message` is a pure function so the "untriggered ≠ graceful" invariant is unit-tested without capturing log output.
 
 ## Timeout Behavior
 

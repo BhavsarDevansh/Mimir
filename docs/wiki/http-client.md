@@ -47,8 +47,4 @@ These overrides do not affect the daemon's global configuration.
 
 ## Timeouts and robust construction
 
-`MimirClient::new(base_url)` uses a 10 s connect timeout and 120 s total
-timeout and panics if the HTTP client cannot be built (which only happens on a
-misconfigured system). Embedders that need explicit timeouts or graceful
-startup can use `MimirClient::try_new(base_url, connect_timeout, timeout)`,
-which returns a `ClientError` instead of panicking.
+`MimirClient::new(base_url)` uses a 10 s connect timeout and 120 s total timeout and panics if the HTTP client cannot be built (which only happens on a misconfigured system). Embedders that need explicit timeouts or graceful startup can use `MimirClient::try_new(base_url, connect_timeout, timeout)`, which returns a `ClientError` instead of panicking.

@@ -1,6 +1,7 @@
 # Obsidian Sync
 
 > **Status:** Not yet implemented. Deferred to **post-Phase-5**.
+>
 > **Tracking:** Knowledge Graph roadmap — `kb import` / `kb export` (see `VISION/09-Roadmap/Phase-2-Knowledge-Graph.md` §2.16–2.17).
 
 Mimir is designed to export and import its Knowledge Graph as a folder of Markdown files compatible with [Obsidian](https://obsidian.md), so you can browse, edit, and back up your knowledge in a tool you already use. This page describes the **planned design** so the intent and file format are documented ahead of implementation. None of the commands or behaviour below exists yet.

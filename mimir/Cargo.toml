@@ -57,7 +57,7 @@ mimir-server = { path = "../mimir-server", features = ["mock-connector"] }
 # The in-process mock OAuth server (Phase 3 T2 / #207) for the daemon-level
 # PKCE E2E test, plus the shared fake-browser test doubles (issue #290); the
 # features are test-only and off in production builds.
-mimir-connectors = { path = "../mimir-connectors", features = ["test-mock-oauth", "test-utils"] }
+mimir-connectors = { path = "../mimir-connectors", features = ["test-mock-connector", "test-mock-oauth", "test-utils"] }
 reqwest = { version = "0.13", features = ["blocking"] }
 nix = { version = "0.31", features = ["signal"] }
 wiremock = "0.6.5"

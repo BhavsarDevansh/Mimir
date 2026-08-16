@@ -1,7 +1,6 @@
 # Code review — `tests-and-benchmarks` change set
 
-Review run per `AGENTS.md` (mandatory, non-negotiable) over every file touched
-in this change set, after documentation was updated and before commit.
+Review run per `AGENTS.md` (mandatory, non-negotiable) over every file touched in this change set, after documentation was updated and before commit.
 
 ## Scope
 
@@ -16,9 +15,7 @@ Touched files:
 - `mimir-knowledge/src/models/{entity_date,memory}.rs`
 - `mimir-server/src/error.rs`
 - `mimir/src/kb/`
-- new bench files: `mimir-api-types/benches/wire_types.rs`,
-  `mimir-core/benches/pure_helpers.rs`,
-  `mimir-knowledge/benches/pure_helpers.rs`
+- new bench files: `mimir-api-types/benches/wire_types.rs`, `mimir-core/benches/pure_helpers.rs`, `mimir-knowledge/benches/pure_helpers.rs`
 - `Cargo.toml` (root + crate manifests: bench registration, dev-deps, version)
 
 ## Findings (new test/bench code)
@@ -36,8 +33,7 @@ Touched files:
 
 ## Findings (existing code surfaced during the pass)
 
-Existing-code findings were triaged into prescriptive GitHub issues rather
-than fixed in this change set (out of scope for a tests/benchmarks pass):
+Existing-code findings were triaged into prescriptive GitHub issues rather than fixed in this change set (out of scope for a tests/benchmarks pass):
 
 | Issue | Dimension | Severity |
 |-------|-----------|----------|
@@ -55,17 +51,14 @@ than fixed in this change set (out of scope for a tests/benchmarks pass):
 
 - `cargo fmt --all -- --check` — clean.
 - `cargo clippy --workspace --all-targets --tests --benches -- -D warnings` — clean.
-- `cargo test --workspace` — all suites pass (api-types 46, client 64,
-  core lib 211, knowledge lib 110, server 65, bin 29, plus all integration
-  suites).
+- `cargo test --workspace` — all suites pass (api-types 46, client 64, core lib 211, knowledge lib 110, server 65, bin 29, plus all integration suites).
 - `cargo build --workspace` — clean.
 
 Zero unactioned findings in the new code; review returns zero findings.
 
 ## Review-Fix Pass (PR #169, v0.54.5)
 
-CodeRabbit posted five inline review comments on the change set; all were
-verified against current code and actioned in v0.54.5.
+CodeRabbit posted five inline review comments on the change set; all were verified against current code and actioned in v0.54.5.
 
 | # | File | Finding | Action |
 |---|------|---------|--------|
@@ -75,5 +68,4 @@ verified against current code and actioned in v0.54.5.
 | 4 | `mimir-core/src/job_queue/` | No test documented chrono's padding-agnostic `%H:%M` parsing | Added `daily_schedule_parse_accepts_non_zero_padded_input` |
 | 5 | `mimir/src/kb/` | Comment implied conditional "ellipsis or empty" behaviour | Corrected to deterministic "just ellipsis" |
 
-All five findings fixed; `cargo fmt`, `clippy --all-targets`, and the
-workspace test suite remain green. Review returns zero findings.
+All five findings fixed; `cargo fmt`, `clippy --all-targets`, and the workspace test suite remain green. Review returns zero findings.

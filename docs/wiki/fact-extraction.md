@@ -14,22 +14,14 @@ The extraction pipeline applies Rust-side normalisation and splitting to improve
 
 ## Shared with connectors
 
-The resolve → confidence → sensitivity-gate → insert steps are not
-conversation-specific. They live in a single shared function,
-`mimir_knowledge::normalize::normalize_and_insert`, that both the chat
-`remember` path and (future) service connectors call. Connectors build the
-same `NormalizedFact` values from their items and supply a connector
-`Provenance`, so facts learned from your email, calendar, or photos get the
-identical confidence scoring, corroboration, supersession, and sensitivity
-gating as facts you tell Mimir directly — including cross-source corroboration,
-where the same fact reported by two different connectors is merged into one
-knowledge-graph entry with boosted confidence rather than duplicated.
+The resolve → confidence → sensitivity-gate → insert steps are not conversation-specific. They live in a single shared function, `mimir_knowledge::normalize::normalize_and_insert`, that both the chat `remember` path and service connectors call. Connectors build the same `NormalizedFact` values from their items and supply a connector `Provenance`, so facts learned from your email, calendar, or photos get the identical confidence scoring, corroboration, supersession, and sensitivity gating as facts you tell Mimir directly — including cross-source corroboration, where the same fact reported by two different connectors is merged into one knowledge-graph entry with boosted confidence rather than duplicated.
 
 ## What Gets Extracted
 
 Mimir looks for **subject-predicate-object** triples in your messages:
 
-> "My favourite colour is blue."  
+> "My favourite colour is blue."
+>
 > → Subject: you, Predicate: favourite_colour, Object: blue
 
 ## Learning Modes
@@ -58,16 +50,12 @@ Some facts are too important to store without asking:
 - Relationship status
 - Religious or political beliefs
 
-Mimir uses a two-stage check. The AI flags potential sensitive facts, but a
-deterministic Rust validation layer has the final say — it checks the fact's
-catalogue category and object text against a known sensitive set. This prevents
-benign preferences like "I don't like chihuahuas" or "I live in a small flat"
-from being flagged as sensitive just because the AI was overly cautious.
+Mimir uses a two-stage check. The AI flags potential sensitive facts, but a deterministic Rust validation layer has the final say — it checks the fact's catalogue category and object text against a known sensitive set. This prevents benign preferences like "I don't like chihuahuas" or "I live in a small flat" from being flagged as sensitive just because the AI was overly cautious.
 
-When Mimir confirms a fact is sensitive, it stores it as **pending confirmation**
-and asks you:
+When Mimir confirms a fact is sensitive, it stores it as **pending confirmation** and asks you:
 
-> ⚠️ I learned: You have a **PEANUT ALLERGY**. This is a sensitive health fact. Please confirm it is correct.  
+> ⚠️ I learned: You have a **PEANUT ALLERGY**. This is a sensitive health fact. Please confirm it is correct.
+>
 > [Confirm] [Reject]
 
 - **Confirmed:** Stored permanently with full confidence.

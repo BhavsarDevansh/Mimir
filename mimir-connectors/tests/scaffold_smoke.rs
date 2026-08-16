@@ -2,10 +2,13 @@
 //!
 //! This is the F1 anchor test: it referenced `mimir_connectors` *before* the
 //! crate existed, so it failed to compile. Now that the crate is scaffolded it
-//! passes, proving the trait/registry/mock stubs compile and are usable under
-//! every feature combination. Real behavioural tests arrive with F6/F7/F13.
+//! passes, proving the trait/registry stubs compile and are usable under
+//! every feature combination. Real behavioural tests live in the feature-gated
+//! mock harness (F13 / #190).
 
-use mimir_connectors::{Connector, ConnectorRegistry, MockConnector};
+use mimir_connectors::ConnectorRegistry;
+#[cfg(feature = "test-mock-connector")]
+use mimir_connectors::{Connector, MockConnector};
 
 #[test]
 fn registry_starts_empty() {
@@ -14,6 +17,7 @@ fn registry_starts_empty() {
     assert_eq!(registry.len(), 0);
 }
 
+#[cfg(feature = "test-mock-connector")]
 #[test]
 fn mock_connector_reports_identity() {
     let mock = MockConnector::default();

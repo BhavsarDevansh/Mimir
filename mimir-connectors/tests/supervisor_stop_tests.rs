@@ -1,5 +1,6 @@
 //! Single-connector stop semantics (A1 / #202).
 
+#![cfg(feature = "test-mock-connector")]
 use std::sync::Arc;
 use std::time::Duration;
 

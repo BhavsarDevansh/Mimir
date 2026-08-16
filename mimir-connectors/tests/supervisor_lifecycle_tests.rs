@@ -1,5 +1,6 @@
 //! Supervised connector lifecycle: restore, shutdown, backoff, circuit breaker, and panic recovery.
 
+#![cfg(feature = "test-mock-connector")]
 use std::sync::Arc;
 use std::time::Duration;
 

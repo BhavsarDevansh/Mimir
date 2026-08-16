@@ -1,14 +1,14 @@
-//! Always-compiled, configurable mock connector — the framework's test harness
-//! (Phase 3 F13 / issue #190).
+//! Configurable mock connector — the framework's test harness (Phase 3 F13 /
+//! issue #190).
 //!
 //! `MockConnector` is an in-memory connector whose behaviour is driven
 //! entirely by its `config_json`: it emits canned [`NormalizedFact`]s on a
 //! configurable cadence, in either [`ConnectorMode::Polling`] or
 //! [`ConnectorMode::Push`], and can inject failures, panics, and health/auth
 //! states to exercise the [`ConnectorSupervisor`](crate::supervisor). It is
-//! always compiled (no feature flag) so the framework and registry stay
-//! exercisable under every feature combination, including
-//! `--no-default-features`, and it is the vehicle for the T1
+//! Test-only, gated by the `test-mock-connector` feature (off by default) so
+//! production builds never compile the harness; the crate's own unit tests
+//! compile it via `cfg(test)` regardless. It is the vehicle for the T1
 //! sync→extract→insert→query end-to-end test without real services.
 //!
 //! # Two-step ingestion model

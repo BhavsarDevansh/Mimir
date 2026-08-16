@@ -2,9 +2,7 @@
 
 ## Server Integration Tests (`mimir-server/src/lib.rs`)
 
-These tests exercise the full Axum HTTP stack without making real network calls.
-They use `tower::ServiceExt::oneshot` to send requests through the router and
-`MockLlmClient` to simulate the LLM backend.
+These tests exercise the full Axum HTTP stack without making real network calls. They use `tower::ServiceExt::oneshot` to send requests through the router and `MockLlmClient` to simulate the LLM backend.
 
 ### Test Matrix
 
@@ -20,14 +18,11 @@ They use `tower::ServiceExt::oneshot` to send requests through the router and
 | `test_chat_unknown_session_returns_404` | `POST /chat` | default mock | HTTP 404 |
 | `test_memory_returns_content` | `GET /memory` | default mock | HTTP 200, body contains memory text |
 
-All tests use a temporary directory for the SQLite context database and a
-fresh `MockLlmClient` instance so they are fully isolated and parallel-safe.
+All tests use a temporary directory for the SQLite context database and a fresh `MockLlmClient` instance so they are fully isolated and parallel-safe.
 
 ## Wiremock HTTP Tests (`mimir-core/tests/llm_http_integration.rs`)
 
-These tests verify the **real** `LlmClient` HTTP layer: request serialisation,
-retry logic, SSE parsing, and error mapping. They use the `wiremock` crate to
-stand up a real HTTP server on a random localhost port.
+These tests verify the **real** `LlmClient` HTTP layer: request serialisation, retry logic, SSE parsing, and error mapping. They use the `wiremock` crate to stand up a real HTTP server on a random localhost port.
 
 ### Test Matrix
 

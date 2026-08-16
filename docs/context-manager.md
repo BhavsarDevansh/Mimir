@@ -2,40 +2,25 @@
 
 ## Overview
 
-The context manager (`mimir-core::context`) maintains multi-turn dialogue state
-across interactions.  It persists sessions and messages to SQLite via **SQLx**,
-supports token-aware trimming using actual token counts returned by the LLM API,
-and exports conversation history for LLM requests and audit/logging.
+The context manager (`mimir-core::context`) maintains multi-turn dialogue state across interactions.  It persists sessions and messages to SQLite via **SQLx**, supports token-aware trimming using actual token counts returned by the LLM API, and exports conversation history for LLM requests and audit/logging.
 
 ## Design Decisions
 
 ### SQLx over rusqlite
 
-SQLx was chosen because it is async-native, provides built-in connection pooling
-(`SqlitePool`), supports `chrono`/`uuid` type mappings out of the box, and uses
-parameterised queries by default.  This keeps the storage layer consistent with
-the rest of the async stack (tokio, reqwest, axum).
+SQLx was chosen because it is async-native, provides built-in connection pooling (`SqlitePool`), supports `chrono`/`uuid` type mappings out of the box, and uses parameterised queries by default.  This keeps the storage layer consistent with the rest of the async stack (tokio, reqwest, axum).
 
 ### Runtime queries (not `query!` macros)
 
-Phase 1 uses runtime `sqlx::query` and `sqlx::query_as` to avoid the extra
-complexity of `sqlx-cli`, offline-mode schema files, and compile-time checking.
-The code is still type-safe via `query_as::<_, Struct>`.  If query coverage grows
-significantly we can migrate to macros later without changing the public API.
+Phase 1 uses runtime `sqlx::query` and `sqlx::query_as` to avoid the extra complexity of `sqlx-cli`, offline-mode schema files, and compile-time checking. The code is still type-safe via `query_as::<_, Struct>`.  If query coverage grows significantly we can migrate to macros later without changing the public API.
 
 ### Session cache
 
-`ContextManager` keeps an in-memory `Arc<tokio::sync::Mutex<HashSet<String>>>`
-that tracks known session IDs.  This avoids a DB round-trip on every
-`ensure_session_exists` check; the cache is updated on `create_session` and
-`delete_session`.  `tokio::sync::Mutex` is used because the guard may be held
-across `.await` points.
+`ContextManager` keeps an in-memory `Arc<tokio::sync::Mutex<HashSet<String>>>` that tracks known session IDs.  This avoids a DB round-trip on every `ensure_session_exists` check; the cache is updated on `create_session` and `delete_session`.  `tokio::sync::Mutex` is used because the guard may be held across `.await` points.
 
 ### No in-memory LRU cache
 
-Sessions are tiny (≈20 messages).  SQLite with WAL mode is fast enough for
-local-first use.  An in-memory cache can be added later if profiling shows a
-bottleneck.
+Sessions are tiny (≈20 messages).  SQLite with WAL mode is fast enough for local-first use.  An in-memory cache can be added later if profiling shows a bottleneck.
 
 ## SQLite Schema
 
@@ -75,33 +60,24 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 
 ## Token Attribution
 
-`record_usage` expects **per-call delta values** — the number of tokens
-attributable to this single request:
+`record_usage` expects **per-call delta values** — the number of tokens attributable to this single request:
 
 | Token type | Attribution rule |
 |-----------|-----------------|
 | `prompt_tokens` | Per-call delta → most recent user message. |
 | `completion_tokens` | Full amount per call → most recent assistant message. |
 
-Deltas are added to the stored cumulative totals on the session row and to the
-`token_count` of the respective most recent message.  Zero or negative deltas
-are ignored so cumulative totals never decrease.
+Deltas are added to the stored cumulative totals on the session row and to the `token_count` of the respective most recent message.  Zero or negative deltas are ignored so cumulative totals never decrease.
 
 ## Trimming Algorithm
 
 `trim_to_budget(session_id, max_tokens, max_turns)` operates in two phases:
 
-1. **Turn cap (hard):** Count non-system messages.  If the count exceeds
-   `max_turns * 2`, delete the oldest complete `(user, assistant)` pairs until
-   the count is under the limit.
+1. **Turn cap (hard):** Count non-system messages.  If the count exceeds `max_turns * 2`, delete the oldest complete `(user, assistant)` pairs until the count is under the limit.
 
-2. **Token budget (soft):** If `SUM(token_count)` for the session exceeds
-   `max_tokens`:
-   - If all non-system messages have known `token_count`, delete oldest pairs
-     until the sum is under budget.
-   - If some messages lack `token_count` (e.g. streaming without usage), fall
-     back to deleting oldest pairs until the pair count is under `max_turns / 2`
-     (conservative).
+2. **Token budget (soft):** If `SUM(token_count)` for the session exceeds `max_tokens`:
+   - If all non-system messages have known `token_count`, delete oldest pairs until the sum is under budget.
+   - If some messages lack `token_count` (e.g. streaming without usage), fall back to deleting oldest pairs until the pair count is under `max_turns / 2` (conservative).
    - The system prompt is **never** deleted.
 
 ## API Surface

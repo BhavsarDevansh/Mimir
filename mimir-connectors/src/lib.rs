@@ -31,12 +31,13 @@
 //!   (F7 / #184): maps `(connector_type, backend)` to a [`ConnectorFactory`]
 //!   and constructs instances on demand; includes the closure-backed
 //!   [`FnConnectorFactory`].
-//! - [`mock`] — always-compiled, configurable mock connector test harness
-//!   (F13 / #190): emits canned `NormalizedFact`s on a configurable cadence in
-//!   both `Polling` and `Push` modes, with health/auth/failure/panic injection,
-//!   and is the T1 sync→extract→insert→query vehicle. Includes `MockFactConfig`
-//!   (canned-fact DTO) and `MockSyncRecorder` (sync-options observation for
-//!   concurrency tests).
+//! - [`mock`] — configurable mock connector test harness (F13 / #190): emits
+//!   canned `NormalizedFact`s on a configurable cadence in both `Polling` and
+//!   `Push` modes, with health/auth/failure/panic injection, and is the T1
+//!   sync→extract→insert→query vehicle. Includes `MockFactConfig` (canned-fact
+//!   DTO) and `MockSyncRecorder` (sync-options observation for concurrency
+//!   tests). Test-only, gated by the `test-mock-connector` feature (off by
+//!   default).
 //! - [`rate_limit`] — shared rate-limiting + retry/backoff primitives
 //!   ([`RateLimitConfig`] / [`RateLimiter`] / [`BackoffStrategy`] / [`retry_with_backoff`],
 //!   F12 / #189): token-bucket throttling (governor GCRA), optional rolling 24h
@@ -71,9 +72,13 @@
 //! added in later Phase 3 issues (C1–C7); `oauth` is the shared OAuth 2.0
 //! client + refresh layer enabled by `calendar`/`gmail` and the CLI PKCE flow.
 //! `test-mock-oauth` gates the in-process mock OAuth server used by the T2
-//! E2E tests (off by default).
-//! The framework core and the mock connector are **always built**, so
-//! `--no-default-features` still compiles a working framework + mock harness.
+//! E2E tests and `test-mock-connector` gates the configurable mock connector
+//! harness (F13 / #190); both are test-only and off by default, and
+//! `test-utils` gates the shared OAuth test doubles (issues #290, #298).
+//! The framework core is **always built**; the mock connector is a test
+//! harness gated by `test-mock-connector` (off by default), so
+//! `--no-default-features` still compiles a working framework without the
+//! harness.
 
 pub mod connector;
 mod fact;
@@ -83,6 +88,13 @@ pub mod geocoder;
 /// consume iCalendar data; gated by `any(feature = "calendar", feature = "gmail")`.
 #[cfg(any(feature = "calendar", feature = "gmail"))]
 pub mod ical;
+/// Configurable mock connector test harness (Phase 3 F13 / #190): an
+/// in-memory connector whose behaviour is driven entirely by `config_json`,
+/// with health/auth/failure/panic injection and sync-options observation.
+/// Test-only, gated by the `test-mock-connector` feature (off by default);
+/// the crate's own unit tests compile the module via `cfg(test)` regardless,
+/// and downstream crates opt in through dev-dependencies.
+#[cfg(any(feature = "test-mock-connector", test))]
 pub mod mock;
 /// In-process mock OAuth 2.0 authorization server for tests (Phase 3 T2 /
 /// #207): an HTTPS `/authorize` + HTTP `/token` loopback pair that the PKCE
@@ -136,6 +148,7 @@ pub use connector::{
     ConnectorMode, HealthStatus, SyncOptions, SyncOutcome,
 };
 pub use geocoder::{DEFAULT_NOMINATIM_ENDPOINT, NominatimConfig, NominatimGeocoder};
+#[cfg(any(feature = "test-mock-connector", test))]
 pub use mock::{
     MockConnector, MockConnectorFactory, MockFactConfig, MockSyncGuard, MockSyncRecorder,
 };

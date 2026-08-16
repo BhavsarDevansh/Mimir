@@ -1,7 +1,9 @@
 # Phase 2 Knowledge Graph — Design Discussion Log
 
 > **Purpose:** Capture all architectural decisions, open questions, and design rationale from the Phase 2 planning session so work can be resumed in a fresh thread if the CLI session is interrupted.
+>
 > **Last Updated:** 2026-05-30
+>
 > **Status:** All decisions (A–K) locked. Ready for issue creation.
 
 ---

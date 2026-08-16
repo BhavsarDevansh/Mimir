@@ -10,16 +10,13 @@ Mimir now displays tool calls in chat and ask output, and supports an agentic to
 
 Two SSE event types are emitted during streaming chat:
 
-1. **`tool_call_start`** — sent before a tool executes, containing `name` and
-   `display_name` only (no result yet) so the client can show a "working"
-   indicator:
+1. **`tool_call_start`** — sent before a tool executes, containing `name` and `display_name` only (no result yet) so the client can show a "working" indicator:
 
    ```json
    {"name": "get_current_time", "display_name": "Get Current Time"}
    ```
 
-2. **`tool_call`** — sent after the tool completes, containing the full
-   `ToolCallInfo` payload with the result:
+2. **`tool_call`** — sent after the tool completes, containing the full `ToolCallInfo` payload with the result:
 
    ```json
    {

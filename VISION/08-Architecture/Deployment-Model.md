@@ -41,8 +41,7 @@ Library crates provide code organisation but produce one binary:
 - **Planned (#25):** Unix domain socket (`~/.local/share/mimir/mimir.sock`) — will offer faster local IPC, instant daemon detection, and filesystem-level access control
 - Planned: Daemon detection — check socket file existence (instant, no network; not yet implemented, tracked as `#25`)
 
-**Daemon-down handling:**
-When a CLI command cannot reach the daemon, the user is prompted:
+**Daemon-down handling:** When a CLI command cannot reach the daemon, the user is prompted:
 ```
 Error: Mimir is not running.
 Start the server now? [y/N]:

@@ -620,7 +620,11 @@ impl Connector for FailFirstExtractPhotosConnector {
     }
     async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError> {
         if !self.failed_once.swap(true, Ordering::SeqCst) {
-            return Err(ConnectorError::Parse(
+            // Drain the inner buffer like a real extract would, then fail —
+            // the retry cycle's re-scan then stages the photo fresh instead
+            // of duplicating the un-drained window.
+            let _ = self.inner.extract().await?;
+            return Err(ConnectorError::Other(
                 "injected transient extract failure".to_string(),
             ));
         }

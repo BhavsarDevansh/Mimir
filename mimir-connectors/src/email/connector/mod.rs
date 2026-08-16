@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
 
 use tokio::sync::Mutex;
 
@@ -54,9 +55,18 @@ pub struct EmailConnector {
     /// error).
     oauth_http: Option<OAuthHttpClient>,
     /// In-memory incremental cursor (`(uid_validity, last_uid)`). Seeded from
-    /// `__cursor` at construction; the supervisor persists the value returned
-    /// by [`sync`](Connector::sync) via `update_sync_cursor`.
+    /// `__cursor` at construction; advanced only via
+    /// [`Connector::on_cycle_succeeded`] after the supervisor persists the
+    /// reported cursor on a fully successful cycle (issue #332), so a failed
+    /// cycle re-syncs from the last confirmed cursor.
     pub(crate) last_uid: Mutex<Option<(u32, u32)>>,
+    /// `true` when the last `sync()` reported a moved cursor that the
+    /// supervisor has not yet confirmed via [`Connector::on_cycle_succeeded`]
+    /// (issue #332). The next `sync()` then skips the IDLE wait and re-fetches
+    /// from the last confirmed cursor, because the IDLE notification for the
+    /// failed window will not re-fire — a failed cycle's staged mail would
+    /// otherwise sit unprocessed until the next push.
+    pub(crate) resync_pending: AtomicBool,
     /// Cached `IDLE` capability, set by [`authenticate`](Connector::authenticate).
     /// `None` until the first successful capability probe. A
     /// `std::sync::Mutex` (never held across an `await`) so the

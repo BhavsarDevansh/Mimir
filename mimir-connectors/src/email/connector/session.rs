@@ -1,5 +1,7 @@
 //! IMAP session lifecycle: open, sync, and capability probing.
 
+use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -71,7 +73,13 @@ impl EmailConnector {
         mut session: ImapSession<S>,
         options: SyncOptions,
     ) -> Result<SyncOutcome, ConnectorError> {
-        let idle = self.use_idle()?;
+        // Issue #332: a previous cycle reported a moved cursor that the
+        // supervisor has not yet confirmed via `on_cycle_succeeded` (the
+        // cycle failed after `sync`). The IDLE notification for that window
+        // will not re-fire, so skip the IDLE wait and re-fetch from the last
+        // confirmed cursor immediately instead of blocking until the next
+        // push.
+        let idle = self.use_idle()? && !self.resync_pending.load(Ordering::SeqCst);
         let info = session.examine(self.mailbox()).await?;
         let uid_validity = info.uid_validity;
 
@@ -110,7 +118,21 @@ impl EmailConnector {
         session.logout().await;
 
         let fetched = u32::try_from(messages.len()).unwrap_or(u32::MAX);
-        self.buffer.lock().await.extend(messages);
+        // Issue #332: a failed cycle's re-fetch must not duplicate messages
+        // that are already staged — the buffer can hold re-staged LLM retries
+        // (issue #262) or the previous cycle's un-drained window, and each
+        // failed cycle would otherwise double them. Dedupe by the
+        // `(uid_validity, uid)` identity (stable within one epoch).
+        {
+            let mut buffer = self.buffer.lock().await;
+            let mut seen: HashSet<(u32, u32)> =
+                buffer.iter().map(|m| (m.uid_validity, m.uid)).collect();
+            for mail in messages {
+                if seen.insert((mail.uid_validity, mail.uid)) {
+                    buffer.push(mail);
+                }
+            }
+        }
 
         // Report the cursor: persist on a full/first sync or when new mail
         // arrived; leave it unchanged when an incremental cycle fetched
@@ -126,6 +148,11 @@ impl EmailConnector {
             (Some(prev), max) if max > prev => Some(encode_cursor(uid_validity, max)),
             _ => None,
         };
+        // Track whether a moved cursor is awaiting supervisor confirmation:
+        // the next cycle then re-fetches immediately (IDLE mode) instead of
+        // waiting for a push that will not re-fire (issue #332).
+        self.resync_pending
+            .store(new_cursor.is_some(), Ordering::SeqCst);
 
         debug!(
             fetched,

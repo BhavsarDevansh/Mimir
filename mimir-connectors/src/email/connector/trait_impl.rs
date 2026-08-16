@@ -1,5 +1,6 @@
 //! [`Connector`] trait implementation for the email backend.
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -130,6 +131,7 @@ impl Connector for EmailConnector {
         // persisted cursor is only updated on a fully successful cycle, so
         // the in-memory marker must never run ahead of it. `None` means
         // "cursor unchanged" and leaves the marker as-is.
+        self.resync_pending.store(false, Ordering::SeqCst);
         if let Some(cursor) = new_cursor {
             match parse_cursor(cursor) {
                 Some(parsed) => *self.last_uid.lock().await = Some(parsed),
@@ -329,6 +331,7 @@ impl Connector for EmailConnector {
         self.buffer.lock().await.clear();
         self.prose_retry.lock().unwrap().clear();
         *self.last_uid.lock().await = None;
+        self.resync_pending.store(false, Ordering::SeqCst);
         if let Some(store) = &self.secret_store {
             store.delete(&self.slug).await.map_err(|e| {
                 ConnectorError::Authentication(format!("secret delete failed: {e}"))

@@ -227,6 +227,28 @@ async fn harness(cfg: FakeCfg) -> (EmailConnector, ImapSession<tokio::io::Duplex
     (connector, session)
 }
 
+/// Build a connector (app-password, idle mode) + a fake session wired to a
+/// fake server with `cfg`, seeding the in-memory cursor from `cursor`. A
+/// 1-second IDLE timeout keeps a missed-push test fast instead of hanging
+/// on the default.
+async fn idle_harness(
+    cfg: FakeCfg,
+    cursor: Option<&str>,
+) -> (EmailConnector, ImapSession<tokio::io::DuplexStream>) {
+    let (client, server) = tokio::io::duplex(8 * 1024);
+    let select_count = Arc::new(Mutex::new(0u32));
+    tokio::spawn(run_fake(server, cfg, None, Arc::clone(&select_count)));
+    let mut config = app_config();
+    config["mode"] = serde_json::json!("idle");
+    config["idle_timeout_secs"] = 1.into();
+    let connector =
+        EmailConnector::from_config(config, None, cursor.map(str::to_string)).expect("config");
+    let session = imap_login(Client::new(client), app_password_auth())
+        .await
+        .expect("login");
+    (connector, session)
+}
+
 fn app_password_auth() -> ImapAuth {
     ImapAuth::Login {
         username: "devansh@example.com".into(),
@@ -385,6 +407,11 @@ async fn failed_cycle_reprocesses_staged_mail_on_next_sync() {
         .expect("sync ok");
     assert_eq!(second.fetched, 3, "the failed window must be re-fetched");
     assert_eq!(second.new_cursor.as_deref(), Some("17:12"));
+    assert_eq!(
+        connector.buffer.lock().await.len(),
+        3,
+        "the re-fetch must not duplicate the staged window"
+    );
 
     // The cycle now succeeds: adopt the persisted cursor.
     connector
@@ -418,17 +445,8 @@ async fn idle_push_triggers_incremental_fetch() {
         idle_push_exists: Some(1),
         ..Default::default()
     };
-    let (client, server) = tokio::io::duplex(8 * 1024);
-    let select_count = Arc::new(Mutex::new(0u32));
-    tokio::spawn(run_fake(server, cfg, None, Arc::clone(&select_count)));
-    let mut config = app_config();
-    config["mode"] = serde_json::json!("idle");
     // Seed cursor at 17:19 so UID 20 is new.
-    let connector =
-        EmailConnector::from_config(config, None, Some("17:19".into())).expect("config");
-    let session = imap_login(Client::new(client), app_password_auth())
-        .await
-        .expect("login");
+    let (connector, session) = idle_harness(cfg, Some("17:19")).await;
     let outcome = connector
         .run_sync(session, SyncOptions::default())
         .await
@@ -441,6 +459,54 @@ async fn idle_push_triggers_incremental_fetch() {
 }
 
 #[tokio::test]
+async fn idle_failed_cycle_resyncs_without_waiting_for_next_push() {
+    // Issue #332: in IDLE mode, a cycle that fails after `sync` must not
+    // block on IDLE for the next push — the IDLE notification for the failed
+    // window will not re-fire, so the next cycle re-fetches from the last
+    // confirmed cursor immediately.
+    let cfg = FakeCfg {
+        messages: vec![(20u32, b"new-mail".to_vec())],
+        idle_push_exists: Some(1),
+        ..Default::default()
+    };
+    let (connector, session) = idle_harness(cfg, Some("17:19")).await;
+    let first = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("sync ok");
+    assert_eq!(first.fetched, 1);
+    assert_eq!(first.new_cursor.as_deref(), Some("17:20"));
+    assert_eq!(
+        *connector.last_uid.lock().await,
+        Some((17, 19)),
+        "a failed cycle must not advance the in-memory cursor past the last confirmed value"
+    );
+
+    // Cycle 2: the server pushes nothing — the connector must skip the IDLE
+    // wait and re-fetch the failed window immediately.
+    let cfg2 = FakeCfg {
+        messages: vec![(20u32, b"new-mail".to_vec())],
+        idle_push_exists: None,
+        ..Default::default()
+    };
+    let (_, session2) = idle_harness(cfg2, Some("17:19")).await;
+    let second = connector
+        .run_sync(session2, SyncOptions::default())
+        .await
+        .expect("sync ok");
+    assert_eq!(
+        second.fetched, 1,
+        "the failed window must be re-fetched without an IDLE push"
+    );
+    assert_eq!(second.new_cursor.as_deref(), Some("17:20"));
+    assert_eq!(
+        connector.buffer.lock().await.len(),
+        1,
+        "the re-fetch must not duplicate staged mail"
+    );
+}
+
+#[tokio::test]
 async fn idle_timeout_no_new_mail_returns_zero() {
     // IDLE with no push: the connector's idle_wait uses a short timeout in
     // tests. Configure a 1-second idle timeout.
@@ -449,16 +515,7 @@ async fn idle_timeout_no_new_mail_returns_zero() {
         messages: vec![(5u32, b"x".to_vec())],
         ..Default::default()
     };
-    let (client, server) = tokio::io::duplex(8 * 1024);
-    let select_count = Arc::new(Mutex::new(0u32));
-    tokio::spawn(run_fake(server, cfg, None, Arc::clone(&select_count)));
-    let mut config = app_config();
-    config["mode"] = serde_json::json!("idle");
-    config["idle_timeout_secs"] = 1.into();
-    let connector = EmailConnector::from_config(config, None, Some("17:5".into())).expect("config");
-    let session = imap_login(Client::new(client), app_password_auth())
-        .await
-        .expect("login");
+    let (connector, session) = idle_harness(cfg, Some("17:5")).await;
     let outcome = connector
         .run_sync(session, SyncOptions::default())
         .await

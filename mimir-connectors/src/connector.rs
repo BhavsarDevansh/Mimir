@@ -420,7 +420,9 @@ pub trait Connector: Send + Sync {
     /// in-memory state here — the supervisor persists it first and hands it
     /// back via [`on_cycle_succeeded`](Self::on_cycle_succeeded) once the
     /// cycle fully succeeded, so a failed cycle re-syncs from the last
-    /// confirmed cursor (issue #314).
+    /// confirmed cursor (issue #314). Connectors that re-deliver failed
+    /// windows by other means (e.g. a durable retry ledger, issue #262) may
+    /// keep their own in-memory progress.
     async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError>;
 
     /// Called by the supervisor after a cycle fully succeeded — `sync`

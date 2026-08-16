@@ -593,9 +593,10 @@ pub(super) async fn run_cycle(
     // deliberately deferred past `sync`/`extract`/insert/persist so a cycle
     // that fails part-way re-syncs from the last confirmed cursor on the
     // next in-process cycle instead of skipping the failed window (issue
-    // #314). The call is infallible: if it fails, the DB cursor is already
-    // committed and the next cycle re-syncs from the stale in-memory marker
-    // (an idempotent re-statement, never data loss).
+    // #314). The call returns no error: even if the connector's internal
+    // adoption does not take effect, the DB cursor is already committed and
+    // the next cycle re-syncs from the stale in-memory marker (an idempotent
+    // re-statement, never data loss).
     connector
         .on_cycle_succeeded(outcome.new_cursor.as_deref())
         .await;

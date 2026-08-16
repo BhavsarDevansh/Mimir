@@ -102,6 +102,47 @@ async fn incremental_sync_uses_persisted_sync_token() {
     assert_eq!(second.new_cursor.as_deref(), Some("token-2"));
 }
 
+/// Issue #314: a failed cycle re-syncs from the last confirmed cursor, so the
+/// server re-reports the same deletions — the pending tombstone buffer must
+/// dedupe by href instead of growing across repeated re-syncs of the same
+/// window (the trash path is idempotent, but the buffer would grow
+/// unbounded).
+#[tokio::test]
+async fn repeated_failed_window_does_not_grow_tombstone_buffer() {
+    let server = MockServer::start().await;
+    let url = format!("{}/cal/personal/", server.uri());
+    // The same failed window (no cursor) re-reports the same deletion twice.
+    mount_sync(
+        &server,
+        "/cal/personal/",
+        None,
+        sync_body("token-1", &[], &["/cal/a.ics"]),
+    )
+    .await;
+    mount_sync(
+        &server,
+        "/cal/personal/",
+        None,
+        sync_body("token-1", &[], &["/cal/a.ics"]),
+    )
+    .await;
+
+    let connector = make_connector(
+        app_password_config(&url),
+        store_with_app_password().await,
+        None,
+    );
+    connector.sync(SyncOptions::default()).await.unwrap();
+    connector.sync(SyncOptions::default()).await.unwrap();
+
+    let tombstones = connector.extract_deletions().await.unwrap();
+    assert_eq!(
+        tombstones,
+        vec!["/cal/a.ics".to_string()],
+        "re-syncing the same failed window must not duplicate pending tombstones"
+    );
+}
+
 #[tokio::test]
 async fn full_sync_ignores_cursor() {
     let server = MockServer::start().await;

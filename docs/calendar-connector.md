@@ -63,7 +63,7 @@ One round trip per cycle (paged when truncated), via the
    multiget).
 2. Omitting `<sync-token>` performs a **full** sync and yields the initial
    token; including it performs an **incremental** sync (no re-fetch).
-3. The returned `sync-token` is the connector's incremental cursor. It is returned in `SyncOutcome` for the supervisor to persist via `KnowledgeGraph::update_sync_cursor`, and the connector adopts it as its in-memory marker only **after** the supervisor confirms the whole cycle succeeded (`Connector::on_cycle_succeeded`, issue #314) — never inside `sync`, so a cycle that fails after fetching re-syncs from the last confirmed cursor instead of skipping the failed window.
+3. The returned `sync-token` is the connector's incremental cursor. It is returned in `SyncOutcome` for the supervisor to persist via `KnowledgeGraph::update_sync_progress_and_durable_state`, and the connector adopts it as its in-memory marker only **after** the supervisor confirms the whole cycle succeeded (`Connector::on_cycle_succeeded`, issue #314) — never inside `sync`, so a cycle that fails after fetching re-syncs from the last confirmed cursor instead of skipping the failed window.
 4. Each changed resource's `calendar-data` is parsed with `icalendar` into a
    `RawCalDavEvent` and staged. A `<response>` with no `calendar-data` is a
    tombstone **only** when its `<status>` is an explicit `404`/`410`; other statuses (`403` permission denied, `423` locked, `507` truncated, …) are logged and skipped so a transient server error never purges a live event. Tombstones are staged and propagated to the KB fact lifecycle (issue #247, below).

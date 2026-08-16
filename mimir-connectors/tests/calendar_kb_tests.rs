@@ -463,12 +463,13 @@ async fn failed_extract_cycle_reprocesses_staged_events_on_next_cycle() {
         .unwrap();
     let (_shutdown_tx, rx) = tokio::sync::watch::channel(false);
     // A deliberately slow backoff keeps the runner from auto-retrying the
-    // failed cycle before the test's manual trigger arrives — the test owns
-    // the cycle sequencing from here on.
+    // failed cycle before the test's manual trigger arrives (the trigger
+    // preempts the backoff sleep) — the test owns the cycle sequencing from
+    // here on.
     let config = SupervisorConfig {
         max_failures: 5,
-        base_backoff: Duration::from_secs(2),
-        max_backoff: Duration::from_secs(4),
+        base_backoff: Duration::from_secs(30),
+        max_backoff: Duration::from_secs(30),
     };
     let supervisor = ConnectorSupervisor::new(Arc::new(registry), kg.clone(), config, rx)
         .with_secret_store(store_with_app_password().await);

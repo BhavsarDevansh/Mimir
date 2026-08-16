@@ -33,7 +33,10 @@ cpu_cores = 1
 nice_level = 10
 timeout_minutes = 120
 schedule_time = "02:00"
+# memory_limit_mb = 2048  # Optional: best-effort cgroup v2 memory cap (MiB)
 ```
+
+`cpu_cores` and `nice_level` are enforced per run as best-effort `JobResourceLimits` (Linux CPU affinity and POSIX scheduling priority; see `docs/job-queue.md`). `memory_limit_mb` is an optional best-effort cgroup v2 memory cap applied while the optimization job runs — it requires a writable (delegated) cgroup v2 filesystem and is skipped with a debug log otherwise. The cap is process-wide: the whole daemon is moved into the job cgroup, so it limits the entire process while the job runs. None of the limits can fail the job.
 
 ## Background Scheduler Integration
 

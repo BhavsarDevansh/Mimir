@@ -5,6 +5,7 @@
 //! the SQLite-backed [`JobQueue`] implementation lives in `queue`.
 
 mod queue;
+mod resources;
 #[cfg(test)]
 mod tests;
 
@@ -17,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use queue::JobQueue;
+pub(crate) use resources::ResourceGuard;
 pub type JobFuture = Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>>;
 
 type JobHandler = dyn Fn(JobContext) -> JobFuture + Send + Sync + 'static;
@@ -176,17 +178,53 @@ impl DailySchedule {
 #[derive(Debug, Clone)]
 pub struct JobContext {
     job_id: String,
+    cancellation: tokio_util::sync::CancellationToken,
 }
 
 impl JobContext {
-    fn new(job_id: String) -> Self {
-        Self { job_id }
+    fn new(job_id: String, cancellation: tokio_util::sync::CancellationToken) -> Self {
+        Self {
+            job_id,
+            cancellation,
+        }
     }
 
     /// Identifier of the currently running job.
     pub fn job_id(&self) -> &str {
         &self.job_id
     }
+
+    /// Cancellation token for the current run.
+    ///
+    /// Long-running handlers should `tokio::select!` on
+    /// `ctx.cancellation_token().cancelled()` at checkpoint boundaries so
+    /// they can persist state and exit cleanly when the daemon shuts down or
+    /// the job is cancelled (issue #91).
+    pub fn cancellation_token(&self) -> tokio_util::sync::CancellationToken {
+        self.cancellation.clone()
+    }
+
+    /// Returns `true` once a cancellation has been requested for this run.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
+    }
+}
+
+/// Best-effort per-job resource limits.
+///
+/// Enforcement is OS-specific and never fails the job: if a limit cannot be
+/// applied (unsupported platform, missing permissions, no writable cgroup),
+/// the queue logs at debug level and runs the job without it (issue #91).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct JobResourceLimits {
+    /// Maximum number of CPUs the job may run on (Linux CPU affinity).
+    pub cpu_cores: Option<u8>,
+    /// Scheduling priority (`nice` value, -20..=19) for the job's thread.
+    pub nice_level: Option<i8>,
+    /// Best-effort memory cap in bytes (Linux cgroup v2 `memory.max`); the
+    /// whole process is moved into the job cgroup, so the cap applies to the
+    /// entire daemon while the job runs.
+    pub memory_limit_bytes: Option<u64>,
 }
 
 /// Durable job definition plus its in-process handler.
@@ -196,6 +234,7 @@ pub struct Job {
     schedule: Option<DailySchedule>,
     yield_on_user_activity: bool,
     handler: Arc<JobHandler>,
+    limits: JobResourceLimits,
 }
 
 impl Job {
@@ -216,7 +255,19 @@ impl Job {
             schedule,
             yield_on_user_activity,
             handler: Arc::new(handler),
+            limits: JobResourceLimits::default(),
         }
+    }
+
+    /// Attach best-effort resource limits to this job.
+    pub fn with_resource_limits(mut self, limits: JobResourceLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// Resource limits configured for this job.
+    pub fn resource_limits(&self) -> JobResourceLimits {
+        self.limits
     }
 }
 
@@ -256,6 +307,10 @@ pub enum JobError {
     Handler(String),
     #[error("job already running: {0}")]
     JobAlreadyRunning(String),
+    #[error("job cancelled")]
+    Cancelled,
+    #[error("job timed out")]
+    TimedOut,
 }
 
 impl JobError {

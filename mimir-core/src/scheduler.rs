@@ -170,6 +170,9 @@ impl BackgroundScheduler {
     /// Signal the dispatch loop to shut down gracefully.
     pub fn shutdown(&self) {
         let _ = self.shutdown_tx.send(true);
+        // Cancel any in-flight job so the dispatch loop (which awaits
+        // `run_now` inline) can observe shutdown promptly (issue #91).
+        self.job_queue.cancel_all();
     }
 
     /// Start the dispatch loop.
@@ -325,7 +328,7 @@ impl BackgroundScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::job_queue::{Job, JobContext, JobPriority};
+    use crate::job_queue::{Job, JobContext, JobPriority, JobRunStatus};
     use crate::llm::MockLlmClient;
     use std::time::Duration;
 
@@ -508,5 +511,56 @@ mod tests {
 
         sched.shutdown_tx.send(true).unwrap();
         let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_cancels_running_job() {
+        let (jq, _temp) = test_job_queue().await;
+        // Override the short dummy handler with a long-running one so the
+        // cancellation path is exercised rather than natural completion.
+        jq.register(Job::new(
+            "memory.condensation",
+            JobPriority::System,
+            None,
+            true,
+            |_ctx: JobContext| {
+                Box::pin(async move {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    Ok(())
+                })
+            },
+        ))
+        .await
+        .unwrap();
+
+        let llm = Arc::new(MockLlmClient::builder().build());
+        let (sched, shutdown_rx) = BackgroundScheduler::new(
+            Arc::clone(&jq),
+            llm,
+            Duration::from_millis(50),
+            Duration::from_millis(50),
+        );
+
+        sched.submit(DaemonJob::MemoryCondensation).await;
+        let sched_clone = Arc::clone(&sched);
+        let handle = tokio::spawn(async move {
+            sched_clone.start(shutdown_rx).await;
+        });
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !jq.is_running("memory.condensation").await && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(jq.is_running("memory.condensation").await);
+
+        sched.shutdown();
+        let _ = handle.await;
+
+        let status = jq.status("memory.condensation").await.unwrap();
+        assert_eq!(
+            status.last_run.as_ref().unwrap().status,
+            JobRunStatus::Cancelled
+        );
     }
 }

@@ -154,9 +154,35 @@ fn job_error_predicates() {
 }
 
 #[test]
-fn job_context_exposes_job_id() {
-    let ctx = JobContext::new("daily.cleanup".to_string());
+fn job_context_exposes_job_id_and_cancellation() {
+    let token = tokio_util::sync::CancellationToken::new();
+    let ctx = JobContext::new("daily.cleanup".to_string(), token.clone());
     assert_eq!(ctx.job_id(), "daily.cleanup");
+    assert!(!ctx.is_cancelled());
+    token.cancel();
+    assert!(ctx.is_cancelled());
+}
+
+#[test]
+fn job_resource_limits_default_to_none() {
+    let limits = JobResourceLimits::default();
+    assert_eq!(limits.cpu_cores, None);
+    assert_eq!(limits.nice_level, None);
+    assert_eq!(limits.memory_limit_bytes, None);
+}
+
+#[test]
+fn job_with_resource_limits_exposes_them() {
+    let limits = JobResourceLimits {
+        cpu_cores: Some(2),
+        nice_level: Some(10),
+        memory_limit_bytes: Some(512 * 1024 * 1024),
+    };
+    let job = Job::new("test.limits", JobPriority::System, None, false, |_ctx| {
+        Box::pin(async { Ok(()) })
+    })
+    .with_resource_limits(limits);
+    assert_eq!(job.resource_limits(), limits);
 }
 
 #[test]

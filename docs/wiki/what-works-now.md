@@ -245,7 +245,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
 | Job queue + scheduler | ✅ Works | SQLite-backed queue with dedup, debounce, cooldown, idle gating; memory condensation, nightly optimization, pending cleanup, and events scan jobs. |
-| Resource-limit enforcement | 🟡 Partial | Timeouts only; per-job CPU/memory limits and graceful cancellation are follow-up work ([#91](https://github.com/BhavsarDevansh/Mimir/issues/91)). |
+| Resource-limit enforcement | ✅ Works | Per-job timeouts, graceful cancellation (daemon shutdown cancels in-flight runs, recorded as `cancelled`), and best-effort CPU affinity / nice / cgroup v2 memory limits wired from `[knowledge.optimization]` ([#91](https://github.com/BhavsarDevansh/Mimir/issues/91)). |
 
 ### LLM Client & Worker Pool
 
@@ -325,7 +325,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | Automatic Librarian fallback when `remember` is not called | [#156](https://github.com/BhavsarDevansh/Mimir/issues/156) |
 | Generated skills: reflection loop, utility scoring, pruning | [#20](https://github.com/BhavsarDevansh/Mimir/issues/20) |
 | Tool backlog: time-to/since, web, wikipedia, weather, timezone, calculator, curl, sports, stocks, flights, distance, RSS | [#83](https://github.com/BhavsarDevansh/Mimir/issues/83), [#93](https://github.com/BhavsarDevansh/Mimir/issues/93)–[#106](https://github.com/BhavsarDevansh/Mimir/issues/106) |
-| JobQueue resource-limit enforcement | [#91](https://github.com/BhavsarDevansh/Mimir/issues/91) |
 | Config hot-reload propagation to scheduler/jobs | [#286](https://github.com/BhavsarDevansh/Mimir/issues/286) |
 | Code quality: duplicate `#[cfg(test)]`, sync skill file I/O | [#287](https://github.com/BhavsarDevansh/Mimir/issues/287) |
 

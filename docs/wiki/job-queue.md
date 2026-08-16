@@ -34,11 +34,21 @@ mimir kb optimization --run-now
 
 Triggers the full optimization pipeline immediately. This can take a few minutes depending on graph size.
 
+If the run is cancelled (for example by daemon shutdown) the request returns `409 Conflict`; if it exceeds the configured timeout it returns `504 Gateway Timeout`.
+
 ```bash
 mimir memory --refresh
 ```
 
 Triggers memory condensation immediately, bypassing the scheduler's debounce and cooldown.
+
+## Shutdown behaviour
+
+When Mimir shuts down, any background job that is still running is asked to stop. Jobs that cooperate with the cancellation signal finish their current step cleanly and exit. Cancellation is best-effort: the signal only asks the job to stop, and the job's thread is neither aborted nor joined, so synchronous or blocking work can keep running until it finishes. The run is recorded as `cancelled` in the job history, so `mimir kb optimization --status` shows what happened.
+
+## Resource limits
+
+The nightly optimization job runs with the resource limits from `[knowledge.optimization]` in `config.toml`: `cpu_cores` (how many CPUs it may use, Linux), `nice_level` (a signed Unix priority value: positive values lower scheduling priority, negative values raise it and may require additional privileges), and the optional `memory_limit_mb` (a best-effort memory cap on Linux systems with a writable cgroup v2 setup). The memory cap applies to the whole Mimir process while the job runs, not just the job's thread. These limits are best-effort — if your system cannot apply one, Mimir logs it and runs the job anyway.
 
 ## Best practices
 

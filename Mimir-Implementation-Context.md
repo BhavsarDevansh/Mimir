@@ -1,7 +1,7 @@
 # Mimir — Implementation Context
 
 > **Created:** 2025-05-20
-> **Last Updated:** 2026-08-06
+> **Last Updated:** 2026-08-16
 > **Vision Docs:** `VISION/` directory (48 files, 10 sections)
 > **Phase 1 Plan:** `VISION/09-Roadmap/Phase-1-Core-Agent.md`
 > **GitHub:** https://github.com/BhavsarDevansh/Mimir
@@ -138,7 +138,7 @@ If the user agrees, the daemon is started and the command is retried.
 ### Single Binary, Library Crates
 
 The workspace produces one binary (`mimir`) but uses library crates for code organisation:
-- `mimir-core` — shared domain logic (used by both daemon and tests)
+- `mimir-core` — shared domain logic (used by both daemon and tests). The SQLite-backed `JobQueue` (issue #58) gained per-job resource-limit enforcement and graceful cancellation in #91: each run carries a `CancellationToken` exposed via `JobContext::cancellation_token()` (cooperative handlers select on it at checkpoint boundaries; `JobQueue::cancel`/`cancel_all` signal runs, `BackgroundScheduler::shutdown` cancels in-flight jobs, and cancelled runs persist as `JobRunStatus::Cancelled`), and `Job::with_resource_limits` attaches best-effort `JobResourceLimits` (`cpu_cores` Linux CPU affinity via `nix::sched`, `nice_level` POSIX priority via `rustix::process`, `memory_limit_bytes` Linux cgroup v2 `memory.max`) applied on a fresh per-run thread so thread-local state never leaks into pooled threads; `[knowledge.optimization]` wires `cpu_cores`/`nice_level` and the new optional `memory_limit_mb` into the optimization job.
 - `mimir-server` — HTTP API layer (library, no binary). `AppState` construction is decomposed into per-subsystem init helpers in `state/builder.rs` (`init_context_manager`, `init_tool_registry`, `init_knowledge_graph`, `init_job_queue`, `init_agent_runtime`, `init_scheduler`, `init_connector_framework`) composed by `from_config_with_llm` in a fixed startup order (issue #265).
 - `mimir-client` — HTTP client for CLI commands (library, no binary)
 - `mimir-knowledge` — SQLite knowledge graph (Phase 2)

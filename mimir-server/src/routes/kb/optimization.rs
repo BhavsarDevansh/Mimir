@@ -44,7 +44,8 @@ pub async fn kb_optimization_status_handler(
 /// POST /kb/optimization/run-now
 pub async fn kb_optimization_run_now_handler(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<OptimizationRunNowResponse>, StatusCode> {
+) -> Result<(StatusCode, Json<OptimizationRunNowResponse>), StatusCode> {
+    use mimir_core::job_queue::JobRunStatus;
     let summary = state
         .job_queue
         .run_now("knowledge.optimization")
@@ -60,11 +61,20 @@ pub async fn kb_optimization_run_now_handler(
             }
         })?;
 
-    Ok(Json(OptimizationRunNowResponse {
-        run_id: summary.run_id,
-        status: summary.status.as_str().to_string(),
-        started_at: summary.started_at.to_rfc3339(),
-        finished_at: summary.finished_at.map(|dt| dt.to_rfc3339()),
-        error: summary.error,
-    }))
+    let status = match summary.status {
+        JobRunStatus::Cancelled => StatusCode::CONFLICT,
+        JobRunStatus::TimedOut => StatusCode::GATEWAY_TIMEOUT,
+        _ => StatusCode::OK,
+    };
+
+    Ok((
+        status,
+        Json(OptimizationRunNowResponse {
+            run_id: summary.run_id,
+            status: summary.status.as_str().to_string(),
+            started_at: summary.started_at.to_rfc3339(),
+            finished_at: summary.finished_at.map(|dt| dt.to_rfc3339()),
+            error: summary.error,
+        }),
+    ))
 }

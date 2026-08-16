@@ -176,7 +176,9 @@ async fn main() {
                 slug,
                 name,
                 password,
+                password_stdin,
                 token,
+                token_stdin,
                 json,
             } => {
                 ensure_daemon(&base_url, &mut daemon_started).await;
@@ -188,7 +190,9 @@ async fn main() {
                     slug,
                     name,
                     password,
+                    password_stdin,
                     token,
+                    token_stdin,
                     json,
                     &base_url,
                 )
@@ -203,7 +207,9 @@ async fn main() {
                 config,
                 config_json,
                 password,
+                password_stdin,
                 token,
+                token_stdin,
                 json,
             } => {
                 ensure_daemon(&base_url, &mut daemon_started).await;
@@ -212,7 +218,9 @@ async fn main() {
                     config,
                     config_json,
                     password,
+                    password_stdin,
                     token,
+                    token_stdin,
                     json,
                     &base_url,
                 )

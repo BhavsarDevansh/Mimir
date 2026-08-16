@@ -384,9 +384,15 @@ pub enum ConnectorCommands {
         /// App-password credential (skips the interactive prompt).
         #[arg(long, conflicts_with = "token")]
         password: Option<String>,
+        /// Read the app-password credential from stdin (piped secrets; skips the interactive prompt).
+        #[arg(long, conflicts_with_all = ["password", "token", "token_stdin"])]
+        password_stdin: bool,
         /// API-token credential (skips the interactive prompt).
         #[arg(long)]
         token: Option<String>,
+        /// Read the API-token credential from stdin (piped secrets; skips the interactive prompt).
+        #[arg(long, conflicts_with_all = ["token", "password", "password_stdin"])]
+        token_stdin: bool,
         /// Output raw JSON instead of a summary.
         #[arg(long)]
         json: bool,
@@ -403,9 +409,15 @@ pub enum ConnectorCommands {
         /// App-password credential (skips the interactive prompt).
         #[arg(long, conflicts_with = "token")]
         password: Option<String>,
+        /// Read the app-password credential from stdin (piped secrets; skips the interactive prompt).
+        #[arg(long, conflicts_with_all = ["password", "token", "token_stdin"])]
+        password_stdin: bool,
         /// API-token credential (skips the interactive prompt).
         #[arg(long)]
         token: Option<String>,
+        /// Read the API-token credential from stdin (piped secrets; skips the interactive prompt).
+        #[arg(long, conflicts_with_all = ["token", "password", "password_stdin"])]
+        token_stdin: bool,
         /// Output raw JSON instead of a summary.
         #[arg(long)]
         json: bool,

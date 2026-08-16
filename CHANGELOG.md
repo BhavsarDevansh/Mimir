@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.113.0] — 2026-08-16
+
+### Connector CLI: env/stdin secret ingestion (issue #270)
+
+- **`mimir connector add` / `auth` no longer require `--password`/`--token` flags for non-interactive credential supply.** The flags leak secrets to the process list (`ps aux`) and shell history, so two non-visible channels were added: `--password-stdin` / `--token-stdin` (the whole piped stream is the secret, trailing newlines stripped — `cat secret.txt | mimir connector add ... --password-stdin`, mirroring `docker login --password-stdin`) and the `MIMIR_CONNECTOR_PASSWORD` / `MIMIR_CONNECTOR_TOKEN` environment variables (read by the CLI only, never by the daemon). Per-kind precedence is flag → stdin flag → env var → interactive `inquire` prompt; `auth` also infers the credential kind from the env vars (exactly one set) when neither config nor flags declare one, and the non-terminal error messages now point at all non-visible channels. The flags are kept for script convenience and the leak risk is documented.
+- **Tests.** `mimir/tests/connector_cli_tests.rs` gains binary-level coverage: `--password-stdin` ingestion for `add` and `auth` (piped secret asserted on the daemon's token route), `MIMIR_CONNECTOR_TOKEN` / `MIMIR_CONNECTOR_PASSWORD` env ingestion, env-based kind inference for `auth` without config, the clap conflict between the two stdin flags, empty-stdin rejection (no `POST /connectors` after it), and flag-beats-env precedence.
+- **Docs.** `docs/cli.md`, `docs/connector-management.md`, `docs/wiki/cli-commands.md`, `docs/wiki/connectors.md`, `docs/wiki/what-works-now.md`, and `Mimir-Implementation-Context.md` updated with the new channels, precedence, and secret-hygiene guidance.
+- Version bumped 0.112.0 → 0.113.0 (minor — backwards-compatible new feature).
+
 ## [0.112.0] — 2026-08-16
 
 ### AppState construction decomposed into per-subsystem init helpers (issue #265)

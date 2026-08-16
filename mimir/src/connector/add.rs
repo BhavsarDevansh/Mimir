@@ -15,12 +15,14 @@ use super::{
 /// The daemon creates the instance in `Setup` (activation is the `resume`
 /// action, A2 / #203). The credential is acquired *before* the instance is
 /// registered, so a canceled prompt or aborted OAuth flow exits with nothing
-/// created: non-OAuth kinds prompt for the secret via `inquire` (or take
-/// `--password` / `--token`), while `auth.kind=oauth` configs run the
-/// interactive PKCE loopback flow (A4 / #205) and POST the exchanged
+/// created: non-OAuth kinds resolve the secret per kind with the precedence
+/// flag → stdin flag (`--password-stdin` / `--token-stdin`) →
+/// `MIMIR_CONNECTOR_PASSWORD` / `MIMIR_CONNECTOR_TOKEN` env var → `inquire`
+/// prompt (issue #270), while `auth.kind=oauth` configs run the interactive
+/// PKCE loopback flow (A4 / #205) and POST the exchanged
 /// `SecretBundle::OAuth` to the token route so the instance becomes
-/// `authenticated`. A non-interactive run without a flag proceeds with an
-/// unauthenticated instance and warns — it can be completed later with
+/// `authenticated`. A non-interactive run without any channel proceeds with
+/// an unauthenticated instance and warns — it can be completed later with
 /// `mimir connector auth <slug>`.
 #[allow(clippy::too_many_arguments)] // mirrors the clap field count (kb style)
 pub async fn handle_connector_add(
@@ -31,7 +33,9 @@ pub async fn handle_connector_add(
     slug: Option<String>,
     name: Option<String>,
     password: Option<String>,
+    password_stdin: bool,
     token: Option<String>,
+    token_stdin: bool,
     json: bool,
     base_url: &str,
 ) {
@@ -43,7 +47,9 @@ pub async fn handle_connector_add(
         slug,
         name,
         password,
+        password_stdin,
         token,
+        token_stdin,
         json,
         base_url,
         &open_in_browser,
@@ -63,7 +69,9 @@ pub(crate) async fn handle_connector_add_with_opener(
     slug: Option<String>,
     name: Option<String>,
     password: Option<String>,
+    password_stdin: bool,
     token: Option<String>,
+    token_stdin: bool,
     json: bool,
     base_url: &str,
     opener: &(dyn Fn(&str) + Send + Sync),
@@ -84,7 +92,7 @@ pub(crate) async fn handle_connector_add_with_opener(
     } else {
         None
     };
-    let secret = add_secret(&merged, password, token);
+    let secret = add_secret(&merged, password, token, password_stdin, token_stdin);
 
     let request = AddConnectorRequest {
         connector_type,
@@ -120,7 +128,7 @@ pub(crate) async fn handle_connector_add_with_opener(
         (kind, None, None) => {
             if !matches!(kind, CredentialKind::None) {
                 eprintln!(
-                    "Warning: no credential provided — connector '{slug}' left unauthenticated (pass --password/--token, or run `mimir connector auth {slug}` to complete it later)"
+                    "Warning: no credential provided — connector '{slug}' left unauthenticated (pass --password/--token, set MIMIR_CONNECTOR_PASSWORD/MIMIR_CONNECTOR_TOKEN, pipe via --password-stdin/--token-stdin, or run `mimir connector auth {slug}` to complete it later)"
                 );
             }
         }

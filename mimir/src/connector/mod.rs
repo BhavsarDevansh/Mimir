@@ -13,6 +13,7 @@ use colored::Colorize;
 use is_terminal::IsTerminal;
 use mimir_api_types::ConnectorResponse;
 use mimir_client::MimirClient;
+use std::io::Read;
 
 pub(crate) use crate::cli_util::{exit_with_error, make_client, print_json};
 
@@ -212,6 +213,7 @@ fn set_dotted_path(target: &mut serde_json::Value, key: &str, value: serde_json:
 /// derived deterministically from the config's `auth.kind` tag — the same
 /// tag the backends' auth-method DTOs use. OAuth is A4 (#205): the
 /// interactive PKCE flow replaces the credential prompt.
+#[derive(Clone, Copy)]
 enum CredentialKind {
     AppPassword,
     ApiToken,
@@ -228,49 +230,156 @@ fn credential_kind_for(config: &serde_json::Value) -> CredentialKind {
     }
 }
 
+/// Environment variable carrying the app-password secret for
+/// `connector add` / `connector auth`. Read by the CLI only — the daemon
+/// never sees it (issue #270).
+const ENV_PASSWORD: &str = "MIMIR_CONNECTOR_PASSWORD";
+
+/// Environment variable carrying the API-token secret (CLI only, #270).
+const ENV_TOKEN: &str = "MIMIR_CONNECTOR_TOKEN";
+
+/// The secret from the matching `MIMIR_CONNECTOR_*` environment variable,
+/// if set and non-empty. Env vars are visible to the same user via
+/// `/proc/<pid>/environ` but not to other users via `ps` and never land in
+/// shell history — the recommended non-interactive channel (issue #270).
+fn env_secret(name: &str) -> Option<String> {
+    match std::env::var(name) {
+        Ok(value) if !value.is_empty() => Some(value),
+        _ => None,
+    }
+}
+
+/// Read a secret from stdin for `--password-stdin` / `--token-stdin`,
+/// mirroring `docker login --password-stdin`: the whole stream is the
+/// secret, with trailing CR/LF stripped. Exits with a clear error on an
+/// empty stream, an oversized stream, or a read failure.
+fn read_stdin_secret(label: &str) -> String {
+    const MAX_BYTES: u64 = 1024 * 1024;
+    let mut raw = String::new();
+    if let Err(e) = std::io::stdin()
+        .take(MAX_BYTES + 1)
+        .read_to_string(&mut raw)
+    {
+        exit_with_error(format!("failed to read {label} from stdin: {e}"));
+    }
+    if raw.len() as u64 > MAX_BYTES {
+        exit_with_error(format!(
+            "{label} from stdin exceeds the {MAX_BYTES}-byte limit"
+        ));
+    }
+    let secret = raw.trim_end_matches(['\r', '\n']);
+    if secret.is_empty() {
+        exit_with_error(format!(
+            "no {label} received on stdin — pipe the secret, e.g. `cat secret.txt | mimir connector add ... --password-stdin`"
+        ));
+    }
+    secret.to_string()
+}
+
+/// Resolve the secret for a known non-OAuth kind with the precedence flag →
+/// stdin flag → env var → interactive prompt, warning when the other kind's
+/// channels were supplied. Shared by the `add` and `auth` flows (DRY).
+fn resolve_kind_secret(
+    kind: CredentialKind,
+    password: Option<String>,
+    token: Option<String>,
+    password_stdin: bool,
+    token_stdin: bool,
+) -> Option<String> {
+    match kind {
+        CredentialKind::AppPassword => {
+            if token.is_some() || token_stdin || env_secret(ENV_TOKEN).is_some() {
+                eprintln!(
+                    "Warning: --token/--token-stdin/MIMIR_CONNECTOR_TOKEN given but the connector uses an app password — ignoring them (pass --password, --password-stdin, or MIMIR_CONNECTOR_PASSWORD instead)"
+                );
+            }
+            password
+                .or_else(|| password_stdin.then(|| read_stdin_secret("app password")))
+                .or_else(|| env_secret(ENV_PASSWORD))
+                .or_else(|| prompt_secret("App password:"))
+        }
+        CredentialKind::ApiToken => {
+            if password.is_some() || password_stdin || env_secret(ENV_PASSWORD).is_some() {
+                eprintln!(
+                    "Warning: --password/--password-stdin/MIMIR_CONNECTOR_PASSWORD given but the connector uses an API token — ignoring them (pass --token, --token-stdin, or MIMIR_CONNECTOR_TOKEN instead)"
+                );
+            }
+            token
+                .or_else(|| token_stdin.then(|| read_stdin_secret("API token")))
+                .or_else(|| env_secret(ENV_TOKEN))
+                .or_else(|| prompt_secret("API token:"))
+        }
+        CredentialKind::OAuth | CredentialKind::None => {
+            unreachable!("callers resolve OAuth/None before resolving a secret")
+        }
+    }
+}
+
+/// Whether any non-interactive secret channel (flag, stdin flag, or env
+/// var) was supplied for either credential kind.
+fn any_secret_channel(
+    password: Option<&str>,
+    token: Option<&str>,
+    password_stdin: bool,
+    token_stdin: bool,
+) -> bool {
+    password.is_some()
+        || token.is_some()
+        || password_stdin
+        || token_stdin
+        || env_secret(ENV_PASSWORD).is_some()
+        || env_secret(ENV_TOKEN).is_some()
+}
+
 /// Resolve the non-OAuth credential secret for `add` *before* the instance
-/// exists: the matching flag wins, then an interactive `inquire` prompt. A
-/// canceled prompt (Esc/Ctrl-D) exits, so the daemon never registers a
-/// zombie `Setup` row for an aborted interactive run.
+/// exists. Precedence per kind: the matching flag (`--password` /
+/// `--token`), then the matching stdin flag (`--password-stdin` /
+/// `--token-stdin`), then the matching `MIMIR_CONNECTOR_*` env var, then an
+/// interactive `inquire` prompt. A canceled prompt (Esc/Ctrl-D) exits, so
+/// the daemon never registers a zombie `Setup` row for an aborted
+/// interactive run.
 ///
 /// Returns `None` when the config declares no credential, or when stdin is
-/// not a terminal and no flag was supplied — the caller proceeds with an
-/// unauthenticated instance and warns (recoverable later via
-/// `mimir connector auth <slug>`).
+/// not a terminal and no non-interactive channel was supplied — the caller
+/// proceeds with an unauthenticated instance and warns (recoverable later
+/// via `mimir connector auth <slug>`).
 fn add_secret(
     config: &serde_json::Value,
     password: Option<String>,
     token: Option<String>,
+    password_stdin: bool,
+    token_stdin: bool,
 ) -> Option<String> {
     match credential_kind_for(config) {
-        CredentialKind::AppPassword => {
-            if token.is_some() {
-                eprintln!(
-                    "Warning: --token given but auth.kind is 'app_password' — ignoring it (pass --password instead)"
-                );
-            }
-            password.or_else(|| prompt_secret("App password:"))
-        }
-        CredentialKind::ApiToken => {
-            if password.is_some() {
-                eprintln!(
-                    "Warning: --password given but auth.kind is 'api_token' — ignoring it (pass --token instead)"
-                );
-            }
-            token.or_else(|| prompt_secret("API token:"))
-        }
+        CredentialKind::AppPassword | CredentialKind::ApiToken => resolve_kind_secret(
+            credential_kind_for(config),
+            password,
+            token,
+            password_stdin,
+            token_stdin,
+        ),
         CredentialKind::OAuth => {
-            if password.is_some() || token.is_some() {
+            if any_secret_channel(
+                password.as_deref(),
+                token.as_deref(),
+                password_stdin,
+                token_stdin,
+            ) {
                 eprintln!(
-                    "Warning: --password/--token given but auth.kind is 'oauth' — ignoring them (the PKCE flow obtains the token)"
+                    "Warning: --password/--token (or --password-stdin/--token-stdin/MIMIR_CONNECTOR_*) given but auth.kind is 'oauth' — ignoring them (the PKCE flow obtains the token)"
                 );
             }
             None
         }
         CredentialKind::None => {
-            if password.is_some() || token.is_some() {
+            if any_secret_channel(
+                password.as_deref(),
+                token.as_deref(),
+                password_stdin,
+                token_stdin,
+            ) {
                 eprintln!(
-                    "Warning: --password/--token given but config declares no non-OAuth credential kind — ignoring them (set auth.kind=app_password or auth.kind=api_token)"
+                    "Warning: --password/--token (or --password-stdin/--token-stdin/MIMIR_CONNECTOR_*) given but config declares no non-OAuth credential kind — ignoring them (set auth.kind=app_password or auth.kind=api_token)"
                 );
             }
             None

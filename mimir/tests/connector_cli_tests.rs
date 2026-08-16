@@ -34,6 +34,8 @@ fn spawn_mimir(
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
         .env("HOME", &home_dir)
+        .env_remove("MIMIR_CONNECTOR_PASSWORD")
+        .env_remove("MIMIR_CONNECTOR_TOKEN")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     for (key, value) in envs {
@@ -860,6 +862,39 @@ async fn connector_auth_infers_kind_from_env_without_config() {
 }
 
 #[tokio::test]
+async fn connector_auth_rejects_both_env_vars() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/connectors"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorListResponse {
+                connectors: vec![connector_fixture(1, "demo")],
+            }),
+        )
+        .mount(&server)
+        .await;
+
+    let (stdout, stderr, status) = run_mimir_with_env(
+        &["connector", "auth", "demo"],
+        &server.uri(),
+        &[
+            ("MIMIR_CONNECTOR_PASSWORD", "p"),
+            ("MIMIR_CONNECTOR_TOKEN", "t"),
+        ],
+    );
+    assert!(
+        !status.success(),
+        "auth with both env secrets set must fail.\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("set only one of MIMIR_CONNECTOR_PASSWORD / MIMIR_CONNECTOR_TOKEN"),
+        "expected the both-env-vars error, got: {combined}"
+    );
+}
+
+#[tokio::test]
 async fn connector_add_stdin_secret_empty_fails() {
     let server = MockServer::start().await;
     mount_health(&server).await;
@@ -973,4 +1008,70 @@ async fn connector_add_flag_beats_env_secret() {
         .filter(|r| r.url.path() == "/connectors/1/tokens")
         .count();
     assert_eq!(token_requests, 1, "the flag secret must be ingested once");
+}
+
+#[tokio::test]
+async fn connector_add_stdin_beats_env_secret() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/connectors/catalog"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
+                entries: vec![ConnectorCatalogEntry {
+                    connector_type: "gmail".to_string(),
+                    backend: "test".to_string(),
+                }],
+            }),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/connectors"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(connector_fixture(1, "demo")))
+        .mount(&server)
+        .await;
+    let mut authenticated = connector_fixture(1, "demo");
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_json(serde_json::json!({
+            "kind": "app_password",
+            "password": "stdin-wins"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&server)
+        .await;
+
+    let output = spawn_mimir(
+        &[
+            "connector",
+            "add",
+            "gmail",
+            "--backend",
+            "test",
+            "--slug",
+            "demo",
+            "auth.kind=app_password",
+            "--password-stdin",
+            "--json",
+        ],
+        &server.uri(),
+        Some(b"stdin-wins\n"),
+        &[("MIMIR_CONNECTOR_PASSWORD", "env-loses")],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "add with stdin + env failed.\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    let token_requests = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .count();
+    assert_eq!(token_requests, 1, "the piped secret must be ingested once");
 }

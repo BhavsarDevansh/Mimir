@@ -263,9 +263,7 @@ fn read_stdin_secret(label: &str) -> String {
         exit_with_error(format!("failed to read {label} from stdin: {e}"));
     }
     if raw.len() as u64 > MAX_BYTES {
-        exit_with_error(format!(
-            "{label} from stdin exceeds the {MAX_BYTES}-byte limit"
-        ));
+        exit_with_error(format!("{label} from stdin exceeds the 1 MiB limit"));
     }
     let secret = raw.trim_end_matches(['\r', '\n']);
     if secret.is_empty() {
@@ -350,14 +348,11 @@ fn add_secret(
     password_stdin: bool,
     token_stdin: bool,
 ) -> Option<String> {
-    match credential_kind_for(config) {
-        CredentialKind::AppPassword | CredentialKind::ApiToken => resolve_kind_secret(
-            credential_kind_for(config),
-            password,
-            token,
-            password_stdin,
-            token_stdin,
-        ),
+    let kind = credential_kind_for(config);
+    match kind {
+        CredentialKind::AppPassword | CredentialKind::ApiToken => {
+            resolve_kind_secret(kind, password, token, password_stdin, token_stdin)
+        }
         CredentialKind::OAuth => {
             if any_secret_channel(
                 password.as_deref(),

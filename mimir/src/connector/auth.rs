@@ -5,8 +5,8 @@ use mimir_api_types::IngestTokenRequest;
 
 use super::oauth::{ingest_oauth_bundle, open_in_browser, run_oauth_flow_with_opener};
 use super::{
-    CredentialKind, ENV_PASSWORD, ENV_TOKEN, credential_kind_for, env_secret, exit_with_error,
-    make_client, merge_config, print_json, render_client_error, resolve_connector,
+    CredentialKind, ENV_PASSWORD, ENV_TOKEN, any_secret_channel, credential_kind_for, env_secret,
+    exit_with_error, make_client, merge_config, print_json, render_client_error, resolve_connector,
     resolve_kind_secret,
 };
 
@@ -74,13 +74,12 @@ pub(crate) async fn handle_connector_auth_with_opener(
     // re-supplied config only drives the flow; the daemon's stored config
     // remains authoritative for the connector's runtime.
     if matches!(kind, CredentialKind::OAuth) {
-        if password.is_some()
-            || token.is_some()
-            || password_stdin
-            || token_stdin
-            || env_secret(ENV_PASSWORD).is_some()
-            || env_secret(ENV_TOKEN).is_some()
-        {
+        if any_secret_channel(
+            password.as_deref(),
+            token.as_deref(),
+            password_stdin,
+            token_stdin,
+        ) {
             eprintln!(
                 "Warning: --password/--token (or --password-stdin/--token-stdin/MIMIR_CONNECTOR_*) are ignored for OAuth connectors (the PKCE flow obtains the token)"
             );
@@ -104,20 +103,25 @@ pub(crate) async fn handle_connector_auth_with_opener(
     let kind = match kind {
         CredentialKind::None => {
             if (password.is_some() || password_stdin) && (token.is_some() || token_stdin) {
-                exit_with_error("pass only one of --password / --token");
+                exit_with_error(
+                    "pass only one of --password / --token / --password-stdin / --token-stdin",
+                );
             }
             if password.is_some() || password_stdin {
                 CredentialKind::AppPassword
             } else if token.is_some() || token_stdin {
                 CredentialKind::ApiToken
-            } else if env_secret(ENV_PASSWORD).is_some() && env_secret(ENV_TOKEN).is_some() {
-                exit_with_error("set only one of MIMIR_CONNECTOR_PASSWORD / MIMIR_CONNECTOR_TOKEN");
-            } else if env_secret(ENV_PASSWORD).is_some() {
-                CredentialKind::AppPassword
-            } else if env_secret(ENV_TOKEN).is_some() {
-                CredentialKind::ApiToken
             } else {
-                prompt_credential_kind(&slug)
+                let env_password = env_secret(ENV_PASSWORD);
+                let env_token = env_secret(ENV_TOKEN);
+                match (env_password.is_some(), env_token.is_some()) {
+                    (true, true) => exit_with_error(
+                        "set only one of MIMIR_CONNECTOR_PASSWORD / MIMIR_CONNECTOR_TOKEN",
+                    ),
+                    (true, false) => CredentialKind::AppPassword,
+                    (false, true) => CredentialKind::ApiToken,
+                    (false, false) => prompt_credential_kind(&slug),
+                }
             }
         }
         kind => kind,
@@ -159,7 +163,7 @@ pub(crate) async fn handle_connector_auth_with_opener(
 }
 
 /// Ask which credential kind the connector uses. Non-terminal stdin aborts
-/// with a message pointing at the flags.
+/// with a message pointing at the non-visible channels.
 fn prompt_credential_kind(slug: &str) -> CredentialKind {
     if !std::io::stdin().is_terminal() {
         exit_with_error(format!(

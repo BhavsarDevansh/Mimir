@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.115.4] — 2026-08-16
+
+### Docs: refresh stale connectors framework + Phase 3 roadmap docs (issue #274)
+
+- `docs/connectors-framework.md` crate-layout table now lists the `secrets`, `rate_limit`, `geocoder`, `ical`, `calendar`, and `email` subsystems with their landing issues, the feature-flags block matches `mimir-connectors/Cargo.toml` (including `test-utils`, `test-mock-oauth`, and the `oauth` `dep:url` gate), and the status blockquote opens with "Implemented" instead of "Scaffolded".
+- `VISION/09-Roadmap/Phase-3-Connectors.md` checklists now reflect the landed work (F1–F10, F12–F13 — F11 keyring deferred, C1–C7, A1–A4, T1–T2) with issue references, the stale "Duration: 6–8 weeks" header is replaced by a status blockquote pointing at `Phase-3-Plan.md` as the design source of truth, and the success criteria / risks sections note how each was met or mitigated.
+- `docs/wiki/connectors.md` status blockquote updated to "Implemented"; `docs/wiki/what-works-now.md` maintenance backlog no longer lists #274 (and the closed #260).
+- Version bumped 0.115.3 → 0.115.4 (patch — documentation update).
+
 ## [0.115.3] — 2026-08-16
 
 ### PR #343 review: remaining CodeRabbit findings

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.115.2] — 2026-08-16
+
+### PR #343 review: finish `--` separator support in md-reflow
+
+- `scripts/md-reflow` argument parsing was extracted into a unit-tested `parse_args` helper, and arguments after the conventional `--` separator are now treated as paths verbatim. The earlier fix still ran the flag filter over post-separator arguments, so a file named like `--weird.md` was dropped and the tool fell back to scanning the whole tree; `md-reflow --check -- --weird.md` now processes the explicit path. The `--check` non-zero exit for unreadable files (from the first review pass) is unchanged.
+- Version bumped 0.115.1 → 0.115.2 (patch — CLI bug fix).
+
 ## [0.115.1] — 2026-08-16
 
 ### Docs: reflow all markdown prose to the single-line standard (issue #245)

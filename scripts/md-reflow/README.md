@@ -16,6 +16,10 @@ Pass explicit paths to limit the run, e.g. `--check docs/ README.md`.
 
 If you pass no mode flag, the tool uses `--reflow` and writes files in place.
 
+A conventional `--` separator ends flag parsing: every argument after it is treated as a path verbatim, so files whose names start with `--` can be processed, e.g. `md-reflow --check -- --weird.md`.
+
+In `--check` mode the exit code is 1 when any file would change or could not be read, so unreadable files fail CI instead of being silently skipped.
+
 ## What it does
 
 - Joins wrapped paragraphs and tight list items onto one line, preserving the exact source text (inline markup is never rewritten).

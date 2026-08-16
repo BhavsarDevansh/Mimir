@@ -29,14 +29,16 @@ enum Frame {
     BlockQuote,
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    // The conventional `--` separator ends flag parsing, so a path that
-    // starts with `--` can still be passed after it.
+/// Parse CLI arguments into an optional mode flag and file paths.
+///
+/// The conventional `--` separator ends flag parsing: arguments before it are
+/// mode flags or paths, while arguments after it are paths verbatim, so names
+/// that start with `--` can be passed explicitly.
+fn parse_args(args: &[String]) -> Result<(Option<&str>, Vec<PathBuf>), String> {
     let sep = args.iter().position(|a| a == "--");
     let (flag_args, path_args) = match sep {
         Some(i) => (&args[..i], &args[i + 1..]),
-        None => (&args[..], &[][..]),
+        None => (args, &[][..]),
     };
     let flags: Vec<&str> = flag_args
         .iter()
@@ -44,20 +46,30 @@ fn main() {
         .map(String::as_str)
         .collect();
     if flags.len() > 1 {
-        eprintln!(
-            "error: expected at most one mode flag, got: {}",
+        return Err(format!(
+            "expected at most one mode flag, got: {}",
             flags.join(" ")
-        );
-        std::process::exit(2);
+        ));
     }
-    let mode = flags.first().copied().unwrap_or("--reflow");
-    let paths: Vec<PathBuf> = args
+    let mut paths: Vec<PathBuf> = flag_args
         .iter()
-        .take(sep.unwrap_or(args.len()))
-        .chain(path_args.iter())
         .filter(|a| !a.starts_with("--"))
         .map(PathBuf::from)
         .collect();
+    paths.extend(path_args.iter().map(PathBuf::from));
+    Ok((flags.first().copied(), paths))
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (mode, paths) = match parse_args(&args) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(2);
+        }
+    };
+    let mode = mode.unwrap_or("--reflow");
     let files = if paths.is_empty() {
         collect_md_files(Path::new("."))
     } else {
@@ -589,6 +601,59 @@ mod tests {
             reflow_str("> - item one\n>   continuation\n"),
             "> - item one continuation\n"
         );
+    }
+
+    #[test]
+    fn parse_args_extracts_mode_flag_and_paths() {
+        let args = vec![
+            "--check".to_string(),
+            "a.md".to_string(),
+            "b.md".to_string(),
+        ];
+        assert_eq!(
+            parse_args(&args).unwrap(),
+            (
+                Some("--check"),
+                vec![PathBuf::from("a.md"), PathBuf::from("b.md")]
+            )
+        );
+    }
+
+    #[test]
+    fn parse_args_returns_no_mode_when_absent() {
+        let args = vec!["a.md".to_string()];
+        assert_eq!(
+            parse_args(&args).unwrap(),
+            (None, vec![PathBuf::from("a.md")])
+        );
+    }
+
+    #[test]
+    fn parse_args_treats_arguments_after_separator_as_paths() {
+        let args = vec![
+            "--check".to_string(),
+            "--".to_string(),
+            "--weird.md".to_string(),
+        ];
+        assert_eq!(
+            parse_args(&args).unwrap(),
+            (Some("--check"), vec![PathBuf::from("--weird.md")])
+        );
+    }
+
+    #[test]
+    fn parse_args_separator_alone_keeps_default_mode() {
+        let args = vec!["--".to_string(), "--weird.md".to_string()];
+        assert_eq!(
+            parse_args(&args).unwrap(),
+            (None, vec![PathBuf::from("--weird.md")])
+        );
+    }
+
+    #[test]
+    fn parse_args_rejects_multiple_mode_flags() {
+        let args = vec!["--check".to_string(), "--survey".to_string()];
+        assert!(parse_args(&args).is_err());
     }
 
     #[test]

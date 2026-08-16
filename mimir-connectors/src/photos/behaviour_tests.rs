@@ -36,6 +36,72 @@ fn gps_raw(rel_path: &str, lat: f64, lng: f64) -> RawPhoto {
     }
 }
 
+/// Issue #332: `sync` must not advance the in-memory cursor — the
+/// supervisor persists the reported cursor and hands it back via
+/// `on_cycle_succeeded` only after a fully successful cycle, so a failed
+/// cycle re-scans from the last confirmed cursor instead of skipping the
+/// staged photos.
+#[tokio::test]
+async fn sync_reports_cursor_without_advancing_in_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::copy(fixture("exif.jpg"), dir.path().join("IMG_001.jpg")).unwrap();
+    let config = serde_json::json!({ "watch_dir": dir.path().to_string_lossy() });
+    let connector = PhotosConnector::from_config(config).unwrap();
+
+    let outcome = connector.sync(SyncOptions::default()).await.unwrap();
+    assert_eq!(outcome.fetched, 1);
+    let cursor_json = outcome.new_cursor.expect("cursor reported");
+    assert!(
+        connector.cursor.lock().await.is_empty(),
+        "in-memory cursor must not advance before the cycle succeeds"
+    );
+
+    // The supervisor's post-success adoption advances the marker.
+    connector.on_cycle_succeeded(Some(&cursor_json)).await;
+    assert_eq!(connector.cursor.lock().await.len(), 1);
+}
+
+/// Issue #332: a cycle that fails after `sync` must not lose the staged
+/// photos. The file watcher does not re-deliver consumed events, so the next
+/// in-process `sync` re-scans from the last confirmed cursor instead of
+/// blocking on the watcher.
+#[tokio::test]
+async fn failed_cycle_rescans_staged_photos_on_next_sync() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::copy(fixture("exif.jpg"), dir.path().join("IMG_001.jpg")).unwrap();
+    let config = serde_json::json!({ "watch_dir": dir.path().to_string_lossy() });
+    let connector = PhotosConnector::from_config(config).unwrap();
+
+    // Cycle 1: the initial scan stages the photo; the cycle then fails
+    // (no `on_cycle_succeeded` adoption).
+    let first = connector.sync(SyncOptions::default()).await.unwrap();
+    assert_eq!(first.fetched, 1);
+    assert!(first.new_cursor.is_some());
+    assert!(
+        connector.cursor.lock().await.is_empty(),
+        "in-memory cursor must not advance before the cycle succeeds"
+    );
+
+    // Cycle 2: must re-scan (not block on the watcher) and re-stage the
+    // failed window from the last confirmed cursor.
+    let second = connector.sync(SyncOptions::default()).await.unwrap();
+    assert_eq!(second.fetched, 1, "the failed window must be re-scanned");
+    assert!(second.new_cursor.is_some());
+    // The failed cycle never drained the buffer, so the re-scan must dedupe
+    // against the still-staged photo instead of staging a second copy.
+    assert_eq!(
+        connector.buffer.lock().await.len(),
+        1,
+        "the re-scan must not duplicate an item that is still staged"
+    );
+
+    // The cycle now succeeds: adopt the persisted cursor.
+    connector
+        .on_cycle_succeeded(second.new_cursor.as_deref())
+        .await;
+    assert_eq!(connector.cursor.lock().await.len(), 1);
+}
+
 #[tokio::test]
 async fn extract_reverse_geocodes_gps_into_took_photo_at_fact() {
     let dir = tempfile::tempdir().unwrap();

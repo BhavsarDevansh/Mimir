@@ -16,6 +16,7 @@ It is a background sync worker that runs in two modes automatically:
 
 - You point it at your IMAP server and give it either an **app-specific password** or an **OAuth** token (Google/Microsoft). The secret lives in Mimir's permission-checked secret store (`0600`); the username and server config live in the connector config.
 - Each sync fetches only what's new. Mimir tracks the last message it saw by **UID** (a stable, server-assigned message id), so it never re-downloads the same email. Your progress is saved across restarts.
+- Sync is **failure-safe**: Mimir only records how far it got after a sync fully succeeds (fetch, extract, and knowledge-graph insert all complete). If a sync fails part-way, the next run re-fetches the same window instead of skipping it, so no email is silently lost. This also applies in push/IDLE mode: after a failed sync the next run re-fetches immediately instead of waiting for the next new email.
 - If your mailbox is ever recreated (a rare event Mimir detects via a server value called `UIDVALIDITY`), the connector notices and does one full re-fetch — no silent gaps or duplicates.
 - Each message's raw contents (headers, body) are held in an in-memory buffer ready for the knowledge graph.
 

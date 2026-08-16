@@ -10,13 +10,15 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::json;
 
 use mimir_connectors::{
-    Connector, ConnectorRegistry, ConnectorSupervisor, PhotosConnector, PhotosConnectorFactory,
-    PhotosCursor, SupervisorConfig, SyncOptions,
+    ActionResult, Connector, ConnectorAction, ConnectorError, ConnectorFactory, ConnectorMode,
+    ConnectorRegistry, ConnectorSupervisor, FnConnectorFactory, HealthStatus, PhotosConnector,
+    PhotosConnectorFactory, PhotosCursor, SupervisorConfig, SyncOptions, SyncOutcome,
 };
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::connector::UpsertConnectorInput;
@@ -25,6 +27,7 @@ use mimir_knowledge::models::enums::{
     ConnectorAuthState, ConnectorStatus, ConnectorType, LocationType,
 };
 use mimir_knowledge::models::source::SourceType;
+use mimir_knowledge::normalize::NormalizedFact;
 
 use mimir_core::geocoder::{GeocodeResult, Geocoder, MockGeocoder};
 
@@ -574,4 +577,309 @@ async fn supervisor_ingests_photo_as_took_photo_at_place_fact() {
     );
 
     supervisor.shutdown().await;
+}
+
+/// Delegating connector that fails the first `extract()` call, simulating a
+/// transient extraction failure *after* `sync` already staged the photos.
+/// Every other operation — including the cursor adoption in
+/// `on_cycle_succeeded` — delegates to the inner photos connector, so the
+/// wrapper only injects the failure (issue #332). When `drain_before_fail` is
+/// set the inner buffer is drained like a real extract before the failure
+/// fires; otherwise the failure fires first, leaving the staged photo
+/// buffered so the retry cycle's re-scan must dedupe against it.
+struct FailFirstExtractPhotosConnector {
+    inner: Arc<dyn Connector>,
+    /// Set once the injected extract failure has fired, so the test can wait
+    /// for the failing cycle instead of racing the supervisor's first
+    /// automatic cycle.
+    failed_once: Arc<AtomicBool>,
+    /// Drain the inner buffer (real-extract semantics) before failing.
+    drain_before_fail: bool,
+    /// Number of facts returned by the successful (retry) extract — pinned
+    /// so the undrained-failure test can assert the re-scan did not
+    /// duplicate the still-staged photo.
+    retry_fact_count: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl Connector for FailFirstExtractPhotosConnector {
+    fn id(&self) -> &str {
+        self.inner.id()
+    }
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn connector_type(&self) -> ConnectorType {
+        self.inner.connector_type()
+    }
+    fn mode(&self) -> ConnectorMode {
+        self.inner.mode()
+    }
+    fn config_schema(&self) -> serde_json::Value {
+        self.inner.config_schema()
+    }
+    async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError> {
+        self.inner.authenticate().await
+    }
+    async fn health(&self) -> Result<HealthStatus, ConnectorError> {
+        self.inner.health().await
+    }
+    async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
+        self.inner.sync(options).await
+    }
+    async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError> {
+        if !self.failed_once.swap(true, Ordering::SeqCst) {
+            if self.drain_before_fail {
+                // Drain the inner buffer like a real extract would, then
+                // fail — the retry cycle's re-scan then stages the photo
+                // fresh instead of duplicating the un-drained window.
+                let _ = self.inner.extract().await?;
+            }
+            return Err(ConnectorError::Other(
+                "injected transient extract failure".to_string(),
+            ));
+        }
+        let facts = self.inner.extract().await?;
+        self.retry_fact_count.store(facts.len(), Ordering::SeqCst);
+        Ok(facts)
+    }
+    async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError> {
+        self.inner.extract_deletions().await
+    }
+    async fn acknowledge_deletions(&self, deleted: &[String]) -> Result<(), ConnectorError> {
+        self.inner.acknowledge_deletions(deleted).await
+    }
+    async fn on_cycle_succeeded(&self, new_cursor: Option<&str>) {
+        self.inner.on_cycle_succeeded(new_cursor).await;
+    }
+    async fn act(&self, action: ConnectorAction) -> Result<ActionResult, ConnectorError> {
+        self.inner.act(action).await
+    }
+    async fn forget(&self) -> Result<(), ConnectorError> {
+        self.inner.forget().await
+    }
+}
+
+/// Issue #332: a cycle that fails *after* `sync` (extract error) must not
+/// lose the staged photos. The in-memory cursor may only advance once the
+/// supervisor persisted the new cursor, so the next in-process cycle re-scans
+/// from the last confirmed cursor (the file watcher does not re-deliver
+/// consumed events) and re-processes the failed window.
+#[tokio::test]
+async fn failed_extract_cycle_reprocesses_staged_photos_on_next_cycle() {
+    let watch = tempfile::tempdir().unwrap();
+    fs::copy(fixture("exif.jpg"), watch.path().join("IMG_001.jpg")).unwrap();
+
+    let (kg, _db_dir) = init_kg().await;
+    let config = serde_json::to_string(&json!({
+        "watch_dir": watch.path().to_string_lossy(),
+        "owner_name": "Devansh",
+        "debounce_ms": 80,
+    }))
+    .unwrap();
+    let row = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Photos,
+            slug: "photos".to_string(),
+            backend: "local-failing".to_string(),
+            display_name: "Photos".to_string(),
+            config_json: config,
+            status: Some(ConnectorStatus::Active),
+            auth_state: Some(ConnectorAuthState::Authenticated),
+        })
+        .await
+        .unwrap();
+    let kg = Arc::new(kg);
+
+    let failed_once = Arc::new(AtomicBool::new(false));
+    let registry = ConnectorRegistry::new();
+    registry
+        .register(
+            ConnectorType::Photos,
+            "local-failing",
+            FnConnectorFactory::new({
+                let failed_once = Arc::clone(&failed_once);
+                move |config, ctx| {
+                    let inner = PhotosConnectorFactory.create(config, ctx)?;
+                    Ok(Arc::new(FailFirstExtractPhotosConnector {
+                        inner,
+                        failed_once: Arc::clone(&failed_once),
+                        drain_before_fail: true,
+                        retry_fact_count: Arc::new(AtomicUsize::new(0)),
+                    }) as Arc<dyn Connector>)
+                }
+            }),
+        )
+        .unwrap();
+    let (_shutdown_tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = ConnectorSupervisor::new(Arc::new(registry), kg.clone(), fast_config(), rx);
+    assert_eq!(supervisor.restore().await.unwrap(), 1);
+
+    // Wait for the injected extract failure to fire, then for the retry
+    // cycle to re-scan the failed window and land the photo's fact in the KB.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    while !failed_once.load(Ordering::SeqCst) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "injected extract failure never fired"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // The retry cycle re-scans from the last confirmed cursor (none) and
+    // re-processes the photo: the coords-only `visited` fact lands, and the
+    // cursor is persisted by the supervisor in the same cycle, right after
+    // the fact insert. Poll for both so a tiny commit-order gap does not
+    // flake the test.
+    let kg2 = kg.clone();
+    let row_id = row.id;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let Some(owner) = mimir_search_entity(&kg2, "Devansh").await else {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "owner entity never created"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            continue;
+        };
+        let facts = kg2.get_facts_by_subject(owner, 100).await.unwrap();
+        if facts
+            .iter()
+            .any(|f| f.object_literal.as_deref() == Some("46.500, 7.500"))
+        {
+            let after = match kg2.get_connector(row_id).await.unwrap() {
+                Some(c) if c.sync_cursor.is_some() => c,
+                _ => {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "cursor never persisted after the successful retry"
+                    );
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                }
+            };
+            assert_eq!(after.status(), Some(ConnectorStatus::Active));
+            supervisor.shutdown().await;
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "visited fact never landed"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Issue #332: a cycle that fails *between* `sync` and `extract` leaves the
+/// staged photo in the buffer; the retry cycle's re-scan must dedupe against
+/// the still-staged item so `extract` emits exactly one fact (not two).
+#[tokio::test]
+async fn failed_before_extract_cycle_does_not_duplicate_staged_photo() {
+    let watch = tempfile::tempdir().unwrap();
+    fs::copy(fixture("exif.jpg"), watch.path().join("IMG_001.jpg")).unwrap();
+
+    let (kg, _db_dir) = init_kg().await;
+    let config = serde_json::to_string(&json!({
+        "watch_dir": watch.path().to_string_lossy(),
+        "owner_name": "Devansh",
+        "debounce_ms": 80,
+    }))
+    .unwrap();
+    let row = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Photos,
+            slug: "photos".to_string(),
+            backend: "local-fail-before-extract".to_string(),
+            display_name: "Photos".to_string(),
+            config_json: config,
+            status: Some(ConnectorStatus::Active),
+            auth_state: Some(ConnectorAuthState::Authenticated),
+        })
+        .await
+        .unwrap();
+    let kg = Arc::new(kg);
+
+    let failed_once = Arc::new(AtomicBool::new(false));
+    let retry_fact_count = Arc::new(AtomicUsize::new(0));
+    let registry = ConnectorRegistry::new();
+    registry
+        .register(
+            ConnectorType::Photos,
+            "local-fail-before-extract",
+            FnConnectorFactory::new({
+                let failed_once = Arc::clone(&failed_once);
+                let retry_fact_count = Arc::clone(&retry_fact_count);
+                move |config, ctx| {
+                    let inner = PhotosConnectorFactory.create(config, ctx)?;
+                    Ok(Arc::new(FailFirstExtractPhotosConnector {
+                        inner,
+                        failed_once: Arc::clone(&failed_once),
+                        drain_before_fail: false,
+                        retry_fact_count: Arc::clone(&retry_fact_count),
+                    }) as Arc<dyn Connector>)
+                }
+            }),
+        )
+        .unwrap();
+    let (_shutdown_tx, rx) = tokio::sync::watch::channel(false);
+    let supervisor = ConnectorSupervisor::new(Arc::new(registry), kg.clone(), fast_config(), rx);
+    assert_eq!(supervisor.restore().await.unwrap(), 1);
+
+    // Wait for the injected extract failure to fire (the staged photo stays
+    // in the buffer), then for the retry cycle to re-scan, dedupe against the
+    // still-staged photo, and land exactly one fact with the cursor
+    // persisted.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    while !failed_once.load(Ordering::SeqCst) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "injected extract failure never fired"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let kg2 = kg.clone();
+    let row_id = row.id;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let Some(owner) = mimir_search_entity(&kg2, "Devansh").await else {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "owner entity never created"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            continue;
+        };
+        let facts = kg2.get_facts_by_subject(owner, 100).await.unwrap();
+        if facts
+            .iter()
+            .any(|f| f.object_literal.as_deref() == Some("46.500, 7.500"))
+        {
+            assert_eq!(
+                retry_fact_count.load(Ordering::SeqCst),
+                1,
+                "the re-scan must not duplicate the still-staged photo"
+            );
+            let after = match kg2.get_connector(row_id).await.unwrap() {
+                Some(c) if c.sync_cursor.is_some() => c,
+                _ => {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "cursor never persisted after the successful retry"
+                    );
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                }
+            };
+            assert_eq!(after.status(), Some(ConnectorStatus::Active));
+            supervisor.shutdown().await;
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "visited fact never landed"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }

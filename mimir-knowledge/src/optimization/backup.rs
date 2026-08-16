@@ -12,7 +12,16 @@ impl<'a> OptimizationRunner<'a> {
                 // A concurrent run may prune the same file between
                 // `next_entry` and `metadata`; skip entries that vanish
                 // mid-scan instead of failing the whole pass (issue #241).
-                let Ok(meta) = entry.metadata().await else {
+                let meta = match entry.metadata().await {
+                    Ok(meta) => meta,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) => return Err(e.into()),
+                };
+                // A reserved-but-never-written backup (crash between the
+                // atomic filename reservation and `VACUUM INTO`) is empty;
+                // never count it or let it displace a real backup from the
+                // keep-newest window.
+                if meta.len() == 0 {
                     continue;
                 };
                 if let Ok(modified) = meta.modified() {
@@ -67,7 +76,13 @@ impl<'a> OptimizationRunner<'a> {
             // Do not leave the reserved empty file behind to be counted by
             // `prune_backups` (it would displace a real backup from the
             // keep-newest window).
-            let _ = tokio::fs::remove_file(&backup).await;
+            if let Err(e) = tokio::fs::remove_file(&backup).await {
+                tracing::warn!(
+                    "Failed to remove reserved backup {}: {}",
+                    backup.display(),
+                    e
+                );
+            }
         }
         result?;
         Ok(())

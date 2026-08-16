@@ -318,7 +318,7 @@ async fn pending_confirmation_cleanup_uses_configured_retention() {
     let runner = OptimizationRunner::new(
         &kg,
         OptimizationConfig {
-            backup_dir: std::path::PathBuf::from("/tmp/mimir-test-backups"),
+            backup_dir: _dir.path().join("backups"),
             timeout_minutes: 120,
             schedule_time: "02:00".to_string(),
             pending_cleanup_retention_days: 3,
@@ -348,7 +348,7 @@ async fn pending_confirmation_cleanup_skips_facts_within_retention_window() {
     let runner = OptimizationRunner::new(
         &kg,
         OptimizationConfig {
-            backup_dir: std::path::PathBuf::from("/tmp/mimir-test-backups"),
+            backup_dir: _dir.path().join("backups"),
             timeout_minutes: 120,
             schedule_time: "02:00".to_string(),
             pending_cleanup_retention_days: 3,

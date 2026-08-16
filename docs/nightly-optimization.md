@@ -23,7 +23,7 @@ Each mutating operation runs in its **own short transaction** rather than one tr
 
 ## Backup
 
-Before the first pass, `VACUUM INTO` creates a dated backup at `~/.local/share/mimir/backups/knowledge-YYYY-MM-DD.db`. If the file already exists, a numeric suffix is appended. The filename is reserved atomically (`O_EXCL`), so concurrent runs sharing a backup directory can never collide (issue #241); a reserved file is removed again if the `VACUUM INTO` fails, and `prune_backups` skips entries that vanish mid-scan. Rotation (keep last 7 daily + 4 Sunday weekly) is planned as follow-up work.
+Before the first pass, `VACUUM INTO` creates a dated backup at `~/.local/share/mimir/backups/knowledge-YYYY-MM-DD.db`. If the file already exists, a numeric suffix is appended. The filename is reserved atomically (`O_EXCL`), so concurrent runs sharing a backup directory can never collide (issue #241); a reserved file is removed again if the `VACUUM INTO` fails, and `prune_backups` skips entries that vanish mid-scan and ignores empty reserved files left behind by a crash. Rotation (keep last 7 daily + 4 Sunday weekly) is planned as follow-up work.
 
 ## Configuration
 

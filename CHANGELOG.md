@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.112.0] — 2026-08-16
+
+### AppState construction decomposed into per-subsystem init helpers (issue #265)
+
+- **`mimir-server` `AppState` construction is no longer a monolith.** `state/builder.rs` now exposes `pub(super)` per-subsystem init helpers — `init_context_manager`, `init_tool_registry`, `init_knowledge_graph`, `init_job_queue`, `init_agent_runtime`, `init_scheduler`, and `init_connector_framework` — composed by `from_config_with_llm` in the same fixed startup order as before (context → tools → knowledge graph → job queue → agent runtime → scheduler → connector framework). `init_knowledge_graph` returns a small `KnowledgeGraphInit` struct carrying the shared knowledge graph, geocoder, resolved user entity id, and backup directory so later steps consume them without re-deriving state. The `AppState` field set and the public `from_config` / `from_config_with_llm` API are unchanged; no behaviour or startup order changed.
+- **Tests.** `mimir-server/src/state/tests.rs` gains `init_knowledge_graph_resolves_user_entity_and_registers_kg_tools` (user-entity resolution, identity-fact seeding, KG tool registration, default geocoder, backup dir), `init_scheduler_registers_system_jobs` (knowledge-optimization, memory-condensation, pending-cleanup, and events-scan jobs registered), and `init_connector_framework_registers_mock_backend` (mock factory registered under `cfg(test)`).
+- **Docs.** `docs/chat-server.md` (init-helper composition under Module Layout), `docs/wiki/what-works-now.md` (daemon-startup row; #265 removed from backlog), and `Mimir-Implementation-Context.md` updated.
+- Version bumped 0.111.3 → 0.112.0 (minor — backwards-compatible refactor).
+
 ## [0.111.3] — 2026-08-16
 
 ### Email and Photos connectors: failure-safe in-memory cursor advance (issue #332)

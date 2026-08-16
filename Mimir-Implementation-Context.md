@@ -139,7 +139,7 @@ If the user agrees, the daemon is started and the command is retried.
 
 The workspace produces one binary (`mimir`) but uses library crates for code organisation:
 - `mimir-core` — shared domain logic (used by both daemon and tests)
-- `mimir-server` — HTTP API layer (library, no binary)
+- `mimir-server` — HTTP API layer (library, no binary). `AppState` construction is decomposed into per-subsystem init helpers in `state/builder.rs` (`init_context_manager`, `init_tool_registry`, `init_knowledge_graph`, `init_job_queue`, `init_agent_runtime`, `init_scheduler`, `init_connector_framework`) composed by `from_config_with_llm` in a fixed startup order (issue #265).
 - `mimir-client` — HTTP client for CLI commands (library, no binary)
 - `mimir-knowledge` — SQLite knowledge graph (Phase 2)
 - `mimir-api-types` — shared serde wire types

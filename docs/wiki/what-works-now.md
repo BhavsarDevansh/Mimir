@@ -186,6 +186,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | systemd user service | ✅ Works | `mimir init` offers to install and enable it on Linux. |
 | macOS launchd | ❌ Not implemented | `mimir init` prints "planned for a future phase" ([#285](https://github.com/BhavsarDevansh/Mimir/issues/285)). |
 | Graceful shutdown | ✅ Works | `mimir stop`, Ctrl-C, or SIGTERM; drains in-flight requests and tears down background tasks; shutdown cause is logged. |
+| Daemon startup (AppState construction) | ✅ Works | Per-subsystem init helpers (`init_context_manager`, `init_tool_registry`, `init_knowledge_graph`, `init_job_queue`, `init_agent_runtime`, `init_scheduler`, `init_connector_framework`) composed in a fixed order by `from_config_with_llm`; the `AppState` field set is unchanged ([#265](https://github.com/BhavsarDevansh/Mimir/issues/265)). |
 | Daemon-down detection | ✅ Works | CLI probes `/health`; prompts to auto-start with a 10 s readiness timeout. |
 | Loopback security | 🟡 Partial | `/stop` and a few management routes are loopback-restricted, but the HTTP API has no authentication — any local process can read/write the knowledge graph, and a `0.0.0.0` bind exposes everything ([#281](https://github.com/BhavsarDevansh/Mimir/issues/281)). |
 | CORS for local dev | ✅ Works | Whitelisted ports: 8080, 3000, 5173. |
@@ -325,7 +326,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | Generated skills: reflection loop, utility scoring, pruning | [#20](https://github.com/BhavsarDevansh/Mimir/issues/20) |
 | Tool backlog: time-to/since, web, wikipedia, weather, timezone, calculator, curl, sports, stocks, flights, distance, RSS | [#83](https://github.com/BhavsarDevansh/Mimir/issues/83), [#93](https://github.com/BhavsarDevansh/Mimir/issues/93)–[#106](https://github.com/BhavsarDevansh/Mimir/issues/106) |
 | JobQueue resource-limit enforcement | [#91](https://github.com/BhavsarDevansh/Mimir/issues/91) |
-| AppState construction refactor (monolith) | [#265](https://github.com/BhavsarDevansh/Mimir/issues/265) |
 | Config hot-reload propagation to scheduler/jobs | [#286](https://github.com/BhavsarDevansh/Mimir/issues/286) |
 | Code quality: duplicate `#[cfg(test)]`, sync skill file I/O | [#287](https://github.com/BhavsarDevansh/Mimir/issues/287) |
 

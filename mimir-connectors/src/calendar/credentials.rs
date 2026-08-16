@@ -6,7 +6,7 @@ use crate::calendar::caldav::CalDavAuth;
 use crate::calendar::CalendarConnector;
 use crate::connector::ConnectorError;
 use crate::oauth;
-use crate::secrets::SecretBundle;
+use crate::secrets::{SecretBundle, mismatch_error};
 
 impl CalendarConnector {
     /// Turn a [`SecretBundle`] into a [`CalDavAuth`], refreshing an expired
@@ -59,10 +59,7 @@ impl CalendarConnector {
             }
             // Auth method / bundle kind mismatch — e.g. an app-password bundle
             // configured as OAuth, or vice versa.
-            _ => Err(ConnectorError::Authentication(format!(
-                "auth method {} does not match stored secret kind",
-                self.config.auth.discriminant()
-            ))),
+            _ => Err(mismatch_error(self.config.auth.discriminant())),
         }
     }
 

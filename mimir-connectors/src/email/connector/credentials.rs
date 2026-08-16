@@ -5,7 +5,7 @@ use crate::email::config::EmailAuthMethod;
 use crate::email::connector::EmailConnector;
 use crate::email::imap::ImapAuth;
 use crate::oauth;
-use crate::secrets::SecretBundle;
+use crate::secrets::{SecretBundle, mismatch_error};
 
 /// Load the secret bundle and turn it into live [`ImapAuth`] credentials,
 /// refreshing an expired OAuth access token (persisting the new bundle).
@@ -78,10 +78,7 @@ impl EmailConnector {
                 };
                 Ok((auth, refreshed))
             }
-            _ => Err(ConnectorError::Authentication(format!(
-                "auth method {} does not match stored secret kind",
-                self.config.auth.discriminant()
-            ))),
+            _ => Err(mismatch_error(self.config.auth.discriminant())),
         }
     }
 

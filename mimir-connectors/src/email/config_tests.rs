@@ -138,10 +138,38 @@ async fn auth_method_mismatch_is_an_error() {
         refresh_token: None,
         expires_at: None,
     };
-    assert!(matches!(
-        connector.resolve_auth(&bundle).await,
-        Err(ConnectorError::Authentication(_))
-    ));
+    assert_eq!(
+        connector
+            .resolve_auth(&bundle)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "authentication failed: auth method app_password does not match stored secret kind",
+    );
+}
+
+#[tokio::test]
+async fn auth_method_mismatch_oauth_config_with_app_password_bundle() {
+    let mut cfg = app_config();
+    cfg["auth"] = serde_json::json!({
+        "kind": "oauth",
+        "username": "devansh@example.com",
+        "auth_uri": "https://oauth.example.com/authorize",
+        "token_endpoint": "https://oauth.example.com/token",
+        "client_id": "cid",
+    });
+    let connector = EmailConnector::from_config(cfg, None, None).expect("config");
+    let bundle = SecretBundle::AppPassword {
+        password: "hunter2".into(),
+    };
+    assert_eq!(
+        connector
+            .resolve_auth(&bundle)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "authentication failed: auth method oauth does not match stored secret kind",
+    );
 }
 
 #[tokio::test]

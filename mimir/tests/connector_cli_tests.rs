@@ -8,10 +8,17 @@ use mimir_api_types::{
 };
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{body_json, method, path},
 };
 
-fn run_mimir(args: &[&str], base_url: &str) -> (String, String, std::process::ExitStatus) {
+/// Spawn the real `mimir` binary with an isolated XDG home, optionally
+/// piping `stdin_bytes` and setting `envs` (shared by every runner below).
+fn spawn_mimir(
+    args: &[&str],
+    base_url: &str,
+    stdin_bytes: Option<&[u8]>,
+    envs: &[(&str, &str)],
+) -> std::process::Output {
     let temp = tempfile::tempdir().expect("tempdir");
     let config_dir = temp.path().join("config");
     let data_dir = temp.path().join("data");
@@ -19,18 +26,69 @@ fn run_mimir(args: &[&str], base_url: &str) -> (String, String, std::process::Ex
     std::fs::create_dir_all(config_dir.join("mimir")).unwrap();
     std::fs::create_dir_all(data_dir.join("mimir")).unwrap();
     std::fs::create_dir_all(&home_dir).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_mimir"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mimir"));
+    command
         .args(args)
         .env("NO_COLOR", "1")
         .env("MIMIR_BASE_URL", base_url)
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
         .env("HOME", &home_dir)
-        .stdin(Stdio::null())
+        .env_remove("MIMIR_CONNECTOR_PASSWORD")
+        .env_remove("MIMIR_CONNECTOR_TOKEN")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .expect("spawn mimir");
+        .stderr(Stdio::piped());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    match stdin_bytes {
+        Some(bytes) => {
+            use std::io::Write;
+            let mut child = command.stdin(Stdio::piped()).spawn().expect("spawn mimir");
+            child
+                .stdin
+                .take()
+                .expect("piped stdin")
+                .write_all(bytes)
+                .expect("write stdin");
+            child.wait_with_output().expect("wait for mimir")
+        }
+        None => command.stdin(Stdio::null()).output().expect("spawn mimir"),
+    }
+}
+
+fn run_mimir(args: &[&str], base_url: &str) -> (String, String, std::process::ExitStatus) {
+    let output = spawn_mimir(args, base_url, None, &[]);
+    (
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+        output.status,
+    )
+}
+
+/// Like [`run_mimir`], but with `stdin_bytes` piped to the child's stdin
+/// (for `--password-stdin` / `--token-stdin`).
+fn run_mimir_with_stdin(
+    args: &[&str],
+    base_url: &str,
+    stdin_bytes: &[u8],
+) -> (String, String, std::process::ExitStatus) {
+    let output = spawn_mimir(args, base_url, Some(stdin_bytes), &[]);
+    (
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+        output.status,
+    )
+}
+
+/// Like [`run_mimir`], but with extra environment variables set on the
+/// child (for `MIMIR_CONNECTOR_PASSWORD` / `MIMIR_CONNECTOR_TOKEN`).
+fn run_mimir_with_env(
+    args: &[&str],
+    base_url: &str,
+    envs: &[(&str, &str)],
+) -> (String, String, std::process::ExitStatus) {
+    let output = spawn_mimir(args, base_url, None, envs);
     (
         String::from_utf8_lossy(&output.stdout).to_string(),
         String::from_utf8_lossy(&output.stderr).to_string(),
@@ -461,4 +519,559 @@ fn connector_auth_rejects_both_flags() {
         combined.contains("cannot be used with '--token <TOKEN>'"),
         "expected the clap both-flags conflict error, got: {combined}"
     );
+}
+
+#[test]
+fn connector_add_rejects_both_stdin_flags() {
+    let (stdout, stderr, status) = run_mimir(
+        &[
+            "connector",
+            "add",
+            "gmail",
+            "--backend",
+            "test",
+            "--password-stdin",
+            "--token-stdin",
+        ],
+        "http://127.0.0.1:1",
+    );
+    assert!(
+        !status.success(),
+        "add must reject passing both --password-stdin and --token-stdin"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("cannot be used with '--token-stdin'"),
+        "expected the clap both-stdin-flags conflict error, got: {combined}"
+    );
+}
+
+#[tokio::test]
+async fn connector_add_reads_password_from_stdin() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/connectors/catalog"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
+                entries: vec![ConnectorCatalogEntry {
+                    connector_type: "gmail".to_string(),
+                    backend: "test".to_string(),
+                }],
+            }),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/connectors"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(connector_fixture(1, "demo")))
+        .mount(&server)
+        .await;
+    let mut authenticated = connector_fixture(1, "demo");
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_json(serde_json::json!({
+            "kind": "app_password",
+            "password": "hunter2"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&server)
+        .await;
+
+    let (stdout, stderr, status) = run_mimir_with_stdin(
+        &[
+            "connector",
+            "add",
+            "gmail",
+            "--backend",
+            "test",
+            "--slug",
+            "demo",
+            "auth.kind=app_password",
+            "--password-stdin",
+            "--json",
+        ],
+        &server.uri(),
+        b"hunter2\r\n",
+    );
+    assert!(
+        status.success(),
+        "add --password-stdin failed (CRLF must be stripped).\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let token_requests = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .count();
+    assert_eq!(token_requests, 1, "the piped secret must be ingested once");
+}
+
+#[tokio::test]
+async fn connector_add_reads_token_from_env() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/connectors/catalog"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
+                entries: vec![ConnectorCatalogEntry {
+                    connector_type: "gmail".to_string(),
+                    backend: "test".to_string(),
+                }],
+            }),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/connectors"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(connector_fixture(1, "demo")))
+        .mount(&server)
+        .await;
+    let mut authenticated = connector_fixture(1, "demo");
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_json(serde_json::json!({
+            "kind": "api_token",
+            "token": "hunter2"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&server)
+        .await;
+
+    let (stdout, stderr, status) = run_mimir_with_env(
+        &[
+            "connector",
+            "add",
+            "gmail",
+            "--backend",
+            "test",
+            "--slug",
+            "demo",
+            "auth.kind=api_token",
+            "--json",
+        ],
+        &server.uri(),
+        &[("MIMIR_CONNECTOR_TOKEN", "hunter2")],
+    );
+    assert!(
+        status.success(),
+        "add with MIMIR_CONNECTOR_TOKEN failed.\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    let token_requests = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .count();
+    assert_eq!(token_requests, 1, "the env secret must be ingested once");
+}
+
+#[tokio::test]
+async fn connector_auth_reads_password_from_stdin() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/connectors"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorListResponse {
+                connectors: vec![connector_fixture(1, "demo")],
+            }),
+        )
+        .mount(&server)
+        .await;
+    let mut authenticated = connector_fixture(1, "demo");
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_json(serde_json::json!({
+            "kind": "app_password",
+            "password": "hunter2"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&server)
+        .await;
+
+    let (stdout, stderr, status) = run_mimir_with_stdin(
+        &[
+            "connector",
+            "auth",
+            "demo",
+            "auth.kind=app_password",
+            "--password-stdin",
+            "--json",
+        ],
+        &server.uri(),
+        b"hunter2\n",
+    );
+    assert!(
+        status.success(),
+        "auth --password-stdin failed.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let token_requests = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .count();
+    assert_eq!(token_requests, 1, "the piped secret must be ingested once");
+}
+
+#[tokio::test]
+async fn connector_auth_reads_token_from_stdin() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/connectors"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorListResponse {
+                connectors: vec![connector_fixture(1, "demo")],
+            }),
+        )
+        .mount(&server)
+        .await;
+    let mut authenticated = connector_fixture(1, "demo");
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_json(serde_json::json!({
+            "kind": "api_token",
+            "token": "hunter2"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&server)
+        .await;
+
+    let (stdout, stderr, status) = run_mimir_with_stdin(
+        &[
+            "connector",
+            "auth",
+            "demo",
+            "auth.kind=api_token",
+            "--token-stdin",
+            "--json",
+        ],
+        &server.uri(),
+        b"hunter2\n",
+    );
+    assert!(
+        status.success(),
+        "auth --token-stdin failed.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let token_requests = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .count();
+    assert_eq!(token_requests, 1, "the piped secret must be ingested once");
+}
+
+#[tokio::test]
+async fn connector_auth_reads_token_from_env() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/connectors"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorListResponse {
+                connectors: vec![connector_fixture(1, "demo")],
+            }),
+        )
+        .mount(&server)
+        .await;
+    let mut authenticated = connector_fixture(1, "demo");
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_json(serde_json::json!({
+            "kind": "api_token",
+            "token": "hunter2"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&server)
+        .await;
+
+    let (stdout, stderr, status) = run_mimir_with_env(
+        &["connector", "auth", "demo", "auth.kind=api_token", "--json"],
+        &server.uri(),
+        &[("MIMIR_CONNECTOR_TOKEN", "hunter2")],
+    );
+    assert!(
+        status.success(),
+        "auth with MIMIR_CONNECTOR_TOKEN failed.\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    let token_requests = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .count();
+    assert_eq!(token_requests, 1, "the env secret must be ingested once");
+}
+
+#[tokio::test]
+async fn connector_auth_infers_kind_from_env_without_config() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/connectors"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorListResponse {
+                connectors: vec![connector_fixture(1, "demo")],
+            }),
+        )
+        .mount(&server)
+        .await;
+    let mut authenticated = connector_fixture(1, "demo");
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_json(serde_json::json!({
+            "kind": "app_password",
+            "password": "hunter2"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&server)
+        .await;
+
+    let (stdout, stderr, status) = run_mimir_with_env(
+        &["connector", "auth", "demo", "--json"],
+        &server.uri(),
+        &[("MIMIR_CONNECTOR_PASSWORD", "hunter2")],
+    );
+    assert!(
+        status.success(),
+        "auth with only MIMIR_CONNECTOR_PASSWORD failed.\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    let token_requests = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .count();
+    assert_eq!(token_requests, 1, "the env secret must be ingested once");
+}
+
+#[tokio::test]
+async fn connector_auth_rejects_both_env_vars() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/connectors"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorListResponse {
+                connectors: vec![connector_fixture(1, "demo")],
+            }),
+        )
+        .mount(&server)
+        .await;
+
+    let (stdout, stderr, status) = run_mimir_with_env(
+        &["connector", "auth", "demo"],
+        &server.uri(),
+        &[
+            ("MIMIR_CONNECTOR_PASSWORD", "p"),
+            ("MIMIR_CONNECTOR_TOKEN", "t"),
+        ],
+    );
+    assert!(
+        !status.success(),
+        "auth with both env secrets set must fail.\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("set only one of MIMIR_CONNECTOR_PASSWORD / MIMIR_CONNECTOR_TOKEN"),
+        "expected the both-env-vars error, got: {combined}"
+    );
+}
+
+#[tokio::test]
+async fn connector_add_stdin_secret_empty_fails() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/connectors/catalog"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
+                entries: vec![ConnectorCatalogEntry {
+                    connector_type: "gmail".to_string(),
+                    backend: "test".to_string(),
+                }],
+            }),
+        )
+        .mount(&server)
+        .await;
+    // Fail loud if the CLI still POSTs after the empty-stdin rejection.
+    Mock::given(method("POST"))
+        .and(path("/connectors"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let (stdout, stderr, status) = run_mimir_with_stdin(
+        &[
+            "connector",
+            "add",
+            "gmail",
+            "--backend",
+            "test",
+            "auth.kind=app_password",
+            "--password-stdin",
+        ],
+        &server.uri(),
+        b"",
+    );
+    assert!(
+        !status.success(),
+        "add --password-stdin with empty stdin must fail"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("no app password received on stdin"),
+        "expected an empty-stdin error, got: {combined}"
+    );
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        requests.iter().all(|r| r.url.path() != "/connectors"),
+        "POST /connectors must not run after an empty-stdin rejection"
+    );
+}
+
+#[tokio::test]
+async fn connector_add_flag_beats_env_secret() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/connectors/catalog"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
+                entries: vec![ConnectorCatalogEntry {
+                    connector_type: "gmail".to_string(),
+                    backend: "test".to_string(),
+                }],
+            }),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/connectors"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(connector_fixture(1, "demo")))
+        .mount(&server)
+        .await;
+    let mut authenticated = connector_fixture(1, "demo");
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_json(serde_json::json!({
+            "kind": "app_password",
+            "password": "flag-wins"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&server)
+        .await;
+
+    let (stdout, stderr, status) = run_mimir_with_env(
+        &[
+            "connector",
+            "add",
+            "gmail",
+            "--backend",
+            "test",
+            "--slug",
+            "demo",
+            "auth.kind=app_password",
+            "--password",
+            "flag-wins",
+            "--json",
+        ],
+        &server.uri(),
+        &[("MIMIR_CONNECTOR_PASSWORD", "env-loses")],
+    );
+    assert!(
+        status.success(),
+        "add with flag + env failed.\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    let token_requests = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .count();
+    assert_eq!(token_requests, 1, "the flag secret must be ingested once");
+}
+
+#[tokio::test]
+async fn connector_add_stdin_beats_env_secret() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/connectors/catalog"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
+                entries: vec![ConnectorCatalogEntry {
+                    connector_type: "gmail".to_string(),
+                    backend: "test".to_string(),
+                }],
+            }),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/connectors"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(connector_fixture(1, "demo")))
+        .mount(&server)
+        .await;
+    let mut authenticated = connector_fixture(1, "demo");
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_json(serde_json::json!({
+            "kind": "app_password",
+            "password": "stdin-wins"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&server)
+        .await;
+
+    let output = spawn_mimir(
+        &[
+            "connector",
+            "add",
+            "gmail",
+            "--backend",
+            "test",
+            "--slug",
+            "demo",
+            "auth.kind=app_password",
+            "--password-stdin",
+            "--json",
+        ],
+        &server.uri(),
+        Some(b"stdin-wins\n"),
+        &[("MIMIR_CONNECTOR_PASSWORD", "env-loses")],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "add with stdin + env failed.\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    let token_requests = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .count();
+    assert_eq!(token_requests, 1, "the piped secret must be ingested once");
 }

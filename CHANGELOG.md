@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.115.0] — 2026-08-16
+
+### DRY: shared auth-method/secret-kind mismatch error (issue #273)
+
+- The `auth method {} does not match stored secret kind` error arm was duplicated verbatim in the Calendar and Email connectors' `resolve_auth` matches (`mimir-connectors/src/calendar/credentials.rs` and `mimir-connectors/src/email/connector/credentials.rs`). Both now build the error through the shared `mimir_connectors::secrets::mismatch_error(discriminant)` helper, so the message text and the auth-kind `discriminant()` stay in sync across both backends. The message is unchanged and is now pinned by unit tests in both mismatch directions (the Calendar mismatch path previously had no test coverage, and the Email test only checked the error variant).
+- **Tests.** New `secrets::tests::mismatch_error_pins_the_exact_message_text`; Calendar `resolve_auth_mismatch_reports_config_discriminant` and `resolve_auth_mismatch_oauth_config_with_app_password_bundle`; Email `auth_method_mismatch_is_an_error` strengthened to assert the exact text plus a new reverse-direction test.
+- **Docs.** `docs/connector-secret-store.md`, `docs/calendar-connector.md`, `docs/wiki/connectors.md`, and `Mimir-Implementation-Context.md` updated.
+- Version bumped 0.114.3 → 0.115.0 (minor — refactor).
+
 ## [0.114.3] — 2026-08-16
 
 ### PR #338 review fix: never expose an in-progress backup as a completed `.db` file

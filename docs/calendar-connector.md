@@ -40,12 +40,7 @@ Two credential kinds, mirroring [`SecretBundle`](connector-secret-store.md):
   omits `refresh_token` (RFC 6749 §6 allows this), the connector **retains**
   the prior refresh token, so OAuth does not break after the first refresh.
 
-The token-endpoint error path reports only the HTTP status and the parsed
-`error`/`error_description` fields — the raw response body is never surfaced
-to `ConnectorError` strings (which the supervisor persists to `last_error`
- and logs) because provider error payloads can echo the `client_secret` or
-`refresh_token`. Auth-method/secret-kind mismatch errors use the auth-kind
-discriminant only, never a `Debug` of the OAuth config.
+The token-endpoint error path reports only the HTTP status and the parsed `error`/`error_description` fields — the raw response body is never surfaced to `ConnectorError` strings (which the supervisor persists to `last_error` and logs) because provider error payloads can echo the `client_secret` or `refresh_token`. Auth-method/secret-kind mismatch errors use the auth-kind discriminant only, never a `Debug` of the OAuth config; both connectors build the error via the shared `secrets::mismatch_error` helper (issue #273).
 
 The interactive PKCE login that *obtains* the first OAuth token is
 **A4 / `#205`**, implemented in `mimir-connectors::oauth::pkce` and driven by the CLI (`mimir connector add` / `auth` with an `auth.kind=oauth` config): the CLI binds an ephemeral loopback listener, opens the provider's authorize URL in the browser (printed first for headless sessions), exchanges the code, and POSTs the token bundle to the daemon's token-ingest route. `#197` consumes + refreshes a stored token.

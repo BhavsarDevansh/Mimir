@@ -49,6 +49,8 @@ Three kinds of credential are supported, all in the same store:
 
 Credentials are stored **in plaintext**, deliberately — the same way your LLM API key is stored in `config.toml` — because Mimir is a local-first app that relies on your home directory being private (the home-directory trust boundary). At-rest encryption is planned for a later release, and an optional OS keyring backend (macOS Keychain / Linux Secret Service / Windows Credential Manager) is tracked as a follow-up (#188) for those who prefer it.
 
+If the auth method configured for a connector does not match the kind of credential stored for it (for example, an app-password secret stored while the connector is configured for OAuth), Mimir fails auth with `authentication failed: auth method <kind> does not match stored secret kind`. Re-run `mimir connector auth` (or re-add the connector) with the credential kind that matches the config.
+
 Removing a connector wipes its secret file: `DELETE /connectors/{id}` deletes the slug-keyed secret before the row, and `POST /connectors/{id}/forget` deletes it as part of the cascade. The `mimir connector remove` CLI subcommand that plumbs these routes lands in A3 (#204).
 
 

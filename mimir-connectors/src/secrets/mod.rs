@@ -49,8 +49,30 @@ mod file;
 mod memory;
 mod store;
 
+#[cfg(any(feature = "calendar", feature = "gmail"))]
+use crate::connector::ConnectorError;
+
 pub use bundle::SecretBundle;
 pub use error::SecretError;
 pub use file::FileSecretStore;
 pub use memory::InMemorySecretStore;
 pub use store::SecretStore;
+
+/// Build the `Authentication` error raised when a connector's configured auth
+/// method does not match the stored [`SecretBundle`] kind (issue #273).
+///
+/// Shared by the Calendar and Email `resolve_auth` matches so the message and
+/// the `discriminant()` value stay in sync across both connectors. Only the
+/// non-secret auth-kind discriminant is included — never a `Debug` of the
+/// OAuth config (which could echo the client secret).
+#[cfg(any(feature = "calendar", feature = "gmail"))]
+pub(crate) fn mismatch_error(config_discriminant: &str) -> ConnectorError {
+    ConnectorError::Authentication(format!(
+        "auth method {} does not match stored secret kind",
+        config_discriminant
+    ))
+}
+
+#[cfg(all(test, any(feature = "calendar", feature = "gmail")))]
+#[path = "mod_tests.rs"]
+mod tests;

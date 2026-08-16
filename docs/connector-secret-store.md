@@ -134,6 +134,7 @@ in `Arc` to share across tasks.
   Secret Service backend (#188) can implement it without a breaking change,
   and so it composes with the async `Connector` pipeline. The V1 file backend
   does blocking I/O, which is fast for tiny JSON files.
+- **Shared mismatch error.** The Calendar and Email connectors build the `auth method X does not match stored secret kind` error through the shared `crate::secrets::mismatch_error` helper (issue #273), so the message text and the auth-kind `discriminant()` stay in sync across both backends and are pinned by unit tests.
 
 ## End-to-end secret wipe
 

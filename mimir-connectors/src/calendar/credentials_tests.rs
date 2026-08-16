@@ -30,6 +30,53 @@ fn oauth_bundle(access_token: &str, expires_at: Option<chrono::DateTime<Utc>>) -
     }
 }
 
+#[tokio::test]
+async fn resolve_auth_mismatch_reports_config_discriminant() {
+    // App-password config but an OAuth bundle stored — the error must name
+    // the config auth method, never a `Debug` of the OAuth config (which
+    // could echo the client secret).
+    let connector = CalendarConnector::from_config(
+        serde_json::json!({
+            "calendar_url": "https://caldav.example.com/calendar/",
+            "auth": { "kind": "app_password", "username": "devansh@example.com" },
+        }),
+        None,
+        None,
+    )
+    .expect("config");
+    let bundle = SecretBundle::OAuth {
+        access_token: "t".into(),
+        refresh_token: None,
+        expires_at: None,
+    };
+    assert_eq!(
+        connector
+            .resolve_auth(&bundle)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "authentication failed: auth method app_password does not match stored secret kind",
+    );
+}
+
+#[tokio::test]
+async fn resolve_auth_mismatch_oauth_config_with_app_password_bundle() {
+    let connector =
+        CalendarConnector::from_config(oauth_config("https://oauth.example.com/token"), None, None)
+            .expect("config");
+    let bundle = SecretBundle::AppPassword {
+        password: "hunter2".into(),
+    };
+    assert_eq!(
+        connector
+            .resolve_auth(&bundle)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "authentication failed: auth method oauth does not match stored secret kind",
+    );
+}
+
 #[test]
 fn oauth_config_without_auth_uri_deserializes_from_stored_record() {
     // Records persisted before the `auth_uri` field (pre-0.97.0) must still

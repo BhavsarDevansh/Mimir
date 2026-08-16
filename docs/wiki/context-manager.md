@@ -25,7 +25,7 @@ When either limit is exceeded, Mimir **drops the oldest complete pairs** of (use
 
 ### Example
 
-If `max_turns = 20` and you send 25 messages, the first 5 exchanges are deleted.  The system prompt plus the most recent 20 exchanges remain.
+If `max_turns = 20` and you send 25 exchanges, the first 5 exchanges are deleted.  The system prompt plus the most recent 20 exchanges remain.
 
 If token usage is known and the total exceeds `max_tokens`, Mimir drops oldest pairs until the count is back under budget.
 

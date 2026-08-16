@@ -52,7 +52,7 @@ Fact C: devansh lives_in Berlin
   confidence: 0.95
 ```
 
-When asked "Where does devansh live?", the agent returns **Fact C** (most recent, active). When asked "Where did devansh live in 2021?", the agent returns **Fact A**. When asked "Has devansh ever lived in London?", the agent returns **Fact B**.
+When asked "Where does devansh live?" the agent returns **Fact C** (most recent, active). When asked "Where did devansh live in 2021?" the agent returns **Fact A**. When asked "Has devansh ever lived in London?" the agent returns **Fact B**.
 
 ## Fact Statuses
 

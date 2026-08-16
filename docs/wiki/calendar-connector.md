@@ -50,8 +50,8 @@ Mimir can also write back to your calendar: creating, updating, or deleting remo
 
 ## Use cases
 
-- "What do I have on Thursday?" — your calendar events become queryable knowledge, cross-referenced with everything else Mimir knows (once C4 turns staged events into facts).
-- Recurring events (birthdays, standups) sync once and advance automatically via the events & reminders subsystem (once C4 lands).
+- "What do I have on Thursday?" — your calendar events become queryable knowledge, cross-referenced with everything else Mimir knows.
+- Recurring events (birthdays, standups) sync once and advance automatically via the events & reminders subsystem.
 - Travel: a calendar event "Trip to Rome" can corroborate a flight email and photos taken in Rome into one coherent picture.
 
 ## Known limitations (V1)

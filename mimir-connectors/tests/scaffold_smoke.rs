@@ -5,6 +5,7 @@
 //! passes, proving the trait/registry/mock stubs compile and are usable under
 //! every feature combination. Real behavioural tests arrive with F6/F7/F13.
 
+#![cfg(feature = "test-mock-connector")]
 use mimir_connectors::{Connector, ConnectorRegistry, MockConnector};
 
 #[test]

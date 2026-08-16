@@ -1,5 +1,7 @@
 [package]
 name = "md-reflow"
+# Versioned independently: this is a standalone developer tool and is not a
+# member of the Mimir workspace, so the workspace version bump does not apply.
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"

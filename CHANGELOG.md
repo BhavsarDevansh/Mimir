@@ -6,6 +6,7 @@
 
 - Every repo `.md` file now follows the AGENTS.md single-line prose standard: paragraphs and list-item continuations are single flowing lines, with blank lines only between blocks. A new `scripts/md-reflow` tool (pulldown-cmark-based) performs the reflow and offers a `--check` mode so future changes can verify compliance. Blockquote field-lists (one `> **Field:** value` entry per line) were restructured so each entry is its own blockquote paragraph; tables, fenced code blocks, nested lists, and code blocks are untouched. Content is unchanged — only line wrapping (verified by whitespace-collapsed diff equality per file).
 - **Docs.** `docs/wiki/what-works-now.md` updated (reflow plus #245 removed from the maintenance backlog).
+- **PR #343 review fixes.** `scripts/md-reflow` now fails `--check` on unreadable files, supports the `--` path separator, skips symlinks during the directory walk, enables definition-list parsing, and guards overlapping regions; the mock connector harness moved behind the off-by-default `test-mock-connector` feature; `docs/connectors-framework.md` status now reflects A1–A4 and C4–C7 as landed; minor prose corrections across `docs/` and `VISION/`.
 - Version bumped 0.115.0 → 0.115.1 (patch — documentation update).
 
 ## [0.115.0] — 2026-08-16

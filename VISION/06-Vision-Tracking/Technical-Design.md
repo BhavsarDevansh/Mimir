@@ -133,7 +133,10 @@ CREATE INDEX idx_detections_zone ON object_detections(zone, detected_at);
 When user asks "Where is X?":
 1. Check Spatial Memory for most recent detection of object matching "X"
 2. If found: return location + timestamp + confidence
-3. If not found in recent history: a. Activate cameras to look for object b. Run detection on live frames for N seconds c. Return result or "not found"
+3. If not found in recent history:
+   1. Activate cameras to look for object
+   2. Run detection on live frames for N seconds
+   3. Return result or "not found"
 
 ## Technology Stack
 - **Object Detection:** YOLO (ultralytics crate or ONNX Runtime)

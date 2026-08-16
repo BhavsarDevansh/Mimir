@@ -1,13 +1,14 @@
-//! F13 behavioural tests (issue #190): the configurable, always-compiled
-//! `MockConnector` test harness.
+//! F13 behavioural tests (issue #190): the configurable `MockConnector` test
+//! harness.
 //!
 //! These reference the configurable mock surface (`MockConnector::from_config`,
 //! `MockFactConfig`, `MockSyncRecorder`) *before* it exists, so they fail to
 //! compile until F13 lands — the TDD anchor.
 //!
 //! Design (locked with the user):
-//! - The mock is **always compiled** (no feature flag) and is the framework's
-//!   test harness + the T1 sync→extract→insert vehicle.
+//! - The mock is gated behind the `test-mock-connector` feature (off by
+//!   default) and is the framework's test harness + the T1
+//!   sync→extract→insert vehicle.
 //! - It is fully config-driven: behaviour (mode, cadence, canned facts, health,
 //!   failure/panic injection, cursor) is read from `config_json`. Instance
 //!   identity (`__slug` / `__ctype` / `__instance_id`) is injected by the
@@ -20,6 +21,7 @@
 //!   (`id "mock"`, `name "Mock Connector"`, type `Gmail`, `Polling`, health
 //!   `Online`, empty `extract`) so existing trait tests keep passing.
 
+#![cfg(feature = "test-mock-connector")]
 use std::sync::Arc;
 use std::time::Duration;
 

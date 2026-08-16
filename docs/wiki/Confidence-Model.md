@@ -43,7 +43,7 @@ When a source fact is forgotten or corrected:
 
 ## Corroboration (#79)
 
-When Mimir learns the same claim from a second **independent** source, it does not create a duplicate fact. Instead the existing fact gains a new source row (provenance) and, if it is non-explicit and non-inferred, its confidence rises by `0.05` per corroborating source, capped at `0.95`.
+When Mimir learns the same claim from a second **independent** source, it does not create a duplicate fact. Instead, the existing fact gains a new source row (provenance) and, if it is non-explicit and non-inferred, its confidence rises by `0.05` per corroborating source, capped at `0.95`.
 
 - "Same claim" means same subject + predicate + object with **overlapping** time ranges. Two facts about different time periods (e.g. "lived in London last year" vs "last month") are separate timeline facts, not corroboration.
 - An explicit statement (something you said directly) always **supersedes** rather than corroborates, so your direct input wins.

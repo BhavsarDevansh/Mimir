@@ -189,6 +189,12 @@ default = ["photos", "calendar", "gmail"]
 ## crate's own unit tests compile the module via `cfg(test)` regardless.
 ## `wiremock` is optional so production builds never compile it.
 test-utils = ["dep:wiremock"]
+## The configurable mock connector test harness (F13 / #190): `MockConnector`
+## + factory + recorder. Test-only, off by default so production builds never
+## compile the harness; the crate's own unit tests compile the module via
+## `cfg(test)` regardless, and downstream crates opt in through dev-
+## dependencies (`mimir` / `mimir-server`).
+test-mock-connector = []
 ## Google Photos / Apple Photos / local photo library ingestion (C1–C2).
 photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"]
 ## Shared OAuth 2.0 client + refresh helpers (issue #240): `oauth2` 5.0.0 with

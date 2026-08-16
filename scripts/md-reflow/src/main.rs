@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 
 const OPTIONS: Options = Options::ENABLE_TABLES
     .union(Options::ENABLE_TASKLISTS)
-    .union(Options::ENABLE_STRIKETHROUGH);
+    .union(Options::ENABLE_STRIKETHROUGH)
+    .union(Options::ENABLE_DEFINITION_LIST);
 
 #[derive(Clone, Copy, PartialEq)]
 enum Frame {
@@ -30,7 +31,14 @@ enum Frame {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let flags: Vec<&str> = args
+    // The conventional `--` separator ends flag parsing, so a path that
+    // starts with `--` can still be passed after it.
+    let sep = args.iter().position(|a| a == "--");
+    let (flag_args, path_args) = match sep {
+        Some(i) => (&args[..i], &args[i + 1..]),
+        None => (&args[..], &[][..]),
+    };
+    let flags: Vec<&str> = flag_args
         .iter()
         .filter(|a| a.starts_with("--"))
         .map(String::as_str)
@@ -45,6 +53,8 @@ fn main() {
     let mode = flags.first().copied().unwrap_or("--reflow");
     let paths: Vec<PathBuf> = args
         .iter()
+        .take(sep.unwrap_or(args.len()))
+        .chain(path_args.iter())
         .filter(|a| !a.starts_with("--"))
         .map(PathBuf::from)
         .collect();
@@ -57,9 +67,11 @@ fn main() {
         "--survey" => survey(files),
         "--check" => {
             let mut changed = 0usize;
+            let mut failed = 0usize;
             for file in files {
                 let Ok(src) = std::fs::read_to_string(&file) else {
                     eprintln!("skip {}: unreadable", file.display());
+                    failed += 1;
                     continue;
                 };
                 if reflow_named(&src, &file) != src {
@@ -68,7 +80,7 @@ fn main() {
                 }
             }
             println!("{changed} files would change");
-            if changed > 0 {
+            if changed > 0 || failed > 0 {
                 std::process::exit(1);
             }
         }
@@ -109,11 +121,17 @@ fn collect_md_files(dir: &Path) -> Vec<PathBuf> {
         };
         for e in entries.flatten() {
             let p = e.path();
-            if p.is_dir() {
+            let Ok(ft) = e.file_type() else {
+                continue;
+            };
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
                 if p.file_name().is_some_and(|n| n != "target" && n != ".git") {
                     stack.push(p);
                 }
-            } else if p.extension().is_some_and(|x| x == "md") {
+            } else if ft.is_file() && p.extension().is_some_and(|x| x == "md") {
                 out.push(p);
             }
         }
@@ -410,6 +428,10 @@ fn apply_regions(src: &str, mut regions: Vec<(usize, usize, String)>) -> String 
     let mut out = String::with_capacity(src.len());
     let mut pos = 0usize;
     for (start, end, replacement) in regions {
+        if start < pos {
+            eprintln!("skip overlapping region {start}..{end}");
+            continue;
+        }
         out.push_str(&src[pos..start]);
         out.push_str(&replacement);
         pos = end;
@@ -571,7 +593,11 @@ mod tests {
 
     #[test]
     fn expand_paths_accepts_directories_and_files() {
-        let dir = std::env::temp_dir().join(format!("md-reflow-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "md-reflow-test-expand-paths-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
         let sub = dir.join("sub");
         std::fs::create_dir_all(&sub).unwrap();
         let a = dir.join("a.md");

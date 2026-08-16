@@ -2,13 +2,13 @@
 
 > **Phase:** 3 — Connectors
 >
-> **Status:** Done (issue #190 / F13). Always compiled.
+> **Status:** Done (issue #190 / F13). Gated by the off-by-default `test-mock-connector` feature.
 
 ## What it is
 
 The mock connector is Mimir's built-in test harness for the connector framework. It is a fake connector that emits pre-written ("canned") facts on a schedule you configure, so the framework and its supervisor can be tested end-to-end without connecting to any real service (no Gmail, no calendar, no photo library).
 
-It is **always compiled** — it ships in every build, including `--no-default-features`, so the connector framework is always exercisable.
+It is **test-only**: the module is gated behind the off-by-default `test-mock-connector` feature so production builds never compile it, and the workspace test run enables the feature through the `mimir` binary's dev-dependencies.
 
 ## Why it exists
 

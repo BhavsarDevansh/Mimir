@@ -2,7 +2,7 @@
 
 > **Phase:** 3 — Connectors
 >
-> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). Runtime `Connector` trait + data types landed (issue #183 / F6). `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10). Rate limiter + retry/backoff landed (issue #189 / F12). Mock connector test harness landed (issue #190 / F13). Geocoder service + Nominatim backend landed (issue #191 / S1). Entity-locations write path + geocode wiring landed (issue #193 / S3). Entity-locations proximity query landed (issue #194 / S4). **First concrete backend landed: Photos local-filesystem connector (issue #195 / C1).** The supervisor now injects the persisted `sync_cursor` into connector `config_json` as `__cursor` so incremental connectors (Photos) can skip already-processed files across restarts. The daemon `AppState` wiring, `connector` CLI (A1–A3), optional OS-keyring backend (#188), the event → KB fact extraction + write-back (Calendar C4 / #198), the email backends (C5–C7) remain to be built. **The CalDAV Calendar transport backend landed (issue #197 / C3):** a `CalDavClient` (PROPFIND + sync-collection REPORT, sync-token incremental sync) + `CalendarConnector` (Polling) with app-password and OAuth-refresh auth via the secret store, parsing VEVENTs with `icalendar`; `extract()` is transport-only (C4 owns event → fact extraction). This wired the `SecretStore` into `ConnectorContext` (`with_secret_store`).
+> **Status:** Scaffolded (issue #178 / F1). Instance registry table + facade landed (issue #179 / F2). `sources` provenance FK migration landed (issue #180 / F3). Shared `normalize_and_insert` boundary landed (issue #181 / F4). Full entity-resolution chain landed (issue #182 / F5). Runtime `Connector` trait + data types landed (issue #183 / F6). `ConnectorRegistry` + multi-backend factory dispatch landed (issue #184 / F7). `ConnectorSupervisor` supervised lifecycle landed (issue #185 / F8). Manual sync triggering landed (issue #186 / F9). Connector secret store landed (issue #187 / F10). Rate limiter + retry/backoff landed (issue #189 / F12). Mock connector test harness landed (issue #190 / F13). Geocoder service + Nominatim backend landed (issue #191 / S1). Entity-locations write path + geocode wiring landed (issue #193 / S3). Entity-locations proximity query landed (issue #194 / S4). **First concrete backend landed: Photos local-filesystem connector (issue #195 / C1).** The supervisor now injects the persisted `sync_cursor` into connector `config_json` as `__cursor` so incremental connectors (Photos) can skip already-processed files across restarts. The daemon `AppState` registry/supervisor wiring + connector CRUD/status/action routes (A1–A2 / #202–#203), the `mimir connector` CLI (A3 / #204), the interactive OAuth PKCE flow (A4 / #205), the event → KB fact extraction + write-back (Calendar C4 / #198), and the email backends (C5–C7 / #199–#201) all landed. The optional OS-keyring backend (#188) remains to be built. **The CalDAV Calendar transport backend landed (issue #197 / C3):** a `CalDavClient` (PROPFIND + sync-collection REPORT, sync-token incremental sync) + `CalendarConnector` (Polling) with app-password and OAuth-refresh auth via the secret store, parsing VEVENTs with `icalendar`; `extract()` builds event facts (`user has_event`, `located_in`, `attending`) and `act()` implements the write-back (`create_event` / `update_event` / `delete_event`, C4 / #198). This wired the `SecretStore` into `ConnectorContext` (`with_secret_store`).
 >
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
@@ -166,7 +166,7 @@ impl ConnectorRegistry {
 - **Concurrency.** Following the workspace `ToolRegistry` / `SkillRegistry` pattern, registration uses interior mutability (`RwLock`) with a `&self` receiver, so a registry shared in `AppState` behind `Arc` can be populated at startup and queried concurrently at runtime.
 - **Fail-loud duplicates.** `register` returns `ConnectorError::BackendAlreadyRegistered` on a repeated `(type, backend)` rather than silently shadowing the existing factory. `register_arc` is the pre-built-`Arc` variant.
 - **Dispatch errors.** `create` / `create_with_context` return `ConnectorError::BackendNotFound` when no factory is registered for the requested pair.
-- **`FnConnectorFactory`.** A closure-backed `ConnectorFactory` (`new<F: Fn(serde_json::Value, &ConnectorContext) -> Result<…> + Send + Sync + 'static>`) for simple backends and tests. `MockConnectorFactory` (always-compiled, F13 / #190) produces `MockConnector`s from their `config_json`, keeping the registry exercisable under every feature combination, including `--no-default-features`. The mock is fully configurable (mode, cadence, canned facts, health/auth, failure/panic injection) and is the T1 sync→extract→insert→query vehicle.
+- **`FnConnectorFactory`.** A closure-backed `ConnectorFactory` (`new<F: Fn(serde_json::Value, &ConnectorContext) -> Result<…> + Send + Sync + 'static>`) for simple backends and tests. `MockConnectorFactory` (gated by the off-by-default `test-mock-connector` feature, F13 / #190) produces `MockConnector`s from their `config_json`, keeping the registry exercisable under every feature combination in test builds. The mock is fully configurable (mode, cadence, canned facts, health/auth, failure/panic injection) and is the T1 sync→extract→insert→query vehicle.
 - **Reliability stays per-type.** Confidence for connector facts is the `connector_reliability` table score for the type (via `confidence::connector_reliability`, seeded defaults as fallback), keyed on the type axis only. The registry never branches reliability on `backend`; an instance reports the same `connector_type()` regardless of which backend constructed it.
 - **Construction context.** The factory signature takes the construction context directly (the Phase 3 plan's decision D′ anticipated this extension; it landed with C2 / #196 and F10 / #187 rather than remaining a forward-looking note). The supervisor (F8) is the only production constructor: it calls `create_with_context` with the daemon-wide context built in `mimir-server` (`with_secret_store` / `with_geocoder` / `with_user_identity` / `with_llm_backend`). The config-only `create` is the convenience path for callers with no services to inject (tests, and any non-supervisor construction). Backends that need no shared services ignore `ctx`.
 
@@ -231,7 +231,7 @@ Decision D of the Phase 3 plan calls for connectors to yield to user activity. T
 
 ### Server wiring (forward-looking)
 
-F8 lands the supervisor as a library component in `mimir-connectors` with unit/integration tests against a configurable in-memory mock. Daemon `AppState` wiring (owning a `ConnectorSupervisor`, calling `restore()` after KG/LLM are up, and `shutdown()` in the graceful-drain path) and the `mimir connector ...` CLI subcommands are separate Phase 3 issues (A1-A3) that depend on F8.
+F8 lands the supervisor as a library component in `mimir-connectors` with unit/integration tests against a configurable in-memory mock. Daemon `AppState` wiring (owning a `ConnectorSupervisor`, calling `restore()` after KG/LLM are up, and `shutdown()` in the graceful-drain path) and the `mimir connector ...` CLI subcommands were separate Phase 3 issues (A1–A3) that depended on F8.
 
 
 ## Manual sync triggering (F9 / #186)
@@ -266,11 +266,11 @@ F8 lands the supervisor as a library component in `mimir-connectors` with unit/i
 - `TriggerError::PushUnsupported` — push-mode connectors have no polling interval to preempt; push manual sync is deferred to a later Phase 3 issue.
 - `TriggerError::RunnerDropped` — the runner stopped mid-sync before reporting.
 
-The issue spec described the mechanism as a per-connector `tokio::sync::Notify` plus a serialisation semaphore. The implementation uses a small request channel (carrying the `SyncOptions` and returning the outcome) instead of a bare `Notify`, because `--full` / `--since` must reach the cycle and the future HTTP route wants the sync result — but the one-permit semaphore is kept as the explicit serialisation gate, matching the spec's intent ("no concurrent sync on the same connector").
+The issue spec described the mechanism as a per-connector `tokio::sync::Notify` plus a serialisation semaphore. The implementation uses a small request channel (carrying the `SyncOptions` and returning the outcome) instead of a bare `Notify`, because `--full` / `--since` must reach the cycle and the HTTP route needs the sync result — but the one-permit semaphore is kept as the explicit serialisation gate, matching the spec's intent ("no concurrent sync on the same connector").
 
 ### Wiring (forward-looking)
 
-F9 lands the trigger as a library API on `ConnectorSupervisor` in `mimir-connectors`, with integration tests against a configurable in-memory mock. The `mimir connector sync <slug> [--full|--since]` CLI command and its HTTP route are separate Phase 3 issues (A2 action routes / A3 CLI) that call `trigger_sync` / `trigger_sync_by_slug` once the supervisor is wired into `AppState` (A1).
+F9 lands the trigger as a library API on `ConnectorSupervisor` in `mimir-connectors`, with integration tests against a configurable in-memory mock. The `mimir connector sync <slug> [--full|--since]` CLI command and its HTTP route (A2 action routes / A3 CLI) call `trigger_sync` / `trigger_sync_by_slug` through the daemon's AppState wiring (A1 / #202).
 
 ## Crate layout
 
@@ -281,9 +281,9 @@ The crate root (`src/lib.rs`) re-exports the public API; each subsystem is a dir
 | `connector` | Runtime `Connector` trait + data types (`ConnectorMode`, `SyncOptions`, `SyncOutcome`, `HealthStatus`, `ConnectorAction`, `ActionResult`, `ConnectorError`) and the `ConnectorFactory` trait | F6 — done (#183) |
 | `registry` | `ConnectorRegistry` + multi-backend factory dispatch: `(connector_type, backend)` → `ConnectorFactory`, plus the closure-backed `FnConnectorFactory` | F7 — done (#184) |
 | `supervisor` | `ConnectorSupervisor` + `SupervisorConfig` + `SupervisorError` + `TriggerOutcome` + `TriggerError`: supervised per-connector task lifecycle (spawn / restart / backoff / circuit-breaker / startup-restore / graceful-shutdown / cursor-persistence), and manual sync triggering (`trigger_sync` / `trigger_sync_by_slug` — per-connector semaphore + request channel; preempts the polling interval) | F8 — done (#185), F9 — done (#186) |
-| `mock` | `MockConnector` + `MockConnectorFactory` + `MockFactConfig` + `MockSyncRecorder` (configurable, always-compiled test harness: emits canned `NormalizedFact`s in `Polling`/`Push` modes with health/auth/failure/panic injection and sync-options observation) | F13 — done (#190) |
+| `mock` | `MockConnector` + `MockConnectorFactory` + `MockFactConfig` + `MockSyncRecorder` (configurable test harness gated by the off-by-default `test-mock-connector` feature: emits canned `NormalizedFact`s in `Polling`/`Push` modes with health/auth/failure/panic injection and sync-options observation) | F13 — done (#190) |
 | `photos` *(feature `photos`)* | `PhotosConnector` + `PhotosConnectorFactory` + `PhotosCursor`: read-only local-filesystem push connector — `notify` recursive watcher + `kamadak-exif` GPS/datetime extraction + per-file mtime/inode incremental cursor | C1 — done (#195) |
-| `oauth` *(feature `oauth`)* | `OAuthHttpClient` (the `oauth2`-crate `AsyncHttpClient` adapter over the workspace reqwest 0.13 client) + `refresh_token` / `resolve_access_token` refresh helpers with the HTTPS/loopback endpoint gate and secret-hygiene error mapping; used by the Calendar and Email OAuth backends, and reserved for the A4 CLI PKCE flow (not yet implemented) | #240 — done (v0.96.0) |
+| `oauth` *(feature `oauth`)* | `OAuthHttpClient` (the `oauth2`-crate `AsyncHttpClient` adapter over the workspace reqwest 0.13 client) + `refresh_token` / `resolve_access_token` refresh helpers with the HTTPS/loopback endpoint gate and secret-hygiene error mapping; used by the Calendar and Email OAuth backends and the A4 CLI PKCE flow (implemented, v0.97.0) | #240 — done (v0.96.0) |
 
 Provenance types that connectors reference (`ConnectorType`, `SourceType`) live in `mimir-knowledge` and are re-used, not duplicated (DRY).
 
@@ -292,18 +292,19 @@ Provenance types that connectors reference (`ConnectorType`, `SourceType`) live 
 ```toml
 [features]
 default = ["photos", "calendar", "gmail"]
+test-mock-connector = [] # configurable mock connector test harness (F13 / #190), off by default
 photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"] # local photo ingestion (C1–C2 done)
 oauth = ["dep:oauth2", "dep:http"] # shared OAuth 2.0 client + refresh (issue #240)
 calendar = ["dep:icalendar", "dep:roxmltree", "dep:chrono-tz", "dep:uuid", "oauth"] # CalDAV calendar ingestion (C3–C4 done)
 gmail = ["dep:async-imap", "dep:base64", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures", "dep:icalendar", "dep:chrono-tz", "dep:mail-parser", "oauth"] # IMAP email ingestion (C5–C7 done)
 ```
 
-The framework core and the mock connector are **always built**. Running `cargo build -p mimir-connectors --no-default-features` therefore still compiles a working framework + mock harness — the gated backends are simply absent. The `photos` feature gates the `notify` / `notify-debouncer-full` / `kamadak-exif` dependencies and the `photos` module (C1 / #195); `oauth` gates `oauth2` / `http` and the `oauth` module (#240); `calendar` and `gmail` gate their backend deps and modules and enable `oauth` for their OAuth refresh path.
+The framework core is **always built**; the mock connector is a test harness gated by the off-by-default `test-mock-connector` feature, so production builds never compile it. Running `cargo build -p mimir-connectors --no-default-features` therefore still compiles a working framework — the mock harness and the gated backends are simply absent. The `photos` feature gates the `notify` / `notify-debouncer-full` / `kamadak-exif` dependencies and the `photos` module (C1 / #195); `oauth` gates `oauth2` / `http` and the `oauth` module (#240); `calendar` and `gmail` gate their backend deps and modules and enable `oauth` for their OAuth refresh path.
 
 ## Workspace wiring
 
 - `mimir-connectors` is a workspace `members` entry.
-- `mimir-server` depends on `mimir-connectors`; the daemon will own a `ConnectorRegistry` and `ConnectorSupervisor` once A1 wires them into `AppState` (not yet done in F1).
+- `mimir-server` depends on `mimir-connectors`; the daemon owns a `ConnectorRegistry` and `ConnectorSupervisor` wired into `AppState` at startup (A1 / #202).
 
 ## Safety
 
@@ -397,9 +398,9 @@ The `connector remove` flow (server `DELETE /connectors/:id` + CLI `mimir connec
 
 ## What remains to be built
 
-- **F11–F13** — optional OS-keyring backend (#188, deferred), rate limiter / retry primitives (done, #189), and the configurable mock harness (done, #190). The `SecretStore` + `FileSecretStore` + `InMemorySecretStore` landed in #187 / F10.
-- **C1–C7** — the concrete backends (Photos, CalDAV Calendar, IMAP Email).
-- **A1–A4** — server `AppState` registry/supervisor wiring + CLI subcommands. `mimir-server` declares the `mimir-connectors` dependency but does not yet own a `ConnectorSupervisor`; that wiring lands with A1 and depends on F8.
+- **F11** — optional OS-keyring backend (#188, deferred). The `SecretStore` + `FileSecretStore` + `InMemorySecretStore` (F10 / #187), the rate limiter / retry primitives (F12 / #189), and the configurable mock harness (F13 / #190, gated by `test-mock-connector`) have landed.
+- **C1–C7** — all concrete backends have landed: Photos (C1–C2), CalDAV Calendar (C3–C4), and IMAP Email (C5–C7).
+- **A1–A4** — server `AppState` registry/supervisor wiring, the connector CRUD/status/action routes, the `mimir connector` CLI, and the OAuth PKCE flow are all implemented (#202–#205).
 
 The framework pieces already landed: F1 (scaffold), F2 (instance table + facade), F3 (provenance FK), F4 (`normalize_and_insert` boundary), F5 (entity-resolution chain), F6 (the `Connector` trait + data types), F7 (the `ConnectorRegistry` + multi-backend factory dispatch), F8 (the `ConnectorSupervisor` supervised lifecycle), and F10 (the `SecretStore` + `FileSecretStore` + `InMemorySecretStore`).
 
@@ -407,9 +408,9 @@ The framework pieces already landed: F1 (scaffold), F2 (instance table + facade)
 
 ```bash
 cargo build --workspace                              # full workspace
-cargo build -p mimir-connectors --no-default-features # framework + mock only
+cargo build -p mimir-connectors --no-default-features # framework core only (mock + backends gated)
 cargo test -p mimir-connectors --test secrets_store  # secret store round-trip + perm + slug tests (F10)
-cargo test -p mimir-connectors                        # includes supervisor lifecycle tests (F8)
+cargo test -p mimir-connectors --features test-mock-connector # includes the mock-harness + supervisor lifecycle tests (F8/F13)
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```

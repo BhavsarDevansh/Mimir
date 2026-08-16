@@ -14,6 +14,8 @@ cargo run --manifest-path scripts/md-reflow/Cargo.toml -- --survey  # list remai
 
 Pass explicit paths to limit the run, e.g. `--check docs/ README.md`.
 
+If you pass no mode flag, the tool uses `--reflow` and writes files in place.
+
 ## What it does
 
 - Joins wrapped paragraphs and tight list items onto one line, preserving the exact source text (inline markup is never rewritten).

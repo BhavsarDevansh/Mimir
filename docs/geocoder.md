@@ -42,7 +42,7 @@ This keeps the daemon observable (errors are logged) while preserving the "no pa
 
 ## Nominatim backend
 
-`NominatimGeocoder` (`mimir-connectors/src/geocoder/`) issues `GET /search` (forward) and `GET /reverse` (reverse) with `format=json&addressdetails=1& namedetails=1`. `lat`/`lon` are returned by Nominatim as strings and parsed to `f64`.
+`NominatimGeocoder` (`mimir-connectors/src/geocoder/`) issues `GET /search` (forward) and `GET /reverse` (reverse) with `format=json&addressdetails=1&namedetails=1`. `lat`/`lon` are returned by Nominatim as strings and parsed to `f64`.
 
 ### Throttling + retry (reuses F12)
 
@@ -65,4 +65,4 @@ Each request acquires a token from the shared `RateLimiter` built from `RateLimi
 - `mimir-core` unit tests: `MockGeocoder` round-trips configured results / `None` / errors; `GeocodeResult` serde round-trip.
 - `mimir-connectors/tests/geocoder_nominatim.rs`: `wiremock`-backed tests covering forward/reverse parsing, empty-result → `None`, 429-retry-then-success, persistent 503 → `Err(Status)`, non-retryable 404 (no retry), connection refused → `Err(Network)` (no panic), and rate-limiter throttling of consecutive requests.
 
-The backend is always built (not behind a feature flag), consistent with the framework core + mock connector.
+The backend is always built (not behind a feature flag), consistent with the framework core.

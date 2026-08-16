@@ -1,10 +1,10 @@
 # Mock Connector (Phase 3 F13 / #190)
 
-> **Status:** Done. Always compiled (no feature flag). The framework's test harness and the T1 sync→extract→insert→query vehicle.
+> **Status:** Done. Gated by the off-by-default `test-mock-connector` feature. The framework's test harness and the T1 sync→extract→insert→query vehicle.
 
 The `MockConnector` is an in-memory connector whose behaviour is driven entirely by its `config_json`. It emits canned `NormalizedFact`s on a configurable cadence, in both `Polling` and `Push` modes, and can inject failures, panics, and health/auth states to exercise the `ConnectorSupervisor`. It never touches the database — the supervisor inserts its facts through the shared `normalize_and_insert` pipeline.
 
-It lives in `mimir-connectors/src/mock/` and is always compiled, so `cargo build -p mimir-connectors --no-default-features` still produces a working framework + mock harness (the gated Photos/Calendar/Gmail backends are absent, but the mock and the framework core remain).
+It lives in `mimir-connectors/src/mock/` and is test-only: the module and its re-exports are gated behind the off-by-default `test-mock-connector` feature, so production builds (including `cargo build -p mimir-connectors --no-default-features`) compile the framework core without the harness. The workspace test run enables the feature through the `mimir` binary's dev-dependencies; a standalone `cargo test -p mimir-connectors --features test-mock-connector` compiles it too.
 
 ## Public surface
 

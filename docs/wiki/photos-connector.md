@@ -37,7 +37,7 @@ The first time it runs against an existing library it ingests every photo once (
 
 ## Configuration
 
-When the daemon wiring lands, a Photos connector is configured with a JSON object like:
+A Photos connector is configured with a JSON object like:
 
 ```json
 {

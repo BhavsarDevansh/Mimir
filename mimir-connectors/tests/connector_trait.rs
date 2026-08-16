@@ -12,6 +12,7 @@
 //!   the persisted `ConnectorStatus` / `ConnectorAuthState` enums.
 //! - `act()` is optional write-back with a default `UnsupportedAction` impl.
 
+#![cfg(feature = "test-mock-connector")]
 use std::sync::Arc;
 use std::time::Duration;
 

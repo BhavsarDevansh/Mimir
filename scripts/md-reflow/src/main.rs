@@ -29,22 +29,29 @@ enum Frame {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let mode = args
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let flags: Vec<&str> = args
         .iter()
-        .find(|a| a.starts_with("--"))
-        .map(|s| s.as_str())
-        .unwrap_or("reflow");
+        .filter(|a| a.starts_with("--"))
+        .map(String::as_str)
+        .collect();
+    if flags.len() > 1 {
+        eprintln!(
+            "error: expected at most one mode flag, got: {}",
+            flags.join(" ")
+        );
+        std::process::exit(2);
+    }
+    let mode = flags.first().copied().unwrap_or("--reflow");
     let paths: Vec<PathBuf> = args
         .iter()
-        .skip(1)
         .filter(|a| !a.starts_with("--"))
         .map(PathBuf::from)
         .collect();
     let files = if paths.is_empty() {
         collect_md_files(Path::new("."))
     } else {
-        paths
+        expand_paths(paths)
     };
     match mode {
         "--survey" => survey(files),
@@ -65,7 +72,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        _ => {
+        "--reflow" => {
             let mut changed = 0usize;
             for file in files {
                 let Ok(src) = std::fs::read_to_string(&file) else {
@@ -84,9 +91,15 @@ fn main() {
             }
             println!("{changed} files changed");
         }
+        other => {
+            eprintln!("error: unknown option: {other}");
+            std::process::exit(2);
+        }
     }
 }
 
+/// Recursively collect every `.md` file under `dir`, skipping `target` and
+/// `.git` directories.
 fn collect_md_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
@@ -109,6 +122,22 @@ fn collect_md_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Expand directory arguments to their `.md` files, keeping plain files as-is.
+fn expand_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for p in paths {
+        if p.is_dir() {
+            out.extend(collect_md_files(&p));
+        } else {
+            out.push(p);
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Print wrapped regions per file for `--survey`.
 fn survey(files: Vec<PathBuf>) {
     let mut para_files = 0usize;
     let mut bq_files = 0usize;
@@ -143,87 +172,33 @@ fn survey(files: Vec<PathBuf>) {
     );
 }
 
+/// Classify wrapped regions for `--survey`: plain paragraphs, blockquote
+/// paragraphs, and tight list items.
 fn analyze(src: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
-    let parser = Parser::new_ext(src, OPTIONS);
+    let spans = collect_spans(src);
     let mut paras = Vec::new();
     let mut bqs = Vec::new();
     let mut tights = Vec::new();
-    let mut stack: Vec<Frame> = Vec::new();
-    let mut bq_depth = 0usize;
-    let mut item_spans: Vec<(usize, usize)> = Vec::new();
-    let mut para_spans: Vec<(usize, usize)> = Vec::new();
-    let mut block_spans: Vec<(usize, usize)> = Vec::new();
-    for (event, range) in parser.into_offset_iter() {
-        match event {
-            Event::Start(Tag::Paragraph) => stack.push(Frame::Paragraph),
-            Event::Start(Tag::Item) => {
-                stack.push(Frame::Item);
-                item_spans.push((range.start, range.end));
+    for (s, e, depth) in &spans.paras {
+        let text = &src[*s..*e];
+        if text.lines().filter(|l| !is_blank_line(l)).count() > 1 {
+            if *depth > 0 {
+                bqs.push(text.to_string());
+            } else {
+                paras.push(text.to_string());
             }
-            Event::Start(Tag::BlockQuote(_)) => {
-                bq_depth += 1;
-                stack.push(Frame::BlockQuote);
-            }
-            Event::Start(Tag::List(_))
-            | Event::Start(Tag::CodeBlock(_))
-            | Event::Start(Tag::Table(_))
-            | Event::Start(Tag::HtmlBlock)
-            | Event::Start(Tag::FootnoteDefinition(_))
-            | Event::Start(Tag::DefinitionList) => {
-                block_spans.push((range.start, range.end));
-            }
-            Event::End(tag_end) => {
-                let frame = match tag_end {
-                    TagEnd::Paragraph => Some(Frame::Paragraph),
-                    TagEnd::Item => Some(Frame::Item),
-                    TagEnd::BlockQuote(_) => Some(Frame::BlockQuote),
-                    _ => None,
-                };
-                if let Some(frame) = frame {
-                    if stack.last() == Some(&frame) {
-                        stack.pop();
-                        match frame {
-                            Frame::Paragraph => {
-                                let text = &src[range.start..range.end];
-                                if text.lines().filter(|l| !is_blank_line(l)).count() > 1 {
-                                    if bq_depth > 0 {
-                                        bqs.push(text.to_string());
-                                    } else {
-                                        paras.push(text.to_string());
-                                    }
-                                }
-                                para_spans.push((range.start, range.end));
-                            }
-                            Frame::BlockQuote => bq_depth -= 1,
-                            Frame::Item => {}
-                        }
-                    }
-                }
-            }
-            _ => {}
         }
     }
-    for (is, ie) in item_spans {
-        let has_para = para_spans.iter().any(|(ps, pe)| ps >= &is && pe <= &ie);
-        if !has_para {
-            let mut gaps = vec![(is, ie)];
-            for (bs, be) in &block_spans {
-                let bs_line = src[..*bs].rfind('\n').map(|i| i + 1).unwrap_or(0);
-                if bs_line > is && *be <= ie {
-                    gaps = split_gaps(gaps, bs_line, *be);
-                }
-            }
-            for (gs, ge) in gaps {
-                let text = &src[gs..ge];
-                if text.lines().filter(|l| !is_blank_line(l)).count() > 1 {
-                    tights.push(text.to_string());
-                }
-            }
+    for (gs, ge) in item_gaps(src, &spans) {
+        let text = &src[gs..ge];
+        if text.lines().filter(|l| !is_blank_line(l)).count() > 1 {
+            tights.push(text.to_string());
         }
     }
     (paras, bqs, tights)
 }
 
+/// Split a gap range around a nested block span.
 fn split_gaps(gaps: Vec<(usize, usize)>, bs: usize, be: usize) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     for (gs, ge) in gaps {
@@ -244,20 +219,31 @@ fn split_gaps(gaps: Vec<(usize, usize)>, bs: usize, be: usize) -> Vec<(usize, us
     out
 }
 
-fn reflow_named(src: &str, file: &Path) -> String {
+/// Source spans of paragraphs, list items, and nested blocks, with the
+/// blockquote depth at each paragraph end.
+struct Spans {
+    paras: Vec<(usize, usize, usize)>,
+    items: Vec<(usize, usize)>,
+    blocks: Vec<(usize, usize)>,
+}
+
+/// Walk the CommonMark tree once and record the spans both `analyze` and
+/// `reflow_named` need.
+fn collect_spans(src: &str) -> Spans {
     let parser = Parser::new_ext(src, OPTIONS);
-    let mut regions: Vec<(usize, usize, String)> = Vec::new();
+    let mut spans = Spans {
+        paras: Vec::new(),
+        items: Vec::new(),
+        blocks: Vec::new(),
+    };
     let mut stack: Vec<Frame> = Vec::new();
     let mut bq_depth = 0usize;
-    let mut item_spans: Vec<(usize, usize)> = Vec::new();
-    let mut para_spans: Vec<(usize, usize)> = Vec::new();
-    let mut block_spans: Vec<(usize, usize)> = Vec::new();
     for (event, range) in parser.into_offset_iter() {
         match event {
             Event::Start(Tag::Paragraph) => stack.push(Frame::Paragraph),
             Event::Start(Tag::Item) => {
                 stack.push(Frame::Item);
-                item_spans.push((range.start, range.end));
+                spans.items.push((range.start, range.end));
             }
             Event::Start(Tag::BlockQuote(_)) => {
                 bq_depth += 1;
@@ -269,7 +255,7 @@ fn reflow_named(src: &str, file: &Path) -> String {
             | Event::Start(Tag::HtmlBlock)
             | Event::Start(Tag::FootnoteDefinition(_))
             | Event::Start(Tag::DefinitionList) => {
-                block_spans.push((range.start, range.end));
+                spans.blocks.push((range.start, range.end));
             }
             Event::End(tag_end) => {
                 let frame = match tag_end {
@@ -283,16 +269,7 @@ fn reflow_named(src: &str, file: &Path) -> String {
                         stack.pop();
                         match frame {
                             Frame::Paragraph => {
-                                para_spans.push((range.start, range.end));
-                                let text = &src[range.start..range.end];
-                                let reflowed = if bq_depth == 0 {
-                                    reflow_region(text)
-                                } else {
-                                    reflow_blockquote_field_list(text, bq_depth)
-                                };
-                                if reflowed != text {
-                                    regions.push((range.start, range.end, reflowed));
-                                }
+                                spans.paras.push((range.start, range.end, bq_depth));
                             }
                             Frame::BlockQuote => bq_depth -= 1,
                             Frame::Item => {}
@@ -303,35 +280,61 @@ fn reflow_named(src: &str, file: &Path) -> String {
             _ => {}
         }
     }
-    for (is, ie) in item_spans {
-        let has_para = para_spans.iter().any(|(ps, pe)| ps >= &is && pe <= &ie);
-        if !has_para {
-            let mut gaps = vec![(is, ie)];
-            for (bs, be) in &block_spans {
-                let bs_line = src[..*bs].rfind('\n').map(|i| i + 1).unwrap_or(0);
-                if bs_line > is && *be <= ie {
-                    gaps = split_gaps(gaps, bs_line, *be);
-                }
+    spans
+}
+
+/// Source ranges of tight list items' text that is not covered by a nested
+/// block (paragraphs and nested lists are excluded from reflow).
+fn item_gaps(src: &str, spans: &Spans) -> Vec<(usize, usize)> {
+    let mut gaps = Vec::new();
+    for (is, ie) in &spans.items {
+        let has_para = spans.paras.iter().any(|(ps, pe, _)| ps >= is && pe <= ie);
+        if has_para {
+            continue;
+        }
+        let mut item_gaps = vec![(*is, *ie)];
+        for (bs, be) in &spans.blocks {
+            let bs_line = src[..*bs].rfind('\n').map(|i| i + 1).unwrap_or(0);
+            if bs_line > *is && *be <= *ie {
+                item_gaps = split_gaps(item_gaps, bs_line, *be);
             }
-            for (gs, ge) in gaps {
-                if gs > ge {
-                    eprintln!(
-                        "inverted gap {gs}..{ge} in item {is}..{ie} (file {})",
-                        file.display()
-                    );
-                    continue;
-                }
-                let text = &src[gs..ge];
-                let reflowed = reflow_region(text);
-                if reflowed != text {
-                    regions.push((gs, ge, reflowed));
-                }
-            }
+        }
+        gaps.extend(item_gaps);
+    }
+    gaps
+}
+
+/// Reflow `src` to the single-line standard and return the result; `file` is
+/// used only for diagnostics.
+fn reflow_named(src: &str, file: &Path) -> String {
+    let spans = collect_spans(src);
+    let mut regions: Vec<(usize, usize, String)> = Vec::new();
+    for (s, e, depth) in &spans.paras {
+        let text = &src[*s..*e];
+        let reflowed = if *depth == 0 {
+            reflow_region(text)
+        } else {
+            reflow_blockquote_field_list(text, *depth)
+        };
+        if reflowed != text {
+            regions.push((*s, *e, reflowed));
+        }
+    }
+    for (gs, ge) in item_gaps(src, &spans) {
+        if gs > ge {
+            eprintln!("inverted gap {gs}..{ge} (file {})", file.display());
+            continue;
+        }
+        let text = &src[gs..ge];
+        let reflowed = reflow_region(text);
+        if reflowed != text {
+            regions.push((gs, ge, reflowed));
         }
     }
     apply_regions(src, regions)
 }
 
+/// Split a blockquote field-list into one blockquote paragraph per entry.
 fn reflow_blockquote_field_list(text: &str, depth: usize) -> String {
     let ends_with_newline = text.ends_with('\n');
     let trimmed = text.trim_end_matches('\n');
@@ -366,6 +369,7 @@ fn reflow_blockquote_field_list(text: &str, depth: usize) -> String {
     out
 }
 
+/// Remove leading `>` markers (and one following space) from a line.
 fn strip_blockquote_markers(line: &str) -> &str {
     let mut l = line.trim_start();
     while let Some(rest) = l.strip_prefix('>') {
@@ -374,6 +378,7 @@ fn strip_blockquote_markers(line: &str) -> &str {
     l
 }
 
+/// True when a line is empty after removing blockquote markers.
 fn is_blank_line(line: &str) -> bool {
     let mut l = line.trim();
     while let Some(rest) = l.strip_prefix('>') {
@@ -382,6 +387,7 @@ fn is_blank_line(line: &str) -> bool {
     l.is_empty()
 }
 
+/// Join the lines of a paragraph or tight-item region onto one line.
 fn reflow_region(text: &str) -> String {
     let trailing_newlines = text.len() - text.trim_end_matches('\n').len();
     let trimmed = text.trim_end_matches('\n');
@@ -398,6 +404,7 @@ fn reflow_region(text: &str) -> String {
     format!("{joined}{}", "\n".repeat(trailing_newlines))
 }
 
+/// Apply sorted, non-overlapping source replacements.
 fn apply_regions(src: &str, mut regions: Vec<(usize, usize, String)>) -> String {
     regions.sort_by_key(|(s, _, _)| *s);
     let mut out = String::with_capacity(src.len());
@@ -552,5 +559,29 @@ mod tests {
             reflow_str("- First item\n- Second item\n  with wrap\n  - nested\n"),
             "- First item\n- Second item with wrap\n  - nested\n"
         );
+    }
+
+    #[test]
+    fn blockquote_tight_item_joins() {
+        assert_eq!(
+            reflow_str("> - item one\n>   continuation\n"),
+            "> - item one continuation\n"
+        );
+    }
+
+    #[test]
+    fn expand_paths_accepts_directories_and_files() {
+        let dir = std::env::temp_dir().join(format!("md-reflow-test-{}", std::process::id()));
+        let sub = dir.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let a = dir.join("a.md");
+        let b = sub.join("b.md");
+        let c = dir.join("c.txt");
+        std::fs::write(&a, "# a\n").unwrap();
+        std::fs::write(&b, "# b\n").unwrap();
+        std::fs::write(&c, "not markdown\n").unwrap();
+        let expanded = expand_paths(vec![dir.clone(), c.clone()]);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(expanded, vec![a, c, b]);
     }
 }

@@ -8,7 +8,7 @@ Run from the repository root:
 
 ```bash
 cargo run --manifest-path scripts/md-reflow/Cargo.toml -- --check   # report files that would change (exit 1 if any)
-cargo run --manifest-path scripts/md-reflow/Cargo.toml             # reflow all .md files in place
+cargo run --manifest-path scripts/md-reflow/Cargo.toml -- --reflow   # reflow all .md files in place
 cargo run --manifest-path scripts/md-reflow/Cargo.toml -- --survey  # list remaining wrapped regions
 ```
 

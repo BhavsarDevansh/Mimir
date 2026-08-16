@@ -1,7 +1,8 @@
 [package]
 name = "md-reflow"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 description = "Reflow markdown prose to single-line paragraphs (Mimir AGENTS.md standard)"
 license = "GPL-3.0"
 publish = false

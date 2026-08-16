@@ -15,6 +15,18 @@ fn test_config(temp: &tempfile::TempDir) -> Config {
     config
 }
 
+fn test_llm() -> Arc<dyn mimir_core::llm::LlmBackend> {
+    Arc::new(MockLlmClient::builder().build())
+}
+
+async fn test_kg(temp: &tempfile::TempDir) -> Arc<mimir_knowledge::KnowledgeGraph> {
+    Arc::new(
+        mimir_knowledge::KnowledgeGraph::init(&temp.path().join("knowledge.db"))
+            .await
+            .unwrap(),
+    )
+}
+
 #[test]
 fn warn_err_returns_some_on_ok() {
     assert_eq!(
@@ -39,7 +51,7 @@ async fn init_knowledge_graph_resolves_user_entity_and_registers_kg_tools() {
             .await
             .unwrap(),
     );
-    let llm: Arc<dyn mimir_core::llm::LlmBackend> = Arc::new(MockLlmClient::builder().build());
+    let llm = test_llm();
 
     let init = init_knowledge_graph(&config, &tool_registry, &context_manager, &llm)
         .await
@@ -72,12 +84,8 @@ async fn init_scheduler_registers_system_jobs() {
             .await
             .unwrap(),
     );
-    let knowledge_graph = Arc::new(
-        mimir_knowledge::KnowledgeGraph::init(&temp.path().join("knowledge.db"))
-            .await
-            .unwrap(),
-    );
-    let llm: Arc<dyn mimir_core::llm::LlmBackend> = Arc::new(MockLlmClient::builder().build());
+    let knowledge_graph = test_kg(&temp).await;
+    let llm = test_llm();
     let activity = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
     let (_scheduler, _shutdown_rx) = init_scheduler(
@@ -111,12 +119,8 @@ async fn init_scheduler_registers_system_jobs() {
 async fn init_connector_framework_registers_mock_backend() {
     let temp = tempfile::tempdir().unwrap();
     let config = test_config(&temp);
-    let knowledge_graph = Arc::new(
-        mimir_knowledge::KnowledgeGraph::init(&temp.path().join("knowledge.db"))
-            .await
-            .unwrap(),
-    );
-    let llm: Arc<dyn mimir_core::llm::LlmBackend> = Arc::new(MockLlmClient::builder().build());
+    let knowledge_graph = test_kg(&temp).await;
+    let llm = test_llm();
     let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
 
     let (registry, _supervisor) =

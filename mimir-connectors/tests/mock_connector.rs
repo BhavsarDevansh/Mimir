@@ -1,13 +1,12 @@
 //! F13 behavioural tests (issue #190): the configurable `MockConnector` test
 //! harness.
 //!
-//! These reference the configurable mock surface (`MockConnector::from_config`,
-//! `MockFactConfig`, `MockSyncRecorder`) *before* it exists, so they fail to
-//! compile until F13 lands — the TDD anchor.
+//! These exercise the configurable mock surface (`MockConnector::from_config`,
+//! `MockFactConfig`, `MockSyncRecorder`) that F13 implemented, and are gated
+//! behind the `test-mock-connector` feature (off by default).
 //!
 //! Design (locked with the user):
-//! - The mock is gated behind the `test-mock-connector` feature (off by
-//!   default) and is the framework's test harness + the T1
+//! - The mock is the framework's test harness + the T1
 //!   sync→extract→insert vehicle.
 //! - It is fully config-driven: behaviour (mode, cadence, canned facts, health,
 //!   failure/panic injection, cursor) is read from `config_json`. Instance

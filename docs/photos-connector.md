@@ -97,7 +97,7 @@ So knowledge-graph growth is O(distinct places), not O(photos). The only per-pho
 The reverse geocode reuses the shared `Geocoder` (Phase 3 S1 / #191) rather than the connector holding its own HTTP client. The geocoder is injected at construction through a new `ConnectorContext` — a small shared-services struct threaded factory → registry → supervisor:
 
 1. `ConnectorFactory::create(config, ctx)` now receives a `&ConnectorContext`. `ConnectorRegistry::create_with_context` forwards it; the config-only `create` shortcut delegates with an empty context.
-2. `ConnectorSupervisor::with_geocoder(Arc<dyn Geocoder>)` sets the context's geocoder; `instantiate` calls `create_with_context` so every connector the supervisor spawns can read it. The daemon will set this from `KnowledgeGraph::geocoder()` once the server wires a supervisor (A1).
+2. `ConnectorSupervisor::with_geocoder(Arc<dyn Geocoder>)` sets the context's geocoder; `instantiate` calls `create_with_context` so every connector the supervisor spawns can read it. The daemon sets this from the shared geocoder it also injects into the knowledge graph (A1 / #202).
 3. `PhotosConnector::from_config_with_geocoder(config, geocoder)` stores the `Option<Arc<dyn Geocoder>>`; the factory reads it off the context. `None` keeps the coords-only `visited` fallback shape (issue #250).
 
 ### Coord-dedup cache

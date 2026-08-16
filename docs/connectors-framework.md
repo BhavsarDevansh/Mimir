@@ -229,9 +229,9 @@ The shared `watch::Receiver<bool>` is the same shutdown channel the daemon alrea
 
 Decision D of the Phase 3 plan calls for connectors to yield to user activity. This is **deferred for V1** (`last_user_activity` is not consulted yet); it lands with the proactive-agent / scheduling work.
 
-### Server wiring (forward-looking)
+### Server wiring
 
-F8 lands the supervisor as a library component in `mimir-connectors` with unit/integration tests against a configurable in-memory mock. Daemon `AppState` wiring (owning a `ConnectorSupervisor`, calling `restore()` after KG/LLM are up, and `shutdown()` in the graceful-drain path) and the `mimir connector ...` CLI subcommands were separate Phase 3 issues (A1–A3) that depended on F8.
+The supervisor is a library component in `mimir-connectors` with unit/integration tests against a configurable in-memory mock. The daemon `AppState` owns a `ConnectorSupervisor`, calls `restore()` after KG/LLM are up, and calls `shutdown()` in the graceful-drain path; the `mimir connector ...` CLI subcommands (A1–A3 / #202–#204) drive the same wiring.
 
 
 ## Manual sync triggering (F9 / #186)
@@ -268,9 +268,9 @@ F8 lands the supervisor as a library component in `mimir-connectors` with unit/i
 
 The issue spec described the mechanism as a per-connector `tokio::sync::Notify` plus a serialisation semaphore. The implementation uses a small request channel (carrying the `SyncOptions` and returning the outcome) instead of a bare `Notify`, because `--full` / `--since` must reach the cycle and the HTTP route needs the sync result — but the one-permit semaphore is kept as the explicit serialisation gate, matching the spec's intent ("no concurrent sync on the same connector").
 
-### Wiring (forward-looking)
+### Wiring
 
-F9 lands the trigger as a library API on `ConnectorSupervisor` in `mimir-connectors`, with integration tests against a configurable in-memory mock. The `mimir connector sync <slug> [--full|--since]` CLI command and its HTTP route (A2 action routes / A3 CLI) call `trigger_sync` / `trigger_sync_by_slug` through the daemon's AppState wiring (A1 / #202).
+The trigger is a library API on `ConnectorSupervisor` in `mimir-connectors`, with integration tests against a configurable in-memory mock. The `mimir connector sync <slug> [--full|--since]` CLI command and its HTTP route (A2 action routes / A3 CLI) call `trigger_sync` / `trigger_sync_by_slug` through the daemon's AppState wiring (A1 / #202).
 
 ## Crate layout
 

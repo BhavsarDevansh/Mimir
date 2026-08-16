@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.115.3] — 2026-08-16
+
+### PR #343 review: remaining CodeRabbit findings
+
+- `docs/connectors-framework.md` and `docs/photos-connector.md` now describe the daemon `AppState` supervisor wiring, the sync route/CLI, and the geocoder injection in present tense instead of as future work (A1–A3 / #202–#204).
+- `mimir-connectors/tests/mock_connector.rs` module comment rewritten in present tense: the configurable mock surface (`MockConnector::from_config`, `MockFactConfig`, `MockSyncRecorder`) exists and the file is feature-gated for execution.
+- `mimir-connectors/tests/scaffold_smoke.rs` no longer gates the whole file behind `test-mock-connector`; `registry_starts_empty` now runs in default test builds, with only the mock import and `mock_connector_reports_identity` feature-gated.
+- Version bumped 0.115.2 → 0.115.3 (patch — documentation and test-gating fixes).
+
 ## [0.115.2] — 2026-08-16
 
 ### PR #343 review: finish `--` separator support in md-reflow

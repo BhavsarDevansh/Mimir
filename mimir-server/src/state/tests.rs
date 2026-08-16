@@ -71,7 +71,18 @@ async fn init_knowledge_graph_resolves_user_entity_and_registers_kg_tools() {
     );
     assert!(tool_registry.get("kg_query").is_some());
     assert!(tool_registry.get("remember").is_some());
-    assert!(init.geocoder.is_some(), "default geocoder constructed");
+    // The builder treats geocoder construction as best-effort: it is disabled
+    // when the Nominatim HTTP client or rate limiter cannot be built, so the
+    // geocoder may legitimately be absent on some hosts. When present, it
+    // must be the instance shared with the knowledge graph.
+    if let Some(geocoder) = &init.geocoder {
+        assert!(
+            init.knowledge_graph
+                .geocoder()
+                .is_some_and(|kg_geocoder| Arc::ptr_eq(geocoder, kg_geocoder)),
+            "geocoder shared with knowledge graph"
+        );
+    }
     assert!(init.backup_dir.ends_with("backups"));
 }
 

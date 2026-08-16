@@ -268,7 +268,7 @@ fn read_stdin_secret(label: &str) -> String {
     let secret = raw.trim_end_matches(['\r', '\n']);
     if secret.is_empty() {
         exit_with_error(format!(
-            "no {label} received on stdin — pipe the secret, e.g. `cat secret.txt | mimir connector add ... --password-stdin`"
+            "no {label} received on stdin — pipe the secret to the matching stdin option"
         ));
     }
     secret.to_string()

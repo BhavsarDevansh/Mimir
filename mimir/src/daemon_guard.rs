@@ -121,22 +121,31 @@ impl PromptReader for RealPromptReader {
 
 struct RealProcessSpawner;
 
+/// Build the daemon child command, stripping connector secrets from the
+/// inherited environment so they never reach the daemon process.
+fn daemon_command(exe: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("start")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .env_remove("MIMIR_CONNECTOR_PASSWORD")
+        .env_remove("MIMIR_CONNECTOR_TOKEN");
+
+    // Detach from the parent process group so Ctrl-C in the terminal
+    // does not propagate to the background daemon.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    cmd
+}
+
 impl ProcessSpawner for RealProcessSpawner {
     fn spawn(&self, exe: &Path) -> Result<(), DaemonGuardError> {
-        let mut cmd = std::process::Command::new(exe);
-        cmd.arg("start")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-
-        // Detach from the parent process group so Ctrl-C in the terminal
-        // does not propagate to the background daemon.
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            cmd.process_group(0);
-        }
-
+        let mut cmd = daemon_command(exe);
         cmd.spawn()
             .map_err(|e| DaemonGuardError::Spawn(e.to_string()))?;
         Ok(())
@@ -218,6 +227,18 @@ impl DaemonGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daemon_command_strips_connector_secrets_from_child_env() {
+        let cmd = daemon_command(Path::new("mimir"));
+        for var in ["MIMIR_CONNECTOR_PASSWORD", "MIMIR_CONNECTOR_TOKEN"] {
+            let entry = cmd.get_envs().find(|(k, _)| *k == var);
+            assert!(
+                matches!(entry, Some((_, None))),
+                "{var} must be removed from the daemon child environment"
+            );
+        }
+    }
 
     struct MockProbe {
         results: std::sync::Mutex<Vec<bool>>,

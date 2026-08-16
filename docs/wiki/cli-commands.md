@@ -400,8 +400,8 @@ mimir connector add gmail --backend imap host=imap.gmail.com auth.kind=app_passw
 # Non-interactive: pipe the credential (recommended — keeps it out of shell history)
 cat secret.txt | mimir connector add gmail --backend imap host=imap.fastmail.com auth.kind=app_password auth.username=me@fastmail.com --password-stdin
 
-# Non-interactive: pass the credential via an environment variable (also safe from shell history)
-MIMIR_CONNECTOR_PASSWORD='app-password' mimir connector add gmail --backend imap host=imap.fastmail.com auth.kind=app_password auth.username=me@fastmail.com
+# Non-interactive: pass the credential via an environment variable (avoids the command line; load it from a protected source)
+MIMIR_CONNECTOR_PASSWORD="$(cat secret.txt)" mimir connector add gmail --backend imap host=imap.fastmail.com auth.kind=app_password auth.username=me@fastmail.com
 
 # Complex configs: full JSON object, with key=value overrides on top
 mimir connector add calendar --backend caldav --config-json '{"calendar_url":"https://dav.example.com/cal","auth":{"kind":"app_password","username":"me@example.com"}}' --slug work-cal
@@ -411,7 +411,7 @@ Config is given as `key=value` pairs with dotted nesting (`auth.kind=app_passwor
 
 Before prompting for credentials, `add` asks the daemon for its catalog and fails fast if the requested `(connector_type, backend)` pair is not registered — no more discovering a typo after an interactive credential flow (issue #271).
 
-**Secret hygiene (issue #270):** `--password <secret>` / `--token <secret>` are visible to any local user via the process list (`ps aux`) while the command runs and persist in shell history, terminal scrollback, and process supervisors' logs. Prefer the non-visible channels for real credentials: `--password-stdin` / `--token-stdin` (the whole piped stream is the secret, trailing newlines stripped — `cat secret.txt | mimir connector add ... --password-stdin`) or the `MIMIR_CONNECTOR_PASSWORD` / `MIMIR_CONNECTOR_TOKEN` environment variables (read by the CLI only, never by the daemon). Precedence per kind: flag, then stdin flag, then env var, then the interactive prompt. The flags are kept for script convenience, but treat them like API keys on a command line.
+**Secret hygiene (issue #270):** `--password <secret>` / `--token <secret>` are visible to any local user via the process list (`ps aux`) while the command runs and persist in shell history, terminal scrollback, and process supervisors' logs. Prefer channels that avoid the command line for real credentials: `--password-stdin` / `--token-stdin` (the whole piped stream is the secret, trailing newlines stripped — `cat secret.txt | mimir connector add ... --password-stdin`) or the `MIMIR_CONNECTOR_PASSWORD` / `MIMIR_CONNECTOR_TOKEN` environment variables (read by the CLI only, never by the daemon; the value stays in the process environment, so load it from a protected source such as `$(cat secret.txt)` rather than typing it into the command). Precedence per kind: flag, then stdin flag, then env var, then the interactive prompt. The flags are kept for script convenience, but treat them like API keys on a command line.
 
 ### `mimir connector catalog`
 

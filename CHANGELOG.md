@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.114.3] — 2026-08-16
+
+### PR #338 review fix: never expose an in-progress backup as a completed `.db` file
+
+- **Root cause.** `create_backup` reserved the final `knowledge-YYYY-MM-DD.db` path and ran `VACUUM INTO` directly into it, so once the copy wrote its first bytes the file was no longer zero-length and `prune_backups` treated it as a real backup; with more than seven concurrent runs a pruning pass could unlink an older in-progress backup, leaving the completed copy without a directory entry.
+- **Fix.** `VACUUM INTO` now writes to a staging path (`knowledge-YYYY-MM-DD.db.staging`) that `prune_backups` never matches, and the completed backup is published to the reserved `.db` path with an atomic rename only after the copy succeeds. Failed runs remove both the reservation and any partial staging file; a staging orphan from a crashed run is cleared by the next run before `VACUUM INTO`.
+- **Tests.** New unit tests cover the publish-without-leftovers contract, orphaned-staging cleanup, and pruning never removing staging files; the concurrent shared-backup-dir regression test now also asserts no staging files remain and every published backup is a queryable database.
+- **Docs.** `docs/nightly-optimization.md` and `docs/wiki/nightly-optimization.md` updated.
+- Version bumped 0.114.2 → 0.114.3 (patch — bug fix).
+
+## [0.114.2] — 2026-08-16
+
+### Flaky test fix: nightly-optimization backup race (issue #241)
+
+- **Root cause.** `test_pending_confirmation_ttl_cleanup` (and two `inference_tests` cases) failed under parallel load because the test-only `run_nightly_optimization` helper hardcoded the real user data dir as the backup directory, and concurrent runs raced on it: `create_backup` picked its filename with a check-then-act sequence (`try_exists` + `VACUUM INTO`), so two runs could select the same file and one failed with `table _sqlx_migrations already exists` or `output file already exists`; `prune_backups` could also fail with `Io(NotFound)` when a concurrent run removed a file mid-scan.
+- **Fix.** `run_nightly_optimization(kg, backup_dir)` now takes the backup directory explicitly and the three tests pass a per-test tempdir, so tests never write to the real user data directory. `create_backup` reserves its filename atomically (`O_EXCL` via `create_new`) so concurrent runs sharing a directory can never collide, and removes the reserved file if `VACUUM INTO` fails; `prune_backups` skips entries that vanish mid-scan instead of failing the pass and ignores empty reserved files left behind by a crash.
+- **Tests.** New regression test `concurrent_full_runs_with_shared_backup_dir_do_not_corrupt_each_other` runs two full nightly pipelines concurrently against one shared backup dir and asserts both succeed and both write backups; `TestGraph` gains a `backup_dir()` helper.
+- **Docs.** `docs/nightly-optimization.md` and `docs/wiki/nightly-optimization.md` updated.
+- Version bumped 0.114.1 → 0.114.2 (patch — bug fix).
+
 ## [0.114.1] — 2026-08-16
 
 ### PR #336 review fixes

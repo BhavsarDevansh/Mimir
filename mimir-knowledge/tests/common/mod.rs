@@ -37,6 +37,12 @@ impl TestGraph {
         Self { kg, _dir: dir }
     }
 
+    /// Per-test backup directory for optimization runs, so tests never write
+    /// to the real user data directory (issue #241).
+    pub fn backup_dir(&self) -> std::path::PathBuf {
+        self._dir.path().join("backups")
+    }
+
     pub async fn create_person(&self, name: &str) -> i32 {
         create_person(&self.kg, name).await
     }

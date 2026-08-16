@@ -566,7 +566,7 @@ async fn test_pending_confirmation_ttl_cleanup() {
         .unwrap();
 
     // Run the nightly optimization which includes the cleanup.
-    mimir_knowledge::optimization::run_nightly_optimization(&tg.kg)
+    mimir_knowledge::optimization::run_nightly_optimization(&tg.kg, &tg.backup_dir())
         .await
         .unwrap();
 

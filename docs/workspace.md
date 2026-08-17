@@ -46,6 +46,10 @@ cargo clippy --workspace --all-targets --all-features
 cargo fmt -- --check
 ```
 
+## Regression Guards
+
+Issue-specific regression guards live in `scripts/tests/` and are run at review time so newly-introduced violations fail before merge: `md-reflow_test.sh` (issue #294) re-checks every repo `.md` file against the AGENTS.md single-line prose standard via `scripts/md-reflow`'s `--check` mode, `rustdoc_test.sh` (issue #276) builds `mimir-connectors` docs with `-D warnings`, and `no-default-features_test.sh` (issue #277) compiles the `mimir-connectors` feature matrix under `--no-default-features`.
+
 ## Version Policy
 
 All workspace members stay in sync on the same semver version unless there is an explicit, documented reason to diverge. The version is bumped in the root `[workspace.package]` table only; members inherit it automatically.

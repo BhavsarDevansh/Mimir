@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.119.1] — 2026-08-17
+
+### Docs: enforce the single-line markdown prose standard (issue #294)
+
+- The one-off reflow of all repo `.md` files landed earlier via #245 (the `scripts/md-reflow` tool); this change wires the tool's `--check` mode into the repo's review-time regression guards as `scripts/tests/md-reflow_test.sh`, so any future hard-wrap drift fails at review time instead of accumulating.
+- Docs updated: `scripts/md-reflow/README.md`, `docs/workspace.md` (regression guards), `docs/wiki/autonomous-loop.md`.
+- Version bumped 0.119.0 → 0.119.1 (patch — documentation and tooling).
+
 ## [0.119.0] — 2026-08-17
 
 ### Refactor: typed enum→wire-string mapping for KB route helpers (issue #293)

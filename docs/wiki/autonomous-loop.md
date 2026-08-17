@@ -17,6 +17,8 @@ Each cycle the loop checks which git branch you are on:
 
 While working, the loop also keeps GitHub itself in good shape: it refreshes stale issue descriptions with the current state of the codebase, files new issues (using the existing labels) for bugs, DRY violations, misplaced code, or performance problems it finds outside the change it is working on, and keeps `README.md`, `docs/wiki/what-works-now.md` and `AGENTS.md` accurate as part of every documentation update.
 
+It also keeps the repo's own markdown consistent: a review-time regression guard (`scripts/tests/md-reflow_test.sh`) re-checks every `.md` file against the single-line prose rule in `AGENTS.md`, so formatting drift is caught before it lands instead of accumulating.
+
 ## When it needs your help
 
 If the loop starts an issue but realises it needs a clarification or a decision that only a human can make, it will not guess. Instead it adds the `help-wanted` label to the issue and posts its questions as a comment on the issue. This is how feature tickets are handled by default: before implementing a feature the loop analyses the requirements in depth, and if anything is missing or ambiguous — scope, design, acceptance criteria, priorities — it asks you and moves on to other work until you reply. When you answer the questions (and remove the `help-wanted` label, if you like), the loop notices on a future run, reads your answers as context, and goes ahead with the implementation. If it still has further questions later, it posts them and puts the `help-wanted` label back, so nothing is ever implemented on guesswork. In the meantime it works on other tickets, so progress never stalls.

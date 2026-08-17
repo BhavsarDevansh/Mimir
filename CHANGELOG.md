@@ -1,10 +1,17 @@
 # Changelog
 
+## [0.117.3] — 2026-08-17
+
+### Docs: HTAB separator described as an implementation extension (PR #355)
+
+- Documentation, test comments, and the changelog now state that RFC 7235 separates the bearer scheme from the credentials with one or more SP characters, and that accepting a tab (HTAB) as well is an interoperability extension of the daemon's `require_auth` rather than RFC 7235 syntax.
+- Version bumped 0.117.2 → 0.117.3 (patch — documentation update).
+
 ## [0.117.2] — 2026-08-17
 
 ### Fix: RFC 7235 header parsing and CLI token-attachment fallback (issue #281)
 
-- The daemon's `require_auth` now accepts a single tab (HTAB) as well as a space between the `Bearer` scheme and the credentials, per RFC 7235, with a regression test (`test_status_accepts_tab_separated_scheme`).
+- The daemon's `require_auth` now accepts a single tab (HTAB) as well as a space between the `Bearer` scheme and the credentials — an interoperability extension beyond RFC 7235's SP separator — with a regression test (`test_status_accepts_tab_separated_scheme`).
 - The CLI's `make_client` now uses the fallible `try_new_with_token` constructor and, if the token cannot be attached as a header, prints a warning and falls back to a tokenless client so the daemon's `401` surfaces the problem instead of a panic. `mimir-client` exposes `DEFAULT_CONNECT_TIMEOUT` / `DEFAULT_TOTAL_TIMEOUT` so the default timeouts are defined once and reused by `new`, `with_token`, and the CLI.
 - Docs updated: `docs/api-authentication.md` (HTAB parsing, CLI fallback, test list), `docs/wiki/server.md` (CLI warning behaviour).
 - Version bumped 0.117.1 → 0.117.2 (patch — bug fixes).

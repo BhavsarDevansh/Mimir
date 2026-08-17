@@ -99,7 +99,7 @@ async fn test_status_accepts_lowercase_bearer_scheme() {
 
 #[tokio::test]
 async fn test_status_accepts_tab_separated_scheme() {
-    // RFC 7235 allows SP or HTAB between the scheme and the credentials.
+    // RFC 7235 uses SP between the scheme and the credentials; accepting HTAB too is an implementation extension.
     let mock = Arc::new(MockLlmClient::builder().build());
     let (state, _temp) = test_state(mock).await;
     let app = mimir_server::build_app(state.clone());

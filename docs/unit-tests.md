@@ -21,7 +21,7 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 - `tools/permission.rs`: 5 tests for default, `as_str`/`from_str` roundtrip, case-insensitive parsing, serde lowercase rename.
 - `tools/error.rs`: 3 tests for constructor variants, `Into<String>` acceptance, `Display` formatting.
 
-279 lib tests (up from 179).
+279 lib tests (up from 211).
 
 ## `mimir-knowledge`
 
@@ -33,14 +33,14 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 - `models/source.rs`: 2 tests — `SourceType::try_from<i16>` roundtrip (valid/invalid discriminants) and `as_str` wire-contract names.
 - `models/fact.rs`: 6 tests — `FactStatus` discriminant roundtrip, `Fact::status` mapping, `try_from<i16>` roundtrip, `as_str` wire-contract names, `FromStr` wire-string parsing (incl. case-insensitive), `NewFact` defaults.
 
-195 lib tests (up from ~74).
+195 lib tests (up from 110).
 
 ## `mimir-server`
 
 - `error.rs`: 15 tests for every `ApiError` response helper — status codes, error codes, `Retry-After` header on `QueueFull`, and (security-relevant) verification that internal error details (context IDs, LLM upstream text, memory I/O messages, KG internal variants) are masked from clients.
 - `routes/kb/helpers.rs`: 3 tests — `status_name` / `source_type_name` wire-contract strings (incl. `Unknown` fallback) and `parse_status` wire-string parsing.
 
-41 lib tests (up from 50).
+41 lib tests (up from 38).
 
 ## `mimir` (binary)
 

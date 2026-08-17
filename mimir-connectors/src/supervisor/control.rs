@@ -115,7 +115,7 @@ impl ConnectorSupervisor {
     /// The per-runner stop signal is sent first so each runner aborts and
     /// awaits its in-flight cycle sub-task before exiting — a runner only
     /// returns once its cycle task is gone (issue #266). Runners still alive
-    /// after [`SHUTDOWN_GRACE`] are aborted as a defensive fallback for
+    /// after `SHUTDOWN_GRACE` are aborted as a defensive fallback for
     /// stragglers; their cycle handles remain registered in the shared
     /// `CycleRegistry`, which is drained and awaited afterwards, so no cycle
     /// task can outlive `shutdown` even on the abort path.

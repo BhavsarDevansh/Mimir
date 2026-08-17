@@ -15,7 +15,7 @@ use super::store::{SecretStore, validate_slug};
 
 /// In-memory [`SecretStore`] backed by a [`HashMap`].
 ///
-/// Primarily a test harness for the [`crate::mock`] connector and unit tests,
+/// Primarily a test harness for the `crate::mock` connector and unit tests,
 /// but exposed so any caller that does not want on-disk persistence (e.g. an
 /// ephemeral daemon process) can use it directly. Thread-safe via a [`Mutex`]; wrap in `Arc` to share across tasks.
 #[derive(Debug, Default)]

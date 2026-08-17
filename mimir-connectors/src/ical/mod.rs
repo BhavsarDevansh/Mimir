@@ -5,15 +5,15 @@
 //! connector (`#197`/`#198`) and the IMAP Email connector's iMIP-invite
 //! extraction (`#200`) — parse the *same* RFC 5545 VEVENT payload into the
 //! *same* intrinsic fields and turn it into the *same* cluster of
-//! [`NormalizedFact`]s. This module is the single source of truth for both:
+//! [`mimir_knowledge::normalize::NormalizedFact`]s. This module is the single source of truth for both:
 //!
-//! - [`parse_ical_to_vevents`] parses an iCalendar text payload into one
-//!   [`RawVEvent`] per `VEVENT` (UTC-resolved dates, resolved attendee display
+//! - [`crate::ical::parse_ical_to_vevents`] parses an iCalendar text payload into one
+//!   [`crate::ical::RawVEvent`] per `VEVENT` (UTC-resolved dates, resolved attendee display
 //!   names, raw `RRULE`). It does not know where the payload came from
 //!   (a CalDAV resource or a `text/calendar` MIME part) — that provenance is
 //!   supplied by the caller as the `raw_reference` on each fact.
-//! - [`vevent_to_facts`] turns one [`RawVEvent`] into the appointment cluster:
-//!   `user has_event <event>` (typed [`EventType::Appointment`], recurrence
+//! - [`crate::ical::vevent_to_facts`] turns one [`crate::ical::RawVEvent`] into the appointment cluster:
+//!   `user has_event <event>` (typed [`mimir_knowledge::models::enums::EventType::Appointment`], recurrence
 //!   from `RRULE` `FREQ`), `<event> located_in <place>`, and
 //!   `<attendee> attending <event>`. Entity resolution, confidence, and the
 //!   events-subsystem overlay are left to the shared `normalize_and_insert`

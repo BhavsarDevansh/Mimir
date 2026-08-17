@@ -1,7 +1,7 @@
 //! CalDAV calendar connector (Phase 3 C3 / #197), gated by the `calendar`
 //! feature.
 //!
-//! A [`caldav::CalDavClient`] (PROPFIND + sync-collection REPORT, sync-token
+//! A [`crate::calendar::caldav::CalDavClient`] (PROPFIND + sync-collection REPORT, sync-token
 //! incremental sync, `icalendar` VEVENT parsing) backs a [`CalendarConnector`]
 //! implementing the two-step ingestion model ([`crate::Connector`]) in
 //! `Polling` mode. Auth is an app password (HTTP Basic) or an OAuth bearer
@@ -12,8 +12,8 @@
 //!
 //! C3 (#197) delivers the *transport* + `sync` that stages parsed VEVENTs in
 //! an internal buffer. C4 / #198 (this module's extractor + write-back)
-//! converts those events into a cluster of [`NormalizedFact`]s — a primary
-//! `user has_event <event>` (typed [`EventType::Appointment`], recurrence
+//! converts those events into a cluster of [`mimir_knowledge::normalize::NormalizedFact`]s — a primary
+//! `user has_event <event>` (typed [`mimir_knowledge::models::enums::EventType::Appointment`], recurrence
 //! from `RRULE` `FREQ`), `<event> located_in <place>`, and `<attendee>
 //! attending <event>` — so the shared `normalize_and_insert` pipeline
 //! resolves every entity via F5 and the events-subsystem (#74) surfaces

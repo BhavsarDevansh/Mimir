@@ -31,7 +31,7 @@
 //!   (F7 / #184): maps `(connector_type, backend)` to a [`ConnectorFactory`]
 //!   and constructs instances on demand; includes the closure-backed
 //!   [`FnConnectorFactory`].
-//! - [`mock`] — configurable mock connector test harness (F13 / #190): emits
+//! - `mock` — configurable mock connector test harness (F13 / #190): emits
 //!   canned `NormalizedFact`s on a configurable cadence in both `Polling` and
 //!   `Push` modes, with health/auth/failure/panic injection, and is the T1
 //!   sync→extract→insert→query vehicle. Includes `MockFactConfig` (canned-fact

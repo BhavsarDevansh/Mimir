@@ -30,7 +30,7 @@
 //!
 //! The trait is used as `Arc<dyn Connector>` by the registry (F7) and the
 //! supervisor (F8). Native `async fn` in traits is not dyn-compatible
-//! (`error[E0038]`), so [`async_trait`] is used with the default `Send` bound
+//! (`error[E0038]`), so [`macro@async_trait`] is used with the default `Send` bound
 //! so `dyn Connector` is usable across multi-threaded tasks.
 
 use std::time::Duration;
@@ -122,7 +122,7 @@ impl ConnectorContext {
     }
 
     /// An empty context with no shared services (used by the registry's
-    /// config-only [`ConnectorRegistry::create`] shortcut and by connectors
+    /// config-only [`crate::registry::ConnectorRegistry::create`] shortcut and by connectors
     /// that need no injected dependencies).
     pub fn empty() -> Self {
         Self::default()
@@ -140,7 +140,7 @@ impl ConnectorContext {
     }
 
     /// Attach a shared [`Geocoder`] to this context (builder), mirroring
-    /// [`ConnectorSupervisor::with_geocoder`].
+    /// [`crate::supervisor::ConnectorSupervisor::with_geocoder`].
     pub fn with_geocoder(mut self, geocoder: std::sync::Arc<dyn Geocoder>) -> Self {
         self.geocoder = Some(geocoder);
         self
@@ -159,7 +159,7 @@ impl ConnectorContext {
     }
 
     /// Attach a shared [`LlmBackend`] to this context (builder), mirroring
-    /// [`ConnectorSupervisor::with_llm_backend`]. Connectors that perform LLM
+    /// [`crate::supervisor::ConnectorSupervisor::with_llm_backend`]. Connectors that perform LLM
     /// extraction (Email C7 / #201) clone the `Arc<dyn LlmBackend>` out of
     /// the context and route calls through [`LlmBackend::system_chat_message`].
     pub fn with_llm_backend(mut self, backend: std::sync::Arc<dyn LlmBackend>) -> Self {
@@ -490,7 +490,7 @@ pub trait Connector: Send + Sync {
     /// a removal reported twice trashes nothing the second time.
     ///
     /// The report is **non-destructive**: the pending tombstones stay
-    /// buffered until the supervisor calls [`acknowledge_deletions`] after
+    /// buffered until the supervisor calls [`acknowledge_deletions`](Self::acknowledge_deletions) after
     /// the cycle's trashing, fact insertion, and cursor persistence all
     /// succeeded, so a transient failure re-reports the same removals on the
     /// next cycle instead of losing them. Connectors whose services cannot

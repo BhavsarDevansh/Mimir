@@ -1,4 +1,6 @@
-//! Shared fixtures for the CalDAV calendar connector integration tests.
+//! Shared fixtures for the connector integration tests: CalDAV calendar
+//! fixtures (gated by the `calendar` feature) and the framework/supervisor
+//! test harness used by the `test-mock-connector` supervisor tests.
 
 #![allow(dead_code)]
 
@@ -6,28 +8,31 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::json;
-use wiremock::matchers::{body_string_contains, method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use mimir_connectors::{
-    CalendarConnector, ConnectorRegistry, ConnectorSupervisor, InMemorySecretStore, SecretBundle,
-    SecretStore, SupervisorConfig,
-};
+#[cfg(feature = "calendar")]
+use chrono::{Duration as ChronoDuration, Utc};
+#[cfg(feature = "calendar")]
+use mimir_connectors::{CalendarConnector, InMemorySecretStore, SecretBundle, SecretStore};
 #[cfg(feature = "test-mock-connector")]
 use mimir_connectors::{
     Connector, ConnectorError, FnConnectorFactory, MockConnector, MockConnectorFactory,
     MockSyncRecorder,
 };
+use mimir_connectors::{ConnectorRegistry, ConnectorSupervisor, SupervisorConfig};
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorStatus, ConnectorType};
+#[cfg(feature = "calendar")]
+use wiremock::matchers::{body_string_contains, method, path};
+#[cfg(feature = "calendar")]
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ---------------------------------------------------------------------------
-// Fixtures + helpers
+// CalDAV calendar fixtures + helpers (gated by the `calendar` feature)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "calendar")]
 pub const ICAL_EVENT: &str = "BEGIN:VCALENDAR\n\
 VERSION:2.0\n\
 PRODID:-//Mimir//Test//EN\n\
@@ -41,6 +46,7 @@ STATUS:CONFIRMED\n\
 END:VEVENT\n\
 END:VCALENDAR";
 
+#[cfg(feature = "calendar")]
 pub const ICAL_RECURRING: &str = "BEGIN:VCALENDAR\n\
 VERSION:2.0\n\
 BEGIN:VEVENT\n\
@@ -51,6 +57,7 @@ RRULE:FREQ=YEARLY\n\
 END:VEVENT\n\
 END:VCALENDAR";
 
+#[cfg(feature = "calendar")]
 pub fn sync_body(token: &str, items: &[(&str, &str)], deleted: &[&str]) -> String {
     let mut responses = String::new();
     for (href, ical) in items {
@@ -73,6 +80,7 @@ pub fn sync_body(token: &str, items: &[(&str, &str)], deleted: &[&str]) -> Strin
     )
 }
 
+#[cfg(feature = "calendar")]
 pub async fn mount_sync(
     server: &MockServer,
     path_suffix: &str,
@@ -97,6 +105,7 @@ pub async fn mount_sync(
         .await;
 }
 
+#[cfg(feature = "calendar")]
 pub fn app_password_config(calendar_url: &str) -> serde_json::Value {
     json!({
         "calendar_url": calendar_url,
@@ -107,6 +116,7 @@ pub fn app_password_config(calendar_url: &str) -> serde_json::Value {
     })
 }
 
+#[cfg(feature = "calendar")]
 pub fn oauth_config(calendar_url: &str, token_endpoint: &str) -> serde_json::Value {
     json!({
         "calendar_url": calendar_url,
@@ -123,6 +133,7 @@ pub fn oauth_config(calendar_url: &str, token_endpoint: &str) -> serde_json::Val
     })
 }
 
+#[cfg(feature = "calendar")]
 pub async fn store_with_app_password() -> Arc<dyn SecretStore> {
     let store = Arc::new(InMemorySecretStore::new());
     store
@@ -137,6 +148,7 @@ pub async fn store_with_app_password() -> Arc<dyn SecretStore> {
     store
 }
 
+#[cfg(feature = "calendar")]
 pub async fn store_with_expired_oauth(refresh_token: &str) -> Arc<dyn SecretStore> {
     let store = Arc::new(InMemorySecretStore::new());
     store
@@ -153,6 +165,7 @@ pub async fn store_with_expired_oauth(refresh_token: &str) -> Arc<dyn SecretStor
     store
 }
 
+#[cfg(feature = "calendar")]
 pub fn make_connector(
     config: serde_json::Value,
     store: Arc<dyn SecretStore>,
@@ -167,6 +180,7 @@ pub fn make_connector(
 /// Like [`make_connector`] but injects a canonical user identity so the
 /// extractor authors `user has_event <event>` (and the event surfaces in the
 /// user's "Upcoming" section).
+#[cfg(feature = "calendar")]
 pub fn make_connector_as(
     config: serde_json::Value,
     store: Arc<dyn SecretStore>,

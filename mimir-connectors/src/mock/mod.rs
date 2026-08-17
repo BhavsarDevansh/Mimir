@@ -2,7 +2,7 @@
 //! issue #190).
 //!
 //! `MockConnector` is an in-memory connector whose behaviour is driven
-//! entirely by its `config_json`: it emits canned [`NormalizedFact`]s on a
+//! entirely by its `config_json`: it emits canned [`mimir_knowledge::normalize::NormalizedFact`]s on a
 //! configurable cadence, in either [`ConnectorMode::Polling`] or
 //! [`ConnectorMode::Push`], and can inject failures, panics, and health/auth
 //! states to exercise the [`ConnectorSupervisor`](crate::supervisor). It is

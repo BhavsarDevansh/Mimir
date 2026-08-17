@@ -232,7 +232,7 @@ impl ConnectorRegistry {
     /// Like [`create`](Self::create) but forwards `ctx` to the factory so
     /// backends that need injected dependencies (the Photos connector's
     /// geocoder, Phase 3 C2 / #196) receive them. The supervisor (F8) calls
-    /// this with the daemon-wide context; the config-only [`create`] is the
+    /// this with the daemon-wide context; the config-only [`create`](Self::create) is the
     /// convenience path for callers with no services to inject.
     pub fn create_with_context(
         &self,

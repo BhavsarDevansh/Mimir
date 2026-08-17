@@ -18,9 +18,9 @@
 //!   generated [`CsrfToken`] or the flow aborts without exchanging.
 //! - **Token endpoint gate** — the exchange posts the code (and optional
 //!   `client_secret`) through the same HTTPS/loopback gate as the refresh
-//!   grant ([`super::refresh::validate_token_endpoint`]).
+//!   grant (`super::refresh::validate_token_endpoint`).
 //! - **Secret hygiene** — exchange errors go through the shared
-//!   [`super::refresh::map_token_error`] mapping: only parsed
+//!   `super::refresh::map_token_error` mapping: only parsed
 //!   `error`/`error_description` (truncated) are surfaced, never the raw
 //!   response body.
 //! - **Bounded callback read** — the loopback request is read with an 8 KiB

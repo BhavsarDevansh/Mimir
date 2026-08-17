@@ -293,6 +293,10 @@ The crate root (`src/lib.rs`) re-exports the public API; each subsystem is a dir
 
 Provenance types that connectors reference (`ConnectorType`, `SourceType`) live in `mimir-knowledge` and are re-used, not duplicated (DRY).
 
+## Documentation conventions
+
+`cargo doc -p mimir-connectors --no-deps --all-features` must build with zero warnings (issue #276); `scripts/tests/rustdoc_test.sh` enforces this with `RUSTDOCFLAGS="-D warnings"` so newly-introduced broken links fail at review time. Module-level `//!` docs resolve intra-doc links against the *parent* module's scope, so links to the module's own items use full paths (`crate::ical::parse_ical_to_vevents`, `crate::registry::ConnectorRegistry::create`) or `Self::` where applicable, and external types use full paths (`mimir_knowledge::normalize::NormalizedFact`). Private items (private modules, `pub(crate)`/`pub(super)` types) are rendered as code spans (`` `config` ``), never links, so public docs never warn about private targets. Ambiguous names use namespace disambiguators (`macro@async_trait`).
+
 ## Feature flags
 
 ```toml

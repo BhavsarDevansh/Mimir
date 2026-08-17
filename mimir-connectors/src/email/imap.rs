@@ -20,9 +20,9 @@
 //! # Testability
 //!
 //! The session logic is generic over the underlying stream `S` and exposed as
-//! [`ImapSession`], so tests drive it against a fake IMAP server speaking the
+//! `ImapSession`, so tests drive it against a fake IMAP server speaking the
 //! protocol over a [`tokio::io::duplex`] pair — no TLS, no live account. The
-//! production path ([`connect_tls`] + [`imap_login`]) is the only TLS-aware
+//! production path (`connect_tls` + `imap_login`) is the only TLS-aware
 //! entry point.
 //!
 //! # No `unsafe`

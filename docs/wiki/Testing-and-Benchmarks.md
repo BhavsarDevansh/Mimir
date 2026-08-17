@@ -6,7 +6,7 @@ A `tests-and-benchmarks` pass massively expanded Mimir's automated test and benc
 
 ## How Mimir is tested
 
-- **Unit tests** (`#[cfg(test)]` modules inside each crate) cover pure helpers, wire-type (de)serialisation, and HTTP error mapping. They run in milliseconds and need no network.
+- **Unit tests** (`#[cfg(test)]` modules inside each crate) cover pure helpers, wire-type (de)serialisation, and HTTP error mapping. They run in milliseconds and need no network. Per-crate coverage is documented in `docs/unit-tests.md`; `mimir-connectors` alone carries 319 inline tests across the OAuth, rate-limit, supervisor, calendar, email, photos, geocoder, and secrets modules.
 - **Integration tests** (`<crate>/tests/*.rs`) exercise SQLite-backed and wiremock-backed pathways end to end.
 - **Daemon E2E tests** (`mimir/tests/*.rs`) boot the real daemon in-process (mock LLM, isolated temp HOME/XDG) and drive the real `mimir` CLI binary against it — the full connector lifecycle plus the mock-connector sync → `normalize_and_insert` → KB-query round trip with provenance, reliability-score confidence, and corroboration assertions (issue #206), and the OAuth PKCE login against an in-process mock OAuth server via a `$BROWSER` fake browser (issue #207).
 - **Connector E2E tests** (`mimir-connectors/tests/*.rs`) cover the PKCE flow against the mock OAuth server (HTTPS authorize + HTTP token endpoints, PKCE S256 validation, one-time codes), the rate-limit/backoff primitives over real HTTP (429/503 with `Retry-After`, daily-quota exhaustion), and the supervisor edge cases (startup restore, shutdown cursor persistence, circuit breaker, panic recovery) — issue #207.

@@ -42,6 +42,24 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 
 41 lib tests (up from 38).
 
+## `mimir-connectors`
+
+319 lib tests (default features: `photos`, `calendar`, `gmail`). The crate's inline unit tests cover the framework core and every backend:
+
+- `oauth/` (`pkce.rs`, `refresh.rs`, `http_client.rs`): PKCE code-verifier/challenge generation and S256 verification, the refresh-grant POST (client-secret omission, redirect rejection, HTTPS/loopback endpoint gate, parsed-error-only mapping, hostile `expires_in` clamping), and the `OAuthHttpClient` adapter.
+- `rate_limit/` (`tests.rs`): token-bucket quota tracking (window rollover, snapshot round-trip, fail-fast exhaustion), backoff delay clamping/saturation, `Retry-After` honouring, and jitter bounds.
+- `supervisor/` (`control_tests.rs`, `instantiate_tests.rs`, `forget_tests.rs`, `cycle.rs`): start/pause/resume/stop control, cursor + durable-state injection at instantiation, forget cascade, and cycle outcomes.
+- `calendar/` (`caldav/tests.rs`, `credentials_tests.rs`): CalDAV sync-collection PROPFIND/REPORT bodies (DAV namespace, sync-level element), tombstone handling (404/410 vs 507 truncation), iCalendar VEVENT field extraction (attendees, organizer, TZID), and credential parsing.
+- `email/` (`config_tests.rs`, `extract_tests.rs`, `imap_tests.rs`, `jsonld/tests.rs`, `llm/tests.rs`, `llm_tests.rs`, `kb_tests.rs`): config parsing, the deterministic extraction cascade, IMAP session handling, JSON-LD fact extraction, and the LLM prose-extraction schema/parse/retry layer.
+- `photos/` (`logic_tests.rs`, `behaviour_tests.rs`): cursor round-trip/classification, EXIF GPS + datetime parsing (JPEG/TIFF), reverse-geocode fact construction, watcher failure handling, and geocode retry bounding.
+- `geocoder/` (`tests.rs`): query percent-encoding, Nominatim place→result mapping, locality short-name specificity chain, and coordinate parsing.
+- `secrets/` (`mod_tests.rs`, `store.rs`, `memory.rs`, `bundle.rs`): slug validation, debug-redaction of secret values, and store round-trips.
+- `ical/` (`tests.rs`): shared VEVENT parsing used by both the calendar and email backends.
+- `test_utils.rs` (feature `test-utils`, issues #290/#298): the shared fake-browser opener, authorize-URL parsing, and wiremock token-endpoint mock.
+- `connector.rs` / `fact.rs`: trait data-type invariants (factory context, user-identity normalisation, `NormalizedFact` defaults).
+
+The `test-mock-oauth`-gated mock OAuth server (`src/mock_oauth.rs`, issue #207) has no inline tests of its own; its correctness is exercised by the integration tests in `tests/oauth_pkce_e2e.rs` and the `mimir` binary's CLI connector tests. The crate's integration-test split (`tests/*.rs`) is documented in `docs/e2e-testing.md`.
+
 ## `mimir` (binary)
 
 - `kb/`: 16 tests for `parse_datetime` (RFC3339, date-only, ISO without zone, space separator, fractional seconds, invalid), `confidence_color` boundary semantics, and `truncate` (short/exact/long+ellipsis/multibyte/`max=0`).
@@ -58,6 +76,7 @@ cargo test --workspace
 cargo test -p mimir-core --lib
 cargo test -p mimir-knowledge --lib
 cargo test -p mimir-server --lib
+cargo test -p mimir-connectors --lib
 
 # Binary crate inline tests
 cargo test -p mimir --bin mimir

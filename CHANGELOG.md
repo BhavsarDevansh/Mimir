@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.118.0] — 2026-08-17
+
+### Refactor: async user-skill loading and config test-module cleanup (issue #287)
+
+- `SkillRegistry::load_user_skills` now performs asynchronous file I/O (`tokio::fs::read_dir` / `read_to_string` / `try_exists`) instead of blocking the runtime with synchronous `std::fs` calls, so a future server-side skill surface can load skills without blocking the daemon. The CLI caller and the `mimir-core` integration tests were updated to `.await`, and a new test covers the missing-directory no-op.
+- Removed the duplicate `#[cfg(test)]` attribute on the test module in `mimir-core/src/config/reload.rs`.
+- Docs updated: `docs/skills.md` (user-skill loading), `docs/wiki/what-works-now.md` (backlog row removed).
+- Version bumped 0.117.3 → 0.118.0 (minor — refactor).
+
 ## [0.117.3] — 2026-08-17
 
 ### Docs: HTAB separator described as an implementation extension (PR #355)

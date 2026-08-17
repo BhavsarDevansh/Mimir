@@ -9,8 +9,8 @@ fn registry_with_builtins_contains_expected_skills() {
     assert!(names.contains(&"test_driven_development"));
 }
 
-#[test]
-fn registry_loads_user_skills_from_directory() {
+#[tokio::test]
+async fn registry_loads_user_skills_from_directory() {
     let dir = tempfile::tempdir().unwrap();
     let skill_path = dir.path().join("hello.md");
     std::fs::write(
@@ -29,7 +29,7 @@ Say hello to the user.
     .unwrap();
 
     let registry = SkillRegistry::new();
-    let count = registry.load_user_skills(dir.path()).unwrap();
+    let count = registry.load_user_skills(dir.path()).await.unwrap();
     assert_eq!(count, 1);
 
     let meta = registry.metadata("hello-world").unwrap();
@@ -37,8 +37,8 @@ Say hello to the user.
     assert_eq!(meta.source, SkillSource::User);
 }
 
-#[test]
-fn registry_skips_invalid_files() {
+#[tokio::test]
+async fn registry_skips_invalid_files() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("valid.md"),
@@ -53,8 +53,17 @@ fn registry_skips_invalid_files() {
     .unwrap();
 
     let registry = SkillRegistry::new();
-    let count = registry.load_user_skills(dir.path()).unwrap();
+    let count = registry.load_user_skills(dir.path()).await.unwrap();
     assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn load_user_skills_missing_directory_returns_zero() {
+    let registry = SkillRegistry::new();
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("does-not-exist");
+    let count = registry.load_user_skills(&missing).await.unwrap();
+    assert_eq!(count, 0);
 }
 
 #[test]
@@ -87,8 +96,8 @@ Do the thing.
     assert!(schema["properties"].get("input").is_some());
 }
 
-#[test]
-fn openai_export_includes_both_builtin_and_user() {
+#[tokio::test]
+async fn openai_export_includes_both_builtin_and_user() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("user.md"),
@@ -97,7 +106,7 @@ fn openai_export_includes_both_builtin_and_user() {
     .unwrap();
 
     let registry = SkillRegistry::with_builtins();
-    registry.load_user_skills(dir.path()).unwrap();
+    registry.load_user_skills(dir.path()).await.unwrap();
 
     let exported = registry.export_openai_tools();
     let names: Vec<_> = exported

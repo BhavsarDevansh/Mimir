@@ -110,7 +110,7 @@ pub async fn handle_skill_command(command: SkillCommands) {
     let registry = SkillRegistry::with_builtins();
 
     let sdir = skills_dir();
-    if let Err(e) = registry.load_user_skills(&sdir) {
+    if let Err(e) = registry.load_user_skills(&sdir).await {
         eprintln!("Warning: failed to load user skills: {e}");
     }
 

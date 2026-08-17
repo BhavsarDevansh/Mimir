@@ -11,4 +11,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$SCRIPT_DIR"
 
+# `--all-features` covers the default feature set; `--no-default-features`
+# guards the feature-gated link class (e.g. `crate::mock`) fixed in #276.
 RUSTDOCFLAGS="-D warnings" cargo doc -p mimir-connectors --no-deps --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc -p mimir-connectors --no-deps --no-default-features

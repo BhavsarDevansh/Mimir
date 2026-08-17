@@ -5,7 +5,7 @@
 ### Docs: zero rustdoc warnings in mimir-connectors (issue #276)
 
 - `cargo doc -p mimir-connectors --no-deps --all-features` emitted 35 warnings (28 unresolved intra-doc links, 6 private-item links, and one ambiguous-name warning). Every link now resolves: module-level `//!` docs use full paths (`crate::ical::parse_ical_to_vevents`, `crate::registry::ConnectorRegistry::create`, `mimir_knowledge::normalize::NormalizedFact`) or `Self::` where applicable, private items are rendered as code spans instead of links, and the `async_trait` ambiguity is disambiguated with `macro@async_trait`. Two feature-gated `mock` links in `lib.rs` and `secrets/memory.rs` were also fixed, so the doc build is clean under default, `--all-features`, and `--no-default-features`.
-- Regression guard: `scripts/tests/rustdoc_test.sh` runs `RUSTDOCFLAGS="-D warnings" cargo doc -p mimir-connectors --no-deps --all-features` so newly-introduced broken links fail at review time.
+- Regression guard: `scripts/tests/rustdoc_test.sh` runs `RUSTDOCFLAGS="-D warnings" cargo doc -p mimir-connectors --no-deps` under `--all-features` and `--no-default-features` so newly-introduced broken links fail at review time.
 - Docs updated: `docs/connectors-framework.md` (documentation conventions section), `docs/wiki/what-works-now.md` (backlog: #276 done, #348 added for the remaining mimir-server warning).
 - Version bumped 0.116.1 → 0.116.2 (patch — documentation fix).
 

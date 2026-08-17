@@ -29,7 +29,8 @@ Run the guided initialisation:
 This will:
 1. Create the XDG config directory (`~/.config/mimir/`)
 2. Generate a default `config.toml`
-3. Optionally install and enable a systemd user service
+3. Generate the local API token (`~/.local/share/mimir/api_token`) that the daemon and CLI use to authenticate each other
+4. Optionally install and enable a systemd user service
 
 ## Configuration
 

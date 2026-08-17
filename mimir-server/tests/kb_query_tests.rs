@@ -51,7 +51,7 @@ async fn test_kb_optimization_status_returns_job() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .uri("/kb/optimization/status")
                 .body(Body::empty())
                 .unwrap(),
@@ -77,7 +77,7 @@ async fn test_kb_optimization_run_now_triggers_job() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/kb/optimization/run-now")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -125,7 +125,7 @@ async fn test_kb_optimization_run_now_cancelled_returns_409() {
     let jq = Arc::clone(&state.job_queue);
     let response_task = tokio::spawn(async move {
         app.oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/kb/optimization/run-now")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -173,7 +173,7 @@ async fn test_kb_optimization_run_now_timed_out_returns_504() {
     let app = mimir_server::build_app(Arc::clone(&state));
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/kb/optimization/run-now")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -240,7 +240,7 @@ async fn test_kb_query_returns_facts() {
     let app = mimir_server::build_app(state.clone());
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("GET")
                 .uri("/kb/query?entity=Alice")
                 .body(Body::empty())
@@ -303,7 +303,7 @@ async fn test_kb_show_returns_fact_detail() {
     let app = mimir_server::build_app(state.clone());
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("GET")
                 .uri(format!("/kb/facts/{}", fact.id))
                 .body(Body::empty())
@@ -375,7 +375,7 @@ async fn test_kb_browse_returns_edges() {
     let app = mimir_server::build_app(state.clone());
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("GET")
                 .uri("/kb/browse?entity=Alice&depth=2")
                 .body(Body::empty())
@@ -438,7 +438,7 @@ async fn test_kb_profile_returns_groups() {
     let app = mimir_server::build_app(state.clone());
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("GET")
                 .uri("/kb/profile?entity=Charlie")
                 .body(Body::empty())
@@ -501,7 +501,7 @@ async fn test_kb_audit_returns_entries() {
     let app = mimir_server::build_app(state.clone());
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("GET")
                 .uri("/kb/audit?entity=Dave")
                 .body(Body::empty())
@@ -577,7 +577,7 @@ async fn test_kb_forget_restore_trash_roundtrip() {
     let _forget_resp = app
         .clone()
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/kb/facts/forget")
                 .header("Content-Type", "application/json")
@@ -594,7 +594,7 @@ async fn test_kb_forget_restore_trash_roundtrip() {
     let trash_resp = app
         .clone()
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("GET")
                 .uri("/kb/trash")
                 .body(Body::empty())
@@ -613,7 +613,7 @@ async fn test_kb_forget_restore_trash_roundtrip() {
     let _restore_resp = app
         .clone()
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/kb/trash/restore")
                 .header("Content-Type", "application/json")
@@ -632,7 +632,7 @@ async fn test_kb_forget_rejects_non_loopback() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/kb/facts/forget")
                 .header("Content-Type", "application/json")
@@ -652,7 +652,7 @@ async fn test_kb_trash_empty_rejects_non_loopback() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("DELETE")
                 .uri("/kb/trash")
                 .extension(non_loopback_connect_info())
@@ -671,7 +671,7 @@ async fn test_kb_trash_restore_rejects_non_loopback() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/kb/trash/restore")
                 .header("Content-Type", "application/json")

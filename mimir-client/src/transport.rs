@@ -35,7 +35,40 @@ impl MimirClient {
         timeout: std::time::Duration,
     ) -> Result<Self, ClientError> {
         let base_url = Self::normalize_base_url(base_url.into())?;
-        let client = Self::build_client(connect_timeout, timeout)?;
+        let client = Self::build_client(connect_timeout, timeout, None)?;
+        Ok(Self { base_url, client })
+    }
+
+    /// Create a new client that authenticates every request with a bearer
+    /// token (`Authorization: Bearer <token>`), as required by the daemon's
+    /// API authentication (issue #281).
+    ///
+    /// Uses the default connect (10s) and total (120s) timeouts. A failure to
+    /// build the underlying `reqwest::Client` panics, mirroring [`Self::new`];
+    /// callers that prefer a fallible path should use
+    /// [`Self::try_new_with_token`].
+    pub fn with_token(base_url: impl Into<String>, token: impl Into<String>) -> Self {
+        Self::try_new_with_token(
+            base_url,
+            token,
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(120),
+        )
+        .expect("default reqwest client must build")
+    }
+
+    /// Create a new client with a bearer token and explicit timeouts,
+    /// returning a [`ClientError`] instead of panicking when the HTTP client
+    /// cannot be built. The token is attached as a default header so every
+    /// request — including SSE streams — carries it.
+    pub fn try_new_with_token(
+        base_url: impl Into<String>,
+        token: impl Into<String>,
+        connect_timeout: std::time::Duration,
+        timeout: std::time::Duration,
+    ) -> Result<Self, ClientError> {
+        let base_url = Self::normalize_base_url(base_url.into())?;
+        let client = Self::build_client(connect_timeout, timeout, Some(token.into().as_str()))?;
         Ok(Self { base_url, client })
     }
 
@@ -60,12 +93,19 @@ impl MimirClient {
     pub(crate) fn build_client(
         connect_timeout: std::time::Duration,
         timeout: std::time::Duration,
+        auth_token: Option<&str>,
     ) -> Result<reqwest::Client, ClientError> {
-        reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .connect_timeout(connect_timeout)
-            .timeout(timeout)
-            .build()
-            .map_err(Self::map_build_error)
+            .timeout(timeout);
+        if let Some(token) = auth_token {
+            let value = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|e| ClientError::Connection(format!("invalid API token: {e}")))?;
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(reqwest::header::AUTHORIZATION, value);
+            builder = builder.default_headers(headers);
+        }
+        builder.build().map_err(Self::map_build_error)
     }
 
     /// Map a `reqwest::Client` build failure to a [`ClientError::Connection`].
@@ -240,6 +280,45 @@ mod tests {
             ),
             other => panic!("expected Connection error, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn with_token_attaches_bearer_header_to_every_request() {
+        // Issue #281: a token-bearing client must send
+        // `Authorization: Bearer <token>` on every request so the daemon's
+        // auth middleware accepts it.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/status"))
+            .and(wiremock::matchers::header(
+                "Authorization",
+                "Bearer secret-token",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                mimir_api_types::StatusResponse {
+                    version: "0.0.0".to_string(),
+                    uptime_seconds: 1,
+                    queue_depth_user: 0,
+                    queue_depth_system: 0,
+                    worker_threads: 1,
+                    endpoint: "http://127.0.0.1:1".to_string(),
+                    model: "gpt-4o".to_string(),
+                    config_path: None,
+                    config_exists: false,
+                    llm_reachable: true,
+                    context_window: None,
+                    memory_exists: false,
+                    memory_chars: 0,
+                    memory_limit: 0,
+                    memory_usage_pct: 0.0,
+                },
+            ))
+            .mount(&server)
+            .await;
+
+        let client = MimirClient::with_token(server.uri(), "secret-token");
+        let status = client.status().await.unwrap();
+        assert_eq!(status.uptime_seconds, 1);
     }
 
     #[test]

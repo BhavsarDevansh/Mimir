@@ -602,15 +602,17 @@ impl AppState {
     pub async fn from_config(
         config: Arc<ReloadableConfig>,
     ) -> anyhow::Result<(Self, tokio::sync::watch::Receiver<bool>)> {
+        let api_token = Arc::from(mimir_core::auth::load_or_create_api_token()?.as_str());
         let llm_client: Arc<dyn LlmBackend> =
             Arc::new(LlmClient::new(config.snapshot().await.llm.clone()).await?);
-        Self::from_config_with_llm(config, llm_client).await
+        Self::from_config_with_llm(config, llm_client, api_token).await
     }
 
-    /// Build `AppState` from [`ReloadableConfig`] with an injected LLM backend.
+    /// Build `AppState` from [`ReloadableConfig`] with an injected LLM backend
+    /// and API token.
     ///
     /// Primarily useful for tests that need to supply a [`MockLlmClient`](mimir_core::llm::mock::MockLlmClient)
-    /// without relying on sentinel strings or config hacks.
+    /// and a known token without relying on sentinel strings or config hacks.
     ///
     /// Startup order is a composition of the per-subsystem init helpers:
     /// context manager → tool registry → knowledge graph → job queue → agent
@@ -618,6 +620,7 @@ impl AppState {
     pub async fn from_config_with_llm(
         config: Arc<ReloadableConfig>,
         llm_client: Arc<dyn LlmBackend>,
+        api_token: Arc<str>,
     ) -> anyhow::Result<(Self, tokio::sync::watch::Receiver<bool>)> {
         let cfg = config.snapshot().await;
 
@@ -668,6 +671,7 @@ impl AppState {
                 user_entity_id: kg_init.user_entity_id,
                 connector_registry,
                 connector_supervisor,
+                api_token,
             },
             scheduler_shutdown_rx,
         ))

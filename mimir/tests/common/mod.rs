@@ -99,8 +99,20 @@ db_path = "{jobs_db}"
             config,
             config_dir.join("mimir").join("config.toml"),
         ));
+        // The CLI subprocesses resolve the token from `$XDG_DATA_HOME/mimir`,
+        // so create it at the same path the daemon would use in production.
+        let api_token = mimir_core::auth::load_or_create_api_token_at(
+            &data_dir.join("mimir").join("api_token"),
+        )
+        .expect("test API token must be creatable");
         let server_handle = rt.spawn(async move {
-            mimir_server::start_server_with_llm_and_listener(config, mock, listener).await
+            mimir_server::start_server_with_llm_and_listener(
+                config,
+                mock,
+                listener,
+                Arc::from(api_token.as_str()),
+            )
+            .await
         });
 
         let client = reqwest::blocking::Client::builder()

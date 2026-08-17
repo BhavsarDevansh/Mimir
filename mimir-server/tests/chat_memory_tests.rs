@@ -12,7 +12,7 @@ async fn test_chat_unknown_session_returns_404() {
             .unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat")
                 .header("Content-Type", "application/json")
@@ -45,7 +45,7 @@ async fn test_chat_injects_kg_memory_into_system_prompt() {
     let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat")
                 .header("Content-Type", "application/json")
@@ -110,7 +110,7 @@ async fn test_chat_stream_injects_kg_memory_into_system_prompt() {
     let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat/stream")
                 .header("Content-Type", "application/json")

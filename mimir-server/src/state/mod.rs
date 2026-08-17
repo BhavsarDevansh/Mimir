@@ -87,6 +87,9 @@ pub struct AppState {
     /// long-lived runner per `Active` connector instance; the daemon signals
     /// shutdown via the shared `shutdown_tx` watch channel.
     pub connector_supervisor: Arc<ConnectorSupervisor>,
+    /// Local API token required on every route except `GET /health`
+    /// (issue #281). Loaded (or generated) from the data dir at startup.
+    pub api_token: Arc<str>,
 }
 
 const MODEL_OVERRIDE_CACHE_CAP: usize = 16;

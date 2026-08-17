@@ -8,12 +8,7 @@ async fn test_status_returns_ok() {
     let app = mimir_server::build_app(state.clone());
 
     let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/status")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(authed_request().uri("/status").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -29,12 +24,7 @@ async fn test_health_returns_ok_without_llm() {
     let app = mimir_server::build_app(state.clone());
 
     let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/health")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(authed_request().uri("/health").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -57,12 +47,7 @@ async fn test_status_returns_queue_depths() {
     let app = mimir_server::build_app(state.clone());
 
     let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/status")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(authed_request().uri("/status").body(Body::empty()).unwrap())
         .await
         .unwrap();
 

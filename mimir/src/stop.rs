@@ -2,14 +2,12 @@
 
 use std::time::Duration;
 
-use mimir_client::MimirClient;
-
 /// Trigger a graceful shutdown of the Mimir daemon.
 ///
 /// After sending the stop signal, waits two seconds and then probes the
 /// daemon to verify it has actually exited.
 pub async fn handle_stop(base_url: &str) {
-    let client = MimirClient::new(base_url);
+    let client = crate::cli_util::make_client(base_url);
 
     match client.stop().await {
         Ok(()) => {

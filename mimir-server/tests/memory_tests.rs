@@ -16,12 +16,7 @@ async fn test_memory_returns_condensed_content() {
     let app = mimir_server::build_app(state.clone());
 
     let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/memory")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(authed_request().uri("/memory").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -40,7 +35,7 @@ async fn test_memory_refresh_non_loopback_rejected() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/memory/refresh")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -63,7 +58,7 @@ async fn test_memory_refresh_not_registered_returns_404() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/memory/refresh")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -111,7 +106,7 @@ async fn test_memory_refresh_already_running_returns_409() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/memory/refresh")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -152,7 +147,7 @@ async fn test_memory_refresh_cancelled_returns_409() {
     let jq = Arc::clone(&state.job_queue);
     let response_task = tokio::spawn(async move {
         app.oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/memory/refresh")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -200,7 +195,7 @@ async fn test_memory_refresh_timed_out_returns_504() {
     let app = mimir_server::build_app(Arc::clone(&state));
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/memory/refresh")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((

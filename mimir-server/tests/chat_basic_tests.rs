@@ -14,7 +14,7 @@ async fn test_chat_creates_session() {
     let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat")
                 .header("Content-Type", "application/json")
@@ -52,7 +52,7 @@ async fn test_chitchat_does_not_trigger_background_learning() {
     let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat")
                 .header("Content-Type", "application/json")
@@ -86,7 +86,7 @@ async fn test_chat_stream_returns_ok() {
     let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat/stream")
                 .header("Content-Type", "application/json")
@@ -141,7 +141,7 @@ async fn test_chat_stream_llm_error_sends_error_event() {
     let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat/stream")
                 .header("Content-Type", "application/json")
@@ -172,7 +172,7 @@ async fn test_chat_queue_full_returns_503() {
     let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat")
                 .header("Content-Type", "application/json")

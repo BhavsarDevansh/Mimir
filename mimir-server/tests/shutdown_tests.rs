@@ -9,7 +9,7 @@ async fn test_stop_returns_ok() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/stop")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -32,7 +32,7 @@ async fn test_stop_rejects_non_loopback() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/stop")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -64,7 +64,7 @@ async fn test_stop_handler_fires_shutdown_trigger() {
     let app = mimir_server::build_app(state.clone());
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/stop")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((

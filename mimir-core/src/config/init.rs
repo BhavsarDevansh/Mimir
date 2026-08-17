@@ -21,6 +21,13 @@ impl Config {
 
         let cfg_path = cfg_dir.join("config.toml");
 
+        // Generate the local API token (issue #281) so the daemon and CLI can
+        // authenticate each other from first run. Best-effort: the daemon and
+        // CLI also create it lazily, so a failure here is not fatal.
+        if let Err(e) = crate::auth::load_or_create_api_token() {
+            tracing::warn!("Failed to create API token during init: {e}");
+        }
+
         // Use create_new for atomic "write only if not exists" semantics.
         match std::fs::OpenOptions::new()
             .write(true)
@@ -59,6 +66,10 @@ impl Config {
         paths::ensure_dir(cache_dir)?;
 
         let cfg_path = config_dir.join("config.toml");
+
+        if let Err(e) = crate::auth::load_or_create_api_token_at(&data_dir.join("api_token")) {
+            tracing::warn!("Failed to create API token during init: {e}");
+        }
 
         match std::fs::OpenOptions::new()
             .write(true)

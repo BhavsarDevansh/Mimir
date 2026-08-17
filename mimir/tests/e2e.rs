@@ -23,6 +23,33 @@ fn e2e_ask_no_stream_round_trip() {
     daemon.stop();
 }
 
+#[test]
+fn e2e_api_rejects_unauthenticated_requests() {
+    // Issue #281: the daemon must reject requests without the bearer token,
+    // while the CLI keeps working because it auto-discovers the token.
+    let daemon = TestDaemon::start();
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .unwrap();
+    let resp = client
+        .get(format!("{}/kb/query?entity=anything", daemon.base_url))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // The CLI reads the same token file the daemon generated, so commands
+    // keep working unmodified.
+    let (stdout, stderr, status) = daemon.run_cli(&["status"]);
+    assert!(
+        status.success(),
+        "mimir status failed after auth rollout.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    daemon.stop();
+}
+
 /// Smoke test for the SIGTERM shutdown path.
 ///
 /// systemd stops `mimir.service` with SIGTERM. The daemon must exit promptly

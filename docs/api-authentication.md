@@ -21,14 +21,14 @@ The bearer token closes that gap: without the token, the knowledge graph is unre
 ## Enforcement
 
 - `mimir-server/src/app.rs` assembles the router as a protected sub-router (every route except `GET /health`) wrapped in `require_auth` via `axum::middleware::from_fn_with_state`, merged with the unauthenticated `/health` route.
-- `require_auth` extracts the `Authorization` header, strips the `Bearer` prefix, and compares the presented token against `AppState::api_token` in constant time (`mimir_core::auth::verify_api_token`, backed by the `subtle` crate), so comparison time does not depend on the matching prefix.
+- `require_auth` extracts the `Authorization` header, strips the `Bearer` prefix, and compares the presented token against `AppState::api_token` in constant time (`mimir_core::auth::verify_api_token`, backed by the `subtle` crate), so comparison time does not depend on the matching prefix. Per RFC 7235, a single space or tab (HTAB) is accepted between the scheme and the credentials.
 - `GET /health` stays unauthenticated on purpose: it is the daemon-guard liveness probe and reveals nothing beyond "a daemon is listening". A token-bearing probe would make a daemon with a different token look "down" and trigger a second daemon start.
 - The loopback guard is unchanged and runs inside the auth layer, so a non-loopback caller without the token gets `401` and a non-loopback caller with the token gets `403` on loopback-gated routes.
 
 ## Client Behaviour
 
 - `MimirClient::with_token` / `MimirClient::try_new_with_token` build a `reqwest` client whose default headers include `Authorization: Bearer <token>`, so every request — including SSE streams — carries the token. `MimirClient::new` / `try_new` remain tokenless for tests and mock servers.
-- The CLI's `make_client` helper loads (or creates) the token from the data dir and uses the token-bearing constructor. If the token cannot be loaded it warns and falls back to a tokenless client, so the daemon's `401` surfaces the problem instead of a silent failure.
+- The CLI's `make_client` helper loads (or creates) the token from the data dir and uses the token-bearing constructor. If the token cannot be loaded or attached as a header it warns and falls back to a tokenless client, so the daemon's `401` surfaces the problem instead of a panic.
 - The daemon guard probes `GET /health` without a token, so the auto-start flow is unaffected.
 
 ## Non-Loopback Binds
@@ -38,7 +38,7 @@ Binding to `0.0.0.0:8080` (or any non-loopback address) exposes the API to the n
 ## Testing
 
 - `mimir-core/src/auth.rs` unit tests cover token creation (`0600` permissions, hex content, idempotence, atomic publish, canonical-token return on a creation race, empty-file rejection, parent-directory creation) and constant-time verification.
-- `mimir-server/tests/auth_tests.rs` covers missing/wrong/malformed tokens on read and write routes, the `WWW-Authenticate` challenge, correct-token acceptance, and the unauthenticated `/health` exception.
+- `mimir-server/tests/auth_tests.rs` covers missing/wrong/malformed tokens on read and write routes, the `WWW-Authenticate` challenge, correct-token acceptance (including a tab-separated scheme), and the unauthenticated `/health` exception.
 - `mimir/tests/e2e.rs` proves the end-to-end contract: an unauthenticated request to `/kb/query` gets `401` while `mimir status` keeps working because the CLI auto-discovers the token.
 - The shared server-test fixture (`mimir-server/tests/common/mod.rs`) builds `AppState` with `TEST_TOKEN` and provides `authed_request()` so route tests present the token without repeating the header.
 

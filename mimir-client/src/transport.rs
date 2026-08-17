@@ -2,6 +2,12 @@ use crate::MimirClient;
 use crate::error::ClientError;
 
 impl MimirClient {
+    /// Default connect timeout (10s) used by [`Self::new`] and [`Self::with_token`].
+    pub const DEFAULT_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// Default total request timeout (120s) used by [`Self::new`] and [`Self::with_token`].
+    pub const DEFAULT_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
     /// Create a new client pointing at the given base URL.
     ///
     /// The base URL should include the scheme and host/port, e.g.
@@ -14,8 +20,8 @@ impl MimirClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self::try_new(
             base_url,
-            std::time::Duration::from_secs(10),
-            std::time::Duration::from_secs(120),
+            Self::DEFAULT_CONNECT_TIMEOUT,
+            Self::DEFAULT_TOTAL_TIMEOUT,
         )
         .expect("default reqwest client must build")
     }
@@ -51,8 +57,8 @@ impl MimirClient {
         Self::try_new_with_token(
             base_url,
             token,
-            std::time::Duration::from_secs(10),
-            std::time::Duration::from_secs(120),
+            Self::DEFAULT_CONNECT_TIMEOUT,
+            Self::DEFAULT_TOTAL_TIMEOUT,
         )
         .expect("default reqwest client must build")
     }

@@ -63,6 +63,10 @@ See [Chat API](chat-api.md) for detailed examples.
 - Per-session concurrency is controlled via semaphores.
 - The server is a library crate (`mimir-server`); the `mimir` binary calls `mimir_server::build_app()` and `mimir_server::start_server()`.
 
+## Loopback-Only Routes
+
+Destructive and sensitive operations are only accepted from the local machine. If the daemon is bound to a LAN address, remote clients can still read (chat, status, KB queries) but mutations such as forgetting facts, emptying the trash, restoring facts, triggering optimization, ingesting connector credentials, and stopping the daemon return `403 Forbidden` for non-loopback callers. This keeps the single-writer knowledge graph safe even when the server is reachable from other devices.
+
 ## Stopping the Server
 
 Send `SIGINT` or `SIGTERM` to the process (e.g., `Ctrl+C` in the foreground, or `systemctl --user stop mimir` when running as a systemd service).

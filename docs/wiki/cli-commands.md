@@ -221,6 +221,8 @@ mimir skill disable <name>         # Disable a skill
 
 Query and manage the Mimir knowledge graph. All commands talk to the daemon over HTTP — no direct SQLite access from the CLI.
 
+Destructive operations (`forget`, `restore`, `trash --empty`) are loopback-only on the daemon: they work from the local CLI but return `403 Forbidden` for remote clients, so a daemon reachable from other devices can be inspected but not mutated remotely.
+
 Every command supports `--json` for structured, scriptable output.
 
 ### `mimir kb query`

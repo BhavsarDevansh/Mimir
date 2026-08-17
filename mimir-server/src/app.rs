@@ -7,6 +7,7 @@ use std::sync::Arc;
 use axum::{
     Router,
     extract::ConnectInfo,
+    handler::Handler,
     http::StatusCode,
     middleware::from_fn,
     response::IntoResponse,
@@ -101,7 +102,10 @@ pub fn build_app(state: Arc<AppState>) -> Router {
             "/kb/facts/{id}",
             get(kb_show_handler).patch(kb_edit_handler),
         )
-        .route("/kb/facts/forget", post(kb_forget_handler))
+        .route(
+            "/kb/facts/forget",
+            post(kb_forget_handler).layer(from_fn(require_loopback)),
+        )
         .route(
             "/kb/facts/{id}/confirm",
             post(kb_confirm_fact_handler).layer(from_fn(require_loopback)),
@@ -119,9 +123,13 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route("/kb/audit", get(kb_audit_handler))
         .route(
             "/kb/trash",
-            get(kb_trash_list_handler).delete(kb_trash_empty_handler),
+            get(kb_trash_list_handler)
+                .delete(kb_trash_empty_handler.layer(from_fn(require_loopback))),
         )
-        .route("/kb/trash/restore", post(kb_trash_restore_handler))
+        .route(
+            "/kb/trash/restore",
+            post(kb_trash_restore_handler).layer(from_fn(require_loopback)),
+        )
         .route(
             "/connectors",
             get(connectors_list_handler).post(connector_add_handler),

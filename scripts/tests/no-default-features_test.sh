@@ -15,9 +15,9 @@ cd "$SCRIPT_DIR"
 # from both sides.
 for features in "" "oauth" "calendar" "photos" "gmail" "test-mock-connector" "test-mock-oauth" "test-utils" "calendar,test-mock-connector"; do
   echo "checking --no-default-features --features '${features:-<none>}'"
-  if [[ -z "$features" ]]; then
-    cargo check -p mimir-connectors --all-targets --no-default-features
-  else
-    cargo check -p mimir-connectors --all-targets --no-default-features --features "$features"
+  args=(check -p mimir-connectors --all-targets --no-default-features)
+  if [[ -n "$features" ]]; then
+    args+=(--features "$features")
   fi
+  cargo "${args[@]}"
 done

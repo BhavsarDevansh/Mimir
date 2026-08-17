@@ -263,12 +263,13 @@ impl SkillRegistry {
     /// Performs asynchronous file I/O so the daemon can load skills without
     /// blocking the runtime. Returns the number of skills registered.
     pub async fn load_user_skills(&self, dir: &Path) -> Result<usize, SkillError> {
-        if !tokio::fs::try_exists(dir).await.map_err(load_io_error)? {
-            return Ok(0);
-        }
+        let mut entries = match tokio::fs::read_dir(dir).await {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(load_io_error(e)),
+        };
 
         let mut count = 0;
-        let mut entries = tokio::fs::read_dir(dir).await.map_err(load_io_error)?;
         while let Some(entry) = entries.next_entry().await.map_err(load_io_error)? {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("md") {

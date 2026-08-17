@@ -4,7 +4,7 @@
 
 ### Refactor: async user-skill loading and config test-module cleanup (issue #287)
 
-- `SkillRegistry::load_user_skills` now performs asynchronous file I/O (`tokio::fs::read_dir` / `read_to_string` / `try_exists`) instead of blocking the runtime with synchronous `std::fs` calls, so a future server-side skill surface can load skills without blocking the daemon. The CLI caller and the `mimir-core` integration tests were updated to `.await`, and a new test covers the missing-directory no-op.
+- `SkillRegistry::load_user_skills` now performs asynchronous file I/O (`tokio::fs::read_dir` / `read_to_string`) instead of blocking the runtime with synchronous `std::fs` calls, so a future server-side skill surface can load skills without blocking the daemon. The CLI caller and the `mimir-core` integration tests were updated to `.await`, and a new test covers the missing-directory no-op. A missing directory is still a no-op returning `0`, while other I/O errors now propagate to the caller instead of being silently treated as an empty directory.
 - Removed the duplicate `#[cfg(test)]` attribute on the test module in `mimir-core/src/config/reload.rs`.
 - Docs updated: `docs/skills.md` (user-skill loading), `docs/wiki/what-works-now.md` (backlog row removed).
 - Version bumped 0.117.3 → 0.118.0 (minor — refactor).

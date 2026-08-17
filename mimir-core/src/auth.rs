@@ -52,10 +52,13 @@ pub fn load_or_create_api_token() -> Result<String, ApiTokenError> {
 
 /// Load the API token from `path`, creating it if missing.
 ///
-/// The file is created with mode `0600` (Unix) and `create_new` semantics so
-/// a concurrent creator race resolves to whichever process wrote first; the
-/// loser re-reads the winner's file. An existing file is never overwritten,
-/// so a user-supplied token is preserved.
+/// The file is created with mode `0600` (Unix) and published atomically (the
+/// token is written to a temporary file and then hard-linked into place), so
+/// a concurrent creator race resolves to whichever process published first
+/// and the loser re-reads the winner's complete file. The returned token is
+/// always the canonical one on disk, so every caller ends up with the same
+/// token. An existing file is never overwritten, so a user-supplied token is
+/// preserved.
 pub fn load_or_create_api_token_at(path: &Path) -> Result<String, ApiTokenError> {
     match std::fs::read_to_string(path) {
         Ok(contents) => {
@@ -70,8 +73,7 @@ pub fn load_or_create_api_token_at(path: &Path) -> Result<String, ApiTokenError>
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let token = generate_token()?;
-            write_token_file(path, &token)?;
-            Ok(token)
+            write_token_file(path, &token)
         }
         Err(e) => Err(ApiTokenError::Io {
             path: path.to_path_buf(),
@@ -82,8 +84,8 @@ pub fn load_or_create_api_token_at(path: &Path) -> Result<String, ApiTokenError>
 
 /// Compare a presented token against the expected token in constant time.
 ///
-/// Used by the server's auth middleware so a wrong token cannot be
-/// distinguished from a right one by timing.
+/// Used by the server's auth middleware so comparison time does not depend
+/// on the matching prefix.
 pub fn verify_api_token(presented: &str, expected: &str) -> bool {
     use subtle::ConstantTimeEq;
     presented.as_bytes().ct_eq(expected.as_bytes()).into()
@@ -97,9 +99,21 @@ fn generate_token() -> Result<String, ApiTokenError> {
 }
 
 /// Write `token` to `path` with `0600` permissions, creating parent
-/// directories as needed. If the file already exists (a creation race),
-/// re-read it so both processes agree on the same token.
-fn write_token_file(path: &Path, token: &str) -> Result<(), ApiTokenError> {
+/// directories as needed.
+///
+/// The token is first written to a unique temporary file in the same
+/// directory and then published with an atomic `hard_link`, so a concurrent
+/// creator race resolves to whichever process published first and the loser
+/// re-reads the winner's complete file (a direct `create_new` write would
+/// let the loser observe a partially written token). If the file already
+/// exists (a creation race or a user-supplied token), it is re-read so both
+/// processes agree on the same token. Filesystems without hard-link support
+/// fall back to a direct `create_new` write.
+///
+/// Returns the canonical token: the one published by this call, or the
+/// winner's token re-read from the file when a concurrent creator won the
+/// race.
+fn write_token_file(path: &Path, token: &str) -> Result<String, ApiTokenError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|source| ApiTokenError::Io {
             path: parent.to_path_buf(),
@@ -107,6 +121,43 @@ fn write_token_file(path: &Path, token: &str) -> Result<(), ApiTokenError> {
         })?;
     }
 
+    let tmp_name = format!(
+        "api_token.tmp.{}.{}",
+        std::process::id(),
+        &token[..token.len().min(8)]
+    );
+    let tmp_path = path
+        .parent()
+        .map_or_else(|| PathBuf::from(&tmp_name), |parent| parent.join(&tmp_name));
+    if let Err(source) = write_token_to(&tmp_path, token) {
+        if source.kind() != std::io::ErrorKind::AlreadyExists {
+            let _ = std::fs::remove_file(&tmp_path);
+        }
+        return Err(ApiTokenError::Io {
+            path: tmp_path,
+            source,
+        });
+    }
+
+    match std::fs::hard_link(&tmp_path, path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            Ok(token.to_string())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = std::fs::remove_file(&tmp_path);
+            load_or_create_api_token_at(path)
+        }
+        Err(_) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            write_token_direct(path, token)
+        }
+    }
+}
+
+/// Write `token` to `path` with `0600` permissions using `create_new`
+/// semantics, so an existing file is never overwritten.
+fn write_token_to(path: &Path, token: &str) -> std::io::Result<()> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -115,18 +166,19 @@ fn write_token_file(path: &Path, token: &str) -> Result<(), ApiTokenError> {
         options.mode(0o600);
     }
 
-    match options.open(path) {
-        Ok(mut file) => {
-            use std::io::Write;
-            file.write_all(token.as_bytes())
-                .map_err(|source| ApiTokenError::Io {
-                    path: path.to_path_buf(),
-                    source,
-                })?;
-            Ok(())
-        }
+    let mut file = options.open(path)?;
+    use std::io::Write;
+    file.write_all(token.as_bytes())
+}
+
+/// Fallback for filesystems without hard-link support: create the target
+/// directly with `create_new` semantics. The atomic-publish guarantee is
+/// lost on such filesystems, but they are rare for a user data directory.
+fn write_token_direct(path: &Path, token: &str) -> Result<String, ApiTokenError> {
+    match write_token_to(path, token) {
+        Ok(()) => Ok(token.to_string()),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            load_or_create_api_token_at(path).map(|_| ())
+            load_or_create_api_token_at(path)
         }
         Err(e) => Err(ApiTokenError::Io {
             path: path.to_path_buf(),
@@ -233,6 +285,85 @@ mod tests {
 
         assert_eq!(token.len(), TOKEN_BYTES * 2);
         assert!(path.is_file());
+    }
+
+    #[test]
+    fn creation_leaves_no_temporary_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("api_token");
+
+        load_or_create_api_token_at(&path).unwrap();
+
+        let entries: Vec<_> = std::fs::read_dir(temp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, vec![std::ffi::OsString::from("api_token")]);
+    }
+
+    #[test]
+    fn creation_race_returns_winner_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("api_token");
+        std::fs::write(&path, "winner-token\n").unwrap();
+
+        let token = write_token_file(&path, "loser-token").unwrap();
+
+        assert_eq!(token, "winner-token");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "winner-token\n");
+    }
+
+    #[test]
+    fn concurrent_creators_agree_on_canonical_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("api_token");
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || load_or_create_api_token_at(&path).unwrap())
+            })
+            .collect();
+        let tokens: Vec<String> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(tokens.iter().all(|token| *token == on_disk));
+    }
+
+    #[test]
+    fn concurrent_readers_never_observe_partial_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("api_token");
+
+        let creator = {
+            let path = path.clone();
+            std::thread::spawn(move || load_or_create_api_token_at(&path).unwrap())
+        };
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..100 {
+                        if let Ok(contents) = std::fs::read_to_string(&path) {
+                            let token = contents.trim();
+                            assert!(
+                                token.len() == TOKEN_BYTES * 2
+                                    && token.chars().all(|c| c.is_ascii_hexdigit()),
+                                "reader observed a partial token: {token:?}"
+                            );
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        creator.join().unwrap();
+        for reader in readers {
+            reader.join().unwrap();
+        }
     }
 
     #[test]

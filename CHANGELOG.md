@@ -1,13 +1,21 @@
 # Changelog
 
+## [0.117.1] — 2026-08-17
+
+### Security: HTTP API authentication review fixes (PR #353)
+
+- Token creation now publishes the token atomically (temporary file + hard link) and returns the canonical token when a concurrent creator wins, so the daemon and CLI can never end up with different tokens or observe a partial token file.
+- Auth tests now assert the `WWW-Authenticate: Bearer` challenge for wrong and malformed credentials, not just missing ones.
+- Docs corrected: the pre-authentication threat model distinguishes unguarded routes from loopback-gated ones, the constant-time claim is limited to token comparison, the protected-route curl examples present the token, `/chat` is no longer classified as read-only, and the token and loopback guard are described as separate controls.
+
 ## [0.117.0] — 2026-08-17
 
 ### Security: HTTP API authentication (issue #281)
 
-- The daemon API had no authentication: any local process (or any other local user) could read the entire knowledge graph, forge chat turns, edit/forget facts, and delete connectors, and a `0.0.0.0` bind exposed everything to the network. Every route except `GET /health` now requires a bearer token (`Authorization: Bearer <token>`), rejected with `401` + `WWW-Authenticate: Bearer` otherwise.
+- The daemon API had no authentication: any local process (or any other local user) could read the entire knowledge graph, forge chat turns, edit/forget facts, and delete connectors, and a `0.0.0.0` bind exposed the unguarded routes to the network (the loopback-gated routes stayed local-only). Every route except `GET /health` now requires a bearer token (`Authorization: Bearer <token>`), rejected with `401` + `WWW-Authenticate: Bearer` otherwise.
 - The token is 256 bits of CSPRNG entropy (`getrandom`), hex-encoded, stored `0600` at `~/.local/share/mimir/api_token`, generated at `mimir init` and lazily by the daemon or CLI for existing installs, and never overwrites a user-supplied token. Comparison is constant-time (`subtle`).
 - `mimir-client` gained `with_token` / `try_new_with_token` (default `Authorization` header on every request, SSE included); the CLI's `make_client` auto-discovers the token, so all commands work unmodified. `GET /health` stays unauthenticated as the daemon-guard liveness probe.
-- The loopback guard remains as a second layer for destructive routes; a non-loopback bind is now protected only by the token and logs a startup warning.
+- The loopback guard remains as an independent control for destructive routes; a non-loopback bind relies on the token for authentication (loopback-gated routes still return `403` remotely) and logs a startup warning.
 - Tests: `mimir-core` token-file unit tests, `mimir-server/tests/auth_tests.rs` (missing/wrong/malformed token, challenge header, health exception), a `mimir-client` header-attachment test, and an E2E test proving unauthenticated `401` while `mimir status` keeps working. All existing server route tests now present the shared test token.
 - Docs updated: new `docs/api-authentication.md` (threat model, lifecycle, non-loopback guidance), `docs/chat-server.md`, `docs/wiki/server.md`, `docs/wiki/getting-started.md`, `docs/wiki/what-works-now.md`, `Mimir-Implementation-Context.md`, `VISION/08-Architecture/Deployment-Model.md`.
 - Version bumped 0.116.3 → 0.117.0 (minor — new security capability).

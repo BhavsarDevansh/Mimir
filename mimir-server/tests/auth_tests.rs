@@ -44,6 +44,10 @@ async fn test_status_rejects_wrong_token() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response.headers().get("www-authenticate").unwrap(),
+        "Bearer"
+    );
 }
 
 #[tokio::test]
@@ -65,6 +69,10 @@ async fn test_status_rejects_malformed_authorization() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response.headers().get("www-authenticate").unwrap(),
+        "Bearer"
+    );
 }
 
 #[tokio::test]

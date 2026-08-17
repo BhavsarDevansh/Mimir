@@ -37,16 +37,22 @@ bind_addr = "127.0.0.1:8080"
 
 ### Status
 
+`/status` requires the API token; `GET /health` is the only unauthenticated route (see [Authentication](#authentication)).
+
 ```bash
-curl http://127.0.0.1:8080/status
+TOKEN=$(cat ~/.local/share/mimir/api_token)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/status
 ```
 
 Returns version, uptime, and queue depths.
 
 ### Memory
 
+`/memory` requires the API token; `GET /health` is the only unauthenticated route (see [Authentication](#authentication)).
+
 ```bash
-curl http://127.0.0.1:8080/memory
+TOKEN=$(cat ~/.local/share/mimir/api_token)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/memory
 ```
 
 Returns the live condensed memory block (stable facts + upcoming events) from the knowledge graph.
@@ -69,7 +75,7 @@ Every request except `GET /health` must present the daemon's API token as `Autho
 
 ## Loopback-Only Routes
 
-Destructive and sensitive operations are additionally only accepted from the local machine. If the daemon is bound to a LAN address, remote clients that hold the token can still read (chat, status, KB queries) but mutations such as forgetting facts, emptying the trash, restoring facts, triggering optimization, ingesting connector credentials, and stopping the daemon return `403 Forbidden` for non-loopback callers. This keeps the single-writer knowledge graph safe even when the server is reachable from other devices.
+Destructive and sensitive operations are additionally only accepted from the local machine. If the daemon is bound to a LAN address, remote clients that hold the token can still read status and KB queries and use chat — note that chat persists turns and can write facts through the `remember` tool — but mutations such as forgetting facts, emptying the trash, restoring facts, triggering optimization, ingesting connector credentials, and stopping the daemon return `403 Forbidden` for non-loopback callers. This keeps the single-writer knowledge graph safe even when the server is reachable from other devices.
 
 ## Stopping the Server
 

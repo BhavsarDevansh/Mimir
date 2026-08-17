@@ -191,7 +191,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Daemon startup (AppState construction) | ✅ Works | Per-subsystem init helpers (`init_context_manager`, `init_tool_registry`, `init_knowledge_graph`, `init_job_queue`, `init_agent_runtime`, `init_scheduler`, `init_connector_framework`) composed in a fixed order by `from_config_with_llm`; issue #281 added the `api_token` field to `AppState` (loaded or generated at startup). |
 | Daemon-down detection | ✅ Works | CLI probes `/health`; prompts to auto-start with a 10 s readiness timeout. |
 | API authentication | ✅ Works | Every route except `GET /health` requires a bearer token auto-generated at `~/.local/share/mimir/api_token` (mode `0600`); the CLI attaches it automatically, so commands work unmodified ([#281](https://github.com/BhavsarDevansh/Mimir/issues/281)). |
-| Loopback security | ✅ Works | Destructive/sensitive routes stay loopback-only as a second layer on top of the token; a non-loopback bind is protected only by the token and logs a startup warning. |
+| Loopback security | ✅ Works | Destructive/sensitive routes stay loopback-only as an independent control; the bearer token authenticates every other route, and a non-loopback bind relies on the token alone for authentication and logs a startup warning. |
 | CORS for local dev | ✅ Works | Whitelisted ports: 8080, 3000, 5173. |
 
 ### Knowledge Graph (Phase 2)

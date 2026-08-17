@@ -313,6 +313,8 @@ gmail = ["dep:async-imap", "dep:base64", "dep:tokio-rustls", "dep:rustls", "dep:
 
 The framework core is **always built**; the mock connector and the OAuth test doubles are test harnesses gated by the off-by-default `test-mock-connector` / `test-utils` / `test-mock-oauth` features, so production builds never compile them. Running `cargo build -p mimir-connectors --no-default-features` therefore still compiles a working framework — the test harnesses and the gated backends are simply absent. The `photos` feature gates the `notify` / `notify-debouncer-full` / `kamadak-exif` dependencies and the `photos` module (C1–C2 / #195–#196); `oauth` gates `oauth2` / `http` / `url` and the `oauth` module (#240); `calendar` and `gmail` gate their backend deps and modules and enable `oauth` for their OAuth refresh path.
 
+Integration tests follow the same gating: each backend test file carries a crate-level `#![cfg(feature = "...")]` gate (`calendar_*_tests.rs` → `calendar`, `photos_connector.rs` → `photos`, the mock/supervisor tests → `test-mock-connector`, `oauth_pkce_e2e.rs` → `test-mock-oauth`), and the shared `tests/common/mod.rs` fixtures gate their calendar-specific imports and helpers behind `#[cfg(feature = "calendar")]` so every feature combination compiles under `--all-targets` (issue #277). `scripts/tests/no-default-features_test.sh` enforces the `--no-default-features` build matrix at review time.
+
 ## Workspace wiring
 
 - `mimir-connectors` is a workspace `members` entry.
@@ -423,6 +425,7 @@ cargo build --workspace                              # full workspace
 cargo build -p mimir-connectors --no-default-features # framework core only (mock + backends gated)
 cargo test -p mimir-connectors --test secrets_store  # secret store round-trip + perm + slug tests (F10)
 cargo test -p mimir-connectors --features test-mock-connector # includes the mock-harness + supervisor lifecycle tests (F8/F13)
+scripts/tests/no-default-features_test.sh # --no-default-features --all-targets build matrix (issue #277)
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```

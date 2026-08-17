@@ -90,6 +90,10 @@ If `parameters` is omitted, defaults to `{"query": string}`.
 
 This makes user skills easy to write and share without recompiling Mimir.
 
+## User Skill Loading
+
+`SkillRegistry::load_user_skills` scans `~/.config/mimir/skills/` for Markdown files with YAML frontmatter and registers each valid file as a user skill. It performs asynchronous file I/O (`tokio::fs`) so the daemon can load skills without blocking the runtime; the CLI's `mimir skill` commands and any future server-side skill surface call it with `.await`. Invalid or unreadable files are skipped with a warning, and a missing directory is a no-op returning `0`.
+
 ## Metrics
 
 Every skill invocation is tracked in `~/.local/share/mimir/skills.db`:

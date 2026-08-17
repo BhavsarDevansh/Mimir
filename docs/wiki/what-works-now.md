@@ -329,8 +329,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | Generated skills: reflection loop, utility scoring, pruning | [#20](https://github.com/BhavsarDevansh/Mimir/issues/20) |
 | Tool backlog: time-to/since, web, wikipedia, weather, timezone, calculator, curl, sports, stocks, flights, distance, RSS | [#83](https://github.com/BhavsarDevansh/Mimir/issues/83), [#93](https://github.com/BhavsarDevansh/Mimir/issues/93)–[#106](https://github.com/BhavsarDevansh/Mimir/issues/106) |
 | Config hot-reload propagation to scheduler/jobs | [#286](https://github.com/BhavsarDevansh/Mimir/issues/286) |
-| Code quality: duplicate `#[cfg(test)]`, sync skill file I/O | [#287](https://github.com/BhavsarDevansh/Mimir/issues/287) |
-
 ### Knowledge Graph
 
 | Work item | Issue |

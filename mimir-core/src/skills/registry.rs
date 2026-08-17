@@ -260,24 +260,22 @@ impl SkillRegistry {
 
     /// Load user skills from a directory of Markdown files.
     ///
-    /// TODO: This method performs synchronous file I/O. When the server
-    /// integrates skill loading, this should become `async`.
-    pub fn load_user_skills(&self, dir: &Path) -> Result<usize, SkillError> {
-        if !dir.exists() {
-            return Ok(0);
-        }
+    /// Performs asynchronous file I/O so the daemon can load skills without
+    /// blocking the runtime. Returns the number of skills registered.
+    pub async fn load_user_skills(&self, dir: &Path) -> Result<usize, SkillError> {
+        let mut entries = match tokio::fs::read_dir(dir).await {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(load_io_error(e)),
+        };
 
         let mut count = 0;
-        for entry in std::fs::read_dir(dir)
-            .map_err(|e| SkillError::execution_failed("load_user_skills", e.to_string()))?
-        {
-            let entry = entry
-                .map_err(|e| SkillError::execution_failed("load_user_skills", e.to_string()))?;
+        while let Some(entry) = entries.next_entry().await.map_err(load_io_error)? {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("md") {
                 continue;
             }
-            let Ok(contents) = std::fs::read_to_string(&path) else {
+            let Ok(contents) = tokio::fs::read_to_string(&path).await else {
                 warn!(path = %path.display(), "failed to read skill file");
                 continue;
             };
@@ -308,6 +306,10 @@ impl SkillRegistry {
         }
         Ok(count)
     }
+}
+
+fn load_io_error(e: std::io::Error) -> SkillError {
+    SkillError::execution_failed("load_user_skills", e.to_string())
 }
 
 #[cfg(test)]

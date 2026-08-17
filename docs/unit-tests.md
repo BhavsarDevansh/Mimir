@@ -8,11 +8,11 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 
 ## `mimir-api-types` (`src/lib.rs`)
 
-46 tests (up from 12). Added a `roundtrip_tests!` macro that asserts both the populated and sparse (all-`None`) forms round-trip, and that `skip_serializing_if` fields are omitted from the sparse JSON. The sparse-field check parses the serialised JSON into a `serde_json::Map` and asserts key absence with `contains_key` (not a substring search, which could match value text). Covers every KG wire type: `FactQueryParams`, `FactRow`, `FactQueryResponse`, `SourceRow`, `DependencyRow`, `AuditRow`, `FactDetailResponse`, `FactEditRequest`, `FactEditResponse`, `BrowseRequest`, `BrowseEdge`/`BrowseResponse`, `CategoryResponse`/`CategoryDetailResponse`, `ProfileRequest`/`ProfileResponse`, `AuditQueryRequest`/`AuditQueryResponse`, `ForgetRequest`/`ForgetResponse`, `RestoreRequest`/`RestoreResponse`, `TrashRow`/`TrashListResponse`, `OptimizationRunSummary`/`OptimizationStatusResponse`/`OptimizationRunNowResponse`, `PendingFactRow`/`PendingListResponse`, `ConfirmFactResponse`, `RejectFactRequest`, plus `StreamItem` variant equality.
+63 tests (up from 12). Added a `roundtrip_tests!` macro that asserts both the populated and sparse (all-`None`) forms round-trip, and that `skip_serializing_if` fields are omitted from the sparse JSON. The sparse-field check parses the serialised JSON into a `serde_json::Map` and asserts key absence with `contains_key` (not a substring search, which could match value text). Covers every KG wire type: `FactQueryParams`, `FactRow`, `FactQueryResponse`, `SourceRow`, `DependencyRow`, `AuditRow`, `FactDetailResponse`, `FactEditRequest`, `FactEditResponse`, `BrowseRequest`, `BrowseEdge`/`BrowseResponse`, `CategoryResponse`/`CategoryDetailResponse`, `ProfileRequest`/`ProfileResponse`, `AuditQueryRequest`/`AuditQueryResponse`, `ForgetRequest`/`ForgetResponse`, `RestoreRequest`/`RestoreResponse`, `TrashRow`/`TrashListResponse`, `OptimizationRunSummary`/`OptimizationStatusResponse`/`OptimizationRunNowResponse`, `PendingFactRow`/`PendingListResponse`, `ConfirmFactResponse`, `RejectFactRequest`, plus `StreamItem` variant equality.
 
 ## `mimir-client` (`src/lib.rs`)
 
-64 tests (up from ~24). Added pure unit tests for the SSE parser primitives (`find_double_newline`, `parse_sse_event` — text/usage/tool_call/session_id/ error/empty/multiline/invalid-UTF-8) and wiremock-backed integration tests for every previously-uncovered `MimirClient` method: `kb_optimization_status`, `kb_optimization_run_now`, `kb_query/show/edit/browse/profile/audit/forget/restore/trash/trash_empty/pending/confirm/reject`, `stop` (success/503/error), `sessions` (list/error), `session_messages` (success + existing 404), `chat` server error, and `chat_stream` session_id + tool_call.
+74 tests (up from ~24). Added pure unit tests for the SSE parser primitives (`find_double_newline`, `parse_sse_event` — text/usage/tool_call/session_id/ error/empty/multiline/invalid-UTF-8) and wiremock-backed integration tests for every previously-uncovered `MimirClient` method: `kb_optimization_status`, `kb_optimization_run_now`, `kb_query/show/edit/browse/profile/audit/forget/restore/trash/trash_empty/pending/confirm/reject`, `stop` (success/503/error), `sessions` (list/error), `session_messages` (success + existing 404), `chat` server error, and `chat_stream` session_id + tool_call.
 
 ## `mimir-core`
 
@@ -21,7 +21,7 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 - `tools/permission.rs`: 5 tests for default, `as_str`/`from_str` roundtrip, case-insensitive parsing, serde lowercase rename.
 - `tools/error.rs`: 3 tests for constructor variants, `Into<String>` acceptance, `Display` formatting.
 
-211 lib tests (up from 179).
+279 lib tests (up from 179).
 
 ## `mimir-knowledge`
 
@@ -30,14 +30,17 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 - `inference/rules/transitivity.rs`: 7 tests for `intersect_windows` (unbounded, max-from, min-until, overlapping, disjoint).
 - `models/entity_date.rs`: 7 tests for private helpers `is_leap_year`, `days_in_month` (incl. invalid), `parse_base_datetime` (RFC3339, date-only, offset normalisation, invalid).
 - `models/memory.rs`: 7 tests for `MemoryPriority::boost` ordering/exact, discriminant stability, `MemorySchema::new`/`default`/`all_facts` ordering, serde roundtrip.
+- `models/source.rs`: 2 tests — `SourceType::try_from<i16>` roundtrip (valid/invalid discriminants) and `as_str` wire-contract names.
+- `models/fact.rs`: 6 tests — `FactStatus` discriminant roundtrip, `Fact::status` mapping, `try_from<i16>` roundtrip, `as_str` wire-contract names, `FromStr` wire-string parsing (incl. case-insensitive), `NewFact` defaults.
 
-110 lib tests (up from ~74).
+195 lib tests (up from ~74).
 
 ## `mimir-server`
 
 - `error.rs`: 15 tests for every `ApiError` response helper — status codes, error codes, `Retry-After` header on `QueueFull`, and (security-relevant) verification that internal error details (context IDs, LLM upstream text, memory I/O messages, KG internal variants) are masked from clients.
+- `routes/kb/helpers.rs`: 3 tests — `status_name` / `source_type_name` wire-contract strings (incl. `Unknown` fallback) and `parse_status` wire-string parsing.
 
-65 lib tests (up from 50).
+41 lib tests (up from 50).
 
 ## `mimir` (binary)
 

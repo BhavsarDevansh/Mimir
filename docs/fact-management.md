@@ -45,6 +45,10 @@ Every insert, temporal update, status change, confidence change, source added, f
 - `old_value` / `new_value` — **column-only** JSON snapshots (e.g. `{"valid_until": "..."}`, not the full fact)
 - `reason` — optional human-readable explanation
 
+### Wire representation
+
+The HTTP API renders `fact_status_id` and `source_type_id` as strings. The single source of truth for those wire names is `FactStatus::as_str()` (`models::fact`) and `SourceType::as_str()` (`models::source`); the KB route helpers (`mimir-server/src/routes/kb/helpers.rs`) map stored IDs through `TryFrom<i16>` and fall back to `"Unknown"` for unknown IDs (issue #293). `FactStatus` also implements `FromStr` (case-insensitive) for the `kb edit` status input.
+
 ---
 
 ## Temporal Logic

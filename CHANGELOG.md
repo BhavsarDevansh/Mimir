@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.119.0] — 2026-08-17
+
+### Refactor: typed enum→wire-string mapping for KB route helpers (issue #293)
+
+- `mimir-knowledge` now exposes `SourceType::as_str()` / `FactStatus::as_str()` (wire names), `TryFrom<i16>` for both enums, and a case-insensitive `FromStr` for `FactStatus`; `Fact::status()` delegates to `TryFrom` instead of a hand-rolled match.
+- `mimir-server` KB route helpers (`source_type_name`, `status_name`, `parse_status`) now map through the typed conversions instead of magic numbers, keeping the wire strings byte-identical (`"UserEdit"`...`"System"`, `"Active"`...`"Forgotten"`, lowercase status input) and falling back to `"Unknown"` for unknown IDs.
+- Added round-trip unit tests asserting the wire names match the enum variants (`mimir-knowledge`) and the route helpers' output contract (`mimir-server`).
+- Docs updated: `docs/unit-tests.md`, `docs/fact-management.md`.
+- Version bumped 0.118.0 → 0.119.0 (minor — refactor).
+
 ## [0.118.0] — 2026-08-17
 
 ### Refactor: async user-skill loading and config test-module cleanup (issue #287)

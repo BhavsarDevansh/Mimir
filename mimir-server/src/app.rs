@@ -51,7 +51,7 @@ async fn require_auth(State(state): State<Arc<AppState>>, req: Request, next: Ne
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| {
-            let (scheme, token) = value.split_once(' ')?;
+            let (scheme, token) = value.split_once([' ', '\t'])?;
             scheme
                 .eq_ignore_ascii_case("bearer")
                 .then_some(token.trim())

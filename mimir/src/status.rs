@@ -1,8 +1,7 @@
 //! System status reporter. Displays config, LLM connectivity, and memory stats.
-use mimir_client::MimirClient;
 
 pub async fn handle_status(base_url: &str) {
-    let client = MimirClient::new(base_url);
+    let client = crate::cli_util::make_client(base_url);
 
     match client.status().await {
         Ok(status) => {

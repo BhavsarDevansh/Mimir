@@ -1,7 +1,7 @@
 #![deny(unsafe_code)]
 //! HTTP server library for the Mimir daemon.
 //!
-//! - [`app`] — axum router assembly and the loopback guard middleware.
+//! - [`app`] — axum router assembly, the bearer-token auth middleware, and the loopback guard middleware.
 //! - [`shutdown`] — shutdown trigger sources, OS-signal handling, and the
 //!   bounded graceful-drain lifecycle.
 //! - [`server`] — daemon startup: state initialisation, background tasks, and

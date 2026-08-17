@@ -37,16 +37,22 @@ bind_addr = "127.0.0.1:8080"
 
 ### Status
 
+`/status` requires the API token; `GET /health` is the only unauthenticated route (see [Authentication](#authentication)).
+
 ```bash
-curl http://127.0.0.1:8080/status
+TOKEN=$(cat ~/.local/share/mimir/api_token)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/status
 ```
 
 Returns version, uptime, and queue depths.
 
 ### Memory
 
+`/memory` requires the API token; `GET /health` is the only unauthenticated route (see [Authentication](#authentication)).
+
 ```bash
-curl http://127.0.0.1:8080/memory
+TOKEN=$(cat ~/.local/share/mimir/api_token)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/memory
 ```
 
 Returns the live condensed memory block (stable facts + upcoming events) from the knowledge graph.
@@ -63,9 +69,13 @@ See [Chat API](chat-api.md) for detailed examples.
 - Per-session concurrency is controlled via semaphores.
 - The server is a library crate (`mimir-server`); the `mimir` binary calls `mimir_server::build_app()` and `mimir_server::start_server()`.
 
+## Authentication
+
+Every request except `GET /health` must present the daemon's API token as `Authorization: Bearer <token>`, otherwise the daemon answers `401 Unauthorized`. The token is generated automatically at `~/.local/share/mimir/api_token` (mode `0600`) during `mimir init` — or lazily by the daemon or any CLI command — and the CLI attaches it to every request, so `mimir ask`, `mimir chat`, `mimir kb`, and the other commands keep working without any extra setup. `GET /health` stays open because it is the lightweight "is the daemon running?" probe. If you bind the daemon to a non-loopback address such as `0.0.0.0`, the token is the only thing protecting your data, so treat the token file like a password and rotate it (delete the file and restart the daemon) if it leaks. See [API Authentication](../api-authentication.md) for the full picture.
+
 ## Loopback-Only Routes
 
-Destructive and sensitive operations are only accepted from the local machine. If the daemon is bound to a LAN address, remote clients can still read (chat, status, KB queries) but mutations such as forgetting facts, emptying the trash, restoring facts, triggering optimization, ingesting connector credentials, and stopping the daemon return `403 Forbidden` for non-loopback callers. This keeps the single-writer knowledge graph safe even when the server is reachable from other devices.
+Destructive and sensitive operations are additionally only accepted from the local machine. If the daemon is bound to a LAN address, remote clients that hold the token can still read status and KB queries and use chat — note that chat persists turns and can write facts through the `remember` tool — but mutations such as forgetting facts, emptying the trash, restoring facts, triggering optimization, ingesting connector credentials, and stopping the daemon return `403 Forbidden` for non-loopback callers. This keeps the single-writer knowledge graph safe even when the server is reachable from other devices.
 
 ## Stopping the Server
 

@@ -20,24 +20,26 @@ use crate::state::AppState;
 /// If the server does not shut down gracefully within 30 seconds, it is
 /// forcefully aborted so that resource cleanup can still run.
 pub async fn start_server(config: Arc<ReloadableConfig>) -> anyhow::Result<()> {
+    let api_token = Arc::from(mimir_core::auth::load_or_create_api_token()?.as_str());
     let llm_client: Arc<dyn LlmBackend> =
         Arc::new(LlmClient::new(config.snapshot().await.llm.clone()).await?);
-    start_server_with_llm(config, llm_client).await
+    start_server_with_llm(config, llm_client, api_token).await
 }
 
-/// Start the Mimir HTTP server with an injected LLM backend.
+/// Start the Mimir HTTP server with an injected LLM backend and API token.
 ///
 /// This is the same as [`start_server`], but allows tests (and future
-/// embedders) to supply a custom [`LlmBackend`] implementation without
-/// relying on sentinel strings or config hacks.
+/// embedders) to supply a custom [`LlmBackend`] implementation and a known
+/// API token without relying on sentinel strings or config hacks.
 pub async fn start_server_with_llm(
     config: Arc<ReloadableConfig>,
     llm_client: Arc<dyn LlmBackend>,
+    api_token: Arc<str>,
 ) -> anyhow::Result<()> {
     let bind_addr = config.snapshot().await.server.bind_addr.clone();
     let addr: SocketAddr = bind_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    start_server_with_llm_and_listener(config, llm_client, listener).await
+    start_server_with_llm_and_listener(config, llm_client, listener, api_token).await
 }
 
 /// Start the Mimir HTTP server with an injected LLM backend and a pre-bound listener.
@@ -49,10 +51,21 @@ pub async fn start_server_with_llm_and_listener(
     config: Arc<ReloadableConfig>,
     llm_client: Arc<dyn LlmBackend>,
     listener: tokio::net::TcpListener,
+    api_token: Arc<str>,
 ) -> anyhow::Result<()> {
     let (app_state, scheduler_shutdown_rx) =
-        AppState::from_config_with_llm(Arc::clone(&config), llm_client).await?;
+        AppState::from_config_with_llm(Arc::clone(&config), llm_client, api_token).await?;
     let state = Arc::new(app_state);
+
+    // A non-loopback bind exposes the API to the network; the bearer token is
+    // then the only access control (issue #281). Warn so the operator knows.
+    if let Ok(local_addr) = listener.local_addr()
+        && !local_addr.ip().is_loopback()
+    {
+        tracing::warn!(
+            "bind_addr {local_addr} is not loopback: the API token is the only access control; see docs/api-authentication.md"
+        );
+    }
 
     // ---- Start background scheduler dispatch loop ----
     let sched = Arc::clone(&state.scheduler);

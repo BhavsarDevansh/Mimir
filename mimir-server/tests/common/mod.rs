@@ -21,12 +21,30 @@ pub use mimir_core::{
 };
 pub use mimir_server::state::AppState;
 
+/// The API token every test request presents (issue #281). The test
+/// `AppState` is built with this exact token, so `authed_request()` requests
+/// pass the auth middleware.
+pub const TEST_TOKEN: &str = "test-api-token";
+
+/// Build a request pre-authenticated with [`TEST_TOKEN`] so route tests can
+/// focus on handler behaviour instead of repeating the auth header.
+/// Shared fixture: not every test binary uses every helper, so dead-code
+/// analysis is relaxed.
+#[allow(dead_code)]
+pub fn authed_request() -> axum::http::request::Builder {
+    Request::builder().header("Authorization", format!("Bearer {TEST_TOKEN}"))
+}
+
 /// A loopback `ConnectInfo` extension for requests to loopback-gated routes.
+/// Shared fixture: not every test binary uses every helper, so dead-code
+/// analysis is relaxed for these two.
+#[allow(dead_code)]
 pub fn loopback_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
     axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
 }
 
 /// A non-loopback `ConnectInfo` extension for loopback-rejection tests.
+#[allow(dead_code)]
 pub fn non_loopback_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
     axum::extract::ConnectInfo(std::net::SocketAddr::from(([192, 168, 1, 1], 0)))
 }
@@ -194,6 +212,7 @@ pub async fn test_state_with_config(
         last_user_activity,
         connector_registry,
         connector_supervisor,
+        api_token: Arc::from(TEST_TOKEN),
     });
 
     (state, temp)

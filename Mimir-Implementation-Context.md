@@ -71,6 +71,10 @@ The daemon exposes its API over two transports simultaneously:
 1. **Unix domain socket** (`~/.local/share/mimir/mimir.sock`) — planned for local CLI (see #25; not yet implemented)
 2. **TCP** (`127.0.0.1:8080`) — fallback for remote clients, web UI, and Windows
 
+### API Authentication
+
+Every route except `GET /health` requires a bearer token (issue #281): the daemon and CLI share a token auto-generated at `~/.local/share/mimir/api_token` (mode `0600`), sent as `Authorization: Bearer <token>` by `mimir-client`, and verified in constant time by the `require_auth` middleware. The loopback guard remains as a second layer for destructive routes. See `docs/api-authentication.md` for the threat model and non-loopback bind guidance.
+
 ### Daemon-down Handling
 
 When a CLI command cannot connect to the daemon, the user is prompted:

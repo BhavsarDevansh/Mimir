@@ -61,7 +61,7 @@ async fn test_chat_extracts_facts_after_response() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat")
                 .header("Content-Type", "application/json")
@@ -229,7 +229,7 @@ async fn test_incognito_blocks_remember_tool_and_writes_no_facts() {
     .unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat")
                 .header("Content-Type", "application/json")
@@ -295,7 +295,7 @@ async fn test_non_incognito_allows_remember_tool_and_persists_fact() {
     .unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat")
                 .header("Content-Type", "application/json")
@@ -361,7 +361,7 @@ async fn test_incognito_blocks_remember_tool_and_writes_no_facts_stream() {
     .unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat/stream")
                 .header("Content-Type", "application/json")
@@ -435,7 +435,7 @@ async fn test_non_incognito_allows_remember_tool_and_persists_fact_stream() {
     .unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat/stream")
                 .header("Content-Type", "application/json")

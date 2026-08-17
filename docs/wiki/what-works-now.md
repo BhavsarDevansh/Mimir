@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-08-16
+> **Last updated:** 2026-08-17
 >
-> **Version:** 0.115.1
+> **Version:** 0.117.0
 >
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in `CHANGELOG.md`; this file deliberately does not repeat either.
 
@@ -188,9 +188,10 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | systemd user service | ✅ Works | `mimir init` offers to install and enable it on Linux. |
 | macOS launchd | ❌ Not implemented | `mimir init` prints "planned for a future phase" ([#285](https://github.com/BhavsarDevansh/Mimir/issues/285)). |
 | Graceful shutdown | ✅ Works | `mimir stop`, Ctrl-C, or SIGTERM; drains in-flight requests and tears down background tasks; shutdown cause is logged. |
-| Daemon startup (AppState construction) | ✅ Works | Per-subsystem init helpers (`init_context_manager`, `init_tool_registry`, `init_knowledge_graph`, `init_job_queue`, `init_agent_runtime`, `init_scheduler`, `init_connector_framework`) composed in a fixed order by `from_config_with_llm`; the `AppState` field set is unchanged ([#265](https://github.com/BhavsarDevansh/Mimir/issues/265)). |
+| Daemon startup (AppState construction) | ✅ Works | Per-subsystem init helpers (`init_context_manager`, `init_tool_registry`, `init_knowledge_graph`, `init_job_queue`, `init_agent_runtime`, `init_scheduler`, `init_connector_framework`) composed in a fixed order by `from_config_with_llm`; issue #281 added the `api_token` field to `AppState` (loaded or generated at startup). |
 | Daemon-down detection | ✅ Works | CLI probes `/health`; prompts to auto-start with a 10 s readiness timeout. |
-| Loopback security | 🟡 Partial | `/stop` and a few management routes are loopback-restricted, but the HTTP API has no authentication — any local process can read/write the knowledge graph, and a `0.0.0.0` bind exposes everything ([#281](https://github.com/BhavsarDevansh/Mimir/issues/281)). |
+| API authentication | ✅ Works | Every route except `GET /health` requires a bearer token auto-generated at `~/.local/share/mimir/api_token` (mode `0600`); the CLI attaches it automatically, so commands work unmodified ([#281](https://github.com/BhavsarDevansh/Mimir/issues/281)). |
+| Loopback security | ✅ Works | Destructive/sensitive routes stay loopback-only as an independent control; the bearer token authenticates every other route, and a non-loopback bind relies on the token alone for authentication and logs a startup warning. |
 | CORS for local dev | ✅ Works | Whitelisted ports: 8080, 3000, 5173. |
 
 ### Knowledge Graph (Phase 2)
@@ -382,7 +383,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 
 | Issue | Impact | Workaround |
 |-------|--------|------------|
-| [#281](https://github.com/BhavsarDevansh/Mimir/issues/281) — no HTTP API auth | Any local process can read/write the knowledge graph | Keep the daemon on loopback; do not set `bind_addr` to `0.0.0.0` |
 | [#25](https://github.com/BhavsarDevansh/Mimir/issues/25) — Unix socket transport | TCP is the only transport | TCP on `127.0.0.1:8080` is secure for local use |
 | [#279](https://github.com/BhavsarDevansh/Mimir/issues/279) — no session compaction | Very long conversations are trimmed, not summarised | Keep `max_turns` modest (10–30) |
 | [#280](https://github.com/BhavsarDevansh/Mimir/issues/280) — chat session not persisted | Restarting `mimir chat` starts a new session | Use `/history` to resume |

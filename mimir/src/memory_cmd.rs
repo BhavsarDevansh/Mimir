@@ -1,8 +1,7 @@
 //! Memory viewer. Loads and prints the live condensed memory block to stdout.
-use mimir_client::MimirClient;
 
 pub async fn handle_memory(base_url: &str, refresh: bool) {
-    let client = MimirClient::new(base_url);
+    let client = crate::cli_util::make_client(base_url);
     if refresh {
         match client.memory_refresh().await {
             Ok(resp) => {

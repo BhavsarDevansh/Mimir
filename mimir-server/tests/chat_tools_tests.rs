@@ -14,7 +14,7 @@ async fn test_chat_forwards_tools_to_llm() {
     let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat")
                 .header("Content-Type", "application/json")
@@ -68,7 +68,7 @@ async fn test_chat_executes_tool_calls_and_returns_final_response() {
     let body = serde_json::to_string(&serde_json::json!({"message": "What time is it?"})).unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat")
                 .header("Content-Type", "application/json")
@@ -109,7 +109,7 @@ async fn test_chat_stream_forwards_tools_to_llm() {
     let body = serde_json::to_string(&serde_json::json!({"message": "hello"})).unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat/stream")
                 .header("Content-Type", "application/json")
@@ -169,7 +169,7 @@ async fn test_chat_stream_executes_tool_calls_and_returns_final_response() {
     let body = serde_json::to_string(&serde_json::json!({"message": "What time is it?"})).unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/chat/stream")
                 .header("Content-Type", "application/json")

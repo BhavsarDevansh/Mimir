@@ -7,7 +7,7 @@ use common::*;
 async fn connector_post(app: axum::Router, body: serde_json::Value) -> axum::response::Response {
     let body = serde_json::to_string(&body).unwrap();
     app.oneshot(
-        Request::builder()
+        authed_request()
             .method("POST")
             .uri("/connectors")
             .header("Content-Type", "application/json")
@@ -52,7 +52,7 @@ async fn test_connector_add_list_show_remove_round_trip() {
     let resp = app
         .clone()
         .oneshot(
-            Request::builder()
+            authed_request()
                 .uri("/connectors")
                 .body(Body::empty())
                 .unwrap(),
@@ -71,7 +71,7 @@ async fn test_connector_add_list_show_remove_round_trip() {
     let resp = app
         .clone()
         .oneshot(
-            Request::builder()
+            authed_request()
                 .uri(format!("/connectors/{id}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -84,7 +84,7 @@ async fn test_connector_add_list_show_remove_round_trip() {
     let resp = app
         .clone()
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("DELETE")
                 .uri(format!("/connectors/{id}"))
                 .body(Body::empty())
@@ -97,7 +97,7 @@ async fn test_connector_add_list_show_remove_round_trip() {
     // GET /connectors/{id} now 404s.
     let resp = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .uri(format!("/connectors/{id}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -119,7 +119,7 @@ async fn test_connector_catalog_lists_registered_backend_pairs() {
     let resp = app
         .clone()
         .oneshot(
-            Request::builder()
+            authed_request()
                 .uri("/connectors/catalog")
                 .body(Body::empty())
                 .unwrap(),
@@ -258,7 +258,8 @@ async fn test_connector_round_trip_via_mimir_client() {
         let _ = axum::serve(listener, app).await;
     });
 
-    let client = mimir_client::MimirClient::new(format!("http://127.0.0.1:{port}"));
+    let client =
+        mimir_client::MimirClient::with_token(format!("http://127.0.0.1:{port}"), TEST_TOKEN);
     let req = mimir_api_types::AddConnectorRequest {
         connector_type: "gmail".to_string(),
         backend: "test".to_string(),
@@ -290,7 +291,7 @@ async fn test_connector_remove_unknown_returns_404() {
     let app = mimir_server::build_app(state.clone());
     let resp = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("DELETE")
                 .uri("/connectors/999999")
                 .body(Body::empty())
@@ -357,7 +358,7 @@ async fn test_connector_remove_deletes_stored_credentials() {
     let resp = app
         .clone()
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("DELETE")
                 .uri(format!("/connectors/{id}"))
                 .body(Body::empty())
@@ -398,7 +399,7 @@ async fn connector_sub_post(
 ) -> axum::response::Response {
     let uri = format!("/connectors/{id}/{action}");
     let mut builder =
-        Request::builder()
+        authed_request()
             .method("POST")
             .uri(uri)
             .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -731,7 +732,7 @@ async fn test_connector_tokens_and_forget_reject_non_loopback() {
         let resp = app
             .clone()
             .oneshot(
-                Request::builder()
+                authed_request()
                     .method("POST")
                     .uri(format!("/connectors/{}/{}", created.id, action))
                     .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((

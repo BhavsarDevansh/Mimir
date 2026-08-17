@@ -12,9 +12,20 @@ pub fn exit_with_error(msg: impl std::fmt::Display) -> ! {
     std::process::exit(1);
 }
 
-/// Build a daemon HTTP client for the given base URL.
+/// Build a daemon HTTP client for the given base URL, authenticating with the
+/// local API token (issue #281). The token is loaded — or generated — from
+/// the data dir, so the CLI works unmodified after `mimir init` and can even
+/// create the token before auto-starting the daemon.
 pub fn make_client(base_url: &str) -> MimirClient {
-    MimirClient::new(base_url)
+    match mimir_core::auth::load_or_create_api_token() {
+        Ok(token) => MimirClient::with_token(base_url, token),
+        Err(error) => {
+            eprintln!(
+                "Warning: failed to load the API token ({error}); requests may be rejected by the daemon."
+            );
+            MimirClient::new(base_url)
+        }
+    }
 }
 
 /// Pretty-print a JSON value to stdout — the `--json` output mode shared by

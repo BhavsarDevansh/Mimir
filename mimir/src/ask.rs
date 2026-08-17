@@ -9,7 +9,6 @@ use std::io::Read;
 
 use futures::StreamExt;
 use mimir_api_types::{ChatRequest, StreamItem};
-use mimir_client::MimirClient;
 
 pub struct AskOptions {
     pub query: String,
@@ -22,7 +21,7 @@ pub struct AskOptions {
 }
 
 pub async fn handle_ask(base_url: &str, opts: AskOptions) {
-    let client = MimirClient::new(base_url);
+    let client = crate::cli_util::make_client(base_url);
 
     let mut message = String::new();
     if let Some(ref piped) = opts.piped_input {

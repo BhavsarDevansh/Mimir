@@ -6,11 +6,11 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::ConnectInfo,
+    extract::{ConnectInfo, Request, State},
     handler::Handler,
-    http::StatusCode,
-    middleware::from_fn,
-    response::IntoResponse,
+    http::{StatusCode, header},
+    middleware::{Next, from_fn, from_fn_with_state},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use tower::ServiceBuilder;
@@ -32,11 +32,37 @@ use crate::state::AppState;
 
 async fn require_loopback(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
+    req: Request,
+    next: Next,
+) -> Response {
     if !addr.ip().is_loopback() {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(req).await
+}
+
+/// Reject requests that do not present the daemon's API token as a bearer
+/// token (issue #281). Every route except `GET /health` sits behind this
+/// middleware, so the knowledge graph is unreadable and unmutable without
+/// the token even for other local processes or users.
+async fn require_auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+    let authorized = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            let (scheme, token) = value.split_once(' ')?;
+            scheme
+                .eq_ignore_ascii_case("bearer")
+                .then_some(token.trim())
+        })
+        .is_some_and(|presented| mimir_core::auth::verify_api_token(presented, &state.api_token));
+    if !authorized {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(header::WWW_AUTHENTICATE, "Bearer")],
+        )
+            .into_response();
     }
     next.run(req).await
 }
@@ -70,10 +96,9 @@ pub fn build_app(state: Arc<AppState>) -> Router {
             http::Method::PATCH,
             http::Method::DELETE,
         ])
-        .allow_headers([http::header::CONTENT_TYPE]);
+        .allow_headers([http::header::CONTENT_TYPE, http::header::AUTHORIZATION]);
 
-    Router::new()
-        .route("/health", get(|| async { StatusCode::OK }))
+    let protected = Router::new()
         .route("/status", get(status_handler))
         .route("/memory", get(memory_handler))
         .route(
@@ -152,6 +177,11 @@ pub fn build_app(state: Arc<AppState>) -> Router {
             post(connector_forget_handler).layer(from_fn(require_loopback)),
         )
         .route("/stop", post(stop_handler).layer(from_fn(require_loopback)))
+        .route_layer(from_fn_with_state(Arc::clone(&state), require_auth));
+
+    Router::new()
+        .route("/health", get(|| async { StatusCode::OK }))
+        .merge(protected)
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())

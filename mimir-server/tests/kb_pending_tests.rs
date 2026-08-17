@@ -45,7 +45,7 @@ async fn test_kb_pending_lists_pending_facts() {
     let app = mimir_server::build_app(state.clone());
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .uri("/kb/pending")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
                     [127, 0, 0, 1],
@@ -77,7 +77,7 @@ async fn test_kb_confirm_returns_active_fact() {
     let app = mimir_server::build_app(state.clone());
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri(format!("/kb/facts/{fact_id}/confirm"))
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -113,7 +113,7 @@ async fn test_kb_confirm_non_pending_returns_bad_request() {
     let app = mimir_server::build_app(state.clone());
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri(format!("/kb/facts/{fact_id}/confirm"))
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -140,7 +140,7 @@ async fn test_kb_reject_deletes_fact_and_returns_204() {
     .unwrap();
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri(format!("/kb/facts/{fact_id}/reject"))
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -182,7 +182,7 @@ async fn test_kb_reject_empty_body_returns_204() {
     let app = mimir_server::build_app(state.clone());
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri(format!("/kb/facts/{fact_id}/reject"))
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -204,7 +204,7 @@ async fn test_kb_pending_rejects_non_loopback() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .uri("/kb/pending")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
                     [192, 168, 1, 1],
@@ -225,7 +225,7 @@ async fn test_kb_confirm_rejects_non_loopback() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/kb/facts/1/confirm")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -247,7 +247,7 @@ async fn test_kb_reject_rejects_non_loopback() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            authed_request()
                 .method("POST")
                 .uri("/kb/facts/1/reject")
                 .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.119.3] — 2026-08-18
+
+### Docs: reconcile inline unit-test counts in Testing-and-Benchmarks (PR #361 review)
+
+- `docs/wiki/Testing-and-Benchmarks.md` now reports the same inline unit-test counts as `docs/unit-tests.md` (mimir-api-types 63, mimir-client 74, mimir-core 279, mimir-knowledge 195, mimir-server 41), verified against `cargo test --workspace`.
+- Version bumped 0.119.2 → 0.119.3 (patch — documentation).
+
 ## [0.119.2] — 2026-08-17
 
 ### Docs: document mimir-connectors unit-test coverage (issue #299)

@@ -42,6 +42,23 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 
 41 lib tests (up from 38).
 
+## `mimir-connectors`
+
+- `email/`: 147 tests — deterministic JSON-LD extraction (`email/jsonld`, 55: block detection, array flattening, flight/event-reservation facts), the connector's extract/imap/kb/llm layers (`email/connector`, 46: iMIP invite extraction, cancel tombstones, IMAP sync/cursor semantics, KB funnel, bounded LLM retry), the LLM retry ledger (`email/llm`, 29), config parsing (`email/config`, 14: auth-method resolution, polling/IDLE mode selection), and IMAP auth (`email/imap`, 3: XOAUTH2 SASL, secret redaction).
+- `oauth/`: 39 tests — the interactive PKCE flow (`oauth/pkce`, 16: callback parsing, state-mismatch abort, HTTPS gates, timeouts), token refresh (`oauth/refresh`, 21: grant posting, loopback-host validation, expiry clamping, error surfacing), and the HTTP client (`oauth/http_client`, 2: response-size bound).
+- `photos/`: 31 tests — EXIF GPS/datetime parsing, cursor classification and pruning, reverse-geocode retry bounds, and the `took_photo_at` / `visited` fact overlay.
+- `supervisor/`: 23 tests — runner control/forget/instantiate (20: start/pause/resume, per-connector lifecycle lock, cursor + durable-state injection) and cycle semantics (3: cursor adoption only after success, deletion replay).
+- `rate_limit/`: 19 tests — backoff/jitter saturation, `Retry-After` handling, and the daily-quota tracker.
+- `calendar/`: 18 tests — CalDAV collection/sync-collection parsing (13: tombstones, sync tokens, 507 truncation) and credential resolution (5: OAuth refresh, auth-kind mismatch).
+- `geocoder/`: 12 tests — Nominatim query encoding, locality short-name fallback chain, and place-to-result mapping.
+- `ical/`: 10 tests — iCalendar datetime/TZID parsing and `vevent` → fact mapping.
+- `connector.rs`: 7 tests — `ConnectorContext` secret-store / user-identity plumbing.
+- `test_utils.rs`: 6 tests — the shared OAuth test doubles (feature `test-utils`, #290/#298): authorize-URL parsing, callback URL building, and the wiremock token-endpoint mock.
+- `secrets/`: 6 tests — slug validation, `SecretBundle` / store debug redaction, and the shared auth-mismatch message helper.
+- `fact.rs`: 1 test — `ConnectorFact` shared defaults and per-fact overrides.
+
+319 lib tests. The `test-mock-oauth`-gated in-process mock OAuth server (`mock_oauth.rs`, #207) has no inline unit tests of its own — its correctness is pinned by the PKCE E2E suites in `mimir-connectors/tests/` and `mimir/tests/` (see `docs/e2e-testing.md` for the crate's integration-test split).
+
 ## `mimir` (binary)
 
 - `kb/`: 16 tests for `parse_datetime` (RFC3339, date-only, ISO without zone, space separator, fractional seconds, invalid), `confidence_color` boundary semantics, and `truncate` (short/exact/long+ellipsis/multibyte/`max=0`).
@@ -58,6 +75,7 @@ cargo test --workspace
 cargo test -p mimir-core --lib
 cargo test -p mimir-knowledge --lib
 cargo test -p mimir-server --lib
+cargo test -p mimir-connectors --lib
 
 # Binary crate inline tests
 cargo test -p mimir --bin mimir

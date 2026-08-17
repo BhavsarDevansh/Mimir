@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.119.2] — 2026-08-17
+
+### Docs: document mimir-connectors unit-test coverage (issue #299)
+
+- `docs/unit-tests.md` gains a `mimir-connectors` section summarising the crate's 319 inline lib tests (email extraction/LLM layers, OAuth PKCE/refresh, photos, supervisor, rate-limit, calendar, geocoder, ical, secrets, `ConnectorContext`, and the shared `test_utils` doubles from #290/#298), notes that the `test-mock-oauth`-gated mock OAuth server (#207) is pinned by the E2E suites rather than inline tests, and adds `cargo test -p mimir-connectors --lib` to the running commands.
+- Docs updated: `docs/unit-tests.md`, `docs/wiki/Testing-and-Benchmarks.md`.
+- Version bumped 0.119.1 → 0.119.2 (patch — documentation).
+
 ## [0.119.1] — 2026-08-17
 
 ### Docs: enforce the single-line markdown prose standard (issue #294)

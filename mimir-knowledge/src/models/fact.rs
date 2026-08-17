@@ -64,15 +64,17 @@ impl std::str::FromStr for FactStatus {
     /// historical `kb edit` input contract, so the input and output
     /// directions share one string table (issue #293).
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "active" => Ok(Self::Active),
-            "inferred" => Ok(Self::Inferred),
-            "disputed" => Ok(Self::Disputed),
-            "corrected" => Ok(Self::Corrected),
-            "superseded" => Ok(Self::Superseded),
-            "forgotten" => Ok(Self::Forgotten),
-            _ => Err(()),
-        }
+        [
+            Self::Active,
+            Self::Inferred,
+            Self::Disputed,
+            Self::Corrected,
+            Self::Superseded,
+            Self::Forgotten,
+        ]
+        .into_iter()
+        .find(|status| status.as_str().eq_ignore_ascii_case(s))
+        .ok_or(())
     }
 }
 

@@ -5,6 +5,7 @@ use chrono::Utc;
 
 use mimir_api_types::FactRow;
 use mimir_knowledge::models::fact::FactStatus;
+use mimir_knowledge::models::source::SourceType;
 
 use crate::error;
 use crate::state::AppState;
@@ -30,41 +31,19 @@ pub(super) fn parse_datetime(s: &str) -> Option<chrono::DateTime<Utc>> {
 }
 
 pub(super) fn parse_status(s: &str) -> Option<FactStatus> {
-    match s.to_lowercase().as_str() {
-        "active" => Some(FactStatus::Active),
-        "inferred" => Some(FactStatus::Inferred),
-        "disputed" => Some(FactStatus::Disputed),
-        "corrected" => Some(FactStatus::Corrected),
-        "superseded" => Some(FactStatus::Superseded),
-        "forgotten" => Some(FactStatus::Forgotten),
-        _ => None,
-    }
+    s.parse().ok()
 }
 
 pub(super) fn status_name(status_id: i16) -> String {
-    match status_id {
-        1 => "Active",
-        2 => "Inferred",
-        3 => "Disputed",
-        4 => "Corrected",
-        5 => "Superseded",
-        6 => "Forgotten",
-        _ => "Unknown",
-    }
-    .to_string()
+    FactStatus::try_from(status_id)
+        .map(|s| s.as_str().to_string())
+        .unwrap_or_else(|_| "Unknown".to_string())
 }
 
 pub(super) fn source_type_name(source_type_id: i16) -> String {
-    match source_type_id {
-        1 => "UserEdit",
-        2 => "Connector",
-        3 => "Inference",
-        4 => "Interaction",
-        5 => "Import",
-        6 => "System",
-        _ => "Unknown",
-    }
-    .to_string()
+    SourceType::try_from(source_type_id)
+        .map(|t| t.as_str().to_string())
+        .unwrap_or_else(|_| "Unknown".to_string())
 }
 
 pub(super) fn change_type_name(change_type_id: i16) -> String {
@@ -150,4 +129,42 @@ pub(super) async fn fact_row_from(
         valid_until: fact.valid_until.map(|dt| dt.to_rfc3339()),
         inferred: fact.inferred,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_name_matches_wire_contract() {
+        assert_eq!(status_name(FactStatus::Active as i16), "Active");
+        assert_eq!(status_name(FactStatus::Inferred as i16), "Inferred");
+        assert_eq!(status_name(FactStatus::Disputed as i16), "Disputed");
+        assert_eq!(status_name(FactStatus::Corrected as i16), "Corrected");
+        assert_eq!(status_name(FactStatus::Superseded as i16), "Superseded");
+        assert_eq!(status_name(FactStatus::Forgotten as i16), "Forgotten");
+        assert_eq!(status_name(99), "Unknown");
+    }
+
+    #[test]
+    fn source_type_name_matches_wire_contract() {
+        assert_eq!(source_type_name(SourceType::UserEdit as i16), "UserEdit");
+        assert_eq!(source_type_name(SourceType::Connector as i16), "Connector");
+        assert_eq!(source_type_name(SourceType::Inference as i16), "Inference");
+        assert_eq!(
+            source_type_name(SourceType::Interaction as i16),
+            "Interaction"
+        );
+        assert_eq!(source_type_name(SourceType::Import as i16), "Import");
+        assert_eq!(source_type_name(SourceType::System as i16), "System");
+        assert_eq!(source_type_name(99), "Unknown");
+    }
+
+    #[test]
+    fn parse_status_accepts_wire_strings() {
+        assert_eq!(parse_status("active"), Some(FactStatus::Active));
+        assert_eq!(parse_status("Active"), Some(FactStatus::Active));
+        assert_eq!(parse_status("forgotten"), Some(FactStatus::Forgotten));
+        assert_eq!(parse_status("bogus"), None);
+    }
 }

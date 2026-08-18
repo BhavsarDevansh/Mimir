@@ -54,18 +54,6 @@ pub struct SkillDefinition {
 /// # Weekly Summary Skill
 /// ...
 /// ```
-/// Parse a Markdown skill file into frontmatter + body.
-///
-/// Expected format:
-/// ```markdown
-/// ---
-/// name: weekly-summary
-/// version: 1.0.0
-/// ---
-///
-/// # Weekly Summary Skill
-/// ...
-/// ```
 ///
 /// Rejects files larger than `MAX_SKILL_FILE_SIZE`.
 pub fn parse_skill_file(contents: &str) -> Result<SkillDefinition, SkillError> {

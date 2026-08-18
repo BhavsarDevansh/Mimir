@@ -34,7 +34,7 @@
 //! that `.expect`), matching the workspace `ToolRegistry` convention, so the
 //! registry never reports contradictory state after a panic.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use mimir_knowledge::models::enums::ConnectorType;
@@ -58,12 +58,20 @@ impl std::fmt::Debug for ConnectorRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `dyn ConnectorFactory` is not `Debug`, so report the registered
         // (type, backend) keys rather than recursing into the trait objects.
-        let keys = self.read().keys().cloned().collect::<Vec<_>>();
+        let mut keys = self.read().keys().cloned().collect::<Vec<_>>();
+        sort_pairs(&mut keys);
         f.debug_struct("ConnectorRegistry")
             .field("len", &keys.len())
             .field("entries", &keys)
             .finish()
     }
+}
+
+/// Sort `(type, backend)` pairs by type then backend (wire-string form) —
+/// the single ordering contract behind every deterministic registry
+/// accessor ([`pairs`](ConnectorRegistry::pairs) and the `Debug` listing).
+fn sort_pairs(pairs: &mut [(ConnectorType, String)]) {
+    pairs.sort_by(|a, b| (a.0.as_str(), &a.1).cmp(&(b.0.as_str(), &b.1)));
 }
 
 impl Default for ConnectorRegistry {
@@ -176,24 +184,17 @@ impl ConnectorRegistry {
             .cloned()
     }
 
-    /// List the backend names registered under a connector type, in arbitrary
-    /// order. Useful for the `connector add` flow's backend discovery.
+    /// List the backend names registered under a connector type, sorted by
+    /// backend name so callers get a deterministic listing. Delegates to
+    /// [`pairs`](Self::pairs) so the ordering contract stays single-sourced
+    /// (the `connector add` flow discovers backends through the catalog
+    /// route, which also uses `pairs`).
     pub fn backends_for(&self, connector_type: ConnectorType) -> Vec<String> {
-        self.read()
-            .keys()
-            .filter(|(ct, _)| *ct == connector_type)
-            .map(|(_, b)| b.clone())
-            .collect::<Vec<_>>()
-    }
-
-    /// All connector types that have at least one registered backend.
-    pub fn registered_types(&self) -> Vec<ConnectorType> {
-        self.read()
-            .keys()
-            .map(|(ct, _)| *ct)
-            .collect::<HashSet<_>>()
+        self.pairs()
             .into_iter()
-            .collect::<Vec<_>>()
+            .filter(|(ct, _)| *ct == connector_type)
+            .map(|(_, backend)| backend)
+            .collect()
     }
 
     /// List every registered `(connector_type, backend)` pair, sorted by
@@ -206,7 +207,7 @@ impl ConnectorRegistry {
             .keys()
             .map(|(ct, backend)| (*ct, backend.clone()))
             .collect::<Vec<_>>();
-        pairs.sort_by(|a, b| (a.0.as_str(), &a.1).cmp(&(b.0.as_str(), &b.1)));
+        sort_pairs(&mut pairs);
         pairs
     }
 

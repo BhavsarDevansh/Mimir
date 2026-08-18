@@ -145,7 +145,6 @@ impl ConnectorRegistry {
     pub fn factory(&self, connector_type: ConnectorType, backend: &str)
         -> Option<Arc<dyn ConnectorFactory>>;
     pub fn backends_for(&self, connector_type: ConnectorType) -> Vec<String>;
-    pub fn registered_types(&self) -> Vec<ConnectorType>;
     pub fn pairs(&self) -> Vec<(ConnectorType, String)>;
     pub fn create(
         &self, connector_type: ConnectorType, backend: &str, config: serde_json::Value,
@@ -157,7 +156,7 @@ impl ConnectorRegistry {
 }
 ```
 
-`pairs()` lists every registered `(connector_type, backend)` pair, sorted by type then backend (wire-string form) so output is deterministic — it backs the daemon's `GET /connectors/catalog` discovery route and `mimir connector catalog` (issue #271). `backends_for` / `registered_types` predate it and return unordered results.
+`pairs()` lists every registered `(connector_type, backend)` pair, sorted by type then backend (wire-string form) so output is deterministic — it backs the daemon's `GET /connectors/catalog` discovery route and `mimir connector catalog` (issue #271). `backends_for` returns the backend names for one type, also sorted, so every registry accessor is order-stable. The pre-`pairs()` `registered_types` accessor was removed in issue #322: it returned unordered results and had no callers once `pairs()` superseded it for discovery.
 
 `ConnectorContext` carries the shared services injected at construction: an optional `Arc<dyn Geocoder>` (Photos reverse geocoding, C2 / #196), an optional `Arc<dyn SecretStore>` (Calendar / Email credentials, F10 / #187), the canonical user identity name (A1), and an optional `Arc<dyn LlmBackend>` (Email LLM extraction, C7 / #201, routed through the shared pool's system queue per decision D′). `create_with_context` forwards the context to the factory; `create` is the config-only convenience path that passes `ConnectorContext::empty()`.
 

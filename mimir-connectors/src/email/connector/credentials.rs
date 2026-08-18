@@ -5,7 +5,7 @@ use crate::email::config::EmailAuthMethod;
 use crate::email::connector::EmailConnector;
 use crate::email::imap::ImapAuth;
 use crate::oauth;
-use crate::secrets::{SecretBundle, mismatch_error};
+use crate::secrets::{AuthMethodDiscriminant, SecretBundle, mismatch_error};
 
 /// Load the secret bundle and turn it into live [`ImapAuth`] credentials,
 /// refreshing an expired OAuth access token (persisting the new bundle).

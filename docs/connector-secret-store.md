@@ -77,7 +77,7 @@ A `Mutex<HashMap<String, SecretBundle>>` backend, included as a test/helper for 
 - **Struct variants, not newtypes.** `SecretBundle` uses `ApiToken { token }` / `AppPassword { password }` rather than `ApiToken(String)` because serde's internally-tagged `kind` representation requires map-typed variant payloads; the named fields also make the on-disk JSON self-describing.
 - **`OAuth` `Option` fields.** `refresh_token` and `expires_at` are `Option` since not all grants issue a refresh token or return an expiry (e.g. client-credentials, some OIDC providers).
 - **Async trait.** `SecretStore` is `#[async_trait]` so the deferred keyring / Secret Service backend (#188) can implement it without a breaking change, and so it composes with the async `Connector` pipeline. The V1 file backend does blocking I/O, which is fast for tiny JSON files.
-- **Shared mismatch error.** The Calendar and Email connectors build the `auth method X does not match stored secret kind` error through the shared `crate::secrets::mismatch_error` helper (issue #273), so the message text and the auth-kind `discriminant()` stay in sync across both backends and are pinned by unit tests.
+- **Shared mismatch error.** The Calendar and Email connectors build the `auth method X does not match stored secret kind` error through the shared `crate::secrets::mismatch_error` helper (issue #273), so the message text and the auth-kind `discriminant()` stay in sync across both backends and are pinned by unit tests. The `discriminant()` contract is shared via the `crate::secrets::AuthMethodDiscriminant` trait (issue #341), while the concrete `match` expressions remain connector-specific; each variant's mapping is pinned against its serde `kind` tag by unit tests.
 
 ## End-to-end secret wipe
 

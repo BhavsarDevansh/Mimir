@@ -6,7 +6,7 @@ use crate::calendar::caldav::CalDavAuth;
 use crate::calendar::CalendarConnector;
 use crate::connector::ConnectorError;
 use crate::oauth;
-use crate::secrets::{SecretBundle, mismatch_error};
+use crate::secrets::{AuthMethodDiscriminant, SecretBundle, mismatch_error};
 
 impl CalendarConnector {
     /// Turn a [`SecretBundle`] into a [`CalDavAuth`], refreshing an expired

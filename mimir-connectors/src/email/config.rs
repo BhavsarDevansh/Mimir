@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::secrets::AuthMethodDiscriminant;
+
 // ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------
@@ -94,10 +96,8 @@ pub enum EmailAuthMethod {
     },
 }
 
-impl EmailAuthMethod {
-    /// The non-secret discriminant name (the serde `kind` tag), for error
-    /// messages that must not `Debug`-format the OAuth `client_secret`.
-    pub(crate) fn discriminant(&self) -> &'static str {
+impl AuthMethodDiscriminant for EmailAuthMethod {
+    fn discriminant(&self) -> &'static str {
         match self {
             Self::AppPassword { .. } => "app_password",
             Self::OAuth { .. } => "oauth",

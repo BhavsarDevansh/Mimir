@@ -45,7 +45,7 @@ use tokio::sync::Mutex;
 use crate::calendar::caldav::RawCalDavEvent;
 use crate::connector::{Connector, ConnectorContext, ConnectorError, ConnectorFactory};
 use crate::oauth::OAuthHttpClient;
-use crate::secrets::SecretStore;
+use crate::secrets::{AuthMethodDiscriminant, SecretStore};
 
 // ---------------------------------------------------------------------------
 // Defaults
@@ -113,9 +113,7 @@ pub enum CalendarAuthMethod {
     },
 }
 
-impl CalendarAuthMethod {
-    /// The non-secret discriminant name (the serde `kind` tag), for error
-    /// messages that must not `Debug`-format the OAuth `client_secret`.
+impl AuthMethodDiscriminant for CalendarAuthMethod {
     fn discriminant(&self) -> &'static str {
         match self {
             Self::AppPassword { .. } => "app_password",
@@ -235,3 +233,7 @@ mod credentials;
 mod payload;
 mod sync;
 mod trait_impl;
+
+#[cfg(test)]
+#[path = "config_tests.rs"]
+mod config_tests;

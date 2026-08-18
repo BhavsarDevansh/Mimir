@@ -58,6 +58,19 @@ pub use file::FileSecretStore;
 pub use memory::InMemorySecretStore;
 pub use store::SecretStore;
 
+/// Shared auth-kind discriminant contract (issue #341).
+///
+/// Both `CalendarAuthMethod` and `EmailAuthMethod` implement this trait so
+/// the non-secret `kind` strings cannot drift between the two connectors: a
+/// new auth variant is forced to map here, and `mismatch_error` callers pass
+/// `auth.discriminant()`.
+#[cfg(any(feature = "calendar", feature = "gmail"))]
+pub(crate) trait AuthMethodDiscriminant {
+    /// The non-secret discriminant name (the serde `kind` tag), for error
+    /// messages that must not `Debug`-format the OAuth `client_secret`.
+    fn discriminant(&self) -> &'static str;
+}
+
 /// Build the `Authentication` error raised when a connector's configured auth
 /// method does not match the stored [`SecretBundle`] kind (issue #273).
 ///

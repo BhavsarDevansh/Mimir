@@ -5,7 +5,7 @@ use chrono::Utc;
 use crate::connector::{Connector, ConnectorError, ConnectorMode};
 use crate::email::connector::EmailConnector;
 use crate::email::imap::ImapAuth;
-use crate::secrets::SecretBundle;
+use crate::secrets::{AuthMethodDiscriminant, SecretBundle};
 use mimir_knowledge::models::enums::ConnectorType;
 
 pub(crate) fn app_config() -> serde_json::Value {
@@ -279,4 +279,26 @@ async fn resolve_auth_oauth_refreshes_expired_token() {
         Some("rt"),
         "prior refresh token retained"
     );
+}
+
+#[test]
+fn auth_method_discriminants_match_serde_kind_tag() {
+    // The shared trait contract (issue #341): every variant's
+    // `discriminant()` must equal the serde `kind` tag so the mismatch error
+    // can never drift from the stored-config kind.
+    let app_password = EmailAuthMethod::AppPassword {
+        username: "devansh@example.com".into(),
+    };
+    let oauth = EmailAuthMethod::OAuth {
+        username: "devansh@example.com".into(),
+        auth_uri: None,
+        token_endpoint: "https://oauth.example.com/token".into(),
+        client_id: "cid".into(),
+        client_secret: None,
+        scopes: None,
+    };
+    for (auth, kind) in [(&app_password, "app_password"), (&oauth, "oauth")] {
+        assert_eq!(AuthMethodDiscriminant::discriminant(auth), kind);
+        assert_eq!(serde_json::to_value(auth).unwrap()["kind"], kind);
+    }
 }

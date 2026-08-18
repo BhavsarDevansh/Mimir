@@ -2,7 +2,7 @@
 
 > **Last updated:** 2026-08-18
 >
-> **Version:** 0.120.3
+> **Version:** 0.121.0
 >
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in `CHANGELOG.md`; this file deliberately does not repeat either.
 

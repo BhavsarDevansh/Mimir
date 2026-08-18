@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.119.5] — 2026-08-18
+
+### Docs: fix the last mimir-knowledge rustdoc intra-doc link warning (issue #310)
+
+- `mimir-knowledge/src/events.rs` module docs linked `[get_overdue_events]` bare, which no longer resolves since the item moved to `queries::event::get_overdue_events` in the module split (0.94.0); the link now uses the full path `crate::queries::event::get_overdue_events`, so `cargo doc -p mimir-knowledge --no-deps` builds with zero warnings.
+- Regression guard: `scripts/tests/rustdoc_test.sh` now also builds `mimir-knowledge` docs with `RUSTDOCFLAGS="-D warnings"` (mimir-knowledge has no feature flags, so the default build is the full surface); the remaining workspace crates with doc warnings are tracked in #337 (mimir-core) and #348 (mimir-server).
+- Docs updated: `docs/workspace.md` (regression guards), `docs/wiki/what-works-now.md` (backlog: #337 added).
+- Version bumped 0.119.4 → 0.119.5 (patch — documentation fix).
+
 ## [0.119.4] — 2026-08-18
 
 ### Docs: fix Phase-2 roadmap and schema-doc spec drift (issue #306)

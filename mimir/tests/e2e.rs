@@ -132,6 +132,10 @@ db_path = "{jobs_db}"
         .unwrap();
 
     // Wait for the daemon to become ready via the cheap /health endpoint.
+    // Readiness here implies the SIGTERM handler is already installed:
+    // `serve_with_bounded_drain` registers the OS signal handlers
+    // synchronously before the listener starts accepting (issue #329), so a
+    // SIGTERM sent after this point always takes the graceful path.
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     let mut ready = false;
     while std::time::Instant::now() < deadline {

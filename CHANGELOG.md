@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.121.2] — 2026-08-18
+
+### Docs: remove duplicate `> **Scope:**` line in docs/config-system.md (issue #344)
+
+- The header blockquote of `docs/config-system.md` contained two `> **Scope:**` entries; the first was stale (it omitted `mimir-core/src/paths.rs`). Removed the stale line, so the blockquote lists the complete, current scope once.
+- Version bumped 0.121.1 → 0.121.2 (patch — documentation update).
+
 ## [0.121.1] — 2026-08-18
 
 ### Fix: mimir-connectors dead-code warning for connector_fact under --no-default-features (issue #342)

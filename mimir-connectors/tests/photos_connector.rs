@@ -595,10 +595,29 @@ struct FailFirstExtractPhotosConnector {
     failed_once: Arc<AtomicBool>,
     /// Drain the inner buffer (real-extract semantics) before failing.
     drain_before_fail: bool,
-    /// Number of facts returned by the successful (retry) extract — pinned
-    /// so the undrained-failure test can assert the re-scan did not
-    /// duplicate the still-staged photo.
+    /// Number of facts returned by successful (retry) extracts, accumulated
+    /// across calls — tracked so the undrained-failure test can assert the
+    /// re-scan did not duplicate the still-staged photo. Accumulates
+    /// (`fetch_add`) instead of overwriting so a later overlapping extract
+    /// that finds an empty buffer cannot erase the count of an earlier
+    /// successful one (issue #339).
     retry_fact_count: Arc<AtomicUsize>,
+}
+
+impl FailFirstExtractPhotosConnector {
+    fn new(
+        inner: Arc<dyn Connector>,
+        failed_once: Arc<AtomicBool>,
+        drain_before_fail: bool,
+        retry_fact_count: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            inner,
+            failed_once,
+            drain_before_fail,
+            retry_fact_count,
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -640,7 +659,8 @@ impl Connector for FailFirstExtractPhotosConnector {
             ));
         }
         let facts = self.inner.extract().await?;
-        self.retry_fact_count.store(facts.len(), Ordering::SeqCst);
+        self.retry_fact_count
+            .fetch_add(facts.len(), Ordering::SeqCst);
         Ok(facts)
     }
     async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError> {
@@ -701,12 +721,12 @@ async fn failed_extract_cycle_reprocesses_staged_photos_on_next_cycle() {
                 let failed_once = Arc::clone(&failed_once);
                 move |config, ctx| {
                     let inner = PhotosConnectorFactory.create(config, ctx)?;
-                    Ok(Arc::new(FailFirstExtractPhotosConnector {
+                    Ok(Arc::new(FailFirstExtractPhotosConnector::new(
                         inner,
-                        failed_once: Arc::clone(&failed_once),
-                        drain_before_fail: true,
-                        retry_fact_count: Arc::new(AtomicUsize::new(0)),
-                    }) as Arc<dyn Connector>)
+                        Arc::clone(&failed_once),
+                        true,
+                        Arc::new(AtomicUsize::new(0)),
+                    )) as Arc<dyn Connector>)
                 }
             }),
         )
@@ -812,12 +832,12 @@ async fn failed_before_extract_cycle_does_not_duplicate_staged_photo() {
                 let retry_fact_count = Arc::clone(&retry_fact_count);
                 move |config, ctx| {
                     let inner = PhotosConnectorFactory.create(config, ctx)?;
-                    Ok(Arc::new(FailFirstExtractPhotosConnector {
+                    Ok(Arc::new(FailFirstExtractPhotosConnector::new(
                         inner,
-                        failed_once: Arc::clone(&failed_once),
-                        drain_before_fail: false,
-                        retry_fact_count: Arc::clone(&retry_fact_count),
-                    }) as Arc<dyn Connector>)
+                        Arc::clone(&failed_once),
+                        false,
+                        Arc::clone(&retry_fact_count),
+                    )) as Arc<dyn Connector>)
                 }
             }),
         )
@@ -882,4 +902,44 @@ async fn failed_before_extract_cycle_does_not_duplicate_staged_photo() {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+/// Issue #339: the retry-fact counter must accumulate across overlapping
+/// `extract()` calls. A later empty extract (the buffer was already drained
+/// by an earlier successful extract) must not erase the count of the earlier
+/// one, or the poll loop can observe the fact in the KG while the counter
+/// reads 0 and flake under parallel load.
+#[tokio::test]
+async fn retry_fact_count_accumulates_across_overlapping_extracts() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::copy(fixture("exif.jpg"), dir.path().join("IMG_001.jpg")).unwrap();
+
+    let inner = make(config_for(dir.path(), json!({})));
+    inner.sync(SyncOptions::default()).await.unwrap();
+
+    let retry_fact_count = Arc::new(AtomicUsize::new(0));
+    let connector = FailFirstExtractPhotosConnector::new(
+        inner,
+        Arc::new(AtomicBool::new(false)),
+        false,
+        Arc::clone(&retry_fact_count),
+    );
+
+    // First extract fails (injected transient failure); the staged photo
+    // stays buffered.
+    assert!(connector.extract().await.is_err());
+
+    // Retry extract drains the buffer: exactly one fact.
+    let facts = connector.extract().await.unwrap();
+    assert_eq!(facts.len(), 1);
+
+    // A second, overlapping extract call (the supervisor's next cycle can
+    // race the first) finds an empty buffer. It must not erase the count of
+    // the earlier successful extract.
+    assert!(connector.extract().await.unwrap().is_empty());
+    assert_eq!(
+        retry_fact_count.load(Ordering::SeqCst),
+        1,
+        "a later empty extract must not erase the retry fact count"
+    );
 }

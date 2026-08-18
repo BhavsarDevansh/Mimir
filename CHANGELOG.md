@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.121.1] — 2026-08-18
+
+### Fix: mimir-connectors dead-code warning for connector_fact under --no-default-features (issue #342)
+
+- `cargo build -p mimir-connectors --no-default-features` emitted `warning: function connector_fact is never used` because the shared `NormalizedFact` constructor (`mimir-connectors/src/fact.rs`, issue #255) is only used by the feature-gated Photos, iCal VEVENT (Calendar + Email iMIP), and Email JSON-LD backends plus its own unit tests. The `fact` module is now cfg-gated to `any(feature = "photos", feature = "calendar", feature = "gmail", test)`, matching its callers, so the always-compiled framework core stays warning-free under `--no-default-features`.
+- Regression guard: `scripts/tests/no-default-features_test.sh` now additionally checks the no-features lib target with `RUSTFLAGS="-D warnings"` so the framework core cannot regress to dead-code warnings.
+- Docs updated: `docs/connectors-framework.md` (connector_fact + crate layout), `docs/workspace.md` (regression guards).
+- Version bumped 0.121.0 → 0.121.1 (patch — bug fix).
+
 ## [0.121.0] — 2026-08-18
 
 ### Refactor: shared auth-method discriminant trait (issue #341)

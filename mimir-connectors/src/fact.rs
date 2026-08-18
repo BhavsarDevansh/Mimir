@@ -5,8 +5,9 @@
 //! no user action). [`connector_fact`] owns that boilerplate once so a new
 //! connector cannot silently drift on a default (e.g. forgetting
 //! `is_correction: false`), and the per-shape fields are the arguments.
-//! Always compiled — any backend (Photos, Calendar, Email) may use it
-//! regardless of feature flags.
+//! Compiled whenever any backend feature (`photos`, `calendar`, `gmail`) is
+//! enabled, or under `cfg(test)` for the module's own unit tests, so the
+//! framework stays warning-free under `--no-default-features` (issue #342).
 
 use chrono::{DateTime, Utc};
 use mimir_knowledge::models::entity::EntityType;

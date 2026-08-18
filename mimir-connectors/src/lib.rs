@@ -81,6 +81,7 @@
 //! harness.
 
 pub mod connector;
+#[cfg(any(feature = "photos", feature = "calendar", feature = "gmail", test))]
 mod fact;
 pub mod geocoder;
 /// Shared iCalendar VEVENT parsing + fact extraction (Phase 3 C4 / #198

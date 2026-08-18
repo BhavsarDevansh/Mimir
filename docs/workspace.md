@@ -48,7 +48,7 @@ cargo fmt -- --check
 
 ## Regression Guards
 
-Issue-specific regression guards live in `scripts/tests/` and are run at review time so newly-introduced violations fail before merge: `md-reflow_test.sh` (issue #294) re-checks every repo `.md` file against the AGENTS.md single-line prose standard via `scripts/md-reflow`'s `--check` mode, `rustdoc_test.sh` (issues #276, #310, #337) builds the `mimir-connectors`, `mimir-knowledge` and `mimir-core` docs with `-D warnings`, and `no-default-features_test.sh` (issue #277) compiles the `mimir-connectors` feature matrix under `--no-default-features`.
+Issue-specific regression guards live in `scripts/tests/` and are run at review time so newly-introduced violations fail before merge: `md-reflow_test.sh` (issue #294) re-checks every repo `.md` file against the AGENTS.md single-line prose standard via `scripts/md-reflow`'s `--check` mode, `rustdoc_test.sh` (issues #276, #310, #337) builds the `mimir-connectors`, `mimir-knowledge` and `mimir-core` docs with `-D warnings`, and `no-default-features_test.sh` (issues #277, #342) compiles the `mimir-connectors` feature matrix under `--no-default-features` and additionally checks the no-features lib target with `-D warnings` so the framework core cannot regress to dead-code warnings.
 
 ## Version Policy
 

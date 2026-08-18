@@ -139,6 +139,15 @@ fn backends_for_type_lists_all_registered_backends() {
             )
             .unwrap();
     }
+    // A backend under a different type must not leak into the Gmail list;
+    // "a-backend" would sort first if it did, so the assertion catches it.
+    registry
+        .register(
+            ConnectorType::Calendar,
+            "a-backend",
+            fake_factory("a-backend", ConnectorType::Calendar),
+        )
+        .unwrap();
 
     assert_eq!(
         registry.backends_for(ConnectorType::Gmail),

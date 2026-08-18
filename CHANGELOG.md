@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.119.6] — 2026-08-18
+
+### Fix: calendar KB server-side-deletion test no longer flakes under parallel load (issue #320)
+
+- `mimir-connectors/tests/calendar_kb_tests.rs::calendar_server_side_deletion_trashes_facts_and_hides_upcoming_event` waited on the CalDAV connector's 1 s polling interval for the tombstone cycle with a fixed 8 s deadline, which could be missed under full-suite parallel load. The test now drives the tombstone cycle deterministically: the connector's `poll_interval_secs` is set to 3600 so no automatic cycle races the single-use wiremock window, and the test calls `ConnectorSupervisor::trigger_sync_by_slug`, which preempts the polling interval and returns only after the full cycle (sync → extract_deletions → trash → cursor persist) completed. The post-trigger assertions are no longer at the mercy of scheduler load, and the test runs ~5x faster (~0.25 s vs ~1.3 s).
+- Docs updated: `docs/connectors-framework.md` (deterministic multi-cycle test pattern), `docs/wiki/what-works-now.md` (version header).
+- Version bumped 0.119.5 → 0.119.6 (patch — bug fix).
+
 ## [0.119.5] — 2026-08-18
 
 ### Docs: fix the last mimir-knowledge rustdoc intra-doc link warning (issue #310)

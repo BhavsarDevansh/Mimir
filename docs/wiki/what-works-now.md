@@ -371,6 +371,7 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 
 | Work item | Issue |
 |-----------|-------|
+| Intra-doc link warnings in `mimir-core` | [#337](https://github.com/BhavsarDevansh/Mimir/issues/337) |
 | Intra-doc link warning in `mimir-server` | [#348](https://github.com/BhavsarDevansh/Mimir/issues/348) |
 | Dead-code clippy warnings in `mimir-server` test helpers | [#349](https://github.com/BhavsarDevansh/Mimir/issues/349) |
 | `tabled` 0.21 / proc-macro-error2 future rejection | [#275](https://github.com/BhavsarDevansh/Mimir/issues/275) |

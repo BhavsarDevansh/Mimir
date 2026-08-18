@@ -12,7 +12,8 @@
 //!    to their next occurrence via [`next_occurrence`].
 //!
 //! `RequiresUserAction` events are intentionally left untouched; once past
-//! their `trigger_date` they surface as overdue via [`get_overdue_events`].
+//! their `trigger_date` they surface as overdue via
+//! [`crate::queries::event::get_overdue_events`].
 
 use crate::KnowledgeError;
 use crate::KnowledgeGraph;

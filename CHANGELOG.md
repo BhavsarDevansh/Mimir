@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.120.0] — 2026-08-18
+
+### Refactor: deterministic `ConnectorRegistry` accessors (issue #322)
+
+- `ConnectorRegistry::registered_types()` is removed: it returned connector types in hash-seed-dependent order and had zero callers once `pairs()` (issue #271) superseded it for discovery — the catalog route and CLI surface use `pairs()`, which is sorted by type then backend.
+- `ConnectorRegistry::backends_for()` now returns backend names sorted alphabetically, so every registry accessor is order-stable; the registry-dispatch test asserts the sorted contract directly instead of sorting in the test.
+- Docs updated: `docs/connectors-framework.md` (registry API listing and determinism note), `Mimir-Implementation-Context.md` (F7 method list), `docs/wiki/what-works-now.md` (version header; dropped the stale #271 "no connector catalog" known-limitation row — the catalog landed in #271).
+- Version bumped 0.119.7 → 0.120.0 (minor — refactor).
+
 ## [0.119.7] — 2026-08-18
 
 ### Docs: narrow scheduler-immunity claim for the deterministic tombstone-cycle test (PR #366 review)

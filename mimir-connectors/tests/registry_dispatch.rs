@@ -127,24 +127,23 @@ fn register_then_factory_lookup_succeeds() {
 #[test]
 fn backends_for_type_lists_all_registered_backends() {
     let registry = ConnectorRegistry::new();
-    registry
-        .register(
-            ConnectorType::Gmail,
-            "mock-imap",
-            fake_factory("imap", ConnectorType::Gmail),
-        )
-        .unwrap();
-    registry
-        .register(
-            ConnectorType::Gmail,
-            "mock-graph",
-            fake_factory("graph", ConnectorType::Gmail),
-        )
-        .unwrap();
+    // Registered in non-alphabetical order; backends_for() must return a
+    // deterministic sorted list so discovery never depends on HashMap
+    // iteration order.
+    for backend in ["z-backend", "a-backend", "m-backend"] {
+        registry
+            .register(
+                ConnectorType::Gmail,
+                backend,
+                fake_factory(backend, ConnectorType::Gmail),
+            )
+            .unwrap();
+    }
 
-    let mut backends = registry.backends_for(ConnectorType::Gmail);
-    backends.sort();
-    assert_eq!(backends, vec!["mock-graph", "mock-imap"]);
+    assert_eq!(
+        registry.backends_for(ConnectorType::Gmail),
+        vec!["a-backend", "m-backend", "z-backend"]
+    );
 }
 
 #[test]

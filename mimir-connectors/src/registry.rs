@@ -34,7 +34,7 @@
 //! that `.expect`), matching the workspace `ToolRegistry` convention, so the
 //! registry never reports contradictory state after a panic.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use mimir_knowledge::models::enums::ConnectorType;
@@ -176,24 +176,19 @@ impl ConnectorRegistry {
             .cloned()
     }
 
-    /// List the backend names registered under a connector type, in arbitrary
-    /// order. Useful for the `connector add` flow's backend discovery.
+    /// List the backend names registered under a connector type, sorted by
+    /// backend name so callers get a deterministic listing (the `connector
+    /// add` flow discovers backends through the catalog route, which uses
+    /// [`pairs`](Self::pairs)).
     pub fn backends_for(&self, connector_type: ConnectorType) -> Vec<String> {
-        self.read()
+        let mut backends = self
+            .read()
             .keys()
             .filter(|(ct, _)| *ct == connector_type)
             .map(|(_, b)| b.clone())
-            .collect::<Vec<_>>()
-    }
-
-    /// All connector types that have at least one registered backend.
-    pub fn registered_types(&self) -> Vec<ConnectorType> {
-        self.read()
-            .keys()
-            .map(|(ct, _)| *ct)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        backends.sort();
+        backends
     }
 
     /// List every registered `(connector_type, backend)` pair, sorted by

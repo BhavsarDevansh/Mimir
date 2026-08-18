@@ -2,7 +2,7 @@
 
 > **Last updated:** 2026-08-18
 >
-> **Version:** 0.119.6
+> **Version:** 0.120.0
 >
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in `CHANGELOG.md`; this file deliberately does not repeat either.
 
@@ -390,8 +390,7 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | [#143](https://github.com/BhavsarDevansh/Mimir/issues/143) — no proactive notifications | Events surface only in the "Upcoming" memory section | Check `mimir memory` / the Upcoming section |
 | [#120](https://github.com/BhavsarDevansh/Mimir/issues/120) — no kb import/export | Knowledge graph is not portable to Obsidian/CSV | Use the daemon API or CLI CRUD |
 | [#270](https://github.com/BhavsarDevansh/Mimir/issues/270) — secret flags leak | `--password`/`--token` appear in the process list and shell history | Use `--password-stdin`/`--token-stdin` (piped) or `MIMIR_CONNECTOR_PASSWORD`/`MIMIR_CONNECTOR_TOKEN` (env) instead |
-| [#271](https://github.com/BhavsarDevansh/Mimir/issues/271) — no connector catalog | Types/backends are not discoverable from the CLI | Read `docs/wiki/connectors.md` |
-| [#230](https://github.com/BhavsarDevansh/Mimir/issues/230), [#241](https://github.com/BhavsarDevansh/Mimir/issues/241), [#243](https://github.com/BhavsarDevansh/Mimir/issues/243) — flaky tests | Intermittent CI failures | Re-run the affected test |
+| [#230](https://github.com/BhavsarDevansh/Mimir/issues/230), [#241](https://github.com/BhavsarDevansh/Mimir/issues/241), [#243](https://github.com/BhavsarDevansh/Mimir/issues/243), [#367](https://github.com/BhavsarDevansh/Mimir/issues/367) — flaky tests | Intermittent CI failures | Re-run the affected test |
 
 ---
 

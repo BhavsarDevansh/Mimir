@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.119.4] — 2026-08-18
+
+### Docs: fix Phase-2 roadmap and schema-doc spec drift (issue #306)
+
+- `VISION/09-Roadmap/Phase-2-Knowledge-Graph.md` now lists the seeded `entity_types` taxonomy (including `Activity(7)` from migration `001` alongside `DateTime(8)` from migration `012`), adds `Contradicts(4)` to `relation_types` (migration `024`) and `Geographic(6)` to `location_types` (migration `046`), marks `entity_dates` / `entity_date_types` as dropped by migration `040` and superseded by the events overlay (migration `039`), and reflects the events-overlay reality in the 2.2 Entity Management checklist.
+- `docs/knowledge-graph-schema.md` adds migration `023` to the lookup-seeding list and documents its re-seed of `preference_categories` (7 rows) and `preference_source_types` (3 rows), matching the Rust enums in `mimir-knowledge/src/models/preference.rs`.
+- Version bumped 0.119.3 → 0.119.4 (patch — documentation).
+
 ## [0.119.3] — 2026-08-18
 
 ### Docs: reconcile inline unit-test counts in Testing-and-Benchmarks (PR #361 review)

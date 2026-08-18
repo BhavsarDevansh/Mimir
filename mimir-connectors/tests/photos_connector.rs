@@ -604,6 +604,22 @@ struct FailFirstExtractPhotosConnector {
     retry_fact_count: Arc<AtomicUsize>,
 }
 
+impl FailFirstExtractPhotosConnector {
+    fn new(
+        inner: Arc<dyn Connector>,
+        failed_once: Arc<AtomicBool>,
+        drain_before_fail: bool,
+        retry_fact_count: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            inner,
+            failed_once,
+            drain_before_fail,
+            retry_fact_count,
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl Connector for FailFirstExtractPhotosConnector {
     fn id(&self) -> &str {
@@ -705,12 +721,12 @@ async fn failed_extract_cycle_reprocesses_staged_photos_on_next_cycle() {
                 let failed_once = Arc::clone(&failed_once);
                 move |config, ctx| {
                     let inner = PhotosConnectorFactory.create(config, ctx)?;
-                    Ok(Arc::new(FailFirstExtractPhotosConnector {
+                    Ok(Arc::new(FailFirstExtractPhotosConnector::new(
                         inner,
-                        failed_once: Arc::clone(&failed_once),
-                        drain_before_fail: true,
-                        retry_fact_count: Arc::new(AtomicUsize::new(0)),
-                    }) as Arc<dyn Connector>)
+                        Arc::clone(&failed_once),
+                        true,
+                        Arc::new(AtomicUsize::new(0)),
+                    )) as Arc<dyn Connector>)
                 }
             }),
         )
@@ -816,12 +832,12 @@ async fn failed_before_extract_cycle_does_not_duplicate_staged_photo() {
                 let retry_fact_count = Arc::clone(&retry_fact_count);
                 move |config, ctx| {
                     let inner = PhotosConnectorFactory.create(config, ctx)?;
-                    Ok(Arc::new(FailFirstExtractPhotosConnector {
+                    Ok(Arc::new(FailFirstExtractPhotosConnector::new(
                         inner,
-                        failed_once: Arc::clone(&failed_once),
-                        drain_before_fail: false,
-                        retry_fact_count: Arc::clone(&retry_fact_count),
-                    }) as Arc<dyn Connector>)
+                        Arc::clone(&failed_once),
+                        false,
+                        Arc::clone(&retry_fact_count),
+                    )) as Arc<dyn Connector>)
                 }
             }),
         )
@@ -902,12 +918,12 @@ async fn retry_fact_count_accumulates_across_overlapping_extracts() {
     inner.sync(SyncOptions::default()).await.unwrap();
 
     let retry_fact_count = Arc::new(AtomicUsize::new(0));
-    let connector = FailFirstExtractPhotosConnector {
+    let connector = FailFirstExtractPhotosConnector::new(
         inner,
-        failed_once: Arc::new(AtomicBool::new(false)),
-        drain_before_fail: false,
-        retry_fact_count: Arc::clone(&retry_fact_count),
-    };
+        Arc::new(AtomicBool::new(false)),
+        false,
+        Arc::clone(&retry_fact_count),
+    );
 
     // First extract fails (injected transient failure); the staged photo
     // stays buffered.

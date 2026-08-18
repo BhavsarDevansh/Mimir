@@ -78,14 +78,18 @@ mkdir -p "$LOG_DIR" "$LOG_FILE_DIR"
 # available. Headless runs (systemd timer, TERM unset/dumb) stay plain, and a
 # failing `tput` can never abort the loop under `set -e`.
 CYAN=
+BLUE=
 YELLOW=
 RED=
+MAGENTA=
 GREEN=
 NORMAL=
 if [[ -t 2 ]] && command -v tput >/dev/null 2>&1; then
     CYAN="$(tput setaf 6 2>/dev/null || true)"
+    BLUE="$(tput setaf 4 2>/dev/null || true)"
     YELLOW="$(tput setaf 3 2>/dev/null || true)"
     RED="$(tput setaf 1 2>/dev/null || true)"
+    MAGENTA="$(tput setaf 5 2>/dev/null || true)"
     GREEN="$(tput setaf 2 2>/dev/null || true)"
     NORMAL="$(tput sgr0 2>/dev/null || true)"
 fi
@@ -125,8 +129,8 @@ log_agent_stream() {
           end
     ' | while IFS=$'\t' read -r level text; do
         [[ -n "$level" ]] || continue
-        local color="$CYAN"
-        [[ "$level" == "ERROR" ]] && color="$RED"
+        local color="$BLUE"
+        [[ "$level" == "ERROR" ]] && color="$MAGENTA"
         while IFS= read -r line; do
             [[ -n "$line" ]] || continue
             emit "$level" "$color" "$line"

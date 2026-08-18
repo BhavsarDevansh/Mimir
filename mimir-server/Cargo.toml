@@ -54,5 +54,6 @@ mimir-connectors = { path = "../mimir-connectors", features = ["test-mock-connec
 reqwest = { version = "0.13", features = ["json"] }
 tempfile = "3"
 # Safe signal-syscall wrapper for the SIGTERM registration regression test
-# (issue #329); test-only, off in production builds.
-nix = { version = "0.31", features = ["signal"] }
+# (issue #329); test-only, off in production builds. `process` is declared
+# directly because shutdown.rs calls nix::unistd::getpid().
+nix = { version = "0.31", features = ["process", "signal"] }

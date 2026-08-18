@@ -356,26 +356,84 @@ mod tests {
     /// disposition and killed the process — the `e2e_sigterm_exits_promptly`
     /// flake under parallel load, where the health listener became ready
     /// before the signal task was scheduled.
+    ///
+    /// The real SIGTERM is sent to an isolated child process (this test
+    /// re-executed with a marker env var) rather than to this process:
+    /// tokio's OS-signal listeners are process-global — every listener
+    /// registered for a signal kind receives the notification — so a SIGTERM
+    /// delivered here would also fire the SIGTERM/SIGINT listeners that
+    /// other tests running concurrently in this binary install via
+    /// `serve_with_bounded_drain` (`test_serve_outlives_drain_timeout`,
+    /// `test_server_exits_after_stop`), shutting their servers down
+    /// mid-test. In the child there are no other listeners, and if the
+    /// regression returns the child dies from the default disposition
+    /// (signal 15) exactly as the original flake did.
     #[cfg(unix)]
-    #[tokio::test]
-    async fn test_sigterm_registered_before_spawn_returns() {
-        use std::time::Duration;
+    #[test]
+    fn test_sigterm_registered_before_spawn_returns() {
+        const CHILD_ENV: &str = "MIMIR_SIGTERM_REGRESSION_CHILD";
+        const CHILD_OK: &str = "mimir-sigterm-regression-child-ok";
+        const TEST_NAME: &str = "test_sigterm_registered_before_spawn_returns";
 
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
-        spawn_os_signal_shutdown(shutdown_tx);
+        if std::env::var_os(CHILD_ENV).is_none() {
+            // Parent: run the assertion in a fresh child process and verify
+            // it passed. The child prints `CHILD_OK` only when it actually
+            // ran the assertion, so a future rename that makes the `--exact`
+            // filter match nothing fails loudly instead of passing silently.
+            // libtest names tests crate-relative (no crate-name prefix), but
+            // `module_path!()` includes the crate — strip the first segment.
+            let module = module_path!()
+                .split_once("::")
+                .map_or(module_path!(), |(_, rest)| rest);
+            let filter = format!("{module}::{TEST_NAME}");
+            let output = std::process::Command::new(std::env::current_exe().expect("current_exe"))
+                .arg("--exact")
+                .arg(&filter)
+                .arg("--nocapture")
+                .env(CHILD_ENV, "1")
+                .output()
+                .expect("failed to spawn the SIGTERM regression child process");
+            assert!(
+                output.status.success(),
+                "SIGTERM regression child failed: {}\nstdout:\n{}\nstderr:\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains(CHILD_OK),
+                "SIGTERM regression child did not run the assertion"
+            );
+            return;
+        }
 
-        // No await between the call and the signal: if the handler were only
-        // installed when the spawned task is polled (the bug), this SIGTERM
-        // would kill the test process via the default disposition.
-        nix::sys::signal::kill(nix::unistd::getpid(), nix::sys::signal::Signal::SIGTERM)
-            .expect("kill(SIGTERM) failed");
+        // Child: the actual regression assertion, in a process with no other
+        // signal listeners.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build child test runtime");
+        runtime.block_on(async {
+            use std::time::Duration;
 
-        let result = tokio::time::timeout(Duration::from_secs(5), shutdown_rx.changed()).await;
-        assert!(
-            result.is_ok(),
-            "SIGTERM sent immediately after spawn_os_signal_shutdown was not caught by the handler"
-        );
-        assert!(*shutdown_rx.borrow(), "shutdown trigger did not fire");
+            let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+            spawn_os_signal_shutdown(shutdown_tx);
+
+            // No await between the call and the signal: if the handler were
+            // only installed when the spawned task is polled (the bug), this
+            // SIGTERM kills the child via the default disposition (signal
+            // 15) before the assertion below runs.
+            nix::sys::signal::kill(nix::unistd::getpid(), nix::sys::signal::Signal::SIGTERM)
+                .expect("kill(SIGTERM) failed");
+
+            let result = tokio::time::timeout(Duration::from_secs(5), shutdown_rx.changed()).await;
+            assert!(
+                result.is_ok(),
+                "SIGTERM sent immediately after spawn_os_signal_shutdown was not caught by the handler"
+            );
+            assert!(*shutdown_rx.borrow(), "shutdown trigger did not fire");
+            println!("{CHILD_OK}");
+        });
     }
     /// Regression: the drain timeout must bound only the post-signal drain
     /// phase, NOT the serving lifetime. Previously `tokio::time::timeout`

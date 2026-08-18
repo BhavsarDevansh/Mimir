@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.120.2] — 2026-08-18
+
+### Docs: fix the last mimir-core rustdoc intra-doc link warnings (issue #337)
+
+- `mimir-core/src/llm/backend.rs` doc comment linked `[MockLlmClient](super::mock::MockLlmClient)`, but the `mock` module is cfg-gated behind `#[cfg(any(test, feature = "mock-llm"))]`, so the link never resolved in a plain `cargo doc` build; the sentence now names the mock client in plain text.
+- `mimir-core/src/skills/markdown.rs` `parse_skill_file` doc linked `[MAX_SKILL_FILE_SIZE]`, a private const, which rustdoc rejects for public docs; the link is now plain code formatting, and a duplicated doc line on `SkillFrontmatter` was removed.
+- Regression guard: `scripts/tests/rustdoc_test.sh` now also builds `mimir-core` docs with `RUSTDOCFLAGS="-D warnings"` for both the default feature set and `--all-features` (the `mock-llm`-gated surface); the remaining workspace crate with doc warnings is tracked in #348 (mimir-server).
+- Docs updated: `docs/workspace.md` (regression guards), `docs/wiki/what-works-now.md` (backlog: #337 row removed, version header).
+- Version bumped 0.120.1 → 0.120.2 (patch — documentation fix).
+
 ## [0.120.1] — 2026-08-18
 
 ### Fix: SIGTERM during daemon startup no longer kills the process (issue #329)

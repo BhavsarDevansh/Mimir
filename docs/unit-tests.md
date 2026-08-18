@@ -16,7 +16,7 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 
 ## `mimir-core`
 
-- `job_queue/`: 15 tests for `JobPriority::from_i16`, `JobRunStatus` str roundtrip + fallback, `DailySchedule` parse/`as_hhmm`/`next_after` (TZ-robust, including non-zero-padded `%H:%M` acceptance), `JobError` predicates, enum serde roundtrips, `JobContext`.
+- `job_queue/`: 23 tests for `JobPriority::from_i16`, `JobRunStatus` str roundtrip + fallback, `DailySchedule` parse/`as_hhmm`/`next_after` (TZ-robust, including non-zero-padded `%H:%M` acceptance), `JobError` predicates, enum serde roundtrips, `JobContext`, and the cgroup resource-limit helpers (`resources.rs`: cgroup v2 path parsing, name sanitisation, guard apply/restore).
 - `tools/output.rs`: 10 tests for `to_display_text` (error precedence, string unquoting, non-string JSON, stdout fallback, empty/placeholder) and `to_llm_text`/`output_to_llm_text` (all-parts join, empty stdout/stderr omission, `skip_serializing_if` roundtrip).
 - `tools/permission.rs`: 5 tests for default, `as_str`/`from_str` roundtrip, case-insensitive parsing, serde lowercase rename.
 - `tools/error.rs`: 3 tests for constructor variants, `Into<String>` acceptance, `Display` formatting.

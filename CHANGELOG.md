@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.119.7] — 2026-08-18
+
+### Docs: narrow scheduler-immunity claim for the deterministic tombstone-cycle test (PR #366 review)
+
+- `docs/connectors-framework.md` previously claimed the whole CalDAV server-side-deletion test is "immune to scheduler load", but only the explicitly triggered tombstone cycle is deterministic: `trigger_sync_by_slug` preempts the polling interval and awaits the full cycle, while the test's initial cycle still waits on the connector's first polling run. The sentence now scopes the claim to the tombstone cycle and notes the initial-cycle wait.
+- Version bumped 0.119.6 → 0.119.7 (patch — documentation fix).
+
 ## [0.119.6] — 2026-08-18
 
 ### Fix: calendar KB server-side-deletion test no longer flakes under parallel load (issue #320)

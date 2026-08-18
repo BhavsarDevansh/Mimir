@@ -53,3 +53,6 @@ mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
 mimir-connectors = { path = "../mimir-connectors", features = ["test-mock-connector"] }
 reqwest = { version = "0.13", features = ["json"] }
 tempfile = "3"
+# Safe signal-syscall wrapper for the SIGTERM registration regression test
+# (issue #329); test-only, off in production builds.
+nix = { version = "0.31", features = ["signal"] }

@@ -63,16 +63,27 @@ pub fn server_exit_message(triggered: bool) -> &'static str {
 /// [`watch_shutdown`], so neither can observe a signal before the other has
 /// registered interest — the original race that could leave axum accepting
 /// connections until the drain timeout kicked in.
+///
+/// The signal handlers are registered synchronously, before the task is
+/// spawned: `tokio::signal::unix::signal()` installs the libc handler in its
+/// constructor, so a SIGTERM/SIGINT arriving before the spawned task is first
+/// polled (e.g. during startup, once the health listener is already
+/// accepting) is caught here instead of hitting the default disposition and
+/// killing the process (issue #329).
 fn spawn_os_signal_shutdown(shutdown_tx: tokio::sync::watch::Sender<bool>) {
+    #[cfg(unix)]
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("SIGTERM handler");
+    #[cfg(unix)]
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .expect("SIGINT handler");
     tokio::spawn(async move {
         #[cfg(unix)]
         {
-            use tokio::signal::unix::{SignalKind, signal};
-            let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
             // Distinguish which signal fired so the journal attributes the
             // shutdown to its real cause rather than a generic "graceful" line.
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
+                _ = sigint.recv() => {
                     info!("{}", ShutdownSource::Interrupt.attribution());
                 }
                 _ = sigterm.recv() => {
@@ -336,6 +347,35 @@ mod tests {
             result.is_ok(),
             "watch_shutdown hung on an already-fired trigger"
         );
+    }
+    /// Regression (issue #329): the SIGTERM handler must be registered
+    /// synchronously by `spawn_os_signal_shutdown`, before the spawned task
+    /// is first polled. Previously the handler was installed inside the
+    /// task, so a SIGTERM arriving in the window between
+    /// `spawn_os_signal_shutdown` and the task's first poll hit the default
+    /// disposition and killed the process — the `e2e_sigterm_exits_promptly`
+    /// flake under parallel load, where the health listener became ready
+    /// before the signal task was scheduled.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_sigterm_registered_before_spawn_returns() {
+        use std::time::Duration;
+
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+        spawn_os_signal_shutdown(shutdown_tx);
+
+        // No await between the call and the signal: if the handler were only
+        // installed when the spawned task is polled (the bug), this SIGTERM
+        // would kill the test process via the default disposition.
+        nix::sys::signal::kill(nix::unistd::getpid(), nix::sys::signal::Signal::SIGTERM)
+            .expect("kill(SIGTERM) failed");
+
+        let result = tokio::time::timeout(Duration::from_secs(5), shutdown_rx.changed()).await;
+        assert!(
+            result.is_ok(),
+            "SIGTERM sent immediately after spawn_os_signal_shutdown was not caught by the handler"
+        );
+        assert!(*shutdown_rx.borrow(), "shutdown trigger did not fire");
     }
     /// Regression: the drain timeout must bound only the post-signal drain
     /// phase, NOT the serving lifetime. Previously `tokio::time::timeout`

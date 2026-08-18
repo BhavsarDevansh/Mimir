@@ -51,6 +51,8 @@ There is exactly **one** OS-signal listener per process. `serve_with_bounded_dra
 
 This avoids the previous race where two independent `shutdown_signal` futures each built their own `ctrl_c()`/`SIGTERM` listeners: the phase-1 waiter could observe a signal before axum's graceful-shutdown future had registered interest, leaving axum still accepting connections until the drain bound kicked in. With a single listener fanning into one shared trigger, both phases fire in lockstep.
 
+The OS signal handlers are registered **synchronously**, before the listener task is spawned: `tokio::signal::unix::signal()` installs the libc handler in its constructor, so a SIGTERM/SIGINT arriving before the spawned task is first polled is caught instead of hitting the default disposition and killing the process. This closes the startup race (issue #329) where the health listener became ready before the signal task was scheduled — under parallel load the window was wide enough for a SIGTERM sent right after readiness to terminate the daemon with the default disposition (exit status = signal 15) instead of taking the graceful path.
+
 ## Shutdown Trigger Attribution
 
 Every code path that fires the shared `shutdown_tx` watch trigger now logs the **cause** of the shutdown *before* sending, via the `ShutdownSource` enum:
@@ -87,7 +89,8 @@ Resource cleanup (`AppState::shutdown()`) runs in either case.
 
 ## Code References
 
-- `mimir-server/src/lib.rs` — `ShutdownSource`, `server_exit_message()`, `spawn_os_signal_shutdown()`, `watch_shutdown()`, `serve_with_bounded_drain()`, `GRACEFUL_DRAIN_TIMEOUT`, and `start_server()`
+- `mimir-server/src/shutdown.rs` — `ShutdownSource`, `server_exit_message()`, `spawn_os_signal_shutdown()`, `watch_shutdown()`, `serve_with_bounded_drain()`, and `GRACEFUL_DRAIN_TIMEOUT`
+- `mimir-server/src/server.rs` — `start_server()` and the daemon startup sequence
 - `mimir-server/src/routes/stop.rs` — `stop_handler()` (logs `ShutdownSource::StopEndpoint` with the peer address)
 - `mimir-server/src/state/` — `AppState::shutdown()`
 - `mimir-core/src/scheduler.rs` — `BackgroundScheduler::shutdown()`

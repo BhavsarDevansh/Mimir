@@ -38,6 +38,8 @@ The daemon runs indefinitely while no shutdown is requested — there is no idle
 
 `systemctl --user stop mimir` sends `SIGTERM`. The daemon catches it, drains in-flight requests (up to 30 s), tears down all background tasks (config file-watcher, SIGHUP handler, condensation listener), and exits promptly — well within systemd's `TimeoutStopSec`. Previously the `SIGTERM` path could hang during runtime teardown (deadlocking the tokio blocking pool until systemd aborted the unit with `SIGABRT`); that is fixed by an explicit shutdown broadcast before the runtime drops.
 
+The signal handlers are installed before the daemon starts accepting connections, so a `SIGTERM` or `Ctrl-C` arriving during startup (for example, `systemctl stop` racing a slow start) is handled gracefully instead of killing the process with the default signal disposition.
+
 ## Finding Out Why the Daemon Stopped
 
 The daemon now logs the **cause** of every shutdown to the journal, just before it stops, so an unexplained stop can be diagnosed instead of guessed at:

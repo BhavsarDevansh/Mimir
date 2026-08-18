@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.120.1] — 2026-08-18
+
+### Fix: SIGTERM during daemon startup no longer kills the process (issue #329)
+
+- `spawn_os_signal_shutdown` registered the SIGTERM/SIGINT handlers inside the spawned task, so a signal arriving before the task's first poll hit the default disposition and terminated the daemon — the `e2e_sigterm_exits_promptly` flake under parallel load, where the health listener became ready before the signal task was scheduled. The handlers are now registered synchronously via `tokio::signal::unix::signal()` before the task is spawned, so a SIGTERM/SIGINT arriving once the listener is accepting always takes the graceful path.
+- Added a deterministic regression test (`test_sigterm_registered_before_spawn_returns`) that sends SIGTERM immediately after `spawn_os_signal_shutdown` returns and asserts the shutdown trigger fires; without the fix the test process is killed by the default disposition (signal 15), reproducing the flake's failure mode.
+- Docs updated: `docs/shutdown.md` (trigger architecture), `docs/wiki/daemon-shutdown.md` (startup signal handling), `docs/wiki/what-works-now.md` (version header).
+- Version bumped 0.120.0 → 0.120.1 (patch — bug fix).
+
 ## [0.120.0] — 2026-08-18
 
 ### Refactor: deterministic `ConnectorRegistry` accessors (issue #322)

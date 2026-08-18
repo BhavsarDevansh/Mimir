@@ -6,6 +6,12 @@ set -euo pipefail
 # integration-test fixtures stay feature-gated and the framework/mock-only
 # build remains usable. The default feature set is covered by the regular
 # workspace test run.
+#
+# The framework core must also be warning-free under --no-default-features
+# (issue #342): the shared `connector_fact` constructor is used only by
+# feature-gated backends, so the `fact` module is cfg-gated to match.
+# RUSTFLAGS="-D warnings" turns any dead-code warning in the lib target into
+# a hard failure, so this supported build configuration cannot regress.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$SCRIPT_DIR"
@@ -21,3 +27,8 @@ for features in "" "oauth" "calendar" "photos" "gmail" "test-mock-connector" "te
   fi
   cargo "${args[@]}"
 done
+
+# Issue #342: the no-features lib target (framework core, no backends) must
+# compile with zero warnings. Scoped to the lib target because the oauth-only
+# combo still has pre-existing dead-code warnings (issue #374).
+RUSTFLAGS="-D warnings" cargo check -p mimir-connectors --no-default-features --lib

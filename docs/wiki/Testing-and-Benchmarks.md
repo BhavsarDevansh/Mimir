@@ -25,7 +25,7 @@ cargo fmt --all -- --check
 
 ## What got better
 
-- Inline unit tests grew from ~12 to 46 (`mimir-api-types`), ~24 to 64 (`mimir-client`), 179 to 211 (`mimir-core` lib), ~74 to 110 (`mimir-knowledge` lib), 50 to 65 (`mimir-server`), and 15 to 29 (`mimir` bin).
+- Inline unit tests grew from ~12 to 63 (`mimir-api-types`), ~24 to 74 (`mimir-client`), 211 to 279 (`mimir-core` lib), 110 to 195 (`mimir-knowledge` lib), 38 to 41 (`mimir-server`), and 15 to 29 (`mimir` bin); `mimir-connectors` currently carries 319 lib tests across the email/oauth/photos/supervisor/rate-limit/calendar/geocoder/ical/secrets modules (see `docs/unit-tests.md`).
 - Three new pure-helper benchmark suites cover pathways that were previously unbenchmarked.
 - Security-relevant tests now lock in that internal error details (LLM upstream text, context IDs, memory I/O messages, KG internal variants) are masked from HTTP clients with stable error codes.
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.121.3] — 2026-08-18
+
+### Docs: refresh stale `job_queue/` test count in docs/unit-tests.md (issue #345)
+
+- The `mimir-core` `job_queue/` bullet reported 15 tests, but the module now carries 23 (`mimir-core/src/job_queue/tests.rs` has 19, `resources.rs` has 4). Refreshed the bullet to 23 and listed the cgroup resource-limit helper tests it now covers; the surrounding `mimir-core` total (279 lib tests) was already accurate.
+- Version bumped 0.121.2 → 0.121.3 (patch — documentation update).
+
 ## [0.121.2] — 2026-08-18
 
 ### Docs: remove duplicate `> **Scope:**` line in docs/config-system.md (issue #344)

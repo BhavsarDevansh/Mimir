@@ -201,7 +201,11 @@ DTSTART:{start_ical}\nLOCATION:London\nEND:VEVENT\nEND:VCALENDAR"
     )
     .await;
 
-    let config = app_password_config(&cal_url);
+    let mut config = app_password_config(&cal_url);
+    // Only the test's manual trigger may drive the tombstone cycle: a short
+    // poll interval would race the trigger for the single-use window-2 mock
+    // (issue #320).
+    config["poll_interval_secs"] = serde_json::json!(3600);
     let _row = kg
         .upsert_connector(UpsertConnectorInput {
             connector_type: ConnectorType::Calendar,
@@ -262,24 +266,21 @@ DTSTART:{start_ical}\nLOCATION:London\nEND:VEVENT\nEND:VCALENDAR"
         .expect("overlay");
     assert_eq!(event.event_type(), Some(EventType::Appointment));
 
-    // Wait for the tombstone cycle: the facts must be trashed and the event
-    // must stop surfacing in Upcoming.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    loop {
-        let empty = kg
-            .get_facts_by_subject(devansh, 100)
-            .await
-            .unwrap()
-            .is_empty();
-        if empty {
-            break;
+    // Drive the tombstone cycle deterministically: `trigger_sync_by_slug`
+    // preempts the polling interval and returns only after the full cycle
+    // (sync → extract_deletions → trash → cursor persist) completed, so the
+    // assertions below are not at the mercy of scheduler load (issue #320).
+    let outcome = supervisor
+        .trigger_sync_by_slug("calendar-personal", SyncOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome,
+        TriggerOutcome::Ok {
+            fetched: 0,
+            new_cursor: Some("tomb-2".to_string()),
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "deleted event facts were never trashed"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    );
 
     let upcoming = kg.render_upcoming_section(devansh, 30, 10).await.unwrap();
     assert!(

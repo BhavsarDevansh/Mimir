@@ -30,5 +30,5 @@ done
 
 # Issue #342: the no-features lib target (framework core, no backends) must
 # compile with zero warnings. Scoped to the lib target because the oauth-only
-# combo still has pre-existing dead-code warnings (tracked separately).
+# combo still has pre-existing dead-code warnings (issue #374).
 RUSTFLAGS="-D warnings" cargo check -p mimir-connectors --no-default-features --lib

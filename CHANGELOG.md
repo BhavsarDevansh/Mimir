@@ -4,7 +4,7 @@
 
 ### Refactor: shared auth-method discriminant trait (issue #341)
 
-- The `discriminant()` mapping (auth variant → serde `kind` tag string) was implemented verbatim on both `CalendarAuthMethod` (`mimir-connectors/src/calendar/mod.rs`) and `EmailAuthMethod` (`mimir-connectors/src/email/config.rs`), with the same doc comment. Both enums now implement the shared `crate::secrets::AuthMethodDiscriminant` trait instead, so a new auth kind is forced to map in the same contract for both connectors and the shared mismatch error (issue #273) can never silently diverge from the stored-config `kind`.
+- The `discriminant()` mapping (auth variant → serde `kind` tag string) was implemented verbatim on both `CalendarAuthMethod` (`mimir-connectors/src/calendar/mod.rs`) and `EmailAuthMethod` (`mimir-connectors/src/email/config.rs`), with the same doc comment. Both enums now implement the shared `crate::secrets::AuthMethodDiscriminant` trait instead, so a new auth kind must implement the same `discriminant()` contract in both connectors, and each connector's mapping is pinned against its serde `kind` tag by unit tests; the shared mismatch error (issue #273) can never silently diverge from the stored-config `kind`.
 - **Tests.** New `auth_method_discriminants_match_serde_kind_tag` tests in the Email and Calendar config suites assert every variant's `discriminant()` equals its serde `kind` tag.
 - **Docs.** `docs/connector-secret-store.md`, `docs/calendar-connector.md`, `docs/unit-tests.md`, `Mimir-Implementation-Context.md`, and `docs/wiki/what-works-now.md` updated.
 - Version bumped 0.120.3 → 0.121.0 (minor — refactor).

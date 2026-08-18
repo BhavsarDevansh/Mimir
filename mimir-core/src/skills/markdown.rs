@@ -9,7 +9,6 @@ use tracing::{debug, warn};
 const MAX_SKILL_FILE_SIZE: usize = 1_048_576;
 
 /// Parsed YAML frontmatter from a skill Markdown file.
-/// YAML frontmatter extracted from a skill Markdown file.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SkillFrontmatter {
     /// Unique skill identifier (snake_case recommended).
@@ -55,20 +54,8 @@ pub struct SkillDefinition {
 /// # Weekly Summary Skill
 /// ...
 /// ```
-/// Parse a Markdown skill file into frontmatter + body.
 ///
-/// Expected format:
-/// ```markdown
-/// ---
-/// name: weekly-summary
-/// version: 1.0.0
-/// ---
-///
-/// # Weekly Summary Skill
-/// ...
-/// ```
-///
-/// Rejects files larger than [`MAX_SKILL_FILE_SIZE`].
+/// Rejects files larger than `MAX_SKILL_FILE_SIZE`.
 pub fn parse_skill_file(contents: &str) -> Result<SkillDefinition, SkillError> {
     if contents.len() > MAX_SKILL_FILE_SIZE {
         return Err(SkillError::parse_error(

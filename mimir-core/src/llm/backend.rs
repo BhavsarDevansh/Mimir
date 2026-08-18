@@ -15,8 +15,8 @@ pub type LlmTextStream = Pin<Box<dyn Stream<Item = Result<String, LlmError>> + S
 
 /// Abstract backend for LLM operations.
 ///
-/// Enables fast, deterministic testing via [`MockLlmClient`](super::mock::MockLlmClient)
-/// and insulates server routes from concrete HTTP client details.
+/// Enables fast, deterministic testing via the mock LLM client and insulates
+/// server routes from concrete HTTP client details.
 #[async_trait]
 pub trait LlmBackend: Send + Sync + Debug {
     /// Send a non-streaming chat completion request and return the full assistant message.

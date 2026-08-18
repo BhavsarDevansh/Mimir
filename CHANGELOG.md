@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.120.3] — 2026-08-18
+
+### Fix: flaky photos failure-cycle test under parallel load (issue #339)
+
+- `mimir-connectors/tests/photos_connector.rs` `failed_before_extract_cycle_does_not_duplicate_staged_photo` flaked under `cargo test --workspace` parallel load: the `FailFirstExtractPhotosConnector` wrapper recorded the retry extract result with `store`, which is last-writer-wins — a second, overlapping `extract()` call that found the already-drained buffer overwrote the counter back to 0 after the first batch was already ingested, so the poll loop observed the fact in the knowledge graph while the counter read 0.
+- The wrapper now accumulates with `fetch_add` so a later empty extract cannot erase the count of an earlier successful one; a deterministic regression test (`retry_fact_count_accumulates_across_overlapping_extracts`) reproduces the overlapping-extract race directly.
+- Docs updated: `docs/photos-connector.md` (failure-cycle testing notes), `docs/wiki/what-works-now.md` (version header).
+- Version bumped 0.120.2 → 0.120.3 (patch — bug fix).
+
 ## [0.120.2] — 2026-08-18
 
 ### Docs: fix the last mimir-core rustdoc intra-doc link warnings (issue #337)

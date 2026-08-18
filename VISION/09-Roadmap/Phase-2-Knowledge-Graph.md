@@ -2,7 +2,7 @@
 
 > **Status:** Fully designed. See `VISION/02-Knowledge-Graph/Phase-2-Design-Discussion.md` for all locked decisions.
 >
-> **Last Updated:** 2026-05-30
+> **Last Updated:** 2026-08-18
 
 ## Goal
 Build the persistent memory system: entities, facts, temporal reasoning, structural confidence, inference engine, nightly optimization, and user inspection — all backed by a layered SQLite schema with Rust-native logic.
@@ -22,17 +22,17 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 - [ ] All enum-like columns use integer FK lookup tables mapped to Rust enums via `sqlx::Type`
 - [ ] Tables:
   - `entities` — nodes in the graph
-  - `entity_types` — lookup (Person, Place, Event, Object, Concept, Organization, DateTime)
+  - `entity_types` — lookup (Person, Place, Event, Object, Concept, Organization, Activity, DateTime)
   - `entity_aliases` — (entity_id, alias) for alias resolution
-  - `entity_dates` — temporal properties with recurrence (birthdays, appointments)
-  - `entity_date_types` — lookup (Birthday, Anniversary, Appointment, Deadline, RecurringEvent)
+  - `entity_dates` — temporal properties with recurrence (birthdays, appointments) — **dropped by migration `040`**; superseded by the events overlay (migration `039`)
+  - `entity_date_types` — lookup (Birth, Death, Anniversary, Created, Dissolved, Custom) — **dropped by migration `040`**; superseded by the events overlay (migration `039`)
   - `recurrence_types` — lookup (None, Yearly, Monthly, Weekly, Daily)
   - `entity_locations` — geographic properties (schema + stubs for Phase 2)
-  - `location_types` — lookup (Home, Work, Visited, Origin, Current)
+  - `location_types` — lookup (Home, Work, Visited, Origin, Current, Geographic)
   - `facts` — directed, temporal edges between entities
   - `fact_statuses` — lookup (Active, Inferred, Disputed, Corrected, Superseded, Forgotten)
   - `fact_dependencies` — junction: (parent_fact_id, child_fact_id, relation_type_id)
-  - `relation_types` — lookup (InferredFrom, Corrects, Supersedes)
+  - `relation_types` — lookup (InferredFrom, Corrects, Supersedes, Contradicts)
   - `sources` — provenance for every fact
   - `source_types` — lookup (UserEdit, Connector, Inference, Interaction, Import, System)
   - `fact_audit_log` — immutable audit trail of all fact changes
@@ -53,7 +53,7 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 - [x] Alias resolution: exact match → alias match → FTS5 fuzzy → create new (Phase 3 F5 / #182)
 - [ ] Entity deduplication: Rust exact match (auto-merge) + LLM semantic match (flag for review)
 - [ ] Entity merge: re-point all facts → append aliases → soft-delete merged entity
-- [ ] Entity dates (full implementation): birthdays, appointments, deadlines with recurrence
+- [x] Events & reminders (recurrence + lifecycle overlay on facts): birthdays, appointments, deadlines with recurrence (migration `039` / #74)
 - [ ] Entity locations (schema + stubs): GPS, address — full implementation in Phase 3
 
 ### 2.3 Fact Management

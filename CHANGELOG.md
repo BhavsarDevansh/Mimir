@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.124.2] — 2026-08-19
+
+### Docs: add change_types seeds to the schema-doc lookup-seeding list (issue #364)
+
+- `docs/knowledge-graph-schema.md` now lists migrations `027` (`Rejected = 8`) and `034` (`ContentUpdate = 9`) in the lookup-seeding migration list, closing the same class of drift that #306 fixed for `023`/`024`: both migrations seed `change_types` rows that map to `ChangeType` enum variants via `#[repr(i16)]` discriminants, and the list's stated criteria already covered them.
+- Version bumped 0.124.1 → 0.124.2 (patch — documentation update).
+
 ## [0.124.1] — 2026-08-19
 
 ### Bugfix: wizard secrets are prompted exactly once (issue #399)

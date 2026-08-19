@@ -12,13 +12,15 @@
 
 ### Lookup Tables (Stable Integer IDs)
 
-Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `023`, `024`, `032`, `039`, and `046` with stable integer IDs that map to Rust enums via `#[repr(i16)]` discriminants:
+Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `023`, `024`, `027`, `032`, `034`, `039`, and `046` with stable integer IDs that map to Rust enums via `#[repr(i16)]` discriminants:
 
 - Migration `001` seeds `entity_types` (7 variants), `recurrence_types`, `location_types`, `fact_statuses`, `relation_types`, `source_types`, `preference_categories`, and `preference_source_types`. (`entity_date_types` was also seeded here but is dropped in migration `040` — see Events & Reminders.)
 - Migration `012` adds the `DateTime = 8` variant to `entity_types`.
 - Migration `013` seeds `predicates` and `predicate_constraints` (renamed to `relationship_types` / `relationship_constraints` by migration `031`).
 - Migration `023` re-seeds `preference_categories` (7 rows: CalendarBehavior, NotificationStyle, FoodPreference, TravelPreference, WorkStyle, CommunicationPreference, General) and `preference_source_types` (3 rows: Interaction, Fact, UserEdit).
 - Migration `024` adds the `Contradicts = 4` variant to `relation_types`.
+- Migration `027` adds the `Rejected = 8` variant to `change_types`.
+- Migration `034` adds the `ContentUpdate = 9` variant to `change_types`.
 - Migration `039` seeds the events overlay lookups: `event_types`, `event_statuses`, and `auto_complete_policies`.
 - The enum conversions in `mimir-knowledge` align the lookup identifiers across storage and the API/tool contracts: `ChangeType` / `ChangedBy` (`models::audit_log`) and `EntityType` (`models::entity`) expose `as_str()` + `TryFrom<i16>` (plus case-insensitive `FromStr` where input parsing exists), and the KB route / `kg_*` tool helpers delegate to them instead of re-typing the name tables (issue #358). Alignment is by stable identifier — `TryFrom<i16>` keeps the lookup rows and enum discriminants in lock-step — while endpoint string representations may differ: audit SQL responses report `changed_by` as the lowercase lookup name (`user`), whereas fact-detail output uses the title-case variant string (`User`).
 

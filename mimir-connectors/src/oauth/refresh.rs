@@ -164,10 +164,12 @@ fn expires_at_from_now(secs: std::time::Duration) -> DateTime<Utc> {
 
 /// Build a [`SecretBundle::OAuth`] from an `oauth2` token response, retaining
 /// the prior refresh token when the response omits one (RFC 6749 §6 says a
-/// `refresh_token` MAY be omitted).
+/// `refresh_token` MAY be omitted) and carrying the client secret through so
+/// it stays in the credential bundle instead of `config_json`.
 pub(crate) fn into_bundle(
     response: &BasicTokenResponse,
     prior_refresh_token: Option<String>,
+    client_secret: Option<String>,
 ) -> SecretBundle {
     SecretBundle::OAuth {
         access_token: response.access_token().secret().clone(),
@@ -178,6 +180,7 @@ pub(crate) fn into_bundle(
             .map(|rt| rt.secret().clone())
             .or(prior_refresh_token),
         expires_at: response.expires_in().map(expires_at_from_now),
+        client_secret,
     }
 }
 
@@ -251,6 +254,7 @@ pub(crate) async fn resolve_access_token(
         access_token,
         refresh_token: stored_refresh_token,
         expires_at,
+        client_secret: stored_client_secret,
     } = bundle
     else {
         return Err(ConnectorError::Authentication(
@@ -272,7 +276,10 @@ pub(crate) async fn resolve_access_token(
         http,
         token_endpoint,
         client_id,
-        client_secret,
+        // The bundle's client secret wins (wizard-created connectors keep it
+        // out of `config_json`); the config value is the pre-bundle fallback
+        // for connectors registered before the field existed.
+        stored_client_secret.as_deref().or(client_secret),
         scopes,
         &stored_refresh_token,
     )
@@ -280,7 +287,15 @@ pub(crate) async fn resolve_access_token(
     let token = refreshed.access_token().secret().clone();
     Ok((
         token,
-        Some(into_bundle(&refreshed, Some(stored_refresh_token))),
+        Some(into_bundle(
+            &refreshed,
+            Some(stored_refresh_token),
+            // Adopt the config secret into the refreshed bundle so the
+            // bundle becomes authoritative for future refreshes.
+            stored_client_secret
+                .clone()
+                .or_else(|| client_secret.map(str::to_string)),
+        )),
     ))
 }
 
@@ -305,17 +320,19 @@ mod tests {
             "expires_in": 3600,
         }))
         .expect("token response");
-        let bundle = into_bundle(&resp, Some("prior-rt".into()));
+        let bundle = into_bundle(&resp, Some("prior-rt".into()), Some("client-secret".into()));
         let SecretBundle::OAuth {
             access_token,
             refresh_token,
             expires_at,
+            client_secret,
         } = bundle
         else {
             panic!("expected OAuth bundle, got {bundle:?}");
         };
         assert_eq!(access_token, "fresh");
         assert_eq!(refresh_token.as_deref(), Some("prior-rt"));
+        assert_eq!(client_secret.as_deref(), Some("client-secret"));
         let remaining = expires_at
             .expect("expiry")
             .signed_duration_since(Utc::now());
@@ -330,7 +347,7 @@ mod tests {
             "refresh_token": "rotated-rt",
         }))
         .expect("token response");
-        let bundle = into_bundle(&resp, Some("prior-rt".into()));
+        let bundle = into_bundle(&resp, Some("prior-rt".into()), None);
         let SecretBundle::OAuth {
             refresh_token,
             expires_at,
@@ -637,7 +654,7 @@ mod tests {
             "expires_in": 18446744073709551615u64,
         }))
         .expect("token response");
-        let bundle = into_bundle(&resp, None);
+        let bundle = into_bundle(&resp, None, None);
         let SecretBundle::OAuth { expires_at, .. } = bundle else {
             panic!("expected OAuth bundle, got {bundle:?}");
         };
@@ -722,6 +739,7 @@ mod tests {
             access_token: "ya29.access".into(),
             refresh_token: Some("rt".into()),
             expires_at: Some(Utc::now() + chrono::Duration::hours(1)),
+            client_secret: None,
         };
         let (token, refreshed) =
             resolve_access_token(&client(), TOKEN_ENDPOINT, "cid", None, None, &bundle)
@@ -740,6 +758,7 @@ mod tests {
             access_token: "ya29.access".into(),
             refresh_token: Some("rt".into()),
             expires_at: None,
+            client_secret: None,
         };
         let (token, refreshed) =
             resolve_access_token(&client(), TOKEN_ENDPOINT, "cid", None, None, &bundle)
@@ -754,6 +773,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/token"))
+            .and(body_string_contains("client_secret=bundle-secret"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "access_token": "fresh",
                 "token_type": "Bearer",
@@ -766,25 +786,37 @@ mod tests {
             refresh_token: Some("rt".into()),
             // 30 s before expiry — inside the 60 s refresh skew.
             expires_at: Some(Utc::now() + chrono::Duration::seconds(30)),
+            // The bundle's secret wins over the config value supplied below.
+            client_secret: Some("bundle-secret".into()),
         };
         let (token, refreshed) = resolve_access_token(
             &client(),
             &format!("{}/token", server.uri()),
             "cid",
-            None,
+            Some("config-secret"),
             None,
             &bundle,
         )
         .await
         .expect("refresh");
         assert_eq!(token, "fresh");
-        let SecretBundle::OAuth { refresh_token, .. } = refreshed.expect("refreshed bundle") else {
+        let SecretBundle::OAuth {
+            refresh_token,
+            client_secret,
+            ..
+        } = refreshed.expect("refreshed bundle")
+        else {
             panic!("expected OAuth bundle");
         };
         assert_eq!(
             refresh_token.as_deref(),
             Some("rt"),
             "prior refresh token retained"
+        );
+        assert_eq!(
+            client_secret.as_deref(),
+            Some("bundle-secret"),
+            "client secret must be carried through the refreshed bundle"
         );
     }
 
@@ -794,6 +826,7 @@ mod tests {
             access_token: "stale".into(),
             refresh_token: None,
             expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
+            client_secret: None,
         };
         let err = resolve_access_token(&client(), TOKEN_ENDPOINT, "cid", None, None, &bundle)
             .await

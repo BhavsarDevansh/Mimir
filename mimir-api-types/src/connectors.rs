@@ -144,6 +144,11 @@ pub enum IngestTokenRequest {
         /// RFC-3339 expiry timestamp, absent when the provider omits one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expires_at: Option<String>,
+        /// OAuth client secret for confidential clients, kept with the
+        /// credential bundle (never in `config_json`); absent for PKCE
+        /// public clients and for requests from pre-bundle clients.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client_secret: Option<String>,
     },
     /// Static API token (e.g. a PAT).
     #[serde(rename = "api_token")]
@@ -164,6 +169,7 @@ impl std::fmt::Debug for IngestTokenRequest {
             Self::OAuth {
                 refresh_token,
                 expires_at,
+                client_secret,
                 ..
             } => f
                 .debug_struct("IngestTokenRequest::OAuth")
@@ -171,6 +177,10 @@ impl std::fmt::Debug for IngestTokenRequest {
                 .field(
                     "refresh_token",
                     &refresh_token.as_ref().map(|_| "<redacted>"),
+                )
+                .field(
+                    "client_secret",
+                    &client_secret.as_ref().map(|_| "<redacted>"),
                 )
                 .field("expires_at", expires_at)
                 .finish(),
@@ -327,10 +337,12 @@ mod tests {
             access_token: "at".to_string(),
             refresh_token: Some("rt".to_string()),
             expires_at: Some("2026-01-01T00:00:00Z".to_string()),
+            client_secret: Some("secret".to_string()),
         };
         assert_eq!(roundtrip(&req), req);
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["kind"], "oauth");
+        assert_eq!(json["client_secret"], "secret");
     }
 
     #[test]
@@ -359,10 +371,12 @@ mod tests {
             access_token: "at".to_string(),
             refresh_token: None,
             expires_at: None,
+            client_secret: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert!(!json.as_object().unwrap().contains_key("refresh_token"));
         assert!(!json.as_object().unwrap().contains_key("expires_at"));
+        assert!(!json.as_object().unwrap().contains_key("client_secret"));
     }
 
     /// The redacting `Debug` impl must never print a secret value verbatim,
@@ -373,10 +387,12 @@ mod tests {
             access_token: "super-secret-at".to_string(),
             refresh_token: Some("super-secret-rt".to_string()),
             expires_at: Some("2026-01-01T00:00:00Z".to_string()),
+            client_secret: Some("super-secret-cs".to_string()),
         };
         let debug = format!("{req:?}");
         assert!(!debug.contains("super-secret-at"));
         assert!(!debug.contains("super-secret-rt"));
+        assert!(!debug.contains("super-secret-cs"));
         assert!(debug.contains("IngestTokenRequest::OAuth"));
         assert!(debug.contains("expires_at"));
 

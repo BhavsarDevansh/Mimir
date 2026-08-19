@@ -414,6 +414,7 @@ fn to_secret_bundle(
             access_token,
             refresh_token,
             expires_at,
+            client_secret,
         } => {
             let expires_at = match expires_at {
                 Some(s) => Some(
@@ -427,6 +428,7 @@ fn to_secret_bundle(
                 access_token,
                 refresh_token,
                 expires_at,
+                client_secret,
             }
         }
         mimir_api_types::IngestTokenRequest::ApiToken { token } => {

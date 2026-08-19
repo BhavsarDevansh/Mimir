@@ -14,7 +14,7 @@ use wiremock::{
 
 use super::add::handle_connector_add_with_opener;
 use super::auth::handle_connector_auth_with_opener;
-use super::oauth::{oauth_flow_config, oauth_ingest_request};
+use super::oauth::{oauth_flow_config, oauth_flow_config_with_secret, oauth_ingest_request};
 use super::wizard::{
     PromptDriver, build_wizard_config, handle_connector_add_wizard_with_deps, parse_scopes, slugify,
 };
@@ -601,6 +601,23 @@ fn oauth_flow_config_extracts_fields() {
 }
 
 #[test]
+fn oauth_flow_config_with_secret_overrides_config_value() {
+    let config = serde_json::json!({
+        "auth": {
+            "kind": "oauth",
+            "auth_uri": "https://oauth.example.com/authorize",
+            "token_endpoint": "https://oauth.example.com/token",
+            "client_id": "cid",
+            "client_secret": "config-secret",
+        }
+    });
+    let flow = oauth_flow_config_with_secret(&config, Some("wizard-secret")).expect("config");
+    assert_eq!(flow.client_secret.as_deref(), Some("wizard-secret"));
+    let flow = oauth_flow_config_with_secret(&config, None).expect("config");
+    assert_eq!(flow.client_secret.as_deref(), Some("config-secret"));
+}
+
+#[test]
 fn oauth_flow_config_rejects_missing_fields() {
     let missing_uri = serde_json::json!({
         "auth": {"kind": "oauth", "token_endpoint": "https://oauth.example.com/token", "client_id": "cid"}
@@ -619,6 +636,7 @@ fn oauth_ingest_request_converts_bundle_to_wire() {
         access_token: "ya29.access".to_string(),
         refresh_token: Some("rt".to_string()),
         expires_at: Some(chrono::Utc::now()),
+        client_secret: Some("s3cret".to_string()),
     };
     let req = oauth_ingest_request(&bundle);
     match req {
@@ -626,9 +644,11 @@ fn oauth_ingest_request_converts_bundle_to_wire() {
             access_token,
             refresh_token,
             expires_at,
+            client_secret,
         } => {
             assert_eq!(access_token, "ya29.access");
             assert_eq!(refresh_token.as_deref(), Some("rt"));
+            assert_eq!(client_secret.as_deref(), Some("s3cret"));
             assert!(
                 expires_at
                     .as_ref()
@@ -1013,10 +1033,15 @@ fn wizard_gmail_oauth_config_uses_google_defaults() {
         ScriptedAnswer::Input("me@gmail.com".to_string()), // account email
         ScriptedAnswer::Select(0),            // OAuth browser login
         ScriptedAnswer::Input("client-123".to_string()), // client id
-        ScriptedAnswer::Input(String::new()), // client secret → none
+        ScriptedAnswer::Password(String::new()), // client secret → none
     ]);
     let (config, credential) = build_wizard_config(&entry, "personal-gmail", &prompts).unwrap();
-    assert!(matches!(credential, super::wizard::WizardCredential::OAuth));
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::OAuth {
+            client_secret: None
+        }
+    ));
     assert_eq!(config["host"], "imap.gmail.com");
     assert_eq!(config["port"], 993);
     assert_eq!(config["mailbox"], "INBOX");
@@ -1039,6 +1064,34 @@ fn wizard_gmail_oauth_config_uses_google_defaults() {
         config["auth"].get("client_secret").is_none(),
         "blank client secret must be omitted"
     );
+}
+
+#[test]
+fn wizard_gmail_oauth_client_secret_stays_out_of_config_json() {
+    let entry = mimir_api_types::ConnectorCatalogEntry {
+        connector_type: "gmail".to_string(),
+        backend: "imap".to_string(),
+    };
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Input(String::new()), // host → default
+        ScriptedAnswer::Input(String::new()), // port → default
+        ScriptedAnswer::Input(String::new()), // mailbox → default
+        ScriptedAnswer::Input("me@gmail.com".to_string()), // account email
+        ScriptedAnswer::Select(0),            // OAuth browser login
+        ScriptedAnswer::Input("client-123".to_string()), // client id
+        ScriptedAnswer::Password("s3cret".to_string()), // client secret (hidden)
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "personal-gmail", &prompts).unwrap();
+    assert!(
+        config["auth"].get("client_secret").is_none(),
+        "client secret must never be written into config_json"
+    );
+    match credential {
+        super::wizard::WizardCredential::OAuth { client_secret } => {
+            assert_eq!(client_secret.as_deref(), Some("s3cret"));
+        }
+        other => panic!("expected OAuth credential, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -1090,6 +1143,75 @@ async fn wizard_gmail_app_password_registers_end_to_end() {
     assert_eq!(body["slug"], "personal-gmail");
     assert_eq!(body["display_name"], "Personal Gmail");
     assert_eq!(body["config_json"]["auth"]["username"], "me@gmail.com");
+}
+
+#[tokio::test]
+async fn wizard_oauth_with_client_secret_keeps_it_out_of_config_json() {
+    let daemon = MockServer::start().await;
+    let token_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/connectors/catalog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(catalog(&[
+            ("gmail", "imap"),
+            ("calendar", "caldav"),
+            ("photos", "local"),
+        ])))
+        .mount(&daemon)
+        .await;
+    let created = connector_fixture(1, "personal-gmail");
+    mount_add(&daemon, &created).await;
+    let mut authenticated = created;
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_partial_json(serde_json::json!({
+            "kind": "oauth",
+            "access_token": "ya29.access",
+            "refresh_token": "rt",
+            "client_secret": "s3cret",
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .expect(1)
+        .mount(&daemon)
+        .await;
+    mount_token_endpoint(&token_server, 1).await;
+
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(1), // Calendar (caldav)
+        ScriptedAnswer::Input("Personal Gmail".to_string()),
+        ScriptedAnswer::Input(String::new()), // slug → personal-gmail
+        ScriptedAnswer::Input("https://dav.example.com/cal".to_string()),
+        ScriptedAnswer::Input("me@gmail.com".to_string()),
+        ScriptedAnswer::Select(1), // OAuth 2.0 — browser login
+        ScriptedAnswer::Input("https://accounts.example.com/auth".to_string()),
+        ScriptedAnswer::Input(format!("{}/token", token_server.uri())),
+        ScriptedAnswer::Input("client-456".to_string()),
+        ScriptedAnswer::Password("s3cret".to_string()), // client secret, hidden
+        ScriptedAnswer::Input(String::new()),           // scopes → default
+    ]);
+    handle_connector_add_wizard_with_deps(
+        false,
+        &daemon.uri(),
+        &prompts,
+        &self_callback_opener("auth-code"),
+    )
+    .await;
+
+    let requests = daemon.received_requests().await.unwrap();
+    let add = requests
+        .iter()
+        .find(|r| r.url.path() == "/connectors")
+        .expect("connector add POST");
+    let body: serde_json::Value = serde_json::from_slice(&add.body).unwrap();
+    assert!(
+        body["config_json"]["auth"].get("client_secret").is_none(),
+        "client secret must not be stored in config_json"
+    );
+    let token_requests = requests
+        .iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .count();
+    assert_eq!(token_requests, 1, "OAuth bundle must be ingested once");
 }
 
 #[tokio::test]
@@ -1162,6 +1284,40 @@ fn wizard_required_field_error_mentions_field() {
 }
 
 #[test]
+fn wizard_gmail_empty_app_password_is_rejected() {
+    let entry = mimir_api_types::ConnectorCatalogEntry {
+        connector_type: "gmail".to_string(),
+        backend: "imap".to_string(),
+    };
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Input(String::new()), // host → default
+        ScriptedAnswer::Input(String::new()), // port → default
+        ScriptedAnswer::Input(String::new()), // mailbox → default
+        ScriptedAnswer::Input("me@gmail.com".to_string()),
+        ScriptedAnswer::Select(1),               // App password
+        ScriptedAnswer::Password(String::new()), // empty app password
+    ]);
+    let err = build_wizard_config(&entry, "gmail", &prompts).unwrap_err();
+    assert_eq!(err, "App password is required");
+}
+
+#[test]
+fn wizard_caldav_whitespace_only_app_password_is_rejected() {
+    let entry = mimir_api_types::ConnectorCatalogEntry {
+        connector_type: "calendar".to_string(),
+        backend: "caldav".to_string(),
+    };
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Input("https://dav.example.com/cal".to_string()),
+        ScriptedAnswer::Input("me@example.com".to_string()),
+        ScriptedAnswer::Select(0),                   // App password
+        ScriptedAnswer::Password("   ".to_string()), // whitespace-only
+    ]);
+    let err = build_wizard_config(&entry, "calendar", &prompts).unwrap_err();
+    assert_eq!(err, "App password is required");
+}
+
+#[test]
 fn wizard_caldav_oauth_config_includes_scopes() {
     let entry = mimir_api_types::ConnectorCatalogEntry {
         connector_type: "calendar".to_string(),
@@ -1174,11 +1330,16 @@ fn wizard_caldav_oauth_config_includes_scopes() {
         ScriptedAnswer::Input("https://accounts.example.com/auth".to_string()),
         ScriptedAnswer::Input("https://accounts.example.com/token".to_string()),
         ScriptedAnswer::Input("client-456".to_string()),
-        ScriptedAnswer::Input(String::new()), // client secret → none
-        ScriptedAnswer::Input(String::new()), // scopes → default Google Calendar
+        ScriptedAnswer::Password(String::new()), // client secret → none
+        ScriptedAnswer::Input(String::new()),    // scopes → default Google Calendar
     ]);
     let (config, credential) = build_wizard_config(&entry, "calendar", &prompts).unwrap();
-    assert!(matches!(credential, super::wizard::WizardCredential::OAuth));
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::OAuth {
+            client_secret: None
+        }
+    ));
     assert_eq!(config["calendar_url"], "https://dav.example.com/cal");
     assert_eq!(config["auth"]["kind"], "oauth");
     assert_eq!(config["auth"]["username"], "me@example.com");
@@ -1206,7 +1367,7 @@ fn wizard_caldav_oauth_scope_prompt_accepts_custom_list() {
         ScriptedAnswer::Input("https://auth.example.com/auth".to_string()),
         ScriptedAnswer::Input("https://auth.example.com/token".to_string()),
         ScriptedAnswer::Input("client-456".to_string()),
-        ScriptedAnswer::Input(String::new()),
+        ScriptedAnswer::Password(String::new()),
         ScriptedAnswer::Input("scope.a scope.b,scope.c".to_string()),
     ]);
     let (config, _) = build_wizard_config(&entry, "calendar", &prompts).unwrap();

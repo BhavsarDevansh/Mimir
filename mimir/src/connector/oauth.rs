@@ -21,7 +21,20 @@ use super::exit_with_error;
 /// validity is checked by the flow itself (`AuthUrl` / the shared token
 /// endpoint gate) before any browser is opened, so it is not duplicated
 /// here.
+#[cfg(test)]
 pub(crate) fn oauth_flow_config(config: &serde_json::Value) -> Result<PkceFlowConfig, String> {
+    oauth_flow_config_with_secret(config, None)
+}
+
+/// Like [`oauth_flow_config`], but with an explicit client secret that
+/// overrides (and takes precedence over) any `auth.client_secret` in the
+/// config. The wizard uses this so the secret is never written into
+/// `config_json` — it is prompted hidden and carried through the credential
+/// bundle instead.
+pub(crate) fn oauth_flow_config_with_secret(
+    config: &serde_json::Value,
+    client_secret: Option<&str>,
+) -> Result<PkceFlowConfig, String> {
     let auth = config
         .pointer("/auth")
         .and_then(|v| v.as_object())
@@ -32,10 +45,11 @@ pub(crate) fn oauth_flow_config(config: &serde_json::Value) -> Result<PkceFlowCo
             .map(str::to_string)
             .ok_or_else(|| format!("OAuth config is missing `auth.{key}`"))
     };
-    let client_secret = auth
-        .get("client_secret")
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
+    let client_secret = client_secret.map(str::to_string).or_else(|| {
+        auth.get("client_secret")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    });
     let scopes = auth.get("scopes").and_then(|v| v.as_array()).map(|arr| {
         arr.iter()
             .filter_map(|s| s.as_str().map(str::to_string))
@@ -69,7 +83,20 @@ pub(crate) async fn run_oauth_flow_with_opener(
     config: &serde_json::Value,
     opener: &(dyn Fn(&str) + Send + Sync),
 ) -> SecretBundle {
-    let flow_config = oauth_flow_config(config).unwrap_or_else(|e| exit_with_error(e));
+    run_oauth_flow_with_opener_and_secret(config, None, opener).await
+}
+
+/// Run the interactive PKCE flow with an explicit (hidden-prompt) client
+/// secret. The wizard collects the secret separately so it never lands in
+/// `config_json`; the secret is attached to the returned bundle and POSTed
+/// to the daemon's secret store with the tokens.
+pub(crate) async fn run_oauth_flow_with_opener_and_secret(
+    config: &serde_json::Value,
+    client_secret: Option<&str>,
+    opener: &(dyn Fn(&str) + Send + Sync),
+) -> SecretBundle {
+    let flow_config =
+        oauth_flow_config_with_secret(config, client_secret).unwrap_or_else(|e| exit_with_error(e));
     let http = OAuthHttpClient::new().unwrap_or_else(|e| exit_with_error(e.to_string()));
     eprintln!("Starting OAuth login — complete the authorization in the browser that opens.");
     run_pkce_flow(&flow_config, &http, opener, DEFAULT_FLOW_TIMEOUT)
@@ -84,6 +111,7 @@ pub(crate) fn oauth_ingest_request(bundle: &SecretBundle) -> IngestTokenRequest 
         access_token,
         refresh_token,
         expires_at,
+        client_secret,
     } = bundle
     else {
         unreachable!("the PKCE flow always returns an OAuth bundle")
@@ -92,6 +120,7 @@ pub(crate) fn oauth_ingest_request(bundle: &SecretBundle) -> IngestTokenRequest 
         access_token: access_token.clone(),
         refresh_token: refresh_token.clone(),
         expires_at: expires_at.map(|dt| dt.to_rfc3339()),
+        client_secret: client_secret.clone(),
     }
 }
 

@@ -7,7 +7,7 @@ A Connector is a bridge between the agent and an external service (email, calend
 
 ### Adding a Connector
 
-The default path is the interactive wizard — `mimir connector add` with no arguments lists the daemon's supported `(connector_type, backend)` pairs for selection, confirms the display name (defaults to the type) and slug (defaults to the slugified name), asks the per-backend questions with sensible defaults, and drives authentication. For Gmail IMAP it offers OAuth browser login first (Google authorization/token endpoints pre-filled; the user supplies their own OAuth client ID from the Google Cloud Console), launching the browser at the printed authorize URL — which can also be opened manually on any device — with an app-password fallback. Local backends (Photos) need no credential.
+The default path is the interactive wizard — `mimir connector add` with no arguments lists the daemon's supported `(connector_type, backend)` pairs for selection, confirms the display name (defaults to the type) and slug (defaults to the slugified name), asks the per-backend questions with sensible defaults, and drives authentication. For Gmail IMAP it offers OAuth browser login first (Google authorization/token endpoints pre-filled; the user supplies their own OAuth client ID from the Google Cloud Console), launching the browser at the printed authorize URL — the URL can also be opened manually, but the browser must run on the machine running `mimir` because the PKCE callback binds to `127.0.0.1` — with an app-password fallback. Local backends (Photos) need no credential.
 
 ```bash
 $ mimir connector add
@@ -23,20 +23,21 @@ Required permissions: read emails, read labels
 If the browser does not open automatically, visit:
   https://accounts.google.com/o/oauth2/v2/auth?client_id=...&code_challenge=...&state=...
 [Browser opens; the user authorizes; the provider redirects to the loopback callback]
-Connected! Syncing emails from the last 30 days...
+Added connector 'gmail' (gmail / imap, status setup, auth authenticated).
+Next: run `mimir connector resume gmail` to activate it, then `mimir connector sync gmail` to sync.
 
-$ agent connector add homeassistant
+$ mimir connector add homeassistant
 Connector: Home Assistant
 URL: http://homeassistant.local:8123
 Long-lived access token: ████████
 Connected! Found 47 entities (lights, sensors, cameras).
 ```
 The flag form (`mimir connector add gmail --backend imap auth.kind=oauth …`) remains for scripts and non-interactive setup; it runs the same registration and credential-ingest core.
-The OAuth flow (A4 / #205) runs entirely in the CLI process: it binds an ephemeral loopback listener on `127.0.0.1`, opens the provider's authorize URL in the default browser (the URL is printed first, so headless/SSH sessions can open it manually), receives the redirect, exchanges the code, and POSTs the token bundle to the daemon — the user never copies a code. A canceled flow exits with nothing created.
+The OAuth flow (A4 / #205) runs entirely in the CLI process: it binds an ephemeral loopback listener on `127.0.0.1`, opens the provider's authorize URL in the default browser (the URL is printed first, so it can also be opened manually — but the browser must run on the machine running `mimir`, because the callback binds to `127.0.0.1`), receives the redirect, exchanges the code, and POSTs the token bundle to the daemon — the user never copies a code. A canceled flow exits with nothing created.
 
 ### Checking Status
 ```bash
-$ agent connector status
+$ mimir connector status
 Gmail              ● Online    Last sync: 2m ago    Emails: 12,304
 Google Calendar    ● Online    Last sync: 5m ago    Events: 843
 Apple Photos       ● Online    Last sync: 1h ago    Photos: 24,501
@@ -53,15 +54,15 @@ Each connector declares its permission levels:
 
 Users can revoke or downgrade permissions at any time:
 ```bash
-$ agent connector permissions gmail --downgrade read-only
+$ mimir connector permissions gmail --downgrade read-only
 ```
 
 ### Sync Control
 ```bash
-$ agent connector sync gmail --full          # Full historical sync
-$ agent connector sync gmail --since 7d      # Last 7 days only
-$ agent connector pause github               # Pause syncing
-$ agent connector resume github              # Resume syncing
+$ mimir connector sync gmail --full          # Full historical sync
+$ mimir connector sync gmail --since 7d      # Last 7 days only
+$ mimir connector pause github               # Pause syncing
+$ mimir connector resume github              # Resume syncing
 ```
 
 ## Data Privacy

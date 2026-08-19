@@ -37,6 +37,12 @@ pub enum SecretBundle {
         refresh_token: Option<String>,
         /// When `access_token` expires, or `None` if unknown.
         expires_at: Option<DateTime<Utc>>,
+        /// OAuth client secret for confidential clients. Stored with the
+        /// credential bundle (never in `config_json`); `None` for PKCE
+        /// public clients and for bundles persisted before this field
+        /// existed (serde `default` keeps those files loadable).
+        #[serde(default)]
+        client_secret: Option<String>,
     },
     /// A static API token presented as a bearer/`Authorization` header.
     ApiToken {
@@ -70,12 +76,17 @@ impl std::fmt::Debug for SecretBundle {
                 access_token: _,
                 refresh_token,
                 expires_at,
+                client_secret,
             } => f
                 .debug_struct("SecretBundle::OAuth")
                 .field("access_token", &"<redacted>")
                 .field(
                     "refresh_token",
                     &refresh_token.as_ref().map(|_| "<redacted>"),
+                )
+                .field(
+                    "client_secret",
+                    &client_secret.as_ref().map(|_| "<redacted>"),
                 )
                 .field("expires_at", expires_at)
                 .finish(),
@@ -102,11 +113,13 @@ mod tests {
                 access_token: "super-secret-access".into(),
                 refresh_token: Some("super-secret-refresh".into()),
                 expires_at: None,
+                client_secret: Some("super-secret-client".into()),
             },
             SecretBundle::OAuth {
                 access_token: "a".into(),
                 refresh_token: None,
                 expires_at: None,
+                client_secret: None,
             },
             SecretBundle::ApiToken {
                 token: "super-secret-token".into(),
@@ -134,6 +147,7 @@ mod tests {
                 access_token: "a".into(),
                 refresh_token: Some("rt".into()),
                 expires_at: None,
+                client_secret: None,
             }
         );
         assert!(
@@ -146,6 +160,7 @@ mod tests {
                 access_token: "a".into(),
                 refresh_token: None,
                 expires_at: None,
+                client_secret: Some("super-secret-client".into()),
             }
         );
         assert!(

@@ -218,6 +218,7 @@ async fn oauth_refreshes_expired_token_then_syncs() {
         access_token,
         refresh_token,
         expires_at,
+        ..
     } = bundle
     else {
         panic!("expected OAuth bundle, got {bundle:?}");
@@ -290,6 +291,7 @@ async fn oauth_unknown_expiry_does_not_force_refresh_on_every_cycle() {
                 access_token: "live-token".into(),
                 refresh_token: Some("rt-1".into()),
                 expires_at: None,
+                client_secret: None,
             },
         )
         .await

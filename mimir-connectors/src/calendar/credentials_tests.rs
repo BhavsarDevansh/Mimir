@@ -27,6 +27,7 @@ fn oauth_bundle(access_token: &str, expires_at: Option<chrono::DateTime<Utc>>) -
         access_token: access_token.into(),
         refresh_token: Some("rt".into()),
         expires_at,
+        client_secret: None,
     }
 }
 
@@ -48,6 +49,7 @@ async fn resolve_auth_mismatch_reports_config_discriminant() {
         access_token: "t".into(),
         refresh_token: None,
         expires_at: None,
+        client_secret: None,
     };
     assert_eq!(
         connector

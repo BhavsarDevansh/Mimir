@@ -158,6 +158,7 @@ pub async fn store_with_expired_oauth(refresh_token: &str) -> Arc<dyn SecretStor
                 access_token: "stale-token".into(),
                 refresh_token: Some(refresh_token.to_string()),
                 expires_at: Some(Utc::now() - ChronoDuration::minutes(5)),
+                client_secret: None,
             },
         )
         .await

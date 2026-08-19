@@ -6,8 +6,9 @@
 //! (defaults to the type), slug (defaults to the slugified name), per-backend
 //! configuration, and authentication — OAuth runs the shared PKCE loopback
 //! flow (A4 / #205) which prints the authorize URL and opens the browser, app
-//! passwords are prompted hidden, and tokens are never echoed. Credentials
-//! are stored by the daemon's [`SecretStore`](mimir_connectors::secrets)
+//! passwords and OAuth client secrets are prompted hidden, and tokens are
+//! never echoed. Credentials — including the OAuth client secret — are
+//! stored by the daemon's [`SecretStore`](mimir_connectors::secrets)
 //! (per-slug `0600` files), never in the config.
 ///
 /// The wizard is purely a UX layer over the same daemon routes as the flag
@@ -19,7 +20,7 @@ use serde_json::{Value, json};
 
 use super::add::no_backends_message;
 use super::add::register_and_ingest;
-use super::oauth::{open_in_browser, run_oauth_flow_with_opener};
+use super::oauth::{open_in_browser, run_oauth_flow_with_opener_and_secret};
 use super::{CredentialKind, exit_with_error, make_client, render_client_error, title_case};
 
 /// Google OAuth authorize endpoint used as the Gmail IMAP default (the
@@ -87,8 +88,11 @@ fn prompt_error(e: inquire::InquireError) -> String {
 /// *before* anything is registered so an aborted flow creates nothing.
 #[derive(Debug)]
 pub(crate) enum WizardCredential {
-    /// Run the interactive PKCE flow (browser + printed URL).
-    OAuth,
+    /// Run the interactive PKCE flow (browser + printed URL). The OAuth
+    /// client secret (confidential clients only) is carried separately so
+    /// it is never written into `config_json` — it goes to the daemon's
+    /// secret store inside the credential bundle.
+    OAuth { client_secret: Option<String> },
     /// App-password / API-token secret already prompted.
     Secret(String),
     /// No credential (e.g. local-filesystem backends).
@@ -140,8 +144,10 @@ pub(crate) async fn handle_connector_add_wizard_with_deps(
         build_wizard_config(&entry, &slug, prompts).unwrap_or_else(|e| exit_with_error(e));
 
     let (kind, oauth_bundle, secret) = match credential {
-        WizardCredential::OAuth => {
-            let bundle = run_oauth_flow_with_opener(&config, opener).await;
+        WizardCredential::OAuth { client_secret } => {
+            let bundle =
+                run_oauth_flow_with_opener_and_secret(&config, client_secret.as_deref(), opener)
+                    .await;
             (CredentialKind::OAuth, Some(bundle), None)
         }
         WizardCredential::Secret(secret) => {
@@ -243,8 +249,13 @@ fn gmail_imap_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredent
             ),
             "OAuth client ID",
         )?;
-        let client_secret = prompts.input("OAuth client secret (blank if none)", Some(""))?;
-        let mut auth = json!({
+        let client_secret = prompts.password("OAuth client secret (blank if none)")?;
+        let client_secret = if client_secret.trim().is_empty() {
+            None
+        } else {
+            Some(client_secret)
+        };
+        let auth = json!({
             "kind": "oauth",
             "username": username,
             "auth_uri": GOOGLE_AUTH_URI,
@@ -252,17 +263,17 @@ fn gmail_imap_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredent
             "client_id": client_id,
             "scopes": [GMAIL_SCOPE],
         });
-        if !client_secret.is_empty() {
-            auth["client_secret"] = json!(client_secret);
-        }
         let mut config = json!({ "host": host, "mailbox": mailbox, "auth": auth });
         if let Some(port) = port {
             config["port"] = json!(port);
         }
-        Ok((config, WizardCredential::OAuth))
+        Ok((config, WizardCredential::OAuth { client_secret }))
     } else {
-        let password = prompts.password(
-            "App password (Google Account → Security → 2-Step Verification → App passwords)",
+        let password = required_secret(
+            prompts.password(
+                "App password (Google Account → Security → 2-Step Verification → App passwords)",
+            ),
+            "App password",
         )?;
         let mut config = json!({
             "host": host,
@@ -301,12 +312,17 @@ fn caldav_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredential)
             "Token endpoint URL",
         )?;
         let client_id = required(prompts.input("OAuth client ID", None), "OAuth client ID")?;
-        let client_secret = prompts.input("OAuth client secret (blank if none)", Some(""))?;
+        let client_secret = prompts.password("OAuth client secret (blank if none)")?;
+        let client_secret = if client_secret.trim().is_empty() {
+            None
+        } else {
+            Some(client_secret)
+        };
         let scopes_raw = prompts.input(
             "OAuth scopes (comma or space-separated)",
             Some(CALDAV_SCOPE),
         )?;
-        let mut auth = json!({
+        let auth = json!({
             "kind": "oauth",
             "username": username,
             "auth_uri": auth_uri,
@@ -314,15 +330,12 @@ fn caldav_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredential)
             "client_id": client_id,
             "scopes": parse_scopes(&scopes_raw),
         });
-        if !client_secret.is_empty() {
-            auth["client_secret"] = json!(client_secret);
-        }
         Ok((
             json!({ "calendar_url": calendar_url, "auth": auth }),
-            WizardCredential::OAuth,
+            WizardCredential::OAuth { client_secret },
         ))
     } else {
-        let password = prompts.password("App password")?;
+        let password = required_secret(prompts.password("App password"), "App password")?;
         Ok((
             json!({
                 "calendar_url": calendar_url,
@@ -370,6 +383,18 @@ fn required(prompt: Result<String, String>, label: &str) -> Result<String, Strin
         return Err(format!("{label} is required"));
     }
     Ok(value.trim().to_string())
+}
+
+/// Prompt for a required secret, rejecting a canceled/empty/whitespace-only
+/// answer before anything is registered. Unlike [`required`], the value is
+/// preserved unchanged (no trimming) so a legitimate password is never
+/// altered.
+fn required_secret(prompt: Result<String, String>, label: &str) -> Result<String, String> {
+    let value = prompt?;
+    if value.trim().is_empty() {
+        return Err(format!("{label} is required"));
+    }
+    Ok(value)
 }
 
 /// Parse the optional IMAP port (blank → `None`); a non-numeric or

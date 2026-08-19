@@ -93,7 +93,7 @@ DTSTART:{start_ical}\nLOCATION:London\nEND:VEVENT\nEND:VCALENDAR"
 
     // Wait for the user entity + its `has_event` fact AND the events overlay
     // (issue #367) before asserting on the overlay below.
-    let (devansh, fact) = wait_for_has_event_overlay(&kg).await;
+    let (devansh, has_event_fact) = wait_for_has_event_overlay(&kg).await;
 
     let upcoming = kg.render_upcoming_section(devansh, 30, 10).await.unwrap();
     assert!(
@@ -103,7 +103,7 @@ DTSTART:{start_ical}\nLOCATION:London\nEND:VEVENT\nEND:VCALENDAR"
 
     // The event overlay is an Appointment (not a Reminder/Task).
     let event = kg
-        .get_event_by_fact(fact.id)
+        .get_event_by_fact(has_event_fact.id)
         .await
         .unwrap()
         .expect("overlay");

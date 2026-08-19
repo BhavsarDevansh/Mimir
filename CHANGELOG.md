@@ -6,7 +6,7 @@
 
 - The `mimir-connectors` calendar knowledge-graph tests (`calendar_kb_tests.rs`) no longer break their initial-cycle wait on the first non-empty fact list. The events overlay is inserted by `insert_event_if_absent` in a separate transaction after the fact commits, so under full-suite parallel load a test could observe the committed fact before the overlay commit and panic at `.expect("overlay")` on `get_event_by_fact`. Both tests now share a `wait_for_has_event_overlay` helper that polls `get_event_by_fact` until the overlay is queryable, closing the race the deterministic tombstone trigger from #320 did not cover and removing the duplicated wait-loop code (DRY).
 - Verified with 20/20 repeated `calendar_kb_tests` runs and a full `cargo test -p mimir-connectors --all-features` pass.
-- Docs updated in `docs/calendar-connector.md` and `docs/wiki/Testing-and-Benchmarks.md`.
+- Docs updated in `docs/calendar-connector.md`, `docs/wiki/Testing-and-Benchmarks.md`, and `docs/wiki/what-works-now.md` (the last open flaky-test issue is closed, so the "Known Limitations" flaky-tests row is removed).
 - Version bumped 0.124.2 → 0.124.3 (patch — bug fix).
 
 ## [0.124.2] — 2026-08-19

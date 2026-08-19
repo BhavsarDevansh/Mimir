@@ -270,6 +270,10 @@ mod tests {
             config,
             temp.path().join("config.toml"),
         ));
+
+        // The daemon API is bearer-authenticated (issue #281); load the same
+        // token the server reads at startup so `/stop` is accepted.
+        let api_token = mimir_core::auth::load_or_create_api_token().unwrap();
         let handle = tokio::spawn(async move { crate::server::start_server(config).await });
 
         // Poll until the server accepts a TCP connection (up to 5 s).
@@ -290,7 +294,11 @@ mod tests {
 
         // Send the stop request.
         let client = reqwest::Client::builder().http1_only().build().unwrap();
-        let res = client.post(format!("http://{}/stop", addr)).send().await;
+        let res = client
+            .post(format!("http://{}/stop", addr))
+            .bearer_auth(&api_token)
+            .send()
+            .await;
 
         match res {
             Ok(response) => {

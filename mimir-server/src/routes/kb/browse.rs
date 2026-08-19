@@ -7,15 +7,15 @@ use axum::{
     extract::{Query, State},
     response::Response,
 };
+use mimir_api_types::{
+    AuditQueryResponse, AuditRow, BrowseEdge, BrowseResponse, FactRow, ProfileGroup,
+    ProfileResponse,
+};
 
 use crate::error;
 use crate::routes::kb::helpers::{parse_datetime, resolve_entity_id, status_name};
 use crate::routes::kb::params::{AuditQueryParams, BrowseQueryParams, ProfileQueryParams};
 use crate::state::AppState;
-use mimir_api_types::{
-    AuditQueryResponse, AuditRow, BrowseEdge, BrowseResponse, FactRow, ProfileGroup,
-    ProfileResponse,
-};
 
 pub async fn kb_browse_handler(
     State(state): State<Arc<AppState>>,

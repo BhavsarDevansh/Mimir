@@ -39,4 +39,8 @@ mod http_client;
 pub mod pkce;
 mod refresh;
 
+/// The refresh grant is only used by the Calendar and Email backends; gate
+/// the re-export to those callers (issue #351) so the `oauth`-only
+/// combination (e.g. the CLI PKCE flow, A4 / #205) stays warning-free.
+#[cfg(any(feature = "calendar", feature = "gmail"))]
 pub(crate) use refresh::resolve_access_token;

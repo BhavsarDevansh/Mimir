@@ -27,6 +27,7 @@ mod query;
 mod sync;
 #[cfg(test)]
 mod tests;
+mod wizard;
 
 pub use actions::handle_connector_act;
 pub use add::handle_connector_add;
@@ -38,6 +39,7 @@ pub use lifecycle::{
 };
 pub use query::{handle_connector_list, handle_connector_status};
 pub use sync::handle_connector_sync;
+pub use wizard::handle_connector_add_wizard;
 
 /// Resolve a connector slug to its full row, exiting with a clear message
 /// when no registered instance matches.

@@ -382,6 +382,16 @@ Manage connector instances (email, calendar, photos) through the daemon over HTT
 
 Register a new connector instance. The instance is created in `Setup` — run `mimir connector resume` to activate it, then `sync` to ingest.
 
+**Interactive wizard (recommended for first-time setup):** run `mimir connector add` with no arguments and it guides you through everything — pick the connector type from the daemon's catalog (e.g. `Gmail (imap)`), confirm the display name (defaults to the type, e.g. `Gmail`), confirm the slug (defaults to the name, e.g. `gmail`), answer the per-type questions (Gmail IMAP defaults to `imap.gmail.com:993` / `INBOX`), and choose authentication. For Gmail, OAuth browser login is the recommended option: the wizard pre-fills Google's authorization and token endpoints, you paste your own OAuth client ID from the Google Cloud Console, and the CLI launches your browser at the authorization URL (the URL is printed first, so you can open it manually on any device — including headless/SSH sessions). The loopback redirect is handled automatically and the exchanged tokens are stored by the daemon. An app-password path is also offered as a fallback. Local backends (e.g. Photos) need no credential. The wizard only runs on a terminal — with piped input it fails fast and points you at the flag form below.
+
+```bash
+mimir connector add                       # interactive wizard
+```
+
+The wizard registers the connector as read-only: it only imports data from the service, and write-back actions run only when you explicitly invoke `mimir connector act <slug>`.
+
+The flag form gives the same result non-interactively, which is what scripts and power users use:
+
 ```bash
 # Photos: watch a local directory
 mimir connector add photos --backend local watch_dir=/home/me/Pictures

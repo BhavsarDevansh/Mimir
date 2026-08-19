@@ -64,7 +64,7 @@ This is a library component today (in `mimir-connectors`); the daemon wiring tha
 ## Authentication
 
 - **App password** — best for most providers. Generate an app-specific password in your provider's security settings (Gmail calls them "app passwords"); Mimir uses standard IMAP `LOGIN`. Your username is in the connector config; the password is stored securely.
-- **OAuth (Google / Microsoft)** — the connector stores your access + refresh token and refreshes the access token automatically before it expires, so you stay connected without re-authorising. The first token is obtained via the interactive PKCE sign-in flow (A4 / #205): `mimir connector add gmail … auth.kind=oauth …` opens the provider's authorize URL in your browser, receives the redirect on a loopback listener, and stores the exchanged token bundle.
+- **OAuth (Google / Microsoft)** — the connector stores your access + refresh token and refreshes the access token automatically before it expires, so you stay connected without re-authorising. The first token is obtained via the interactive PKCE sign-in flow (A4 / #205): running `mimir connector add` with no arguments selects Gmail, offers OAuth browser login with Google's authorization/token endpoints pre-filled (you supply your own OAuth client ID from the Google Cloud Console), launches your browser at the printed authorize URL, and stores the exchanged token bundle. The flag form `mimir connector add gmail … auth.kind=oauth …` runs the same flow.
 
 ## Privacy
 

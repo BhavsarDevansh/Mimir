@@ -98,6 +98,11 @@ Status responses carry a derived `item_count`: the number of `sources` rows attr
 The `mimir connector` command group (A3 / #204) plumbs these routes so you never need to call the daemon by hand. Every subcommand except `remove` supports `--json` for scriptable output; slug-based commands resolve slugs client-side against the instance list. See [CLI Commands](cli-commands.md) for the full reference with examples.
 
 ```bash
+# Interactive wizard (recommended): picks the type from the daemon's catalog,
+# defaults the name/slug, and drives authentication — browser OAuth for Gmail
+# (Google endpoints pre-filled, your own OAuth client ID) or app passwords
+mimir connector add
+
 # Add (created in Setup — resume activates it)
 mimir connector add gmail --backend imap host=imap.gmail.com auth.kind=app_password auth.username=me@gmail.com
 
@@ -118,6 +123,10 @@ mimir connector forget gmail --yes       # trashes the connector's facts (recove
 # Write-back (Calendar)
 mimir connector act calendar create_event '{"summary":"Lunch","start":"2026-08-12T12:00:00Z"}'
 ```
+
+Running `mimir connector add` with no arguments starts an interactive wizard: it lists the daemon's supported `(type, backend)` pairs for you to pick from, confirms the display name and slug (defaults from the type and name), asks the per-backend questions (Gmail IMAP defaults to `imap.gmail.com:993`/`INBOX`), and guides authentication — OAuth browser login is the recommended Gmail path (the wizard pre-fills Google's authorization/token endpoints, you supply your own OAuth client ID from the Google Cloud Console, and the CLI launches the browser at the printed authorize URL, which you can also open manually on any device), app passwords are prompted hidden, and local backends (Photos) need no credential. The wizard requires a terminal; with piped stdin it fails fast and points at the flag form.
+
+Connectors are **read-only by default**: the framework imports data from the service into your local knowledge graph and never writes back to the service. Write-back actions (e.g. Calendar `create_event`) run only when you explicitly dispatch them with `mimir connector act <slug>`, and the Email connector has no write-back at all. Credentials are stored by the daemon's secret store — per-slug files with `0600` permissions in a `0700` directory, refused if the permissions are ever loosened; see [Connector Secret Store](../connector-secret-store.md) for details (at-rest encryption is deferred to the keyring issue, #188).
 
 Non-OAuth configs (`auth.kind=app_password`/`api_token`) prompt for the credential via `inquire` and ingest it through the daemon's token route; supply it non-interactively with `--password-stdin`/`--token-stdin` (piped) or `MIMIR_CONNECTOR_PASSWORD`/`MIMIR_CONNECTOR_TOKEN` (env) — the `--password`/`--token` flags also work but are visible in the process list and shell history (issue #270) — or run `mimir connector auth <slug>` later to complete or refresh credentials on an existing instance. OAuth configs (`auth.kind=oauth`) run the interactive PKCE login (A4 / #205) instead of prompting: the CLI opens the provider's authorize URL in your browser (the URL is printed first, so headless/SSH sessions can open it manually), receives the redirect on an ephemeral loopback listener, exchanges the code, and POSTs the token bundle to the daemon — the credentials are stored and `auth_state` becomes `authenticated`, but the instance stays in `Setup` until you run `mimir connector resume <slug>` to start its runner. Re-authing an expired OAuth connector is the same flow: `mimir connector auth <slug> auth.kind=oauth auth.auth_uri=… auth.token_endpoint=… auth.client_id=…` (the daemon does not expose the stored config, so the OAuth fields are re-supplied); after re-authing, run `mimir connector resume <slug>` if the connector is not running.
 

@@ -6,8 +6,18 @@ A Connector is a bridge between the agent and an external service (email, calend
 ## Onboarding Flow
 
 ### Adding a Connector
+
+The default path is the interactive wizard — `mimir connector add` with no arguments lists the daemon's supported `(connector_type, backend)` pairs for selection, confirms the display name (defaults to the type) and slug (defaults to the slugified name), asks the per-backend questions with sensible defaults, and drives authentication. For Gmail IMAP it offers OAuth browser login first (Google authorization/token endpoints pre-filled; the user supplies their own OAuth client ID from the Google Cloud Console), launching the browser at the printed authorize URL — which can also be opened manually on any device — with an app-password fallback. Local backends (Photos) need no credential.
+
 ```bash
-$ mimir connector add gmail --backend <b> auth.kind=oauth auth.auth_uri=https://accounts.google.com/o/oauth2/v2/auth auth.token_endpoint=https://oauth2.googleapis.com/token auth.client_id=... auth.username=you@gmail.com
+$ mimir connector add
+Connector type: Gmail (imap)
+Display name (Gmail):
+Slug (gmail):
+IMAP server host (imap.gmail.com):
+...
+Authentication: [OAuth 2.0 — browser login (recommended)]
+OAuth client ID (Google Cloud Console → Credentials → OAuth client): ...
 Connector: Gmail
 Required permissions: read emails, read labels
 If the browser does not open automatically, visit:
@@ -21,6 +31,7 @@ URL: http://homeassistant.local:8123
 Long-lived access token: ████████
 Connected! Found 47 entities (lights, sensors, cameras).
 ```
+The flag form (`mimir connector add gmail --backend imap auth.kind=oauth …`) remains for scripts and non-interactive setup; it runs the same registration and credential-ingest core.
 The OAuth flow (A4 / #205) runs entirely in the CLI process: it binds an ephemeral loopback listener on `127.0.0.1`, opens the provider's authorize URL in the default browser (the URL is printed first, so headless/SSH sessions can open it manually), receives the redirect, exchanges the code, and POSTs the token bundle to the daemon — the user never copies a code. A canceled flow exits with nothing created.
 
 ### Checking Status

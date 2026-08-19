@@ -1075,3 +1075,52 @@ async fn connector_add_stdin_beats_env_secret() {
         .count();
     assert_eq!(token_requests, 1, "the piped secret must be ingested once");
 }
+
+#[tokio::test]
+async fn connector_add_without_args_requires_terminal() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+
+    // No positional args → the interactive wizard; with piped stdin there is
+    // no prompt channel, so it must fail fast with a pointer to the flag form
+    // instead of hanging or erroring mid-prompt.
+    let (stdout, stderr, status) = run_mimir(&["connector", "add"], &server.uri());
+    assert!(!status.success(), "wizard must refuse non-TTY stdin");
+    assert!(
+        stderr.contains("interactive mode requires a terminal"),
+        "expected a non-TTY hint, got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("connector add --help"),
+        "expected a pointer to the flag form, got stderr:\n{stderr}"
+    );
+    assert!(stdout.is_empty(), "no JSON/stdout expected: {stdout}");
+}
+
+#[tokio::test]
+async fn connector_add_partial_args_guides_to_wizard() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+
+    // Type without backend.
+    let (_stdout, stderr, status) = run_mimir(&["connector", "add", "gmail"], &server.uri());
+    assert!(!status.success(), "type without backend must fail");
+    assert!(
+        stderr.contains("--backend"),
+        "expected a --backend hint, got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("interactive wizard"),
+        "expected a wizard pointer, got stderr:\n{stderr}"
+    );
+
+    // Backend without a type.
+    let (stdout, stderr, status) =
+        run_mimir(&["connector", "add", "--backend", "imap"], &server.uri());
+    assert!(!status.success(), "backend without type must fail");
+    assert!(
+        stderr.contains("connector type"),
+        "expected a type hint, got stderr:\n{stderr}"
+    );
+    assert!(stdout.is_empty(), "no output expected: {stdout}");
+}

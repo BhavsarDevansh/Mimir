@@ -94,12 +94,48 @@ pub(crate) async fn handle_connector_add_with_opener(
     };
     let secret = add_secret(&merged, password, token, password_stdin, token_stdin);
 
+    register_and_ingest(
+        &client,
+        connector_type,
+        backend,
+        slug.clone(),
+        display_name,
+        merged,
+        kind,
+        oauth_bundle,
+        secret,
+        json,
+    )
+    .await;
+}
+
+/// Register the connector instance and ingest its credential, printing the
+/// summary. Shared by the flag-based `add` flow and the interactive wizard:
+/// the caller resolves the `(type, backend, name, slug, config)` and the
+/// credential (OAuth bundle or secret) *before* anything is registered, so a
+/// canceled prompt or aborted OAuth flow exits with nothing created.
+///
+/// The daemon creates the instance in `Setup` (activation is the `resume`
+/// action, A2 / #203); credential ingest flips it to `authenticated`.
+#[allow(clippy::too_many_arguments)] // one argument per resolved add-flow input (flag form and wizard share it)
+pub(crate) async fn register_and_ingest(
+    client: &mimir_client::MimirClient,
+    connector_type: String,
+    backend: String,
+    slug: String,
+    display_name: String,
+    config_json: serde_json::Value,
+    kind: CredentialKind,
+    oauth_bundle: Option<mimir_connectors::SecretBundle>,
+    secret: Option<String>,
+    json: bool,
+) -> mimir_api_types::ConnectorResponse {
     let request = AddConnectorRequest {
         connector_type,
         backend,
         slug: slug.clone(),
         display_name,
-        config_json: merged.clone(),
+        config_json,
     };
     let created = client
         .connector_add(request)
@@ -111,7 +147,7 @@ pub(crate) async fn handle_connector_add_with_opener(
     // Credential ingest (secret already resolved pre-create).
     match (kind, oauth_bundle, secret) {
         (CredentialKind::OAuth, Some(bundle), _) => {
-            output = ingest_oauth_bundle(&client, id, &bundle).await;
+            output = ingest_oauth_bundle(client, id, &bundle).await;
         }
         (CredentialKind::AppPassword, None, Some(secret)) => {
             output = client
@@ -139,15 +175,16 @@ pub(crate) async fn handle_connector_add_with_opener(
 
     if json {
         print_json(&output);
-        return;
+    } else {
+        println!(
+            "Added connector '{slug}' ({} / {}, id {}, status {}, auth {}).",
+            output.connector_type, output.backend, output.id, output.status, output.auth_state
+        );
+        println!(
+            "Next: run `mimir connector resume {slug}` to activate it, then `mimir connector sync {slug}` to sync."
+        );
     }
-    println!(
-        "Added connector '{slug}' ({} / {}, id {}, status {}, auth {}).",
-        output.connector_type, output.backend, output.id, output.status, output.auth_state
-    );
-    println!(
-        "Next: run `mimir connector resume {slug}` to activate it, then `mimir connector sync {slug}` to sync."
-    );
+    output
 }
 
 /// Pre-flight check against the daemon's catalog so a typo'd
@@ -176,9 +213,7 @@ async fn validate_backend(client: &MimirClient, connector_type: &str, backend: &
         .collect::<Vec<_>>();
     let message = if type_backends.is_empty() {
         if catalog.entries.is_empty() {
-            exit_with_error(
-                "the daemon has no connector backends registered (check its build features)",
-            );
+            exit_with_error(no_backends_message());
         }
         let supported = catalog
             .entries
@@ -194,6 +229,12 @@ async fn validate_backend(client: &MimirClient, connector_type: &str, backend: &
         )
     };
     exit_with_error(message);
+}
+
+/// Shared message when the daemon has no connector backends registered
+/// (used by the flag form and the interactive wizard — DRY).
+pub(crate) fn no_backends_message() -> &'static str {
+    "the daemon has no connector backends registered (check its build features)"
 }
 
 /// Render the exit message when credential ingest fails after the instance

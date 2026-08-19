@@ -365,11 +365,12 @@ pub enum SkillCommands {
 pub enum ConnectorCommands {
     /// Register a new connector instance.
     Add {
-        /// Connector type (gmail, calendar, photos).
-        connector_type: String,
-        /// Backend (run `mimir connector catalog` for the daemon's supported set).
+        /// Connector type (gmail, calendar, photos). Omit together with
+        /// `--backend` to run the interactive wizard.
+        connector_type: Option<String>,
+        /// Backend (run `mimir connector catalog` for the daemon's supported set). Omit together with the type to run the interactive wizard.
         #[arg(long)]
-        backend: String,
+        backend: Option<String>,
         /// Configuration as `key=value` pairs (dotted keys nest, e.g. `auth.kind=app_password`).
         config: Vec<String>,
         /// Full backend configuration as a JSON object (key=value pairs override it).

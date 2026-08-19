@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.124.0] — 2026-08-19
+
+### Feature: interactive `mimir connector add` wizard
+
+- `mimir connector add` with no arguments now runs an interactive wizard instead of failing on missing required arguments: it lists the daemon's supported `(connector_type, backend)` pairs from the live catalog for selection, prompts for the display name (defaults to the type) and slug (defaults to the slugified name), asks the per-backend questions with sensible defaults, and drives authentication. Gmail IMAP is offered with OAuth browser login first (Google authorization/token endpoints pre-filled — the user supplies only their own OAuth client ID; the CLI prints the authorize URL and opens the browser, with the URL also available to open manually on any device) and an app-password fallback; CalDAV offers app password or OAuth; local backends (Photos) need no credential. The wizard runs on the same shared register+ingest core as the flag form, so a canceled prompt or aborted OAuth flow still exits with nothing created.
+- The wizard requires a terminal: with piped stdin it fails fast with a pointer to the flag form (`mimir connector add gmail --backend imap …`), which remains unchanged and fully non-interactive. Partial arguments (`type` without `--backend`, or vice versa) now produce a friendly hint instead of a bare clap error.
+- The created instance is read-only by design: connectors only import data from the service, and write-back runs only via an explicit `mimir connector act <slug>`; the wizard's summary says so. Credentials continue to be stored by the daemon's secret store (per-slug `0600` files in a `0700` directory, fail-closed on loosened permissions).
+- Tests: scripted-prompt driver exercises the full wizard path (catalog → prompts → PKCE/app-password → register → token ingest) in unit tests, plus binary-level CLI tests for the non-TTY guard and partial-argument hints. Docs updated in `docs/cli.md`, `docs/email-connector.md`, `docs/wiki/cli-commands.md`, `docs/wiki/connectors.md`, `docs/wiki/email-connector.md`.
+- Version bumped 0.123.0 → 0.124.0 (minor — new feature).
+
 ## [0.123.0] — 2026-08-19
 
 ### Remove the autonomous development loop from the repository

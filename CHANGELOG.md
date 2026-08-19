@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.122.1] — 2026-08-19
+
+### Docs: clarify the lookup-name vs wire-string contract in knowledge-graph-schema (PR #381 review)
+
+- `docs/knowledge-graph-schema.md` now states that the `ChangeType` / `ChangedBy` / `EntityType` enum conversions align the lookup identifiers across storage and the API/tool contracts (via `TryFrom<i16>` discriminants), while endpoint string representations may differ — e.g. audit SQL responses report `changed_by` as the lowercase lookup name (`user`), whereas fact-detail output uses the title-case variant string (`User`).
+- Version bumped 0.122.0 → 0.122.1 (patch — documentation update).
+
 ## [0.122.0] — 2026-08-19
 
 ### Refactor: typed enum→wire-string mapping for all remaining lookup enums (issue #358)

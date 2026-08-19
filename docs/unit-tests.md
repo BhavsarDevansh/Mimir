@@ -70,7 +70,7 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 - `chat.rs`: 6 tests for `format_markdown_for_terminal` fence spacing (start, middle, consecutive fences, end, empty input, no fences).
 - `cli_util.rs`: 1 wiremock test — `client_with_token` falls back to a tokenless client when the token is rejected as an invalid header value.
 
-69 bin tests (up from 15).
+69 bin tests (up from 29).
 
 ## Running
 

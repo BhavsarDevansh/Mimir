@@ -22,6 +22,7 @@ use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::enums::{
     ConnectorAuthState, ConnectorStatus, ConnectorType, EventType,
 };
+use mimir_knowledge::models::fact::Fact;
 use mimir_knowledge::normalize::NormalizedFact;
 
 mod common;
@@ -90,23 +91,10 @@ DTSTART:{start_ical}\nLOCATION:London\nEND:VEVENT\nEND:VCALENDAR"
 
     assert_eq!(supervisor.restore().await.unwrap(), 1);
 
-    // Wait for the user entity + its `has_event` fact to land.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    loop {
-        let devansh = entity_id(&kg, "Devansh").await;
-        if let Some(uid) = devansh {
-            if !kg.get_facts_by_subject(uid, 100).await.unwrap().is_empty() {
-                break;
-            }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "event fact never landed"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    // Wait for the user entity + its `has_event` fact AND the events overlay
+    // (issue #367) before asserting on the overlay below.
+    let (devansh, fact) = wait_for_has_event_overlay(&kg).await;
 
-    let devansh = entity_id(&kg, "Devansh").await.expect("Devansh entity");
     let upcoming = kg.render_upcoming_section(devansh, 30, 10).await.unwrap();
     assert!(
         upcoming.contains("Conference"),
@@ -114,13 +102,6 @@ DTSTART:{start_ical}\nLOCATION:London\nEND:VEVENT\nEND:VCALENDAR"
     );
 
     // The event overlay is an Appointment (not a Reminder/Task).
-    let fact = kg
-        .get_facts_by_subject(devansh, 100)
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|f| f.object_literal.is_none())
-        .expect("has_event fact");
     let event = kg
         .get_event_by_fact(fact.id)
         .await
@@ -150,6 +131,40 @@ DTSTART:{start_ical}\nLOCATION:London\nEND:VEVENT\nEND:VCALENDAR"
 async fn entity_id(kg: &KnowledgeGraph, name: &str) -> Option<i32> {
     let results = kg.search_entities(name, 10).await.unwrap();
     results.into_iter().next().map(|r| r.entity.id)
+}
+
+/// Wait for the user entity + its `has_event` fact AND the events overlay to
+/// land, returning the user entity id and the `has_event` fact.
+///
+/// The overlay is inserted by `insert_event_if_absent` in a separate
+/// transaction after the fact commits (mimir-knowledge normalize pipeline),
+/// so a wait on the fact list alone can observe the committed fact before the
+/// overlay commits — asserting on the overlay immediately afterwards would
+/// race the `.expect("overlay")` under scheduler load (issue #367). Waiting
+/// for the overlay itself (polling `get_event_by_fact`) closes that window:
+/// once it is queryable the fact is committed and the overlay is stable.
+async fn wait_for_has_event_overlay(kg: &KnowledgeGraph) -> (i32, Fact) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let devansh = entity_id(kg, "Devansh").await;
+        if let Some(uid) = devansh {
+            for fact in kg.get_facts_by_subject(uid, 100).await.unwrap() {
+                let is_has_event = kg
+                    .relationship_type_name(fact.relationship_type_id)
+                    .await
+                    .as_deref()
+                    == Some("has_event");
+                if is_has_event && kg.get_event_by_fact(fact.id).await.unwrap().is_some() {
+                    return (uid, fact);
+                }
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "event overlay never landed"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 /// Issue #247: a server-side deletion (CalDAV sync-collection tombstone)
@@ -231,34 +246,15 @@ DTSTART:{start_ical}\nLOCATION:London\nEND:VEVENT\nEND:VCALENDAR"
 
     assert_eq!(supervisor.restore().await.unwrap(), 1);
 
-    // Wait for the user entity + its `has_event` fact to land.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    let devansh = loop {
-        let devansh = entity_id(&kg, "Devansh").await;
-        if let Some(uid) = devansh {
-            if !kg.get_facts_by_subject(uid, 100).await.unwrap().is_empty() {
-                break uid;
-            }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "event fact never landed"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    };
+    // Wait for the user entity + its `has_event` fact AND the events overlay
+    // (issue #367) before asserting on the overlay below.
+    let (devansh, has_event_fact) = wait_for_has_event_overlay(&kg).await;
 
     let upcoming = kg.render_upcoming_section(devansh, 30, 10).await.unwrap();
     assert!(
         upcoming.contains("Dentist"),
         "future event surfaces in Upcoming: {upcoming}"
     );
-    let has_event_fact = kg
-        .get_facts_by_subject(devansh, 100)
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|f| f.object_literal.is_none())
-        .expect("has_event fact");
     let event = kg
         .get_event_by_fact(has_event_fact.id)
         .await

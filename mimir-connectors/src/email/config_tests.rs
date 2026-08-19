@@ -137,6 +137,7 @@ async fn auth_method_mismatch_is_an_error() {
         access_token: "t".into(),
         refresh_token: None,
         expires_at: None,
+        client_secret: None,
     };
     assert_eq!(
         connector
@@ -204,6 +205,7 @@ async fn resolve_auth_oauth_reuses_unexpired_token() {
         access_token: "ya29.access".into(),
         refresh_token: Some("rt".into()),
         expires_at: Some(Utc::now() + chrono::Duration::hours(1)),
+        client_secret: None,
     };
     let (auth, refreshed) = connector.resolve_auth(&bundle).await.expect("ok");
     assert!(refreshed.is_none(), "no refresh expected for a live token");
@@ -253,6 +255,7 @@ async fn resolve_auth_oauth_refreshes_expired_token() {
         access_token: "stale".into(),
         refresh_token: Some("rt".into()),
         expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
+        client_secret: Some("secret".into()),
     };
     let (auth, refreshed) = connector.resolve_auth(&bundle).await.expect("refresh");
     match auth {

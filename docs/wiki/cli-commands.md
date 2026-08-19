@@ -382,6 +382,16 @@ Manage connector instances (email, calendar, photos) through the daemon over HTT
 
 Register a new connector instance. The instance is created in `Setup` — run `mimir connector resume` to activate it, then `sync` to ingest.
 
+**Interactive wizard (recommended for first-time setup):** run `mimir connector add` with no arguments and it guides you through everything — pick the connector type from the daemon's catalog (e.g. `Gmail (imap)`), confirm the display name (defaults to the type, e.g. `Gmail`), confirm the slug (defaults to the name, e.g. `gmail`), answer the per-type questions (Gmail IMAP defaults to `imap.gmail.com:993` / `INBOX`), and choose authentication. For Gmail, OAuth browser login is the recommended option: the wizard pre-fills Google's authorization and token endpoints, you paste your own OAuth client ID from the Google Cloud Console, and the CLI launches your browser at the authorization URL (the URL is printed first, so you can also open it manually — but the browser must run on the machine running `mimir`, because the PKCE callback binds to `127.0.0.1`). The loopback redirect is handled automatically and the exchanged tokens are stored by the daemon. An app-password path is also offered as a fallback. Local backends (e.g. Photos) need no credential. The wizard only runs on a terminal — with piped input it fails fast and points you at the flag form below.
+
+```bash
+mimir connector add                       # interactive wizard
+```
+
+The wizard registers the connector as read-only: it only imports data from the service, and write-back actions run only when you explicitly invoke `mimir connector act <slug>`.
+
+The flag form gives the same result non-interactively, which is what scripts and power users use:
+
 ```bash
 # Photos: watch a local directory
 mimir connector add photos --backend local watch_dir=/home/me/Pictures
@@ -399,7 +409,7 @@ MIMIR_CONNECTOR_PASSWORD="$(cat secret.txt)" mimir connector add gmail --backend
 mimir connector add calendar --backend caldav --config-json '{"calendar_url":"https://dav.example.com/cal","auth":{"kind":"app_password","username":"me@example.com"}}' --slug work-cal
 ```
 
-Config is given as `key=value` pairs with dotted nesting (`auth.kind=app_password`) plus an optional `--config-json` base object. Scalar values are parsed as booleans, numbers, or strings; values starting with `[` or `{` are parsed as JSON arrays/objects (e.g. `'auth.scopes=["a","b"]'`), falling back to a plain string when the JSON does not parse (issue #289). OAuth configs (`auth.kind=oauth`) run the interactive PKCE login (A4 / #205) instead of prompting: the CLI opens the provider's authorize URL in your browser (printed first for headless/SSH sessions), receives the redirect on an ephemeral loopback listener, exchanges the code, and POSTs the token bundle to the daemon — the instance becomes `authenticated`. The flow waits up to 5 minutes for the callback; if it times out, the flow aborts and you re-run the command to start a new login. `--slug` defaults to the connector type and `--name` to its title-cased form.
+Config is given as `key=value` pairs with dotted nesting (`auth.kind=app_password`) plus an optional `--config-json` base object. Scalar values are parsed as booleans, numbers, or strings; values starting with `[` or `{` are parsed as JSON arrays/objects (e.g. `'auth.scopes=["a","b"]'`), falling back to a plain string when the JSON does not parse (issue #289). OAuth configs (`auth.kind=oauth`) run the interactive PKCE login (A4 / #205) instead of prompting: the CLI opens the provider's authorize URL in your browser (printed first, so it can also be opened manually — but the browser must run on the machine running `mimir`, because the callback binds to `127.0.0.1`), receives the redirect on an ephemeral loopback listener, exchanges the code, and POSTs the token bundle to the daemon — the instance becomes `authenticated`. The flow waits up to 5 minutes for the callback; if it times out, the flow aborts and you re-run the command to start a new login. `--slug` defaults to the connector type and `--name` to its title-cased form.
 
 Before prompting for credentials, `add` asks the daemon for its catalog and fails fast if the requested `(connector_type, backend)` pair is not registered — no more discovering a typo after an interactive credential flow (issue #271).
 

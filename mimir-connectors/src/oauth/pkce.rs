@@ -169,7 +169,7 @@ pub async fn run_pkce_flow(
         .await
         .map_err(|e| map_token_error(e, "token exchange"))?;
 
-    Ok(into_bundle(&response, None))
+    Ok(into_bundle(&response, None, config.client_secret.clone()))
 }
 
 /// Outcome of a single loopback connection.
@@ -341,7 +341,8 @@ mod tests {
     use crate::test_utils::{
         callback_url, mount_token_endpoint, parse_authorize_url, self_callback_opener,
     };
-    use wiremock::MockServer;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn flow_config(token_endpoint: &str) -> PkceFlowConfig {
         PkceFlowConfig {
@@ -444,16 +445,55 @@ mod tests {
             access_token,
             refresh_token,
             expires_at,
+            client_secret,
         } = bundle
         else {
             panic!("expected OAuth bundle");
         };
         assert_eq!(access_token, "ya29.access");
         assert_eq!(refresh_token.as_deref(), Some("rt"));
+        assert_eq!(client_secret.as_deref(), None);
         assert!(
             expires_at.is_some_and(|exp| exp > chrono::Utc::now()),
             "expiry must be in the future"
         );
+    }
+
+    #[tokio::test]
+    async fn run_pkce_flow_carries_client_secret_into_bundle() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            // The oauth2 `BasicClient` sends the client secret via HTTP
+            // Basic auth (base64 of `client_id:client_secret`).
+            .and(header(
+                "authorization",
+                "Basic dGVzdC1jbGllbnQ6Y2xpZW50LXNlY3JldA==",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "ya29.access",
+                "token_type": "Bearer",
+                "refresh_token": "rt",
+                "expires_in": 3600,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut config = flow_config(&format!("{}/token", server.uri()));
+        config.client_secret = Some("client-secret".into());
+
+        let bundle = run_pkce_flow(
+            &config,
+            &test_http(),
+            &self_callback_opener("auth-code"),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("flow");
+        let SecretBundle::OAuth { client_secret, .. } = bundle else {
+            panic!("expected OAuth bundle");
+        };
+        assert_eq!(client_secret.as_deref(), Some("client-secret"));
     }
 
     #[tokio::test]

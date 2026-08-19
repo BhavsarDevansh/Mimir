@@ -571,6 +571,40 @@ async fn test_connector_tokens_bad_expiry_returns_400() {
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn test_connector_tokens_oauth_ingest_stores_client_secret_in_bundle() {
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock).await;
+    let app = mimir_server::build_app(state.clone());
+    let created = create_test_connector(&app, "oauth-secret", serde_json::json!({})).await;
+
+    let resp = connector_sub_post(
+        app,
+        created.id,
+        "tokens",
+        Some(serde_json::json!({
+            "kind": "oauth",
+            "access_token": "at",
+            "refresh_token": "rt",
+            "client_secret": "s3cret",
+        })),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // The client secret must live in the secret store bundle, not the
+    // connector row's config_json (which stays empty).
+    let secret_store = state.connector_supervisor.secret_store().unwrap();
+    let loaded = secret_store.load("oauth-secret").await.unwrap().unwrap();
+    match loaded {
+        mimir_connectors::SecretBundle::OAuth { client_secret, .. } => {
+            assert_eq!(client_secret.as_deref(), Some("s3cret"));
+        }
+        other => panic!("expected OAuth bundle, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn test_connector_actions_dispatch() {
     let mock = Arc::new(MockLlmClient::builder().build());

@@ -127,6 +127,7 @@ async fn full_pkce_flow_round_trips_against_mock_server() {
         access_token,
         refresh_token,
         expires_at,
+        ..
     } = bundle
     else {
         panic!("expected an OAuth bundle");

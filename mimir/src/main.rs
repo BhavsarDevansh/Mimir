@@ -182,21 +182,32 @@ async fn main() {
                 json,
             } => {
                 ensure_daemon(&base_url, &mut daemon_started).await;
-                connector::handle_connector_add(
-                    connector_type,
-                    backend,
-                    config,
-                    config_json,
-                    slug,
-                    name,
-                    password,
-                    password_stdin,
-                    token,
-                    token_stdin,
-                    json,
-                    &base_url,
-                )
-                .await;
+                match (connector_type, backend) {
+                    (Some(connector_type), Some(backend)) => {
+                        connector::handle_connector_add(
+                            connector_type,
+                            backend,
+                            config,
+                            config_json,
+                            slug,
+                            name,
+                            password,
+                            password_stdin,
+                            token,
+                            token_stdin,
+                            json,
+                            &base_url,
+                        )
+                        .await;
+                    }
+                    (None, None) => connector::handle_connector_add_wizard(json, &base_url).await,
+                    (None, Some(_)) => commands::exit_with_error(
+                        "--backend requires a connector type — run `mimir connector add gmail --backend imap` (or just `mimir connector add` for the interactive wizard)",
+                    ),
+                    (Some(_), None) => commands::exit_with_error(
+                        "a connector type requires --backend — run `mimir connector add gmail --backend imap` (or just `mimir connector add` for the interactive wizard)",
+                    ),
+                }
             }
             cli::ConnectorCommands::List { json } => {
                 ensure_daemon(&base_url, &mut daemon_started).await;

@@ -24,10 +24,12 @@ fn secret_bundle_oauth_round_trips() {
         access_token: "ya29.access".to_string(),
         refresh_token: Some("1//refresh".to_string()),
         expires_at: Some(Utc.with_ymd_and_hms(2026, 7, 17, 12, 0, 0).unwrap()),
+        client_secret: Some("client-secret".to_string()),
     };
     let json = serde_json::to_value(&bundle).unwrap();
     assert_eq!(json["kind"], "oauth");
     assert_eq!(json["access_token"], "ya29.access");
+    assert_eq!(json["client_secret"], "client-secret");
     let back: SecretBundle = serde_json::from_value(json).unwrap();
     assert_eq!(bundle, back);
 }
@@ -39,10 +41,30 @@ fn secret_bundle_oauth_nullable_fields_round_trip() {
         access_token: "tok".to_string(),
         refresh_token: None,
         expires_at: None,
+        client_secret: None,
     };
     let json = serde_json::to_string(&bundle).unwrap();
     let back: SecretBundle = serde_json::from_str(&json).unwrap();
     assert_eq!(bundle, back);
+}
+
+#[test]
+fn secret_bundle_oauth_loads_pre_bundle_client_secret_files() {
+    // Bundles persisted before the client secret moved into the store have
+    // no `client_secret` field; serde `default` must keep them loadable.
+    let json = serde_json::json!({
+        "kind": "oauth",
+        "access_token": "tok",
+        "refresh_token": "rt",
+    });
+    let bundle: SecretBundle = serde_json::from_value(json).unwrap();
+    assert!(matches!(
+        bundle,
+        SecretBundle::OAuth {
+            client_secret: None,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -78,6 +100,7 @@ fn oauth_bundle() -> SecretBundle {
         access_token: "ya29.access".to_string(),
         refresh_token: Some("1//refresh".to_string()),
         expires_at: Some(Utc.with_ymd_and_hms(2026, 7, 17, 12, 0, 0).unwrap()),
+        client_secret: None,
     }
 }
 

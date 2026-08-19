@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-08-18
+> **Last updated:** 2026-08-19
 >
-> **Version:** 0.121.3
+> **Version:** 0.121.4
 >
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in `CHANGELOG.md`; this file deliberately does not repeat either.
 
@@ -371,7 +371,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 
 | Work item | Issue |
 |-----------|-------|
-| Intra-doc link warning in `mimir-server` | [#348](https://github.com/BhavsarDevansh/Mimir/issues/348) |
 | Dead-code clippy warnings in `mimir-server` test helpers | [#349](https://github.com/BhavsarDevansh/Mimir/issues/349) |
 | `tabled` 0.21 / proc-macro-error2 future rejection | [#275](https://github.com/BhavsarDevansh/Mimir/issues/275) |
 

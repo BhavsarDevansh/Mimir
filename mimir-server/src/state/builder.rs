@@ -611,8 +611,8 @@ impl AppState {
     /// Build `AppState` from [`ReloadableConfig`] with an injected LLM backend
     /// and API token.
     ///
-    /// Primarily useful for tests that need to supply a [`MockLlmClient`](mimir_core::llm::mock::MockLlmClient)
-    /// and a known token without relying on sentinel strings or config hacks.
+    /// Primarily useful for tests that need to supply a mock LLM client and a
+    /// known token without relying on sentinel strings or config hacks.
     ///
     /// Startup order is a composition of the per-subsystem init helpers:
     /// context manager → tool registry → knowledge graph → job queue → agent

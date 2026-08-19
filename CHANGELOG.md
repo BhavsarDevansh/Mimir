@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.123.0] — 2026-08-19
+
+### Remove the autonomous development loop from the repository
+
+- The autonomous development loop was a local-only developer tool and never belonged in the codebase: `scripts/autonomous-loop.sh`, its systemd units (`scripts/systemd/mimir-autonomous.{service,timer}`), its test (`scripts/tests/autonomous-loop_test.sh`), and the technical/user docs (`docs/autonomous-loop.md`, `docs/wiki/autonomous-loop.md`) are removed from the repository. The tool now lives locally at `~/.local/share/mimir/autonomous-loop/` (script, systemd units, and tests), with the script defaulting to `~/Projects/Rust/Mimir` (overridable via `MIMIR_REPO`) and the systemd service updated to point at the local copy.
+- All references to the loop are removed from `AGENTS.md` (section renamed to "Issue Hygiene"), `README.md` (Autonomous Development Loop section dropped), and `CHANGELOG.md` (historical entries for the loop removed).
+- Version bumped 0.122.2 → 0.123.0 (minor — removal of a developer-tooling subsystem).
+
 ## [0.122.2] — 2026-08-19
 
 ### Docs: refresh the stale mimir binary unit-test count (issue #362)
@@ -166,7 +174,7 @@
 ### Docs: enforce the single-line markdown prose standard (issue #294)
 
 - The one-off reflow of all repo `.md` files landed earlier via #245 (the `scripts/md-reflow` tool); this change wires the tool's `--check` mode into the repo's review-time regression guards as `scripts/tests/md-reflow_test.sh`, so any future hard-wrap drift fails at review time instead of accumulating.
-- Docs updated: `scripts/md-reflow/README.md`, `docs/workspace.md` (regression guards), `docs/wiki/autonomous-loop.md`.
+- Docs updated: `scripts/md-reflow/README.md`, `docs/workspace.md` (regression guards).
 - Version bumped 0.119.0 → 0.119.1 (patch — documentation and tooling).
 
 ## [0.119.0] — 2026-08-17
@@ -251,15 +259,6 @@
 - Tests: three new non-loopback rejection tests in `mimir-server/tests/kb_query_tests.rs`, and the forget/restore/trash roundtrip now attaches loopback `ConnectInfo`.
 - Docs updated: `docs/chat-server.md` (loopback guard route list), `docs/wiki/server.md` (loopback-only routes), `docs/wiki/cli-commands.md` (destructive KB commands are local-only).
 - Version bumped 0.116.0 → 0.116.1 (patch — cleanup and security hardening).
-
-## [0.116.0] — 2026-08-17
-
-### Autonomous loop: feature tickets at lower priority with an ask-first flow
-
-- `scripts/autonomous-loop.sh` no longer ignores feature-development tickets: `candidate_issues()` now classifies open issues into quality work and feature work (`is_feature_issue()` uses the `feature` label — authoritative even alongside quality labels — plus `Implement:` / `Future:` title prefixes) and lists every quality candidate before any feature ticket, keeping the active-phase-first ordering within each class. Unclassifiable issues remain excluded.
-- The implementation prompt now requires an in-depth requirements analysis for feature tickets before any branch is created; if scope, design, acceptance criteria, priority, or direction are missing or ambiguous, the agent posts its questions with the `<!-- mimir-autonomous-question:N -->` marker, adds the `help-wanted` label, and ends the iteration without creating a branch. The loop skips that ticket until the owner answers in the comments or removes the `help-wanted` label, and then treats the answers as binding context. If further questions arise while implementing a feature, the agent posts them, re-adds the label, and stops before pushing anything. Code-quality work always outranks feature tickets.
-- Docs updated: `AGENTS.md` (loop scope), `README.md`, `docs/autonomous-loop.md` (issue selection and question/answer protocol) and `docs/wiki/autonomous-loop.md` (user-facing flow); `scripts/tests/autonomous-loop_test.sh` gained classification tests for feature vs quality issues.
-- Version bumped 0.115.4 → 0.116.0 (minor — new loop capability).
 
 ## [0.115.4] — 2026-08-16
 
@@ -580,24 +579,6 @@
 - **Docs:** `docs/entity-locations.md`, `docs/photos-connector.md`, and `docs/refactoring-module-split.md` updated for the new module path.
 - Version bumped 0.101.9 → 0.102.0 (minor — internal refactor; breaking only for direct importers of the lower-level `queries::entity` query module, which is not a public-facing interface).
 
-## [0.101.9] — 2026-08-14
-
-### Autonomous loop: visible prompts and live agent logging
-
-- **Prompts logged in green.** `scripts/autonomous-loop.sh` now logs the exact prompt text sent to each `codex exec` session as `[PROMPT]` entries (green on a terminal) in `autonomous.log`, so a run shows activity immediately and the full input is auditable. `log_prompt()` also replaces the dry-run prompt echo.
-- **Live agent messages.** The JSONL filter now runs `jq --unbuffered`, so `[AGENT]` messages are appended to the log the moment codex emits them instead of being held in jq's output buffer until the session exits; an interrupted session no longer loses the messages that already arrived.
-- **Docs:** `docs/autonomous-loop.md` and `docs/wiki/autonomous-loop.md` describe the `[PROMPT]`/`[AGENT]` log format and live streaming.
-- Version bumped 0.101.8 → 0.101.9 (patch — backwards-compatible change to a developer tool).
-
-## [0.101.8] — 2026-08-14
-
-### Autonomous loop logs only the agent's conversation
-
-- **Conversation-only logging.** `scripts/autonomous-loop.sh` now runs `codex exec --json` and filters the JSONL event stream through a new `log_agent_stream()` helper, so `autonomous.log` records the agent's messages (and fatal codex errors) instead of the raw transcript. File contents the agent read, shell commands and their output, patches, web searches and reasoning no longer reach the log; full transcripts remain available in codex's session files under `~/.codex/sessions/`.
-- **Sourceable for tests.** The script's entry point is now guarded (`main` runs only when executed directly), and a new `scripts/tests/autonomous-loop_test.sh` exercises the filter against a realistic `codex exec --json` fixture, asserting that transcript content never leaks into the log.
-- **Docs:** `docs/autonomous-loop.md` gains a "Conversation-only logging" section; `docs/wiki/autonomous-loop.md` describes the log as a conversation record.
-- Version bumped 0.101.7 → 0.101.8 (patch — backwards-compatible change to a developer tool).
-
 ## [0.101.7] — 2026-08-13
 
 ### Entity-location dedup hardened (PR #308 review)
@@ -654,24 +635,10 @@
 
 ## [0.101.1] — 2026-08-13
 
-### Connector design doc sync (issue #222) + autonomous-loop logging hardening
+### Connector design doc sync (issue #222)
 
 - **`VISION/03-Connectors/Technical-Design.md` rewritten to match the locked Phase 3 implementation.** The stale pre-F6 interface (authenticate with a config argument, `sync -> Vec<RawEvent>`, `extract(Vec<RawEvent>) -> Vec<ExtractedFact>`, `forget(&mut self)`) is replaced with the actual `Connector` / `ConnectorFactory` traits and `ConnectorContext` from `mimir-connectors/src/connector.rs`, the `NormalizedFact` model from `mimir-knowledge/src/normalize/types.rs`, and the real data types (`ConnectorMode`, `SyncOptions` / `SyncOutcome`, `HealthStatus`, `ConnectorAction` / `ActionResult`, `ConnectorError`). The lifecycle diagram, sync-strategy section, normalization-pipeline examples, rate-limiting pointer, and technology stack were aligned with the code (including the scoped note that no connector-side `RawEvent` / `ExtractedFact` types exist), and a source-of-truth note now points readers at the crate and `VISION/09-Roadmap/Phase-3-Plan.md`.
-- **Autonomous-loop logging hardened for headless runs.** Terminal colours are now applied only when stderr is a TTY with terminfo available, so the persistent log file stays plain-text (grep-friendly) and a failing `tput` (systemd timer, `TERM` unset/dumb) can no longer abort the loop under `set -euo pipefail`; unused colour definitions were removed.
 - Version bumped 0.101.0 → 0.101.1 (patch — backwards-compatible documentation update).
-
-## [0.101.0] — 2026-08-13
-
-### Autonomous development loop
-
-- **`scripts/autonomous-loop.sh` (new).** Deterministic bash orchestrator that runs on a configurable cadence (default 2h; `MIMIR_AUTONOMOUS_INTERVAL=1800` for a 30-minute cadence) and drives the whole GitHub lifecycle: on `main` it picks the next unblocked issue (blocked and unanswered `help-wanted` issues are skipped, active phase first), implements it via `codex exec` + the `gh-issue-tdd` skill, and publishes a DRAFT PR; on a feature branch it self-reviews the draft against `main` (fixing every finding), marks it ready, addresses unresolved review threads via the `gh-review-commit` skill, and merges once clean — explicitly logging when CodeRabbit skipped its review. Control flow stays in deterministic bash; only open-ended engineering is delegated to the agent.
-- **Review and merge gates.** Review-thread pagination omits the initial GraphQL cursor and then follows returned cursors, and auto-merge now requires GitHub's `CLEAN` merge state rather than treating behind or unstable PRs as mergeable.
-- **Issue hygiene built into the loop.** The implementation prompt fetches the full issue (all fields plus every comment), validates the spec against the current codebase (updating stale issue bodies with current context), posts exact human requirements with the `help-wanted` label and the `<!-- mimir-autonomous-question:N -->` marker when blocked, files new issues for out-of-scope problems using only existing labels, fixes missing quality/feature labels it encounters, and keeps `README.md`, `docs/wiki/what-works-now.md` and `AGENTS.md` accurate.
-- **Code-quality scope.** `candidate_issues()` now excludes feature development entirely: an issue must carry a quality label (`bug`, `refactor`, `maintenance`, `performance`, `security`, `documentation`, `testing`, `build`) or a quality title prefix, and `feature`-labelled or `Implement`/`Future:`-titled issues are hard exclusions; the implementation prompt repeats the same scope rule.
-- **Optional systemd user timer (`scripts/systemd/`).** `mimir-autonomous.service` + `.timer` run one iteration every 2h with `Persistent=true`, so missed runs are caught up on boot.
-- **Codex launch configuration.** `MIMIR_AUTONOMOUS_CODEX_ARGS` passes extra codex CLI flags (word-split) to every delegated session, taking full control of provider/sandbox/model; the systemd service ships with `--oss -m deepseek-v4-flash:cloud --yolo --config model_reasoning_effort=max --config model_context_window=1000000` so the loop runs on the OSS deepseek backend.
-- **Docs:** `docs/autonomous-loop.md`, `docs/wiki/autonomous-loop.md`, `README.md` (Autonomous Development Loop section) and `AGENTS.md` (Issue Hygiene & Autonomous Loop section) added/updated, with prose on the single-line markdown standard.
-- Version bumped 0.100.0 → 0.101.0 (minor — backwards-compatible new maintenance subsystem).
 
 ## [0.100.0] — 2026-08-12
 

@@ -7,19 +7,23 @@
 //! live in exactly one place.
 
 use chrono::{DateTime, Utc};
-use oauth2::basic::{BasicClient, BasicErrorResponse, BasicTokenResponse};
-use oauth2::{
-    AuthType, ClientId, ClientSecret, HttpClientError, RefreshToken, RequestTokenError, Scope,
-    TokenResponse, TokenUrl,
-};
+#[cfg(any(feature = "calendar", feature = "gmail", test))]
+use oauth2::basic::BasicClient;
+use oauth2::basic::{BasicErrorResponse, BasicTokenResponse};
+#[cfg(any(feature = "calendar", feature = "gmail", test))]
+use oauth2::{AuthType, ClientId, ClientSecret, RefreshToken, Scope, TokenUrl};
+use oauth2::{HttpClientError, RequestTokenError, TokenResponse};
 
 use crate::connector::ConnectorError;
 use crate::secrets::SecretBundle;
 
+#[cfg(any(feature = "calendar", feature = "gmail", test))]
 use super::OAuthHttpClient;
 
 /// Refresh when the stored token is within this many seconds of expiry (or
-/// past it).
+/// past it). Only read by `resolve_access_token` (Calendar / Email) and the
+/// module's unit tests, so it is cfg-gated to those callers (issues #351, #374).
+#[cfg(any(feature = "calendar", feature = "gmail", test))]
 const REFRESH_SKEW_SECS: i64 = 60;
 
 /// Maximum length (bytes) of a provider-supplied `error_description` surfaced
@@ -183,6 +187,10 @@ pub(crate) fn into_bundle(
 /// parsed `oauth2` token response for the caller to turn into a
 /// [`SecretBundle`] via [`into_bundle`]. Errors are sanitised so no echoed
 /// request parameter reaches logs or `last_error`.
+///
+/// Only called by `resolve_access_token` (Calendar / Email) and the module's
+/// unit tests, so it is cfg-gated to those callers (issues #351, #374).
+#[cfg(any(feature = "calendar", feature = "gmail", test))]
 pub(crate) async fn refresh_token(
     http: &OAuthHttpClient,
     token_endpoint: &str,
@@ -227,6 +235,10 @@ pub(crate) async fn refresh_token(
 /// against the token endpoint and invite rate limiting. The token is reused
 /// as-is; if it is actually expired the provider returns 401 and the next
 /// cycle re-authenticates.
+///
+/// Only called by the Calendar and Email backends and the module's unit
+/// tests, so it is cfg-gated to those callers (issues #351, #374).
+#[cfg(any(feature = "calendar", feature = "gmail", test))]
 pub(crate) async fn resolve_access_token(
     http: &OAuthHttpClient,
     token_endpoint: &str,

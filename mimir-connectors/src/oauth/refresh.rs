@@ -22,7 +22,7 @@ use super::OAuthHttpClient;
 
 /// Refresh when the stored token is within this many seconds of expiry (or
 /// past it). Only read by `resolve_access_token` (Calendar / Email) and the
-/// module's unit tests, so it is cfg-gated to those callers (issue #351).
+/// module's unit tests, so it is cfg-gated to those callers (issues #351, #374).
 #[cfg(any(feature = "calendar", feature = "gmail", test))]
 const REFRESH_SKEW_SECS: i64 = 60;
 
@@ -189,7 +189,7 @@ pub(crate) fn into_bundle(
 /// request parameter reaches logs or `last_error`.
 ///
 /// Only called by `resolve_access_token` (Calendar / Email) and the module's
-/// unit tests, so it is cfg-gated to those callers (issue #351).
+/// unit tests, so it is cfg-gated to those callers (issues #351, #374).
 #[cfg(any(feature = "calendar", feature = "gmail", test))]
 pub(crate) async fn refresh_token(
     http: &OAuthHttpClient,
@@ -237,7 +237,7 @@ pub(crate) async fn refresh_token(
 /// cycle re-authenticates.
 ///
 /// Only called by the Calendar and Email backends and the module's unit
-/// tests, so it is cfg-gated to those callers (issue #351).
+/// tests, so it is cfg-gated to those callers (issues #351, #374).
 #[cfg(any(feature = "calendar", feature = "gmail", test))]
 pub(crate) async fn resolve_access_token(
     http: &OAuthHttpClient,

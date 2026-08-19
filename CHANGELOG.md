@@ -2,10 +2,10 @@
 
 ## [0.121.5] — 2026-08-19
 
-### Fix: mimir-connectors oauth refresh helpers dead-code warnings under oauth-only feature combinations (issue #351)
+### Fix: mimir-connectors oauth refresh helpers dead-code warnings under oauth-only feature combinations (issues #351, #374)
 
 - `cargo check -p mimir-connectors --all-targets --no-default-features --features oauth` (and `--features test-mock-oauth`) emitted four dead-code warnings: the `refresh::resolve_access_token` re-export in `src/oauth/mod.rs` and the `REFRESH_SKEW_SECS` constant / `refresh_token` / `resolve_access_token` helpers in `src/oauth/refresh.rs` are only called by the Calendar and Email backends and the refresh module's own unit tests, so the `oauth`-only combination (e.g. the CLI PKCE flow, A4 / #205) compiled them as dead code. The helpers and their imports are now cfg-gated to `any(feature = "calendar", feature = "gmail", test)` and the `mod.rs` re-export to `any(feature = "calendar", feature = "gmail")`, matching their actual callers, so every supported feature combination compiles warning-free.
-- Regression guard: `scripts/tests/no-default-features_test.sh` now runs the whole `--no-default-features` feature matrix (not just the no-features lib target) with `RUSTFLAGS="-D warnings"`, so no supported combination can regress to dead-code or unused-import warnings.
+- Regression guard: `scripts/tests/no-default-features_test.sh` now runs the whole `--no-default-features` feature matrix (not just the no-features lib target) with `RUSTFLAGS="-D warnings"`, so no supported combination can regress to dead-code or unused-import warnings; this also resolves the follow-up tracked in #374 (the `oauth`-only combo the guard's old scoping note excluded).
 - Docs updated: `docs/connectors-framework.md` (oauth module gating), `docs/workspace.md` (regression guards), `docs/wiki/what-works-now.md` (#349 backlog row removed — already fixed in 0.117.0 by commit 42e7d86 — and version header).
 - Version bumped 0.121.4 → 0.121.5 (patch — build hygiene fix).
 

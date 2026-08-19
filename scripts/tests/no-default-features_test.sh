@@ -7,7 +7,7 @@ set -euo pipefail
 # build remains usable. The default feature set is covered by the regular
 # workspace test run.
 #
-# Every supported combination must also be warning-free (issues #342, #351):
+# Every supported combination must also be warning-free (issues #342, #351, #374):
 # the shared `connector_fact` constructor is used only by feature-gated
 # backends (so the `fact` module is cfg-gated to match), and the OAuth
 # refresh helpers are only called by the Calendar/Email backends (so they are

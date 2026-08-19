@@ -16,7 +16,7 @@ use super::add::handle_connector_add_with_opener;
 use super::auth::handle_connector_auth_with_opener;
 use super::oauth::{oauth_flow_config, oauth_ingest_request};
 use super::wizard::{
-    PromptDriver, build_wizard_config, handle_connector_add_wizard_with_deps, slugify,
+    PromptDriver, build_wizard_config, handle_connector_add_wizard_with_deps, parse_scopes, slugify,
 };
 use super::*;
 
@@ -1159,4 +1159,67 @@ fn wizard_required_field_error_mentions_field() {
     ]);
     let err = build_wizard_config(&entry, "gmail", &prompts).unwrap_err();
     assert_eq!(err, "Account email is required");
+}
+
+#[test]
+fn wizard_caldav_oauth_config_includes_scopes() {
+    let entry = mimir_api_types::ConnectorCatalogEntry {
+        connector_type: "calendar".to_string(),
+        backend: "caldav".to_string(),
+    };
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Input("https://dav.example.com/cal".to_string()),
+        ScriptedAnswer::Input("me@example.com".to_string()),
+        ScriptedAnswer::Select(1), // OAuth 2.0 — browser login
+        ScriptedAnswer::Input("https://accounts.example.com/auth".to_string()),
+        ScriptedAnswer::Input("https://accounts.example.com/token".to_string()),
+        ScriptedAnswer::Input("client-456".to_string()),
+        ScriptedAnswer::Input(String::new()), // client secret → none
+        ScriptedAnswer::Input(String::new()), // scopes → default Google Calendar
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "calendar", &prompts).unwrap();
+    assert!(matches!(credential, super::wizard::WizardCredential::OAuth));
+    assert_eq!(config["calendar_url"], "https://dav.example.com/cal");
+    assert_eq!(config["auth"]["kind"], "oauth");
+    assert_eq!(config["auth"]["username"], "me@example.com");
+    assert_eq!(config["auth"]["client_id"], "client-456");
+    assert_eq!(
+        config["auth"]["scopes"],
+        serde_json::json!(["https://www.googleapis.com/auth/calendar"])
+    );
+    assert!(
+        config["auth"].get("client_secret").is_none(),
+        "blank client secret must be omitted"
+    );
+}
+
+#[test]
+fn wizard_caldav_oauth_scope_prompt_accepts_custom_list() {
+    let entry = mimir_api_types::ConnectorCatalogEntry {
+        connector_type: "calendar".to_string(),
+        backend: "caldav".to_string(),
+    };
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Input("https://dav.example.com/cal".to_string()),
+        ScriptedAnswer::Input("me@example.com".to_string()),
+        ScriptedAnswer::Select(1), // OAuth
+        ScriptedAnswer::Input("https://auth.example.com/auth".to_string()),
+        ScriptedAnswer::Input("https://auth.example.com/token".to_string()),
+        ScriptedAnswer::Input("client-456".to_string()),
+        ScriptedAnswer::Input(String::new()),
+        ScriptedAnswer::Input("scope.a scope.b,scope.c".to_string()),
+    ]);
+    let (config, _) = build_wizard_config(&entry, "calendar", &prompts).unwrap();
+    assert_eq!(
+        config["auth"]["scopes"],
+        serde_json::json!(["scope.a", "scope.b", "scope.c"])
+    );
+}
+
+#[test]
+fn parse_scopes_splits_on_commas_and_whitespace() {
+    assert_eq!(parse_scopes("a,b c\td"), vec!["a", "b", "c", "d"]);
+    assert_eq!(parse_scopes("  ,  "), Vec::<String>::new());
+    assert_eq!(parse_scopes(""), Vec::<String>::new());
+    assert_eq!(parse_scopes("single"), vec!["single"]);
 }

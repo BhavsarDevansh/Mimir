@@ -31,6 +31,10 @@ const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 /// read-only IMAP scope. The connector itself only reads (write-back is a
 /// separate, explicit `act` dispatch and is not implemented for email).
 const GMAIL_SCOPE: &str = "https://mail.google.com/";
+/// Default CalDAV OAuth scope for Google Calendar (the calendar connector's
+/// documented OAuth provider). The wizard pre-fills it so the authorize URL
+/// always carries a `scope` parameter.
+const CALDAV_SCOPE: &str = "https://www.googleapis.com/auth/calendar";
 
 /// Interactive prompt driver. Production uses `inquire`; tests inject a
 /// scripted driver so the whole wizard (prompts → catalog → PKCE →
@@ -168,7 +172,7 @@ pub(crate) async fn handle_connector_add_wizard_with_deps(
 
     if !json {
         println!(
-            "This connector imports data read-only — it never writes to the service. Write-back actions run only when you explicitly invoke `mimir connector act {}`.",
+            "This connector imports data read-only by default — it does not write to the service on its own. Write-back actions run only when you explicitly invoke `mimir connector act {}`.",
             output.slug
         );
     }
@@ -298,12 +302,17 @@ fn caldav_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredential)
         )?;
         let client_id = required(prompts.input("OAuth client ID", None), "OAuth client ID")?;
         let client_secret = prompts.input("OAuth client secret (blank if none)", Some(""))?;
+        let scopes_raw = prompts.input(
+            "OAuth scopes (comma or space-separated)",
+            Some(CALDAV_SCOPE),
+        )?;
         let mut auth = json!({
             "kind": "oauth",
             "username": username,
             "auth_uri": auth_uri,
             "token_endpoint": token_endpoint,
             "client_id": client_id,
+            "scopes": parse_scopes(&scopes_raw),
         });
         if !client_secret.is_empty() {
             auth["client_secret"] = json!(client_secret);
@@ -322,6 +331,18 @@ fn caldav_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredential)
             WizardCredential::Secret(password),
         ))
     }
+}
+
+/// Split a user-entered scope list on commas and/or whitespace into a JSON
+/// string array, dropping empty segments. An empty answer yields no scopes
+/// (the provider then rejects the authorize request, but the caller's
+/// default prompt makes that a deliberate choice).
+pub(crate) fn parse_scopes(raw: &str) -> Vec<String> {
+    raw.split([',', ' ', '\t'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Local-photos wizard: a directory to watch; no credential.

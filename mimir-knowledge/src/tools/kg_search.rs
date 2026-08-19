@@ -28,17 +28,7 @@ struct KgSearchOutput {
 }
 
 fn parse_entity_type(s: &str) -> Option<EntityType> {
-    match s.to_lowercase().as_str() {
-        "person" => Some(EntityType::Person),
-        "place" => Some(EntityType::Place),
-        "event" => Some(EntityType::Event),
-        "object" => Some(EntityType::Object),
-        "concept" => Some(EntityType::Concept),
-        "organization" => Some(EntityType::Organization),
-        "activity" => Some(EntityType::Activity),
-        "datetime" => Some(EntityType::DateTime),
-        _ => None,
-    }
+    s.parse().ok()
 }
 
 pub struct KgSearchTool {

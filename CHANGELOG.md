@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.122.0] — 2026-08-19
+
+### Refactor: typed enum→wire-string mapping for all remaining lookup enums (issue #358)
+
+- `mimir-knowledge` now exposes `ChangeType::as_str()` / `ChangedBy::as_str()` (`models::audit_log`) and `EntityType::as_str()` (`models::entity`) with the stable wire names (`"created"`...`"content_update"`, `"User"`/`"System"`/`"InferenceEngine"`/`"NightlyOptimization"`, `"Person"`...`"DateTime"`), plus `TryFrom<i16>` for all three and a case-insensitive `FromStr` for `ChangeType` and `EntityType`.
+- `mimir-server` KB helpers (`change_type_name`, `changed_by_name`) and the audit filter parser in `kb_audit_handler` now map through the typed conversions instead of magic numbers; this fixes the live bug where a `ChangeType::ContentUpdate = 9` audit row rendered as `"Unknown"` in the fact-detail API even though the audit filter accepts `"content_update"`.
+- `mimir-knowledge` LLM-facing helpers (`fact_status_name`, `source_type_name`, `entity_type_name` in `tools/`), the extraction validator `parse_entity_type`, and the `kg_search` entity-type filter now delegate to the enum conversions, keeping the `Unknown({id})` tool fallback.
+- Added round-trip unit tests asserting the wire names match the enum variants (mimir-knowledge) and the route helpers' output contract (mimir-server), plus a server integration test proving a content-update audit entry renders as `"content_update"` in the fact-detail API.
+- Docs updated: `docs/unit-tests.md`, `docs/fact-management.md`, `docs/knowledge-graph-schema.md`, `docs/wiki/facts.md`.
+- Version bumped 0.121.5 → 0.122.0 (minor — refactor plus bug fix).
+
 ## [0.121.5] — 2026-08-19
 
 ### Fix: mimir-connectors oauth refresh helpers dead-code warnings under oauth-only feature combinations (issues #351, #374)

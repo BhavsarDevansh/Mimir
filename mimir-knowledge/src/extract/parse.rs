@@ -61,21 +61,12 @@ pub(super) fn source_type_for(classification: Classification) -> SourceType {
 // ---------------------------------------------------------------------------
 
 /// Parse an entity type string into the Rust enum.
+///
+/// Delegates to [`EntityType`]'s `FromStr` so the LLM extraction validation
+/// shares the enum's single wire-string table (issue #358).
 pub fn parse_entity_type(s: &str) -> Result<EntityType, KnowledgeError> {
-    match s {
-        "Person" => Ok(EntityType::Person),
-        "Place" => Ok(EntityType::Place),
-        "Event" => Ok(EntityType::Event),
-        "Object" => Ok(EntityType::Object),
-        "Concept" => Ok(EntityType::Concept),
-        "Organization" => Ok(EntityType::Organization),
-        "Activity" => Ok(EntityType::Activity),
-        "DateTime" => Ok(EntityType::DateTime),
-        _ => Err(KnowledgeError::Validation(format!(
-            "Invalid entity_type: {}",
-            s
-        ))),
-    }
+    s.parse()
+        .map_err(|_| KnowledgeError::Validation(format!("Invalid entity_type: {}", s)))
 }
 
 // ---------------------------------------------------------------------------

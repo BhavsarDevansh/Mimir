@@ -4,6 +4,7 @@ use axum::response::Response;
 use chrono::Utc;
 
 use mimir_api_types::FactRow;
+use mimir_knowledge::models::audit_log::{ChangeType, ChangedBy};
 use mimir_knowledge::models::fact::FactStatus;
 use mimir_knowledge::models::source::SourceType;
 
@@ -47,30 +48,16 @@ pub(super) fn source_type_name(source_type_id: i16) -> String {
 }
 
 pub(super) fn change_type_name(change_type_id: i16) -> String {
-    match change_type_id {
-        1 => "created",
-        2 => "status_change",
-        3 => "confidence_change",
-        4 => "temporal_update",
-        5 => "source_added",
-        6 => "forgotten",
-        7 => "restored",
-        8 => "rejected",
-        _ => "Unknown",
-    }
-    .to_string()
+    ChangeType::try_from(change_type_id)
+        .map(|c| c.as_str().to_string())
+        .unwrap_or_else(|_| "Unknown".to_string())
 }
 
 pub(super) fn changed_by_name(changed_by_id: Option<i16>) -> Option<String> {
     changed_by_id.map(|id| {
-        match id {
-            1 => "User",
-            2 => "System",
-            3 => "InferenceEngine",
-            4 => "NightlyOptimization",
-            _ => "Unknown",
-        }
-        .to_string()
+        ChangedBy::try_from(id)
+            .map(|c| c.as_str().to_string())
+            .unwrap_or_else(|_| "Unknown".to_string())
     })
 }
 
@@ -166,5 +153,37 @@ mod tests {
         assert_eq!(parse_status("Active"), Some(FactStatus::Active));
         assert_eq!(parse_status("forgotten"), Some(FactStatus::Forgotten));
         assert_eq!(parse_status("bogus"), None);
+    }
+
+    #[test]
+    fn change_type_name_matches_wire_contract() {
+        for (ty, name) in [
+            (ChangeType::Created, "created"),
+            (ChangeType::StatusChange, "status_change"),
+            (ChangeType::ConfidenceChange, "confidence_change"),
+            (ChangeType::TemporalUpdate, "temporal_update"),
+            (ChangeType::SourceAdded, "source_added"),
+            (ChangeType::Forgotten, "forgotten"),
+            (ChangeType::Restored, "restored"),
+            (ChangeType::Rejected, "rejected"),
+            (ChangeType::ContentUpdate, "content_update"),
+        ] {
+            assert_eq!(change_type_name(ty as i16), name);
+        }
+        assert_eq!(change_type_name(99), "Unknown");
+    }
+
+    #[test]
+    fn changed_by_name_matches_wire_contract() {
+        assert_eq!(changed_by_name(None), None);
+        assert_eq!(
+            changed_by_name(Some(ChangedBy::User as i16)),
+            Some("User".to_string())
+        );
+        assert_eq!(
+            changed_by_name(Some(ChangedBy::NightlyOptimization as i16)),
+            Some("NightlyOptimization".to_string())
+        );
+        assert_eq!(changed_by_name(Some(99)), Some("Unknown".to_string()));
     }
 }

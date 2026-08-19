@@ -32,15 +32,18 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 - `models/memory.rs`: 7 tests for `MemoryPriority::boost` ordering/exact, discriminant stability, `MemorySchema::new`/`default`/`all_facts` ordering, serde roundtrip.
 - `models/source.rs`: 2 tests — `SourceType::try_from<i16>` roundtrip (valid/invalid discriminants) and `as_str` wire-contract names.
 - `models/fact.rs`: 6 tests — `FactStatus` discriminant roundtrip, `Fact::status` mapping, `try_from<i16>` roundtrip, `as_str` wire-contract names, `FromStr` wire-string parsing (incl. case-insensitive), `NewFact` defaults.
+- `models/audit_log.rs`: 5 tests — `ChangeType` / `ChangedBy` `try_from<i16>` roundtrips (valid/invalid discriminants), `as_str` wire-contract names (incl. `content_update`), and `ChangeType` `FromStr` wire-string parsing (incl. case-insensitive).
+- `models/entity.rs`: 6 tests — discriminant stability, the `ENTITY_TYPES` const-array lock-step contract, `try_from<i16>` roundtrip, `as_str` wire-contract names, `FromStr` wire-string parsing (incl. case-insensitive), basic construction.
+- `tools/`: 1 test — the `kg_*` name helpers (`fact_status_name` / `source_type_name` / `entity_type_name`) match the wire contract with the `Unknown({id})` fallback.
 
-195 lib tests (up from 110).
+204 lib tests (up from 110).
 
 ## `mimir-server`
 
 - `error.rs`: 15 tests for every `ApiError` response helper — status codes, error codes, `Retry-After` header on `QueueFull`, and (security-relevant) verification that internal error details (context IDs, LLM upstream text, memory I/O messages, KG internal variants) are masked from clients.
-- `routes/kb/helpers.rs`: 3 tests — `status_name` / `source_type_name` wire-contract strings (incl. `Unknown` fallback) and `parse_status` wire-string parsing.
+- `routes/kb/helpers.rs`: 5 tests — `status_name` / `source_type_name` / `change_type_name` / `changed_by_name` wire-contract strings (incl. `content_update` and `Unknown` fallback) and `parse_status` wire-string parsing.
 
-41 lib tests (up from 38).
+44 lib tests (up from 38).
 
 ## `mimir-connectors`
 

@@ -17,43 +17,45 @@ pub use remember::RememberTool;
 mod retrieve_context;
 pub use retrieve_context::RetrieveContextTool;
 
+use crate::models::entity::EntityType;
+use crate::models::fact::FactStatus;
+use crate::models::source::SourceType;
+
 /// Map a fact_status_id to its human-readable name.
 pub(crate) fn fact_status_name(id: i16) -> String {
-    match id {
-        1 => "Active".to_string(),
-        2 => "Inferred".to_string(),
-        3 => "Disputed".to_string(),
-        4 => "Corrected".to_string(),
-        5 => "Superseded".to_string(),
-        6 => "Forgotten".to_string(),
-        _ => format!("Unknown({})", id),
-    }
+    FactStatus::try_from(id)
+        .map(|s| s.as_str().to_string())
+        .unwrap_or_else(|_| format!("Unknown({})", id))
 }
 
 /// Map a source_type_id to its human-readable name.
 pub(crate) fn source_type_name(id: i16) -> String {
-    match id {
-        1 => "UserEdit".to_string(),
-        2 => "Connector".to_string(),
-        3 => "Inference".to_string(),
-        4 => "Interaction".to_string(),
-        5 => "Import".to_string(),
-        6 => "System".to_string(),
-        _ => format!("Unknown({})", id),
-    }
+    SourceType::try_from(id)
+        .map(|s| s.as_str().to_string())
+        .unwrap_or_else(|_| format!("Unknown({})", id))
 }
 
 /// Map an entity_type_id to its human-readable name.
 pub(crate) fn entity_type_name(id: i16) -> String {
-    match id {
-        1 => "Person".to_string(),
-        2 => "Place".to_string(),
-        3 => "Event".to_string(),
-        4 => "Object".to_string(),
-        5 => "Concept".to_string(),
-        6 => "Organization".to_string(),
-        7 => "Activity".to_string(),
-        8 => "DateTime".to_string(),
-        _ => format!("Unknown({})", id),
+    EntityType::try_from(id)
+        .map(|e| e.as_str().to_string())
+        .unwrap_or_else(|_| format!("Unknown({})", id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn name_helpers_match_wire_contract() {
+        assert_eq!(fact_status_name(FactStatus::Active as i16), "Active");
+        assert_eq!(fact_status_name(FactStatus::Forgotten as i16), "Forgotten");
+        assert_eq!(source_type_name(SourceType::UserEdit as i16), "UserEdit");
+        assert_eq!(source_type_name(SourceType::System as i16), "System");
+        assert_eq!(entity_type_name(EntityType::Person as i16), "Person");
+        assert_eq!(entity_type_name(EntityType::DateTime as i16), "DateTime");
+        assert_eq!(fact_status_name(99), "Unknown(99)");
+        assert_eq!(source_type_name(99), "Unknown(99)");
+        assert_eq!(entity_type_name(99), "Unknown(99)");
     }
 }

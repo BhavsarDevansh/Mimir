@@ -68,12 +68,13 @@ This cascade ensures the knowledge graph stays consistent when evidence changes.
 
 ## Audit Trail
 
-Every insert, update, status change, confidence change, source addition, and delete is logged with a timestamp, a typed `change_type` and `changed_by`, and a **column-only** JSON snapshot of the affected field(s).
+Every insert, update, status change, confidence change, source addition, and delete is logged with a timestamp, a typed `change_type` and `changed_by`, and a **column-only** JSON snapshot of the affected field(s). The change types are `created`, `status_change`, `confidence_change`, `temporal_update`, `source_added`, `forgotten`, `restored`, `rejected`, and `content_update` (content edits such as changing a fact's object value).
 
 You can inspect the full history of any fact through the API, or query the audit log directly from the CLI:
 
 ```bash
 mimir kb audit --entity "Alice" --change-type status_change
+mimir kb audit --entity "Alice" --change-type content_update
 ```
 
 ---

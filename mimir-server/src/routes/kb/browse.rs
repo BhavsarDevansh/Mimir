@@ -7,12 +7,10 @@ use axum::{
     extract::{Query, State},
     response::Response,
 };
-
 use mimir_api_types::{
     AuditQueryResponse, AuditRow, BrowseEdge, BrowseResponse, FactRow, ProfileGroup,
     ProfileResponse,
 };
-use mimir_knowledge::models::audit_log::ChangeType;
 
 use crate::error;
 use crate::routes::kb::helpers::{parse_datetime, resolve_entity_id, status_name};
@@ -141,21 +139,7 @@ pub async fn kb_audit_handler(
     State(state): State<Arc<AppState>>,
     Query(params): Query<AuditQueryParams>,
 ) -> Result<Json<AuditQueryResponse>, Response> {
-    let ct = params
-        .change_type
-        .as_deref()
-        .and_then(|s| match s.to_lowercase().as_str() {
-            "created" => Some(ChangeType::Created),
-            "status_change" => Some(ChangeType::StatusChange),
-            "confidence_change" => Some(ChangeType::ConfidenceChange),
-            "temporal_update" => Some(ChangeType::TemporalUpdate),
-            "source_added" => Some(ChangeType::SourceAdded),
-            "forgotten" => Some(ChangeType::Forgotten),
-            "restored" => Some(ChangeType::Restored),
-            "rejected" => Some(ChangeType::Rejected),
-            "content_update" => Some(ChangeType::ContentUpdate),
-            _ => None,
-        });
+    let ct = params.change_type.as_deref().and_then(|s| s.parse().ok());
 
     let from_dt = params.from.as_deref().and_then(parse_datetime);
     let to_dt = params.to.as_deref().and_then(parse_datetime);

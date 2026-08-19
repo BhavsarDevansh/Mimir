@@ -21,6 +21,60 @@ pub enum EntityType {
 
 const_assert!((EntityType::Person as i16) != 0);
 
+impl TryFrom<i16> for EntityType {
+    type Error = ();
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        match value {
+            x if x == Self::Person as i16 => Ok(Self::Person),
+            x if x == Self::Place as i16 => Ok(Self::Place),
+            x if x == Self::Event as i16 => Ok(Self::Event),
+            x if x == Self::Object as i16 => Ok(Self::Object),
+            x if x == Self::Concept as i16 => Ok(Self::Concept),
+            x if x == Self::Organization as i16 => Ok(Self::Organization),
+            x if x == Self::Activity as i16 => Ok(Self::Activity),
+            x if x == Self::DateTime as i16 => Ok(Self::DateTime),
+            _ => Err(()),
+        }
+    }
+}
+
+impl EntityType {
+    /// Wire representation of the entity type.
+    ///
+    /// The HTTP API and the LLM-facing tools carry entity types as these
+    /// strings, so this is the single source of truth for the wire contract —
+    /// independent of the derived `Debug` repr (issue #358).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Person => "Person",
+            Self::Place => "Place",
+            Self::Event => "Event",
+            Self::Object => "Object",
+            Self::Concept => "Concept",
+            Self::Organization => "Organization",
+            Self::Activity => "Activity",
+            Self::DateTime => "DateTime",
+        }
+    }
+}
+
+impl std::str::FromStr for EntityType {
+    type Err = ();
+
+    /// Parse an entity-type wire string back into the enum.
+    ///
+    /// Mirrors [`EntityType::as_str`] case-insensitively, matching both the
+    /// `kg_search` filter input and the LLM extraction validation contracts
+    /// (issue #358).
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ENTITY_TYPES
+            .into_iter()
+            .find(|ty| ty.as_str().eq_ignore_ascii_case(s))
+            .ok_or(())
+    }
+}
+
 /// Every [`EntityType`] variant in discriminant order.
 ///
 /// Single source of truth for callers that must enumerate the variants (for
@@ -98,5 +152,37 @@ mod tests {
         assert_eq!(e.id, 42);
         assert_eq!(e.name, "Alice");
         assert_eq!(e.entity_type_id, 1);
+    }
+
+    #[test]
+    fn entity_type_try_from_roundtrip() {
+        for id in 1..=8 {
+            let ty = EntityType::try_from(id).unwrap();
+            assert_eq!(ty as i16, id);
+            assert_eq!(EntityType::try_from(ty as i16), Ok(ty));
+        }
+        assert!(EntityType::try_from(0).is_err());
+        assert!(EntityType::try_from(9).is_err());
+    }
+
+    #[test]
+    fn entity_type_as_str_matches_wire_contract() {
+        assert_eq!(EntityType::Person.as_str(), "Person");
+        assert_eq!(EntityType::Place.as_str(), "Place");
+        assert_eq!(EntityType::Event.as_str(), "Event");
+        assert_eq!(EntityType::Object.as_str(), "Object");
+        assert_eq!(EntityType::Concept.as_str(), "Concept");
+        assert_eq!(EntityType::Organization.as_str(), "Organization");
+        assert_eq!(EntityType::Activity.as_str(), "Activity");
+        assert_eq!(EntityType::DateTime.as_str(), "DateTime");
+    }
+
+    #[test]
+    fn entity_type_from_str_roundtrip() {
+        for ty in ENTITY_TYPES {
+            assert_eq!(ty.as_str().parse(), Ok(ty));
+            assert_eq!(ty.as_str().to_lowercase().parse(), Ok(ty));
+        }
+        assert!("bogus".parse::<EntityType>().is_err());
     }
 }

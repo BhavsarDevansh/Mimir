@@ -40,14 +40,14 @@ Unique constraint: `(fact_id, source_type_id, connector_instance_id, raw_referen
 ### `fact_audit_log` table
 
 Every insert, temporal update, status change, confidence change, source added, forget, and restore writes a row with:
-- `change_type_id` → `change_types(id)` (`created`, `status_change`, `confidence_change`, `temporal_update`, `source_added`, `forgotten`, `restored`)
+- `change_type_id` → `change_types(id)` (`created`, `status_change`, `confidence_change`, `temporal_update`, `source_added`, `forgotten`, `restored`, `rejected`, `content_update`)
 - `changed_by_id` → `changed_by_types(id)` (`user`, `system`, `inference_engine`, `nightly_optimization`)
 - `old_value` / `new_value` — **column-only** JSON snapshots (e.g. `{"valid_until": "..."}`, not the full fact)
 - `reason` — optional human-readable explanation
 
 ### Wire representation
 
-The HTTP API renders `fact_status_id` and `source_type_id` as strings. The single source of truth for those wire names is `FactStatus::as_str()` (`models::fact`) and `SourceType::as_str()` (`models::source`); the KB route helpers (`mimir-server/src/routes/kb/helpers.rs`) map stored IDs through `TryFrom<i16>` and fall back to `"Unknown"` for unknown IDs (issue #293). `FactStatus` also implements `FromStr` (case-insensitive) for the `kb edit` status input.
+The HTTP API renders `fact_status_id`, `source_type_id`, `change_type_id`, `changed_by_id`, and `entity_type_id` as strings. The single source of truth for those wire names is the enum `as_str()` implementations — `FactStatus::as_str()` (`models::fact`), `SourceType::as_str()` (`models::source`), `ChangeType::as_str()` / `ChangedBy::as_str()` (`models::audit_log`), and `EntityType::as_str()` (`models::entity`); the KB route helpers (`mimir-server/src/routes/kb/helpers.rs`) and the LLM-facing `kg_*` tool helpers map stored IDs through `TryFrom<i16>` and fall back to `"Unknown"` / `"Unknown({id})"` for unknown IDs (issues #293, #358). `FactStatus`, `ChangeType`, and `EntityType` also implement `FromStr` (case-insensitive) for the `kb edit` status, `kb audit --change-type`, and entity-type parsing inputs. The `kb audit` endpoint surfaces `change_type` / `changed_by` from the lookup-table `name` columns via the SQL join (so `changed_by` appears lowercase there, e.g. `user`), while the fact-detail endpoint renders them through the enum conversions (e.g. `User`).
 
 ---
 

@@ -20,6 +20,7 @@ Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `0
 - Migration `023` re-seeds `preference_categories` (7 rows: CalendarBehavior, NotificationStyle, FoodPreference, TravelPreference, WorkStyle, CommunicationPreference, General) and `preference_source_types` (3 rows: Interaction, Fact, UserEdit).
 - Migration `024` adds the `Contradicts = 4` variant to `relation_types`.
 - Migration `039` seeds the events overlay lookups: `event_types`, `event_statuses`, and `auto_complete_policies`.
+- The enum conversions in `mimir-knowledge` align the lookup identifiers across storage and the API/tool contracts: `ChangeType` / `ChangedBy` (`models::audit_log`) and `EntityType` (`models::entity`) expose `as_str()` + `TryFrom<i16>` (plus case-insensitive `FromStr` where input parsing exists), and the KB route / `kg_*` tool helpers delegate to them instead of re-typing the name tables (issue #358). Alignment is by stable identifier — `TryFrom<i16>` keeps the lookup rows and enum discriminants in lock-step — while endpoint string representations may differ: audit SQL responses report `changed_by` as the lowercase lookup name (`user`), whereas fact-detail output uses the title-case variant string (`User`).
 
 | Table | Rows | Rust Enum | Module |
 |-------|------|-----------|--------|

@@ -6,7 +6,7 @@
 
 - The interactive `mimir connector add` wizard's hidden secret prompts (Gmail/CalDAV OAuth client secrets and app passwords) no longer ask for a second masked "Confirmation:" input. inquire 0.9.4 enables password confirmation by default, so after the first masked entry a second hidden prompt appeared — with no visible keystrokes it looked like the wizard froze right before the OAuth browser opened, and a mismatch produced an unexplained error loop. Secrets are typically pasted, the mismatch loop is more confusing than a rare typo, and the connector auth step already fails loudly with a clear error when a secret is wrong, so confirmation is now disabled (`without_confirmation()`).
 - Regression test: the production password-prompt configuration is pinned so wizard secrets are asked exactly once (confirmation disabled), alongside the existing scripted-prompt wizard tests.
-- Docs updated in `docs/cli.md`, `docs/wiki/cli-commands.md`, `docs/unit-tests.md` (connector 46 → 52, bin 78 → 84), and `docs/wiki/Testing-and-Benchmarks.md` (bin 69 → 84).
+- Docs updated in `docs/cli.md`, `docs/wiki/cli-commands.md`, `docs/unit-tests.md` (connector 51 → 52, bin 83 → 84), and `docs/wiki/Testing-and-Benchmarks.md` (bin 83 → 84).
 - Version bumped 0.124.0 → 0.124.1 (patch — bug fix).
 
 ## [0.124.0] — 2026-08-19

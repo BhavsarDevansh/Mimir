@@ -69,10 +69,21 @@ impl PromptDriver for InquirePrompt {
     }
 
     fn password(&self, message: &str) -> Result<String, String> {
-        inquire::Password::new(message)
-            .prompt()
-            .map_err(prompt_error)
+        password_prompt(message).prompt().map_err(prompt_error)
     }
+}
+
+/// Build the production secret prompt, shared by the wizard's
+/// `InquirePrompt` and the flag form's `prompt_secret` (DRY). Kept as a
+/// separate function so tests can assert the prompt configuration without a
+/// TTY. Confirmation is disabled (issue #399): inquire 0.9.4 enables it by
+/// default, so the hidden secret prompts asked twice — the second masked
+/// "Confirmation:" input looked like a hang right before the OAuth browser
+/// opened. Secrets are typically pasted, the mismatch loop is more
+/// confusing than a rare typo, and the connector auth step already fails
+/// loudly with a clear error when a secret is wrong.
+pub(crate) fn password_prompt(message: &str) -> inquire::Password<'_> {
+    inquire::Password::new(message).without_confirmation()
 }
 
 /// Render an `inquire` error as a human message; aborts (Esc / Ctrl-C /

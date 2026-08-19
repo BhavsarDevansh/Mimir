@@ -64,13 +64,13 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 
 ## `mimir` (binary)
 
-- `connector/`: 46 tests — CLI connector flows: `parse_duration` (bare seconds, units, case/whitespace, garbage, overflow), config merging (`merge_config` nesting/dotted keys/JSON base/overrides, `parse_config_scalar` quoting/arrays/objects/malformed fallback), credential-kind detection, `title_case`, server-error rendering, connector-not-running detection, the wiremock-backed command flows (`add`, `auth`, `act`, `forget`, `pause_and_resume`, `remove`, `sync`, `resolve_connector`, OAuth PKCE config extraction and token ingest), and the interactive add wizard (scripted-prompt driver: Gmail OAuth Google-endpoint defaults, Gmail app-password registration end-to-end, CalDAV OAuth scopes, credential-less Photos registration, unknown-backend flag-form hint, required-field errors, `slugify`/`parse_scopes` helpers).
+- `connector/`: 52 tests — CLI connector flows: `parse_duration` (bare seconds, units, case/whitespace, garbage, overflow), config merging (`merge_config` nesting/dotted keys/JSON base/overrides, `parse_config_scalar` quoting/arrays/objects/malformed fallback), credential-kind detection, `title_case`, server-error rendering, connector-not-running detection, the wiremock-backed command flows (`add`, `auth`, `act`, `forget`, `pause_and_resume`, `remove`, `sync`, `resolve_connector`, OAuth PKCE config extraction and token ingest), and the interactive add wizard (scripted-prompt driver: Gmail OAuth Google-endpoint defaults, Gmail app-password registration end-to-end, CalDAV OAuth scopes, credential-less Photos registration, unknown-backend flag-form hint, required-field errors, `slugify`/`parse_scopes` helpers, and the password-prompt configuration regression pinning that wizard secrets are asked exactly once with confirmation disabled — issue #399).
 - `kb/`: 15 tests for `parse_datetime` (RFC3339, date-only, ISO without zone, space separator, fractional seconds, explicit offset, invalid), `confidence_color` boundary semantics, and `truncate` (short/exact/long+ellipsis/multibyte/`max=0`).
 - `daemon_guard.rs`: 10 tests — the auto-start guard's HTTP probe, prompt, spawn, timeout, and child-env secret-stripping paths.
 - `chat.rs`: 6 tests for `format_markdown_for_terminal` fence spacing (start, middle, consecutive fences, end, empty input, no fences).
 - `cli_util.rs`: 1 wiremock test — `client_with_token` falls back to a tokenless client when the token is rejected as an invalid header value.
 
-78 bin tests (up from 29).
+84 bin tests (up from 29).
 
 ## Running
 

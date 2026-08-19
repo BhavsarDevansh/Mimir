@@ -419,10 +419,7 @@ fn prompt_secret(label: &str) -> Option<String> {
     if !std::io::stdin().is_terminal() {
         return None;
     }
-    match inquire::Password::new(label)
-        .without_confirmation()
-        .prompt()
-    {
+    match wizard::password_prompt(label).prompt() {
         Ok(value) => Some(value),
         Err(e) => exit_with_error(format!("{label} prompt failed: {e}")),
     }

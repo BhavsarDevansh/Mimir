@@ -30,6 +30,7 @@ $ mimir connector add photos --backend local watch_dir=/home/me/Pictures
 Added connector 'photos' (photos / local, status setup, auth unauthenticated).
 Next: run `mimir connector resume photos` to activate it, then `mimir connector sync photos` to sync.
 ```
+
 The flag form (`mimir connector add gmail --backend imap auth.kind=app_password auth.username=me@example.com --password-stdin …`) remains for scripts; only non-OAuth flows with supplied credentials are fully non-interactive — `auth.kind=oauth` still opens the browser for PKCE and waits for the loopback callback. It runs the same registration and credential-ingest core.
 The OAuth flow (A4 / #205) runs entirely in the CLI process: it binds an ephemeral loopback listener on `127.0.0.1`, opens the provider's authorize URL in the default browser (the URL is printed first, so it can also be opened manually — but the browser must run on the machine running `mimir`, because the callback binds to `127.0.0.1`), receives the redirect, exchanges the code, and POSTs the token bundle to the daemon — the user never copies a code. A canceled flow exits with nothing created.
 

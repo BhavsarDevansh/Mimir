@@ -5,8 +5,9 @@
 //! `GET /connectors/catalog` lists every `(connector_type, backend)` pair the
 //! daemon can construct (issue #271). `POST /connectors` registers a new
 //! instance keyed on `slug`, validating the `(connector_type, backend)` pair
-//! against the daemon's [`ConnectorRegistry`] so an unregistered backend is
-//! rejected up front. `DELETE /connectors/{id}` stops the runner (if any) and
+//! against the daemon's [`mimir_connectors::ConnectorRegistry`] so an
+//! unregistered backend is rejected up front. `DELETE /connectors/{id}` stops
+//! the runner (if any) and
 //! deletes the row, detaching provenance so ingested facts survive with
 //! degraded provenance.
 //!

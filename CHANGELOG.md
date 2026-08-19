@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.121.4] — 2026-08-19
+
+### Docs: fix the last mimir-server rustdoc intra-doc link warnings (issue #348)
+
+- `cargo doc -p mimir-server --no-deps --all-features` emitted two unresolved-link warnings: `mimir-server/src/routes/connectors.rs` module doc linked `[ConnectorRegistry]`, which is not in scope in that module (the type lives in `mimir_connectors` and is re-exported at its crate root), so the link now uses the full path `[mimir_connectors::ConnectorRegistry]`; and `mimir-server/src/state/builder.rs` linked `[MockLlmClient](mimir_core::llm::mock::MockLlmClient)`, but the `mock` module is cfg-gated behind `#[cfg(any(test, feature = "mock-llm"))]` and `mock-llm` is only a mimir-server dev-dependency, so the link could never resolve in a doc build — the sentence now names the mock client in plain text, matching the #337 fix for the same link class in `mimir-core`.
+- Regression guard: `scripts/tests/rustdoc_test.sh` now also builds `mimir-server` docs with `RUSTDOCFLAGS="-D warnings" --all-features` (the "widen this check once #348 lands" note from the #337 fix), so the whole workspace's intra-doc links stay warning-free at review time.
+- Docs updated: `docs/workspace.md` (regression guards), `docs/wiki/what-works-now.md` (#348 backlog row removed, version header).
+- Version bumped 0.121.3 → 0.121.4 (patch — documentation fix).
+
 ## [0.121.3] — 2026-08-18
 
 ### Docs: refresh stale `job_queue/` test count in docs/unit-tests.md (issue #345)

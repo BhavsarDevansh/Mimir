@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Regression guard for issues #276, #310 and #337: mimir-connectors,
-# mimir-knowledge and mimir-core rustdoc must build with zero warnings so
-# broken intra-doc links are caught at review time.
-#
-# Scoped to these three crates for now; the remaining workspace crate with doc
-# warnings is tracked in #348 (mimir-server). Widen this check once that lands.
+# Regression guard for issues #276, #310, #337 and #348: mimir-connectors,
+# mimir-knowledge, mimir-core and mimir-server rustdoc must build with zero
+# warnings so broken intra-doc links are caught at review time.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$SCRIPT_DIR"
@@ -23,3 +20,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc -p mimir-knowledge --no-deps
 # is the primary surface and `--all-features` guards the feature-gated links.
 RUSTDOCFLAGS="-D warnings" cargo doc -p mimir-core --no-deps
 RUSTDOCFLAGS="-D warnings" cargo doc -p mimir-core --no-deps --all-features
+
+# mimir-server: `--all-features` covers the connector backend features; the
+# doc surface must stay warning-free (issue #348).
+RUSTDOCFLAGS="-D warnings" cargo doc -p mimir-server --no-deps --all-features

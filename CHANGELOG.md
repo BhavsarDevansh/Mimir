@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.122.2] — 2026-08-19
+
+### Docs: refresh the stale mimir binary unit-test count (issue #362)
+
+- `docs/unit-tests.md` reported 29 bin tests for the `mimir` binary and listed only the `kb/` module; the actual inline unit-test count is 69 (verified via `cargo test -p mimir --bin mimir`), split across `connector/` (37), `kb/` (15 — the previous doc figure of 16 was also off by one), `daemon_guard/` (10), `chat` (6), and `cli_util` (1). The `mimir` section now lists every test-carrying module with its count and coverage summary.
+- `docs/wiki/Testing-and-Benchmarks.md` is reconciled with `docs/unit-tests.md`: the `mimir` bin figure moves from 15 → 29 to 15 → 69, and the `mimir-knowledge` (195 → 204), `mimir-server` (41 → 44), and `mimir-connectors` (319 → 321) lib-test counts in the same sentence are refreshed to the verified workspace counts. `docs/wiki/what-works-now.md` version header is bumped to 0.122.2.
+- Version bumped 0.122.1 → 0.122.2 (patch — documentation update).
+
 ## [0.122.1] — 2026-08-19
 
 ### Docs: clarify the lookup-name vs wire-string contract in knowledge-graph-schema (PR #381 review)

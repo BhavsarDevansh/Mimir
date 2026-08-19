@@ -16,7 +16,8 @@ use super::add::handle_connector_add_with_opener;
 use super::auth::handle_connector_auth_with_opener;
 use super::oauth::{oauth_flow_config, oauth_flow_config_with_secret, oauth_ingest_request};
 use super::wizard::{
-    PromptDriver, build_wizard_config, handle_connector_add_wizard_with_deps, parse_scopes, slugify,
+    PromptDriver, build_wizard_config, handle_connector_add_wizard_with_deps, parse_scopes,
+    password_prompt, slugify,
 };
 use super::*;
 
@@ -1018,6 +1019,20 @@ fn slugify_defaults_slug_from_display_name() {
     assert_eq!(slugify("café"), "caf");
     assert_eq!(slugify("Photos"), "photos");
     assert_eq!(slugify(""), "");
+}
+
+#[test]
+fn wizard_password_prompt_disables_confirmation() {
+    // Regression (issue #399): inquire 0.9.4 enables password confirmation
+    // by default, so the wizard's hidden secret prompts asked twice — the
+    // second masked "Confirmation:" input looked like a hang right before
+    // the OAuth browser opened. Secrets are pasted, so each secret must be
+    // prompted exactly once.
+    let prompt = password_prompt("OAuth client secret (blank if none)");
+    assert!(
+        !prompt.enable_confirmation,
+        "wizard secrets must not ask for a confirmation input"
+    );
 }
 
 #[test]

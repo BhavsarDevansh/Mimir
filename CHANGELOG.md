@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.125.1] — 2026-08-20
+
+### Bugfix: workspace test suite is isolated, deterministic, and hang-proof (issue #384)
+
+- The daemon-down CLI tests in `mimir/tests/cli_tests.rs` no longer rely on "nothing is listening at the default base URL": each test reserves a free loopback port (`reserve_free_port` in `mimir/tests/common/mod.rs`) and runs the real binary with `MIMIR_BASE_URL` plus temp HOME/XDG dirs, so a real or leftover daemon on the configured port can no longer flip the assertions (previously `test_status_fails_when_server_down`, `test_stop_when_server_down`, and `test_memory_fails_when_server_down` panicked whenever a daemon was reachable).
+- `shutdown::tests::test_server_exits_after_stop` is fully isolated: it now injects a known API token and a mock LLM via `start_server_with_llm` (no reads/writes of the real `~/.local/share/mimir/api_token`) and points the context/knowledge/scheduler DBs at temp paths, so the test can no longer hold handles on the real `knowledge.db`/`jobs.db` (the sqlite-lock hang seen in full-suite runs, also tracked as issue #396). The spawned server task is owned by a kill-on-drop guard so a panicking assertion cannot leak a live server into parallel suites.
+- `TestDaemon` (the in-process daemon fixture for the `mimir` E2E tests) kills its server on drop, so a test that panics before `stop()` cannot leak a daemon holding the reserved port and temp DBs.
+- Verified with a fake daemon serving real `/status` JSON at the CLI's resolved base URL: the bare CLI succeeds (the old test failure mode), while the new isolated `cli_tests` binary still passes. The full `cargo test --workspace` run is green and completes in about a minute when compiled (the earlier ~15-minute figure was dominated by cold compilation; rate-limit/backoff and OAuth E2E waits had already been shortened to deterministic millisecond-scale durations).
+- Docs updated in `docs/e2e-testing.md`, `docs/unit-tests.md`, `docs/wiki/Testing-and-Benchmarks.md`, and `docs/wiki/what-works-now.md`.
+- Version bumped 0.125.0 → 0.125.1 (patch — bug fix).
+
 ## [0.125.0] — 2026-08-20
 
 ### Bugfix: kb audit and fact-detail endpoints render the same changed_by wire strings (issue #380)

@@ -1,7 +1,9 @@
 //! Binary-level tests for the `mimir connector` CLI against a wiremock
 //! daemon (full clap → daemon-guard → HTTP-client path).
 
-use std::process::{Command, Stdio};
+mod common;
+
+use common::spawn_mimir_cli;
 
 use mimir_api_types::{
     ConnectorCatalogEntry, ConnectorCatalogResponse, ConnectorListResponse, ConnectorResponse,
@@ -19,42 +21,7 @@ fn spawn_mimir(
     stdin_bytes: Option<&[u8]>,
     envs: &[(&str, &str)],
 ) -> std::process::Output {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let config_dir = temp.path().join("config");
-    let data_dir = temp.path().join("data");
-    let home_dir = temp.path().join("home");
-    std::fs::create_dir_all(config_dir.join("mimir")).unwrap();
-    std::fs::create_dir_all(data_dir.join("mimir")).unwrap();
-    std::fs::create_dir_all(&home_dir).unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mimir"));
-    command
-        .args(args)
-        .env("NO_COLOR", "1")
-        .env("MIMIR_BASE_URL", base_url)
-        .env("XDG_CONFIG_HOME", &config_dir)
-        .env("XDG_DATA_HOME", &data_dir)
-        .env("HOME", &home_dir)
-        .env_remove("MIMIR_CONNECTOR_PASSWORD")
-        .env_remove("MIMIR_CONNECTOR_TOKEN")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    for (key, value) in envs {
-        command.env(key, value);
-    }
-    match stdin_bytes {
-        Some(bytes) => {
-            use std::io::Write;
-            let mut child = command.stdin(Stdio::piped()).spawn().expect("spawn mimir");
-            child
-                .stdin
-                .take()
-                .expect("piped stdin")
-                .write_all(bytes)
-                .expect("write stdin");
-            child.wait_with_output().expect("wait for mimir")
-        }
-        None => command.stdin(Stdio::null()).output().expect("spawn mimir"),
-    }
+    spawn_mimir_cli(args, base_url, stdin_bytes, envs)
 }
 
 fn run_mimir(args: &[&str], base_url: &str) -> (String, String, std::process::ExitStatus) {

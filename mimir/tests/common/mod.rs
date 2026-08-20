@@ -14,11 +14,74 @@ use std::time::Duration;
 use mimir_core::config::{Config, ReloadableConfig};
 use mimir_core::llm::MockLlmClient;
 
+/// Reserve a free loopback port by pre-binding and dropping the listener.
+///
+/// Used by the daemon-down CLI tests: no daemon-spawning test binds the
+/// returned port afterwards, so pointing `MIMIR_BASE_URL` at it makes
+/// "daemon unreachable" assertions independent of any real or leftover
+/// daemon on the default base URL (issue #384).
+#[allow(dead_code)]
+pub fn reserve_free_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    listener.local_addr().expect("ephemeral port").port()
+}
+
+/// Spawn the real `mimir` binary with an isolated environment: temp
+/// HOME/XDG dirs, the given `MIMIR_BASE_URL`, optional piped stdin and extra
+/// env vars, and connector-secret env vars stripped. The temp dir lives for
+/// the child's lifetime and the captured output is returned once it exits.
+/// Shared by the wiremock-backed CLI tests and the daemon-down tests so the
+/// isolation environment never drifts (issue #384).
+#[allow(dead_code)]
+pub fn spawn_mimir_cli(
+    args: &[&str],
+    base_url: &str,
+    stdin_bytes: Option<&[u8]>,
+    envs: &[(&str, &str)],
+) -> std::process::Output {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_dir = temp.path().join("config");
+    let data_dir = temp.path().join("data");
+    let home_dir = temp.path().join("home");
+    std::fs::create_dir_all(config_dir.join("mimir")).unwrap();
+    std::fs::create_dir_all(data_dir.join("mimir")).unwrap();
+    std::fs::create_dir_all(&home_dir).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mimir"));
+    command
+        .args(args)
+        .env("NO_COLOR", "1")
+        .env("MIMIR_BASE_URL", base_url)
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .env("HOME", &home_dir)
+        .env_remove("MIMIR_CONNECTOR_PASSWORD")
+        .env_remove("MIMIR_CONNECTOR_TOKEN")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    match stdin_bytes {
+        Some(bytes) => {
+            use std::io::Write;
+            let mut child = command.stdin(Stdio::piped()).spawn().expect("spawn mimir");
+            child
+                .stdin
+                .take()
+                .expect("piped stdin")
+                .write_all(bytes)
+                .expect("write stdin");
+            child.wait_with_output().expect("wait for mimir")
+        }
+        None => command.stdin(Stdio::null()).output().expect("spawn mimir"),
+    }
+}
+
 /// A running in-process daemon plus the environment a CLI subprocess needs
 /// to talk to it.
 pub struct TestDaemon {
     pub rt: tokio::runtime::Runtime,
-    pub server_handle: tokio::task::JoinHandle<anyhow::Result<()>>,
+    pub server_handle: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
     pub base_url: String,
     pub config_dir: PathBuf,
     pub data_dir: PathBuf,
@@ -26,8 +89,22 @@ pub struct TestDaemon {
     pub _temp: tempfile::TempDir,
 }
 
+impl Drop for TestDaemon {
+    /// Kill-on-drop: a test that panics before [`stop`](Self::stop) must not
+    /// leak a live daemon holding the reserved port and temp DB handles into
+    /// parallel suites (issue #384).
+    fn drop(&mut self) {
+        if let Some(handle) = self.server_handle.take() {
+            handle.abort();
+        }
+    }
+}
+
 impl TestDaemon {
     /// Start the daemon and wait until `GET /health` responds (up to 20 s).
+    /// Shared fixture: not every test binary uses every helper, so
+    /// dead-code analysis is relaxed.
+    #[allow(dead_code)]
     pub fn start() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let config_dir = temp.path().join("config");
@@ -138,7 +215,7 @@ db_path = "{jobs_db}"
 
         Self {
             rt,
-            server_handle,
+            server_handle: Some(server_handle),
             base_url,
             config_dir,
             data_dir,
@@ -204,12 +281,16 @@ db_path = "{jobs_db}"
     }
 
     /// Stop the daemon via `mimir stop` and await server exit (up to 5 s).
-    pub fn stop(self) {
+    /// Shared fixture: not every test binary uses every helper, so
+    /// dead-code analysis is relaxed.
+    #[allow(dead_code)]
+    pub fn stop(mut self) {
         let (_, stderr, status) = self.run_cli(&["stop"]);
         assert!(status.success(), "mimir stop failed: {stderr}");
-        let result = self.rt.block_on(async {
-            tokio::time::timeout(Duration::from_secs(5), self.server_handle).await
-        });
+        let server_handle = self.server_handle.take().expect("server handle");
+        let result = self
+            .rt
+            .block_on(async { tokio::time::timeout(Duration::from_secs(5), server_handle).await });
         assert!(result.is_ok(), "server did not exit within 5 seconds");
         assert!(
             result.unwrap().is_ok(),

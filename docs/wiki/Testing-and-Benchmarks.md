@@ -29,6 +29,7 @@ cargo fmt --all -- --check
 - Three new pure-helper benchmark suites cover pathways that were previously unbenchmarked.
 - Security-relevant tests now lock in that internal error details (LLM upstream text, context IDs, memory I/O messages, KG internal variants) are masked from HTTP clients with stable error codes.
 - The calendar knowledge-graph integration tests are deterministic under parallel load: they wait for the events-subsystem overlay (`get_event_by_fact`) instead of the bare fact list, and drive the tombstone cycle via `trigger_sync_by_slug` — closing the initial-cycle and tombstone-cycle races that previously made `calendar_kb_tests` flaky in full-suite runs (issues #320, #367).
+- The workspace suite is isolated from the developer's real install (issue #384): the daemon-down CLI tests probe a reserved free port with temp HOME/XDG instead of the default base URL, every daemon-spawning test runs against temp DBs with an injected API token, and the in-process `TestDaemon` / server-task fixtures kill their server on drop so a panicking test cannot leak a daemon that locks the real `knowledge.db`/`jobs.db` or holds a port. The full compiled suite runs in about a minute.
 
 ## Use cases
 

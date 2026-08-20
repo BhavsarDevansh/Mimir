@@ -209,6 +209,33 @@ mod tests {
 
     use mimir_core::config::Config;
 
+    /// Owns the spawned server task and aborts it on drop, so a panicking
+    /// assertion cannot leave a live server holding the temp DBs and the
+    /// reserved port for the rest of the suite (issue #384).
+    struct ServerGuard(Option<tokio::task::JoinHandle<anyhow::Result<()>>>);
+
+    impl ServerGuard {
+        fn new(handle: tokio::task::JoinHandle<anyhow::Result<()>>) -> Self {
+            Self(Some(handle))
+        }
+
+        fn is_finished(&self) -> bool {
+            self.0.as_ref().is_some_and(|h| h.is_finished())
+        }
+
+        fn into_inner(mut self) -> tokio::task::JoinHandle<anyhow::Result<()>> {
+            self.0.take().expect("server handle already taken")
+        }
+    }
+
+    impl Drop for ServerGuard {
+        fn drop(&mut self) {
+            if let Some(handle) = self.0.take() {
+                handle.abort();
+            }
+        }
+    }
+
     /// Attribution strings are the whole point of this fix: the journal must
     /// record *what* stopped the daemon. Lock the exact wording so a future
     /// refactor cannot silently drop attribution.
@@ -247,9 +274,12 @@ mod tests {
     #[tokio::test]
     async fn test_server_exits_after_stop() {
         use mimir_core::config::ReloadableConfig;
+        use mimir_core::llm::{LlmBackend, MockLlmClient};
 
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("context.db");
+        let kg_db_path = temp.path().join("knowledge.db");
+        let jobs_db_path = temp.path().join("jobs.db");
 
         // Find an available port.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -265,23 +295,33 @@ mod tests {
         config.server.bind_addr = addr.to_string();
         config.memory.char_limit = 10_000;
         config.context.db_path = Some(db_path);
+        config.knowledge.db_path = Some(kg_db_path);
+        config.scheduler.db_path = Some(jobs_db_path);
 
         let config = Arc::new(ReloadableConfig::new(
             config,
             temp.path().join("config.toml"),
         ));
 
-        // The daemon API is bearer-authenticated (issue #281); load the same
-        // token the server reads at startup so `/stop` is accepted.
-        let api_token = mimir_core::auth::load_or_create_api_token().unwrap();
-        let handle = tokio::spawn(async move { crate::server::start_server(config).await });
+        // Inject a known token and mock LLM so the test never reads or writes
+        // the real `~/.local/share/mimir` token file or DBs: the daemon API is
+        // bearer-authenticated (issue #281), and `Config::default()` resolves
+        // unset knowledge/scheduler db paths to the real data dir, which a
+        // leftover test daemon could then lock and hang parallel suites with
+        // (issue #384).
+        let api_token: Arc<str> = Arc::from("test-api-token");
+        let llm: Arc<dyn LlmBackend> = Arc::new(MockLlmClient::builder().build());
+        let token_for_server = api_token.clone();
+        let handle = ServerGuard::new(tokio::spawn(async move {
+            crate::server::start_server_with_llm(config, llm, token_for_server).await
+        }));
 
         // Poll until the server accepts a TCP connection (up to 5 s).
         let poll_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut ready = false;
         while tokio::time::Instant::now() < poll_deadline {
             if handle.is_finished() {
-                let result = handle.await.unwrap();
+                let result = handle.into_inner().await.unwrap();
                 panic!("server exited early: {:?}", result);
             }
             if tokio::net::TcpStream::connect(addr).await.is_ok() {
@@ -296,7 +336,7 @@ mod tests {
         let client = reqwest::Client::builder().http1_only().build().unwrap();
         let res = client
             .post(format!("http://{}/stop", addr))
-            .bearer_auth(&api_token)
+            .bearer_auth(api_token.as_ref())
             .send()
             .await;
 
@@ -323,7 +363,8 @@ mod tests {
         }
 
         // The server should exit within 5 seconds.
-        let result = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(5), handle.into_inner()).await;
         assert!(result.is_ok(), "server did not exit within 5 seconds");
         assert!(
             result.unwrap().is_ok(),

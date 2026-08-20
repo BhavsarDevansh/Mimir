@@ -1,6 +1,67 @@
 use crate::graph::KnowledgeGraph;
 use crate::*;
 
+/// Canonical relationship-type names the conversational extraction path
+/// accepts (issue #401). Seeded by migrations 013/025/031/036/037 and 050;
+/// the prompt-instructed `favourite_<thing>` family is an open set handled
+/// separately by [`KnowledgeGraph::resolve_canonical_relationship_type`].
+///
+/// Kept in sync with the seed by
+/// `canonical_const_matches_seeded_relationship_types` in
+/// `mimir-knowledge/tests/predicate_allowlist_test.rs`.
+pub const CANONICAL_PREDICATES: &[&str] = &[
+    // Migrations 013/025/031 (ids 1-12).
+    "is_in",
+    "visited",
+    "owns",
+    "works_as",
+    "has_partner",
+    "has_parent",
+    "born_on",
+    "died_on",
+    "located_in",
+    "created_on",
+    "has_preference",
+    "rejected_action",
+    // Migrations 036/037 (ids 13-31).
+    "studied_at",
+    "hobby",
+    "works_at",
+    "based_in",
+    "lived_in",
+    "has_pets",
+    "has_sibling",
+    "has_child",
+    "preferred_name",
+    "favourite_food",
+    "favourite_colour",
+    "health_condition",
+    "has_name",
+    "studied",
+    "completed_degree",
+    "educational_status",
+    "job_title",
+    "likes",
+    "dislikes",
+    // Migration 050.
+    "skill",
+    "has_appointment",
+    "allergy",
+    "medication",
+    "diagnosis",
+    "income",
+    "salary",
+    "password",
+    "ssn",
+    "social_security_number",
+    "bank_account",
+    "credit_card",
+    "insurance",
+];
+
+/// Prefix of the prompt-instructed `favourite_<thing>` predicate family.
+const FAVOURITE_PREDICATE_PREFIX: &str = "favourite_";
+
 impl KnowledgeGraph {
     // ------------------------------------------------------------------
     // Predicate registry
@@ -16,6 +77,54 @@ impl KnowledgeGraph {
                 None
             }
         }
+    }
+
+    /// Resolve a relationship-type name to its canonical id, rejecting
+    /// predicates outside the canonical allow-list instead of auto-creating
+    /// rows (issue #401).
+    ///
+    /// This is the strict counterpart to [`Self::ensure_relationship_type`]
+    /// used at the conversational extraction boundary. Resolution order:
+    /// 1. Normalize the incoming name.
+    /// 2. The prompt-instructed `favourite_<thing>` family is accepted and
+    ///    resolved via [`Self::ensure_relationship_type`] (auto-creating the
+    ///    specific favourite on first use).
+    /// 3. Query `relationship_type_aliases` for the normalized name; on a hit
+    ///    the canonical name must be in [`CANONICAL_PREDICATES`] — a type that
+    ///    was auto-created at runtime (e.g. a connector-emitted predicate) is
+    ///    rejected.
+    /// 4. Any other name is rejected with a clear error; no row is created.
+    pub async fn resolve_canonical_relationship_type(
+        &self,
+        name: &str,
+    ) -> Result<i16, KnowledgeError> {
+        let Some(normalized) = normalize_alias(name) else {
+            return Err(KnowledgeError::Validation(
+                "relationship type name cannot be empty".to_string(),
+            ));
+        };
+
+        if normalized.starts_with(FAVOURITE_PREDICATE_PREFIX) {
+            return self.ensure_relationship_type(&normalized).await;
+        }
+
+        let Some(id) = self.resolve_relationship_type_alias(&normalized).await? else {
+            return Err(KnowledgeError::Validation(format!(
+                "predicate '{name}' is not a canonical relationship type; refusing to auto-create. Use a predicate from the extraction prompt's predicate standards or a registered alias."
+            )));
+        };
+
+        let canonical = self.relationship_type_name(id).await;
+        if canonical
+            .as_deref()
+            .is_some_and(|c| CANONICAL_PREDICATES.contains(&c))
+        {
+            return Ok(id);
+        }
+
+        Err(KnowledgeError::Validation(format!(
+            "predicate '{name}' resolves to an auto-created relationship type, not a canonical predicate; refusing to insert. Use a predicate from the extraction prompt's predicate standards or a registered alias."
+        )))
     }
 
     /// Ensure a relationship type exists in the database, returning its stable id.

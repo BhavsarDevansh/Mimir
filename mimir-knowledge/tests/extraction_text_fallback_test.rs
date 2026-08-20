@@ -138,14 +138,15 @@ async fn test_text_fallback_with_bare_array() {
 
 // ---------------------------------------------------------------------------
 // Issue #136: alias + hierarchy is the single source of truth; the deprecated
-// hardcoded `normalize_predicate` map is removed. These tests lock in the new
-// behaviour: unknown predicates are auto-created as canonical types via
-// `ensure_relationship_type`, and predicate resolution happens before entity
-// validation so a rejected fact still registers its predicate.
+// hardcoded `normalize_predicate` map is removed. Issue #401 adds the
+// Rust-side allow-list: unknown predicates are rejected at the extraction
+// boundary instead of being auto-created as canonical types, and predicate
+// resolution happens before entity validation so a rejected fact never
+// registers its predicate.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_unknown_predicate_auto_created_no_split() {
+async fn test_unknown_predicate_rejected_no_auto_create() {
     let tg = TestGraph::new().await;
 
     // "wibbles_at" is not a seeded alias or canonical type.
@@ -166,30 +167,31 @@ async fn test_unknown_predicate_auto_created_no_split() {
         .await
         .unwrap();
 
-    // One fact inserted — no list-splitting for an unknown predicate.
-    assert_eq!(result.inserted.len(), 1);
-    assert!(result.errors.is_empty());
-
-    // The predicate was registered as a canonical relationship type.
-    let id = tg.kg.get_relationship_type_id("wibbles_at").await.unwrap();
-    assert!(id.is_some(), "unknown predicate should be auto-created");
-    let fact = &result.inserted[0];
-    assert_eq!(
-        tg.kg
-            .relationship_type_name(fact.relationship_type_id)
-            .await
-            .as_deref(),
-        Some("wibbles_at")
+    // The fact is rejected with a clear error and no row is auto-created.
+    assert!(result.inserted.is_empty());
+    assert_eq!(result.errors.len(), 1);
+    assert!(
+        result.errors[0].to_string().contains("wibbles_at"),
+        "error should name the rejected predicate: {}",
+        result.errors[0]
     );
-    assert_eq!(fact.object_literal.as_deref(), Some("Guitar"));
+    assert!(
+        tg.kg
+            .get_relationship_type_id("wibbles_at")
+            .await
+            .unwrap()
+            .is_none(),
+        "unknown predicate must not be auto-created"
+    );
 }
 
 #[tokio::test]
-async fn test_unknown_predicate_registered_even_when_fact_rejected() {
+async fn test_unknown_predicate_rejected_before_entity_validation() {
     let tg = TestGraph::new().await;
 
-    // Valid predicate but an invalid subject_type: the fact must be rejected,
-    // yet the predicate is resolved (and auto-created) before entity validation.
+    // An invented predicate with an invalid subject_type: the predicate is
+    // rejected first, so the fact never reaches entity validation and no row
+    // is registered.
     let tool_args = make_remember_tool_output(vec![serde_json::json!({
         "classification": "Explicit",
         "subject": "devansh",
@@ -207,14 +209,20 @@ async fn test_unknown_predicate_registered_even_when_fact_rejected() {
         .await
         .unwrap();
 
-    // The fact itself is rejected, but the batch tolerated the error.
+    // The fact is rejected with a predicate error, and the batch tolerated it.
     assert!(result.inserted.is_empty());
     assert_eq!(result.errors.len(), 1);
-
-    // The predicate was still registered via the alias pipeline.
-    let id = tg.kg.get_relationship_type_id("frobnicates").await.unwrap();
     assert!(
-        id.is_some(),
-        "predicate should be registered even when its fact is rejected"
+        result.errors[0].to_string().contains("frobnicates"),
+        "error should name the rejected predicate: {}",
+        result.errors[0]
+    );
+    assert!(
+        tg.kg
+            .get_relationship_type_id("frobnicates")
+            .await
+            .unwrap()
+            .is_none(),
+        "predicate must not be registered when its fact is rejected"
     );
 }

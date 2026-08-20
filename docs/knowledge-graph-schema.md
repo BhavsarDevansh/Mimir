@@ -85,9 +85,9 @@ Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `0
 
 Migration `013` introduced a controlled vocabulary for predicates as `predicates(id, name, description)` and `predicate_constraints(predicate_id, allowed_subject_type_id, allowed_object_type_id)`. Migration `031` renamed these to **`relationship_types`** and **`relationship_constraints`** (and dropped the old `predicates` / `Predicate`-enum mapping); the canonical predicate names now live in `relationship_types`, and `relationship_constraints` holds the valid subject/object type combinations per predicate.
 
-The original 11 seeded predicates (`is_in`, `visited`, `owns`, `works_as`, `has_partner`, `has_parent`, `born_on`, `died_on`, `located_in`, `created_on`, `has_preference`) were carried over, and migration `025` added `rejected_action` (id 12) for the threshold inference rule. The full set is data-driven and extensible — see [Relationship Type DAG](#relationship-type-dag) and [Category Aliases & Subtree Retrieval](#category-aliases--subtree-retrieval) for the alias and hierarchy layer.
+The original 11 seeded predicates (`is_in`, `visited`, `owns`, `works_as`, `has_partner`, `has_parent`, `born_on`, `died_on`, `located_in`, `created_on`, `has_preference`) were carried over, and migration `025` added `rejected_action` (id 12) for the threshold inference rule. Migration `050` seeds the 13 predicates the extraction path legitimately uses that were missing (`skill`, `has_appointment`, and the sensitive predicates migration `029` intended to mark: `allergy`, `medication`, `diagnosis`, `income`, `salary`, `password`, `ssn`, `social_security_number`, `bank_account`, `credit_card`, `insurance`), bringing the canonical set to 44. The full set is data-driven and extensible — see [Relationship Type DAG](#relationship-type-dag) and [Category Aliases & Subtree Retrieval](#category-aliases--subtree-retrieval) for the alias and hierarchy layer.
 
-Validation is enforced at fact-insert time via `validate_predicate(subject_type, predicate, object_type)`, which queries `relationship_constraints`.
+The conversational extraction path enforces a Rust-side canonical predicate allow-list (`CANONICAL_PREDICATES` in `mimir-knowledge/src/graph/predicates.rs`, issue #401): `resolve_canonical_relationship_type` accepts only seeded canonical predicates, their aliases, and the prompt-instructed `favourite_<thing>` family, and rejects anything else with a clear error instead of auto-creating a `relationship_types` row. The shared `normalize_and_insert` boundary remains permissive for connector-provenance facts until the ontology consolidation (issues #403/#412) seeds connector-emitted predicates.
 
 ---
 
@@ -174,6 +174,7 @@ Migrations are strictly ordered by foreign-key dependencies:
 40. `047` — Partial unique index on `entity_locations(entity_id)` scoped to `location_type_id = 6` (single `Geographic` row per place) (#196)
 41. `048` — `pending_location_meta` cache for sensitive-fact location shape across the confirmation boundary (#226)
 42. `049` — `connectors.durable_state` column: opaque, connector-owned durable state persisted by the supervisor (the Email connector's bounded LLM-extraction retry ledger) (#262)
+43. `050` — Seed remaining canonical predicates (`skill`, `has_appointment`, sensitive set) via name-keyed UPSERT + reconcile auto-created types (#401)
 
 ---
 
@@ -303,6 +304,17 @@ Alias resolution is normalized (`trim`, lowercase, spaces → underscores) and c
 3. On miss, create a new canonical row in `relationship_types` and immediately register the normalized name as a self-alias.
 
 Because every canonical name has a self-alias, the alias table is the only lookup source needed by both `ensure_relationship_type` and `get_relationship_type_id`.
+
+### Strict Allow-List Resolution (`resolve_canonical_relationship_type`)
+
+The conversational extraction path (issue #401) uses `resolve_canonical_relationship_type` instead of `ensure_relationship_type`. It resolves the name through the alias table exactly like `ensure_relationship_type`, but then requires the resolved canonical type to be part of the seeded `CANONICAL_PREDICATES` allow-list:
+
+1. The prompt-instructed `favourite_<thing>` family is accepted as an open set (the specific favourite is auto-created on first use).
+2. A name that resolves via `relationship_type_aliases` to a seeded canonical type is accepted.
+3. A name that resolves to a runtime-auto-created type (e.g. a connector-emitted predicate) is rejected — the row exists but is not canonical.
+4. Any other name is rejected with a clear `Validation` error; no row is created.
+
+The allow-list is pinned to the seed by `canonical_const_matches_seeded_relationship_types` in `mimir-knowledge/tests/predicate_allowlist_test.rs`, so a seed change without a matching allow-list update fails CI.
 
 ### Collision Invariants
 

@@ -338,7 +338,7 @@ async fn confirm_rebuilds_location_overlay_for_sensitive_where_fact() {
                 classification: Classification::Explicit,
                 subject: "Devansh".to_string(),
                 subject_type: "Person".to_string(),
-                relationship_type: "lives_at".to_string(),
+                relationship_type: "based_in".to_string(),
                 object: "10 Downing St".to_string(),
                 object_is_entity: false,
                 object_type: None,

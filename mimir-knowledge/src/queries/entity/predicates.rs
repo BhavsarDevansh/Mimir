@@ -85,14 +85,15 @@ pub(crate) async fn validate_predicate_in_tx(
     let Some(combos) = allowed_combos(&mut **tx, relationship_type_id).await? else {
         return Ok(());
     };
-    let subject_type: i16 = sqlx::query_scalar("SELECT entity_type_id FROM entities WHERE id = ?")
-        .bind(subject_id)
-        .fetch_one(&mut **tx)
-        .await?;
-    let object_type: i16 = sqlx::query_scalar("SELECT entity_type_id FROM entities WHERE id = ?")
-        .bind(object_id)
-        .fetch_one(&mut **tx)
-        .await?;
+    let (subject_type, object_type): (i16, i16) = sqlx::query_as(
+        "SELECT s.entity_type_id, o.entity_type_id \
+         FROM entities s JOIN entities o ON o.id = ? \
+         WHERE s.id = ?",
+    )
+    .bind(object_id)
+    .bind(subject_id)
+    .fetch_one(&mut **tx)
+    .await?;
     if combo_is_allowed(&combos, subject_type, object_type) {
         Ok(())
     } else {

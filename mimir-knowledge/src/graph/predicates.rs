@@ -66,8 +66,41 @@ pub const CANONICAL_PREDICATES: &[&str] = &[
     "insurance",
 ];
 
+/// Predicates that represent a collection of independent values, so a
+/// comma-separated object literal means multiple facts and distinct objects
+/// coexist instead of superseding one another.
+///
+/// Single source of truth shared by the extraction list splitter
+/// (`split_list_objects` in `extract/parse.rs`) and the insert overlap logic
+/// (`insert_fact_in_tx` in `queries/fact/insert.rs`), so the two can never
+/// drift apart. The open `favourite_<thing>` family is multi-valued through
+/// the same shared [`is_favourite_family_predicate`] helper. Every entry is a
+/// canonical predicate (pinned by `multi_valued_predicates_are_canonical` in
+/// `mimir-knowledge/tests/predicate_allowlist_test.rs`).
+pub const MULTI_VALUED_PREDICATES: &[&str] = &[
+    "hobby",
+    "likes",
+    "dislikes",
+    "favourite_colour",
+    "favourite_food",
+    "skill",
+    "has_pets",
+    "has_child",
+    "has_parent",
+    "has_sibling",
+    "has_partner",
+];
+
 /// Prefix of the prompt-instructed `favourite_<thing>` predicate family.
 const FAVOURITE_PREDICATE_PREFIX: &str = "favourite_";
+
+/// Whether a predicate name belongs to the open `favourite_<thing>` family
+/// (a non-empty thing after the prefix). Shared by the strict resolver and
+/// the list splitter so the family's shape is defined in one place.
+pub(crate) fn is_favourite_family_predicate(name: &str) -> bool {
+    name.strip_prefix(FAVOURITE_PREDICATE_PREFIX)
+        .is_some_and(|thing| !thing.is_empty())
+}
 
 impl KnowledgeGraph {
     // ------------------------------------------------------------------
@@ -112,10 +145,8 @@ impl KnowledgeGraph {
             ));
         };
 
-        if let Some(thing) = normalized.strip_prefix(FAVOURITE_PREDICATE_PREFIX) {
-            if !thing.is_empty() {
-                return self.ensure_relationship_type(&normalized).await;
-            }
+        if is_favourite_family_predicate(&normalized) {
+            return self.ensure_relationship_type(&normalized).await;
         }
 
         let Some(id) = self.resolve_relationship_type_alias(&normalized).await? else {

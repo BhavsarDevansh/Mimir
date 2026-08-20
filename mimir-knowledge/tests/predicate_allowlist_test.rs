@@ -330,6 +330,16 @@ async fn consolidated_aliases_resolve_to_canonical() {
 // Allow-list const is pinned to the seed
 // ---------------------------------------------------------------------------
 
+#[test]
+fn multi_valued_predicates_are_canonical() {
+    for name in mimir_knowledge::MULTI_VALUED_PREDICATES {
+        assert!(
+            mimir_knowledge::CANONICAL_PREDICATES.contains(name),
+            "multi-valued predicate {name} missing from CANONICAL_PREDICATES"
+        );
+    }
+}
+
 #[tokio::test]
 async fn canonical_const_matches_seeded_relationship_types() {
     let tg = TestGraph::new().await;

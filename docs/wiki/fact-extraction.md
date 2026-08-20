@@ -9,7 +9,7 @@ The fact-extraction pipeline processes chat input to extract and store facts as 
 The extraction pipeline applies Rust-side normalisation and splitting to improve the quality of extracted facts:
 
 - **Predicate resolution**: The LLM's relationship type is resolved through the alias table (the single source of truth). Common synonyms map to canonical names — for example, `attended` → `studied_at`, `hobbies` → `hobby` — purely from seeded aliases, with no hardcoded synonym list in code. An unknown predicate is rejected on the conversational path instead of being auto-registered as a new canonical type (issue #401).
-- **List splitting**: When the LLM outputs a single fact with a comma-separated list (e.g., `hobby → "Geopolitics, Software Development, Tech"`), the pipeline automatically splits it into three independent facts.
+- **List splitting**: When the LLM outputs a single fact with a comma-separated list (e.g., `hobby → "Geopolitics, Software Development, Tech"`), the pipeline automatically splits it into three independent facts. This applies to the multi-valued predicates (`hobby`, `likes`, `skill`, family relations, and the `favourite_<thing>` family such as `favourite_movie`), so a list of favourite films or pets is stored as separate facts rather than one comma-joined value.
 - **Deduplication**: Before inserting a new fact, the pipeline checks if an identical active fact already exists. If so, it increments the confidence instead of creating a duplicate.
 
 ## Shared with connectors

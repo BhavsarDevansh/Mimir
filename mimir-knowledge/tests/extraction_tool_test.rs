@@ -704,6 +704,59 @@ async fn test_split_hobbies_into_individual_facts() {
 }
 
 #[tokio::test]
+async fn test_split_favourite_family_into_individual_facts() {
+    let tg = TestGraph::new().await;
+    let tool_args = make_remember_tool_output(vec![serde_json::json!({
+        "classification": "Explicit",
+        "subject": "Devansh",
+        "subject_type": "Person",
+        "relationship_type": "favourite_movie",
+        "object": "Inception, Interstellar",
+        "object_is_entity": false,
+        "categories": [],
+    })]);
+    let mock = build_mock_with_tool_output(tool_args);
+
+    let result = tg
+        .kg
+        .extract_facts(&mock, "My favourite movies are Inception and Interstellar.")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.inserted.len(),
+        2,
+        "expected 2 favourite_movie facts, got {:?}",
+        result.inserted
+    );
+    let objects: Vec<Option<&str>> = result
+        .inserted
+        .iter()
+        .map(|f| f.object_literal.as_deref())
+        .collect();
+    assert!(objects.contains(&Some("Inception")));
+    assert!(objects.contains(&Some("Interstellar")));
+
+    // The open `favourite_<thing>` family must carry multi-valued insert
+    // semantics too: re-reading from the DB, both split facts must still be
+    // active rather than the second superseding the first.
+    let active = tg
+        .kg
+        .get_active_facts_at(
+            result.inserted[0].subject_id,
+            result.inserted[0].relationship_type_id,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let active_objects: Vec<Option<&str>> =
+        active.iter().map(|f| f.object_literal.as_deref()).collect();
+    assert_eq!(active_objects.len(), 2, "got {active_objects:?}");
+    assert!(active_objects.contains(&Some("Inception")));
+    assert!(active_objects.contains(&Some("Interstellar")));
+}
+
+#[tokio::test]
 async fn test_preferred_name_creates_alias() {
     let tg = TestGraph::new().await;
 

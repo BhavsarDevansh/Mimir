@@ -230,6 +230,8 @@ schedule_time = "02:00"
 
 ### K. Migration from `memory.md` to Knowledge Graph
 
+**Status (landed):** v0.37.0 (issue #111) deleted the file-backed system outright — `MemoryManager`, `MemoryLoader`, and `MemoryTool` were removed, not refactored, and the one-time seed below never ran because memory already flowed through the Knowledge Graph. The ranking formula shipped with two additional factors: priority (`memory_priority_id`, up to 2.0×) and centrality. The roadmap tracks the landed outcome in section 2.15; `docs/memory-system.md` documents the implemented pipeline.
+
 **`memory.md` is removed entirely.** The flat Markdown file no longer exists as a persistent artifact. Memory is rendered on demand via `mimir memory`.
 
 **`mimir memory` command — hybrid Rust + LLM condensation:**
@@ -243,12 +245,14 @@ schedule_time = "02:00"
 
 **Ranking algorithm (Rust):**
 ```
-score = confidence × category_weight × temporal_boost
+score = confidence × category_weight × temporal_boost × priority × centrality
 ```
 
 Category weights: Identity(1.00) > Preferences(0.90) > Relationships(0.85) > Health(0.80) > Upcoming(0.75) > Work/Location(0.60) > General(0.50).
 
 Temporal boost: within 7 days (2.0×), 14 days (1.5×), 30 days (1.2×), beyond (1.0×). Recurring dates (birthdays, anniversaries) detected by matching month+day across years.
+
+Priority: `memory_priority_id` gives critical facts up to a 2.0× multiplier. Centrality: facts about well-connected entities (people mentioned often) rank higher.
 
 **Fill algorithm:** Pull facts ≥0.7 confidence → identity facts always first (~200 chars) → sort remaining by score descending → fill budget greedily → truncate with `…`.
 

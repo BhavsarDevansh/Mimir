@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.128.2] — 2026-08-20
+
+### Bugfix: `memory.temporal_horizon` now drives the upcoming-events horizon (PR #431 review)
+
+- The chat, status, and memory routes passed a literal 30 days to `render_upcoming_section`, so changing `memory.temporal_horizon` (or `MIMIR_MEMORY_TEMPORAL_HORIZON`) had no effect. All three routes now read the live config snapshot (`cfg.memory.temporal_horizon`), matching the existing `MemoryCondenser` wiring for `condensation_top_n`.
+
+### Docs: PR #431 review corrections
+
+- Corrected the condensation contract in `Mimir-Implementation-Context.md` and `VISION/01-Core-Agent/Memory-System.md`: the LLM receives deterministic text rendered from the schema, while `condensation_top_n` (default 500) is a cache-invalidation control — a hash of the top-N fact IDs and scores gates when the LLM call is skipped.
+- Corrected the prompt refresh boundary in `VISION/01-Core-Agent/Memory-System.md`, `docs/memory-system.md`, and the Phase-2 roadmap: the memory-bearing system prompt is composed at session creation for non-incognito sessions and reused for the session's lifetime, while incognito requests build a fresh prompt per request (not injected before each turn).
+- Unified the ranking formula across the Phase-2 migration documents (`VISION/02-Knowledge-Graph/Phase-2-Design-Discussion.md` section K and roadmap section 2.14) to include the shipped priority and centrality factors: `confidence × category_weight × temporal_boost × priority × centrality`.
+- Renamed the roadmap success criterion to state that the legacy file-backed `memory.md` system was removed in v0.37.0 (issue #111) and the Knowledge Graph became the sole memory store — no data migration ran.
+- Updated the `MIMIR_MEMORY_TEMPORAL_HORIZON` description in `docs/wiki/configuration.md` to describe the upcoming-events horizon it now controls.
+- Version bumped 0.128.1 → 0.128.2 (patch — bugfix plus documentation corrections).
+
+## [0.128.1] — 2026-08-20
+
+### Docs: stale memory.md references removed from project context and VISION docs (issue #406)
+
+- Rewrote the memory sections of `Mimir-Implementation-Context.md` to describe the live knowledge-graph condensation pipeline: ranking formula (`confidence × category.memory_weight × temporal_boost × priority × centrality`), LLM condensation with deterministic Rust fallback, the upcoming-events section, and the regeneration triggers. The architecture diagram and daemon component tree no longer reference `memory.md` or `MemoryManager`/`MemoryLoader` (deleted in v0.37.0, issue #111), and the Phase 1 goal, roadmap summary row, and config paths section were updated (the CLI table already matched the live pipeline).
+- Rewrote `VISION/01-Core-Agent/Memory-System.md` to match the implemented KG-backed memory system (replacing the deleted `memory.md` design), following the same pattern as the VISION personality rewrite (issue #389).
+- Updated `VISION/09-Roadmap/Phase-2-Knowledge-Graph.md` section 2.15 and the success criteria to record the landed migration: `memory.md` was removed outright in v0.37.0 (issue #111), the one-time seed and `MemoryManager` facade refactor never shipped (now documented as obsolete rather than pending), and the success criterion is marked complete.
+- Added a landed-status note to `VISION/02-Knowledge-Graph/Phase-2-Design-Discussion.md` section K, and corrected the stale "Key facts I know about you:" phrasing in `docs/memory-system.md` and the Phase-2 roadmap to the actual system prompt header ("Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive)").
+- Version bumped 0.128.0 → 0.128.1 (patch — documentation update).
+
 ## [0.128.0] — 2026-08-20
 
 ### Refactor: single source of truth for multi-valued predicate list splitting (issue #405)

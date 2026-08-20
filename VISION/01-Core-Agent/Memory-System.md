@@ -1,195 +1,79 @@
-# memory.md — The Working Memory
+# Memory System
 
 ## Philosophy
 
-`memory.md` is Mimir's executive summary. A small, curated, always-hot cache of the most critical facts, system context, and pointers to deeper knowledge. It is injected into every system prompt so that even the very first interaction is grounded in what Mimir already knows.
+Mimir's memory is its executive summary — a small, curated, always-hot block of the most critical facts, system context, and pointers to deeper knowledge. It is injected into every system prompt so that even the very first interaction is grounded in what Mimir already knows.
 
 Think of it as the agent's **index card** — not the full encyclopedia, but the page numbers of the most important chapters.
+
+Memory is a *view* over the Knowledge Graph, not a separate store. The Knowledge Graph holds every fact at full granularity with provenance and history; the memory block is the ranked subset that fits inside the system prompt's character budget. Facts that do not make the cut are not lost — they remain queryable via `mimir kb query`, `mimir kb show`, and `mimir kb browse`.
 
 ## Role in the Architecture
 
 ```
 User Query
     ↓
-System Prompt (injected memory.md + personality + base instructions)
+System Prompt (personality preset + operating directives + condensed memory + upcoming section)
     ↓
 LLM reasons about the query
     ↓
-If memory.md alone is insufficient → Query Knowledge Graph, Connectors, or Reasoning Engine
+If the condensed memory is insufficient → `retrieve_context` tool → Knowledge Graph, Connectors, or Reasoning Engine
 ```
 
-`memory.md` reduces the need to hit the Knowledge Graph for trivial lookups. The LLM already knows the user's name, their current city, their primary email, their favourite editor, their upcoming flight. This saves tokens, latency, and complexity.
+The condensed memory reduces the need to hit the Knowledge Graph for trivial lookups. The LLM already knows the user's name, their current city, their primary email, their favourite editor, their upcoming flight. This saves tokens, latency, and complexity.
 
-## Contents
+## How It Works
 
-### Tier 1: Identity and Context (Always Present)
-These are so fundamental that they are always included:
+The memory block is rendered on demand from the Knowledge Graph by deterministic Rust code in `mimir-knowledge/src/queries/memory/` and `mimir-knowledge/src/condensation.rs`:
 
-```
-Devansh, born [DD MMM YYYY].
-Lives in [CITY].
-Software Developer (C# Fullstack).
-```
+1. Query the Knowledge Graph for facts about the user
+2. Score each fact with the ranking formula and select the top facts within the character budget
+3. Render the schema as deterministic text and send it to the LLM for natural-language condensation; a hash of the top-N facts (default 500, `condensation_top_n`) gates the cached result so unchanged memory skips the LLM call
+4. Validate the LLM output against the budget in Rust; fall back to deterministic template rendering on LLM failure or oversize output
+5. Cache the result in the `system_state` table (`key = "condensed_memory"`) so `mimir memory` prints instantly and daemon restarts survive
 
-### Tier 2: Active Projects and Environment
-Current work context the agent needs to function effectively:
+The legacy `memory.md` file-backed system was deleted in v0.37.0 (issue #111). There is no text file to keep in sync — the condensed block is always derived from the graph.
 
-```
-Active projects: mimir (~/code/mimir; cargo test,run), librechat (~/code/librechat; trunk serve).
-```
+## Ranking Formula
 
-### Tier 3: Critical Preferences
-Preferences that affect every interaction:
+Facts are scored deterministically in Rust:
 
 ```
-Prefers transparent communication, important-only proactivity, no medical topics in public.
-Calendar: auto-add flights (granted 2025-05-10).
+score = confidence × category.memory_weight × temporal_boost × priority × centrality
 ```
 
-### Tier 4: Temporal Facts (Auto-Rotating)
-Time-sensitive facts that are important *now* but may not be in a month:
+| Factor | Meaning |
+|--------|---------|
+| Confidence | How certain Mimir is, based on source quality and corroboration |
+| Category weight | Identity facts rank at the top, followed by preferences, relationships, and the rest of the taxonomy |
+| Temporal boost | Facts with a future `valid_from` (upcoming events and tasks) score higher the closer the date is, so imminent items surface |
+| Priority | `memory_priority_id` gives critical facts a 2× multiplier |
+| Centrality | Facts about well-connected entities (people mentioned often) rank higher |
 
-```
-Upcoming: flight JL043 Tokyo May25 11:00; Priya birthday Jun15.
-Recently moved to Berlin (March 2026).
-```
+Identity facts are always rendered first. The fill algorithm sorts the remaining facts by score descending, greedily fills the character budget (default 2,500), and truncates the last entry with `…` when the budget is exceeded.
 
-### Tier 5: Knowledge Graph Pointers
-Pointers to where deeper information lives, so the agent knows what to query:
+## Upcoming Section
 
-```
-KB: travel 12 destinations, work 2 positions, relationships (Alice), preferences 23 entries.
-```
+Alongside the condensed core-facts block, the daemon renders an upcoming-events section from the events overlay (`render_upcoming_section`): future one-time events, recurring events, and tasks that require user action. It is injected into the system prompt together with the condensed memory so the LLM surfaces what is coming up without extra tool calls.
 
-## Format
+## Identity Fact Seeding
 
-The default template is a free-form agent scratchpad with no rigid sections:
+When the server starts, it resolves the user entity from `[identity].name` in config. If the entity exists (or is created), the server seeds two identity facts automatically: `has_name` (the full name) and `preferred_name` (only if it differs). Both are categorised as Identity (category ID 110) so they rank at the top of the memory schema. Seeding is idempotent, so Mimir knows the user's name immediately after initialization without requiring a separate conversation to extract it.
 
-```markdown
-Mimir memory [0/2500]
+## Regeneration Triggers
 
-No memories yet.
-```
+Condensed memory is regenerated when:
+- A fact is inserted/updated/deleted that ranks in the top-N for memory inclusion (demand-driven via `BackgroundScheduler`)
+- `mimir memory --refresh` is called explicitly (force-submit)
+- Nightly optimization completes (confidence recalculation may re-rank facts)
 
-The agent writes compact, self-contained notes (one thought per line or bullet). It groups related facts organically and decides its own structure. Example populated memory:
+The scheduler ensures condensation only runs during LLM downtime so it never competes with active chats.
 
-```markdown
-Mimir memory [247/2500]
+## Context Injection
 
-Devansh, born [DD MMM YYYY].
-Lives in [CITY].
-Software Developer (C# Fullstack).
-Married to [WIFE]; her birthday [DD MM YYYY].
-```
+The memory-bearing system prompt is composed at session creation for non-incognito sessions — after the preset tone text and shared operating directives — and reused for the session's lifetime, preserving the LLM's prefix cache; incognito requests build a fresh prompt per request. The block is framed as a curated subset rather than an exhaustive picture ("Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive)"), signalling to the LLM that it should use the `retrieve_context` tool if it needs more.
 
-Agents use `replace` on the exact existing note to update it, preventing duplication.
-
-## Size and Budget
-
-**Hard limit:** 2,500 characters (~900 tokens)
-
-This is intentionally small. The goal is to be cheap and fast, not comprehensive. If the full context is needed, the agent queries the Knowledge Graph.
-
-**Budget allocation (suggested):**
-- Identity + System: ~400 chars
-- Active Projects: ~500 chars
-- Preferences: ~400 chars
-- Temporal: ~400 chars
-- KB Pointers: ~400 chars
-- Overhead (headers, delimiters): ~400 chars
-- **Total: ~2,500 chars**
-
-## Auto-Management
-
-The agent manages `memory.md` automatically using the `memory` tool:
-
-```rust
-enum MemoryAction {
-    Add { content: String },
-    Replace { old_text: String, content: String },
-    Remove { old_text: String },
-}
-```
-
-### When the Agent Adds to memory.md
-- New environment discovered (new project, new machine)
-- Critical preference learned (user explicitly stated)
-- Temporal fact becomes important (upcoming event within 30 days)
-- New KB pointer needed (new category of facts being stored)
-
-### When the Agent Removes from memory.md
-- Temporal fact expires (event passed)
-- Project no longer active (no activity in 90 days)
-- Preference overridden (user changed mind)
-- Environment changed (moved cities, switched editors)
-
-### Consolidation
-When memory approaches the limit, the agent consolidates:
-```
-Before: 3 separate entries
-  "User runs macOS 14"
-  "User has M3 MacBook Pro"
-  "User uses zsh with oh-my-zsh"
-
-After: 1 consolidated entry
-  "macOS 14, M3 MacBook Pro, zsh with oh-my-zosh"
-```
-
-## Relationship to Knowledge Graph
-
-```
-memory.md          Knowledge Graph
-     │                   │
-     │  ┌───────────────┐ │
-     └──┤ Hot Cache     ├─┘
-        │ (2,500 chars) │
-        └───────────────┘
-              │
-              ▼
-        ┌───────────────┐
-        │ Full Graph    │
-        │ (millions of  │
-        │ facts)        │
-        └───────────────┘
-```
-
-**Query order:**
-1. memory.md (injected in prompt, instant, free)
-2. Knowledge Graph (SQLite query, ~1-5ms, cheap)
-3. Connectors (API calls, ~100-500ms, may cost tokens)
-4. Reasoning Engine (multi-thread, ~1-10s, most expensive)
-
-**memory.md is always queried first because it's already in context.** Only if the answer isn't there does the agent escalate.
-
-## Frozen Snapshot
-
-Like Hermes Agent, memory.md is loaded once at session start and remains frozen for the duration of the conversation. This preserves the LLM's prefix cache for performance.
-
-Changes made during a session are written to disk immediately but do not appear in the active system prompt until the next session starts.
-
-## File Location
-
-```
-~/.config/mimir/memory.md
-```
-
-## Example: Full memory.md
-
-```markdown
-Mimir memory [1,890/2500]
-
-Devansh, born [DD MMM YYYY].
-Lives in [CITY].
-Software Developer (C# Fullstack).
-Married to [WIFE]; her birthday [DD MM YYYY].
-Uses macOS 14 on M3 MBP, zsh+oh-my-zsh, VSCode+Vim.
-Active projects: mimir (~/code/mimir; cargo test,run), librechat (~/code/librechat; trunk serve).
-Prefers transparent communication, important-only proactivity, no medical topics in public.
-Calendar: auto-add flights (granted 2025-05-10); DND 22:00–08:00.
-Upcoming: flight JL043 Tokyo May25 11:00; Priya birthday Jun15.
-Recently moved to Berlin (March 2026).
-KB: travel 12 destinations, work 2 positions, relationships (Alice), preferences 23 entries, health 2 allergies.
-```
+The block is frozen per session: non-incognito sessions reuse the system prompt captured at session creation, which preserves the LLM's prefix cache; incognito requests build a fresh prompt.
 
 ## Configuration
 
@@ -198,18 +82,18 @@ KB: travel 12 destinations, work 2 positions, relationships (Alice), preferences
 enabled = true
 char_limit = 2500
 auto_manage = true
-frozen_snapshot = true  # Load once per session
-
-# What categories to include
-include_identity = true
-include_projects = true
-include_preferences = true
-include_temporal = true
-include_kb_pointers = true
-
-# Temporal horizon (days into future to include events)
 temporal_horizon = 30
-
-# Project staleness threshold (days without activity)
-project_staleness = 90
+condensation_top_n = 500
 ```
+
+## Implementation
+
+- `mimir-knowledge/src/queries/memory/` — ranking, scoring, budget fill, rendering
+- `mimir-knowledge/src/models/memory.rs` — `MemorySchema`, `MemoryBucket`, `RankedFact`
+- `mimir-knowledge/src/condensation.rs` — LLM condensation pipeline with deterministic fallback
+- `mimir-knowledge/src/queries/system_state.rs` — `condensed_memory` cache read/write
+- `mimir-server/src/routes/memory.rs` — `/memory` GET and `/memory/refresh` POST
+- `mimir-server/src/routes/chat.rs` — system prompt memory injection
+- `mimir-core/src/scheduler.rs` — unified background scheduler
+
+See `docs/memory-system.md` for the canonical technical walkthrough and `docs/wiki/memory.md` for the user-facing guide.

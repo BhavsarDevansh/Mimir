@@ -139,8 +139,8 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 - [ ] `mimir kb optimization --status` and `--run-now` for manual control
 
 ### 2.12 Context Injection (Layer 2)
-- [ ] Daemon injects condensed memory into system prompt before each chat turn
-- [ ] Marked as "Key facts I know about you:" (not exhaustive — LLM knows to use tools)
+- [ ] System prompt with condensed memory is composed at session creation for non-incognito sessions and reused across turns; incognito requests rebuild it per request
+- [ ] Memory block marked "Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive)" and captured once per session (not exhaustive — LLM knows to use tools)
 - [ ] Condensed text stored in `system_state` table, regenerated on KG changes
 
 ### 2.13 Librarian Agent (Layer 2 background extraction) — #130
@@ -151,17 +151,16 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 
 ### 2.14 `mimir memory` Command
 - [ ] Renders condensed memory from KG on demand
-- [ ] Rust: fact selection + ranking (category weights × confidence × temporal boost)
+- [ ] Rust: fact selection + ranking (category weights × confidence × temporal boost × priority × centrality)
 - [ ] LLM: condensation into ≤2500 chars natural language
 - [ ] Rust: validation + budget enforcement + template fallback
 - [ ] `--json` flag for raw ranked facts
 - [ ] Recurring dates detected via month+day matching for temporal boost
 
 ### 2.15 Migration from `memory.md`
-- [ ] `memory.md` removed entirely as persistent artifact
-- [ ] One-time seed: parse legacy `memory.md` → classify via LLM → seed KG → rename to `.bak`
-- [ ] `MemoryManager` refactored: `load_memory()` queries KG, `save_memory()` removed
-- [ ] `MemoryManager` becomes thin facade over KG for Phase 1 compatibility
+- [x] `memory.md` removed entirely as persistent artifact — landed in v0.37.0 (issue #111), which deleted the file-backed system (`MemoryManager`, `MemoryLoader`, `MemorySnapshot`, `MemoryTool`) and made the Knowledge Graph the sole memory store
+- [x] `mimir memory` renders the condensed block on demand from the Knowledge Graph — no file to keep in sync (see `docs/memory-system.md`)
+- Note: the originally planned one-time seed (parse legacy file → LLM classify → seed KG → rename `.bak`) and the `MemoryManager` thin-facade refactor never shipped — v0.37.0 deleted the file system outright instead, because memory already flowed through the KG. Those steps are obsolete rather than pending.
 
 ### 2.16 CLI Commands (`mimir kb ...`)
 - [ ] Commands talk to daemon via Unix socket/TCP (same pattern as `mimir ask`)
@@ -212,7 +211,7 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 - [ ] Temporal queries work correctly (timeline vs contradiction)
 - [ ] Nightly optimization runs automatically via JobQueue
 - [ ] `mimir memory` produces concise, ranked condensation
-- [ ] Legacy `memory.md` successfully migrated
+- [x] Legacy file-backed `memory.md` system removed — v0.37.0 (issue #111) deleted it outright and the Knowledge Graph became the sole memory store; no data migration ran and memory renders from the graph
 - [ ] Obsidian export functional
 - [ ] All tests pass, benchmarks show acceptable performance with 10k+ facts
 

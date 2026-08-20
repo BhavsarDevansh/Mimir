@@ -2,7 +2,7 @@
 
 > **Created:** 2025-05-20
 >
-> **Last Updated:** 2026-08-16
+> **Last Updated:** 2026-08-20
 >
 > **Vision Docs:** `VISION/` directory (48 files, 10 sections)
 >
@@ -47,7 +47,7 @@ mimir (single binary)
 │   ├── LlmWorkerPool (shared across all requests)
 │   ├── ContextManager (shared across all sessions)
 │   ├── ToolRegistry + SkillRegistry
-│   ├── MemoryManager + MemoryLoader
+│   ├── KnowledgeGraph (memory ranking + condensation)
 │   └── Future: connectors, proactive agent, reasoning engine
 └── Client mode (mimir ask, chat, status, memory, stop)
     └── mimir-client (HTTP client → daemon)
@@ -107,9 +107,9 @@ If the user agrees, the daemon is started and the command is retried.
 │  │   Engine     │  │    Graph     │  │    Agent     │  │
 │  └──────────────┘  └──────────────┘  └──────────────┘  │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
-│  │  Connectors  │  │   memory.md  │  │    Vision    │  │
-│  │  Framework   │  │ (Working    │  │  Tracking    │  │
-│  └──────────────┘  │   Memory)    │  └──────────────┘  │
+│  │  Connectors  │  │   Memory     │  │    Vision    │  │
+│  │  Framework   │  │ (Condensed   │  └──────────────┘  │
+│  └──────────────┘  │   KG Block)  │                     │
 │                     └──────────────┘                     │
 └─────────────────────────────────────────────────────────┘
                            │
@@ -117,7 +117,7 @@ If the user agrees, the daemon is started and the command is retried.
 │                     Storage Layer                        │
 │         SQLite (local-first, single file)                │
 │  - Knowledge Graph (entities, facts, temporal data)     │
-│  - memory.md (hot cache, 2,500 char limit)              │
+│  - Condensed memory cache (system_state, 2,500 char)    │
 │  - Audit logs, patterns, preferences                    │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -190,12 +190,16 @@ The daemon will listen on both a Unix domain socket and a TCP socket once UDS is
 
 ## Memory System
 
-### Knowledge-Graph Memory (core-facts block)
-- Facts live in the SQLite knowledge graph; the condensed core-facts block is rendered within a ~2,500 character budget (~900 tokens)
-- Composed into the system prompt as the final block, after the preset tone text and the shared operating directives
+### Knowledge-Graph Memory (condensed block)
+
+- Memory is a view over the SQLite knowledge graph: `mimir memory` renders a condensed core-facts block within a ~2,500 character budget (~900 tokens), cached in `system_state` (`key = "condensed_memory"`) for instant retrieval
+- Ranking is deterministic Rust (`mimir-knowledge/src/queries/memory/`): `confidence × category.memory_weight × temporal_boost × priority × centrality`, with identity facts always first; the fill algorithm sorts by score and truncates the last entry with `…` when the budget is exceeded
+- Condensation: Rust renders the schema as deterministic text and sends it to the LLM for natural-language condensation; `condensation_top_n` (default 500) is a cache-invalidation control — a hash of the top-N fact IDs and scores gates when the LLM call is skipped; Rust validates the output against the budget and falls back to deterministic template rendering on LLM failure or oversize output (`mimir-knowledge/src/condensation.rs`)
+- Composed into the system prompt as the final block, after the preset tone text and the shared operating directives, combined with an upcoming-events section rendered from the events overlay
 - Auto-managed: `remember` extraction, background ingestion, and nightly optimization add, replace, remove, and re-rank facts
+- Regenerated on demand: a fact insert/update/delete that ranks in the top-N, `mimir memory --refresh`, or nightly optimization completion; the background scheduler runs condensation only during LLM downtime
 - Frozen per session: non-incognito sessions reuse the system prompt captured at session creation; incognito requests build a fresh prompt
-- Persisted to disk immediately on change; the condensed block is cached in `system_state` and regenerated on demand
+- No file: the legacy `memory.md` file-backed system was deleted in v0.37.0 (issue #111); see `docs/memory-system.md` for the full pipeline
 
 ### Context Manager
 - SQLite-backed session and message storage
@@ -245,7 +249,7 @@ The daemon will listen on both a Unix domain socket and a TCP socket once UDS is
 
 ## Phase 1: Core Agent (Current Plan)
 
-**Goal:** Build the foundational layer. The agent can start, hold a conversation, stream responses from an OpenAI-compatible endpoint, and manage memory.md.
+**Goal:** Build the foundational layer. The agent can start, hold a conversation, stream responses from an OpenAI-compatible endpoint, and manage knowledge-graph-backed memory.
 
 **Key deliverables:**
 - Single `mimir` binary with daemon and client modes
@@ -263,7 +267,7 @@ See `VISION/09-Roadmap/Phase-1-Core-Agent.md` for full task list.
 
 | Phase | Focus | Duration | Key Deliverables |
 |-------|-------|----------|-----------------|
-| 1 | Core Agent | 4-6 weeks | Single binary, daemon/client, CLI, chat, LLM, memory.md |
+| 1 | Core Agent | 4-6 weeks | Single binary, daemon/client, CLI, chat, LLM, KG-backed memory |
 | 2 | Knowledge Graph | 4-6 weeks | SQLite schema, entities, facts, temporal queries |
 | 3 | Connectors | 6-8 weeks | Gmail, Calendar, Photos, normalization pipeline |
 | 4 | Reasoning Engine | 6-8 weeks | Multi-thread investigation, meta-threads, streaming |
@@ -277,14 +281,14 @@ See `VISION/09-Roadmap/Phase-1-Core-Agent.md` for full task list.
 ### Config
 - User config: `~/.config/mimir/config.toml`
 - Default config: `config/default.toml`
-- memory.md: `~/.config/mimir/memory.md`
+- Memory: knowledge-graph-backed condensed block (no file; see `docs/memory-system.md`)
 - Data: `~/.local/share/mimir/`
 - Socket: `~/.local/share/mimir/mimir.sock`
 
 ### Key VISION Docs (if you need to reference)
 - `VISION/00-Overview/Vision-Statement.md` — Core premise and principles
 - `VISION/01-Core-Agent/Personality.md` — Personality system
-- `VISION/01-Core-Agent/Memory-System.md` — memory.md design
+- `VISION/01-Core-Agent/Memory-System.md` — KG-backed memory system design
 - `VISION/01-Core-Agent/Technical-Design.md` — Architecture, single binary design
 - `VISION/01-Core-Agent/User-Experience.md` — CLI and daemon interaction
 - `VISION/02-Knowledge-Graph/Learning-Modes.md` — Explicit vs casual learning

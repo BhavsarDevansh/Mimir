@@ -20,10 +20,11 @@ pub async fn memory_handler(State(state): State<Arc<AppState>>) -> Result<String
         }
     };
 
+    let cfg = state.config.snapshot().await;
     let upcoming = if let Some(user_id) = state.user_entity_id {
         match state
             .knowledge_graph
-            .render_upcoming_section(user_id, 30, 10)
+            .render_upcoming_section(user_id, cfg.memory.temporal_horizon as i64, 10)
             .await
         {
             Ok(text) => text,

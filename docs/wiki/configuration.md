@@ -176,6 +176,8 @@ kill -SIGHUP $(pidof mimir)
 
 This triggers an immediate reload of the config file.
 
+The SIGHUP handler is registered as soon as the daemon starts, so a SIGHUP sent during the startup window (for example, right after `mimir start` returns) is caught and reloads the config instead of terminating the daemon (issue #369).
+
 ### What Happens on Error
 
 - **Parse error** (invalid TOML): The old config is kept. Mimir logs a warning with the parse error details.

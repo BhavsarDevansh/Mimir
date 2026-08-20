@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.124.4] — 2026-08-20
+
+### Bugfix: SIGHUP config-reload handler is registered before its task is spawned (issue #369)
+
+- The SIGHUP hot-reload handler in `mimir-server/src/server.rs` is now registered synchronously by a dedicated `spawn_sighup_reload_handler` helper, before the tokio task is spawned: `tokio::signal::unix::signal()` installs the libc handler in its constructor, so a SIGHUP arriving in the window between spawn and the task's first poll (e.g. during startup under parallel load) is caught and triggers a config reload instead of hitting the default disposition and killing the daemon. This mirrors the SIGTERM/SIGINT registration in `spawn_os_signal_shutdown` (issue #329) and closes the same startup race. The handler task holds the shutdown watch sender so the channel stays open for the task's lifetime; no behaviour change otherwise.
+- Regression test: a child-process test (`server::tests::test_sighup_registered_before_spawn_reloads_config`) sends a real SIGHUP to an isolated re-executed child immediately after `spawn_sighup_reload_handler` returns and asserts the config is reloaded from disk — with the old in-task registration the child dies from the default disposition (signal 1), exactly as the original bug did.
+- Docs updated in `docs/config-hot-reload.md`, `docs/wiki/configuration.md`, and `docs/unit-tests.md` (mimir-server 44 → 45 lib tests).
+- Version bumped 0.124.3 → 0.124.4 (patch — bug fix).
+
 ## [0.124.3] — 2026-08-19
 
 ### Bugfix: calendar KB tests wait for the event overlay, closing the initial-cycle flake (issue #367)

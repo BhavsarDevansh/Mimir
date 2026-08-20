@@ -199,25 +199,7 @@ pub async fn start_server_with_llm_and_listener(
 
     // ---- SIGHUP handler for config hot-reload ----
     #[cfg(unix)]
-    {
-        let config_clone = Arc::clone(&config);
-        let mut shutdown_rx_clone = state.shutdown_tx.subscribe();
-        tokio::spawn(async move {
-            use tokio::signal::unix::{SignalKind, signal};
-            let mut sighup = signal(SignalKind::hangup()).expect("SIGHUP handler");
-            loop {
-                tokio::select! {
-                    _ = shutdown_rx_clone.changed() => break,
-                    _ = sighup.recv() => {
-                        match config_clone.reload().await {
-                            Ok(()) => tracing::info!("Config reloaded from SIGHUP"),
-                            Err(e) => tracing::warn!("Config reload failed: {}", e),
-                        }
-                    }
-                }
-            }
-        });
-    }
+    spawn_sighup_reload_handler(Arc::clone(&config), state.shutdown_tx.clone());
 
     let app = build_app(Arc::clone(&state));
 
@@ -249,4 +231,193 @@ pub async fn start_server_with_llm_and_listener(
     state.shutdown().await;
     server_result?;
     Ok(())
+}
+
+/// Spawn the SIGHUP config hot-reload handler.
+///
+/// The handler is registered synchronously, before the task is spawned:
+/// `tokio::signal::unix::signal()` installs the libc handler in its
+/// constructor, so a SIGHUP arriving before the spawned task is first polled
+/// (e.g. during startup, once the listener is already bound) is caught here
+/// instead of hitting the default disposition and killing the daemon (issue
+/// #369). Mirrors `spawn_os_signal_shutdown` in `crate::shutdown` (issue
+/// #329).
+#[cfg(unix)]
+fn spawn_sighup_reload_handler(
+    config: Arc<ReloadableConfig>,
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
+) {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut sighup = signal(SignalKind::hangup()).expect("SIGHUP handler");
+    // Subscribe before the task is spawned so a shutdown broadcast that
+    // lands before the task's first poll is still observed: a receiver that
+    // subscribes after the broadcast treats the current value as already
+    // seen, and `changed()` would wait for a newer notification that never
+    // arrives (the task retains `shutdown_tx`), leaving the task alive after
+    // server shutdown.
+    let mut shutdown_rx = shutdown_tx.subscribe();
+    tokio::spawn(async move {
+        // The sender is moved into the task so the watch channel stays open
+        // for the task's lifetime: `changed()` returns immediately on a
+        // closed channel, which would exit the loop before the SIGHUP
+        // listener is ever polled.
+        let _shutdown_tx = shutdown_tx;
+        if *shutdown_rx.borrow_and_update() {
+            // Shutdown was already broadcast before the task first polled
+            // (e.g. the server is draining): exit immediately instead of
+            // waiting for a newer notification.
+            return;
+        }
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.changed() => break,
+                _ = sighup.recv() => {
+                    match config.reload().await {
+                        Ok(()) => tracing::info!("Config reloaded from SIGHUP"),
+                        Err(e) => tracing::warn!("Config reload failed: {}", e),
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// Regression (issue #369): the SIGHUP handler must be registered
+    /// synchronously by `spawn_sighup_reload_handler`, before the spawned
+    /// task is first polled. Previously the handler was installed inside the
+    /// task, so a SIGHUP arriving in the window between the spawn and the
+    /// task's first poll hit the default disposition and killed the daemon
+    /// instead of triggering a config reload.
+    ///
+    /// The real SIGHUP is sent to an isolated child process (this test
+    /// re-executed with a marker env var) rather than to this process:
+    /// tokio's OS-signal listeners are process-global — every listener
+    /// registered for a signal kind receives the notification — so a SIGHUP
+    /// delivered here would also fire the SIGHUP listener that other tests
+    /// running concurrently in this binary install via
+    /// `start_server_with_llm_and_listener`, reloading their config
+    /// mid-test. In the child there are no other listeners, and if the
+    /// regression returns the child dies from the default disposition
+    /// (signal 1) exactly as the original bug did.
+    #[test]
+    fn test_sighup_registered_before_spawn_reloads_config() {
+        const CHILD_ENV: &str = "MIMIR_SIGHUP_REGRESSION_CHILD";
+        const CHILD_OK: &str = "mimir-sighup-regression-child-ok";
+        const TEST_NAME: &str = "test_sighup_registered_before_spawn_reloads_config";
+
+        if std::env::var_os(CHILD_ENV).is_none() {
+            // Parent: run the assertion in a fresh child process and verify
+            // it passed (see `crate::test_utils::run_child_regression_test`).
+            crate::test_utils::run_child_regression_test(
+                module_path!(),
+                TEST_NAME,
+                CHILD_ENV,
+                CHILD_OK,
+            );
+            return;
+        }
+
+        // Child: the actual regression assertion, in a process with no other
+        // signal listeners.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build child test runtime");
+        runtime.block_on(async {
+            use std::time::Duration;
+
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("config.toml");
+            // Only `llm.temperature` is set; every other field falls back to
+            // its serde default, which matches the in-memory
+            // `Config::default()`, so the reload below is not rejected by the
+            // sensitive-field gate. The file content (0.9) differs from the
+            // in-memory default (0.2), so the assertion observes the change
+            // actually applied by the SIGHUP-triggered reload.
+            std::fs::write(&path, "[llm]\ntemperature = 0.9\n").expect("write config");
+            let config = Arc::new(ReloadableConfig::new(
+                mimir_core::config::Config::default(),
+                path,
+            ));
+
+            let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+            spawn_sighup_reload_handler(Arc::clone(&config), shutdown_tx);
+
+            // No await between the call and the signal: if the handler were
+            // only installed when the spawned task is polled (the bug), this
+            // SIGHUP kills the child via the default disposition (signal 1)
+            // before the assertion below runs.
+            nix::sys::signal::kill(nix::unistd::getpid(), nix::sys::signal::Signal::SIGHUP)
+                .expect("kill(SIGHUP) failed");
+
+            // The handler must catch the signal and reload the config from
+            // disk. Poll the snapshot so the assertion observes the reload
+            // even though the handler runs in a separate task.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                if config.snapshot().await.llm.temperature == 0.9 {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "SIGHUP sent immediately after spawn_sighup_reload_handler did not trigger a config reload"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            println!("{CHILD_OK}");
+        });
+    }
+
+    /// Regression (PR #421 CodeRabbit finding): the shutdown receiver must be
+    /// subscribed before the handler task is spawned, and the task must check
+    /// the current shutdown value before entering its loop. A shutdown
+    /// broadcast that lands between the spawn and the task's first poll is
+    /// otherwise missed: the task retains `shutdown_tx`, so `changed()` waits
+    /// for a newer notification that never arrives and the handler stays
+    /// alive after server shutdown.
+    ///
+    /// The broadcast is sent without yielding to the runtime, so the spawned
+    /// task has definitely not been polled yet (current-thread runtime). The
+    /// test observes the broadcast through its own receiver, then expects the
+    /// channel to close once the task runs and exits, dropping the retained
+    /// sender.
+    #[tokio::test]
+    async fn test_sighup_handler_exits_when_shutdown_before_first_poll() {
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[llm]\ntemperature = 0.9\n").expect("write config");
+        let config = Arc::new(ReloadableConfig::new(
+            mimir_core::config::Config::default(),
+            path,
+        ));
+
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+        spawn_sighup_reload_handler(config, shutdown_tx.clone());
+
+        // Broadcast before yielding, so the handler task has not been polled
+        // yet.
+        shutdown_tx.send(true).expect("send shutdown");
+        drop(shutdown_tx);
+
+        // The test's own receiver was subscribed before the broadcast, so it
+        // observes the change...
+        shutdown_rx
+            .changed()
+            .await
+            .expect("observe shutdown broadcast");
+        // ...and when the handler task runs it must see the current value,
+        // exit, and drop its retained sender, closing the channel. A handler
+        // that subscribed only after the broadcast would wait forever for a
+        // newer notification and time out here.
+        tokio::time::timeout(Duration::from_secs(5), shutdown_rx.changed())
+            .await
+            .expect("handler task must exit after shutdown")
+            .expect_err("channel must close when the handler task exits");
+    }
 }

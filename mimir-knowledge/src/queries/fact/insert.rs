@@ -5,25 +5,12 @@ use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
+use crate::MULTI_VALUED_PREDICATES;
 use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::enums::RelationType;
 use crate::models::fact::{Fact, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
 use crate::queries::fact::status::ranges_overlap;
-
-pub const MULTI_VALUED_PREDICATES: [&str; 11] = [
-    "hobby",
-    "likes",
-    "dislikes",
-    "favourite_colour",
-    "favourite_food",
-    "skill",
-    "has_pets",
-    "has_child",
-    "has_parent",
-    "has_sibling",
-    "has_partner",
-];
 
 // ---------------------------------------------------------------------------
 // Corroboration constants (#79)

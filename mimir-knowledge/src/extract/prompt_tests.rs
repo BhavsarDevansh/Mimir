@@ -113,6 +113,18 @@ async fn prompt_keeps_kg_focused_base_rules() {
 }
 
 #[tokio::test]
+async fn prompt_states_one_fact_per_list_item_without_parsing_example() {
+    let (kg, _dir) = fresh_kg().await;
+    let prompt = build_extraction_prompt(&kg, None, &sample_messages())
+        .await
+        .unwrap();
+
+    assert!(prompt.contains("Emit one fact per list item"));
+    assert!(!prompt.contains("BAD (one fact)"));
+    assert!(!prompt.contains("Splitting lists"));
+}
+
+#[tokio::test]
 async fn prompt_has_no_identity_line() {
     // Identity is read from the core-facts block, not rendered as a
     // separate line (deviation from the original #139 spec).

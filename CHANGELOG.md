@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.128.0] — 2026-08-20
+
+### Refactor: single source of truth for multi-valued predicate list splitting (issue #405)
+
+- The extraction prompt no longer carries the BAD/GOOD list-splitting parsing example — it keeps a single high-level rule ("Emit one fact per list item") — and the Rust splitter (`split_list_objects` in `mimir-knowledge/src/extract/parse.rs`) is the one deterministic enforcement mechanism, per the project's "logic in Rust, not in prompts" rule.
+- The 11-predicate allow-list is consolidated into the single shared `MULTI_VALUED_PREDICATES` constant in `mimir-knowledge/src/graph/predicates.rs`, re-exported at the crate root and from `queries::fact` (the old path is preserved). Both the list splitter and the insert overlap logic (`insert_fact_in_tx`) read from it, so the split set and the multi-valued coexist semantics can never drift apart; a new test pins every multi-valued predicate as canonical.
+- The splitter now handles the open `favourite_<thing>` family generically via the shared `is_favourite_family_predicate` helper (the same shape check the strict resolver uses), so `favourite_movie → "Inception, Interstellar"` splits into two facts instead of only the two named favourites (`favourite_colour`/`favourite_food`) — closing the drift between the prompt's `favourite_{{thing}}` standard and the Rust splitter.
+- Tests: unit coverage for the `favourite_*` split in `parse.rs`, a full-pipeline integration test in `extraction_tool_test.rs`, a prompt-shape test in `prompt_tests.rs`, and the canonical-subset pin in `predicate_allowlist_test.rs`.
+- Docs updated in `docs/fact-extraction-pipeline.md`, `docs/wiki/fact-extraction.md`, and `docs/wiki/what-works-now.md`.
+- Version bumped 0.127.0 → 0.128.0 (minor — refactor plus the backwards-compatible `favourite_*` splitting extension).
+
 ## [0.127.0] — 2026-08-20
 
 ### Refactor: consolidate redundant KG predicates and seed the relationship-type DAG (issue #403)

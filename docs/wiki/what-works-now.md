@@ -206,7 +206,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Provenance tracking | ✅ Works | Source tracking with `connector_instance_id` FK + `raw_reference` + typed audit log with `change_type`/`changed_by`. |
 | Forgetting system | ✅ Works | Trash (30-day retention), cascade forget, restore, bulk operations with safeguards. |
 | FTS5 search | ✅ Works | Full-text search over entities and aliases with top-fact retrieval. |
-| Fact extraction pipeline | ✅ Works | LLM → Rust validation → entity resolution (exact → alias → FTS5 fuzzy ≥ 0.9, type-filtered → create) → confidence → sensitive confirmation → insert ([#55](https://github.com/BhavsarDevansh/Mimir/issues/55), [#182](https://github.com/BhavsarDevansh/Mimir/issues/182)). |
+| Fact extraction pipeline | ✅ Works | LLM → Rust validation → entity resolution (exact → alias → FTS5 fuzzy ≥ 0.9, type-filtered → create) → confidence → sensitive confirmation → insert ([#55](https://github.com/BhavsarDevansh/Mimir/issues/55), [#182](https://github.com/BhavsarDevansh/Mimir/issues/182)); comma-separated lists are split into one fact per item for the shared multi-valued predicate set, including the open `favourite_<thing>` family ([#405](https://github.com/BhavsarDevansh/Mimir/issues/405)). |
 | `mimir kb` CLI (daemon-routed) | ✅ Works | All commands route through daemon HTTP. |
 | Pending sensitive-fact confirmation | ✅ Works | `GET /kb/pending`, confirm/reject routes + CLI; optional reject `--reason` in the audit log ([#141](https://github.com/BhavsarDevansh/Mimir/issues/141)). |
 | Pending-fact auto-cleanup | ✅ Works | Daily `knowledge.pending_cleanup` job hard-deletes unconfirmed facts past `retention_days` (default 7). |

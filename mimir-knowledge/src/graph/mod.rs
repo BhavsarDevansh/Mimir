@@ -27,7 +27,8 @@ mod preferences;
 mod relationships;
 mod sources;
 
-pub use predicates::CANONICAL_PREDICATES;
+pub(crate) use predicates::is_favourite_family_predicate;
+pub use predicates::{CANONICAL_PREDICATES, MULTI_VALUED_PREDICATES};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

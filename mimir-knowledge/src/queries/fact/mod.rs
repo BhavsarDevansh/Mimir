@@ -23,12 +23,13 @@ mod read;
 mod status;
 mod update;
 
+pub use crate::MULTI_VALUED_PREDICATES;
 pub use browse::{
     FactWithObjectName, FactWithSources, count_facts_by_relationship_subtree,
     count_facts_by_subject_filtered, get_audit_log, get_facts_by_relationship_subtree,
     get_facts_by_subject_filtered,
 };
-pub use insert::{MULTI_VALUED_PREDICATES, insert_fact, insert_fact_in_tx};
+pub use insert::{insert_fact, insert_fact_in_tx};
 pub use pending::{PendingFactRow, list_pending};
 pub use read::{get_active_facts_at, get_by_id, get_by_object, get_by_predicate, get_by_subject};
 pub use status::{ranges_overlap, set_status, set_status_tx, update_valid_until};

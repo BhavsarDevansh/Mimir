@@ -68,7 +68,11 @@ pub async fn normalize_and_insert(
 
         // Canonicalise the predicate: `ensure_relationship_type` normalises,
         // consults the alias table (single source of truth), and auto-creates
-        // a canonical type + self-alias on a miss. The id threads through to
+        // a canonical type + self-alias on a miss. This shared boundary stays
+        // permissive for connector-provenance facts — the conversational path
+        // already enforced the `CANONICAL_PREDICATES` allow-list upstream
+        // (issue #401), and connector-emitted predicates are tracked by the
+        // ontology consolidation (issues #403/#412). The id threads through to
         // the per-fact processor so the resolution is not repeated downstream.
         let relationship_type_id = match kg.ensure_relationship_type(&fact.relationship_type).await
         {

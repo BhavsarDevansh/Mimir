@@ -27,6 +27,8 @@ mod preferences;
 mod relationships;
 mod sources;
 
+pub use predicates::CANONICAL_PREDICATES;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;

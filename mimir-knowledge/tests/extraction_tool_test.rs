@@ -198,7 +198,7 @@ async fn test_temporal_correction() {
     let devansh = tg.create_person("devansh").await;
 
     // Pre-insert an open-ended fact.
-    tg.create_fact_with_temporal(devansh, "lives_in", None, None, None, SourceType::UserEdit)
+    tg.create_fact_with_temporal(devansh, "based_in", None, None, None, SourceType::UserEdit)
         .await;
 
     let now = chrono::Utc::now();
@@ -208,7 +208,7 @@ async fn test_temporal_correction() {
         "classification": "Correction",
         "subject": "devansh",
         "subject_type": "Person",
-        "relationship_type": "lives_in",
+        "relationship_type": "based_in",
         "object": "Manchester",
         "object_is_entity": false,
         "correction_scope": scope,
@@ -243,7 +243,7 @@ async fn test_correction_no_scope_defaults_to_temporal_at_now() {
     let devansh = tg.create_person("devansh").await;
 
     // Pre-insert an open-ended fact.
-    tg.create_fact_with_temporal(devansh, "lives_in", None, None, None, SourceType::UserEdit)
+    tg.create_fact_with_temporal(devansh, "based_in", None, None, None, SourceType::UserEdit)
         .await;
 
     // The LLM emits a Correction classification but omits correction_scope
@@ -253,7 +253,7 @@ async fn test_correction_no_scope_defaults_to_temporal_at_now() {
         "classification": "Correction",
         "subject": "devansh",
         "subject_type": "Person",
-        "relationship_type": "lives_in",
+        "relationship_type": "based_in",
         "object": "Manchester",
         "object_is_entity": false,
         "correction_scope": null,

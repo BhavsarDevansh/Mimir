@@ -8,7 +8,7 @@ The fact-extraction pipeline processes chat input to extract and store facts as 
 
 The extraction pipeline applies Rust-side normalisation and splitting to improve the quality of extracted facts:
 
-- **Predicate resolution**: The LLM's relationship type is resolved through the alias table (the single source of truth). Common synonyms map to canonical names — for example, `attended` → `studied_at`, `hobbies` → `hobby` — purely from seeded aliases, with no hardcoded synonym list in code. An unknown predicate is auto-registered as a new canonical type.
+- **Predicate resolution**: The LLM's relationship type is resolved through the alias table (the single source of truth). Common synonyms map to canonical names — for example, `attended` → `studied_at`, `hobbies` → `hobby` — purely from seeded aliases, with no hardcoded synonym list in code. An unknown predicate is rejected on the conversational path instead of being auto-registered as a new canonical type (issue #401).
 - **List splitting**: When the LLM outputs a single fact with a comma-separated list (e.g., `hobby → "Geopolitics, Software Development, Tech"`), the pipeline automatically splits it into three independent facts.
 - **Deduplication**: Before inserting a new fact, the pipeline checks if an identical active fact already exists. If so, it increments the confidence instead of creating a duplicate.
 
@@ -87,4 +87,8 @@ You can always:
 
 ### Predicate Resolution Is Data-Driven (v0.50.0)
 
-As of issue #136, Mimir no longer ships a hardcoded synonym map for relationship types. Every fact's predicate is resolved through `ensure_relationship_type`, which consults the `relationship_type_aliases` table (seeded by migrations `036`/`037`) and auto-registers unknown predicates as new canonical types. Resolution errors are tolerated per-fact, so one malformed predicate won't block the rest of a batch. End-user behaviour is unchanged: `attended` still resolves to `studied_at`, `hobbies` to `hobby`, and so on. To teach Mimir a new synonym, register an alias against the canonical relationship type instead of waiting for a code change.
+As of issue #136, Mimir no longer ships a hardcoded synonym map for relationship types. Every fact's predicate is resolved through the `relationship_type_aliases` table (seeded by migrations `036`/`037`), so `attended` still resolves to `studied_at`, `hobbies` to `hobby`, and so on. To teach Mimir a new synonym, register an alias against the canonical relationship type instead of waiting for a code change.
+
+### Predicates Are Allow-Listed (v0.126.0)
+
+As of issue #401, the conversational extraction path enforces a Rust-side canonical predicate allow-list: the LLM must use one of the seeded predicates (or a registered alias), and anything else — for example an invented `moved_into` — is rejected with a clear error instead of being silently stored as a new predicate. This keeps the predicate vocabulary stable so synonyms corroborate and supersede each other correctly, and it means the memory renderer never falls back to a bare invented verb. The prompt-instructed `favourite_<thing>` family (e.g. `favourite_movie`) remains available. One malformed predicate never blocks the rest of a batch — the error is reported and the other facts are still stored.

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.126.0] — 2026-08-20
+
+### Bugfix: conversational extraction enforces the canonical predicate allow-list (issue #401)
+
+- The chat extraction path (`extracted_to_normalized` in `mimir-knowledge/src/extract/pipeline.rs`) now resolves predicates through the new `KnowledgeGraph::resolve_canonical_relationship_type`, which enforces the Rust-side `CANONICAL_PREDICATES` allow-list: seeded canonical predicates and their aliases resolve as before, the prompt-instructed `favourite_<thing>` family is accepted, and any other predicate (e.g. an LLM-invented `moved_into`) is rejected with a clear `Validation` error instead of auto-creating a `relationship_types` row. Per-fact errors are still tolerated, so one bad predicate never aborts the batch.
+- Migration `050_seed_canonical_predicates_and_reconcile.sql` seeds the 13 predicates the extraction path legitimately uses that were missing (`skill`, `has_appointment`, and the sensitive predicates migration `029` intended to mark: `allergy`, `medication`, `diagnosis`, `income`, `salary`, `password`, `ssn`, `social_security_number`, `bank_account`, `credit_card`, `insurance`), bringing the canonical set to 44, and deletes auto-created relationship types that no fact references (cascading to their aliases, constraints, and hierarchy edges). Auto-created types with facts are preserved; repointing them onto canonical predicates is the ontology consolidation's job (issues #403/#412). The `favourite_<thing>` open set requires a non-empty thing, so a bare `favourite_` is rejected like any other unknown predicate.
+- The shared `normalize_and_insert` boundary remains permissive for connector-provenance facts — connector-emitted predicates (`has_event`, `attending`, `took_photo_at`, email LLM predicates) are tracked by the ontology consolidation work.
+- Tests: new `mimir-knowledge/tests/predicate_allowlist_test.rs` (12 tests) covers invented-predicate rejection, batch tolerance, alias/favourite resolution, strict-resolver behaviour (including rejection of a bare `favourite_` prefix), the allow-list-to-seed pin, and the reconciliation migration (including cascade cleanup of orphaned aliases); the old auto-creation tests in `extraction_text_fallback_test.rs` were inverted to assert rejection, and chat-path tests using non-canonical predicates (`lives_in`, `lives_at`) now use the canonical `based_in`.
+- Docs updated in `docs/fact-extraction-pipeline.md`, `docs/knowledge-graph-schema.md`, `docs/wiki/fact-extraction.md`, and `docs/wiki/what-works-now.md`.
+- Version bumped 0.125.2 → 0.126.0 (minor — bug fix plus the new public `resolve_canonical_relationship_type` API and the additive migration).
+
 ## [0.125.2] — 2026-08-20
 
 ### Docs: VISION personality doc matches the implemented preset system (issue #389)

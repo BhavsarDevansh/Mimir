@@ -24,6 +24,7 @@ pub mod tools;
 
 mod graph;
 
+pub use graph::CANONICAL_PREDICATES;
 pub use graph::{KnowledgeError, KnowledgeGraph};
 
 pub(crate) fn normalize_alias(alias: &str) -> Option<String> {

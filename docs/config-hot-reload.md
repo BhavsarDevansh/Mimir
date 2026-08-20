@@ -54,7 +54,8 @@ Uses `notify` 8.2.0 with `notify-debouncer-full` 0.7.0:
 ### SIGHUP Handler (Unix only)
 
 Uses `tokio::signal::unix::signal(SignalKind::hangup())`:
-- Spawned as a tokio task that loops on `sighup.recv().await`.
+- The handler is registered **synchronously** by `spawn_sighup_reload_handler` in `mimir-server/src/server.rs`, before the tokio task is spawned: `tokio::signal::unix::signal()` installs the libc handler in its constructor, so a SIGHUP arriving before the task is first polled (e.g. during startup) is caught instead of hitting the default disposition and killing the daemon. This mirrors the SIGTERM/SIGINT registration in `spawn_os_signal_shutdown` (issue #329) and closes the same startup race (issue #369).
+- The spawned task loops on `sighup.recv().await`; it holds the shutdown watch sender so the channel stays open for the task's lifetime.
 - On each signal, calls `config.reload().await` and logs success or warning.
 - Exits when the shutdown watch channel fires.
 

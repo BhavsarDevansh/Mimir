@@ -385,32 +385,12 @@ mod tests {
 
         if std::env::var_os(CHILD_ENV).is_none() {
             // Parent: run the assertion in a fresh child process and verify
-            // it passed. The child prints `CHILD_OK` only when it actually
-            // ran the assertion, so a future rename that makes the `--exact`
-            // filter match nothing fails loudly instead of passing silently.
-            // libtest names tests crate-relative (no crate-name prefix), but
-            // `module_path!()` includes the crate — strip the first segment.
-            let module = module_path!()
-                .split_once("::")
-                .map_or(module_path!(), |(_, rest)| rest);
-            let filter = format!("{module}::{TEST_NAME}");
-            let output = std::process::Command::new(std::env::current_exe().expect("current_exe"))
-                .arg("--exact")
-                .arg(&filter)
-                .arg("--nocapture")
-                .env(CHILD_ENV, "1")
-                .output()
-                .expect("failed to spawn the SIGTERM regression child process");
-            assert!(
-                output.status.success(),
-                "SIGTERM regression child failed: {}\nstdout:\n{}\nstderr:\n{}",
-                output.status,
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(
-                String::from_utf8_lossy(&output.stdout).contains(CHILD_OK),
-                "SIGTERM regression child did not run the assertion"
+            // it passed (see `crate::test_utils::run_child_regression_test`).
+            crate::test_utils::run_child_regression_test(
+                module_path!(),
+                TEST_NAME,
+                CHILD_ENV,
+                CHILD_OK,
             );
             return;
         }

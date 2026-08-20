@@ -17,6 +17,9 @@ pub mod shutdown;
 pub mod state;
 pub mod types;
 
+#[cfg(test)]
+mod test_utils;
+
 pub use app::build_app;
 pub use server::{start_server, start_server_with_llm, start_server_with_llm_and_listener};
 pub(crate) use shutdown::ShutdownSource;

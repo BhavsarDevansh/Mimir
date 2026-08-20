@@ -42,8 +42,9 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 
 - `error.rs`: 15 tests for every `ApiError` response helper — status codes, error codes, `Retry-After` header on `QueueFull`, and (security-relevant) verification that internal error details (context IDs, LLM upstream text, memory I/O messages, KG internal variants) are masked from clients.
 - `routes/kb/helpers.rs`: 5 tests — `status_name` / `source_type_name` / `change_type_name` / `changed_by_name` wire-contract strings (incl. `content_update` and `Unknown` fallback) and `parse_status` wire-string parsing.
+- `server.rs`: 1 child-process regression test — `spawn_sighup_reload_handler` must register the SIGHUP handler synchronously before spawning its task, so a SIGHUP sent immediately after the call is caught and reloads the config instead of killing the process via the default disposition (issue #369; same pattern as the SIGTERM regression in `shutdown.rs`).
 
-44 lib tests (up from 38).
+45 lib tests (up from 38).
 
 ## `mimir-connectors`
 

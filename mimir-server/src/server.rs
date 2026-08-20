@@ -199,25 +199,7 @@ pub async fn start_server_with_llm_and_listener(
 
     // ---- SIGHUP handler for config hot-reload ----
     #[cfg(unix)]
-    {
-        let config_clone = Arc::clone(&config);
-        let mut shutdown_rx_clone = state.shutdown_tx.subscribe();
-        tokio::spawn(async move {
-            use tokio::signal::unix::{SignalKind, signal};
-            let mut sighup = signal(SignalKind::hangup()).expect("SIGHUP handler");
-            loop {
-                tokio::select! {
-                    _ = shutdown_rx_clone.changed() => break,
-                    _ = sighup.recv() => {
-                        match config_clone.reload().await {
-                            Ok(()) => tracing::info!("Config reloaded from SIGHUP"),
-                            Err(e) => tracing::warn!("Config reload failed: {}", e),
-                        }
-                    }
-                }
-            }
-        });
-    }
+    spawn_sighup_reload_handler(Arc::clone(&config), state.shutdown_tx.clone());
 
     let app = build_app(Arc::clone(&state));
 
@@ -249,4 +231,133 @@ pub async fn start_server_with_llm_and_listener(
     state.shutdown().await;
     server_result?;
     Ok(())
+}
+
+/// Spawn the SIGHUP config hot-reload handler.
+///
+/// The handler is registered synchronously, before the task is spawned:
+/// `tokio::signal::unix::signal()` installs the libc handler in its
+/// constructor, so a SIGHUP arriving before the spawned task is first polled
+/// (e.g. during startup, once the listener is already bound) is caught here
+/// instead of hitting the default disposition and killing the daemon (issue
+/// #369). Mirrors `spawn_os_signal_shutdown` in `crate::shutdown` (issue
+/// #329).
+#[cfg(unix)]
+fn spawn_sighup_reload_handler(
+    config: Arc<ReloadableConfig>,
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
+) {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut sighup = signal(SignalKind::hangup()).expect("SIGHUP handler");
+    tokio::spawn(async move {
+        // The sender is moved into the task so the watch channel stays open
+        // for the task's lifetime: `changed()` returns immediately on a
+        // closed channel, which would exit the loop before the SIGHUP
+        // listener is ever polled.
+        let mut shutdown_rx = shutdown_tx.subscribe();
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.changed() => break,
+                _ = sighup.recv() => {
+                    match config.reload().await {
+                        Ok(()) => tracing::info!("Config reloaded from SIGHUP"),
+                        Err(e) => tracing::warn!("Config reload failed: {}", e),
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression (issue #369): the SIGHUP handler must be registered
+    /// synchronously by `spawn_sighup_reload_handler`, before the spawned
+    /// task is first polled. Previously the handler was installed inside the
+    /// task, so a SIGHUP arriving in the window between the spawn and the
+    /// task's first poll hit the default disposition and killed the daemon
+    /// instead of triggering a config reload.
+    ///
+    /// The real SIGHUP is sent to an isolated child process (this test
+    /// re-executed with a marker env var) rather than to this process:
+    /// tokio's OS-signal listeners are process-global — every listener
+    /// registered for a signal kind receives the notification — so a SIGHUP
+    /// delivered here would also fire the SIGHUP listener that other tests
+    /// running concurrently in this binary install via
+    /// `start_server_with_llm_and_listener`, reloading their config
+    /// mid-test. In the child there are no other listeners, and if the
+    /// regression returns the child dies from the default disposition
+    /// (signal 1) exactly as the original bug did.
+    #[cfg(unix)]
+    #[test]
+    fn test_sighup_registered_before_spawn_reloads_config() {
+        const CHILD_ENV: &str = "MIMIR_SIGHUP_REGRESSION_CHILD";
+        const CHILD_OK: &str = "mimir-sighup-regression-child-ok";
+        const TEST_NAME: &str = "test_sighup_registered_before_spawn_reloads_config";
+
+        if std::env::var_os(CHILD_ENV).is_none() {
+            // Parent: run the assertion in a fresh child process and verify
+            // it passed (see `crate::test_utils::run_child_regression_test`).
+            crate::test_utils::run_child_regression_test(
+                module_path!(),
+                TEST_NAME,
+                CHILD_ENV,
+                CHILD_OK,
+            );
+            return;
+        }
+
+        // Child: the actual regression assertion, in a process with no other
+        // signal listeners.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build child test runtime");
+        runtime.block_on(async {
+            use std::time::Duration;
+
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("config.toml");
+            // All fields except `llm.temperature` fall back to their serde
+            // defaults, so the parsed config's sensitive fields match
+            // `Config::default()` and the reload below is not rejected.
+            std::fs::write(&path, "[llm]\ntemperature = 0.2\n").expect("write config");
+            let config = Arc::new(ReloadableConfig::new(
+                mimir_core::config::Config::default(),
+                path.clone(),
+            ));
+
+            // Rewrite the file with a new non-sensitive value; the
+            // SIGHUP-triggered reload must apply it.
+            std::fs::write(&path, "[llm]\ntemperature = 0.9\n").expect("rewrite config");
+
+            let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+            spawn_sighup_reload_handler(Arc::clone(&config), shutdown_tx);
+
+            // No await between the call and the signal: if the handler were
+            // only installed when the spawned task is polled (the bug), this
+            // SIGHUP kills the child via the default disposition (signal 1)
+            // before the assertion below runs.
+            nix::sys::signal::kill(nix::unistd::getpid(), nix::sys::signal::Signal::SIGHUP)
+                .expect("kill(SIGHUP) failed");
+
+            // The handler must catch the signal and reload the config from
+            // disk. Poll the snapshot so the assertion observes the reload
+            // even though the handler runs in a separate task.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                if config.snapshot().await.llm.temperature == 0.9 {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "SIGHUP sent immediately after spawn_sighup_reload_handler did not trigger a config reload"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            println!("{CHILD_OK}");
+        });
+    }
 }

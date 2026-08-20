@@ -1,13 +1,25 @@
 # Personality System
 
 ## Philosophy
+
 The agent's personality is not cosmetic — it shapes how it asks for permission, how it explains its reasoning, how it admits uncertainty, and how it builds trust over time. The default personality is designed to make the user feel informed, in control, and gradually confident in the agent's judgment.
 
-## Default Personality: Transparently Reasoning
+## Built-In Presets
+
+Personality is implemented as preset system prompts. The four built-in presets ship with Mimir and their tone text is hardcoded in Rust in `mimir-core/src/personality.rs`:
+
+| Preset | Key Traits |
+|--------|-----------|
+| `transparent` (default) | Warm, efficient, shows its work briefly, admits uncertainty, respects the user's pace, speaks as a collaborator |
+| `concise` | Minimal words, bullet points over paragraphs, no reasoning unless asked |
+| `warm` | Conversational and companion-like, acknowledges context and effort, uses the user's name |
+| `formal` | Neutral and structured, full sentences, no contractions, precise terminology |
+
+The `transparent` preset embodies the behaviour described below.
+
+### Default Personality: Transparently Reasoning
 
 The agent shows its work. It is warm but not obsequious, efficient but not terse, and above all transparent about what it knows, what it infers, and what it does not know.
-
-### Characteristics
 
 **1. Shows Its Work** When making a suggestion, it summarizes the pattern or evidence that led to it. This is not verbose by default — it is one or two sentences — but it is always available in full via `--verbose`.
 
@@ -37,72 +49,46 @@ The agent shows its work. It is warm but not obsequious, efficient but not terse
 | Correction received | "Got it — I will not mention medical topics unless you ask. I have deleted the relevant facts." | "Okay." |
 | Unknown answer | "I do not know. I checked your calendar, photos, and messages and found nothing." | "I am unable to process your request at this time." |
 
-## Personality Configuration
+## Preset Selection
 
-Users can customize the agent's personality via the config file or by editing `personality.toml`.
+For normal sessions, the active preset is a single `preset` name string resolved when the session prompt is created. Incognito chats resolve it per request. The sources below have increasing precedence:
 
-```toml
-[personality]
-name = "Ariadne"
-style = "transparent"  # transparent | concise | warm | formal
-verbosity = "normal"     # quiet | normal | verbose
-proactive_tone = "suggestive"  # suggestive | direct | gentle
-humor = "subtle"         # none | subtle | dry | playful
-```
+1. Config file: `[personality] preset = "transparent"` in `~/.config/mimir/config.toml` (the default when unset)
+2. Environment: `MIMIR_PERSONALITY_PRESET`
+3. CLI: `--personality <name>` / `-p <name>` on `mimir ask` and `mimir chat`
+4. REPL: `/personality <name>` inside `mimir chat` (and `/personality` alone shows the current preset)
+5. API: the per-request `personality_preset` field on chat requests
 
-### Preset Personalities
+When the requested name is unknown, Mimir logs a warning and falls back to `transparent`. If the personalities directory cannot be resolved, Mimir logs a warning and skips custom presets; known names still resolve, and unknown names still fall back to `transparent`.
 
-**Concise (The Secretary)**
-- Minimal words, maximum information density
-- No reasoning shown unless explicitly asked
-- Bullet points over paragraphs
-- Good for power users who want speed
+## Custom Presets
 
-**Warm (The Companion)**
-- Slightly more conversational
-- Uses the user's name naturally
-- Acknowledges effort and context
-- Good for users who want an emotional connection
+Users can add custom presets as plain Markdown files: `<name>.personality.md` in the `personalities/` subdirectory of the XDG-resolved user config directory (`~/.config/mimir/personalities/` on Linux). The file stem (without the `.personality` suffix) is the preset name and the file body is used verbatim as the preset tone text — no frontmatter, TOML, or other syntax is parsed. Files that do not end in `.personality.md` are ignored, and custom presets override built-ins when names collide. The preset name is then selected through any of the mechanisms above.
 
-**Formal (The Professional)**
-- Neutral, structured language
-- Full sentences, no contractions
-- Precise terminology
-- Good for professional or shared-device contexts
+## System Prompt Composition
 
-**Transparent (Default)**
-- As documented above
-- Balances warmth with information
-- Good for most users
+The final system prompt is composed in Rust by `Personality::system_prompt` when a session starts (and per request for incognito chats), in this order:
 
-## Custom Personality
+1. The active preset's tone text.
+2. The shared operating directives, which encode Mimir's behavioural invariants — do not invent facts, dispatch the retrieval agent when context is insufficient, and call `remember` for anything worth saving (issue #138). They are owned by Rust and appended to every preset, built-in or custom, so behaviour never depends on preset wording or on which LLM model is configured.
+3. The core-facts block, a condensed subset of knowledge-graph memory injected when facts exist and explicitly framed as starting context, not an exhaustive picture.
 
-Advanced users can write a custom personality file:
+Preset text only controls tone. Conditional logic, tool rules, and workflow orchestration live in Rust, never in prompts.
 
-```toml
-[personality]
-name = "Custom"
-system_prompt = """You are a personal intelligence assistant. You are direct, slightly dry, and extremely precise. You never apologize for existing. You state facts and inferences clearly. When uncertain, you say so. When wrong, you correct yourself without drama."""
+## Discovery & Diagnostics (planned)
 
-[personality.proactive]
-greeting = "Heads up:"
-permission_request = "Pattern detected. Grant permission?"
-uncertainty_phrase = "Unverified inference:"
-```
+First-class discovery is planned but not yet implemented: a `mimir personality list` CLI command, optional description metadata in custom preset files, and visible warnings when the configured preset is missing or a custom file is invalid (issue #387). Until then, the runtime API (`Personality::list_presets`) exposes the available names and an unknown preset falls back to `transparent` with a log warning.
 
-The system prompt is passed to the LLM on every interaction. The proactive phrases override default templates.
+## Non-Goals
 
-## Sensitivity and Context Awareness
+- A standalone `personality.toml` file or TOML-defined tone, phrase, or context fields — never implemented and not planned
+- Tone knobs (`style`, `verbosity`, `proactive_tone`, `humor`) — presets are prompt text and Rust owns behaviour
+- Proactive phrase overrides — proactive behaviour is composed in Rust, not in preset text
+- Per-context tone shifts (`context.public` / `context.private`) — context sensitivity lives outside the personality system
 
-The personality system is integrated with the sensitivity engine. If the agent detects the user is in a public or shared context (e.g., via ambient audio, presence of others, or explicit mode), it automatically shifts to a more discreet tone.
+## Related
 
-```toml
-[personality.context.private]
-style = "transparent"
-verbosity = "normal"
-
-[personality.context.public]
-style = "concise"
-verbosity = "quiet"
-sensitive_topics = "redacted"  # Do not mention medical, financial, or relationship topics
-```
+- `docs/personality-system.md` — technical reference for the implementation
+- `docs/wiki/personality.md` — user-facing guide
+- #387 — preset discovery & diagnostics (planned)
+- #6 — original personality system (closed)

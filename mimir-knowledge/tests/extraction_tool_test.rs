@@ -736,6 +736,24 @@ async fn test_split_favourite_family_into_individual_facts() {
         .collect();
     assert!(objects.contains(&Some("Inception")));
     assert!(objects.contains(&Some("Interstellar")));
+
+    // The open `favourite_<thing>` family must carry multi-valued insert
+    // semantics too: re-reading from the DB, both split facts must still be
+    // active rather than the second superseding the first.
+    let active = tg
+        .kg
+        .get_active_facts_at(
+            result.inserted[0].subject_id,
+            result.inserted[0].relationship_type_id,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let active_objects: Vec<Option<&str>> =
+        active.iter().map(|f| f.object_literal.as_deref()).collect();
+    assert_eq!(active_objects.len(), 2, "got {active_objects:?}");
+    assert!(active_objects.contains(&Some("Inception")));
+    assert!(active_objects.contains(&Some("Interstellar")));
 }
 
 #[tokio::test]

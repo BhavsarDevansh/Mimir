@@ -73,8 +73,9 @@ pub const CANONICAL_PREDICATES: &[&str] = &[
 /// Single source of truth shared by the extraction list splitter
 /// (`split_list_objects` in `extract/parse.rs`) and the insert overlap logic
 /// (`insert_fact_in_tx` in `queries/fact/insert.rs`), so the two can never
-/// drift apart. Every entry is a canonical predicate (pinned by
-/// `multi_valued_predicates_are_canonical` in
+/// drift apart. The open `favourite_<thing>` family is multi-valued through
+/// the same shared [`is_favourite_family_predicate`] helper. Every entry is a
+/// canonical predicate (pinned by `multi_valued_predicates_are_canonical` in
 /// `mimir-knowledge/tests/predicate_allowlist_test.rs`).
 pub const MULTI_VALUED_PREDICATES: &[&str] = &[
     "hobby",

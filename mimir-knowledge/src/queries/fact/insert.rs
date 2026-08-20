@@ -5,12 +5,12 @@ use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
-use crate::MULTI_VALUED_PREDICATES;
 use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::enums::RelationType;
 use crate::models::fact::{Fact, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
 use crate::queries::fact::status::ranges_overlap;
+use crate::{MULTI_VALUED_PREDICATES, is_favourite_family_predicate};
 
 // ---------------------------------------------------------------------------
 // Corroboration constants (#79)
@@ -151,9 +151,13 @@ pub async fn insert_fact_in_tx(
     .await?;
 
     // Collect all overlapping facts.
-    // For multi-valued predicates (e.g. hobby, has_sibling), facts with
-    // different objects are independent and should not supersede each other.
-    let is_multi_valued = MULTI_VALUED_PREDICATES.contains(&relationship_type_name);
+    // For multi-valued predicates (e.g. hobby, has_sibling) and the open
+    // `favourite_<thing>` family, facts with different objects are independent
+    // and should not supersede each other. The same allow-list and family
+    // helper drive the extraction list splitter (`split_list_objects`), so the
+    // split set and the multi-valued coexist semantics cannot drift apart.
+    let is_multi_valued = MULTI_VALUED_PREDICATES.contains(&relationship_type_name)
+        || is_favourite_family_predicate(relationship_type_name);
     let overlaps: Vec<&Fact> = existing
         .iter()
         .filter(|ef| {

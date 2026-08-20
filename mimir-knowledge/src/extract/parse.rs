@@ -79,8 +79,10 @@ pub fn parse_entity_type(s: &str) -> Result<EntityType, KnowledgeError> {
 /// open `favourite_<thing>` family — expand it into multiple
 /// `ExtractedFact`s.
 ///
-/// We only split on simple commas to avoid breaking phrases like
-/// "Manchester, UK" — that predicate won't be in the allow-list anyway.
+/// Splitting is a best-effort pass on simple commas: the prompt already
+/// instructs the model to emit one fact per list item, and the splitter is the
+/// deterministic safety net for crammed lists. Predicates outside the
+/// multi-valued set and the open favourite family pass through untouched.
 pub(super) fn split_list_objects(fact: &ExtractedFact) -> Vec<ExtractedFact> {
     let canon = fact.relationship_type.as_str();
     if !MULTI_VALUED_PREDICATES.contains(&canon) && !is_favourite_family_predicate(canon) {

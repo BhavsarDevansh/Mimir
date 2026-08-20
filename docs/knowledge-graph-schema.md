@@ -89,6 +89,8 @@ The original 11 seeded predicates (`is_in`, `visited`, `owns`, `works_as`, `has_
 
 The conversational extraction path enforces a Rust-side canonical predicate allow-list (`CANONICAL_PREDICATES` in `mimir-knowledge/src/graph/predicates.rs`, issue #401): `resolve_canonical_relationship_type` accepts only seeded canonical predicates, their aliases, and the prompt-instructed `favourite_<thing>` family, and rejects anything else with a clear error instead of auto-creating a `relationship_types` row. The shared `normalize_and_insert` boundary remains permissive for connector-provenance facts until the ontology consolidation (issues #403/#412) seeds connector-emitted predicates.
 
+The seeded `relationship_constraints` are enforced at the write boundary (issue #402): every insert path (`insert_fact_in_tx` and the pending-confirmation path `insert_sensitive_fact`) validates entity-object facts against the seeded (subject, object) entity-type pairs. A pair outside the seeded set is rejected with `KnowledgeError::InvalidRelationshipConstraint` before any overlap/supersession side effects. Two deliberate exemptions keep the permissive contract: predicates with no seeded constraint rows (auto-created and connector-emitted types) accept any entity types, and literal-object facts carry no object type so they always pass. The validator is `validate_predicate` in `mimir-knowledge/src/queries/entity/predicates.rs` (public typed form) with `validate_predicate_in_tx` as the shared insert-path helper; `mimir-knowledge/tests/relationship_constraint_test.rs` pins the contract on the single, batch, normalize, and sensitive paths.
+
 ---
 
 ## Enum ↔ Lookup Mapping

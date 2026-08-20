@@ -25,6 +25,16 @@ pub(super) async fn insert_sensitive_fact(
 
     let mut tx = kg.pool().begin().await?;
 
+    // Enforce the seeded subject/object entity-type constraints (issue #402)
+    // before writing the pending row, mirroring `insert_fact_in_tx`.
+    queries::entity::validate_predicate_in_tx(
+        &mut tx,
+        relationship_type_id,
+        new_fact.subject_id,
+        new_fact.object_id,
+    )
+    .await?;
+
     let memory_priority_id: i16 = sqlx::query_scalar(
         "SELECT COALESCE(r.default_memory_priority_id, p.id) \
          FROM relationship_types r \

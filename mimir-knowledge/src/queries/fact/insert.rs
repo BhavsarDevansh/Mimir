@@ -138,6 +138,18 @@ pub async fn insert_fact_in_tx(
         }
     }
 
+    // 0b. Enforce the seeded subject/object entity-type constraints for
+    // entity-object facts (issue #402). Predicates without seeded constraints
+    // and literal-object facts pass through; a violation rejects the fact
+    // before any overlap/supersession side effects.
+    crate::queries::entity::validate_predicate_in_tx(
+        tx,
+        relationship_type_id,
+        new_fact.subject_id,
+        new_fact.object_id,
+    )
+    .await?;
+
     // 1. Temporal overlap check against same subject + predicate.
     let existing: Vec<Fact> = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \

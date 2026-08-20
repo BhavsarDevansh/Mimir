@@ -13,7 +13,7 @@ use mimir_api_types::{
 };
 
 use crate::error;
-use crate::routes::kb::helpers::{parse_datetime, resolve_entity_id, status_name};
+use crate::routes::kb::helpers::{changed_by_name, parse_datetime, resolve_entity_id, status_name};
 use crate::routes::kb::params::{AuditQueryParams, BrowseQueryParams, ProfileQueryParams};
 use crate::state::AppState;
 
@@ -172,7 +172,7 @@ pub async fn kb_audit_handler(
             old_value: r.old_value,
             new_value: r.new_value,
             changed_at: r.changed_at.to_rfc3339(),
-            changed_by: r.changed_by_name,
+            changed_by: changed_by_name(r.changed_by_id),
             reason: r.reason,
         })
         .collect();

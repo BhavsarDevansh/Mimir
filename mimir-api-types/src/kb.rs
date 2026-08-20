@@ -350,7 +350,7 @@ mod tests {
             old_value: Some("Paris".to_string()),
             new_value: Some("London".to_string()),
             changed_at: "2020-01-01T00:00:00Z".to_string(),
-            changed_by: Some("user".to_string()),
+            changed_by: Some("User".to_string()),
             reason: Some("correction".to_string()),
         },
         sparse: AuditRow {

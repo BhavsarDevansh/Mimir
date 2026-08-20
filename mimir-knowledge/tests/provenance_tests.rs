@@ -565,7 +565,7 @@ async fn query_audit_log_filtered() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].entity_name.as_deref(), Some("Alice"));
     assert_eq!(rows[0].change_type_name, "status_change");
-    assert_eq!(rows[0].changed_by_name.as_deref(), Some("user"));
+    assert_eq!(rows[0].changed_by_id, Some(ChangedBy::User as i16));
 }
 
 #[tokio::test]

@@ -28,7 +28,10 @@
 -- cascade). Auto-created types WITH facts are preserved — repointing existing
 -- facts onto canonical predicates is the ontology consolidation's job (issue
 -- #403), and the strict resolver rejects new facts with them.
-PRAGMA foreign_keys = OFF;
+-- The DELETE relies on foreign-key enforcement (the app enables it on every
+-- connection) so the cascade removes the type's aliases, constraints, and
+-- hierarchy edges; with foreign_keys OFF the self-alias would survive as an
+-- orphan and later connector-path inserts would fail on a dangling id.
 
 -- 1. Canonical predicates (name-keyed UPSERT).
 INSERT INTO relationship_types (name, description, sensitive) VALUES
@@ -64,5 +67,3 @@ ON CONFLICT(alias) DO UPDATE SET
 DELETE FROM relationship_types
 WHERE description LIKE 'Auto-created relationship_type: %'
   AND id NOT IN (SELECT DISTINCT relationship_type_id FROM facts);
-
-PRAGMA foreign_keys = ON;

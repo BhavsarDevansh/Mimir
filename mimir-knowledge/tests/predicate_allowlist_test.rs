@@ -376,12 +376,52 @@ async fn reconciliation_migration_deletes_unreferenced_auto_created_types() {
         .unwrap();
     assert_eq!(without, 0, "zero-fact auto-created type must be deleted");
 
+    // The delete must cascade to the self-alias: an orphaned alias would
+    // resolve to a dangling id and make later connector-path inserts fail
+    // with a foreign-key error.
+    let (orphan_aliases,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM relationship_type_aliases WHERE relationship_type_id = ?",
+    )
+    .bind(without_fact)
+    .fetch_one(kg.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        orphan_aliases, 0,
+        "deleted type must not leave orphaned alias rows"
+    );
+
     let (with,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM relationship_types WHERE id = ?")
         .bind(with_fact)
         .fetch_one(kg.pool())
         .await
         .unwrap();
     assert_eq!(with, 1, "auto-created type with facts must be preserved");
+}
+
+#[tokio::test]
+async fn strict_resolver_rejects_bare_favourite_prefix() {
+    let tg = TestGraph::new().await;
+
+    // `favourite_` with no thing is not a predicate: the open-set family must
+    // not auto-create a junk row for an empty suffix.
+    let err = tg
+        .kg
+        .resolve_canonical_relationship_type("favourite_")
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("favourite_"),
+        "error should name the predicate: {err}"
+    );
+    assert!(
+        tg.kg
+            .get_relationship_type_id("favourite_")
+            .await
+            .unwrap()
+            .is_none(),
+        "bare favourite_ prefix must not auto-create a row"
+    );
 }
 
 // ---------------------------------------------------------------------------

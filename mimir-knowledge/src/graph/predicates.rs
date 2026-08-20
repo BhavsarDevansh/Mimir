@@ -2,15 +2,16 @@ use crate::graph::KnowledgeGraph;
 use crate::*;
 
 /// Canonical relationship-type names the conversational extraction path
-/// accepts (issue #401). Seeded by migrations 013/025/031/036/037 and 050;
-/// the prompt-instructed `favourite_<thing>` family is an open set handled
-/// separately by [`KnowledgeGraph::resolve_canonical_relationship_type`].
+/// accepts (issue #401). Seeded by migrations 013/023/025/031/036/037 and
+/// 050; the prompt-instructed `favourite_<thing>` family is an open set
+/// handled separately by
+/// [`KnowledgeGraph::resolve_canonical_relationship_type`].
 ///
 /// Kept in sync with the seed by
 /// `canonical_const_matches_seeded_relationship_types` in
 /// `mimir-knowledge/tests/predicate_allowlist_test.rs`.
 pub const CANONICAL_PREDICATES: &[&str] = &[
-    // Migrations 013/025/031 (ids 1-12).
+    // Migrations 013/023/025/031 (ids 1-12).
     "is_in",
     "visited",
     "owns",
@@ -88,7 +89,8 @@ impl KnowledgeGraph {
     /// 1. Normalize the incoming name.
     /// 2. The prompt-instructed `favourite_<thing>` family is accepted and
     ///    resolved via [`Self::ensure_relationship_type`] (auto-creating the
-    ///    specific favourite on first use).
+    ///    specific favourite on first use); a bare `favourite_` with no thing
+    ///    is rejected like any other unknown predicate.
     /// 3. Query `relationship_type_aliases` for the normalized name; on a hit
     ///    the canonical name must be in [`CANONICAL_PREDICATES`] — a type that
     ///    was auto-created at runtime (e.g. a connector-emitted predicate) is
@@ -104,8 +106,10 @@ impl KnowledgeGraph {
             ));
         };
 
-        if normalized.starts_with(FAVOURITE_PREDICATE_PREFIX) {
-            return self.ensure_relationship_type(&normalized).await;
+        if let Some(thing) = normalized.strip_prefix(FAVOURITE_PREDICATE_PREFIX) {
+            if !thing.is_empty() {
+                return self.ensure_relationship_type(&normalized).await;
+            }
         }
 
         let Some(id) = self.resolve_relationship_type_alias(&normalized).await? else {

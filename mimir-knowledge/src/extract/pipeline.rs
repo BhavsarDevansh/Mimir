@@ -117,8 +117,9 @@ async fn extracted_to_normalized(
         // `favourite_*` family is accepted, and any other predicate is rejected
         // with a clear error instead of auto-creating a `relationship_types`
         // row. The canonical name drives list-splitting below.
-        // `normalize_and_insert` re-resolves the id (idempotently) so
-        // connectors get the same canonicalisation for free.
+        // `normalize_and_insert` re-resolves the id (idempotently) through the
+        // permissive shared boundary, so the strict check above is not
+        // repeated downstream.
         let relationship_type_id = match kg
             .resolve_canonical_relationship_type(&fact.relationship_type)
             .await

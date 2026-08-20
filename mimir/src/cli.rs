@@ -318,6 +318,10 @@ pub enum CategoryCommands {
         /// Memory weight (higher = more important).
         #[arg(long)]
         memory_weight: Option<f32>,
+        /// Memory bucket id (1 Identity, 2 Upcoming, 3 Relationships,
+        /// 4 Preferences, 5 General; omit for General).
+        #[arg(long)]
+        memory_bucket_id: Option<i16>,
     },
     /// Delete a category (only if empty).
     Delete {

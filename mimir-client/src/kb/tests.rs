@@ -25,6 +25,7 @@ async fn test_kb_categories_parsing() {
         description: None,
         parent_id: None,
         memory_weight: Some(1.0),
+        memory_bucket_id: Some(3),
     }];
     Mock::given(method("GET"))
         .and(path("/kb/categories"))
@@ -47,6 +48,7 @@ async fn test_kb_category_show_parsing() {
         description: None,
         parent_id: None,
         memory_weight: Some(1.0),
+        memory_bucket_id: Some(3),
         fact_count: 5,
         children: vec![],
     };
@@ -71,6 +73,7 @@ async fn test_kb_category_create_and_delete() {
         description: None,
         parent_id: None,
         memory_weight: Some(1.0),
+        memory_bucket_id: None,
     };
     Mock::given(method("POST"))
         .and(path("/kb/categories"))
@@ -85,7 +88,7 @@ async fn test_kb_category_create_and_delete() {
 
     let client = MimirClient::new(server.uri());
     let cat = client
-        .kb_category_create(42, "Places".to_string(), None, None, None)
+        .kb_category_create(42, "Places".to_string(), None, None, None, None)
         .await
         .unwrap();
     assert_eq!(cat.id, 42);

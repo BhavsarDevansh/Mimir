@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.129.0] — 2026-08-20
+
+### Refactor: memory bucket classification is now data-driven (issue #407)
+
+- Added migration `052`: a `memory_buckets` lookup table (Identity, Upcoming, Relationships, Preferences, General) and a `categories.memory_bucket_id` column backfilled from the taxonomy seeded in migration `031` (identity 100–199, upcoming 900–999, relationships 400–499, preferences 300–399 plus the outliers 570/670/680/690/830/870, everything else general). Bucket ids are ordered by priority, so a fact tagged with several categories resolves to `MIN(c.memory_bucket_id)` — the highest-priority bucket.
+- Removed the hard-coded category ID ranges and preference-extras list from `mimir-knowledge/src/queries/memory/`; the memory query now reads the bucket from the category row and `ranking.rs` only maps a stored bucket id to the `MemoryBucket` enum (falling back to General for unset or unknown ids). Adding, renaming, or re-parenting a category can no longer silently change memory bucketing.
+- Added `memory_bucket_id` (optional) to the category model, `kb category add --memory-bucket-id` CLI flag, and the `POST /kb/categories` body / category responses, so runtime-created categories can opt into a bucket instead of defaulting to General.
+- Added tests pinning every seeded category to its expected bucket (migration test), a multi-category priority integration test, and unit tests for the bucket-id mapping.
+- Version bumped 0.128.2 → 0.129.0 (minor — refactor with an additive API field).
+
 ## [0.128.2] — 2026-08-20
 
 ### Bugfix: `memory.temporal_horizon` now drives the upcoming-events horizon (PR #431 review)

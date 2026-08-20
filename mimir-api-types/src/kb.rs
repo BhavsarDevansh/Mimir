@@ -158,6 +158,9 @@ pub struct CategoryResponse {
     pub parent_id: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_weight: Option<f32>,
+    /// Memory bucket id (`memory_buckets` lookup); `None` classifies as General.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_bucket_id: Option<i16>,
 }
 
 /// A category with its child categories and fact count.
@@ -171,6 +174,9 @@ pub struct CategoryDetailResponse {
     pub parent_id: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_weight: Option<f32>,
+    /// Memory bucket id (`memory_buckets` lookup); `None` classifies as General.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_bucket_id: Option<i16>,
     pub fact_count: i64,
     pub children: Vec<CategoryResponse>,
 }
@@ -479,15 +485,17 @@ mod tests {
             description: Some("Humans".to_string()),
             parent_id: Some(0),
             memory_weight: Some(0.8),
+            memory_bucket_id: Some(3),
         },
         sparse: CategoryResponse {
             id: 1,
             name: "people".to_string(),
             description: None,
             parent_id: None,
-           memory_weight: None,
-       },
-       sparse_skips: ["description", "parent_id", "memory_weight"]
+            memory_weight: None,
+            memory_bucket_id: None,
+        },
+        sparse_skips: ["description", "parent_id", "memory_weight", "memory_bucket_id"]
     );
 
     #[test]
@@ -498,6 +506,7 @@ mod tests {
             description: Some("Humans".to_string()),
             parent_id: None,
             memory_weight: Some(0.8),
+            memory_bucket_id: Some(4),
             fact_count: 5,
             children: vec![CategoryResponse {
                 id: 2,
@@ -505,6 +514,7 @@ mod tests {
                 description: None,
                 parent_id: Some(1),
                 memory_weight: None,
+                memory_bucket_id: None,
             }],
         };
         assert_eq!(roundtrip(&detail), detail);

@@ -4,10 +4,6 @@
 use chrono::{DateTime, Utc};
 
 use crate::models::memory::{MemoryBucket, RankedFact};
-use crate::queries::memory::{
-    IDENTITY_CATEGORY_RANGE, PREFERENCE_CATEGORY_EXTRAS, PREFERENCE_CATEGORY_RANGE,
-    RELATIONSHIP_CATEGORY_RANGE, UPCOMING_CATEGORY_RANGE,
-};
 
 /// Temporal boost for facts with a future valid_from date.
 /// boost = 10.0 / sqrt(max(days, 0.5))
@@ -24,39 +20,12 @@ pub fn compute_temporal_boost(valid_from: Option<DateTime<Utc>>, now: DateTime<U
     (10.0 / days.sqrt()) as f32
 }
 
-/// Determine the memory bucket from category IDs.
-/// Priority: identity > upcoming > relationships > preferences > general.
-pub fn determine_bucket(category_ids: &[i32]) -> MemoryBucket {
-    let mut has_identity = false;
-    let mut has_upcoming = false;
-    let mut has_relationships = false;
-    let mut has_preferences = false;
-
-    for &id in category_ids {
-        if IDENTITY_CATEGORY_RANGE.contains(&id) {
-            has_identity = true;
-        } else if UPCOMING_CATEGORY_RANGE.contains(&id) {
-            has_upcoming = true;
-        } else if RELATIONSHIP_CATEGORY_RANGE.contains(&id) {
-            has_relationships = true;
-        } else if PREFERENCE_CATEGORY_RANGE.contains(&id)
-            || PREFERENCE_CATEGORY_EXTRAS.contains(&id)
-        {
-            has_preferences = true;
-        }
-    }
-
-    if has_identity {
-        MemoryBucket::Identity
-    } else if has_upcoming {
-        MemoryBucket::Upcoming
-    } else if has_relationships {
-        MemoryBucket::Relationships
-    } else if has_preferences {
-        MemoryBucket::Preferences
-    } else {
-        MemoryBucket::General
-    }
+/// Resolve a stored bucket id (`categories.memory_bucket_id`) to a bucket.
+/// Unknown ids and unset buckets classify as `General`.
+pub fn bucket_from_id(bucket_id: Option<i16>) -> MemoryBucket {
+    bucket_id
+        .and_then(|id| MemoryBucket::try_from(id).ok())
+        .unwrap_or(MemoryBucket::General)
 }
 
 /// Rough character estimate for a rendered fact.

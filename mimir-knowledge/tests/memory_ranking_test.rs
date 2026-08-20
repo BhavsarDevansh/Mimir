@@ -235,3 +235,89 @@ async fn centrality_cache_populates_on_first_build() {
     let schema = kg.build_memory_schema(user.id, 2500, 0.7).await.unwrap();
     assert!(!schema.all_facts().is_empty());
 }
+
+#[tokio::test]
+async fn memory_ranking_assigns_highest_priority_bucket() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path: PathBuf = dir.path().join("knowledge.db");
+    let clock = Arc::new(MockClock::new(Utc::now()));
+    let kg = KnowledgeGraph::init_with_clock(&db_path, clock.clone())
+        .await
+        .unwrap();
+
+    let user = kg
+        .create_entity("Devansh", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    // Identity beats upcoming (150 Identity + 930 Upcoming).
+    let mut identity = NewFact::new(user.id, "works_as");
+    identity.object_literal = Some("Developer".to_string());
+    identity.confidence = Some(0.95);
+    identity.source_type = SourceType::UserEdit;
+    identity.category_ids = vec![150, 930];
+    kg.insert_fact(identity).await.unwrap();
+
+    // Upcoming beats relationships (930 Upcoming + 420 Romantic).
+    let mut upcoming = NewFact::new(user.id, "has_appointment");
+    upcoming.object_literal = Some("Dentist".to_string());
+    upcoming.confidence = Some(0.90);
+    upcoming.valid_from = Some(clock.now() + chrono::Duration::days(5));
+    upcoming.source_type = SourceType::UserEdit;
+    upcoming.category_ids = vec![930, 420];
+    kg.insert_fact(upcoming).await.unwrap();
+
+    // Relationships beats preferences (420 Romantic + 300 Health).
+    let mut rel = NewFact::new(user.id, "has_partner");
+    rel.object_literal = Some("Alice".to_string());
+    rel.confidence = Some(0.90);
+    rel.source_type = SourceType::UserEdit;
+    rel.category_ids = vec![420, 300];
+    kg.insert_fact(rel).await.unwrap();
+
+    // Preferences beat general (300 Health + 500 Work).
+    let mut pref = NewFact::new(user.id, "prefers_weather");
+    pref.object_literal = Some("mild".to_string());
+    pref.confidence = Some(0.85);
+    pref.source_type = SourceType::UserEdit;
+    pref.category_ids = vec![300, 500];
+    kg.insert_fact(pref).await.unwrap();
+
+    // General only.
+    let mut general = NewFact::new(user.id, "enjoys");
+    general.object_literal = Some("hiking".to_string());
+    general.confidence = Some(0.85);
+    general.source_type = SourceType::UserEdit;
+    general.category_ids = vec![500];
+    kg.insert_fact(general).await.unwrap();
+
+    let schema = kg.build_memory_schema(user.id, 2500, 0.7).await.unwrap();
+
+    let in_bucket = |bucket: &[mimir_knowledge::models::memory::RankedFact], predicate: &str| {
+        bucket.iter().any(|f| f.relationship_type == predicate)
+    };
+
+    assert!(
+        in_bucket(&schema.identity, "works_as"),
+        "multi-category fact must land in Identity"
+    );
+    assert!(
+        in_bucket(&schema.upcoming, "has_appointment"),
+        "multi-category fact must land in Upcoming"
+    );
+    assert!(
+        in_bucket(&schema.relationships, "has_partner"),
+        "multi-category fact must land in Relationships"
+    );
+    assert!(
+        in_bucket(&schema.preferences, "prefers_weather"),
+        "multi-category fact must land in Preferences"
+    );
+    assert!(
+        in_bucket(&schema.general, "enjoys"),
+        "uncategorised-domain fact must land in General"
+    );
+
+    assert!(!in_bucket(&schema.identity, "has_appointment"));
+    assert!(!in_bucket(&schema.upcoming, "works_as"));
+}

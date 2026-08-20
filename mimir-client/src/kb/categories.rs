@@ -32,6 +32,7 @@ impl MimirClient {
         parent_id: Option<i32>,
         description: Option<String>,
         memory_weight: Option<f32>,
+        memory_bucket_id: Option<i16>,
     ) -> Result<CategoryResponse, ClientError> {
         let body = serde_json::json!({
             "id": id,
@@ -39,6 +40,7 @@ impl MimirClient {
             "parent_id": parent_id,
             "description": description,
             "memory_weight": memory_weight,
+            "memory_bucket_id": memory_bucket_id,
         });
         self.post_json(&self.url("kb/categories"), &body).await
     }

@@ -23,17 +23,6 @@ pub struct BuildMemoryOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Bucket category ID constants
-// ---------------------------------------------------------------------------
-const IDENTITY_CATEGORY_RANGE: std::ops::RangeInclusive<i32> = 100..=199;
-const UPCOMING_CATEGORY_RANGE: std::ops::RangeInclusive<i32> = 900..=999;
-const RELATIONSHIP_CATEGORY_RANGE: std::ops::RangeInclusive<i32> = 400..=499;
-/// Core preference category range (300-399).
-const PREFERENCE_CATEGORY_RANGE: std::ops::RangeInclusive<i32> = 300..=399;
-/// Outlier preference category IDs outside the main 300-399 range.
-const PREFERENCE_CATEGORY_EXTRAS: &[i32] = &[460, 480, 570, 670, 680, 690, 830, 870];
-
-// ---------------------------------------------------------------------------
 // Raw row from the enriched fact query
 // ---------------------------------------------------------------------------
 
@@ -48,5 +37,6 @@ struct RawRankedFact {
     valid_from: Option<DateTime<Utc>>,
     category_ids: Option<String>, // comma-separated
     memory_weight: Option<f32>,
+    memory_bucket_id: Option<i16>,
     memory_priority_id: i16,
 }

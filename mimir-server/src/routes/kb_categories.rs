@@ -28,6 +28,9 @@ pub struct CreateCategoryBody {
     pub description: Option<String>,
     #[serde(default)]
     pub memory_weight: Option<f32>,
+    /// Memory bucket id (`memory_buckets` lookup); omit for General.
+    #[serde(default)]
+    pub memory_bucket_id: Option<i16>,
 }
 
 /// List categories.
@@ -49,6 +52,7 @@ pub async fn list_categories(
             description: c.description,
             parent_id: c.parent_id,
             memory_weight: c.memory_weight,
+            memory_bucket_id: c.memory_bucket_id,
         })
         .collect();
 
@@ -83,6 +87,7 @@ pub async fn show_category(
         description: cat.description.clone(),
         parent_id: cat.parent_id,
         memory_weight: cat.memory_weight,
+        memory_bucket_id: cat.memory_bucket_id,
         fact_count: cat.fact_count,
         children: children
             .into_iter()
@@ -92,6 +97,7 @@ pub async fn show_category(
                 description: c.description,
                 parent_id: c.parent_id,
                 memory_weight: c.memory_weight,
+                memory_bucket_id: c.memory_bucket_id,
             })
             .collect(),
     };
@@ -110,6 +116,7 @@ pub async fn create_category(
         description: body.description,
         parent_id: body.parent_id,
         memory_weight: body.memory_weight,
+        memory_bucket_id: body.memory_bucket_id,
     };
 
     let cat = state

@@ -25,11 +25,23 @@ pub(crate) fn run_child_regression_test(
 ) {
     let module = module.split_once("::").map_or(module, |(_, rest)| rest);
     let filter = format!("{module}::{test_name}");
-    let output = std::process::Command::new(std::env::current_exe().expect("current_exe"))
+    let mut command = std::process::Command::new(std::env::current_exe().expect("current_exe"));
+    command
         .arg("--exact")
         .arg(&filter)
         .arg("--nocapture")
-        .env(child_env, "1")
+        .env(child_env, "1");
+    // The child must be isolated from inherited `MIMIR_*` overrides: config
+    // reloads in the child apply env overrides before the sensitive-field
+    // gate, so a developer environment that sets e.g. `MIMIR_LLM_API_KEY` or
+    // `MIMIR_LLM_TEMPERATURE` would otherwise reject the reload or assert the
+    // wrong value and fail the regression test.
+    for (key, _) in std::env::vars() {
+        if key.starts_with("MIMIR_") {
+            command.env_remove(key);
+        }
+    }
+    let output = command
         .output()
         .expect("failed to spawn the child regression process");
     assert!(

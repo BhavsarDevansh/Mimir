@@ -269,7 +269,7 @@ fn spawn_sighup_reload_handler(
     });
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -290,7 +290,6 @@ mod tests {
     /// mid-test. In the child there are no other listeners, and if the
     /// regression returns the child dies from the default disposition
     /// (signal 1) exactly as the original bug did.
-    #[cfg(unix)]
     #[test]
     fn test_sighup_registered_before_spawn_reloads_config() {
         const CHILD_ENV: &str = "MIMIR_SIGHUP_REGRESSION_CHILD";
@@ -320,18 +319,17 @@ mod tests {
 
             let dir = tempfile::tempdir().expect("tempdir");
             let path = dir.path().join("config.toml");
-            // All fields except `llm.temperature` fall back to their serde
-            // defaults, so the parsed config's sensitive fields match
-            // `Config::default()` and the reload below is not rejected.
-            std::fs::write(&path, "[llm]\ntemperature = 0.2\n").expect("write config");
+            // Only `llm.temperature` is set; every other field falls back to
+            // its serde default, which matches the in-memory
+            // `Config::default()`, so the reload below is not rejected by the
+            // sensitive-field gate. The file content (0.9) differs from the
+            // in-memory default (0.2), so the assertion observes the change
+            // actually applied by the SIGHUP-triggered reload.
+            std::fs::write(&path, "[llm]\ntemperature = 0.9\n").expect("write config");
             let config = Arc::new(ReloadableConfig::new(
                 mimir_core::config::Config::default(),
-                path.clone(),
+                path,
             ));
-
-            // Rewrite the file with a new non-sensitive value; the
-            // SIGHUP-triggered reload must apply it.
-            std::fs::write(&path, "[llm]\ntemperature = 0.9\n").expect("rewrite config");
 
             let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
             spawn_sighup_reload_handler(Arc::clone(&config), shutdown_tx);

@@ -56,7 +56,7 @@ The scheduler ensures condensation only runs during LLM downtime so it never com
 
 ### Context Injection
 
-The daemon injects the condensed memory block into the system prompt before each chat turn, combined with an upcoming events section. The prompt phrasing is "Key facts I know about you:" (not "Here is everything I remember"), signalling to the LLM that the subset is curated and it should use KG tools if it needs more.
+The daemon injects the condensed memory block into the system prompt before each chat turn, combined with an upcoming events section. The prompt phrasing is "Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive)", signalling to the LLM that the subset is curated and it should use KG tools if it needs more.
 
 ## Configuration
 

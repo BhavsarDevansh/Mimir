@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.128.1] — 2026-08-20
+
+### Docs: stale memory.md references removed from project context and VISION docs (issue #406)
+
+- Rewrote the memory sections of `Mimir-Implementation-Context.md` to describe the live knowledge-graph condensation pipeline: ranking formula (`confidence × category.memory_weight × temporal_boost × priority × centrality`), LLM condensation with deterministic Rust fallback, the upcoming-events section, and the regeneration triggers. The architecture diagram and daemon component tree no longer reference `memory.md` or `MemoryManager`/`MemoryLoader` (deleted in v0.37.0, issue #111), and the CLI table, Phase 1 goal, roadmap summary row, and config paths section were updated.
+- Rewrote `VISION/01-Core-Agent/Memory-System.md` to match the implemented KG-backed memory system (replacing the deleted `memory.md` design), following the same pattern as the VISION personality rewrite (issue #389).
+- Updated `VISION/09-Roadmap/Phase-2-Knowledge-Graph.md` section 2.15 and the success criteria to record the landed migration: `memory.md` was removed outright in v0.37.0 (issue #111), the one-time seed and `MemoryManager` facade refactor never shipped (now documented as obsolete rather than pending), and the success criterion is marked complete.
+- Added a landed-status note to `VISION/02-Knowledge-Graph/Phase-2-Design-Discussion.md` section K, and corrected the stale "Key facts I know about you:" phrasing in `docs/memory-system.md` and the Phase-2 roadmap to the actual system prompt header ("Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive)").
+- Version bumped 0.128.0 → 0.128.1 (patch — documentation update).
+
 ## [0.128.0] — 2026-08-20
 
 ### Refactor: single source of truth for multi-valued predicate list splitting (issue #405)

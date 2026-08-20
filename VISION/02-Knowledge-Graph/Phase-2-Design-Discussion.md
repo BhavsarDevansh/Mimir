@@ -230,6 +230,8 @@ schedule_time = "02:00"
 
 ### K. Migration from `memory.md` to Knowledge Graph
 
+**Status (landed):** v0.37.0 (issue #111) deleted the file-backed system outright — `MemoryManager`, `MemoryLoader`, and `MemoryTool` were removed, not refactored, and the one-time seed below never ran because memory already flowed through the Knowledge Graph. The ranking formula shipped with two additional factors: priority (`memory_priority_id`, up to 2.0×) and centrality. The roadmap tracks the landed outcome in section 2.15; `docs/memory-system.md` documents the implemented pipeline.
+
 **`memory.md` is removed entirely.** The flat Markdown file no longer exists as a persistent artifact. Memory is rendered on demand via `mimir memory`.
 
 **`mimir memory` command — hybrid Rust + LLM condensation:**

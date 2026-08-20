@@ -140,7 +140,7 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 
 ### 2.12 Context Injection (Layer 2)
 - [ ] Daemon injects condensed memory into system prompt before each chat turn
-- [ ] Marked as "Key facts I know about you:" (not exhaustive — LLM knows to use tools)
+- [ ] Marked as "Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive)" (not exhaustive — LLM knows to use tools)
 - [ ] Condensed text stored in `system_state` table, regenerated on KG changes
 
 ### 2.13 Librarian Agent (Layer 2 background extraction) — #130
@@ -158,10 +158,9 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 - [ ] Recurring dates detected via month+day matching for temporal boost
 
 ### 2.15 Migration from `memory.md`
-- [ ] `memory.md` removed entirely as persistent artifact
-- [ ] One-time seed: parse legacy `memory.md` → classify via LLM → seed KG → rename to `.bak`
-- [ ] `MemoryManager` refactored: `load_memory()` queries KG, `save_memory()` removed
-- [ ] `MemoryManager` becomes thin facade over KG for Phase 1 compatibility
+- [x] `memory.md` removed entirely as persistent artifact — landed in v0.37.0 (issue #111), which deleted the file-backed system (`MemoryManager`, `MemoryLoader`, `MemorySnapshot`, `MemoryTool`) and made the Knowledge Graph the sole memory store
+- [x] `mimir memory` renders the condensed block on demand from the Knowledge Graph — no file to keep in sync (see `docs/memory-system.md`)
+- Note: the originally planned one-time seed (parse legacy file → LLM classify → seed KG → rename `.bak`) and the `MemoryManager` thin-facade refactor never shipped — v0.37.0 deleted the file system outright instead, because memory already flowed through the KG. Those steps are obsolete rather than pending.
 
 ### 2.16 CLI Commands (`mimir kb ...`)
 - [ ] Commands talk to daemon via Unix socket/TCP (same pattern as `mimir ask`)
@@ -212,7 +211,7 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 - [ ] Temporal queries work correctly (timeline vs contradiction)
 - [ ] Nightly optimization runs automatically via JobQueue
 - [ ] `mimir memory` produces concise, ranked condensation
-- [ ] Legacy `memory.md` successfully migrated
+- [x] Legacy `memory.md` successfully migrated — file-backed system removed in v0.37.0 (issue #111); memory now renders from the Knowledge Graph
 - [ ] Obsidian export functional
 - [ ] All tests pass, benchmarks show acceptable performance with 10k+ facts
 

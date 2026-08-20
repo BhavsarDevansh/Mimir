@@ -31,11 +31,11 @@ Inferred facts use `confidence::inference_confidence(parents, depth, num_parents
 
 **Trigger:** `visited` or `located_in` (`is_in` is a seeded alias of `located_in` since migration 051)
 
-**Forward:** `A-P-B` inserted + `B located_in C` exists → infer `A-P-C`
+**Forward:** `A visited B` inserted + `B located_in C` exists → infer `A visited C`
 
 **Backward:** `B located_in C` inserted + `A visited B` exists → infer `A visited C`
 
-**Backward `located_in` lookup is intentionally disabled** to prevent self-disputing chains.
+**`located_in` does not chain to `located_in`** to prevent cyclic chains.
 
 ### Contradiction
 

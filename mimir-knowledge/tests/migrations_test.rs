@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::path::PathBuf;
 
-/// Build a pre-051 database: apply every migration except 051 and return the
+/// Build a pre-051 database: apply every migration below 051 and return the
 /// open pool so the caller can seed legacy data before upgrading.
 async fn build_pre_051_pool(dir: &tempfile::TempDir) -> SqlitePool {
     let db_path: PathBuf = dir.path().join("knowledge.db");
@@ -15,7 +15,13 @@ async fn build_pre_051_pool(dir: &tempfile::TempDir) -> SqlitePool {
     for entry in std::fs::read_dir(migrations_src).unwrap() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap().to_str().unwrap().to_string();
-        if name.starts_with("051_") {
+        // Everything from 051 onwards is the upgrade under test.
+        let version: u32 = name
+            .split('_')
+            .next()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(u32::MAX);
+        if version >= 51 {
             continue;
         }
         std::fs::copy(&path, migrations_dir.join(&name)).unwrap();

@@ -330,7 +330,7 @@ These checks are centralized in two helpers (`canonical_name_conflicts_with_alia
 
 `ensure_relationship_type` resolves aliases first, so a name that matches an existing alias returns the canonical id rather than attempting to create a conflicting canonical type.
 
-The extraction pipeline routes every fact's predicate through `ensure_relationship_type` (issue #136), so the `relationship_type_aliases` table is the sole source of truth for predicate canonicalization. The hardcoded `normalize_predicate` synonym map and the duplicate snake_case helper that previously lived in `mimir-knowledge/src/extract/` have been removed; all legacy synonyms are seeded as data by migrations `036`/`037`.
+Both the permissive boundary (`ensure_relationship_type`, used by connector-provenance facts, issue #136) and the conversational allow-list (`resolve_canonical_relationship_type`, issue #401) resolve names through the `relationship_type_aliases` table — the sole source of truth for predicate canonicalization. The hardcoded `normalize_predicate` synonym map and the duplicate snake_case helper that previously lived in `mimir-knowledge/src/extract/` have been removed; all legacy synonyms are seeded as data by migrations `036`/`037`.
 
 ---
 

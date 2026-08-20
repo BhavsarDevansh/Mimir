@@ -244,7 +244,7 @@ pub async fn normalize_and_insert(
 
 All tests use `MockLlmClient` with `mimir-core`'s `mock-llm` feature for deterministic, fast validation.
 
-## Predicate Resolution (v0.50.0)
+## Predicate Resolution (v0.126.0)
 
 During extraction, each fact's `relationship_type` is resolved through `KnowledgeGraph::resolve_canonical_relationship_type`, which enforces the Rust-side canonical predicate allow-list (`CANONICAL_PREDICATES`, issue #401): the name is trimmed/lowercased (via `normalize_alias`), looked up in the `relationship_type_aliases` table — the single source of truth — and the resolved canonical type must be part of the seeded set. LLM synonyms such as `attended`, `hobbies`, or `works_for` therefore map to their canonical types (`studied_at`, `hobby`, `works_at`) purely from seeded data — there is no hardcoded synonym map in code. The prompt-instructed `favourite_<thing>` family is accepted as an open set (auto-creating the specific favourite on first use); any other unknown predicate is rejected with a clear error instead of auto-creating a `relationship_types` row, so an LLM-invented predicate can never pollute the ontology. The resolved canonical name then drives `split_list_objects`.
 

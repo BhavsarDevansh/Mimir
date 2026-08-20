@@ -6,7 +6,7 @@
 
 - Rewrote `VISION/01-Core-Agent/Personality.md` to describe the implemented design: the four built-in presets, custom `<name>.personality.md` files in `~/.config/mimir/personalities/`, preset selection via config/env/CLI/REPL/API, Rust-composed operating directives and core-facts block, and custom-overrides-built-in semantics.
 - The unimplemented `personality.toml` sections, tone knobs (`style`/`verbosity`/`proactive_tone`/`humor`), proactive phrase overrides, and `context.public`/`context.private` are now documented as non-goals, with cross-references to `docs/personality-system.md` and the planned discovery work (issue #387).
-- Updated the stale personality lines in `Mimir-Implementation-Context.md` and the Phase 1 roadmap (system prompt no longer references the deleted `memory.md`; it is composed from preset + operating directives + condensed knowledge-graph memory).
+- Updated the stale personality lines in `Mimir-Implementation-Context.md` and the Phase 1 roadmap (system prompt no longer references the deleted `memory.md`; it is composed of a preset, operating directives, and condensed knowledge-graph memory).
 - Version bumped 0.125.1 → 0.125.2 (patch — documentation update).
 
 ## [0.125.1] — 2026-08-20

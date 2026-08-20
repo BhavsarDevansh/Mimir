@@ -51,7 +51,7 @@ The agent shows its work. It is warm but not obsequious, efficient but not terse
 
 ## Preset Selection
 
-The active preset is a single `preset` name string, resolved per request from the following sources in increasing precedence:
+For normal sessions, the active preset is a single `preset` name string resolved when the session prompt is created. Incognito chats resolve it per request. The sources below have increasing precedence:
 
 1. Config file: `[personality] preset = "transparent"` in `~/.config/mimir/config.toml` (the default when unset)
 2. Environment: `MIMIR_PERSONALITY_PRESET`
@@ -63,7 +63,7 @@ When the requested name is unknown, Mimir logs a warning and falls back to `tran
 
 ## Custom Presets
 
-Users can add custom presets as plain Markdown files: `<name>.personality.md` in the `personalities/` subdirectory of the user config directory (`~/.config/mimir/personalities/`). The file stem (without the `.personality` suffix) is the preset name and the file body is used verbatim as the system prompt text — no frontmatter, TOML, or other syntax is parsed. Files that do not end in `.personality.md` are ignored, and custom presets override built-ins when names collide. The preset name is then selected through any of the mechanisms above.
+Users can add custom presets as plain Markdown files: `<name>.personality.md` in the `personalities/` subdirectory of the XDG-resolved user config directory (`~/.config/mimir/personalities/` on Linux). The file stem (without the `.personality` suffix) is the preset name and the file body is used verbatim as the preset tone text — no frontmatter, TOML, or other syntax is parsed. Files that do not end in `.personality.md` are ignored, and custom presets override built-ins when names collide. The preset name is then selected through any of the mechanisms above.
 
 ## System Prompt Composition
 
@@ -81,7 +81,7 @@ First-class discovery is planned but not yet implemented: a `mimir personality l
 
 ## Non-Goals
 
-- A `personality.toml` file or any TOML personality sections — never implemented and not planned
+- A standalone `personality.toml` file or TOML-defined tone, phrase, or context fields — never implemented and not planned
 - Tone knobs (`style`, `verbosity`, `proactive_tone`, `humor`) — presets are prompt text and Rust owns behaviour
 - Proactive phrase overrides — proactive behaviour is composed in Rust, not in preset text
 - Per-context tone shifts (`context.public` / `context.private`) — context sensitivity lives outside the personality system

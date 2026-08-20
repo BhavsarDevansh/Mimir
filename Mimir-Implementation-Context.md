@@ -181,7 +181,7 @@ The daemon will listen on both a Unix domain socket and a TCP socket once UDS is
 
 ## Personality System
 
-- **Presets:** `transparent` (default), `concise`, `warm`, `formal`, plus custom `<name>.personality.md` files in `~/.config/mimir/personalities/`
+- **Presets:** `transparent` (default), `concise`, `warm`, `formal`, plus custom `<name>.personality.md` files in the `personalities/` subdirectory of the XDG-resolved user config directory (`~/.config/mimir/personalities/` on Linux)
 - **System prompt:** Composed in Rust from the active preset's tone text, shared operating directives, and the condensed knowledge-graph memory block
 - **Override:** config `[personality] preset`, env `MIMIR_PERSONALITY_PRESET`, `mimir ask -p concise "..."`, `mimir chat` then `/personality concise`, or the per-request `personality_preset` API field
 - **Extensible:** Custom presets override built-ins on name collision; an unknown preset falls back to `transparent` with a warning
@@ -190,12 +190,12 @@ The daemon will listen on both a Unix domain socket and a TCP socket once UDS is
 
 ## Memory System
 
-### memory.md (Working Memory)
-- ~2,500 character budget (~900 tokens)
-- Injected into every system prompt for fast context
-- Auto-managed: add, replace, remove entries
-- Frozen per session (snapshot taken at start)
-- Persisted to disk immediately on change
+### Knowledge-Graph Memory (core-facts block)
+- Facts live in the SQLite knowledge graph; the condensed core-facts block is rendered within a ~2,500 character budget (~900 tokens)
+- Composed into the system prompt as the final block, after the preset tone text and the shared operating directives
+- Auto-managed: `remember` extraction, background ingestion, and nightly optimization add, replace, remove, and re-rank facts
+- Frozen per session: non-incognito sessions reuse the system prompt captured at session creation; incognito requests build a fresh prompt
+- Persisted to disk immediately on change; the condensed block is cached in `system_state` and regenerated on demand
 
 ### Context Manager
 - SQLite-backed session and message storage

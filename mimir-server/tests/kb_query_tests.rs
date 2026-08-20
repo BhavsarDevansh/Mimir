@@ -612,6 +612,123 @@ async fn test_kb_audit_returns_entries() {
             .any(|e| e["change_type"].as_str() == Some("created")),
         "expected a Created audit entry"
     );
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["changed_by"].as_str() == Some("User")),
+        "expected the User wire string for the created-by audit entry, got: {}",
+        json["entries"]
+    );
+}
+
+#[tokio::test]
+async fn test_kb_audit_and_show_render_same_changed_by_casing() {
+    let (state, _temp) = test_state(Arc::new(MockLlmClient::builder().build())).await;
+    let entity = state
+        .knowledge_graph
+        .create_entity(
+            "Dana",
+            mimir_knowledge::models::entity::EntityType::Person,
+            &[],
+        )
+        .await
+        .unwrap();
+    let pred_id = state
+        .knowledge_graph
+        .ensure_relationship_type("likes")
+        .await
+        .unwrap();
+    let fact = mimir_knowledge::queries::fact::insert_fact(
+        state.knowledge_graph.pool(),
+        &mimir_knowledge::models::fact::NewFact {
+            subject_id: entity.id,
+            relationship_type: "likes".to_string(),
+            object_id: None,
+            object_literal: Some("Pizza".to_string()),
+            valid_from: None,
+            valid_until: None,
+            source_type: mimir_knowledge::models::source::SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: vec![],
+            category_ids: vec![],
+        },
+        pred_id,
+        0.88,
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
+
+    let app = mimir_server::build_app(state.clone());
+    let edit = app
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("PATCH")
+                .uri(format!("/kb/facts/{}", fact.id))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"object_literal": "Sushi"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(edit.status(), StatusCode::OK);
+
+    let audit_response = app
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("GET")
+                .uri("/kb/audit?entity=Dana")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(audit_response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(audit_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let audit_changed_by = json["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["change_type"].as_str() == Some("content_update"))
+        .and_then(|e| e["changed_by"].as_str().map(str::to_string))
+        .expect("expected a content_update audit entry from /kb/audit");
+
+    let show_response = app
+        .oneshot(
+            authed_request()
+                .method("GET")
+                .uri(format!("/kb/facts/{}", fact.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(show_response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(show_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let show_changed_by = json["audit_log"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["change_type"].as_str() == Some("content_update"))
+        .and_then(|e| e["changed_by"].as_str().map(str::to_string))
+        .expect("expected a content_update audit entry from /kb/facts/{id}");
+
+    assert_eq!(audit_changed_by, show_changed_by);
+    assert_eq!(audit_changed_by, "User");
 }
 #[tokio::test]
 async fn test_kb_forget_restore_trash_roundtrip() {

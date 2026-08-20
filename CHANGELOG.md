@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.124.5] — 2026-08-20
+
+### Bugfix: kb audit and fact-detail endpoints render the same changed_by wire strings (issue #380)
+
+- The `kb audit` endpoint previously surfaced the raw lowercase `changed_by_types.name` lookup column (`user`, `system`, `inference_engine`, `nightly_optimization`) via the SQL join in `mimir-knowledge/src/queries/audit.rs`, while `GET /kb/facts/{id}` rendered the enum `ChangedBy::as_str()` variant strings (`User`, `System`, `InferenceEngine`, `NightlyOptimization`) — so the same audit entry rendered differently depending on the endpoint. `AuditLogRow` now carries `changed_by_id` instead of the joined `name` column, and the `kb audit` route resolves the wire string through the same `ChangedBy::try_from(i16)` + `as_str()` helper as the fact-detail route (single source of truth, issue #358).
+- Tests: `query_audit_log_filtered` now asserts the `changed_by_id` discriminant, `test_kb_audit_returns_entries` asserts the `User` wire string, and a new `test_kb_audit_and_show_render_same_changed_by_casing` integration test pins identical `changed_by` casing across both endpoints for the same content-update audit entry.
+- Docs updated in `docs/knowledge-graph-schema.md`, `docs/fact-management.md`, and `docs/wiki/facts.md`.
+- Version bumped 0.124.4 → 0.124.5 (patch — bug fix).
+
 ## [0.124.4] — 2026-08-20
 
 ### Bugfix: SIGHUP config-reload handler is registered before its task is spawned (issue #369)

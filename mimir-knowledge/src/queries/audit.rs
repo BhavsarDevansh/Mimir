@@ -20,7 +20,12 @@ pub struct AuditLogFilter {
     pub offset: Option<i64>,
 }
 
-/// A human-readable row from the joined audit log query.
+/// A row from the joined audit log query.
+///
+/// Lookup names that match the enum wire contract (`change_type_name`) are
+/// joined from their lookup tables; `changed_by_id` carries the stored
+/// discriminant so callers resolve the wire string through `ChangedBy`
+/// (issue #380).
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct AuditLogRow {
     pub audit_id: i32,
@@ -28,7 +33,7 @@ pub struct AuditLogRow {
     pub entity_name: Option<String>,
     pub relationship_type_name: Option<String>,
     pub change_type_name: String,
-    pub changed_by_name: Option<String>,
+    pub changed_by_id: Option<i16>,
     pub old_value: Option<String>,
     pub new_value: Option<String>,
     pub changed_at: DateTime<Utc>,
@@ -47,7 +52,7 @@ pub async fn query_audit_log(
             e.name AS entity_name, \
             rt.name AS relationship_type_name, \
             ct.name AS change_type_name, \
-            cbt.name AS changed_by_name, \
+            fal.changed_by_id, \
             fal.old_value, \
             fal.new_value, \
             fal.changed_at, \
@@ -57,7 +62,6 @@ pub async fn query_audit_log(
          LEFT JOIN entities e ON e.id = f.subject_id \
          LEFT JOIN relationship_types rt ON rt.id = f.relationship_type_id \
          JOIN change_types ct ON ct.id = fal.change_type_id \
-         LEFT JOIN changed_by_types cbt ON cbt.id = fal.changed_by_id \
          WHERE 1=1",
     );
 

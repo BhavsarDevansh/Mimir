@@ -59,7 +59,7 @@ The active preset is a single `preset` name string, resolved per request from th
 4. REPL: `/personality <name>` inside `mimir chat` (and `/personality` alone shows the current preset)
 5. API: the per-request `personality_preset` field on chat requests
 
-When the requested name is unknown or the personalities directory cannot be resolved, Mimir logs a warning and falls back to `transparent`.
+When the requested name is unknown, Mimir logs a warning and falls back to `transparent`. If the personalities directory cannot be resolved, Mimir logs a warning and skips custom presets; known names still resolve, and unknown names still fall back to `transparent`.
 
 ## Custom Presets
 
@@ -67,7 +67,7 @@ Users can add custom presets as plain Markdown files: `<name>.personality.md` in
 
 ## System Prompt Composition
 
-The final system prompt is composed in Rust by `Personality::system_prompt` on every interaction, in this order:
+The final system prompt is composed in Rust by `Personality::system_prompt` when a session starts (and per request for incognito chats), in this order:
 
 1. The active preset's tone text.
 2. The shared operating directives, which encode Mimir's behavioural invariants — do not invent facts, dispatch the retrieval agent when context is insufficient, and call `remember` for anything worth saving (issue #138). They are owned by Rust and appended to every preset, built-in or custom, so behaviour never depends on preset wording or on which LLM model is configured.

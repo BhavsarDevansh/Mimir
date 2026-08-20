@@ -1,13 +1,24 @@
-use std::io::Write;
+//! Binary-level tests for the `mimir` CLI.
+//!
+//! The daemon-dependent tests run the real binary against the
+//! never-bindable loopback port 0 (TCP port 0 can never be listened on) with
+//! an isolated HOME/XDG layout, so the daemon-down assertions can never be
+//! affected by a real or leftover daemon on the default base URL (issue
+//! #384).
+
+mod common;
+
 use std::process::Command;
 
-/// Helper: run the mimir binary with given args and return stdout + stderr.
+use common::{spawn_mimir_cli, unreachable_daemon_base_url};
+
+/// Run the mimir binary against a deterministically unreachable base URL
+/// (TCP port 0 can never be listened on, so every connection attempt fails)
+/// with an isolated HOME/XDG layout, so the daemon-down assertions are
+/// independent of any real or leftover daemon (issue #384).
 fn run_mimir(args: &[&str]) -> (String, String, std::process::ExitStatus) {
-    let output = Command::new(env!("CARGO_BIN_EXE_mimir"))
-        .args(args)
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap_or_else(|e| panic!("failed to run mimir: {}", e));
+    let base_url = unreachable_daemon_base_url();
+    let output = spawn_mimir_cli(args, base_url, None, &[]);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     (stdout, stderr, output.status)
@@ -77,20 +88,8 @@ fn test_memory_fails_when_server_down() {
 
 #[test]
 fn test_ask_piped_input_detection() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mimir"))
-        .args(["ask"])
-        .env("NO_COLOR", "1")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-
-    {
-        let stdin = child.stdin.take().expect("stdin not available");
-        let mut stdin = std::io::BufWriter::new(stdin);
-        stdin.write_all(b"hello\n").unwrap();
-    }
-
-    let output = child.wait_with_output().unwrap();
+    let base_url = unreachable_daemon_base_url();
+    let output = spawn_mimir_cli(&["ask"], base_url, Some(b"hello\n"), &[]);
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     // When the daemon is not running, the piped input "hello" is consumed by
     // the daemon guard's prompt reader, which interprets it as a declined

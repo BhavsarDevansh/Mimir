@@ -41,6 +41,10 @@ To add a new E2E scenario (e.g. streaming chat, memory viewing):
 3. Set `MIMIR_BASE_URL` on every CLI invocation.
 4. Assert on captured stdout/stderr.
 
+## Daemon-down CLI tests (`mimir/tests/cli_tests.rs`)
+
+The daemon-down assertions (`status`, `stop`, `memory`, and piped/empty `ask`) run the real binary against the never-bindable loopback endpoint `http://127.0.0.1:0`: TCP port 0 is never assigned to a listener (binding port 0 asks the kernel for an ephemeral port), so every connection attempt fails deterministically (`unreachable_daemon_base_url` in `mimir/tests/common/mod.rs`). Each test passes it via `MIMIR_BASE_URL`, alongside temp HOME/XDG dirs, so the "daemon unreachable" path is deterministic even when the developer's real daemon (or a leftover from an earlier suite) is running on the configured default base URL — the flake described in issue #384. The `TestDaemon` fixture also kills its in-process server on drop, so a panicking E2E test cannot leak a daemon holding a port and temp DB handles.
+
 ## Connector E2E (Phase 3 T1 / issue #206)
 
 `mimir/tests/connector_e2e.rs` extends the same pattern to the connector framework. The shared `TestDaemon` fixture (`mimir/tests/common/mod.rs`) starts the daemon with the `mock-connector` feature so the `gmail/test` mock backend is registered, and `run_cli_json` runs a CLI subcommand and parses its JSON stdout (asserting success first).

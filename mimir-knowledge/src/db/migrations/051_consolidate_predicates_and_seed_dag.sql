@@ -25,18 +25,64 @@
 -- explicitly repointed, so no orphaned rows can survive.
 
 -- 1. Residence consolidation -------------------------------------------------
--- 1a. Rename based_in → resides_in in place (id preserved).
+-- 1a. Merge any pre-existing `resides_in` row into `based_in` before the
+--     rename. A real database may hold an auto-created `resides_in` row with
+--     facts from the pre-036 era (migration 050 deliberately preserves
+--     auto-created types that have facts, deferring repointing to issue
+--     #403); without the merge the rename below would collide with that row
+--     on the UNIQUE name constraint and fail the whole migration. Every step
+--     is guarded by `EXISTS based_in` so it no-ops when only the
+--     auto-created row exists (that row then becomes the canonical verb).
+UPDATE facts
+SET relationship_type_id = (SELECT id FROM relationship_types WHERE name = 'based_in')
+WHERE relationship_type_id = (SELECT id FROM relationship_types WHERE name = 'resides_in')
+  AND EXISTS (SELECT 1 FROM relationship_types WHERE name = 'based_in');
+
+INSERT OR IGNORE INTO relationship_constraints (relationship_type_id, allowed_subject_type_id, allowed_object_type_id)
+SELECT (SELECT id FROM relationship_types WHERE name = 'based_in'), allowed_subject_type_id, allowed_object_type_id
+FROM relationship_constraints
+WHERE relationship_type_id = (SELECT id FROM relationship_types WHERE name = 'resides_in')
+  AND EXISTS (SELECT 1 FROM relationship_types WHERE name = 'based_in');
+DELETE FROM relationship_constraints
+WHERE relationship_type_id = (SELECT id FROM relationship_types WHERE name = 'resides_in')
+  AND EXISTS (SELECT 1 FROM relationship_types WHERE name = 'based_in');
+
+INSERT OR IGNORE INTO relationship_type_hierarchy (child_id, parent_id)
+SELECT (SELECT id FROM relationship_types WHERE name = 'based_in'), parent_id
+FROM relationship_type_hierarchy
+WHERE child_id = (SELECT id FROM relationship_types WHERE name = 'resides_in')
+  AND EXISTS (SELECT 1 FROM relationship_types WHERE name = 'based_in');
+DELETE FROM relationship_type_hierarchy
+WHERE child_id = (SELECT id FROM relationship_types WHERE name = 'resides_in')
+  AND EXISTS (SELECT 1 FROM relationship_types WHERE name = 'based_in');
+
+INSERT INTO relationship_type_aliases (alias, relationship_type_id)
+SELECT alias, (SELECT id FROM relationship_types WHERE name = 'based_in')
+FROM relationship_type_aliases
+WHERE relationship_type_id = (SELECT id FROM relationship_types WHERE name = 'resides_in')
+  AND EXISTS (SELECT 1 FROM relationship_types WHERE name = 'based_in')
+ON CONFLICT(alias) DO UPDATE SET relationship_type_id = excluded.relationship_type_id;
+
+DELETE FROM relationship_types WHERE name = 'resides_in'
+  AND EXISTS (SELECT 1 FROM relationship_types WHERE name = 'based_in');
+
+-- 1b. Rename based_in → resides_in in place (id preserved).
 UPDATE relationship_types SET name = 'resides_in' WHERE name = 'based_in';
--- 1b. Defensive: if based_in was missing, create resides_in fresh.
+
+-- 1c. Defensive: if based_in was missing, create resides_in fresh. If only an
+--     auto-created resides_in exists, it keeps its id but gains the canonical
+--     description so the seeded-description contract holds on upgraded DBs.
 INSERT OR IGNORE INTO relationship_types (name, description) VALUES
     ('resides_in', 'Subject currently or previously resides in a location');
+UPDATE relationship_types SET description = 'Subject currently or previously resides in a location'
+WHERE name = 'resides_in' AND description LIKE 'Auto-created relationship_type: %';
 
--- 1c. Repoint lived_in facts onto resides_in.
+-- 1d. Repoint lived_in facts onto resides_in.
 UPDATE facts
 SET relationship_type_id = (SELECT id FROM relationship_types WHERE name = 'resides_in')
 WHERE relationship_type_id = (SELECT id FROM relationship_types WHERE name = 'lived_in');
 
--- 1d. Move lived_in constraints and hierarchy edges onto resides_in.
+-- 1e. Move lived_in constraints and hierarchy edges onto resides_in.
 INSERT OR IGNORE INTO relationship_constraints (relationship_type_id, allowed_subject_type_id, allowed_object_type_id)
 SELECT (SELECT id FROM relationship_types WHERE name = 'resides_in'), allowed_subject_type_id, allowed_object_type_id
 FROM relationship_constraints
@@ -51,7 +97,7 @@ WHERE child_id = (SELECT id FROM relationship_types WHERE name = 'lived_in');
 DELETE FROM relationship_type_hierarchy
 WHERE child_id = (SELECT id FROM relationship_types WHERE name = 'lived_in');
 
--- 1e. Repoint every lived_in alias (self-alias + legacy synonyms such as
+-- 1f. Repoint every lived_in alias (self-alias + legacy synonyms such as
 --     `previously_lived_in` / `former_city`) onto resides_in, then drop the
 --     old row (FK cascade removes any stragglers).
 INSERT INTO relationship_type_aliases (alias, relationship_type_id)

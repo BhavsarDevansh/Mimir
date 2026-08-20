@@ -46,7 +46,8 @@ impl InferenceRule for TransitivityRule {
         let mut results = Vec::new();
 
         if relationship_type_name == RELATIONSHIP_TYPE_VISITED {
-            // Forward: A-visited-B inserted, look for B-is_in-C → infer A-visited-C.
+            // Forward: A-visited-B inserted, look for B-located_in-C → infer
+            // A-visited-C.
             if let Some(object_id) = fact.object_id {
                 let parent_facts: Vec<Fact> = sqlx::query_as::<_, Fact>(
                     "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \

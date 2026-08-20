@@ -18,7 +18,8 @@ use crate::*;
 /// list — they are query-only subtree roots and must never be used as fact
 /// predicates.
 pub const CANONICAL_PREDICATES: &[&str] = &[
-    // Migrations 013/023/025/031 (ids 1-12).
+    // Migrations 013/023/025/031 (ids 2-12; id 1 `is_in` was consolidated
+    // into `located_in` by migration 051).
     "visited",
     "owns",
     "works_as",

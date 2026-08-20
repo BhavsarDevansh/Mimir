@@ -1,7 +1,36 @@
 //! Tests that all migrations run cleanly and produce the expected schema.
 
 use mimir_knowledge::KnowledgeGraph;
+use sqlx::SqlitePool;
+use sqlx::sqlite::SqlitePoolOptions;
 use std::path::PathBuf;
+
+/// Build a pre-051 database: apply every migration except 051 and return the
+/// open pool so the caller can seed legacy data before upgrading.
+async fn build_pre_051_pool(dir: &tempfile::TempDir) -> SqlitePool {
+    let db_path: PathBuf = dir.path().join("knowledge.db");
+    let migrations_dir = dir.path().join("migrations");
+    std::fs::create_dir(&migrations_dir).unwrap();
+    let migrations_src = concat!(env!("CARGO_MANIFEST_DIR"), "/src/db/migrations");
+    for entry in std::fs::read_dir(migrations_src).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_str().unwrap().to_string();
+        if name.starts_with("051_") {
+            continue;
+        }
+        std::fs::copy(&path, migrations_dir.join(&name)).unwrap();
+    }
+    let migrator = sqlx::migrate::Migrator::new(migrations_dir.as_path())
+        .await
+        .unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}?mode=rwc", db_path.display()))
+        .await
+        .unwrap();
+    migrator.run(&pool).await.unwrap();
+    pool
+}
 
 #[tokio::test]
 async fn all_migrations_apply_cleanly() {
@@ -98,26 +127,7 @@ async fn migration_051_repoints_legacy_predicate_facts() {
     let db_path: PathBuf = dir.path().join("knowledge.db");
 
     // Build a pre-051 database: apply every migration except 051.
-    let migrations_dir = dir.path().join("migrations");
-    std::fs::create_dir(&migrations_dir).unwrap();
-    let migrations_src = concat!(env!("CARGO_MANIFEST_DIR"), "/src/db/migrations");
-    for entry in std::fs::read_dir(migrations_src).unwrap() {
-        let path = entry.unwrap().path();
-        let name = path.file_name().unwrap().to_str().unwrap().to_string();
-        if name.starts_with("051_") {
-            continue;
-        }
-        std::fs::copy(&path, migrations_dir.join(&name)).unwrap();
-    }
-    let migrator = sqlx::migrate::Migrator::new(migrations_dir.as_path())
-        .await
-        .unwrap();
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect(&format!("sqlite://{}?mode=rwc", db_path.display()))
-        .await
-        .unwrap();
-    migrator.run(&pool).await.unwrap();
+    let pool = build_pre_051_pool(&dir).await;
 
     // Seed legacy facts under the pre-051 vocabulary (based_in, lived_in, is_in
     // are separate canonical rows before migration 051).
@@ -223,6 +233,122 @@ async fn migration_051_repoints_legacy_predicate_facts() {
             "{alias} must resolve to {canonical}"
         );
     }
+}
+
+#[tokio::test]
+async fn migration_051_merges_pre_existing_resides_in_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path: PathBuf = dir.path().join("knowledge.db");
+
+    // Pre-051 database, then simulate a pre-036-era auto-created `resides_in`
+    // row with a fact alongside the canonical `based_in` row migration 036
+    // seeds. Pre-036 the extractor emitted `resides_in` before the alias table
+    // existed, so such a row owns the `resides_in` alias (036's INSERT OR
+    // IGNORE lost the PK conflict) and migration 050 preserves it because it
+    // has facts.
+    let pool = build_pre_051_pool(&dir).await;
+    let based_in_id: i16 =
+        sqlx::query_scalar("SELECT id FROM relationship_types WHERE name = 'based_in'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let alice = mimir_knowledge::queries::entity::create_entity(
+        &pool,
+        "Alice",
+        mimir_knowledge::models::entity::EntityType::Person,
+        &[],
+    )
+    .await
+    .unwrap()
+    .id;
+    let london = mimir_knowledge::queries::entity::create_entity(
+        &pool,
+        "London",
+        mimir_knowledge::models::entity::EntityType::Place,
+        &[],
+    )
+    .await
+    .unwrap()
+    .id;
+    let (auto_id,): (i16,) = sqlx::query_as(
+        "INSERT INTO relationship_types (name, description) VALUES ('resides_in', 'Auto-created relationship_type: resides_in') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    // The pre-036 self-alias owns the `resides_in` name.
+    sqlx::query(
+        "INSERT OR REPLACE INTO relationship_type_aliases (alias, relationship_type_id) VALUES ('resides_in', ?)",
+    )
+    .bind(auto_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO facts (subject_id, relationship_type_id, object_id, confidence, fact_status_id) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(alice)
+    .bind(auto_id)
+    .bind(london)
+    .bind(0.9f32)
+    .bind(1i16)
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    // Upgrade: the merge must fold the auto-created row into based_in before
+    // the rename, otherwise the UNIQUE name constraint would fail migration 051.
+    let kg = KnowledgeGraph::init(&db_path).await.unwrap();
+
+    let (resides_rows,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM relationship_types WHERE name = 'resides_in'")
+            .fetch_one(kg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        resides_rows, 1,
+        "exactly one resides_in canonical row survives"
+    );
+    let (resides_id,): (i16,) =
+        sqlx::query_as("SELECT id FROM relationship_types WHERE name = 'resides_in'")
+            .fetch_one(kg.pool())
+            .await
+            .unwrap();
+    assert_eq!(resides_id, based_in_id, "rename keeps based_in's id");
+    let (facts,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM facts WHERE relationship_type_id = ?")
+            .bind(resides_id)
+            .fetch_one(kg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        facts, 1,
+        "auto-created row's fact follows the canonical verb"
+    );
+    assert_eq!(
+        kg.resolve_relationship_type_alias("resides_in")
+            .await
+            .unwrap(),
+        Some(resides_id),
+        "resides_in alias resolves to the surviving row"
+    );
+    assert_eq!(
+        kg.resolve_relationship_type_alias("based_in")
+            .await
+            .unwrap(),
+        Some(resides_id),
+        "based_in alias resolves to the surviving row"
+    );
+    let (description,): (String,) =
+        sqlx::query_as("SELECT description FROM relationship_types WHERE name = 'resides_in'")
+            .fetch_one(kg.pool())
+            .await
+            .unwrap();
+    assert!(
+        !description.starts_with("Auto-created"),
+        "resides_in carries the canonical description: {description}"
+    );
 }
 
 #[tokio::test]

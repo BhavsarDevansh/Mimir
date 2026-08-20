@@ -12,7 +12,7 @@
 
 ### Lookup Tables (Stable Integer IDs)
 
-Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `023`, `024`, `027`, `032`, `034`, `039`, and `046` with stable integer IDs that map to Rust enums via `#[repr(i16)]` discriminants:
+Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `023`, `024`, `027`, `032`, `034`, `039`, `046`, and `052` with stable integer IDs that map to Rust enums via `#[repr(i16)]` discriminants:
 
 - Migration `001` seeds `entity_types` (7 variants), `recurrence_types`, `location_types`, `fact_statuses`, `relation_types`, `source_types`, `preference_categories`, and `preference_source_types`. (`entity_date_types` was also seeded here but is dropped in migration `040` — see Events & Reminders.)
 - Migration `012` adds the `DateTime = 8` variant to `entity_types`.
@@ -22,6 +22,7 @@ Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `0
 - Migration `027` adds the `Rejected = 8` variant to `change_types`.
 - Migration `034` adds the `ContentUpdate = 9` variant to `change_types`.
 - Migration `039` seeds the events overlay lookups: `event_types`, `event_statuses`, and `auto_complete_policies`.
+- Migration `052` seeds `memory_buckets` (Identity, Upcoming, Relationships, Preferences, General) and backfills `categories.memory_bucket_id` from the taxonomy (issue #407).
 - The enum conversions in `mimir-knowledge` align the lookup identifiers across storage and the API/tool contracts: `ChangeType` / `ChangedBy` (`models::audit_log`) and `EntityType` (`models::entity`) expose `as_str()` + `TryFrom<i16>` (plus case-insensitive `FromStr` where input parsing exists), and the KB route / `kg_*` tool helpers delegate to them instead of re-typing the name tables (issue #358). Alignment is by stable identifier — `TryFrom<i16>` keeps the lookup rows and enum discriminants in lock-step — and the audit browse row (`queries::audit::AuditLogRow`) carries `changed_by_id` while both the `kb audit` route and the fact-detail route resolve `changed_by` through `ChangedBy::try_from(i16)` + `as_str()` (issue #380), so `GET /kb/audit` and `GET /kb/facts/{id}` render the same variant-style wire string (`User`, `System`, `InferenceEngine`, `NightlyOptimization`) rather than the lowercase lookup names.
 
 | Table | Rows | Rust Enum | Module |

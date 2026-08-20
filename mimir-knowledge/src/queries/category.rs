@@ -6,6 +6,7 @@ use sqlx::SqlitePool;
 use crate::KnowledgeError;
 use crate::models::category::{Category, CategoryWithCount, FactWithCategories, NewCategory};
 use crate::models::fact::FactStatus;
+use crate::models::memory::MemoryBucket;
 use std::collections::BTreeSet;
 
 /// List categories, optionally filtered by parent.
@@ -71,6 +72,13 @@ pub async fn insert_category(
     new: &NewCategory,
     _now: DateTime<Utc>,
 ) -> Result<Category, KnowledgeError> {
+    if let Some(bucket_id) = new.memory_bucket_id {
+        if MemoryBucket::try_from(bucket_id).is_err() {
+            return Err(KnowledgeError::Validation(format!(
+                "Unknown memory bucket id {bucket_id}; expected 1-5"
+            )));
+        }
+    }
     let category: Category = sqlx::query_as(
         "INSERT INTO categories (id, name, description, parent_id, memory_weight, memory_bucket_id) \
          VALUES (?, ?, ?, ?, ?, ?) \

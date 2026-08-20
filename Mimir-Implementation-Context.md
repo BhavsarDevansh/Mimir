@@ -191,9 +191,10 @@ The daemon will listen on both a Unix domain socket and a TCP socket once UDS is
 ## Memory System
 
 ### Knowledge-Graph Memory (condensed block)
+
 - Memory is a view over the SQLite knowledge graph: `mimir memory` renders a condensed core-facts block within a ~2,500 character budget (~900 tokens), cached in `system_state` (`key = "condensed_memory"`) for instant retrieval
 - Ranking is deterministic Rust (`mimir-knowledge/src/queries/memory/`): `confidence × category.memory_weight × temporal_boost × priority × centrality`, with identity facts always first; the fill algorithm sorts by score and truncates the last entry with `…` when the budget is exceeded
-- Condensation: a `MemorySchema` of the top-N stable facts (default 500) is sent to the LLM for natural-language condensation; Rust validates the output against the budget and falls back to deterministic template rendering on LLM failure or oversize output (`mimir-knowledge/src/condensation.rs`)
+- Condensation: Rust renders the schema as deterministic text and sends it to the LLM for natural-language condensation; `condensation_top_n` (default 500) is a cache-invalidation control — a hash of the top-N fact IDs and scores gates when the LLM call is skipped; Rust validates the output against the budget and falls back to deterministic template rendering on LLM failure or oversize output (`mimir-knowledge/src/condensation.rs`)
 - Composed into the system prompt as the final block, after the preset tone text and the shared operating directives, combined with an upcoming-events section rendered from the events overlay
 - Auto-managed: `remember` extraction, background ingestion, and nightly optimization add, replace, remove, and re-rank facts
 - Regenerated on demand: a fact insert/update/delete that ranks in the top-N, `mimir memory --refresh`, or nightly optimization completion; the background scheduler runs condensation only during LLM downtime

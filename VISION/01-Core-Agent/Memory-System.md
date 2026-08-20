@@ -28,7 +28,7 @@ The memory block is rendered on demand from the Knowledge Graph by deterministic
 
 1. Query the Knowledge Graph for facts about the user
 2. Score each fact with the ranking formula and select the top facts within the character budget
-3. Send the top-N stable facts (default 500) to the LLM as a structured `MemorySchema` for natural-language condensation
+3. Render the schema as deterministic text and send it to the LLM for natural-language condensation; a hash of the top-N facts (default 500, `condensation_top_n`) gates the cached result so unchanged memory skips the LLM call
 4. Validate the LLM output against the budget in Rust; fall back to deterministic template rendering on LLM failure or oversize output
 5. Cache the result in the `system_state` table (`key = "condensed_memory"`) so `mimir memory` prints instantly and daemon restarts survive
 
@@ -71,7 +71,7 @@ The scheduler ensures condensation only runs during LLM downtime so it never com
 
 ## Context Injection
 
-The daemon injects the condensed memory block into the system prompt before each chat turn, after the preset tone text and shared operating directives, framed as a curated subset rather than an exhaustive picture ("Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive)"). This signals to the LLM that it should use the `retrieve_context` tool if it needs more.
+The memory-bearing system prompt is composed at session creation for non-incognito sessions — after the preset tone text and shared operating directives — and reused for the session's lifetime, preserving the LLM's prefix cache; incognito requests build a fresh prompt per request. The block is framed as a curated subset rather than an exhaustive picture ("Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive)"), signalling to the LLM that it should use the `retrieve_context` tool if it needs more.
 
 The block is frozen per session: non-incognito sessions reuse the system prompt captured at session creation, which preserves the LLM's prefix cache; incognito requests build a fresh prompt.
 

@@ -107,7 +107,7 @@ mimir ask "Hello"
 | `MIMIR_MEMORY_ENABLED` | Enable working memory | `true` or `false` |
 | `MIMIR_MEMORY_CHAR_LIMIT` | Character budget for condensed memory | `2500` |
 | `MIMIR_MEMORY_AUTO_MANAGE` | Auto-truncate old memory | `true` or `false` |
-| `MIMIR_MEMORY_TEMPORAL_HORIZON` | Days of memory to retain | `30` |
+| `MIMIR_MEMORY_TEMPORAL_HORIZON` | How many days ahead the upcoming-events section spans in the memory block | `30` |
 | `MIMIR_SERVER_BIND_ADDR` | TCP bind address for the daemon | `127.0.0.1:8080` |
 | `MIMIR_SERVER_SOCKET_PATH` | Unix domain socket path for local CLI | (disabled by default) |
 | `MIMIR_KNOWLEDGE_EVENTS_SCHEDULE_TIMES` | Comma-separated daily scan times (HH:MM) for the events job | `07:30,19:45` |

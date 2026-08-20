@@ -29,10 +29,11 @@ pub async fn status_handler(State(state): State<Arc<AppState>>) -> Json<StatusRe
             String::new()
         }
     };
+    let cfg = state.config.snapshot().await;
     let upcoming = if let Some(uid) = state.user_entity_id {
         match state
             .knowledge_graph
-            .render_upcoming_section(uid, 30, 10)
+            .render_upcoming_section(uid, cfg.memory.temporal_horizon as i64, 10)
             .await
         {
             Ok(text) => text,
@@ -54,7 +55,6 @@ pub async fn status_handler(State(state): State<Arc<AppState>>) -> Json<StatusRe
     let memory_chars = memory_text.chars().count();
     let memory_exists = !memory_text.is_empty();
 
-    let cfg = state.config.snapshot().await;
     let memory_limit = cfg.memory.char_limit as usize;
     let memory_usage_pct = if memory_limit > 0 {
         (memory_chars as f64 / memory_limit as f64) * 100.0

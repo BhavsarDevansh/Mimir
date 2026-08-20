@@ -245,12 +245,14 @@ schedule_time = "02:00"
 
 **Ranking algorithm (Rust):**
 ```
-score = confidence × category_weight × temporal_boost
+score = confidence × category_weight × temporal_boost × priority × centrality
 ```
 
 Category weights: Identity(1.00) > Preferences(0.90) > Relationships(0.85) > Health(0.80) > Upcoming(0.75) > Work/Location(0.60) > General(0.50).
 
 Temporal boost: within 7 days (2.0×), 14 days (1.5×), 30 days (1.2×), beyond (1.0×). Recurring dates (birthdays, anniversaries) detected by matching month+day across years.
+
+Priority: `memory_priority_id` gives critical facts up to a 2.0× multiplier. Centrality: facts about well-connected entities (people mentioned often) rank higher.
 
 **Fill algorithm:** Pull facts ≥0.7 confidence → identity facts always first (~200 chars) → sort remaining by score descending → fill budget greedily → truncate with `…`.
 

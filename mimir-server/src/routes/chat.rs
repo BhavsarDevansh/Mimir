@@ -96,10 +96,11 @@ async fn resolve_chat_state(
             String::new()
         }
     };
+    let cfg = state.config.snapshot().await;
     let upcoming = if let Some(uid) = state.user_entity_id {
         match state
             .knowledge_graph
-            .render_upcoming_section(uid, 30, 10)
+            .render_upcoming_section(uid, cfg.memory.temporal_horizon as i64, 10)
             .await
         {
             Ok(text) => text,
@@ -123,8 +124,6 @@ async fn resolve_chat_state(
     };
 
     let incognito = req.incognito == Some(true);
-
-    let cfg = state.config.snapshot().await;
 
     let personality = if let Some(ref preset) = req.personality_preset {
         Personality::new(&mimir_core::config::PersonalityConfig {

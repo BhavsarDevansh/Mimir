@@ -139,8 +139,8 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 - [ ] `mimir kb optimization --status` and `--run-now` for manual control
 
 ### 2.12 Context Injection (Layer 2)
-- [ ] Daemon injects condensed memory into system prompt before each chat turn
-- [ ] Marked as "Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive)" (not exhaustive — LLM knows to use tools)
+- [ ] System prompt with condensed memory is composed at session creation for non-incognito sessions and reused across turns; incognito requests rebuild it per request
+- [ ] Memory block marked "Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive)" and captured once per session (not exhaustive — LLM knows to use tools)
 - [ ] Condensed text stored in `system_state` table, regenerated on KG changes
 
 ### 2.13 Librarian Agent (Layer 2 background extraction) — #130
@@ -151,7 +151,7 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 
 ### 2.14 `mimir memory` Command
 - [ ] Renders condensed memory from KG on demand
-- [ ] Rust: fact selection + ranking (category weights × confidence × temporal boost)
+- [ ] Rust: fact selection + ranking (category weights × confidence × temporal boost × priority × centrality)
 - [ ] LLM: condensation into ≤2500 chars natural language
 - [ ] Rust: validation + budget enforcement + template fallback
 - [ ] `--json` flag for raw ranked facts
@@ -211,7 +211,7 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 - [ ] Temporal queries work correctly (timeline vs contradiction)
 - [ ] Nightly optimization runs automatically via JobQueue
 - [ ] `mimir memory` produces concise, ranked condensation
-- [x] Legacy `memory.md` successfully migrated — file-backed system removed in v0.37.0 (issue #111); memory now renders from the Knowledge Graph
+- [x] Legacy file-backed `memory.md` system removed — v0.37.0 (issue #111) deleted it outright and the Knowledge Graph became the sole memory store; no data migration ran and memory renders from the graph
 - [ ] Obsidian export functional
 - [ ] All tests pass, benchmarks show acceptable performance with 10k+ facts
 

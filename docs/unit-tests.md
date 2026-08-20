@@ -45,7 +45,7 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 - `server.rs`: 1 child-process regression test — `spawn_sighup_reload_handler` must register the SIGHUP handler synchronously before spawning its task, so a SIGHUP sent immediately after the call is caught and reloads the config instead of killing the process via the default disposition (issue #369; same pattern as the SIGTERM regression in `shutdown.rs`).
 - `shutdown.rs`: 6 tests — shutdown-source attribution strings, graceful-vs-untriggered exit messages, the `serve_with_bounded_drain` lifetime/drain bound, the already-fired-trigger race, the child-process SIGTERM registration regression, and `test_server_exits_after_stop`. The `/stop` round trip is fully isolated (issue #384): it injects a known API token and mock LLM via `start_server_with_llm`, points context/knowledge/scheduler DBs into a temp dir (no real `~/.local/share/mimir` handles), and owns the server task behind a kill-on-drop guard so a panicking assertion cannot leak a live server into parallel suites.
 
-46 lib tests (up from 38).
+46 lib tests on Unix (up from 38); non-Unix platforms have 44 because the two SIGHUP regression tests in `server.rs` are Unix-only.
 
 ## `mimir-connectors`
 

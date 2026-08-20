@@ -14,16 +14,18 @@ use std::time::Duration;
 use mimir_core::config::{Config, ReloadableConfig};
 use mimir_core::llm::MockLlmClient;
 
-/// Reserve a free loopback port by pre-binding and dropping the listener.
+/// Base URL of a deterministically unreachable daemon endpoint.
 ///
-/// Used by the daemon-down CLI tests: no daemon-spawning test binds the
-/// returned port afterwards, so pointing `MIMIR_BASE_URL` at it makes
+/// TCP port 0 can never be a listening port: binding port 0 asks the kernel
+/// for an ephemeral port, so no process can ever listen on `127.0.0.1:0`
+/// and every connection attempt fails deterministically.
+///
+/// Used by the daemon-down CLI tests: pointing `MIMIR_BASE_URL` here makes
 /// "daemon unreachable" assertions independent of any real or leftover
 /// daemon on the default base URL (issue #384).
 #[allow(dead_code)]
-pub fn reserve_free_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-    listener.local_addr().expect("ephemeral port").port()
+pub fn unreachable_daemon_base_url() -> &'static str {
+    "http://127.0.0.1:0"
 }
 
 /// Spawn the real `mimir` binary with an isolated environment: temp

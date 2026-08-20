@@ -43,7 +43,7 @@ To add a new E2E scenario (e.g. streaming chat, memory viewing):
 
 ## Daemon-down CLI tests (`mimir/tests/cli_tests.rs`)
 
-The daemon-down assertions (`status`, `stop`, `memory`, and piped/empty `ask`) run the real binary against a **guaranteed-free** loopback port: each test reserves one by pre-binding and dropping a `std::net::TcpListener` (`reserve_free_port` in `mimir/tests/common/mod.rs`) and passes it via `MIMIR_BASE_URL`, alongside temp HOME/XDG dirs. Nothing can be listening on that port, so the "daemon unreachable" path is deterministic even when the developer's real daemon (or a leftover from an earlier suite) is running on the configured default base URL — the flake described in issue #384. The `TestDaemon` fixture also kills its in-process server on drop, so a panicking E2E test cannot leak a daemon holding the reserved port and temp DB handles.
+The daemon-down assertions (`status`, `stop`, `memory`, and piped/empty `ask`) run the real binary against the never-bindable loopback endpoint `http://127.0.0.1:0`: TCP port 0 is never assigned to a listener (binding port 0 asks the kernel for an ephemeral port), so every connection attempt fails deterministically (`unreachable_daemon_base_url` in `mimir/tests/common/mod.rs`). Each test passes it via `MIMIR_BASE_URL`, alongside temp HOME/XDG dirs, so the "daemon unreachable" path is deterministic even when the developer's real daemon (or a leftover from an earlier suite) is running on the configured default base URL — the flake described in issue #384. The `TestDaemon` fixture also kills its in-process server on drop, so a panicking E2E test cannot leak a daemon holding a port and temp DB handles.
 
 ## Connector E2E (Phase 3 T1 / issue #206)
 

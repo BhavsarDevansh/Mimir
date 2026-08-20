@@ -1,4 +1,4 @@
-//! Transitivity rule: A-[visited/is_in]-B + B-is_in-C → A-[visited/is_in]-C.
+//! Transitivity rule: A-[visited/located_in]-B + B-located_in-C → A-[visited/located_in]-C.
 
 use async_trait::async_trait;
 
@@ -9,7 +9,7 @@ use crate::models::fact::{Fact, FactStatus, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
 
 const RELATIONSHIP_TYPE_VISITED: &str = "visited";
-const RELATIONSHIP_TYPE_IS_IN: &str = "is_in";
+const RELATIONSHIP_TYPE_LOCATED_IN: &str = "located_in";
 
 pub struct TransitivityRule;
 
@@ -26,14 +26,19 @@ impl InferenceRule for TransitivityRule {
                 None => return Ok(Vec::new()),
             };
 
-        // Only run for predicates we care about.
+        // Only run for predicates we care about. `is_in` was consolidated
+        // into `located_in` by migration 051 (issue #403); the alias table
+        // resolves any legacy `is_in` name to the same id.
         if relationship_type_name != RELATIONSHIP_TYPE_VISITED
-            && relationship_type_name != RELATIONSHIP_TYPE_IS_IN
+            && relationship_type_name != RELATIONSHIP_TYPE_LOCATED_IN
         {
             return Ok(Vec::new());
         }
 
-        let is_in_id = match kg.ensure_relationship_type(RELATIONSHIP_TYPE_IS_IN).await {
+        let located_in_id = match kg
+            .ensure_relationship_type(RELATIONSHIP_TYPE_LOCATED_IN)
+            .await
+        {
             Ok(id) => id,
             Err(e) => return Err(e),
         };
@@ -51,7 +56,7 @@ impl InferenceRule for TransitivityRule {
                      WHERE subject_id = ? AND relationship_type_id = ? AND fact_status_id IN (?, ?)",
                 )
                 .bind(object_id)
-                .bind(is_in_id)
+                .bind(located_in_id)
                 .bind(FactStatus::Active as i16)
                 .bind(FactStatus::Inferred as i16)
                 .fetch_all(kg.pool())
@@ -101,14 +106,15 @@ impl InferenceRule for TransitivityRule {
                     }
                 }
             }
-        } else if relationship_type_name == RELATIONSHIP_TYPE_IS_IN {
-            // We do NOT do forward is_in→is_in lookup to prevent cyclic garbage.
-            // (Backward is_in→visited lookup is handled below.)
+        } else if relationship_type_name == RELATIONSHIP_TYPE_LOCATED_IN {
+            // We do NOT do forward located_in→located_in lookup to prevent
+            // cyclic garbage. (Backward located_in→visited lookup is below.)
         }
 
-        if relationship_type_name == RELATIONSHIP_TYPE_IS_IN {
-            // Backward: B-is_in-C inserted, look for A-visited-B → infer A-visited-C.
-            // We do NOT do backward lookup for is_in-to-is_in to avoid self-disputing chains.
+        if relationship_type_name == RELATIONSHIP_TYPE_LOCATED_IN {
+            // Backward: B-located_in-C inserted, look for A-visited-B → infer
+            // A-visited-C. We do NOT do backward lookup for located_in-to-
+            // located_in to avoid self-disputing chains.
             let visited_id = match kg.ensure_relationship_type(RELATIONSHIP_TYPE_VISITED).await {
                 Ok(id) => id,
                 Err(e) => return Err(e),

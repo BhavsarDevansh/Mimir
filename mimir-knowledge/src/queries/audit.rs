@@ -70,8 +70,29 @@ pub async fn query_audit_log(
         builder.push_bind(name);
     }
     if let Some(ref name) = filter.relationship_type_name {
-        builder.push(" AND rt.name = ");
-        builder.push_bind(name);
+        // Resolve through the alias table (the single source of truth for
+        // predicate canonicalization) so alias names like `is_in` match facts
+        // stored under `located_in` (issue #403).
+        let resolved: Option<i16> =
+            match crate::normalize_alias(name) {
+                Some(normalized) => sqlx::query_scalar(
+                    "SELECT relationship_type_id FROM relationship_type_aliases WHERE alias = ?",
+                )
+                .bind(normalized)
+                .fetch_optional(pool)
+                .await?,
+                None => None,
+            };
+        match resolved {
+            Some(id) => {
+                builder.push(" AND f.relationship_type_id = ");
+                builder.push_bind(id);
+            }
+            None => {
+                // Unknown predicate: no facts can match.
+                builder.push(" AND 1 = 0");
+            }
+        }
     }
     if let Some(from) = filter.from {
         builder.push(" AND fal.changed_at >= ");

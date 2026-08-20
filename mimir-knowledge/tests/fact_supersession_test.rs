@@ -107,13 +107,18 @@ async fn explicit_replaces_inferred() {
 
     let alice = create_person(&kg, "Alice").await;
     let london = create_place(&kg, "London").await;
+    let located_in_id = kg
+        .get_relationship_type_id("located_in")
+        .await
+        .unwrap()
+        .unwrap();
 
     // Inferred fact.
     let old_fact: mimir_knowledge::models::fact::Fact = sqlx::query_as(
         "INSERT INTO facts (subject_id, relationship_type_id, object_id, confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until, confidence, fact_status_id, inferred, inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at",
     )
     .bind(alice)
-    .bind(1i16)
+    .bind(located_in_id)
     .bind(london)
     .bind(0.5f32)
     .bind(FactStatus::Inferred as i16)
@@ -129,7 +134,7 @@ async fn explicit_replaces_inferred() {
     let new_fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            relationship_type: "is_in".to_string(),
+            relationship_type: "located_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,

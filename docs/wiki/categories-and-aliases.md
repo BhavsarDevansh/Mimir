@@ -23,7 +23,7 @@ Aliases are stored in the `category_aliases` table (globally unique `alias` → 
 
 ## Why categories, not a predicate hierarchy
 
-A predicate tree follows one axis (a predicate has one canonical name and one parent path). Categories are many-to-many: "Alice works_at Foo as an engineer" can be both `Current Role` and `Skills & Expertise`; "hobbies" spans `Music`, `Gaming`, `Outdoor Activities`. That granularity is what a reasoning agent needs — indoor vs outdoor for weather-aware suggestions, budget-relevant tags, shared-ground detection across two people. So grouping lives in categories; `relationship_type_hierarchy` is kept but not seeded with abstract parent predicates.
+A predicate tree follows one axis (a predicate has one canonical name and one parent path). Categories are many-to-many: "Alice works_at Foo as an engineer" can be both `Current Role` and `Skills & Expertise`; "hobbies" spans `Music`, `Gaming`, `Outdoor Activities`. That granularity is what a reasoning agent needs — indoor vs outdoor for weather-aware suggestions, budget-relevant tags, shared-ground detection across two people. So grouping lives in categories; the predicate hierarchy is seeded (issue #403) with a few abstract parents (`employment`, `education`, `residence`, `containment`) purely so `kg_query --include-subtree` can ask "everything about employment" in one call. The parents are query-only — they can never be used as fact predicates.
 
 ## Use cases
 
@@ -35,7 +35,7 @@ A predicate tree follows one axis (a predicate has one canonical name and one pa
 
 - Tag facts with the **most specific** subcategory available at extraction time (the LLM is instructed to assign 1–3 category ids).
 - Add new domain words via `insert_category_alias` rather than inventing new predicates — keep predicates as thin verbs.
-- Treat `relationship_type_hierarchy` as vestigial for grouping; prefer category-subtree retrieval.
+- Use the seeded predicate DAG parents (`employment`, `education`, `residence`, `containment`) for coarse verb generalisation in `kg_query --include-subtree`, and category subtrees for multi-axis grouping and memory ranking.
 
 ## See also
 

@@ -13,7 +13,7 @@ A `CascadeContext` tracks every triple processed in the current cascade. If a ru
 If you tell Mimir:
 
 - "Devansh visited Rome"
-- "Rome is_in Italy"
+- "Rome located_in Italy"
 
 The transitivity rule infers:
 
@@ -25,8 +25,8 @@ Confidence is computed from both parent facts, penalised slightly for depth.
 
 If you add:
 
-- "Alice is_in London" (explicit, today)
-- "Alice is_in Paris" (from a connector, same time range)
+- "Alice located_in London" (explicit, today)
+- "Alice located_in Paris" (from a connector, same time range)
 
 Both facts are marked `Disputed` and linked by `Contradicts` edges. During nightly optimization, if one is explicit and the other is inferred, the inferred is automatically `Superseded`.
 

@@ -21,7 +21,10 @@ async fn seed_creates_expected_predicate_count() {
         .fetch_one(kg.pool())
         .await
         .unwrap();
-    assert_eq!(count, 44, "44 canonical relationship types after seed");
+    assert_eq!(
+        count, 46,
+        "46 relationship types after seed (42 canonical verbs + 4 abstract DAG parents, issue #403)"
+    );
 
     // The six new core verbs are present with their explicit ids.
     for (id, name) in [

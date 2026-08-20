@@ -274,6 +274,58 @@ async fn strict_resolver_allows_favourite_family() {
     );
 }
 
+#[tokio::test]
+async fn strict_resolver_rejects_abstract_ontology_parent() {
+    let tg = TestGraph::new().await;
+
+    // Abstract DAG parents (employment, education, residence, containment)
+    // are query-only vocabulary: they must not be usable as fact predicates.
+    for parent in ["employment", "education", "residence", "containment"] {
+        let err = tg
+            .kg
+            .resolve_canonical_relationship_type(parent)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains(parent),
+            "error should name the predicate: {err}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn consolidated_aliases_resolve_to_canonical() {
+    let tg = TestGraph::new().await;
+
+    // based_in / lived_in consolidated into resides_in (issue #403).
+    let resides_in = tg
+        .kg
+        .resolve_canonical_relationship_type("resides_in")
+        .await
+        .unwrap();
+    for alias in ["based_in", "lived_in"] {
+        let id = tg
+            .kg
+            .resolve_canonical_relationship_type(alias)
+            .await
+            .unwrap();
+        assert_eq!(id, resides_in, "{alias} must resolve to resides_in");
+    }
+
+    // is_in consolidated into located_in (issue #403).
+    let located_in = tg
+        .kg
+        .resolve_canonical_relationship_type("located_in")
+        .await
+        .unwrap();
+    let is_in = tg
+        .kg
+        .resolve_canonical_relationship_type("is_in")
+        .await
+        .unwrap();
+    assert_eq!(is_in, located_in, "is_in must resolve to located_in");
+}
+
 // ---------------------------------------------------------------------------
 // Allow-list const is pinned to the seed
 // ---------------------------------------------------------------------------
@@ -282,9 +334,10 @@ async fn strict_resolver_allows_favourite_family() {
 async fn canonical_const_matches_seeded_relationship_types() {
     let tg = TestGraph::new().await;
 
-    // Every seeded canonical name must be in the allow-list const.
+    // Every seeded canonical name must be in the allow-list const. Abstract
+    // ontology parents (issue #403) are query-only DAG roots and are excluded.
     let seeded: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM relationship_types WHERE description NOT LIKE 'Auto-created relationship_type: %'",
+        "SELECT name FROM relationship_types WHERE description NOT LIKE 'Auto-created relationship_type: %' AND description NOT LIKE 'Abstract ontology parent%'",
     )
     .fetch_all(tg.kg.pool())
     .await

@@ -493,6 +493,41 @@ async fn kg_query_include_subtree_resolves_alias_for_root() {
 }
 
 #[tokio::test]
+async fn kg_query_include_subtree_uses_seeded_employment_parent() {
+    let tg = common::TestGraph::new().await;
+    let alice = tg.create_person("Alice").await;
+    let engineering = tg.create_activity("Engineering").await;
+    // The seeded employment parent (issue #403) must expand to its children.
+    add_fact(&tg, alice, "works_at", Some(engineering), 0.90).await;
+    add_fact(&tg, alice, "works_as", Some(engineering), 0.80).await;
+    add_fact(&tg, alice, "job_title", Some(engineering), 0.70).await;
+    // Unrelated, high-confidence fact must be excluded by the subtree.
+    add_fact(&tg, alice, "hobby", Some(engineering), 0.99).await;
+
+    let tool = mimir_knowledge::KgQueryTool::new(Arc::new(tg.kg));
+    let out = tool
+        .execute(serde_json::json!({
+            "entity_name": "Alice",
+            "predicate": "employment",
+            "include_subtree": true,
+        }))
+        .await
+        .unwrap();
+    let result = out.result.unwrap();
+    let facts = result["facts"].as_array().unwrap();
+    assert_eq!(
+        facts.len(),
+        3,
+        "employment subtree: works_at + works_as + job_title"
+    );
+    let preds = fact_predicates(&result);
+    assert!(preds.contains(&"works_at".to_string()));
+    assert!(preds.contains(&"works_as".to_string()));
+    assert!(preds.contains(&"job_title".to_string()));
+    assert!(!preds.contains(&"hobby".to_string()));
+}
+
+#[tokio::test]
 async fn kg_query_without_include_subtree_uses_exact_predicate() {
     let tg = common::TestGraph::new().await;
     let alice = tg.create_person("Alice").await;

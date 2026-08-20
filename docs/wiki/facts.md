@@ -8,7 +8,7 @@ Facts are the edges of Mimir’s knowledge graph: statements that connect entiti
 
 A fact has:
 - **Subject** — the entity the statement is about (e.g., *Alice*).
-- **Predicate** — the relationship (e.g., `is_in`, `works_as`, `visited`).
+- **Predicate** — the relationship (e.g., `located_in`, `works_as`, `visited`).
 - **Object** — another entity or a literal string (e.g., *London* or "pizza").
 - **Time range** — when the statement is true (`valid_from` → `valid_until`).
 - **Confidence** — how certain Mimir is (0.0–1.0).
@@ -17,7 +17,7 @@ A fact has:
 Example:
 
 ```text
-Alice --[is_in]--> London   (2020-01-01 → 2021-01-01, confidence 1.0, Active)
+Alice --[located_in]--> London   (2020-01-01 → 2021-01-01, confidence 1.0, Active)
 ```
 
 

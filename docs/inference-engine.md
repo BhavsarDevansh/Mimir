@@ -29,13 +29,13 @@ Inferred facts use `confidence::inference_confidence(parents, depth, num_parents
 
 ### Transitivity
 
-**Trigger:** `visited` or `is_in`
+**Trigger:** `visited` or `located_in` (`is_in` is a seeded alias of `located_in` since migration 051)
 
-**Forward:** `A-P-B` inserted + `B is_in C` exists → infer `A-P-C`
+**Forward:** `A-P-B` inserted + `B located_in C` exists → infer `A-P-C`
 
-**Backward:** `B is_in C` inserted + `A visited B` exists → infer `A visited C`
+**Backward:** `B located_in C` inserted + `A visited B` exists → infer `A visited C`
 
-**Backward `is_in` lookup is intentionally disabled** to prevent self-disputing chains.
+**Backward `located_in` lookup is intentionally disabled** to prevent self-disputing chains.
 
 ### Contradiction
 

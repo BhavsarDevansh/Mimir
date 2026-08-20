@@ -165,6 +165,8 @@ LIMIT ?;
 
 The `UNION` (not `UNION ALL`) deduplicates relationship-type ids, so a type reachable via multiple hierarchy paths contributes each fact only once. Filters and ordering match `get_facts_by_subject_filtered` (non-pending, status `NOT IN (5, 6)`, confidence floor). A matching `count_facts_by_relationship_subtree` produces the `total` field. `include_subtree` without a `predicate` is rejected with `ToolError::InvalidArguments`; the subtree path has no `offset` (results are bounded by `limit` only); a caller-supplied `offset` is ignored and the response `offset` is always `0`, including the empty-result early-return when the predicate does not exist. The `KnowledgeGraph::get_facts_by_relationship_subtree(entity_id, root_type_id, limit)` wrapper is a convenience with `min_confidence = 0.0`.
 
+Migration `051` (issue #403) seeds four query-only abstract parents so subtree expansion works out of the box: `employment` → `works_at`/`works_as`/`job_title`, `education` → `studied`/`studied_at`/`completed_degree`/`educational_status`, `residence` → `resides_in`, and `containment` → `located_in`. These parents are not in the `CANONICAL_PREDICATES` allow-list, so the conversational extraction path rejects them as fact predicates; `kg_query` resolves them through the alias table for subtree queries only.
+
 ## retrieve_context
 
 ### Tool Schema

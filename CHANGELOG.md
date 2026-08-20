@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.127.0] — 2026-08-20
+
+### Refactor: consolidate redundant KG predicates and seed the relationship-type DAG (issue #403)
+
+- Migration `051_consolidate_predicates_and_seed_dag.sql` consolidates the overlapping predicate vocabulary: `based_in` and `lived_in` are now aliases of a single `resides_in` (current vs previous residence is one relation with different `valid_from`/`valid_until` bounds), and `is_in` is an alias of `located_in` (both express physical containment). Existing facts, constraints, and hierarchy edges are repointed name-keyed (never id-assumed), and the old names keep resolving through the alias table, so stored queries and callers are unaffected.
+- The same migration seeds the dormant relationship-type DAG with four query-only abstract parents — `employment` → `works_at`/`works_as`/`job_title`, `education` → `studied`/`studied_at`/`completed_degree`/`educational_status`, `residence` → `resides_in`, `containment` → `located_in` — so `kg_query --include-subtree` expresses real generalisation. The parents are excluded from the Rust `CANONICAL_PREDICATES` allow-list: the strict conversational resolver rejects them as fact predicates, while `kg_query` resolves them through the alias table for subtree expansion.
+- Rust updates: `CANONICAL_PREDICATES` in `mimir-knowledge/src/graph/predicates.rs` swaps `based_in`/`lived_in`/`is_in` for `resides_in`; the extraction prompt and `remember` tool description instruct `resides_in`; the transitivity inference rule keys on `located_in`; the memory renderer adds a `resides_in` line; and the audit-log filter now resolves predicate names through the alias table so filtering by `is_in`/`based_in`/`lived_in` still matches facts stored under the consolidated verbs.
+- Tests: new seeded-DAG and consolidation-alias coverage in `relationship_type_dag_test.rs`, a seeded-parent `kg_query --include-subtree` test in `relationship_subtree_test.rs`, strict-resolver rejection of abstract parents and alias resolution in `predicate_allowlist_test.rs`, and updated seed counts/lookup pins in `migrations_test.rs`, `lookup_sync_test.rs`, and `relationship_ontology_test.rs`; fixtures that hardcoded the old `is_in` id (1) now resolve `located_in` dynamically.
+- Docs updated in `docs/knowledge-graph-schema.md`, `docs/inference-engine.md`, `docs/benchmarks.md`, `docs/wiki/knowledge-graph.md`, `docs/wiki/categories-and-aliases.md`, `docs/wiki/kg-tools.md`, `docs/wiki/inference-rules.md`, `docs/wiki/facts.md`, and `docs/wiki/what-works-now.md`.
+- Version bumped 0.126.1 → 0.127.0 (minor — refactor plus the additive migration and the alias-resolving audit filter).
+
 ## [0.126.1] — 2026-08-20
 
 ### Bugfix: seeded relationship-type constraints are enforced on every insert path (issue #402)

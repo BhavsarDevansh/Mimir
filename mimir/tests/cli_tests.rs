@@ -1,9 +1,9 @@
 //! Binary-level tests for the `mimir` CLI.
 //!
-//! Every test runs the real binary against a guaranteed-free loopback port
-//! (reserved per test) with an isolated HOME/XDG layout, so the daemon-down
-//! assertions can never be affected by a real or leftover daemon on the
-//! default base URL (issue #384).
+//! The daemon-dependent tests run the real binary against a
+//! guaranteed-free loopback port (reserved per test) with an isolated
+//! HOME/XDG layout, so the daemon-down assertions can never be affected by
+//! a real or leftover daemon on the default base URL (issue #384).
 
 mod common;
 

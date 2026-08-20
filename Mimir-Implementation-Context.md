@@ -181,10 +181,10 @@ The daemon will listen on both a Unix domain socket and a TCP socket once UDS is
 
 ## Personality System
 
-- **Presets:** `transparent` (default), `concise`, `warm`, `formal`
-- **System prompt:** Generated from personality preset + memory.md content
-- **Override:** `mimir ask -p concise "..."` or `mimir chat` then `/personality concise`
-- **Extensible:** Custom personalities can be added via config in future versions
+- **Presets:** `transparent` (default), `concise`, `warm`, `formal`, plus custom `<name>.personality.md` files in `~/.config/mimir/personalities/`
+- **System prompt:** Composed in Rust from the active preset's tone text, shared operating directives, and the condensed knowledge-graph memory block
+- **Override:** config `[personality] preset`, env `MIMIR_PERSONALITY_PRESET`, `mimir ask -p concise "..."`, `mimir chat` then `/personality concise`, or the per-request `personality_preset` API field
+- **Extensible:** Custom presets override built-ins on name collision; an unknown preset falls back to `transparent` with a warning
 
 ---
 

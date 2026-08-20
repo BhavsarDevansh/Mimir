@@ -73,7 +73,7 @@ Build the foundational interaction layer: CLI, chat interface, LLM orchestration
 
 ### 1.9 Personality System
 - [x] Personality presets (transparent, concise, warm, formal)
-- [x] System prompt generation from memory.md content
+- [x] System prompt composition from preset + shared operating directives + condensed knowledge-graph memory
 - [x] CLI override via `--personality` flag
 
 ### 1.10 Deployment

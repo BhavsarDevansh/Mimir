@@ -60,7 +60,7 @@ Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `0
 | `preference_audit_log` | Immutable history of preference changes |
 | `relationship_types` | Canonical relationship predicates (thin verbs); see Relationship Type DAG |
 | `relationship_type_aliases` | Globally-unique English synonyms → canonical relationship type id |
-| `relationship_type_hierarchy` | Parent/child edges between relationship types (vestigial — grouping lives in `categories`; see Category Aliases) |
+| `relationship_type_hierarchy` | Parent/child edges between relationship types (seeded abstract parents for subtree queries; grouping still lives in `categories`) |
 | `relationship_constraints` | Valid subject/object entity-type combinations per relationship type (renamed from `predicate_constraints` by migration `031`) |
 | `categories` | Dewey-Decimal-style fact taxonomy with `memory_weight` |
 | `fact_categories` | Many-to-many junction: facts ↔ categories (multi-tag precision + ranking) |
@@ -85,7 +85,7 @@ Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `0
 
 Migration `013` introduced a controlled vocabulary for predicates as `predicates(id, name, description)` and `predicate_constraints(predicate_id, allowed_subject_type_id, allowed_object_type_id)`. Migration `031` renamed these to **`relationship_types`** and **`relationship_constraints`** (and dropped the old `predicates` / `Predicate`-enum mapping); the canonical predicate names now live in `relationship_types`, and `relationship_constraints` holds the valid subject/object type combinations per predicate.
 
-The original 11 seeded predicates (`is_in`, `visited`, `owns`, `works_as`, `has_partner`, `has_parent`, `born_on`, `died_on`, `located_in`, `created_on`, `has_preference`) were carried over, and migration `025` added `rejected_action` (id 12) for the threshold inference rule. Migration `050` seeds the 13 predicates the extraction path legitimately uses that were missing (`skill`, `has_appointment`, and the sensitive predicates migration `029` intended to mark: `allergy`, `medication`, `diagnosis`, `income`, `salary`, `password`, `ssn`, `social_security_number`, `bank_account`, `credit_card`, `insurance`), bringing the canonical set to 44. The full set is data-driven and extensible — see [Relationship Type DAG](#relationship-type-dag) and [Category Aliases & Subtree Retrieval](#category-aliases--subtree-retrieval) for the alias and hierarchy layer.
+The original 11 seeded predicates (`is_in`, `visited`, `owns`, `works_as`, `has_partner`, `has_parent`, `born_on`, `died_on`, `located_in`, `created_on`, `has_preference`) were carried over, and migration `025` added `rejected_action` (id 12) for the threshold inference rule. Migration `050` seeds the 13 predicates the extraction path legitimately uses that were missing (`skill`, `has_appointment`, and the sensitive predicates migration `029` intended to mark: `allergy`, `medication`, `diagnosis`, `income`, `salary`, `password`, `ssn`, `social_security_number`, `bank_account`, `credit_card`, `insurance`). Migration `051` (issue #403) consolidates the redundant verbs: `based_in` and `lived_in` are now aliases of a single `resides_in` (moves are modelled by `valid_from`/`valid_until` and supersession), and `is_in` is an alias of `located_in` (both express physical containment). The table now holds 42 canonical fact predicates plus 4 abstract DAG parents (`residence`, `employment`, `education`, `containment`) that are query-only subtree roots, for 46 rows total. The full set is data-driven and extensible — see [Relationship Type DAG](#relationship-type-dag) and [Category Aliases & Subtree Retrieval](#category-aliases--subtree-retrieval) for the alias and hierarchy layer.
 
 The conversational extraction path enforces a Rust-side canonical predicate allow-list (`CANONICAL_PREDICATES` in `mimir-knowledge/src/graph/predicates.rs`, issue #401): `resolve_canonical_relationship_type` accepts only seeded canonical predicates, their aliases, and the prompt-instructed `favourite_<thing>` family, and rejects anything else with a clear error instead of auto-creating a `relationship_types` row. The shared `normalize_and_insert` boundary remains permissive for connector-provenance facts until the ontology consolidation (issues #403/#412) seeds connector-emitted predicates.
 
@@ -177,6 +177,7 @@ Migrations are strictly ordered by foreign-key dependencies:
 41. `048` — `pending_location_meta` cache for sensitive-fact location shape across the confirmation boundary (#226)
 42. `049` — `connectors.durable_state` column: opaque, connector-owned durable state persisted by the supervisor (the Email connector's bounded LLM-extraction retry ledger) (#262)
 43. `050` — Seed remaining canonical predicates (`skill`, `has_appointment`, sensitive set) via name-keyed UPSERT + reconcile auto-created types (#401)
+44. `051` — Consolidate redundant predicates (`based_in`/`lived_in` → `resides_in`, `is_in` → `located_in`, name-keyed) + seed abstract DAG parents (`residence`, `employment`, `education`, `containment`) (#403)
 
 ---
 
@@ -258,7 +259,7 @@ Added in migration `035`:
 - `relationship_type_hierarchy(child_id, parent_id)` — directed acyclic graph of relationship types. Multiple parents are allowed. Cycles are rejected in Rust before insert.
 - `relationship_type_aliases(alias, relationship_type_id)` — English synonyms. `alias` is the primary key, so every alias resolves to exactly one canonical relationship type.
 
-These tables let the agent discover relationship types instead of memorizing private names. Query traversal uses SQLite recursive CTEs:
+Migration `051` (issue #403) seeds the DAG with four abstract ontology parents so subtree queries express real generalisation: `employment` → `works_at` / `works_as` / `job_title`, `education` → `studied` / `studied_at` / `completed_degree` / `educational_status`, `residence` → `resides_in`, and `containment` → `located_in`. The parents are query-only vocabulary: they are excluded from the Rust `CANONICAL_PREDICATES` allow-list, so the strict conversational resolver rejects them as fact predicates, but `kg_query --include-subtree` resolves them through the alias table and expands to their descendants. These tables let the agent discover relationship types instead of memorizing private names. Query traversal uses SQLite recursive CTEs:
 
 ```sql
 WITH RECURSIVE descendants(id) AS (
@@ -347,7 +348,7 @@ Mimir separates two concerns that previously risked overlapping:
 
 ### Why categories, not a predicate hierarchy, for grouping
 
-A predicate tree can only follow one axis (a predicate has a single canonical name and a parent path). Categories are many-to-many: "Alice works_at Foo as an engineer" can be both `510 Current Role` and `540 Skills & Expertise`, and "hobbies" spans `710 Music`, `740 Gaming`, `780 Outdoor Activities` — the granularity a reasoning agent needs (indoor vs outdoor for weather-aware suggestions, budget-relevant tags, shared-ground detection across two people). `relationship_type_hierarchy` therefore remains available but is **not seeded with abstract parent predicates**; grouping is done by category membership. Reworking `kg_query --include-subtree` (Issue #134) to expand by category subtree is a tracked follow-up; today it still expands by the (now intentionally sparse) predicate DAG.
+A predicate tree can only follow one axis (a predicate has a single canonical name and a parent path). Categories are many-to-many: "Alice works_at Foo as an engineer" can be both `510 Current Role` and `540 Skills & Expertise`, and "hobbies" spans `710 Music`, `740 Gaming`, `780 Outdoor Activities` — the granularity a reasoning agent needs (indoor vs outdoor for weather-aware suggestions, budget-relevant tags, shared-ground detection across two people). Grouping therefore lives in categories; the predicate DAG is seeded (issue #403) with a small set of abstract parents (`employment`, `education`, `residence`, `containment`) purely so `kg_query --include-subtree` can express coarse generalisation ("everything about employment") without enumerating every verb. The two layers are complementary: categories give multi-axis precision and memory ranking, the predicate DAG gives one-axis verb generalisation. Reworking `kg_query --include-subtree` (Issue #134) to expand by category subtree remains a tracked follow-up; today it expands by the predicate DAG.
 
 ### Retrieval API (`queries::category`)
 

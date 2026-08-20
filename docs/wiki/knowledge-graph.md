@@ -47,7 +47,7 @@ Resolution is **type-aware**: only entities matching the declared type (Person, 
 
 ### Relationship Types
 
-Facts connect entities with a **relationship type** (sometimes called a predicate), such as `works_at`, `lives_in`, or `has_sibling`. Relationship types form a controlled vocabulary:
+Facts connect entities with a **relationship type** (sometimes called a predicate), such as `works_at`, `resides_in`, or `has_sibling`. Relationship types form a controlled vocabulary:
 
 - The system keeps a canonical list of relationship type names.
 - Each canonical name can have **aliases** (synonyms). For example, `studied_at` might have aliases `attended` and `alumni_of`.
@@ -57,6 +57,7 @@ Facts connect entities with a **relationship type** (sometimes called a predicat
 - To keep resolution unambiguous, a canonical name cannot be created if it would shadow an existing alias, and an alias cannot be created if it would shadow an existing canonical name.
 
 - Relationship types also form a **hierarchy** (a directed acyclic graph). A type can sit under parent types — for example `studied_at` and `graduated_from` can be children of an `education` type. When the agent queries a type it can expand to the whole **subtree**, so asking about "education" finds `studied_at`, `graduated_from`, and any other descendants without the agent needing to know every type name (see `kg_query` with `include_subtree`).
+- Redundant verbs are consolidated: `based_in` and `lived_in` are aliases of `resides_in` (current and previous residence are one relation with different time bounds), and `is_in` is an alias of `located_in`. The abstract parents `employment`, `education`, `residence`, and `containment` are query-only subtree roots — they are never stored on facts.
 
 ### Deduplication
 

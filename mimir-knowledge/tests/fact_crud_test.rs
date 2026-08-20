@@ -24,7 +24,7 @@ async fn fact_crud_roundtrip() {
 
     let new_fact = NewFact {
         subject_id: alice,
-        relationship_type: "is_in".to_string(),
+        relationship_type: "located_in".to_string(),
         object_id: Some(london),
         object_literal: None,
         valid_from: None,
@@ -43,7 +43,12 @@ async fn fact_crud_roundtrip() {
 
     let fact = kg.insert_fact(new_fact.clone()).await.unwrap();
     assert_eq!(fact.subject_id, alice);
-    assert_eq!(fact.relationship_type_id, 1i16);
+    let located_in_id = kg
+        .get_relationship_type_id("located_in")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fact.relationship_type_id, located_in_id);
     assert_eq!(fact.status().unwrap(), FactStatus::Active);
 
     // Read back
@@ -143,7 +148,7 @@ async fn fact_source_attached() {
     let fact = kg
         .insert_fact(NewFact {
             subject_id: alice,
-            relationship_type: "is_in".to_string(),
+            relationship_type: "located_in".to_string(),
             object_id: Some(london),
             object_literal: None,
             valid_from: None,
@@ -260,11 +265,12 @@ async fn unknown_relationship_type_id_returns_none() {
         .unwrap();
 
     let fetched = kg.get_fact(fact.id).await.unwrap().unwrap();
-    // is_in relationship_type_id is seeded as 1, not 4 — assert name instead.
+    // located_in is the canonical containment verb (is_in is its alias) —
+    // assert name instead of a hardcoded id.
     assert_eq!(
         kg.relationship_type_name(fetched.relationship_type_id)
             .await,
-        Some("is_in".to_string())
+        Some("located_in".to_string())
     );
 
     // Assert that an uninserted predicate ID returns None.

@@ -32,7 +32,12 @@ async fn insert_hierarchy_and_query_descendants() {
 
     let parent = kg.ensure_relationship_type("located").await.unwrap();
     let child = kg.ensure_relationship_type("located_in").await.unwrap();
-    let grandchild = kg.ensure_relationship_type("is_in").await.unwrap();
+    // `is_in` is a seeded alias of `located_in` (migration 051), so use a
+    // fresh name for the grandchild to keep three distinct types.
+    let grandchild = kg
+        .ensure_relationship_type("is_contained_in")
+        .await
+        .unwrap();
 
     kg.insert_relationship_type_hierarchy(child, parent)
         .await
@@ -83,6 +88,136 @@ async fn dag_with_multiple_parents_deduplicates_reachable_ids() {
     );
     assert!(descendants.contains(&mid));
     assert!(descendants.contains(&leaf));
+}
+
+#[tokio::test]
+async fn seeded_dag_expresses_domain_generalisation() {
+    let (_dir, kg) = setup().await;
+
+    // Employment subtree: works_at, works_as, job_title (issue #403).
+    let employment = kg
+        .get_relationship_type_id("employment")
+        .await
+        .unwrap()
+        .expect("employment parent must be seeded");
+    let descendants = kg
+        .get_descendant_relationship_type_ids(employment)
+        .await
+        .unwrap();
+    for child in ["works_at", "works_as", "job_title"] {
+        let id = kg
+            .get_relationship_type_id(child)
+            .await
+            .unwrap()
+            .expect("employment child must be seeded");
+        assert!(
+            descendants.contains(&id),
+            "{child} must be a descendant of employment"
+        );
+    }
+
+    // Education subtree: studied, studied_at, completed_degree, educational_status.
+    let education = kg
+        .get_relationship_type_id("education")
+        .await
+        .unwrap()
+        .expect("education parent must be seeded");
+    let descendants = kg
+        .get_descendant_relationship_type_ids(education)
+        .await
+        .unwrap();
+    for child in [
+        "studied",
+        "studied_at",
+        "completed_degree",
+        "educational_status",
+    ] {
+        let id = kg
+            .get_relationship_type_id(child)
+            .await
+            .unwrap()
+            .expect("education child must be seeded");
+        assert!(
+            descendants.contains(&id),
+            "{child} must be a descendant of education"
+        );
+    }
+
+    // Residence subtree: the consolidated resides_in verb.
+    let residence = kg
+        .get_relationship_type_id("residence")
+        .await
+        .unwrap()
+        .expect("residence parent must be seeded");
+    let descendants = kg
+        .get_descendant_relationship_type_ids(residence)
+        .await
+        .unwrap();
+    let resides_in = kg
+        .get_relationship_type_id("resides_in")
+        .await
+        .unwrap()
+        .expect("resides_in must be seeded");
+    assert!(
+        descendants.contains(&resides_in),
+        "resides_in must be a descendant of residence"
+    );
+
+    // Containment subtree: located_in (is_in consolidated into it).
+    let containment = kg
+        .get_relationship_type_id("containment")
+        .await
+        .unwrap()
+        .expect("containment parent must be seeded");
+    let descendants = kg
+        .get_descendant_relationship_type_ids(containment)
+        .await
+        .unwrap();
+    let located_in = kg
+        .get_relationship_type_id("located_in")
+        .await
+        .unwrap()
+        .expect("located_in must be seeded");
+    assert!(
+        descendants.contains(&located_in),
+        "located_in must be a descendant of containment"
+    );
+}
+
+#[tokio::test]
+async fn consolidated_predicates_resolve_as_aliases() {
+    let (_dir, kg) = setup().await;
+
+    // based_in / lived_in are aliases of the single resides_in verb.
+    let resides_in = kg
+        .get_relationship_type_id("resides_in")
+        .await
+        .unwrap()
+        .expect("resides_in must be seeded");
+    for alias in ["based_in", "lived_in"] {
+        let id = kg.resolve_relationship_type_alias(alias).await.unwrap();
+        assert_eq!(id, Some(resides_in), "{alias} must resolve to resides_in");
+    }
+
+    // is_in is an alias of located_in.
+    let located_in = kg
+        .get_relationship_type_id("located_in")
+        .await
+        .unwrap()
+        .expect("located_in must be seeded");
+    let is_in = kg.resolve_relationship_type_alias("is_in").await.unwrap();
+    assert_eq!(is_in, Some(located_in), "is_in must resolve to located_in");
+
+    // The old rows are gone: no canonical row named based_in/lived_in/is_in.
+    for gone in ["based_in", "lived_in", "is_in"] {
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM relationship_types WHERE name = ?")
+                .bind(gone)
+                .fetch_one(kg.pool())
+                .await
+                .unwrap();
+        assert_eq!(count, 0, "{gone} must no longer be a canonical row");
+    }
 }
 
 #[tokio::test]

@@ -2,17 +2,24 @@ use crate::graph::KnowledgeGraph;
 use crate::*;
 
 /// Canonical relationship-type names the conversational extraction path
-/// accepts (issue #401). Seeded by migrations 013/023/025/031/036/037 and
-/// 050; the prompt-instructed `favourite_<thing>` family is an open set
+/// accepts (issue #401). Seeded by migrations 013/023/025/031/036/037, 050
+/// and 051; the prompt-instructed `favourite_<thing>` family is an open set
 /// handled separately by
 /// [`KnowledgeGraph::resolve_canonical_relationship_type`].
 ///
 /// Kept in sync with the seed by
 /// `canonical_const_matches_seeded_relationship_types` in
 /// `mimir-knowledge/tests/predicate_allowlist_test.rs`.
+///
+/// Migration 051 (issue #403) consolidated redundant verbs: `based_in` and
+/// `lived_in` are aliases of `resides_in`, and `is_in` is an alias of
+/// `located_in`. The abstract DAG parents seeded by 051 (`residence`,
+/// `employment`, `education`, `containment`) are deliberately NOT in this
+/// list — they are query-only subtree roots and must never be used as fact
+/// predicates.
 pub const CANONICAL_PREDICATES: &[&str] = &[
-    // Migrations 013/023/025/031 (ids 1-12).
-    "is_in",
+    // Migrations 013/023/025/031 (ids 2-12; id 1 `is_in` was consolidated
+    // into `located_in` by migration 051).
     "visited",
     "owns",
     "works_as",
@@ -28,8 +35,7 @@ pub const CANONICAL_PREDICATES: &[&str] = &[
     "studied_at",
     "hobby",
     "works_at",
-    "based_in",
-    "lived_in",
+    "resides_in",
     "has_pets",
     "has_sibling",
     "has_child",

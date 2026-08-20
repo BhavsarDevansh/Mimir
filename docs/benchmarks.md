@@ -54,7 +54,7 @@ cargo bench -p mimir-core --bench context_manager
 | `entity_resolution_alias` | Alias lookup with 10k facts |
 | `fts5_search` | FTS5 full-text search over entities with 10k facts |
 | `facts_by_subject_with_chain` | Retrieve facts by subject with a 3-hop chain present |
-| `inference_chain_100` | Transitivity inference across a 100-fact `is_in` chain |
+| `inference_chain_100` | Transitivity-rule evaluation across a 100-fact `located_in` chain |
 | `memory_condensation` | Build and render ranked memory schema from 10k facts |
 
 ```bash

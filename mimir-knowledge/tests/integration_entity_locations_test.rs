@@ -75,10 +75,15 @@ async fn test_delete_guard_rejects_entity_with_facts() {
         .create_entity("Jill", EntityType::Person, &[])
         .await
         .unwrap();
+    let located_in_id = kg
+        .get_relationship_type_id("located_in")
+        .await
+        .unwrap()
+        .unwrap();
 
     sqlx::query("INSERT INTO facts (subject_id, relationship_type_id, object_id, confidence, fact_status_id) VALUES (?, ?, ?, ?, ?)")
         .bind(a.id)
-        .bind(1i16)
+        .bind(located_in_id)
         .bind(b.id)
         .bind(1.0f32)
         .bind(1i16)

@@ -56,7 +56,7 @@ Mimir exposes three LLM-callable tools that let the agent query your personal kn
       "entity": { "id": 2, "name": "London", "entity_type": "Place" },
       "match_score": 0.0,
       "top_facts": [
-        { "predicate": "is_in", "object_literal": "United Kingdom", "confidence": 0.99 }
+        { "predicate": "located_in", "object_literal": "United Kingdom", "confidence": 0.99 }
       ]
     }
   ]

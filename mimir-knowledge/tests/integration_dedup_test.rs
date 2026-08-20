@@ -43,7 +43,7 @@ async fn test_dedup_exact_merge() {
     // Insert a fact for x so x survives the merge (more facts = survivor)
     kg.insert_fact(NewFact {
         subject_id: x.id,
-        relationship_type: "is_in".to_string(),
+        relationship_type: "located_in".to_string(),
         object_id: None,
         object_literal: Some("somewhere".to_string()),
         valid_from: None,
@@ -63,9 +63,14 @@ async fn test_dedup_exact_merge() {
     .unwrap();
 
     // Insert a fact referencing y so we can verify FK repointing.
+    let located_in_id = kg
+        .get_relationship_type_id("located_in")
+        .await
+        .unwrap()
+        .unwrap();
     sqlx::query("INSERT INTO facts (subject_id, relationship_type_id, object_id, confidence, fact_status_id) VALUES (?, ?, ?, ?, ?)")
         .bind(y.id)
-        .bind(1i16)
+        .bind(located_in_id)
         .bind(x.id)
         .bind(1.0f32)
         .bind(1i16)
@@ -84,8 +89,9 @@ async fn test_dedup_exact_merge() {
 
     // Fact should now point to x as subject
     let (subject_id,): (i32,) = sqlx::query_as(
-        "SELECT subject_id FROM facts WHERE relationship_type_id = 1 AND object_id = ?",
+        "SELECT subject_id FROM facts WHERE relationship_type_id = ? AND object_id = ?",
     )
+    .bind(located_in_id)
     .bind(x.id)
     .fetch_one(kg.pool())
     .await

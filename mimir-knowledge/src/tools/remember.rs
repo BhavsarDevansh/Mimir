@@ -28,7 +28,7 @@ impl Tool for RememberTool {
     }
 
     fn description(&self) -> &str {
-        "Extract and persist structured facts to the knowledge graph. Call this whenever the user shares information about themselves, their preferences, their life, or anything worth remembering for future conversations. Each fact is a subject-relationship_type-object triple with classification, temporal bounds, and sensitivity flags. Classification drives Rust-enforced policy: Explicit overwrites existing facts, Casual coexists, Correction supersedes the old value. Prefer canonical relationship types (e.g. studied_at, works_as, based_in, hobby, favourite_{thing}); assign 1-3 category IDs from the Knowledge Catalogue in the system prompt and mark sensitive topics is_sensitive=true."
+        "Extract and persist structured facts to the knowledge graph. Call this whenever the user shares information about themselves, their preferences, their life, or anything worth remembering for future conversations. Each fact is a subject-relationship_type-object triple with classification, temporal bounds, and sensitivity flags. Classification drives Rust-enforced policy: Explicit overwrites existing facts, Casual coexists, Correction supersedes the old value. Prefer canonical relationship types (e.g. studied_at, works_as, resides_in, hobby, favourite_{thing}); assign 1-3 category IDs from the Knowledge Catalogue in the system prompt and mark sensitive topics is_sensitive=true."
     }
 
     fn parameters_schema(&self) -> Value {

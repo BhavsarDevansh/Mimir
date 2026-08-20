@@ -249,12 +249,25 @@ fn spawn_sighup_reload_handler(
 ) {
     use tokio::signal::unix::{SignalKind, signal};
     let mut sighup = signal(SignalKind::hangup()).expect("SIGHUP handler");
+    // Subscribe before the task is spawned so a shutdown broadcast that
+    // lands before the task's first poll is still observed: a receiver that
+    // subscribes after the broadcast treats the current value as already
+    // seen, and `changed()` would wait for a newer notification that never
+    // arrives (the task retains `shutdown_tx`), leaving the task alive after
+    // server shutdown.
+    let mut shutdown_rx = shutdown_tx.subscribe();
     tokio::spawn(async move {
         // The sender is moved into the task so the watch channel stays open
         // for the task's lifetime: `changed()` returns immediately on a
         // closed channel, which would exit the loop before the SIGHUP
         // listener is ever polled.
-        let mut shutdown_rx = shutdown_tx.subscribe();
+        let _shutdown_tx = shutdown_tx;
+        if *shutdown_rx.borrow_and_update() {
+            // Shutdown was already broadcast before the task first polled
+            // (e.g. the server is draining): exit immediately instead of
+            // waiting for a newer notification.
+            return;
+        }
         loop {
             tokio::select! {
                 _ = shutdown_rx.changed() => break,
@@ -357,5 +370,54 @@ mod tests {
             }
             println!("{CHILD_OK}");
         });
+    }
+
+    /// Regression (PR #421 CodeRabbit finding): the shutdown receiver must be
+    /// subscribed before the handler task is spawned, and the task must check
+    /// the current shutdown value before entering its loop. A shutdown
+    /// broadcast that lands between the spawn and the task's first poll is
+    /// otherwise missed: the task retains `shutdown_tx`, so `changed()` waits
+    /// for a newer notification that never arrives and the handler stays
+    /// alive after server shutdown.
+    ///
+    /// The broadcast is sent without yielding to the runtime, so the spawned
+    /// task has definitely not been polled yet (current-thread runtime). The
+    /// test observes the broadcast through its own receiver, then expects the
+    /// channel to close once the task runs and exits, dropping the retained
+    /// sender.
+    #[tokio::test]
+    async fn test_sighup_handler_exits_when_shutdown_before_first_poll() {
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[llm]\ntemperature = 0.9\n").expect("write config");
+        let config = Arc::new(ReloadableConfig::new(
+            mimir_core::config::Config::default(),
+            path,
+        ));
+
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+        spawn_sighup_reload_handler(config, shutdown_tx.clone());
+
+        // Broadcast before yielding, so the handler task has not been polled
+        // yet.
+        shutdown_tx.send(true).expect("send shutdown");
+        drop(shutdown_tx);
+
+        // The test's own receiver was subscribed before the broadcast, so it
+        // observes the change...
+        shutdown_rx
+            .changed()
+            .await
+            .expect("observe shutdown broadcast");
+        // ...and when the handler task runs it must see the current value,
+        // exit, and drop its retained sender, closing the channel. A handler
+        // that subscribed only after the broadcast would wait forever for a
+        // newer notification and time out here.
+        tokio::time::timeout(Duration::from_secs(5), shutdown_rx.changed())
+            .await
+            .expect("handler task must exit after shutdown")
+            .expect_err("channel must close when the handler task exits");
     }
 }

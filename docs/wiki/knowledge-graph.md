@@ -25,7 +25,7 @@ Facts are **temporal edges** in the graph:
 - A fact has a *subject* (who), a *predicate* (what), and an *object* (whom/what).
 - Facts can have `valid_from` and `valid_until` timestamps, so Mimir knows "Alice lived in London" was true from 2018 to 2022 without contradicting "Alice lives in Berlin" from 2023 onwards.
 - Every fact carries a **confidence score** (0.0–1.0) derived from source quality and inference chain depth. Confidence is calculated in Rust, never guessed by an LLM.
-- Predicate constraints validate subject/object type combinations at insert time (e.g. `born_on` requires a `DateTime` object).
+- Predicate constraints validate subject/object type combinations at insert time (e.g. `born_on` requires a `DateTime` object). Predicates without seeded constraints accept any entity types, and facts with literal (non-entity) objects always pass; a violating combination is rejected with a clear error instead of being stored.
 
 ### Inference
 

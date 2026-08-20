@@ -57,7 +57,7 @@ async fn transitivity_visited_plus_is_in() {
 #[tokio::test]
 async fn transitivity_depth_increases_correctly() {
     let tg = common::TestGraph::new().await;
-    let a = tg.create_place("A").await;
+    let a = tg.create_person("A").await;
     let b = tg.create_place("B").await;
     let c = tg.create_place("C").await;
     let d = tg.create_place("D").await;
@@ -318,20 +318,18 @@ async fn cascade_insert_visited_then_is_in() {
 #[tokio::test]
 async fn cycle_safety_cyclic_is_in_no_infinite_loop() {
     let tg = common::TestGraph::new().await;
+    let devansh = tg.create_person("Devansh").await;
     let a = tg.create_place("A").await;
     let b = tg.create_place("B").await;
-    let c = tg.create_place("C").await;
 
-    // Create a cycle: A is_in B, B is_in C, C is_in A
+    // Create a cycle: A is_in B, B is_in A
     tg.create_fact(a, "is_in", Some(b), SourceType::UserEdit)
         .await;
-    tg.create_fact(b, "is_in", Some(c), SourceType::UserEdit)
-        .await;
-    tg.create_fact(c, "is_in", Some(a), SourceType::UserEdit)
+    tg.create_fact(b, "is_in", Some(a), SourceType::UserEdit)
         .await;
 
-    // Insert A visited B - should not infinite loop
-    tg.create_fact(a, "visited", Some(b), SourceType::UserEdit)
+    // Insert Devansh visited A - should not infinite loop
+    tg.create_fact(devansh, "visited", Some(a), SourceType::UserEdit)
         .await;
 
     // Should terminate and have some inferred facts (but not infinite)
@@ -356,14 +354,13 @@ async fn cycle_safety_cyclic_is_in_no_infinite_loop() {
             f.status()
         );
     }
-    let facts = tg.kg.get_facts_by_subject(a, 100).await.unwrap();
+    let facts = tg.kg.get_facts_by_subject(devansh, 100).await.unwrap();
     let inferred_facts: Vec<_> = facts.iter().filter(|f| f.inferred).collect();
     let inferred_count = inferred_facts.len();
-    // With cycle A->B->C->A, visiting A should infer A visited C (via B is_in C).
-    // A visited C would trigger rule to find C is_in A, but C is_in A was marked
-    // Disputed when the inferred C is_in B overlapped with it. Since the rule only
-    // consults Active is_in facts, A visited A is not inferred.
-    // The cascade terminates safely (no infinite loop).
+    // With the A->B->A is_in cycle, visiting A infers Devansh visited B (via
+    // A is_in B); the cascade would then try to infer Devansh visited A again
+    // through B is_in A, which the cycle guard skips. The cascade terminates
+    // safely (no infinite loop).
     assert!(
         inferred_count <= 1,
         "expected at most 1 inferred fact, got {}",

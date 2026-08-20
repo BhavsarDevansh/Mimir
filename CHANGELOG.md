@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.126.1] — 2026-08-20
+
+### Bugfix: seeded relationship-type constraints are enforced on every insert path (issue #402)
+
+- The seeded `relationship_constraints` allow-list (migration 013, renamed by 031) is now enforced at the write boundary: `validate_predicate_in_tx` in `mimir-knowledge/src/queries/entity/predicates.rs` is called from `insert_fact_in_tx` and the pending-confirmation path `insert_sensitive_fact`, so single inserts, batch inserts, conversational extraction, connector syncs, and inference cascades all reject entity-object facts whose (subject, object) entity-type pair is not in the seeded set (e.g. `born_on` with a non-DateTime object, or `has_partner` with a Place object) with the renamed `KnowledgeError::InvalidRelationshipConstraint` before any overlap/supersession side effects.
+- The public typed validator `validate_predicate` was fixed to match the seeded permissive contract: predicates without constraint rows (auto-created and connector-emitted types, tracked by issues #403/#412) accept any entity types, and literal-object facts carry no object type so they always pass. Previously the validator rejected every unseeded predicate and was dead code in production — it had zero call sites.
+- The new `InvalidRelationshipConstraint` error maps to HTTP 400 `VALIDATION_ERROR` with its descriptive message in `mimir-server`, so a rejected combination surfaces as a client error instead of a masked 500.
+- Tests: new `mimir-knowledge/tests/relationship_constraint_test.rs` (8 tests) pins the contract on the single-insert, batch, shared-normalize, sensitive (pending-confirmation), and public-validator paths; existing fixtures that used nonsense combinations (`fact_crud_test.rs` `works_as` Person→Person, `inference_tests.rs` Place-subject `visited` facts) now use constraint-valid entity types while preserving their original intent.
+- Docs updated in `docs/knowledge-graph-schema.md`, `docs/fact-extraction-pipeline.md`, `docs/wiki/knowledge-graph.md`, and `docs/wiki/what-works-now.md`.
+- Version bumped 0.126.0 → 0.126.1 (patch — bug fix; the error-variant rename only touches an internal error enum with no production callers).
+
 ## [0.126.0] — 2026-08-20
 
 ### Bugfix: conversational extraction enforces the canonical predicate allow-list (issue #401)

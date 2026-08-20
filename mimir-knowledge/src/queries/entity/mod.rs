@@ -30,3 +30,4 @@ pub use dedup::{
 };
 pub use names::get_entity_names;
 pub use predicates::validate_predicate;
+pub(crate) use predicates::validate_predicate_in_tx;

@@ -5,6 +5,7 @@ use chrono::{TimeZone, Utc};
 use common::{create_person, create_place};
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::audit_log::ChangedBy;
+use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::fact::{FactStatus, NewFact};
 use mimir_knowledge::models::source::SourceType;
 // ---------------------------------------------------------------------------
@@ -83,7 +84,11 @@ async fn fact_relationship_type_id_lookup() {
         .unwrap();
 
     let alice = create_person(&kg, "Alice").await;
-    let dev = create_person(&kg, "Developer").await;
+    let dev = kg
+        .create_entity("Developer", EntityType::Activity, &[])
+        .await
+        .unwrap()
+        .id;
 
     let fact = kg
         .insert_fact(NewFact {

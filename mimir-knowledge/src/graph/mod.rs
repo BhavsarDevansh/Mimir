@@ -56,8 +56,8 @@ pub enum KnowledgeError {
     #[error("Entity has {0} fact(s) and cannot be deleted")]
     EntityHasFacts(i64),
 
-    #[error("Invalid relationship type id {0}")]
-    InvalidRelationshipType(i16),
+    #[error("Relationship type {0} does not allow this subject/object entity-type combination")]
+    InvalidRelationshipConstraint(i16),
 
     #[error("Entity {0} not found")]
     EntityNotFound(i32),

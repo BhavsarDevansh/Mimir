@@ -230,7 +230,10 @@ pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
     let (status, code) = match &e {
         KnowledgeError::Validation(_)
         | KnowledgeError::DuplicateEntity
-        | KnowledgeError::DuplicatePreference => (StatusCode::BAD_REQUEST, "VALIDATION_ERROR"),
+        | KnowledgeError::DuplicatePreference
+        | KnowledgeError::InvalidRelationshipConstraint(_) => {
+            (StatusCode::BAD_REQUEST, "VALIDATION_ERROR")
+        }
         KnowledgeError::EntityNotFound(_)
         | KnowledgeError::FactNotFound(_)
         | KnowledgeError::CategoryNotFound(_)
@@ -242,6 +245,7 @@ pub fn knowledge_error(e: mimir_knowledge::KnowledgeError) -> Response {
         KnowledgeError::Validation(_)
         | KnowledgeError::DuplicateEntity
         | KnowledgeError::DuplicatePreference
+        | KnowledgeError::InvalidRelationshipConstraint(_)
         | KnowledgeError::EntityNotFound(_)
         | KnowledgeError::FactNotFound(_)
         | KnowledgeError::CategoryNotFound(_)
@@ -352,6 +356,16 @@ mod tests {
         let body = body_json(resp).await;
         assert_eq!(body["code"], "VALIDATION_ERROR");
         assert_eq!(body["error"], "Validation error: bad input");
+    }
+
+    #[tokio::test]
+    async fn knowledge_error_invalid_relationship_constraint_returns_400_with_detail() {
+        let resp =
+            knowledge_error(mimir_knowledge::KnowledgeError::InvalidRelationshipConstraint(7));
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(resp).await;
+        assert_eq!(body["code"], "VALIDATION_ERROR");
+        assert!(body["error"].as_str().unwrap().contains("7"));
     }
 
     #[tokio::test]

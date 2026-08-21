@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.131.5] — 2026-08-21
+
+### Fix: reflow `docs/fact-extraction-pipeline.md` to the single-line prose standard (issue #432)
+
+- `docs/fact-extraction-pipeline.md` no longer violates the AGENTS.md single-line prose standard: the adjacent `**Issue #136:**` / `**Issue #401:**` blockquote field-list entries after the predicate-resolution section are split into separate blockquote paragraphs (blank `>` line between entries) per `scripts/md-reflow`'s field-list rule, so the `md-reflow --check` guard no longer flags the file. Content is unchanged — only blockquote structure (whitespace-collapsed diff equality per `scripts/md-reflow`).
+- Version bumped 0.131.4 → 0.131.5 (patch — documentation fix).
+
 ## [0.131.4] — 2026-08-21
 
 ### Fix: `docs/personality-system.md` no longer references a non-existent `PersonalityPreset` type (issue #426)

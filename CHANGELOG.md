@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.130.1] — 2026-08-21
+
+### Fix: PR #435 review feedback (connector predicate seeding)
+
+- The deterministic memory renderer now covers the complete connector-emitted predicate grammar (`has_event`, `took_photo`, `has_flight`, `has_booking`, `has_order`, `has_delivery`, `shipped_by`, `delivered_to`, `has_ticket`, `issued_by`), with the exact render output pinned in tests.
+- The Photos extraction test now asserts exactly which predicates each path emits (`took_photo_at` with GPS resolution, `took_photo` without), and the `oauth`/memory test counts in `docs/unit-tests.md` were reconciled with the suite (326 connector lib tests, 204 knowledge lib tests, 13 memory tests).
+- Migration `053` now starts each WHERE clause on its own line (SQLFluff LT14), and the connector docs qualify that seeded constraints apply where applicable (typed entity-object shapes; literal-object predicates such as `took_photo` stay unconstrained).
+- Version bumped 0.130.0 → 0.130.1 (patch — review fixes, test pins, and documentation).
+
 ## [0.130.0] — 2026-08-21
 
 ### Seed connector-emitted predicates as canonical ontology (issue #412)

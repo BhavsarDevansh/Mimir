@@ -191,11 +191,24 @@ fn render_connector_predicates_with_complete_grammar() {
             "Devansh has an event the Berlin conference",
         ),
         (
+            "attending",
+            "the Berlin conference",
+            "Devansh is attending the Berlin conference",
+        ),
+        (
+            "took_photo_at",
+            "the Matterhorn",
+            "Devansh took a photo at the Matterhorn",
+        ),
+        (
             "took_photo",
             "the Matterhorn",
             "Devansh took a photo of the Matterhorn",
         ),
         ("has_flight", "BA123", "Devansh has a flight BA123"),
+        ("departs_from", "Geneva", "Devansh departs from Geneva"),
+        ("arrives_at", "Zurich", "Devansh arrives at Zurich"),
+        ("operated_by", "SWISS", "Devansh is operated by SWISS"),
         (
             "has_booking",
             "hotel room 12",
@@ -206,6 +219,7 @@ fn render_connector_predicates_with_complete_grammar() {
             "package 4521",
             "Devansh has an order package 4521",
         ),
+        ("purchased_from", "Shop", "Devansh was purchased from Shop"),
         (
             "has_delivery",
             "parcel 88",

@@ -1,10 +1,18 @@
 # Changelog
 
+## [0.130.2] — 2026-08-21
+
+### Fix: PR #435 review feedback (connector predicate rendering)
+
+- `purchased_from` facts now render in passive voice (`Order was purchased from Shop`), matching migration `053`'s seeded definition ("Subject was purchased from an organization"), and the memory renderer's exact-output pin now covers all 16 connector-emitted predicates, including the previously unpinned `attending`, `took_photo_at`, `departs_from`, `arrives_at`, `operated_by`, and `purchased_from` branches.
+- Corrected the `0.130.1` changelog entry to list the full connector-emitted grammar.
+- Version bumped 0.130.1 → 0.130.2 (patch — render phrase fix and test coverage).
+
 ## [0.130.1] — 2026-08-21
 
 ### Fix: PR #435 review feedback (connector predicate seeding)
 
-- The deterministic memory renderer now covers the complete connector-emitted predicate grammar (`has_event`, `took_photo`, `has_flight`, `has_booking`, `has_order`, `has_delivery`, `shipped_by`, `delivered_to`, `has_ticket`, `issued_by`), with the exact render output pinned in tests.
+- The deterministic memory renderer now covers the complete connector-emitted predicate grammar (`has_event`, `attending`, `took_photo_at`, `took_photo`, `has_flight`, `departs_from`, `arrives_at`, `operated_by`, `has_booking`, `has_order`, `purchased_from`, `has_delivery`, `shipped_by`, `delivered_to`, `has_ticket`, `issued_by`), with the exact render output pinned in tests.
 - The Photos extraction test now asserts exactly which predicates each path emits (`took_photo_at` with GPS resolution, `took_photo` without), and the `oauth`/memory test counts in `docs/unit-tests.md` were reconciled with the suite (326 connector lib tests, 204 knowledge lib tests, 13 memory tests).
 - Migration `053` now starts each WHERE clause on its own line (SQLFluff LT14), and the connector docs qualify that seeded constraints apply where applicable (typed entity-object shapes; literal-object predicates such as `took_photo` stay unconstrained).
 - Version bumped 0.130.0 → 0.130.1 (patch — review fixes, test pins, and documentation).

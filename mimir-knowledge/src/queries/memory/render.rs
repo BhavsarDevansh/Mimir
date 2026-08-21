@@ -84,7 +84,7 @@ pub(super) fn render_fact_line(fact: &RankedFact) -> String {
         ),
         "has_order" => format!("{} has an order {}", fact.subject_name, fact.object_display),
         "purchased_from" => format!(
-            "{} purchased from {}",
+            "{} was purchased from {}",
             fact.subject_name, fact.object_display
         ),
         "has_delivery" => format!(

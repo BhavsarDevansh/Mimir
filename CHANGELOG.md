@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.130.3] — 2026-08-21
+
+### Fix: superseded facts retire their event overlays (issue #413)
+
+- `queries::fact::status::set_status_tx` now retires a fact's event overlay when the fact transitions to `Superseded`: any active overlay is dismissed (`status_id = Dismissed`, `addressed_at` set) and any persisted `pending_event_meta` row is deleted. Because the retirement lives in the shared status transition, every supersession path stays in sync — the insert pipeline's overlap resolution (`queries/fact/conflict.rs`, which now delegates its status change to `set_status_tx` instead of duplicating the UPDATE + audit), the inference engine's contradiction rule, and user status edits via `update_fact_status`.
+- The scan queries (`get_active_recurring`, `get_past_due_auto_complete`) and the Upcoming render's recurring branch now join `facts` and exclude `Superseded`/`Forgotten` facts (`fact_status_id NOT IN (5, 6)`) as a second line of defense, so a stale overlay can never advance, auto-complete, or surface even if a future supersession path forgets to retire it.
+- Added regression tests: a corrected recurring event retires the old overlay (dismissed, not advanced by the scan, only the corrected date surfaces in Upcoming), and a directly-superseded fact's overlay is neither advanced nor surfaced.
+- Version bumped 0.130.2 → 0.130.3 (patch — bug fix and test coverage).
+
 ## [0.130.2] — 2026-08-21
 
 ### Fix: PR #435 review feedback (connector predicate rendering)

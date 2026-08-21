@@ -232,6 +232,7 @@ pub async fn render_upcoming_section(
            AND e.recurrence_type_id != ? \
            AND e.trigger_date >= ? \
            AND e.trigger_date <= ? \
+           AND f.fact_status_id NOT IN (?, ?) \
          ORDER BY e.trigger_date \
          LIMIT ?",
     )
@@ -240,6 +241,8 @@ pub async fn render_upcoming_section(
     .bind(RecurrenceType::None as i16)
     .bind(now)
     .bind(horizon)
+    .bind(FactStatus::Superseded as i16)
+    .bind(FactStatus::Forgotten as i16)
     .bind(limit as i64)
     .fetch_all(pool)
     .await?;

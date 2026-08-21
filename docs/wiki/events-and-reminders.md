@@ -54,6 +54,10 @@ Until you confirm a sensitive fact it is not stored permanently and never surfac
 - Include a concrete date when you want something tracked ("by tomorrow 5pm", "on 15 June"); Mimir does **not** guess dates from loose phrasing.
 - Mark a task as done by dismissing it once you've handled it; otherwise it will continue to surface as overdue.
 
+## Correcting an event
+
+If you correct a date Mimir already tracks (e.g. *"my anniversary is actually 15 February"*), the old event is retired and only the corrected date keeps surfacing in Upcoming — the old date stops rolling forward and disappears from the section.
+
 ## What's not included yet
 
 Proactive pop-up notifications, a dedicated `mimir events` CLI, and smart location-aware completion are planned for a later phase.

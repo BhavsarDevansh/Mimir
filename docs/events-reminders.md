@@ -60,7 +60,15 @@ Registered in `AppState::from_config_with_llm` (`mimir-server/src/state/`), one 
 2. **Auto-complete** — one-time `AutoCompleteOnDate` events whose `trigger_date` has passed transition to `Completed`.
 3. **Advance** — recurring events whose `trigger_date` has passed advance to their next occurrence via `next_occurrence`. `get_active_recurring(pool, now)` filters in SQL to `Recurring`-policy events with `requires_user_action = 0` **and** `trigger_date < now`, so only rows that can actually advance are loaded and sorted. A recurring deadline/task that requires user action stays put and surfaces as overdue instead.
 
+Both the auto-complete and advance queries join `facts` and exclude overlays whose fact is `Superseded` or `Forgotten` (`fact_status_id NOT IN (5, 6)`, issue #413), so a stale overlay can never be auto-completed or advanced even if a supersession path forgot to retire it.
+
 `RequiresUserAction` events are intentionally left untouched; past their `trigger_date` they surface as **overdue** via `get_overdue_events`.
+
+## Supersession & the overlay lifecycle
+
+The overlay is a derived view of the fact, so every fact mutation that invalidates the fact must also retire its overlay (issue #413). When a fact transitions to `Superseded`, `queries::fact::status::set_status_tx` dismisses any active overlay (`status_id = Dismissed`, `addressed_at` set) and deletes any persisted `pending_event_meta` row for the fact. Because the retirement lives in the shared status transition, every supersession path stays in sync: the insert pipeline's overlap resolution (`queries::fact/conflict.rs`), the inference engine's contradiction rule, and user status edits via `update_fact_status`. The corrected fact then gets its own overlay through the normal extraction/derive path, so a corrected recurring event surfaces exactly once.
+
+The Upcoming render's recurring branch applies the same `fact_status_id NOT IN (Superseded, Forgotten)` filter as a second line of defense, so a stale overlay never surfaces even if a future supersession path forgets to retire it.
 
 ## Rendering
 

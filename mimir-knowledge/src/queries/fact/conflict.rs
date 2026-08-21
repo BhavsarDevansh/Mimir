@@ -76,43 +76,17 @@ pub(super) async fn resolve_overlap_conflict(
 
                 // Mark as Superseded unless already superseded.
                 if existing_fact.status() != Some(FactStatus::Superseded) {
-                    let old_json =
-                        serde_json::json!({"fact_status_id": existing_fact.fact_status_id})
-                            .to_string();
-                    sqlx::query("UPDATE facts SET fact_status_id = ?, updated_at = ? WHERE id = ?")
-                        .bind(FactStatus::Superseded as i16)
-                        .bind(now)
-                        .bind(existing_fact.id)
-                        .execute(&mut **tx)
-                        .await?;
-
-                    let updated: Fact = sqlx::query_as::<_, Fact>(
-                        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
-                         valid_from, valid_until, confidence, fact_status_id, inferred, \
-                         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
-                         FROM facts WHERE id = ?",
+                    // Shared status transition (audit + overlay retirement on
+                    // Superseded, issue #413) so the insert pipeline and the
+                    // other supersession paths cannot drift apart.
+                    super::status::set_status_tx(
+                        tx,
+                        existing_fact.id,
+                        FactStatus::Superseded,
+                        now,
+                        ChangedBy::System,
                     )
-                    .bind(existing_fact.id)
-                    .fetch_one(&mut **tx)
                     .await?;
-
-                    let new_json =
-                        serde_json::json!({"fact_status_id": updated.fact_status_id}).to_string();
-                    sqlx::query(
-                        "INSERT INTO fact_audit_log \
-                         (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    )
-                    .bind(existing_fact.id)
-                    .bind(ChangeType::StatusChange as i16)
-                    .bind(old_json)
-                    .bind(new_json)
-                    .bind(now)
-                    .bind(ChangedBy::System as i16)
-                    .bind(None::<&str>)
-                    .execute(&mut **tx)
-                    .await?;
-
                     facts_to_supersede.push(existing_fact.id);
                 }
             }

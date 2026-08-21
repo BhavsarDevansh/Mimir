@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.131.1] — 2026-08-21
+
+### Fix: PR #442 review feedback — job-queue documentation accuracy
+
+- `docs/wiki/job-queue.md` now separates scheduler rules from per-hook queue policies instead of claiming all background jobs share one pipeline: scheduled jobs (nightly optimization, pending-fact cleanup, events scan) follow the scheduler's dedupe/debounce/cooldown/idle-gate lifecycle, while `remember.chat` (per-session debounce, idle-gated), `memory.condensation` (scheduler debounce/cooldown, idle-gated), and `connector_item.remember` (FIFO, ungated) each apply their own hook policy.
+- `docs/job-queue.md` corrects the typed job identifier documentation: `DaemonJob` covers only `knowledge.optimization`, `knowledge.pending_cleanup` and `events.upcoming_scan_{idx}` are plain `Job` registrations, and `JobQueue::run_now`/`JobQueue::status` accept the persistent job ID as `&str`.
+- Version bumped 0.131.0 → 0.131.1 (patch — documentation fix).
+
 ## [0.131.0] — 2026-08-21
 
 ### Feature: hooks engine — typed background tasks with per-hook queue policies (issue #386)

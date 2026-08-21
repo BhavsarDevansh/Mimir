@@ -6,12 +6,16 @@ Mimir runs maintenance tasks in the background so your knowledge graph stays cle
 
 ## How it works
 
-All background jobs go through the same pipeline (the scheduler for scheduled jobs, the hooks engine for event-driven hooks):
+Background work runs through two subsystems with different rules: the scheduler for scheduled jobs, and the hooks engine for event-driven hooks.
+
+**Scheduled jobs** (nightly optimization, pending-fact cleanup, events scan) all follow the same lifecycle:
 
 1. **Deduplication** — if a job is already waiting or running, it is not queued again.
 2. **Debounce** — after a job is requested, the scheduler waits a short time (default 5 s) to batch rapid successive requests.
 3. **Cooldown** — the scheduler then waits until you have not interacted with Mimir for a cooldown period (default 60 s).
 4. **Idle gate** — finally, it checks that the LLM worker pool is completely idle before dispatching.
+
+**Event-driven hooks** apply per-hook queue policies instead of one shared pipeline: `remember.chat` debounces per session (default 10 s) and is idle-gated with the scheduler cooldown; `memory.condensation` reuses the scheduler's debounce and cooldown with the idle gate; `connector_item.remember` enqueues every staged item in FIFO order and is ungated, with LLM calls routed through the shared worker pool's system queue.
 
 ## Current jobs
 

@@ -4,7 +4,7 @@
 
 `mimir-core::job_queue` provides a durable, SQLite-backed async job queue for background tasks. `mimir-core::scheduler` adds a unified **BackgroundScheduler** that wraps the queue with deduplication, debounce, and user-downtime gating.
 
-All scheduled background jobs — nightly knowledge graph optimization and any future scheduled work — follow the same lifecycle rules (memory condensation moved to the hooks engine in #386, which applies the same dedupe/debounce/cooldown/idle-gate rules per hook):
+All scheduled background jobs — nightly knowledge graph optimization and any future scheduled work — follow the same lifecycle rules (memory condensation moved to the hooks engine in #386, where each hook applies its own queue policy):
 
 1. **Deduplication** — Submitting the same job type twice only adds it once to the pending set.
 2. **Debounce** — Rapid successive submissions reset a timer (default 5 s). The job is only considered ready after the timer elapses.
@@ -21,7 +21,7 @@ Jobs may declare best-effort `JobResourceLimits` via `Job::with_resource_limits(
 
 ## Typed Job Identifiers
 
-Background jobs are identified by the `DaemonJob` enum instead of raw strings:
+The scheduler's `DaemonJob` enum identifies the daemon-scheduled jobs:
 
 ```rust
 pub enum DaemonJob {
@@ -29,7 +29,7 @@ pub enum DaemonJob {
 }
 ```
 
-`JobQueue::run_now` and `JobQueue::status` accept `DaemonJob` for type-safe dispatch.
+`DaemonJob::job_id()` maps each variant to its persistent string ID (`knowledge.optimization`). Other background jobs — `knowledge.pending_cleanup` and `events.upcoming_scan_{idx}` — are registered directly as plain `Job` entries. `JobQueue::run_now` and `JobQueue::status` accept the persistent job ID as `&str`.
 
 ## Public API
 

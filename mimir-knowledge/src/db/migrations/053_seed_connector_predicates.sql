@@ -50,7 +50,8 @@ ON CONFLICT(name) DO UPDATE SET
 -- 2. Self-aliases for the new canonical predicates. UPSERT so a stale alias
 -- row is repointed to the canonical id instead of being silently kept.
 INSERT INTO relationship_type_aliases (alias, relationship_type_id)
-SELECT name, id FROM relationship_types WHERE name IN (
+SELECT name, id FROM relationship_types
+WHERE name IN (
     'has_event', 'attending', 'took_photo_at', 'took_photo', 'has_flight',
     'departs_from', 'arrives_at', 'operated_by', 'has_booking', 'has_order',
     'purchased_from', 'has_delivery', 'shipped_by', 'delivered_to',
@@ -61,16 +62,20 @@ ON CONFLICT(alias) DO UPDATE SET
 
 -- 3. Subject/object constraints mirroring the connector emit sites.
 INSERT OR IGNORE INTO relationship_constraints (relationship_type_id, allowed_subject_type_id, allowed_object_type_id)
-SELECT id, 1, 3 FROM relationship_types WHERE name IN
+SELECT id, 1, 3 FROM relationship_types
+WHERE name IN
     ('has_event', 'attending', 'has_flight', 'has_booking', 'has_order',
      'has_delivery', 'has_ticket');
 INSERT OR IGNORE INTO relationship_constraints (relationship_type_id, allowed_subject_type_id, allowed_object_type_id)
-SELECT id, 1, 2 FROM relationship_types WHERE name = 'took_photo_at';
+SELECT id, 1, 2 FROM relationship_types
+WHERE name = 'took_photo_at';
 INSERT OR IGNORE INTO relationship_constraints (relationship_type_id, allowed_subject_type_id, allowed_object_type_id)
-SELECT id, 3, 2 FROM relationship_types WHERE name IN
+SELECT id, 3, 2 FROM relationship_types
+WHERE name IN
     ('departs_from', 'arrives_at', 'delivered_to');
 INSERT OR IGNORE INTO relationship_constraints (relationship_type_id, allowed_subject_type_id, allowed_object_type_id)
-SELECT id, 3, 6 FROM relationship_types WHERE name IN
+SELECT id, 3, 6 FROM relationship_types
+WHERE name IN
     ('operated_by', 'purchased_from', 'shipped_by', 'issued_by');
 
 -- 4. Reconciliation: drop auto-created types no fact references (like 050).

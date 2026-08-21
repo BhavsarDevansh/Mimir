@@ -165,6 +165,70 @@ fn render_unknown_relationship() {
 }
 
 #[test]
+fn render_connector_predicates_with_complete_grammar() {
+    fn render(subject_name: &str, relationship_type: &str, object_display: &str) -> String {
+        render_fact_line(&RankedFact {
+            fact_id: 1,
+            subject_name: subject_name.to_string(),
+            relationship_type: relationship_type.to_string(),
+            object_display: object_display.to_string(),
+            confidence: 0.5,
+            score: 1.0,
+            temporal_boost: 1.0,
+            memory_weight: 1.0,
+            priority_boost: 1.0,
+            centrality_boost: 1.0,
+            category_ids: vec![300],
+            bucket: MemoryBucket::Preferences,
+            char_estimate: 30,
+        })
+    }
+
+    let cases = [
+        (
+            "has_event",
+            "the Berlin conference",
+            "Devansh has an event the Berlin conference",
+        ),
+        (
+            "took_photo",
+            "the Matterhorn",
+            "Devansh took a photo of the Matterhorn",
+        ),
+        ("has_flight", "BA123", "Devansh has a flight BA123"),
+        (
+            "has_booking",
+            "hotel room 12",
+            "Devansh has a booking hotel room 12",
+        ),
+        (
+            "has_order",
+            "package 4521",
+            "Devansh has an order package 4521",
+        ),
+        (
+            "has_delivery",
+            "parcel 88",
+            "Devansh has a delivery parcel 88",
+        ),
+        ("shipped_by", "DHL", "Devansh was shipped by DHL"),
+        ("delivered_to", "Geneva", "Devansh was delivered to Geneva"),
+        ("has_ticket", "seat 14A", "Devansh has a ticket seat 14A"),
+        (
+            "issued_by",
+            "UK Passport Office",
+            "Devansh was issued by UK Passport Office",
+        ),
+    ];
+    for (relationship_type, object_display, expected) in cases {
+        assert_eq!(
+            render("Devansh", relationship_type, object_display),
+            expected
+        );
+    }
+}
+
+#[test]
 fn estimate_chars_basic() {
     assert_eq!(estimate_chars("Alice", "has_partner", "Bob"), 22);
 }

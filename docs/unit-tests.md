@@ -35,9 +35,9 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 - `models/audit_log.rs`: 5 tests — `ChangeType` / `ChangedBy` `try_from<i16>` roundtrips (valid/invalid discriminants), `as_str` wire-contract names (incl. `content_update`), and `ChangeType` `FromStr` wire-string parsing (incl. case-insensitive).
 - `models/entity.rs`: 6 tests — discriminant stability, the `ENTITY_TYPES` const-array lock-step contract, `try_from<i16>` roundtrip, `as_str` wire-contract names, `FromStr` wire-string parsing (incl. case-insensitive), basic construction.
 - `tools/`: 1 test — the `kg_*` name helpers (`fact_status_name` / `source_type_name` / `entity_type_name`) match the wire contract with the `Unknown({id})` fallback.
-- `memory/` (`queries/memory/tests.rs`): 12 tests — calendar-day upcoming suffixes, temporal-boost values (zero/one/past/none), priority boost, bucket-id mapping (every seeded bucket plus General fallback for unset/unknown ids), schema/unknown-relationship rendering, char estimates.
+- `memory/` (`queries/memory/tests.rs`): 13 tests — calendar-day upcoming suffixes, temporal-boost values (zero/one/past/none), priority boost, bucket-id mapping (every seeded bucket plus General fallback for unset/unknown ids), schema/unknown-relationship rendering, connector-predicate grammar, char estimates.
 
-203 lib tests (up from 110).
+204 lib tests (up from 110).
 
 ## `mimir-server`
 
@@ -51,7 +51,7 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 ## `mimir-connectors`
 
 - `email/`: 150 tests — deterministic JSON-LD extraction (`email/jsonld`, 56: block detection, array flattening, flight/event-reservation facts, and the predicate-registration pin for every extractor family, issue #412), the connector's extract/imap/kb/llm layers (`email/connector`, 47: iMIP invite extraction, cancel tombstones, IMAP sync/cursor semantics, universal funnel, bounded LLM retry, and the non-canonical-predicate drop, issue #412), the LLM retry ledger (`email/llm`, 29), config parsing (`email/config`, 15: auth-method resolution incl. the shared discriminant contract, polling/IDLE mode selection), and IMAP auth (`email/imap`, 3: XOAUTH2 SASL, secret redaction).
-- `oauth/`: 39 tests — the interactive PKCE flow (`oauth/pkce`, 16: callback parsing, state-mismatch abort, HTTPS gates, timeouts), token refresh (`oauth/refresh`, 21: grant posting, loopback-host validation, expiry clamping, error surfacing), and the HTTP client (`oauth/http_client`, 2: response-size bound).
+- `oauth/`: 40 tests — the interactive PKCE flow (`oauth/pkce`, 17: callback parsing, state-mismatch abort, HTTPS gates, timeouts), token refresh (`oauth/refresh`, 21: grant posting, loopback-host validation, expiry clamping, error surfacing), and the HTTP client (`oauth/http_client`, 2: response-size bound).
 - `photos/`: 32 tests — EXIF GPS/datetime parsing, cursor classification and pruning, reverse-geocode retry bounds, the `took_photo_at` / `visited` fact overlay, and the emitted-predicate registration gate (issue #412).
 - `supervisor/`: 23 tests — runner control/forget/instantiate (20: start/pause/resume, per-connector lifecycle lock, cursor + durable-state injection) and cycle semantics (3: cursor adoption only after success, deletion replay).
 - `rate_limit/`: 19 tests — backoff/jitter saturation, `Retry-After` handling, and the daily-quota tracker.

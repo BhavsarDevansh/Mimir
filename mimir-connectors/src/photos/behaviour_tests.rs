@@ -164,7 +164,17 @@ async fn emitted_predicates_are_registered_connector_vocabulary() {
     ]);
     let facts = connector.extract().await.unwrap();
     assert_eq!(facts.len(), 2, "{facts:?}");
-    for fact in facts {
+    let mut predicates: Vec<&str> = facts
+        .iter()
+        .map(|fact| fact.relationship_type.as_str())
+        .collect();
+    predicates.sort_unstable();
+    assert_eq!(
+        predicates,
+        ["took_photo", "took_photo_at"],
+        "GPS-resolved and GPS-less photos must emit exactly took_photo_at and took_photo"
+    );
+    for fact in &facts {
         assert!(
             mimir_knowledge::is_canonical_predicate_name(&fact.relationship_type),
             "photos predicate {} must be canonical vocabulary",

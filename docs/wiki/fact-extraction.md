@@ -67,7 +67,7 @@ When Mimir confirms a fact is sensitive, it stores it as **pending confirmation*
 Confidence is calculated by Mimir itself, not the AI. It depends on:
 
 - How directly you stated the fact (explicit vs casual)
-- Whether multiple sources agree (future feature)
+- Whether multiple sources agree (cross-source corroboration boosts confidence)
 - Whether the fact was inferred by rules (lower confidence)
 
 ## Your Control

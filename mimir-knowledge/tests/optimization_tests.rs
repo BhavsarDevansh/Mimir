@@ -590,19 +590,25 @@ async fn dedup_retires_duplicate_fact_event_overlay() {
     .fetch_one(graph.kg.pool())
     .await
     .unwrap();
-    graph
-        .kg
-        .insert_event(NewEvent {
-            fact_id: second_id,
-            entity_id: person,
-            trigger_date: now + Duration::days(5),
-            recurrence: RecurrenceType::Yearly,
-            event_type: EventType::Birthday,
-            auto_complete_policy: AutoCompletePolicy::Recurring,
-            requires_user_action: false,
-        })
-        .await
-        .unwrap();
+    let new_event = NewEvent {
+        fact_id: second_id,
+        entity_id: person,
+        trigger_date: now + Duration::days(5),
+        recurrence: RecurrenceType::Yearly,
+        event_type: EventType::Birthday,
+        auto_complete_policy: AutoCompletePolicy::Recurring,
+        requires_user_action: false,
+    };
+    graph.kg.insert_event(new_event.clone()).await.unwrap();
+    // Seed the pending event shape too, so the dedup merge is exercised on
+    // both halves of the retirement (overlay dismissal + metadata removal).
+    mimir_knowledge::queries::event::insert_pending_event_meta(
+        graph.kg.pool(),
+        second_id,
+        &new_event,
+    )
+    .await
+    .unwrap();
 
     let runner = OptimizationRunner::new(
         &graph.kg,
@@ -625,5 +631,14 @@ async fn dedup_retires_duplicate_fact_event_overlay() {
         overlay.status(),
         Some(EventStatus::Dismissed),
         "duplicate fact's overlay was not retired by dedup"
+    );
+
+    // The merged duplicate's pending event shape is dropped as well.
+    assert!(
+        mimir_knowledge::queries::event::get_pending_event_meta(graph.kg.pool(), second_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "duplicate fact's pending_event_meta was not removed by dedup"
     );
 }

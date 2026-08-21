@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.130.4] — 2026-08-21
+
+### Fix: PR #436 review feedback (event overlay scan coverage and documentation)
+
+- `docs/events-reminders.md` now states that both the one-time and recurring branches of the Upcoming render apply the `fact_status_id NOT IN (Superseded, Forgotten)` filter, matching the queries — the one-time branch excludes `Superseded`/`Forgotten` facts in addition to the terminal-overlay suppression.
+- The supersession regression test now pins the one-time scan path: past-due `AutoCompleteOnDate` overlays on directly-`Superseded` and directly-`Forgotten` facts are neither auto-completed by the scan nor dropped (both stay `Active`), alongside the existing recurring-path assertions.
+- The dedup regression test now seeds `pending_event_meta` for the merged duplicate and asserts the row is removed alongside the overlay dismissal.
+- Version bumped 0.130.3 → 0.130.4 (patch — test coverage and documentation).
+
 ## [0.130.3] — 2026-08-21
 
 ### Fix: superseded facts retire their event overlays (issue #413)

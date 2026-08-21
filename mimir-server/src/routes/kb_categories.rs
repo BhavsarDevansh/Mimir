@@ -33,6 +33,18 @@ pub struct CreateCategoryBody {
     pub memory_bucket_id: Option<i16>,
 }
 
+/// Map a category row to the response type shared by the list, detail, and create routes.
+fn to_response(cat: mimir_knowledge::models::category::Category) -> CategoryResponse {
+    CategoryResponse {
+        id: cat.id,
+        name: cat.name,
+        description: cat.description,
+        parent_id: cat.parent_id,
+        memory_weight: cat.memory_weight,
+        memory_bucket_id: cat.memory_bucket_id,
+    }
+}
+
 /// List categories.
 pub async fn list_categories(
     State(state): State<Arc<AppState>>,
@@ -44,17 +56,7 @@ pub async fn list_categories(
         .await
         .map_err(error::knowledge_error)?;
 
-    let resp: Vec<CategoryResponse> = cats
-        .into_iter()
-        .map(|c| CategoryResponse {
-            id: c.id,
-            name: c.name,
-            description: c.description,
-            parent_id: c.parent_id,
-            memory_weight: c.memory_weight,
-            memory_bucket_id: c.memory_bucket_id,
-        })
-        .collect();
+    let resp: Vec<CategoryResponse> = cats.into_iter().map(to_response).collect();
 
     Ok(Json(resp))
 }
@@ -89,17 +91,7 @@ pub async fn show_category(
         memory_weight: cat.memory_weight,
         memory_bucket_id: cat.memory_bucket_id,
         fact_count: cat.fact_count,
-        children: children
-            .into_iter()
-            .map(|c| CategoryResponse {
-                id: c.id,
-                name: c.name,
-                description: c.description,
-                parent_id: c.parent_id,
-                memory_weight: c.memory_weight,
-                memory_bucket_id: c.memory_bucket_id,
-            })
-            .collect(),
+        children: children.into_iter().map(to_response).collect(),
     };
 
     Ok(Json(resp))
@@ -109,7 +101,7 @@ pub async fn show_category(
 pub async fn create_category(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateCategoryBody>,
-) -> Result<Json<mimir_knowledge::models::category::Category>, Response> {
+) -> Result<Json<CategoryResponse>, Response> {
     let new_cat = mimir_knowledge::models::category::NewCategory {
         id: body.id,
         name: body.name,
@@ -125,7 +117,7 @@ pub async fn create_category(
         .await
         .map_err(error::knowledge_error)?;
 
-    Ok(Json(cat))
+    Ok(Json(to_response(cat)))
 }
 
 /// Delete a category.

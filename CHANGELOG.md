@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.129.1] — 2026-08-21
+
+### Fix: PR #434 review feedback (category memory buckets)
+
+- `POST /kb/categories` now returns the same `CategoryResponse` shape as the list and detail routes, so an unset `memory_bucket_id` is omitted instead of serialised as `null`.
+- The client KB tests now pin the `memory_bucket_id` wire contract: list and detail fixtures assert the decoded bucket id, and the create test sends `memory_bucket_id: 3` and matches it in the POST request body.
+- Corrected `docs/memory-system.md` to state that only `Identity` gets a reserved first fill phase — `Upcoming`, `Relationships`, `Preferences`, and `General` are filled together by score, and the lowest bucket id is the multi-category classification rule rather than a general fill-priority control.
+- Version bumped 0.129.0 → 0.129.1 (patch — response-shape consistency, test coverage, and documentation).
+
 ## [0.129.0] — 2026-08-20
 
 ### Refactor: memory bucket classification is now data-driven (issue #407)

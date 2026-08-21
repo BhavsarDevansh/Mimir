@@ -96,3 +96,4 @@ Unit tests in `mimir-core/src/config/tests.rs`:
 Regression tests in `mimir-server/src/server.rs`:
 - `test_config_watcher_thread_exits_when_runtime_dropped_without_shutdown`: Drops a runtime that spawned the watcher without firing the shutdown watch and asserts the drop completes (issue #415) — with the leak the blocking-pool join hung forever.
 - `test_config_watcher_reloads_on_file_change`: Writes new config content and asserts the debounced event is forwarded and reloaded into the snapshot.
+- Both tests synchronise with successful watcher registration through a test-only readiness signal emitted after `debouncer.watch` succeeds (PR #437 review): the runtime-drop test waits for it before dropping the runtime and the reload test waits for it before rewriting the file, because tokio does not guarantee that a `spawn_blocking` closure has started by the time the spawning call returns — without the wait, both tests could pass without exercising the registered watch.

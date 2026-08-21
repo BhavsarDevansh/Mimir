@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.130.6] — 2026-08-21
+
+### Fix: PR #437 review feedback (deterministic config watcher regression tests)
+
+- The two issue #415 config-watcher regression tests in `mimir-server/src/server.rs` now synchronise with successful watcher registration before dropping the runtime or rewriting the watched config. `spawn_config_watcher` gained a test-only readiness signal (`spawn_config_watcher_with_readiness`, compiled only under `cfg(test)`) emitted after `debouncer.watch` succeeds: the runtime-drop test waits for it before dropping the runtime and the reload test waits for it before writing the replacement content, so neither test can pass without exercising the registered watch — tokio does not guarantee that a `spawn_blocking` closure has started by the time the spawning call returns, so the previous fixed 300 ms delay could let both tests pass vacuously.
+- Docs updated: `docs/config-hot-reload.md`, `docs/unit-tests.md`, `docs/wiki/Testing-and-Benchmarks.md`.
+- Version bumped 0.130.5 → 0.130.6 (patch — test hardening).
+
 ## [0.130.5] — 2026-08-21
 
 ### Fix: daemon config watcher thread leaks and hangs runtime shutdown on error paths (issue #415)

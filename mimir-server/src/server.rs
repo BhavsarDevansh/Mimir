@@ -152,6 +152,35 @@ fn spawn_config_watcher(
     config: Arc<ReloadableConfig>,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
 ) -> Option<tokio::task::JoinHandle<()>> {
+    spawn_config_watcher_inner(config, shutdown_tx, None)
+}
+
+/// Test-only variant of [`spawn_config_watcher`] that signals successful
+/// watcher registration on `ready_tx`. Tokio does not guarantee that a
+/// `spawn_blocking` closure has started by the time the spawning call (or
+/// `Runtime::block_on`) returns, so tests that drop the runtime or rewrite
+/// the watched file immediately after spawning could run before
+/// `debouncer.watch` registers the directory and pass without exercising the
+/// path under test. Tests wait on the signal before proceeding (PR #437
+/// review).
+#[cfg(test)]
+fn spawn_config_watcher_with_readiness(
+    config: Arc<ReloadableConfig>,
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
+    ready_tx: std::sync::mpsc::Sender<()>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    spawn_config_watcher_inner(config, shutdown_tx, Some(ready_tx))
+}
+
+/// Shared implementation of [`spawn_config_watcher`]. When `ready_tx` is
+/// present (tests only), the blocking thread signals it once `debouncer.watch`
+/// has registered the directory, giving tests a deterministic point after
+/// which the watch is active.
+fn spawn_config_watcher_inner(
+    config: Arc<ReloadableConfig>,
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
+    ready_tx: Option<std::sync::mpsc::Sender<()>>,
+) -> Option<tokio::task::JoinHandle<()>> {
     let config_path = config.path().to_path_buf();
     let parent = config_path.parent()?.to_path_buf();
 
@@ -178,6 +207,11 @@ fn spawn_config_watcher(
         if let Err(e) = debouncer.watch(&parent, notify::RecursiveMode::NonRecursive) {
             tracing::warn!("Failed to watch config directory: {}", e);
             return;
+        }
+        if let Some(ready_tx) = ready_tx {
+            // Tests wait on this before dropping the runtime or rewriting the
+            // watched file (PR #437 review).
+            let _ = ready_tx.send(());
         }
         // Signature (mtime, size) of the last file content we asked the
         // async task to reload. Reading the config file generates
@@ -502,6 +536,7 @@ mod watcher_tests {
         // join), so the drop must not run on this test thread or a failure
         // would hang the whole test binary. The helper signals completion;
         // if no signal arrives within the timeout the watcher thread leaked.
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
         let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -510,8 +545,17 @@ mod watcher_tests {
                 .expect("build runtime");
             runtime.block_on(async {
                 let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
-                let _watcher = spawn_config_watcher(config, shutdown_tx);
+                let _watcher = spawn_config_watcher_with_readiness(config, shutdown_tx, ready_tx);
             });
+            // Wait for the blocking thread to register the directory watch
+            // before dropping the runtime: tokio does not guarantee that a
+            // `spawn_blocking` closure has started by the time `block_on`
+            // returns, so an immediate drop could leave the closure never
+            // started and the test passing without exercising the
+            // leaked-thread path (PR #437 review).
+            ready_rx.recv_timeout(Duration::from_secs(10)).expect(
+                "watcher thread must register the directory watch before the runtime is dropped",
+            );
             // Dropping the runtime must not hang; with the regression it
             // joins the leaked blocking thread forever.
             drop(runtime);
@@ -539,12 +583,19 @@ mod watcher_tests {
         ));
 
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
-        let _watcher = spawn_config_watcher(Arc::clone(&config), shutdown_tx);
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
+        let _watcher =
+            spawn_config_watcher_with_readiness(Arc::clone(&config), shutdown_tx, ready_tx);
 
-        // Give the blocking thread time to register the file watch, then
-        // write different content. The length differs from the first write so
-        // the metadata-signature dedupe cannot mistake it for a duplicate.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        // Wait for the blocking thread to register the file watch before
+        // writing different content: the old fixed delay did not guarantee
+        // registration, so the write could land before the watch and the
+        // reload assertion could pass vacuously (PR #437 review). The length
+        // differs from the first write so the metadata-signature dedupe
+        // cannot mistake it for a duplicate.
+        ready_rx.recv_timeout(Duration::from_secs(10)).expect(
+            "watcher thread must register the directory watch before the config is rewritten",
+        );
         std::fs::write(&path, "[llm]\ntemperature = 1.25\n").expect("write config");
 
         // The debouncer waits 1 s before forwarding, so poll the snapshot

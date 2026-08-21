@@ -41,7 +41,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::secrets::SecretStore;
 use mimir_core::geocoder::Geocoder;
+use mimir_core::hooks::HookEngine;
 use mimir_core::llm::LlmBackend;
+use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType};
 use mimir_knowledge::normalize::NormalizedFact;
 
@@ -97,6 +99,19 @@ pub struct ConnectorContext {
     /// (the daemon injects the shared `LlmClient`; tests inject a
     /// `MockLlmClient`). Connectors that need no LLM ignore it.
     pub llm_backend: Option<std::sync::Arc<dyn LlmBackend>>,
+
+    /// Shared knowledge graph, injected by the daemon so the Email
+    /// connector's prose-extraction hook (issue #386) can insert facts
+    /// through the shared `normalize_and_insert` pipeline with connector
+    /// provenance. `None` when no graph is configured (tests that exercise
+    /// deterministic extraction only).
+    pub knowledge_graph: Option<std::sync::Arc<KnowledgeGraph>>,
+
+    /// Shared hooks engine, injected by the daemon so the Email connector
+    /// can enqueue `ConnectorItemStaged` instances for LLM extraction
+    /// (issue #386). `None` when no engine is configured; the LLM layer is
+    /// then skipped (deterministic layers still run).
+    pub hook_engine: Option<std::sync::Arc<HookEngine>>,
 }
 
 /// Normalise a canonical user identity name for storage on a connector or
@@ -118,6 +133,8 @@ impl ConnectorContext {
             secret_store: None,
             user_identity: None,
             llm_backend: None,
+            knowledge_graph: None,
+            hook_engine: None,
         }
     }
 
@@ -164,6 +181,26 @@ impl ConnectorContext {
     /// the context and route calls through [`LlmBackend::system_chat_message`].
     pub fn with_llm_backend(mut self, backend: std::sync::Arc<dyn LlmBackend>) -> Self {
         self.llm_backend = Some(backend);
+        self
+    }
+
+    /// Attach the shared [`KnowledgeGraph`] to this context (builder).
+    ///
+    /// The Email connector's prose-extraction hook (issue #386) clones the
+    /// graph out of the context so the hook handler can insert extracted
+    /// facts through the shared pipeline with connector provenance.
+    pub fn with_knowledge_graph(mut self, kg: std::sync::Arc<KnowledgeGraph>) -> Self {
+        self.knowledge_graph = Some(kg);
+        self
+    }
+
+    /// Attach the shared [`HookEngine`] to this context (builder).
+    ///
+    /// The Email connector clones the engine out of the context and enqueues
+    /// `ConnectorItemStaged` instances for prose emails that need LLM
+    /// extraction (issue #386).
+    pub fn with_hook_engine(mut self, engine: std::sync::Arc<HookEngine>) -> Self {
+        self.hook_engine = Some(engine);
         self
     }
 }

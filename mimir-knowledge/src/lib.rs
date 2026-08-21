@@ -46,5 +46,5 @@ pub(crate) fn normalize_alias(alias: &str) -> Option<String> {
 // Re-export knowledge graph tools.
 pub use tools::{
     KgExpandCatalogueTool, KgFactsInCatalogueTool, KgQueryTool, KgRelatedTool, KgSearchTool,
-    RememberTool, RetrieveContextTool,
+    RetrieveContextTool,
 };

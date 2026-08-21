@@ -20,7 +20,6 @@ use crate::llm::LlmBackend;
 /// Typed identifier for background jobs known to the daemon scheduler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DaemonJob {
-    MemoryCondensation,
     KnowledgeOptimization,
 }
 
@@ -28,7 +27,6 @@ impl DaemonJob {
     /// Persistent string ID used by the [`JobQueue`] database.
     pub fn job_id(self) -> &'static str {
         match self {
-            DaemonJob::MemoryCondensation => "memory.condensation",
             DaemonJob::KnowledgeOptimization => "knowledge.optimization",
         }
     }
@@ -36,7 +34,6 @@ impl DaemonJob {
     /// Parse a persistent job ID back into a [`DaemonJob`] variant.
     pub fn from_job_id(id: &str) -> Option<Self> {
         match id {
-            "memory.condensation" => Some(DaemonJob::MemoryCondensation),
             "knowledge.optimization" => Some(DaemonJob::KnowledgeOptimization),
             _ => None,
         }
@@ -287,14 +284,8 @@ impl BackgroundScheduler {
     }
 
     async fn llm_is_idle(&self) -> bool {
-        let user_depth = self.llm.user_queue_depth().await;
-        let system_depth = self.llm.system_queue_depth().await;
-        let in_flight = self.llm.in_flight_count();
-        let idle = user_depth == 0 && system_depth == 0 && in_flight == 0;
-        debug!(
-            "scheduler: LLM idle check user={} system={} in_flight={} idle={}",
-            user_depth, system_depth, in_flight, idle
-        );
+        let idle = self.llm.pool_is_idle().await;
+        debug!("scheduler: LLM pool idle={idle}");
         idle
     }
 
@@ -337,20 +328,6 @@ mod tests {
         let path = temp.path().join("jobs.db");
         let jq = Arc::new(JobQueue::init(&path).await.unwrap());
 
-        let dummy = Job::new(
-            "memory.condensation",
-            JobPriority::System,
-            None,
-            true,
-            |_ctx: JobContext| {
-                Box::pin(async move {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    Ok(())
-                })
-            },
-        );
-        jq.register(dummy).await.unwrap();
-
         let opt = Job::new(
             "knowledge.optimization",
             JobPriority::System,
@@ -376,21 +353,16 @@ mod tests {
             BackgroundScheduler::new(jq, llm, Duration::from_secs(1), Duration::from_secs(1));
 
         assert_eq!(
-            sched.submit(DaemonJob::MemoryCondensation).await,
-            SubmitStatus::Queued
-        );
-        assert_eq!(
-            sched.submit(DaemonJob::MemoryCondensation).await,
-            SubmitStatus::AlreadyPending
-        );
-        assert_eq!(
             sched.submit(DaemonJob::KnowledgeOptimization).await,
             SubmitStatus::Queued
         );
+        assert_eq!(
+            sched.submit(DaemonJob::KnowledgeOptimization).await,
+            SubmitStatus::AlreadyPending
+        );
 
         let pending = sched.pending.lock().await;
-        assert_eq!(pending.len(), 2);
-        assert!(pending.contains(&DaemonJob::MemoryCondensation));
+        assert_eq!(pending.len(), 1);
         assert!(pending.contains(&DaemonJob::KnowledgeOptimization));
     }
 
@@ -402,16 +374,16 @@ mod tests {
             BackgroundScheduler::new(jq, llm, Duration::from_secs(1), Duration::from_secs(1));
 
         // Simulate a job already running.
-        *sched.running.lock().await = Some(DaemonJob::MemoryCondensation);
+        *sched.running.lock().await = Some(DaemonJob::KnowledgeOptimization);
 
         assert_eq!(
-            sched.submit(DaemonJob::MemoryCondensation).await,
+            sched.submit(DaemonJob::KnowledgeOptimization).await,
             SubmitStatus::AlreadyPending
         );
 
         // Job should NOT be added to pending because it is already running.
         let pending = sched.pending.lock().await;
-        assert!(!pending.contains(&DaemonJob::MemoryCondensation));
+        assert!(!pending.contains(&DaemonJob::KnowledgeOptimization));
         assert!(pending.is_empty());
     }
 
@@ -426,7 +398,7 @@ mod tests {
             Duration::from_millis(100),
         );
 
-        sched.submit(DaemonJob::MemoryCondensation).await;
+        sched.submit(DaemonJob::KnowledgeOptimization).await;
 
         let sched_clone = Arc::clone(&sched);
         let handle = tokio::spawn(async move {
@@ -459,7 +431,7 @@ mod tests {
         sched.notify_user_activity();
 
         // Submit and start scheduler.
-        sched.submit(DaemonJob::MemoryCondensation).await;
+        sched.submit(DaemonJob::KnowledgeOptimization).await;
         let sched_clone = Arc::clone(&sched);
         let handle = tokio::spawn(async move {
             sched_clone.start(shutdown_rx).await;
@@ -470,7 +442,7 @@ mod tests {
 
         // Job should still be pending because cooldown hasn't elapsed.
         let pending = sched.pending.lock().await;
-        assert!(pending.contains(&DaemonJob::MemoryCondensation));
+        assert!(pending.contains(&DaemonJob::KnowledgeOptimization));
         drop(pending);
 
         // Simulate user activity.
@@ -479,7 +451,7 @@ mod tests {
 
         // Still pending because cooldown reset.
         let pending = sched.pending.lock().await;
-        assert!(pending.contains(&DaemonJob::MemoryCondensation));
+        assert!(pending.contains(&DaemonJob::KnowledgeOptimization));
 
         sched.shutdown_tx.send(true).unwrap();
         let _ = handle.await;
@@ -496,7 +468,7 @@ mod tests {
             Duration::from_millis(50),
         );
 
-        sched.submit(DaemonJob::MemoryCondensation).await;
+        sched.submit(DaemonJob::KnowledgeOptimization).await;
         let sched_clone = Arc::clone(&sched);
         let handle = tokio::spawn(async move {
             sched_clone.start(shutdown_rx).await;
@@ -507,7 +479,7 @@ mod tests {
 
         // LLM is "busy" so job should still be pending.
         let pending = sched.pending.lock().await;
-        assert!(pending.contains(&DaemonJob::MemoryCondensation));
+        assert!(pending.contains(&DaemonJob::KnowledgeOptimization));
 
         sched.shutdown_tx.send(true).unwrap();
         let _ = handle.await;
@@ -519,7 +491,7 @@ mod tests {
         // Override the short dummy handler with a long-running one so the
         // cancellation path is exercised rather than natural completion.
         jq.register(Job::new(
-            "memory.condensation",
+            "knowledge.optimization",
             JobPriority::System,
             None,
             true,
@@ -541,23 +513,24 @@ mod tests {
             Duration::from_millis(50),
         );
 
-        sched.submit(DaemonJob::MemoryCondensation).await;
+        sched.submit(DaemonJob::KnowledgeOptimization).await;
         let sched_clone = Arc::clone(&sched);
         let handle = tokio::spawn(async move {
             sched_clone.start(shutdown_rx).await;
         });
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while !jq.is_running("memory.condensation").await && tokio::time::Instant::now() < deadline
+        while !jq.is_running("knowledge.optimization").await
+            && tokio::time::Instant::now() < deadline
         {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert!(jq.is_running("memory.condensation").await);
+        assert!(jq.is_running("knowledge.optimization").await);
 
         sched.shutdown();
         let _ = handle.await;
 
-        let status = jq.status("memory.condensation").await.unwrap();
+        let status = jq.status("knowledge.optimization").await.unwrap();
         assert_eq!(
             status.last_run.as_ref().unwrap().status,
             JobRunStatus::Cancelled

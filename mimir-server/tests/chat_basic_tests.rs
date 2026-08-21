@@ -32,11 +32,11 @@ async fn test_chat_creates_session() {
     assert!(chat.session_id > 0);
     assert_eq!(chat.response, "Hello!");
 }
-// Issue #137: learning is LLM-orchestrated via the `remember` tool. A
-// chitchat turn where the LLM does not call `remember` must not trigger a
-// background extraction LLM call. The unconditional Librarian has been
-// retired, so the mock should record exactly one LLM call (the main chat
-// completion) and no second extraction call.
+// Issues #137/#386: learning is hook-driven via `remember.chat`. A chitchat
+// turn enqueues the hook, but the hook is idle-gated (cooldown + LLM-pool
+// idle), so immediately after the response the mock must have recorded
+// exactly one LLM call (the main chat completion) and no extraction call
+// yet. The unconditional Librarian has been retired.
 #[tokio::test]
 async fn test_chitchat_does_not_trigger_background_learning() {
     let mock = Arc::new(

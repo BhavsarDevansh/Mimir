@@ -43,6 +43,7 @@
 //!   extraction (issue #262): attempt counts, cycle backoff, terminal
 //!   failures, and the persisted ledger format.
 
+mod hook;
 mod message;
 mod parse;
 pub(crate) mod retry;
@@ -60,11 +61,12 @@ use mimir_knowledge::normalize::NormalizedFact;
 use tracing::{debug, warn};
 
 use crate::connector::ConnectorError;
+pub use crate::email::llm::hook::EmailExtractionHook;
+pub(crate) use crate::email::llm::hook::EmailExtractionPayload;
 use crate::email::llm::message::{body_text, from_address, is_likely_spam};
 use crate::email::llm::parse::{build_fact, parse_output};
 pub(crate) use crate::email::llm::retry::{
-    DEFAULT_MAX_LLM_EXTRACTION_ATTEMPTS, FailureDisposition, ProseRetryLedger, RetryGate,
-    health_with_terminal,
+    DEFAULT_MAX_LLM_EXTRACTION_ATTEMPTS, ProseRetryLedger, health_with_terminal,
 };
 use crate::email::llm::schema::{build_system_prompt, email_extraction_tool_schema};
 

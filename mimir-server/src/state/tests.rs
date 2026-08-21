@@ -1,5 +1,6 @@
 use super::builder::{
-    init_connector_framework, init_knowledge_graph, init_scheduler, optimization_resource_limits,
+    init_connector_framework, init_hook_engine, init_knowledge_graph, init_scheduler,
+    optimization_resource_limits,
 };
 use super::warn_err;
 use mimir_core::config::Config;
@@ -72,7 +73,10 @@ async fn init_knowledge_graph_resolves_user_entity_and_registers_kg_tools() {
         "identity has_name fact seeded"
     );
     assert!(tool_registry.get("kg_query").is_some());
-    assert!(tool_registry.get("remember").is_some());
+    assert!(
+        tool_registry.get("remember").is_none(),
+        "the remember tool is removed (issue #386): learning is hook-driven"
+    );
     // The builder treats geocoder construction as best-effort: it is disabled
     // when the Nominatim HTTP client or rate limiter cannot be built, so the
     // geocoder may legitimately be absent on some hosts. When present, it
@@ -100,6 +104,10 @@ async fn init_scheduler_registers_system_jobs() {
     let knowledge_graph = test_kg(&temp).await;
     let llm = test_llm();
     let activity = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let (hook_engine, _hook_shutdown_rx) =
+        init_hook_engine(&config, &job_queue, &llm, &knowledge_graph, Some(1))
+            .await
+            .unwrap();
 
     let (_scheduler, _shutdown_rx) = init_scheduler(
         &config,
@@ -107,7 +115,7 @@ async fn init_scheduler_registers_system_jobs() {
         &llm,
         &knowledge_graph,
         &activity,
-        Some(1),
+        &hook_engine,
         temp.path().join("backups"),
     )
     .await
@@ -117,9 +125,11 @@ async fn init_scheduler_registers_system_jobs() {
     let ids: Vec<String> = jobs.into_iter().map(|j| j.job_id).collect();
     for expected in [
         "knowledge.optimization",
-        "memory.condensation",
         "knowledge.pending_cleanup",
         "events.upcoming_scan_0",
+        "remember.chat",
+        "connector_item.remember",
+        "memory.condensation",
     ] {
         assert!(
             ids.iter().any(|id| id == expected),
@@ -156,11 +166,26 @@ async fn init_connector_framework_registers_mock_backend() {
     let knowledge_graph = test_kg(&temp).await;
     let llm = test_llm();
     let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
-
-    let (registry, _supervisor) =
-        init_connector_framework(&config, &knowledge_graph, &llm, None, &shutdown_tx)
+    let job_queue = Arc::new(
+        mimir_core::job_queue::JobQueue::init(&temp.path().join("jobs.db"))
+            .await
+            .unwrap(),
+    );
+    let (hook_engine, _hook_shutdown_rx) =
+        init_hook_engine(&config, &job_queue, &llm, &knowledge_graph, Some(1))
             .await
             .unwrap();
+
+    let (registry, _supervisor) = init_connector_framework(
+        &config,
+        &knowledge_graph,
+        &llm,
+        None,
+        &hook_engine,
+        &shutdown_tx,
+    )
+    .await
+    .unwrap();
 
     let backends = registry.backends_for(mimir_knowledge::models::enums::ConnectorType::Gmail);
     assert!(

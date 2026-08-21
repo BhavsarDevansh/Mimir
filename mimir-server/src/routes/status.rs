@@ -12,6 +12,7 @@ pub async fn status_handler(State(state): State<Arc<AppState>>) -> Json<StatusRe
     let uptime = Instant::now().duration_since(state.start_time).as_secs();
     let user_depth = state.llm_client.user_queue_depth().await;
     let system_depth = state.llm_client.system_queue_depth().await;
+    let hook_queue_depth = state.hook_engine.pending_depth().await;
     let workers = state.llm_client.worker_threads();
 
     let (llm_reachable, context_window) = match state.llm_client.fetch_model_context_window().await
@@ -73,6 +74,7 @@ pub async fn status_handler(State(state): State<Arc<AppState>>) -> Json<StatusRe
         uptime_seconds: uptime,
         queue_depth_user: user_depth,
         queue_depth_system: system_depth,
+        hook_queue_depth,
         worker_threads: workers,
         endpoint: state.endpoint.clone(),
         model: state.model.clone(),

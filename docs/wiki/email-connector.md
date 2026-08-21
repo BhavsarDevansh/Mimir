@@ -52,7 +52,7 @@ Not every email is machine-readable. A dentist's "see you Tuesday 3pm" with no c
 
 ### If the LLM layer fails (#262)
 
-Sometimes the LLM cannot read an email — a provider hiccup, a network error, or a message the model refuses to process. Mimir never treats that as "nothing to extract": the email is put aside and retried on a later sync, while any facts the deterministic layers already found are kept. The retry is **bounded and restart-safe**:
+Sometimes the LLM cannot read an email — a provider hiccup, a network error, or a message the model refuses to process. Mimir never treats that as "nothing to extract": the `connector_item.remember` hook retries the message with backoff, while any facts the deterministic layers already found are kept. The retry is **bounded and restart-safe**:
 
 - Each message gets a small retry budget (3 attempts by default, configurable via `llm_extraction_max_attempts`) with an increasing wait between attempts, so a stuck message cannot keep burning LLM calls forever.
 - Once the budget is exhausted the message is recorded as **permanently failed with the reason** and skipped; it never consumes another LLM call. A re-fetched message in a new mailbox epoch (a `UIDVALIDITY` change) is treated as a new message and gets a fresh chance.

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 use tokio::sync::Mutex;
 
@@ -15,7 +15,9 @@ use crate::email::imap;
 use crate::email::llm::ProseRetryLedger;
 use crate::oauth::OAuthHttpClient;
 use crate::secrets::SecretStore;
+use mimir_core::hooks::HookEngine;
 use mimir_core::llm::LlmBackend;
+use mimir_knowledge::KnowledgeGraph;
 use tracing::warn;
 
 /// Build a connector from its parsed configuration, a shared secret store
@@ -26,18 +28,21 @@ impl EmailConnector {
         secret_store: Option<Arc<dyn SecretStore>>,
         cursor: Option<String>,
     ) -> Result<Self, ConnectorError> {
-        Self::from_config_with_deps(config, secret_store, None, cursor, None)
+        Self::from_config_with_deps(config, secret_store, None, cursor, None, None, None)
     }
 
     /// Build a connector with optional injected dependencies: the canonical
-    /// user identity and a shared LLM backend (tests inject a mock; the
-    /// daemon passes the live backend through the factory).
+    /// user identity, a shared LLM backend, the shared knowledge graph, and
+    /// the shared hooks engine (tests inject mocks; the daemon passes the
+    /// live services through the factory).
     pub fn from_config_with_deps(
         config: serde_json::Value,
         secret_store: Option<Arc<dyn SecretStore>>,
         user_identity: Option<String>,
         cursor: Option<String>,
         llm_backend: Option<Arc<dyn LlmBackend>>,
+        kg: Option<Arc<KnowledgeGraph>>,
+        hook_engine: Option<Arc<HookEngine>>,
     ) -> Result<Self, ConnectorError> {
         // Recover the supervisor-injected slug before parsing the DTO: serde
         // ignores unknown fields (the DTO has no `deny_unknown_fields`), so
@@ -47,6 +52,11 @@ impl EmailConnector {
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .unwrap_or_else(|| DEFAULT_SLUG.to_string());
+        // Recover the supervisor-injected instance id for hook provenance.
+        let instance_id = config
+            .get("__instance_id")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
         // Seed the durable connector state (issues #262, #283) from the
         // supervisor-injected `__durable_state` (the `connectors.durable_state`
         // column persisted after the previous cycle): the bounded
@@ -72,7 +82,12 @@ impl EmailConnector {
             EmailAuthMethod::OAuth { .. } => Some(OAuthHttpClient::new()?),
             EmailAuthMethod::AppPassword { .. } => None,
         };
-        let pending_items: Vec<_> = ledger.pending().cloned().collect();
+        // Legacy migration (issue #386): pending retries persisted by the
+        // pre-hooks engine re-stage into the buffer and are re-enqueued as
+        // hooks on the next cycle. Entries without a decodable payload are
+        // dropped (they were never persisted with one, or the payload is
+        // corrupt).
+        let pending_items = ledger.drain_legacy_pending();
         let mut buffer = Vec::with_capacity(pending_items.len());
         for pending in pending_items {
             match pending.raw() {
@@ -85,9 +100,8 @@ impl EmailConnector {
                 None => {
                     warn!(
                         raw_ref = %pending.raw_ref(),
-                        "dropping pending prose retry with missing or undecodable payload"
+                        "dropping legacy pending prose retry with missing or undecodable payload"
                     );
-                    ledger.settle(&pending.raw_ref());
                 }
             }
         }
@@ -104,9 +118,13 @@ impl EmailConnector {
             resync_pending: AtomicBool::new(false),
             supports_idle: StdMutex::new(None),
             buffer: Mutex::new(buffer),
-            prose_retry: StdMutex::new(ledger),
+            prose_retry: Arc::new(StdMutex::new(ledger)),
             user_identity: normalize_user_identity(user_identity),
             llm_backend,
+            kg,
+            hook_engine,
+            instance_id,
+            durable_snapshot_version: AtomicU64::new(0),
         })
     }
 }

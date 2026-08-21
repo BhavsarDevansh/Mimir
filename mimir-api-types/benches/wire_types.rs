@@ -71,6 +71,7 @@ fn bench_serde_roundtrip(c: &mut Criterion) {
         uptime_seconds: 9999,
         queue_depth_user: 3,
         queue_depth_system: 1,
+        hook_queue_depth: 2,
         worker_threads: 4,
         endpoint: "http://127.0.0.1:8080".to_string(),
         model: "gpt-4o".to_string(),

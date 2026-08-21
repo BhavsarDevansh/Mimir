@@ -29,4 +29,4 @@ pub use schema::{
     Classification, ExtractedFact, ExtractedLocation, ExtractionOutcome, PendingFact,
     RememberOutput, Temporal,
 };
-pub use tool::{remember_tool_params_schema, remember_tool_schema};
+pub use tool::remember_tool_schema;

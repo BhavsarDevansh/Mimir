@@ -5,14 +5,12 @@ mod kg_facts_in_catalogue;
 mod kg_query;
 mod kg_related;
 mod kg_search;
-mod remember;
 
 pub use kg_expand_catalogue::KgExpandCatalogueTool;
 pub use kg_facts_in_catalogue::KgFactsInCatalogueTool;
 pub use kg_query::KgQueryTool;
 pub use kg_related::KgRelatedTool;
 pub use kg_search::KgSearchTool;
-pub use remember::RememberTool;
 
 mod retrieve_context;
 pub use retrieve_context::RetrieveContextTool;

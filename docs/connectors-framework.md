@@ -8,7 +8,7 @@
 
 ## Purpose
 
-`mimir-connectors` is the service ingestion framework for Mimir. Connectors are background sync workers that fetch data from external services (email, calendar, photos, …), normalize it, and insert it into the knowledge graph through the *existing* fact pipeline — the same `normalize_and_insert` boundary used by conversational `remember` calls. They are not a parallel track.
+`mimir-connectors` is the service ingestion framework for Mimir. Connectors are background sync workers that fetch data from external services (email, calendar, photos, …), normalize it, and insert it into the knowledge graph through the *existing* fact pipeline — the same `normalize_and_insert` boundary used by the `remember.chat` hook's conversational extraction. They are not a parallel track.
 
 ## Database-access boundary
 
@@ -16,7 +16,7 @@ Connectors never hold a `sqlx` pool handle. All persistence goes through the [`m
 
 ## Shared ingestion boundary (F4 / #181)
 
-The resolve → confidence → sensitivity-gate → insert orchestration lives in `mimir-knowledge::normalize` as a single reusable function, so connector ingestion and conversational `remember` extraction share one deterministic Rust pipeline:
+The resolve → confidence → sensitivity-gate → insert orchestration lives in `mimir-knowledge::normalize` as a single reusable function, so connector ingestion and the `remember.chat` hook's conversational extraction share one deterministic Rust pipeline:
 
 ```rust
 pub async fn normalize_and_insert(

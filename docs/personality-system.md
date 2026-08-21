@@ -38,7 +38,7 @@ Files that do not end in `.personality.md` are ignored.
 pub fn system_prompt(&self, memory_content: &str) -> String
 ```
 
-- Appends the shared **operating directives** to every preset (built-in or custom), so the behavioural contract — honesty, retrieval, learning — is uniform across personalities:
+- Appends the shared **operating directives** to every preset (built-in or custom), so the behavioural contract — honesty and retrieval — is uniform across personalities:
   ```text
   {preset_system_prompt}
 
@@ -49,14 +49,11 @@ pub fn system_prompt(&self, memory_content: &str) -> String
     history. If its findings are still not enough, refine the task and dispatch
     again. Continue until you have a confident answer or have confirmed the
     information is not in your knowledge base.
-  - Call the `remember` tool whenever the user states or reveals something
-    worth saving — explicit assertions, corrections, and meaningful casual
-    mentions. Do not call it for pure chitchat or greetings.
   ```
 - If `memory_content` is non-empty, appends a core-facts block under the header `Core facts about the user (condensed subset — not a complete picture; treat as starting context, not exhaustive):` followed by the condensed memory.
 - If `memory_content` is empty, the core-facts block is omitted but the operating directives are still appended.
 
-Memory facts are injected automatically by the server from the knowledge graph condensation pipeline. The `kg_query`/`kg_search`/`kg_related` tools are the retrieval agent's internal tools and are deliberately not mentioned in the system prompt; the core LLM dispatches deeper retrieval via `retrieve_context`. Learning is LLM-orchestrated (issue #137): the LLM calls `remember` inline while composing its reply. An automatic Librarian fallback (#156) will queue background extraction when `remember` is not called for a configurable number of turns.
+Memory facts are injected automatically by the server from the knowledge graph condensation pipeline. The `kg_query`/`kg_search`/`kg_related` tools are the retrieval agent's internal tools and are deliberately not mentioned in the system prompt; the core LLM dispatches deeper retrieval via `retrieve_context`. Learning is hook-driven (issue #386): the `remember.chat` background hook extracts facts after each non-incognito turn, so the system prompt carries no learning directive and the model cannot be steered into or out of remembering.
 
 This composition is the responsibility of `Personality`; the caller passes the resulting string to `ContextManager::create_session`.
 

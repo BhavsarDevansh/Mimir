@@ -39,6 +39,8 @@ impl ConnectorFactory for EmailConnectorFactory {
             ctx.user_identity.clone(),
             cursor,
             ctx.llm_backend.clone(),
+            ctx.knowledge_graph.clone(),
+            ctx.hook_engine.clone(),
         )?;
         Ok(Arc::new(connector) as Arc<dyn Connector>)
     }

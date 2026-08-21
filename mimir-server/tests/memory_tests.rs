@@ -1,6 +1,42 @@
 mod common;
 use common::*;
 
+/// Register a slow `memory.condensation` hook so the refresh route's
+/// already-running / timeout / cancellation branches can be exercised
+/// (issue #386: the route force-runs the hook through the hooks engine).
+async fn register_slow_condensation_hook(state: &Arc<AppState>, sleep: std::time::Duration) {
+    struct SlowCondensation {
+        sleep: std::time::Duration,
+    }
+    #[async_trait::async_trait]
+    impl mimir_core::hooks::HookHandler for SlowCondensation {
+        async fn run(
+            &self,
+            _payload: Arc<dyn std::any::Any + Send + Sync>,
+            _ctx: mimir_core::hooks::HookContext,
+        ) -> mimir_core::hooks::HookOutcome {
+            tokio::time::sleep(self.sleep).await;
+            mimir_core::hooks::HookOutcome::Success
+        }
+    }
+    state
+        .hook_engine
+        .register(mimir_core::hooks::Hook {
+            id: "memory.condensation".to_string(),
+            trigger: mimir_core::hooks::TriggerKind::FactInserted,
+            key_scope: mimir_core::hooks::KeyScope::Global,
+            policy: mimir_core::hooks::QueuePolicy::SingularLastWins {
+                debounce: std::time::Duration::ZERO,
+            },
+            gate: mimir_core::hooks::Gate::Ungated,
+            retry: mimir_core::hooks::RetryPolicy::default(),
+            merge: None,
+            handler: Arc::new(SlowCondensation { sleep }),
+        })
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn test_memory_returns_condensed_content() {
     let mock = Arc::new(MockLlmClient::builder().build());
@@ -78,30 +114,18 @@ async fn test_memory_refresh_already_running_returns_409() {
     let mock = Arc::new(MockLlmClient::builder().build());
     let (state, _temp) = test_state(mock).await;
 
-    // Register a slow condensation job so we can race it.
-    let slow_job = mimir_core::job_queue::Job::new(
-        "memory.condensation",
-        mimir_core::job_queue::JobPriority::System,
-        None,
-        true,
-        |_ctx: mimir_core::job_queue::JobContext| {
-            Box::pin(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                Ok(())
-            })
-        },
-    );
-    state.job_queue.register(slow_job).await.unwrap();
+    // Register a slow condensation hook so we can race it.
+    register_slow_condensation_hook(&state, std::time::Duration::from_secs(2)).await;
 
     let app = mimir_server::build_app(Arc::clone(&state));
 
-    // Start a run in the background via the job queue directly.
-    let jq = Arc::clone(&state.job_queue);
+    // Start a force run in the background via the hooks engine directly.
+    let engine = Arc::clone(&state.hook_engine);
     let _bg = tokio::spawn(async move {
-        let _ = jq.run_now("memory.condensation").await;
+        let _ = engine.force_run("memory.condensation").await;
     });
 
-    // Give the background task a moment to insert the Running row.
+    // Give the background task a moment to mark the hook running.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let response = app
@@ -127,21 +151,9 @@ async fn test_memory_refresh_cancelled_returns_409() {
     let mock = Arc::new(MockLlmClient::builder().build());
     let (state, _temp) = test_state(mock).await;
 
-    // Register a non-cooperative slow job so the run-now cancellation branch
+    // Register a non-cooperative slow hook so the run-now cancellation branch
     // wins and the run is recorded as cancelled.
-    let slow_job = mimir_core::job_queue::Job::new(
-        "memory.condensation",
-        mimir_core::job_queue::JobPriority::System,
-        None,
-        true,
-        |_ctx: mimir_core::job_queue::JobContext| {
-            Box::pin(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                Ok(())
-            })
-        },
-    );
-    state.job_queue.register(slow_job).await.unwrap();
+    register_slow_condensation_hook(&state, std::time::Duration::from_secs(30)).await;
 
     let app = mimir_server::build_app(Arc::clone(&state));
     let jq = Arc::clone(&state.job_queue);
@@ -174,19 +186,7 @@ async fn test_memory_refresh_timed_out_returns_504() {
     let mock = Arc::new(MockLlmClient::builder().build());
     let (state, _temp) = test_state(mock).await;
 
-    let slow_job = mimir_core::job_queue::Job::new(
-        "memory.condensation",
-        mimir_core::job_queue::JobPriority::System,
-        None,
-        true,
-        |_ctx: mimir_core::job_queue::JobContext| {
-            Box::pin(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                Ok(())
-            })
-        },
-    );
-    state.job_queue.register(slow_job).await.unwrap();
+    register_slow_condensation_hook(&state, std::time::Duration::from_secs(30)).await;
     state
         .job_queue
         .set_default_timeout(std::time::Duration::from_millis(100))

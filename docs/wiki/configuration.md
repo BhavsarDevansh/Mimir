@@ -57,6 +57,7 @@ temperature = 0.2
 name = "Mimir"
 proactivity = "important_only"
 verbose_reasoning = false
+remember_debounce_seconds = 10
 
 [memory]
 enabled = true

@@ -18,7 +18,7 @@ Instead of reading a text file, Mimir:
 
 ### Regeneration Triggers
 
-Memory is regenerated **on demand** when facts change, not on a fixed timer. The background scheduler ensures condensation only runs during LLM downtime so it never slows down your conversations.
+Memory is regenerated **on demand** when facts change, not on a fixed timer. The `memory.condensation` background hook (debounced and idle-gated) ensures condensation only runs during LLM downtime so it never slows down your conversations.
 
 You can also force regeneration immediately:
 

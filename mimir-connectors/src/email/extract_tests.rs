@@ -13,6 +13,8 @@ pub(super) fn connector_with_identity(name: Option<&str>) -> EmailConnector {
         name.map(|n| n.to_string()),
         None,
         None,
+        None,
+        None,
     )
     .expect("config")
 }
@@ -337,6 +339,8 @@ async fn cancel_tombstones_survive_restart_via_durable_state() {
         config,
         None,
         Some("Devansh".to_string()),
+        None,
+        None,
         None,
         None,
     )

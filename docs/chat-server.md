@@ -75,6 +75,7 @@ Keep-alive pings are sent every 10 seconds.
   "uptime_seconds": 123,
   "queue_depth_user": 0,
   "queue_depth_system": 0,
+  "hook_queue_depth": 0,
   "worker_threads": 1
 }
 ```
@@ -128,14 +129,15 @@ If `compacted_at` is set on the session, only messages with `created_at >= compa
 4. **Enqueue** — Messages are exported and the request is enqueued in the `LlmWorkerPool`. If the pool is full, a `503` error is returned before the 200 response is committed.
 5. **Tool Calls** — If the LLM responds with `tool_calls` (OpenAI function-calling format), each tool is executed via `ToolRegistry`, the results are appended as `role: tool` messages, and a follow-up LLM request is made to obtain the final assistant text. Both the blocking (`/chat`) and streaming (`/chat/stream`) endpoints support this loop. In streaming mode, tool-call deltas are accumulated internally and the final text is streamed after execution.
 6. **Storage** — The final assistant response is appended via `ContextManager::add_assistant_message`.
-7. **Fact Extraction** — For non-incognito sessions, the fact-extraction pipeline (`KnowledgeGraph::extract_facts`) runs in a background task, parsing the user message for structured facts and inserting them into the knowledge graph. Sensitive facts are gated pending user confirmation.
+7. **Fact Extraction** — For non-incognito sessions, the route triggers the `remember.chat` hook (`Trigger::TurnCompleted`) after the assistant response is persisted. The hook engine debounces consecutive turns per session and, once the LLM pool is idle, runs the fact-extraction pipeline (`KnowledgeGraph::extract_facts_with_context`) over the accumulated transcript. Sensitive facts are gated pending user confirmation.
 
 ## Incognito Mode (issue #155)
 
 When a chat request sets `incognito: true`:
 
 - No session is created and neither the user message nor the assistant response is persisted.
-- **Write-capable tools are suppressed.** Tools implementing `Tool::is_write_tool() -> true` (currently `remember`) are excluded from the exported tool set, and any attempt to execute them during an incognito turn returns `ToolError::BlockedIncognito` so no facts are written to the knowledge graph. Read-only KG tools remain available.
+- **Write-capable tools are suppressed.** Tools implementing `Tool::is_write_tool() -> true` are excluded from the exported tool set, and any attempt to execute them during an incognito turn returns `ToolError::BlockedIncognito` so no facts are written to the knowledge graph. No built-in tool is currently write-capable (the `remember` tool was removed in #386), but the guard remains as defence-in-depth. Read-only KG tools remain available.
+- **No hooks fire.** Incognito turns never enqueue the `remember.chat` hook, so no background extraction runs and no facts are persisted (asserted by server integration tests).
 - The live configuration temperature is applied per request via `LlmBackend::with_temperature_override` (issue #80), so hot-reloaded `llm.temperature` changes take effect without restarting the daemon.
 
 ## Concurrency
@@ -157,4 +159,4 @@ The server reads its bind address from `[server].bind_addr` in `~/.config/mimir/
 
 `mimir-server` splits the daemon into `app.rs` (router assembly + bearer-token auth + loopback guard), `server.rs` (startup and background tasks), `shutdown.rs` (signal handling + bounded graceful drain), `state/` (shared `AppState` construction), `routes/` (one module per endpoint family — `chat.rs`, `connectors.rs`, `kb/`, `memory.rs`, `sessions.rs`, `status.rs`, `stop.rs`, `kb_categories.rs`), and `error.rs` (wire error mapping). The KB route family is further split by concern in `routes/kb/` (`query`, `detail`, `browse`, `pending`, `trash`, `forget`, `optimization`, `helpers`, `params`).
 
-`AppState` construction (`state/builder.rs`) is decomposed into per-subsystem init helpers composed by `from_config_with_llm` in a fixed startup order: `init_context_manager` → `init_tool_registry` → `init_knowledge_graph` (geocoder injection, user-entity resolution, identity-fact seeding, KG tool registration) → `init_job_queue` → `init_agent_runtime` → `init_scheduler` (registers the knowledge-optimization, memory-condensation, pending-cleanup, and events-scan jobs) → `init_connector_framework` (feature-gated factory registration, supervisor wiring, `restore()`). Each helper is independently unit-testable; issue #281 added the `api_token` field to `AppState` (loaded or generated at startup).
+`AppState` construction (`state/builder.rs`) is decomposed into per-subsystem init helpers composed by `from_config_with_llm` in a fixed startup order: `init_context_manager` → `init_tool_registry` → `init_knowledge_graph` (geocoder injection, user-entity resolution, identity-fact seeding, KG tool registration) → `init_job_queue` → `init_agent_runtime` → `init_scheduler` (registers the knowledge-optimization, pending-cleanup, and events-scan jobs) → `init_hook_engine` (registers the `remember.chat`, `memory.condensation`, and `connector_item.remember` hooks) → `init_connector_framework` (feature-gated factory registration, supervisor wiring, `restore()`). Each helper is independently unit-testable; issue #281 added the `api_token` field to `AppState` (loaded or generated at startup).

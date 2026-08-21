@@ -18,7 +18,9 @@ async fn test_kg_tools_registered() {
     assert!(names.contains(&"kg_search".to_string()));
     assert!(names.contains(&"expand_catalogue".to_string()));
     assert!(names.contains(&"get_facts_in_catalogue".to_string()));
-    assert!(names.contains(&"remember".to_string()));
+    // Issue #386: the `remember` tool was replaced by the hooks engine and
+    // must no longer be exposed to the model.
+    assert!(!names.contains(&"remember".to_string()));
 }
 #[tokio::test]
 async fn test_kg_tools_in_openai_export() {
@@ -41,7 +43,7 @@ async fn test_kg_tools_in_openai_export() {
     assert!(names.contains(&"kg_search".to_string()));
     assert!(names.contains(&"expand_catalogue".to_string()));
     assert!(names.contains(&"get_facts_in_catalogue".to_string()));
-    assert!(names.contains(&"remember".to_string()));
+    assert!(!names.contains(&"remember".to_string()));
 }
 #[tokio::test]
 async fn test_kb_optimization_status_returns_job() {

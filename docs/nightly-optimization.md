@@ -44,13 +44,13 @@ The optimization job is registered in the durable `JobQueue` with a daily schedu
 
 | Priority | Value | Meaning |
 |---|---|---|
-| `System` | 0 | Daemon maintenance — never competes with active user work (optimization, condensation) |
+| `System` | 0 | Daemon maintenance — never competes with active user work (optimization, hooks) |
 | `Maintenance` | 1 | Connector sync and background upkeep |
 | `User` | 2 | Explicitly requested user jobs |
 
 The `BackgroundScheduler` polls for scheduled jobs every 60 seconds. When the optimization job is due, it is submitted through the scheduler and follows the same dedupe/debounce/idle rules as any other background job.
 
-After optimization completes, its callback submits `DaemonJob::MemoryCondensation` through the scheduler (not directly via `JobQueue::run_now`), ensuring condensation also waits for user downtime before running.
+After optimization completes, its callback triggers `Trigger::FactInserted` on the hooks engine (issue #386), enqueuing the `memory.condensation` hook (global `SingularLastWins`, idle-gated) so condensation also waits for user downtime before running.
 
 ## Trigger & Daemon-Down Handling
 

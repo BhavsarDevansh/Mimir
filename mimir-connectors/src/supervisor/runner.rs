@@ -13,6 +13,7 @@ use crate::connector::{Connector, ConnectorContext, ConnectorMode};
 use crate::registry::ConnectorRegistry;
 use crate::secrets::SecretStore;
 use mimir_core::geocoder::Geocoder;
+use mimir_core::hooks::HookEngine;
 use mimir_core::llm::LlmBackend;
 
 use super::config::SupervisorConfig;
@@ -201,6 +202,30 @@ impl ConnectorSupervisor {
     /// [`restore`]: Self::restore
     pub fn with_llm_backend(mut self, backend: Arc<dyn LlmBackend>) -> Self {
         self.context.llm_backend = Some(backend);
+        self
+    }
+
+    /// Inject the shared [`KnowledgeGraph`] made available to every
+    /// connector this supervisor constructs (issue #386).
+    ///
+    /// The Email connector's prose-extraction hook clones the graph out of
+    /// the context so the hook handler can insert extracted facts through
+    /// the shared `normalize_and_insert` pipeline with connector provenance.
+    /// Must be called before [`restore`](Self::restore) so already-spawned runners receive it.
+    pub fn with_knowledge_graph(mut self, kg: Arc<KnowledgeGraph>) -> Self {
+        self.context.knowledge_graph = Some(kg);
+        self
+    }
+
+    /// Inject the shared [`HookEngine`] made available to every connector
+    /// this supervisor constructs (issue #386).
+    ///
+    /// The Email connector clones the engine out of the context and enqueues
+    /// `ConnectorItemStaged` instances for prose emails that need LLM
+    /// extraction. Must be called before [`restore`](Self::restore) so
+    /// already-spawned runners receive it.
+    pub fn with_hook_engine(mut self, engine: Arc<HookEngine>) -> Self {
+        self.context.hook_engine = Some(engine);
         self
     }
 

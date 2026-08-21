@@ -52,11 +52,11 @@ Implemented in `mimir-knowledge/src/condensation.rs`.
 ### Regeneration Triggers
 
 Condensed memory is regenerated when:
-- A fact is inserted/updated/deleted that ranks in top-N for memory inclusion (demand-driven via `BackgroundScheduler`)
+- A fact is inserted/updated/deleted that ranks in top-N for memory inclusion (demand-driven via the `memory.condensation` hook, issue #386)
 - `mimir memory --refresh` is called explicitly (force-submit)
 - Nightly optimization completes (confidence recalculation may re-rank facts)
 
-The scheduler ensures condensation only runs during LLM downtime so it never competes with active chats.
+The hook's idle gate ensures condensation only runs during LLM downtime so it never competes with active chats.
 
 ### Context Injection
 

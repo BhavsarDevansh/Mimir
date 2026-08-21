@@ -34,7 +34,7 @@ pub struct NormalizedLocation {
 }
 ```
 
-The temporal bounds come from the **inserted fact's** `valid_from` / `valid_until` (not the pre-correction extracted bounds), so a move is just a fact with bounds plus an overlay — no location-specific date parsing. Reading the bounds from the inserted `Fact` matters for corrections: `handle_correction` mutates `new_fact.valid_from` before the insert (a `None` scope → `now`, a datetime scope → that datetime), and the overlay must inherit the mutated bound so the `entity_locations` row matches its source fact and prior-location supersession fires. Both the conversational `remember` path (`extract.rs`) and connectors (`MockFactConfig.location`, and future connector extraction) fill the same field, differing only in provenance. `NormalizedFact` is `PartialEq`-only (not `Eq`) because `f64` coordinates are not `Eq`.
+The temporal bounds come from the **inserted fact's** `valid_from` / `valid_until` (not the pre-correction extracted bounds), so a move is just a fact with bounds plus an overlay — no location-specific date parsing. Reading the bounds from the inserted `Fact` matters for corrections: `handle_correction` mutates `new_fact.valid_from` before the insert (a `None` scope → `now`, a datetime scope → that datetime), and the overlay must inherit the mutated bound so the `entity_locations` row matches its source fact and prior-location supersession fires. Both the conversational extraction path (`extract.rs`, driven by the `remember.chat` hook since #386) and connectors (`MockFactConfig.location`, and future connector extraction) fill the same field, differing only in provenance. `NormalizedFact` is `PartialEq`-only (not `Eq`) because `f64` coordinates are not `Eq`.
 
 ## Pipeline: `apply_location_overlay`
 

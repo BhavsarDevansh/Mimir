@@ -179,6 +179,7 @@ url = "2"
 # Enable mimir-core's `mock-llm` feature for deterministic connector LLM tests
 # (Email C7 / #201 prose-extraction layer).
 mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
+tokio-util = "0.7"
 
 [features]
 default = ["photos", "calendar", "gmail"]

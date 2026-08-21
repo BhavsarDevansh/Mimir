@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.131.0] — 2026-08-21
+
+### Feature: hooks engine — typed background tasks with per-hook queue policies (issue #386)
+
+- Added a typed hooks engine in `mimir-core/src/hooks/`: a minimal `Trigger` enum (`TurnCompleted`, `ConnectorItemStaged`, `FactInserted`), per-hook `QueuePolicy` (`Multiple` FIFO, `SingularFirstWins`, `SingularLastWins` with debounce + payload merge), `KeyScope` (`Global`/`PerKey`), execution `Gate` (`IdleGated` cooldown + LLM-pool idle, `Ungated`), and `RetryPolicy` with exponential backoff. A single dispatch loop drains the in-memory pending queue through the durable `JobQueue`; each registered hook owns one durable job whose handler executes the currently running instance via a `Weak<EngineInner>` reference. `force_run` bypasses all gates for manual refreshes, and `pending_depth`/`pending_depth_for`/`running_count` provide observability.
+- Migrated remembering and memory condensation onto hooks: `remember.chat` (per-session `SingularLastWins` debounced by `agent.remember_debounce_seconds`, default 10, idle-gated, non-incognito only, fired on both blocking and streaming chat paths), `connector_item.remember` (per-item `Multiple` FIFO, ungated, with the Email connector's retry/terminal-failure policy moved into the hook runner and terminal failures recorded durably in the shared `ProseRetryLedger`), and `memory.condensation` (global `SingularLastWins`, idle-gated, replacing the dirty-signal scheduler submission; `POST /kb/memory/refresh` force-runs it).
+- Removed the `remember` tool from the registry and the personality operating directives; the `remember_tool_schema` remains as the extraction schema for the hook pipeline. Incognito turns never enqueue any hook (asserted by server integration tests).
+- Surfaced the pending hook queue depth as `hook_queue_depth` in `GET /status`.
+- DRY: the LLM-pool idle check shared by the scheduler and the hooks engine now lives in one `LlmBackend::pool_is_idle` default method.
+- Docs: new `docs/hooks.md` + `docs/wiki/hooks.md`; updated `docs/learning-orchestration.md`, `docs/fact-extraction-pipeline.md`, `docs/librarian-agent.md`, `docs/personality-system.md`, `docs/tools-registry.md`, `docs/chat-server.md`, `docs/email-connector.md`, `docs/job-queue.md`, `docs/memory-system.md`, `docs/nightly-optimization.md`, `docs/shutdown.md`, `README.md`, `Mimir-Implementation-Context.md`, and the wiki pages (personality, librarian, tools, server, knowledge-graph, fact-extraction, connectors, memory, job-queue, configuration, what-works-now, daemon-shutdown, cli-commands).
+- Version bumped 0.130.6 → 0.131.0 (minor — new feature).
+
 ## [0.130.6] — 2026-08-21
 
 ### Fix: PR #437 review feedback (deterministic config watcher regression tests)

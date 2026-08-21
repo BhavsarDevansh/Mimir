@@ -6,7 +6,7 @@ Mimir runs maintenance tasks in the background so your knowledge graph stays cle
 
 ## How it works
 
-All background jobs go through the same pipeline:
+All background jobs go through the same pipeline (the scheduler for scheduled jobs, the hooks engine for event-driven hooks):
 
 1. **Deduplication** — if a job is already waiting or running, it is not queued again.
 2. **Debounce** — after a job is requested, the scheduler waits a short time (default 5 s) to batch rapid successive requests.
@@ -15,7 +15,7 @@ All background jobs go through the same pipeline:
 
 ## Current jobs
 
-- **Memory condensation** — triggered automatically when facts change, or manually via `mimir memory --refresh`.
+- **Memory condensation** — the `memory.condensation` hook, triggered automatically when facts change, or manually via `mimir memory --refresh`.
 - **Knowledge graph optimization** — runs every night (default 02:00) to deduplicate facts, resolve contradictions, recalculate confidence, and clean up old data.
 
 ## How to check status
@@ -40,7 +40,7 @@ If the run is cancelled (for example by daemon shutdown) the request returns `40
 mimir memory --refresh
 ```
 
-Triggers memory condensation immediately, bypassing the scheduler's debounce and cooldown.
+Triggers memory condensation immediately, bypassing the hook's debounce and cooldown.
 
 ## Shutdown behaviour
 

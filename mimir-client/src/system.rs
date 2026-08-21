@@ -83,6 +83,7 @@ mod tests {
             uptime_seconds: 1,
             queue_depth_user: 0,
             queue_depth_system: 0,
+            hook_queue_depth: 0,
             worker_threads: 1,
             endpoint: "http://localhost:8080".to_string(),
             model: "gpt-4o".to_string(),

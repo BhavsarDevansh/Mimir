@@ -96,7 +96,7 @@ mimir kb optimization --status # Nightly optimization status
 ## Relationship to the Wider System
 
 - **Chat** — the agent calls `kg_query`, `kg_related`, and `kg_search` tools to pull facts on demand, and a short condensed summary is injected into the system prompt each turn.
-- **Learning** — the conversational LLM calls the `remember` tool during a turn to persist facts it judges worth keeping; all validation, confidence, and insertion logic is deterministic Rust (see [How Mimir Learns Facts](fact-extraction.md)).
+- **Learning** — the server-side `remember.chat` background hook extracts facts after each non-incognito turn; all validation, confidence, and insertion logic is deterministic Rust (see [How Mimir Learns Facts](fact-extraction.md) and [Background Hooks](hooks.md)).
 - **Memory** — `mimir memory` renders a ranked condensation of the Knowledge Graph, not a separate file (see [Memory](memory.md)).
 - **Nightly optimization** — keeps the graph healthy: dedup, contradiction resolution, confidence recalculation, and cleanup (see [Nightly Optimization](nightly-optimization.md)).
 

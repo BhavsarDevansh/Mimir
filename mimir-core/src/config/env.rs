@@ -56,6 +56,11 @@ impl Config {
             self.agent.max_tool_rounds,
             u16
         );
+        set_from_env!(
+            "MIMIR_AGENT_REMEMBER_DEBOUNCE_SECONDS",
+            self.agent.remember_debounce_seconds,
+            u8
+        );
         set_from_env!("MIMIR_MEMORY_ENABLED", self.memory.enabled, bool);
         set_from_env!("MIMIR_MEMORY_CHAR_LIMIT", self.memory.char_limit, u16);
         set_from_env!("MIMIR_MEMORY_AUTO_MANAGE", self.memory.auto_manage, bool);

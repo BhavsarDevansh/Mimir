@@ -48,25 +48,23 @@ pub async fn memory_handler(State(state): State<Arc<AppState>>) -> Result<String
 
 /// POST /memory/refresh
 ///
-/// Triggers the memory condensation job immediately via force-submit,
-/// bypassing the scheduler's debounce, cooldown, and idle gates.
+/// Triggers the memory condensation hook immediately via
+/// [`HookEngine::force_run`], bypassing the hook's debounce, cooldown, and
+/// idle gates.
 pub async fn memory_refresh_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<(StatusCode, Json<OptimizationRunNowResponse>), StatusCode> {
     use mimir_core::job_queue::JobRunStatus;
-    use mimir_core::scheduler::DaemonJob;
     let summary = state
-        .scheduler
-        .force_submit(DaemonJob::MemoryCondensation)
+        .hook_engine
+        .force_run("memory.condensation")
         .await
         .map_err(|e| {
             tracing::error!("Failed to trigger memory condensation: {}", e);
-            if e.is_not_registered() {
-                StatusCode::NOT_FOUND
-            } else if e.is_already_running() {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
+            match e {
+                mimir_core::hooks::HookError::NotRegistered(_) => StatusCode::NOT_FOUND,
+                mimir_core::hooks::HookError::AlreadyRunning(_) => StatusCode::CONFLICT,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
             }
         })?;
 

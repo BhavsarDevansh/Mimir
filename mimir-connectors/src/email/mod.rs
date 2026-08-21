@@ -18,3 +18,4 @@ mod factory;
 pub use config::{EmailAuthMethod, EmailConfigDto, EmailSyncMode};
 pub use connector::EmailConnector;
 pub use factory::EmailConnectorFactory;
+pub use llm::EmailExtractionHook;

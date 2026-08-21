@@ -1,10 +1,10 @@
 # Fact Extraction Pipeline
 
-> **Issues:** #55, #181 (Phase 3 F4 — shared normalize/insert boundary)
+> **Issues:** #55, #181 (Phase 3 F4 — shared normalize/insert boundary), #386 (hooks engine)
 >
 > **Phase:** 2 — Knowledge Graph (boundary shared with Phase 3 connectors)
 >
-> **Version:** 0.65.0
+> **Version:** 0.131.0
 
 ## Overview
 
@@ -12,15 +12,16 @@ The fact extraction pipeline transforms a raw user message into structured, vali
 
 ## Trigger
 
-Learning is **LLM-orchestrated** (Issue #137). The conversational LLM calls the `remember` tool during the chat turn to persist facts it judges worth keeping, so extraction happens inline as part of the response and does not learn from chitchat. The deterministic Rust pipeline (validation, confidence, entity resolution, sensitive gating, insertion) runs when the tool executes — the LLM only supplies structured facts; it cannot set confidence or override policy.
+Learning is **hook-driven** (Issue #386). After each non-incognito chat turn, the `remember.chat` background hook runs the extraction pipeline over the accumulated conversation transcript, debounced per session and idle-gated so background work never steals LLM capacity from interactive chat. The deterministic Rust pipeline (validation, confidence, entity resolution, sensitive gating, insertion) runs when the hook executes — the LLM only supplies structured facts; it cannot set confidence or override policy. The `remember` tool was removed from the registry and the system prompt (Issue #137's tool-call design was superseded).
 
-The [`Librarian Agent`](../librarian-agent.md) and `KnowledgeGraph::extract_facts_with_context` remain as an on-demand library API (for future bulk import or specialist agents) but are no longer auto-invoked after every turn. Incognito sessions never learn.
+The [`Librarian Agent`](../librarian-agent.md) and `KnowledgeGraph::extract_facts_with_context` remain as a library API (the `remember.chat` hook handler calls `extract_facts_with_context` directly). Incognito sessions never learn: incognito turns never enqueue any hook.
 
 ## Architecture
 
 ```
 User message
-    → LLM extraction ("remember" tool)                 [extract/pipeline.rs]
+    → remember.chat hook (debounced, idle-gated)       [mimir-server/src/state/hooks.rs]
+    → LLM extraction (remember_tool_schema)            [extract/pipeline.rs]
     → Conversational adapter:
         predicate canonicalisation + list splitting
         + parse LLM string fields → NormalizedFact       [extract/parse.rs]
@@ -66,11 +67,11 @@ pub async fn normalize_and_insert(
 
 The conversational adapter (`extracted_to_normalized` in `extract/pipeline.rs`) does the LLM-output normalisation the shared boundary cannot: predicate canonicalisation (so list-splitting sees canonical names), list splitting, and parsing the LLM's string-typed fields into the typed `NormalizedFact`. Per-fact canonicalisation and parse errors are tolerated and surfaced via `ExtractionOutcome::errors`, preserving the previous batch behaviour.
 
-The tool-call + fence-fallback parsing itself is shared with the connector extraction path (issue #259): `mimir-core::llm::parse_tool_output` owns the three-step dance (first `tool_calls` entry's `function.arguments`, else fence-stripped `content`, else error) once, and both `parse_remember_output` and the Email connector's `parse_output` map its `ToolOutputParseError` onto their own error types. The conversational path keeps its bare-`Vec<ExtractedFact>` fallback on top of the shared parser. The `remember` tool schema is built once via `LazyLock` and shared by every extraction call.
+The tool-call + fence-fallback parsing itself is shared with the connector extraction path (issue #259): `mimir-core::llm::parse_tool_output` owns the three-step dance (first `tool_calls` entry's `function.arguments`, else fence-stripped `content`, else error) once, and both `parse_remember_output` and the Email connector's `parse_output` map its `ToolOutputParseError` onto their own error types. The conversational path keeps its bare-`Vec<ExtractedFact>` fallback on top of the shared parser. The `remember_tool_schema` is built once via `LazyLock` and shared by every extraction call (the schema is retained for the hook pipeline even though the `remember` tool was removed from the registry in #386).
 
 ## Files
 
-- `mimir-knowledge/src/extract/` — conversational half: `remember` tool schema, extraction prompts, LLM-output parsing, and the adapter that maps `ExtractedFact` onto `NormalizedFact`/`Provenance`
+- `mimir-knowledge/src/extract/` — conversational half: `remember_tool_schema`, extraction prompts, LLM-output parsing, and the adapter that maps `ExtractedFact` onto `NormalizedFact`/`Provenance`
 - `mimir-core/src/llm/tool_output.rs` — shared LLM tool-output parsing (`parse_tool_output` + `ToolOutputParseError`), used by both the conversational and connector extraction paths
 - `mimir-knowledge/src/normalize/` — shared `normalize_and_insert` boundary (entity resolution, confidence, sensitivity gate, insertion, event overlay) used by both chat and connectors
 - `mimir-knowledge/src/queries/fact/` — `insert_fact_in_tx`, corroboration + supersession paths
@@ -84,7 +85,7 @@ The tool-call + fence-fallback parsing itself is shared with the connector extra
 
 ## LLM Extraction
 
-The `remember` tool schema is a JSON object with a `facts` array. Each fact contains:
+The `remember_tool_schema` is a JSON object with a `facts` array. Each fact contains:
 
 | Field | Description |
 |-------|-------------|
@@ -248,7 +249,7 @@ All tests use `MockLlmClient` with `mimir-core`'s `mock-llm` feature for determi
 
 During extraction, each fact's `relationship_type` is resolved through `KnowledgeGraph::resolve_canonical_relationship_type`, which enforces the Rust-side canonical predicate allow-list (`CANONICAL_PREDICATES`, issue #401): the name is trimmed/lowercased (via `normalize_alias`), looked up in the `relationship_type_aliases` table — the single source of truth — and the resolved canonical type must be part of the seeded set. LLM synonyms such as `attended`, `hobbies`, or `works_for` therefore map to their canonical types (`studied_at`, `hobby`, `works_at`) purely from seeded data — there is no hardcoded synonym map in code. The prompt-instructed `favourite_<thing>` family is accepted as an open set (auto-creating the specific favourite on first use); any other unknown predicate is rejected with a clear error instead of auto-creating a `relationship_types` row, so an LLM-invented predicate can never pollute the ontology. The resolved canonical name then drives `split_list_objects`.
 
-The batch flow (`extracted_to_normalized` → `normalize_and_insert`, shared by `extract_facts`/`extract_facts_with_context` and the `remember` tool entrypoint `process_remember_output`) tolerates predicate-resolution errors per-fact: one invalid predicate is recorded in `ExtractionOutcome::errors` without aborting the rest of the batch.
+The batch flow (`extracted_to_normalized` → `normalize_and_insert`, shared by `extract_facts`/`extract_facts_with_context` and the hook entrypoint `process_remember_output`) tolerates predicate-resolution errors per-fact: one invalid predicate is recorded in `ExtractionOutcome::errors` without aborting the rest of the batch.
 
 After resolution, the shared write boundary enforces the seeded subject/object entity-type constraints (`relationship_constraints`, issue #402): an entity-object fact whose (subject, object) pair is not in the seeded allow-list for its predicate is rejected with `KnowledgeError::InvalidRelationshipConstraint`, reported as a per-fact error in `ExtractionOutcome::errors` exactly like the predicate allow-list rejection. Predicates without seeded constraints and literal-object facts are unaffected, so connector-emitted predicates and value-style facts (e.g. `works_as` → "Software Engineer") keep flowing.
 

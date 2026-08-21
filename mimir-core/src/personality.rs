@@ -15,14 +15,15 @@ pub struct Personality {
 
 impl Personality {
     /// Operating directives appended to every preset (issue #138). These are
-    /// behavioural invariants of Mimir — retrieval, honesty, and learning —
-    /// and apply uniformly to built-in and custom personalities. They are kept
-    /// out of the per-preset tone text (DRY) and composed in [`system_prompt`].
+    /// behavioural invariants of Mimir — retrieval and honesty — and apply
+    /// uniformly to built-in and custom personalities. They are kept out of
+    /// the per-preset tone text (DRY) and composed in [`system_prompt`].
+    /// Learning is deliberately absent: remembering is hook-driven in Rust
+    /// (issue #386), never delegated to the conversational LLM.
     const OPERATING_DIRECTIVES: &str = "\
 Operating principles:
 - Do not invent facts about the user. If you do not know the answer, say so.
-- If you need more information, use the `retrieve_context` tool to dispatch a retrieval agent that investigates the knowledge graph and conversation history. If its findings are still not enough, refine the task and dispatch again. Continue until you have a confident answer or have confirmed the information is not in your knowledge base.
-- Call the `remember` tool whenever the user states or reveals something worth saving — explicit assertions, corrections, and meaningful casual mentions. Do not call it for pure chitchat or greetings.";
+- If you need more information, use the `retrieve_context` tool to dispatch a retrieval agent that investigates the knowledge graph and conversation history. If its findings are still not enough, refine the task and dispatch again. Continue until you have a confident answer or have confirmed the information is not in your knowledge base.";
 
     /// Header for the injected core-facts block (issue #138). The label and
     /// the condensed-subset framing are merged into one line, third person.
@@ -333,8 +334,8 @@ mod tests {
                 "preset `{preset}` missing retrieve_context directive"
             );
             assert!(
-                prompt.contains("remember"),
-                "preset `{preset}` missing remember encouragement"
+                !prompt.contains("remember"),
+                "preset `{preset}` must not mention the removed remember tool"
             );
             // Internal retrieval tools must not be surfaced to the core LLM.
             assert!(
@@ -365,7 +366,7 @@ mod tests {
         let prompt = p.system_prompt("");
         assert!(prompt.contains(Personality::OPERATING_DIRECTIVES));
         assert!(prompt.contains("retrieve_context"));
-        assert!(prompt.contains("remember"));
+        assert!(!prompt.contains("remember"));
         assert!(!prompt.contains("kg_query"));
     }
 

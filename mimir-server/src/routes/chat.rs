@@ -9,6 +9,8 @@ use axum::{
 };
 use futures::{Stream, StreamExt};
 use mimir_api_types::{ChatRequest, ChatResponse, Usage};
+use mimir_core::conversation::ConversationTurn;
+use mimir_core::hooks::Trigger;
 use mimir_core::llm::types::StreamItem;
 use mimir_core::personality::Personality;
 use mimir_core::tools::{Tool, ToolPermission};
@@ -327,6 +329,20 @@ pub async fn chat_handler(
             .add_assistant_message(session_id, &response_text)
             .await
             .map_err(error::context_error)?;
+        // Issue #386: learning is hook-driven — enqueue the completed turn
+        // for the debounced `remember.chat` extraction instead of relying on
+        // the conversational LLM to call the `remember` tool.
+        state
+            .hook_engine
+            .trigger(Trigger::TurnCompleted {
+                session_id,
+                payload: Arc::new(vec![ConversationTurn::new(
+                    session_id,
+                    req.message.clone(),
+                    response_text.clone(),
+                )]),
+            })
+            .await;
     }
 
     Ok(Json(ChatResponse {
@@ -367,6 +383,7 @@ pub async fn chat_stream_handler(
 
     let state_clone = Arc::clone(&state);
     let session_id_clone = session_id;
+    let user_message_clone = req.message.clone();
     let llm_clone = Arc::clone(&llm);
     let tool_registry_clone = Arc::clone(&state.tool_registry);
     let kg_clone = Arc::clone(&state.knowledge_graph);
@@ -493,6 +510,19 @@ pub async fn chat_stream_handler(
                     {
                         error!("failed to persist assistant message: {e}");
                     }
+                    // Issue #386: enqueue the completed turn for the
+                    // debounced `remember.chat` extraction.
+                    state_clone
+                        .hook_engine
+                        .trigger(Trigger::TurnCompleted {
+                            session_id: session_id_clone,
+                            payload: Arc::new(vec![ConversationTurn::new(
+                                session_id_clone,
+                                user_message_clone.clone(),
+                                full_response.clone(),
+                            )]),
+                        })
+                        .await;
                 }
                 break 'outer;
             }

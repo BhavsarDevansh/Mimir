@@ -631,9 +631,16 @@ async fn imap_sync_then_extract_yields_invite_facts() {
     tokio::spawn(run_fake(server, cfg, None, Arc::clone(&select_count)));
     let mut config = app_config();
     config["mode"] = serde_json::json!("poll");
-    let connector =
-        EmailConnector::from_config_with_deps(config, None, Some("Devansh".into()), None, None)
-            .expect("config");
+    let connector = EmailConnector::from_config_with_deps(
+        config,
+        None,
+        Some("Devansh".into()),
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("config");
     let session = imap_login(Client::new(client), app_password_auth())
         .await
         .expect("login");

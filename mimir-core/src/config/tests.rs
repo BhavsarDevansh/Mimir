@@ -32,6 +32,32 @@ fn test_env_override_agent_max_tool_rounds() {
 }
 
 #[test]
+fn test_env_override_agent_remember_debounce_seconds() {
+    let mut config = Config::default();
+    config.apply_env_overrides_with(|key| {
+        if key == "MIMIR_AGENT_REMEMBER_DEBOUNCE_SECONDS" {
+            Some("30".to_string())
+        } else {
+            None
+        }
+    });
+    assert_eq!(config.agent.remember_debounce_seconds, 30);
+}
+
+#[test]
+fn test_env_override_agent_remember_debounce_seconds_invalid_ignored() {
+    let mut config = Config::default();
+    config.apply_env_overrides_with(|key| {
+        if key == "MIMIR_AGENT_REMEMBER_DEBOUNCE_SECONDS" {
+            Some("not_a_number".to_string())
+        } else {
+            None
+        }
+    });
+    assert_eq!(config.agent.remember_debounce_seconds, 10);
+}
+
+#[test]
 fn test_env_override_agent_max_tool_rounds_invalid_ignored() {
     let mut config = Config::default();
     config.apply_env_overrides_with(|key| {
@@ -97,6 +123,7 @@ fn test_save_and_load() {
             proactivity: Proactivity::Always,
             verbose_reasoning: true,
             max_tool_rounds: 100,
+            remember_debounce_seconds: 10,
         },
         memory: MemoryConfig {
             enabled: false,

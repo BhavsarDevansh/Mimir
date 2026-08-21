@@ -13,6 +13,7 @@ use crate::connector::{Connector, ConnectorContext, ConnectorMode};
 use crate::registry::ConnectorRegistry;
 use crate::secrets::SecretStore;
 use mimir_core::geocoder::Geocoder;
+use mimir_core::hooks::HookEngine;
 use mimir_core::llm::LlmBackend;
 
 use super::config::SupervisorConfig;
@@ -204,6 +205,18 @@ impl ConnectorSupervisor {
         self
     }
 
+    /// Inject the shared [`HookEngine`] made available to every connector
+    /// this supervisor constructs (issue #386).
+    ///
+    /// The Email connector clones the engine out of the context and enqueues
+    /// `ConnectorItemStaged` instances for prose emails that need LLM
+    /// extraction. Must be called before [`restore`](Self::restore) so
+    /// already-spawned runners receive it.
+    pub fn with_hook_engine(mut self, engine: Arc<HookEngine>) -> Self {
+        self.context.hook_engine = Some(engine);
+        self
+    }
+
     /// Spawn a runner task for every `Active` connector row.
     ///
     /// `Paused` / `Error` / `Setup` rows are not auto-spawned. Rows whose
@@ -344,12 +357,14 @@ impl ConnectorSupervisor {
                 serde_json::to_value(&row.durable_state)?,
             );
         }
-        Ok(self.registry.create_with_context(
-            connector_type,
-            &row.backend,
-            config,
-            &self.context,
-        )?)
+        // The connector-facing graph is always the supervisor's graph, so
+        // connector facts and the connector rows their provenance references
+        // can never land in different databases (issue #386 review).
+        let mut context = self.context.clone();
+        context.knowledge_graph = Some(Arc::clone(&self.kg));
+        Ok(self
+            .registry
+            .create_with_context(connector_type, &row.backend, config, &context)?)
     }
 }
 

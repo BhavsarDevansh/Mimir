@@ -115,7 +115,8 @@ temperature = 0.2
 name = "Mimir"
 proactivity = "important_only"
 verbose_reasoning = false
-max_tool_rounds = 100  # Maximum agentic tool-call rounds
+max_tool_rounds = 100
+remember_debounce_seconds = 10  # Debounce window for the remember.chat hook
 
 [memory]
 enabled = true

@@ -44,7 +44,7 @@ TOKEN=$(cat ~/.local/share/mimir/api_token)
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/status
 ```
 
-Returns version, uptime, and queue depths.
+Returns version, uptime, queue depths, and the pending hook queue depth (`hook_queue_depth`).
 
 ### Memory
 
@@ -75,7 +75,7 @@ Every request except `GET /health` must present the daemon's API token as `Autho
 
 ## Loopback-Only Routes
 
-Destructive and sensitive operations are additionally only accepted from the local machine. If the daemon is bound to a LAN address, remote clients that hold the token can still read status and KB queries and use chat — note that chat persists turns and can write facts through the `remember` tool — but mutations such as forgetting facts, emptying the trash, restoring facts, triggering optimization, ingesting connector credentials, and stopping the daemon return `403 Forbidden` for non-loopback callers. This keeps the single-writer knowledge graph safe even when the server is reachable from other devices.
+Destructive and sensitive operations are additionally only accepted from the local machine. If the daemon is bound to a LAN address, remote clients that hold the token can still read status and KB queries and use chat — note that non-incognito chat persists turns and writes facts through the server-side `remember.chat` background hook, while incognito turns persist nothing — but mutations such as forgetting facts, emptying the trash, restoring facts, triggering optimization, ingesting connector credentials, and stopping the daemon return `403 Forbidden` for non-loopback callers. This keeps the single-writer knowledge graph safe even when the server is reachable from other devices.
 
 ## Stopping the Server
 

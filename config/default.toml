@@ -11,6 +11,7 @@ name = "Mimir"
 proactivity = "important_only"
 verbose_reasoning = false
 max_tool_rounds = 100  # Maximum agentic tool-call rounds
+remember_debounce_seconds = 10  # Debounce window for the remember.chat hook
 
 [memory]
 enabled = true

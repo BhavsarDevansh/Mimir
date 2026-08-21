@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::connector::{Connector, ConnectorContext, ConnectorError, ConnectorFactory};
-use crate::email::connector::EmailConnector;
+use crate::email::connector::{EmailConnector, EmailConnectorDeps};
 
 // ---------------------------------------------------------------------------
 // Factory
@@ -35,10 +35,14 @@ impl ConnectorFactory for EmailConnectorFactory {
             .map(str::to_string);
         let connector = EmailConnector::from_config_with_deps(
             config,
-            ctx.secret_store.clone(),
-            ctx.user_identity.clone(),
-            cursor,
-            ctx.llm_backend.clone(),
+            EmailConnectorDeps {
+                secret_store: ctx.secret_store.clone(),
+                user_identity: ctx.user_identity.clone(),
+                cursor,
+                llm_backend: ctx.llm_backend.clone(),
+                kg: ctx.knowledge_graph.clone(),
+                hook_engine: ctx.hook_engine.clone(),
+            },
         )?;
         Ok(Arc::new(connector) as Arc<dyn Connector>)
     }

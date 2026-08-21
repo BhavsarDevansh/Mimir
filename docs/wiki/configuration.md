@@ -57,6 +57,7 @@ temperature = 0.2
 name = "Mimir"
 proactivity = "important_only"
 verbose_reasoning = false
+remember_debounce_seconds = 10
 
 [memory]
 enabled = true
@@ -104,6 +105,7 @@ mimir ask "Hello"
 | `MIMIR_AGENT_NAME` | Display name | `Mimir` |
 | `MIMIR_AGENT_PROACTIVITY` | When the agent acts on its own | `never`, `important_only`, `always` |
 | `MIMIR_AGENT_VERBOSE_REASONING` | Show chain-of-thought | `true` or `false` |
+| `MIMIR_AGENT_REMEMBER_DEBOUNCE_SECONDS` | Debounce window for the `remember.chat` background hook | `10` |
 | `MIMIR_MEMORY_ENABLED` | Enable working memory | `true` or `false` |
 | `MIMIR_MEMORY_CHAR_LIMIT` | Character budget for condensed memory | `2500` |
 | `MIMIR_MEMORY_AUTO_MANAGE` | Auto-truncate old memory | `true` or `false` |

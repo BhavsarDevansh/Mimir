@@ -6,14 +6,14 @@ The **Librarian Agent** is Mimir's on-demand fact-extraction agent. When invoked
 
 It is the first implementation of the generic `Agent` / `AgentRuntime` framework.
 
-> **Note (Issue #137):** The Librarian is **no longer auto-invoked after every chat turn.** Learning is now LLM-orchestrated: the conversational LLM calls the `remember` tool inline to persist facts. The Librarian and `KnowledgeGraph::extract_facts_with_context` remain as a library API for future on-demand and bulk-extraction callers (e.g. a specialist research agent). The chat route no longer constructs or submits a `LibrarianGoal`.
+> **Note (Issues #137, #386):** The Librarian is **no longer auto-invoked after every chat turn.** Learning is now hook-driven: the `remember.chat` background hook calls `KnowledgeGraph::extract_facts_with_context` directly after each non-incognito turn. The `LibrarianAgent` and `AgentRuntime` remain as a library API for future on-demand and bulk-extraction callers (e.g. a specialist research agent). The chat route no longer constructs or submits a `LibrarianGoal`.
 
 ## Responsibilities
 
 - Receive a completed [`ConversationTurn`](../../mimir-core/src/conversation.rs).
 - Extract only from user-authored messages, never from the assistant's own output (enforced by prompt labelling and source-discipline instructions).
 - Check new facts against the core-facts block to avoid duplicating what is already known.
-- Extract facts through the existing `remember` tool schema.
+- Extract facts through the existing `remember_tool_schema` (the schema is retained for the extraction pipeline even though the `remember` tool was removed from the registry in #386).
 - Store facts with correct provenance, confidence, and status.
 - Log results at `info` and errors at `warn`.
 
@@ -83,9 +83,9 @@ The runtime dedupes by `(agent kind, goal hash)`. Two Librarian jobs with the sa
 3. `AgentRuntime.submit::<LibrarianAgent>` queues the goal.
 4. The runtime spawns a task that calls `LibrarianAgent::run`.
 5. The agent converts the turn into `[User, Assistant]` messages and calls `extract_facts_with_context`, which builds a prompt containing the core-facts block and the labelled recent conversation.
-6. The LLM emits facts via the `remember` tool; Rust validates and inserts them.
+6. The LLM emits facts via the `remember_tool_schema`; Rust validates and inserts them.
 
-For ordinary chat, learning bypasses this agent entirely: the LLM calls `remember` inline and Rust's `process_remember_output` applies the same policy (confidence, overwrite, sensitive gating) without a second LLM call.
+For ordinary chat, learning bypasses the `AgentRuntime` entirely: the `remember.chat` hook handler calls `extract_facts_with_context` directly, and Rust's `process_remember_output` applies the same policy (confidence, overwrite, sensitive gating) without a second LLM call.
 
 ## Configuration
 
@@ -95,7 +95,7 @@ No dedicated configuration is required. The agent uses the same LLM settings as 
 
 - Unit tests for `AgentRuntime` live in `mimir-core/src/agents/runtime.rs`.
 - Integration tests for `LibrarianAgent` (invoked explicitly) live in `mimir-knowledge/tests/librarian_agent.rs`.
-- Server integration tests in `mimir-server/src/lib.rs` assert the new model: `test_chitchat_does_not_trigger_background_learning` verifies that a chitchat turn makes no background extraction LLM call, and `test_chat_extracts_facts_after_response` verifies that an inline `remember` tool call persists facts.
+- Server integration tests in `mimir-server/tests/chat_learning_tests.rs` assert the new model: non-incognito blocking and streaming turns enqueue the `remember.chat` hook and persist facts, and incognito turns never enqueue any hook and write no facts.
 
 ## Future Work
 

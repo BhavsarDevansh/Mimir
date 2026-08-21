@@ -2,7 +2,7 @@
 
 ## What it does
 
-After you finish a chat turn with Mimir, the **Librarian Agent** reads the full conversation and saves anything new it learned about you into the knowledge graph — automatically, in the background.
+After you finish a chat turn with Mimir, the **Librarian Agent** reads the full conversation and saves anything new it learned about you into the knowledge graph — automatically, in the background, via the `remember.chat` hook.
 
 It doesn't just look at your last message. It is given:
 
@@ -13,7 +13,7 @@ Both are clearly labelled so the Librarian learns **only from your messages** �
 
 ## When it runs
 
-The Librarian is **available on demand**. It is no longer auto-triggered after every chat turn (Issue #137) — learning is now driven by the LLM calling the `remember` tool inline during the conversation. The Librarian and its background extraction pipeline remain as a library API for future on-demand and bulk-import use cases.
+The `LibrarianAgent` library API is **available on demand** for future bulk-import use cases. The old model-triggered path was removed (Issue #137); automatic learning is now driven by the server-side `remember.chat` background hook (Issue #386), which runs the Librarian's extraction pipeline after each non-incognito turn. Hook execution is automatic, while the library API itself is only invoked explicitly.
 
 ## What you can see
 

@@ -14,11 +14,12 @@ use dashmap::DashMap;
 
 use mimir_connectors::{ConnectorRegistry, ConnectorSupervisor};
 use mimir_core::{
-    agents::AgentRuntime, config::ReloadableConfig, context::ContextManager, job_queue::JobQueue,
-    llm::LlmBackend, scheduler::BackgroundScheduler, tools::ToolRegistry,
+    agents::AgentRuntime, config::ReloadableConfig, context::ContextManager, hooks::HookEngine,
+    job_queue::JobQueue, llm::LlmBackend, scheduler::BackgroundScheduler, tools::ToolRegistry,
 };
 
 mod builder;
+pub mod hooks;
 mod identity;
 #[cfg(test)]
 mod tests;
@@ -72,6 +73,9 @@ pub struct AppState {
     pub job_queue: Arc<JobQueue>,
     /// In-memory agent runtime for background autonomous agents.
     pub agent_runtime: Arc<AgentRuntime>,
+    /// Typed background-task hooks engine (issue #386): debounced chat
+    /// learning, connector item extraction, and memory condensation.
+    pub hook_engine: Arc<HookEngine>,
     /// Unified background scheduler (dedupe, debounce, idle-gate).
     pub scheduler: Arc<BackgroundScheduler>,
     /// Unix timestamp (seconds) of the last user interaction. Used to yield
@@ -99,6 +103,7 @@ impl AppState {
         self.last_user_activity
             .store(Utc::now().timestamp() as u64, Ordering::Relaxed);
         self.scheduler.notify_user_activity();
+        self.hook_engine.notify_user_activity();
     }
 
     /// Return (or create) the semaphore for a given session id.
@@ -119,6 +124,9 @@ impl AppState {
     pub async fn shutdown(&self) {
         tracing::info!("Shutting down scheduler...");
         self.scheduler.shutdown();
+
+        tracing::info!("Shutting down hooks engine...");
+        self.hook_engine.shutdown().await;
 
         // Abort every connector runner and await its termination so the
         // shared shutdown watch (fired by the caller before this method) does

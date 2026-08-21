@@ -46,7 +46,7 @@ Object-safe async trait (via `async-trait`) that every tool implements:
 
 - Thread-safe via `RwLock<HashMap<String, ToolEntry>>`
 - Methods: `register`, `get`, `metadata`, `set_permission`, `list`, `export_openai_tools`, `execute`
-- Export helpers (issue #155): `export_openai_tools_filtered(allow_write_tools)`, `export_openai_tools_for_llm_with_writes(allow_write_tools)`, and `is_write_tool(name)` suppress write-capable tools (e.g. `remember`) from the LLM tool set and execution path during incognito turns
+- Export helpers (issue #155): `export_openai_tools_filtered(allow_write_tools)`, `export_openai_tools_for_llm_with_writes(allow_write_tools)`, and `is_write_tool(name)` suppress write-capable tools from the LLM tool set and execution path during incognito turns. No built-in tool is currently write-capable (the `remember` tool was removed in #386 and replaced by the hooks engine), but the guard remains as defence-in-depth for future write tools.
 - `with_builtins()` creates a pre-populated registry with `GetCurrentTimeTool` and `EchoTool`
 
 ### `ToolPermission`

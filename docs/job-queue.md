@@ -4,7 +4,7 @@
 
 `mimir-core::job_queue` provides a durable, SQLite-backed async job queue for background tasks. `mimir-core::scheduler` adds a unified **BackgroundScheduler** that wraps the queue with deduplication, debounce, and user-downtime gating.
 
-All background jobs — memory condensation, nightly knowledge graph optimization, and any future background work — follow the same lifecycle rules:
+All scheduled background jobs — nightly knowledge graph optimization and any future scheduled work — follow the same lifecycle rules (memory condensation moved to the hooks engine in #386, where each hook applies its own queue policy):
 
 1. **Deduplication** — Submitting the same job type twice only adds it once to the pending set.
 2. **Debounce** — Rapid successive submissions reset a timer (default 5 s). The job is only considered ready after the timer elapses.
@@ -21,16 +21,15 @@ Jobs may declare best-effort `JobResourceLimits` via `Job::with_resource_limits(
 
 ## Typed Job Identifiers
 
-Background jobs are identified by the `DaemonJob` enum instead of raw strings:
+The scheduler's `DaemonJob` enum identifies the daemon-scheduled jobs:
 
 ```rust
 pub enum DaemonJob {
-    MemoryCondensation,
     KnowledgeOptimization,
 }
 ```
 
-`JobQueue::run_now` and `JobQueue::status` accept `DaemonJob` for type-safe dispatch.
+`DaemonJob::job_id()` maps each variant to its persistent string ID (`knowledge.optimization`). Other background jobs — `knowledge.pending_cleanup` and `events.upcoming_scan_{idx}` — are registered directly as plain `Job` entries. `JobQueue::run_now` and `JobQueue::status` accept the persistent job ID as `&str`.
 
 ## Public API
 
@@ -87,4 +86,4 @@ schedule_time = "02:00"
 
 ## Integration
 
-The daemon initialises the scheduler in `AppState::from_config_with_llm`, registers the `knowledge.optimization` job in the durable `JobQueue` with the configured `cpu_cores`/`nice_level`/`memory_limit_mb` resource limits, and starts the dispatch loop in `start_server_with_llm_and_listener`. The condensation dirty signal from `KnowledgeGraph` drives memory condensation via a `tokio::sync::Notify` listener that submits the job through the scheduler.
+The daemon initialises the scheduler in `AppState::from_config_with_llm`, registers the `knowledge.optimization` job in the durable `JobQueue` with the configured `cpu_cores`/`nice_level`/`memory_limit_mb` resource limits, and starts the dispatch loop in `start_server_with_llm_and_listener`. Memory condensation is now a hook (issue #386): the KG dirty notify path triggers `Trigger::FactInserted`, and the `memory.condensation` hook (global `SingularLastWins`, idle-gated) runs the condenser through the hooks engine's dispatch loop.

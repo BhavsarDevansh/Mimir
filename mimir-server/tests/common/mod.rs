@@ -96,12 +96,6 @@ pub async fn test_state_with_config(
             Arc::clone(&knowledge_graph),
         )))
         .unwrap();
-    tool_registry
-        .register_native(Arc::new(mimir_knowledge::RememberTool::new(Arc::clone(
-            &knowledge_graph,
-        ))))
-        .unwrap();
-
     let jobs_db_path = temp.path().join("jobs.db");
     let job_queue = Arc::new(JobQueue::init(&jobs_db_path).await.unwrap());
     let last_user_activity = Arc::new(std::sync::atomic::AtomicU64::new(
@@ -128,9 +122,41 @@ pub async fn test_state_with_config(
         std::time::Duration::from_secs(1),
     );
 
+    // Hooks engine (issue #386): register the `remember.chat` hook and run
+    // the dispatch loop so chat-learning tests exercise the full path.
+    // Tests that need the condensation hook register it themselves.
+    let (hook_engine, hook_shutdown_rx) =
+        mimir_core::hooks::HookEngine::new(Arc::clone(&job_queue), Arc::clone(&llm));
+    hook_engine
+        .register(mimir_core::hooks::Hook {
+            id: "remember.chat".to_string(),
+            trigger: mimir_core::hooks::TriggerKind::TurnCompleted,
+            key_scope: mimir_core::hooks::KeyScope::PerKey,
+            policy: mimir_core::hooks::QueuePolicy::SingularLastWins {
+                debounce: std::time::Duration::from_secs(
+                    config.agent.remember_debounce_seconds as u64,
+                ),
+            },
+            gate: mimir_core::hooks::Gate::IdleGated {
+                cooldown: std::time::Duration::from_secs(config.scheduler.cooldown_seconds as u64),
+            },
+            retry: mimir_core::hooks::RetryPolicy::default(),
+            max_pending: None,
+            merge: Some(mimir_server::state::hooks::merge_chat_turns),
+            handler: Arc::new(mimir_server::state::hooks::ChatLearningHandler::new(
+                Arc::clone(&knowledge_graph),
+                Arc::clone(&llm),
+            )),
+        })
+        .await
+        .unwrap();
+    let hook_engine_clone = Arc::clone(&hook_engine);
+    tokio::spawn(async move { hook_engine_clone.start(hook_shutdown_rx).await });
+
     // Librarian registered to mirror production, though tests no longer
-    // auto-invoke it (issue #137): learning is LLM-orchestrated via
-    // `remember`. Kept so the on-demand library API stays exercised.
+    // auto-invoke it (issue #137): learning is hook-driven via
+    // `remember.chat` (issue #386). Kept so the on-demand library API stays
+    // exercised.
     let agent_runtime = Arc::new(mimir_core::agents::AgentRuntime::new());
     agent_runtime
         .register::<mimir_knowledge::librarian::LibrarianAgent>(
@@ -207,6 +233,7 @@ pub async fn test_state_with_config(
         knowledge_graph,
         job_queue,
         agent_runtime,
+        hook_engine,
         scheduler,
         user_entity_id,
         last_user_activity,

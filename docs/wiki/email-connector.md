@@ -52,11 +52,11 @@ Not every email is machine-readable. A dentist's "see you Tuesday 3pm" with no c
 
 ### If the LLM layer fails (#262)
 
-Sometimes the LLM cannot read an email — a provider hiccup, a network error, or a message the model refuses to process. Mimir never treats that as "nothing to extract": the email is put aside and retried on a later sync, while any facts the deterministic layers already found are kept. The retry is **bounded and restart-safe**:
+Sometimes the LLM cannot read an email — a provider hiccup, a network error, or a message the model refuses to process. Mimir never treats that as "nothing to extract": the `connector_item.remember` hook retries the message with backoff, while any facts the deterministic layers already found are kept. The retry is **bounded and restart-safe**:
 
 - Each message gets a small retry budget (3 attempts by default, configurable via `llm_extraction_max_attempts`) with an increasing wait between attempts, so a stuck message cannot keep burning LLM calls forever.
 - Once the budget is exhausted the message is recorded as **permanently failed with the reason** and skipped; it never consumes another LLM call. A re-fetched message in a new mailbox epoch (a `UIDVALIDITY` change) is treated as a new message and gets a fresh chance.
-- The retry state — including the raw message bytes (capped at 512 KiB, and at most 32 pending messages' bytes are saved per sync: beyond the cap, messages still retry within the running daemon, but only the saved ones resume after a restart) — is saved with the connector between restarts, so a `mimir stop` or reboot resumes the retry where it left off instead of silently dropping the email.
+- The retry state is saved with the connector between restarts, so a `mimir stop` or reboot resumes the retry where it left off instead of silently dropping the email. Permanently failed messages (with the reason, capped at 64) and, when the hook's pending queue is full, the rejected messages themselves (raw bytes, capped at 1024, mirroring the queue cap) are persisted; a full queue therefore delays extraction rather than losing the email, and the saved messages are re-staged on the next cycle or after a restart.
 - If any messages have permanently failed, the connector reports itself as **degraded** in its health status so the situation is visible, and "forget" clears the recorded failures along with everything else.
 
 This is a library component today (in `mimir-connectors`); the daemon wiring that turns it on for a running `mimir` daemon lands with #202.

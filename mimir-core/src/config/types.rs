@@ -65,6 +65,11 @@ pub struct AgentConfig {
     pub verbose_reasoning: bool,
     /// Maximum number of agentic tool-call rounds before forcing a final response.
     pub max_tool_rounds: u16,
+    /// Debounce window (seconds) for the `remember.chat` hook: consecutive
+    /// turns within the window replace the pending extraction with the
+    /// accumulated transcript, so a burst of messages becomes one extraction
+    /// (issue #386).
+    pub remember_debounce_seconds: u8,
 }
 
 /// Memory subsystem settings.
@@ -243,6 +248,7 @@ impl Default for AgentConfig {
             proactivity: Proactivity::ImportantOnly,
             verbose_reasoning: false,
             max_tool_rounds: 100,
+            remember_debounce_seconds: 10,
         }
     }
 }

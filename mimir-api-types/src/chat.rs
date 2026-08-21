@@ -108,6 +108,10 @@ pub struct StatusResponse {
     pub uptime_seconds: u64,
     pub queue_depth_user: usize,
     pub queue_depth_system: usize,
+    /// Older daemons omit this field; default to 0 so a new CLI keeps
+    /// working against an older daemon.
+    #[serde(default)]
+    pub hook_queue_depth: usize,
     pub worker_threads: u8,
     pub endpoint: String,
     pub model: String,
@@ -262,6 +266,7 @@ mod tests {
             uptime_seconds: 42,
             queue_depth_user: 1,
             queue_depth_system: 2,
+            hook_queue_depth: 3,
             worker_threads: 4,
             endpoint: "http://localhost:8080".to_string(),
             model: "gpt-4o".to_string(),
@@ -277,6 +282,31 @@ mod tests {
         let json = serde_json::to_string(&status).unwrap();
         let back: StatusResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(status, back);
+    }
+
+    #[test]
+    fn test_status_response_accepts_older_payload_without_hook_queue_depth() {
+        // A new CLI must keep deserialising `/status` responses from older
+        // daemons that predate `hook_queue_depth` (PR #442 review).
+        let json = r#"{
+            "version": "0.130.6",
+            "uptime_seconds": 42,
+            "queue_depth_user": 1,
+            "queue_depth_system": 2,
+            "worker_threads": 4,
+            "endpoint": "http://localhost:8080",
+            "model": "gpt-4o",
+            "config_path": null,
+            "config_exists": true,
+            "llm_reachable": true,
+            "context_window": null,
+            "memory_exists": true,
+            "memory_chars": 100,
+            "memory_limit": 10000,
+            "memory_usage_pct": 1.0
+        }"#;
+        let back: StatusResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(back.hook_queue_depth, 0);
     }
 
     #[test]

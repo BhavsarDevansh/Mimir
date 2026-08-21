@@ -12,9 +12,8 @@ Mimir ships with a small set of native tools:
 | `echo` | Echoes back whatever you send it | Auto |
 | `get_weather` | Fetches current weather for a location via wttr.in | Auto |
 | `search_conversation_history` | Searches past conversations via FTS5 and returns ranked snippets | Auto |
-| `remember` | Extracts and persists structured facts to the knowledge graph (write-capable; suppressed in incognito) | Auto |
 
-> **Note:** The `memory` tool was removed in v0.37.0. Use knowledge graph fact extraction instead.
+> **Note:** The `memory` tool was removed in v0.37.0 and the `remember` tool was removed in v0.131.0. Learning is now handled by the server-side `remember.chat` background hook — see [Background Hooks](hooks.md).
 
 "Auto" means the tool runs immediately when the agent decides to use it.
 ### Weather Tool (`get_weather`)

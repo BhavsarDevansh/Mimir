@@ -1,8 +1,19 @@
 use super::*;
 
+use std::future::Future;
+use std::time::Duration;
+
 use crate::email::config::config_tests::app_config;
 use crate::email::imap;
+use crate::email::llm::EmailExtractionHook;
+use mimir_core::hooks::{
+    Gate, Hook, HookEngine, KeyScope, QueuePolicy, RetryPolicy, Trigger, TriggerKind,
+};
+use mimir_core::job_queue::JobQueue;
 use mimir_core::llm::MockLlmClient;
+use mimir_knowledge::KnowledgeGraph;
+use mimir_knowledge::models::connector::UpsertConnectorInput;
+use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorStatus, ConnectorType};
 
 use super::extract_tests::{invite_email, plain_email};
 
@@ -12,10 +23,11 @@ use super::extract_tests::{invite_email, plain_email};
 fn connector_with_llm(name: Option<&str>, backend: Option<Arc<dyn LlmBackend>>) -> EmailConnector {
     EmailConnector::from_config_with_deps(
         app_config(),
-        None,
-        name.map(|n| n.to_string()),
-        None,
-        backend,
+        EmailConnectorDeps {
+            user_identity: name.map(|n| n.to_string()),
+            llm_backend: backend,
+            ..Default::default()
+        },
     )
     .expect("config")
 }
@@ -35,6 +47,150 @@ async fn stage(connector: &EmailConnector, raw: Vec<u8>) {
         internal_date: None,
         raw,
     });
+}
+
+/// A connector wired with the shared knowledge graph and a running hooks
+/// engine (issue #386): `extract()` enqueues prose emails as
+/// `connector_item.remember` instances and the dispatch loop runs the
+/// extraction handler.
+struct HookEnv {
+    connector: EmailConnector,
+    kg: Arc<KnowledgeGraph>,
+    engine: Arc<HookEngine>,
+    _kg_dir: tempfile::TempDir,
+    _jobs_dir: tempfile::TempDir,
+    _loop: tokio::task::JoinHandle<()>,
+}
+
+async fn hook_env(backend: Option<Arc<dyn LlmBackend>>, max_attempts: Option<u8>) -> HookEnv {
+    hook_env_with_policy(backend, max_attempts, None).await
+}
+
+async fn hook_env_with_policy(
+    backend: Option<Arc<dyn LlmBackend>>,
+    max_attempts: Option<u8>,
+    max_pending: Option<usize>,
+) -> HookEnv {
+    let kg_dir = tempfile::tempdir().unwrap();
+    let kg = Arc::new(
+        KnowledgeGraph::init(&kg_dir.path().join("knowledge.db"))
+            .await
+            .unwrap(),
+    );
+    // Register a Gmail connector row so connector provenance has a valid
+    // `connector_instance_id` FK.
+    let row = kg
+        .upsert_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Gmail,
+            slug: "gmail-test".to_string(),
+            backend: "imap".to_string(),
+            display_name: "Gmail".to_string(),
+            config_json: "{}".to_string(),
+            status: Some(ConnectorStatus::Active),
+            auth_state: Some(ConnectorAuthState::Authenticated),
+        })
+        .await
+        .unwrap();
+
+    let jobs_dir = tempfile::tempdir().unwrap();
+    let jq = Arc::new(
+        JobQueue::init(jobs_dir.path().join("jobs.db"))
+            .await
+            .unwrap(),
+    );
+    let llm = backend
+        .clone()
+        .unwrap_or_else(|| Arc::new(MockLlmClient::builder().build()));
+    let (engine, shutdown_rx) = HookEngine::new(jq, llm);
+    engine
+        .register(Hook {
+            id: "connector_item.remember".to_string(),
+            trigger: TriggerKind::ConnectorItemStaged,
+            key_scope: KeyScope::PerKey,
+            policy: QueuePolicy::Multiple,
+            gate: Gate::Ungated,
+            retry: RetryPolicy {
+                max_attempts: u8::MAX,
+                backoff: Duration::from_millis(10),
+            },
+            max_pending,
+            merge: None,
+            handler: Arc::new(EmailExtractionHook::new()),
+        })
+        .await
+        .unwrap();
+    let engine_clone = Arc::clone(&engine);
+    let loop_handle = tokio::spawn(async move { engine_clone.start(shutdown_rx).await });
+
+    let mut config = app_config();
+    config["__instance_id"] = serde_json::json!(row.id);
+    if let Some(max) = max_attempts {
+        config["llm_extraction_max_attempts"] = serde_json::json!(max);
+    }
+    let connector = EmailConnector::from_config_with_deps(
+        config,
+        EmailConnectorDeps {
+            user_identity: Some("Devansh".to_string()),
+            llm_backend: backend,
+            kg: Some(Arc::clone(&kg)),
+            hook_engine: Some(Arc::clone(&engine)),
+            ..Default::default()
+        },
+    )
+    .expect("config");
+
+    HookEnv {
+        connector,
+        kg,
+        engine,
+        _kg_dir: kg_dir,
+        _jobs_dir: jobs_dir,
+        _loop: loop_handle,
+    }
+}
+
+/// Whether the KG holds a fact for the user with the given predicate and
+/// object (entity name or literal).
+async fn has_fact(kg: &KnowledgeGraph, predicate: &str, object: &str) -> bool {
+    let search = kg.search_entities("Devansh", 10).await.unwrap();
+    for result in &search {
+        let facts = kg
+            .get_facts_by_subject(result.entity.id, 100)
+            .await
+            .unwrap();
+        for fact in &facts {
+            let pred = kg.relationship_type_name(fact.relationship_type_id).await;
+            if pred.as_deref() != Some(predicate) {
+                continue;
+            }
+            if let Some(object_id) = fact.object_id {
+                if let Ok(Some(entity)) = kg.get_entity(object_id).await
+                    && entity.name == object
+                {
+                    return true;
+                }
+            } else if fact.object_literal.as_deref() == Some(object) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Poll a condition until it holds or a 5-second deadline passes.
+async fn wait_for<F, Fut>(mut cond: F)
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !cond().await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "condition not met within 5 seconds"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test]
@@ -90,8 +246,9 @@ async fn llm_layer_not_invoked_for_cancel_email() {
 #[tokio::test]
 async fn llm_layer_extracts_prose_when_no_deterministic_facts() {
     // A plain-prose appointment email yields nothing from layers 1-2, so
-    // layer 3 runs and the LLM's validated facts are appended with
-    // `extraction_method = LlmExtraction`.
+    // `extract()` enqueues a `connector_item.remember` hook and the hook
+    // handler inserts the LLM's validated facts through the shared pipeline
+    // (issue #386).
     let mock = llm_tool_response(
         r#"{"facts": [{
                 "subject": "the user",
@@ -104,17 +261,21 @@ async fn llm_layer_extracts_prose_when_no_deterministic_facts() {
                 "event_type": "Appointment"
             }]}"#,
     );
-    let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
-    stage(&connector, prose_email()).await;
-    let facts = connector.extract().await.expect("extract");
-    assert_eq!(facts.len(), 1, "{facts:?}");
-    assert_eq!(facts[0].relationship_type, "has_appointment");
-    assert_eq!(facts[0].subject, "Devansh");
-    assert_eq!(
-        facts[0].extraction_method,
-        Some(mimir_knowledge::models::source::ExtractionMethod::LlmExtraction)
+    let env = hook_env(Some(mock.clone()), None).await;
+    stage(&env.connector, prose_email()).await;
+    let facts = env.connector.extract().await.expect("extract");
+    assert!(
+        facts.is_empty(),
+        "prose email yields no deterministic facts"
     );
-    assert_eq!(facts[0].raw_reference.as_deref(), Some("17:42"));
+    assert_eq!(
+        env.engine
+            .pending_depth_for("connector_item.remember")
+            .await,
+        1,
+        "the prose email is enqueued as a hook instance"
+    );
+    wait_for(|| has_fact(&env.kg, "has_appointment", "Dentist check-up")).await;
     assert_eq!(mock.system_chat_calls().len(), 1);
 }
 
@@ -133,17 +294,22 @@ async fn llm_layer_drops_facts_with_non_canonical_predicates() {
                 "object_is_entity": false
             }]}"#,
     );
-    let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
-    stage(&connector, prose_email()).await;
-    let facts = connector.extract().await.expect("extract");
+    let env = hook_env(Some(mock.clone()), None).await;
+    stage(&env.connector, prose_email()).await;
+    env.connector.extract().await.expect("extract");
+    wait_for(|| async { mock.system_chat_calls().len() == 1 }).await;
+    // The handler has run to completion once the queue drains, so the
+    // absence of the fact proves the predicate was dropped (a fixed sleep
+    // could pass before the insert attempt finished on a loaded runner).
+    // `pending_depth()` alone can reach zero while the dispatched instance
+    // is still inserting, so also wait for the running count to drain.
+    wait_for(|| async {
+        env.engine.pending_depth().await == 0 && env.engine.running_count().await == 0
+    })
+    .await;
     assert!(
-        facts.is_empty(),
-        "non-canonical predicate must be dropped: {facts:?}"
-    );
-    assert_eq!(
-        mock.system_chat_calls().len(),
-        1,
-        "LLM layer must still run"
+        !has_fact(&env.kg, "owes", "the bank").await,
+        "non-canonical predicate must be dropped"
     );
 }
 
@@ -152,39 +318,304 @@ async fn llm_layer_spam_email_skips_call_and_yields_no_facts() {
     // An obvious bulk-marketing email is skipped by the Rust pre-filter
     // before any LLM call: no facts, no system-queue call.
     let mock = llm_tool_response(r#"{"facts": []}"#);
-    let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
+    let env = hook_env(Some(mock.clone()), None).await;
     let spam: Vec<u8> = b"From: promo@mailchimp.com\r\n\
 Subject: 50% off everything\r\n\
 Content-Type: text/plain; charset=\"utf-8\"\r\n\
 \r\n\
 Sale ends Sunday!\r\n"
         .to_vec();
-    stage(&connector, spam).await;
-    let facts = connector.extract().await.expect("extract");
+    stage(&env.connector, spam).await;
+    let facts = env.connector.extract().await.expect("extract");
     assert!(facts.is_empty());
+    wait_for(|| async { env.engine.pending_depth().await == 0 }).await;
     assert!(mock.system_chat_calls().is_empty());
 }
 
 #[tokio::test]
-async fn llm_failure_re_stages_raw_email_for_retry() {
+async fn llm_failure_retries_through_the_hook_runner() {
     // A retryable LLM failure must not become a silent empty extraction:
-    // the raw email is re-staged in the buffer so the next extraction
-    // cycle retries it, and the deterministic layers' facts (here none)
-    // are returned without aborting the batch.
+    // the hook runner re-enqueues the instance with time-based backoff and
+    // the next attempt succeeds (issue #386).
     let mock = Arc::new(
         MockLlmClient::builder()
             .push_chat_error(mimir_core::llm::LlmError::QueueFull)
+            .push_chat_message(
+                llm_tool_message(
+                    r#"{"facts": [{
+                        "subject": "the user",
+                        "subject_type": "Person",
+                        "relationship_type": "has_appointment",
+                        "object": "Dentist check-up",
+                        "object_is_entity": true,
+                        "object_type": "Event",
+                        "temporal": {"valid_from": "2026-08-11T14:00:00Z"},
+                        "event_type": "Appointment"
+                    }]}"#,
+                ),
+                Default::default(),
+            )
             .build(),
     );
-    let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
-    stage(&connector, prose_email()).await;
-    let facts = connector.extract().await.expect("extract");
-    assert!(facts.is_empty(), "no deterministic facts for a prose email");
-    assert_eq!(mock.system_chat_calls().len(), 1, "LLM was attempted once");
-    assert!(
-        !connector.buffer.lock().await.is_empty(),
-        "failed raw email must be re-staged for retry"
+    let env = hook_env(Some(mock.clone()), None).await;
+    stage(&env.connector, prose_email()).await;
+    env.connector.extract().await.expect("extract");
+    wait_for(|| has_fact(&env.kg, "has_appointment", "Dentist check-up")).await;
+    assert_eq!(
+        mock.system_chat_calls().len(),
+        2,
+        "one failed attempt, one successful retry"
     );
+    assert_eq!(
+        env.connector.prose_retry.lock().unwrap().terminal_count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn llm_failure_is_bounded_and_terminates_after_max_attempts() {
+    // Three failures exhaust the default budget: the hook handler records a
+    // durable terminal failure and the message is never re-processed.
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            .push_chat_error(mimir_core::llm::LlmError::QueueFull)
+            .push_chat_error(mimir_core::llm::LlmError::QueueFull)
+            .push_chat_error(mimir_core::llm::LlmError::QueueFull)
+            .build(),
+    );
+    let env = hook_env(Some(mock.clone()), None).await;
+    stage(&env.connector, prose_email()).await;
+    env.connector.extract().await.expect("extract");
+    wait_for(|| async { mock.system_chat_calls().len() == 3 }).await;
+    wait_for(|| async { env.connector.prose_retry.lock().unwrap().terminal_count() == 1 }).await;
+    assert_eq!(
+        env.engine.pending_depth().await,
+        0,
+        "terminal failure drops the instance"
+    );
+    // The terminal failure is recorded durably and stops future attempts.
+    let durable = env
+        .connector
+        .durable_state()
+        .expect("dirty ledger persists");
+    let restored = crate::email::llm::retry::ProseRetryLedger::from_json(&durable);
+    assert_eq!(restored.terminal_count(), 1);
+    assert!(restored.is_terminal("17:42"));
+}
+
+#[tokio::test]
+async fn configurable_max_attempts_fails_terminal_immediately() {
+    // `llm_extraction_max_attempts: 1` bounds the retry budget to a single
+    // attempt: the first failure is terminal, so no LLM call is ever
+    // repeated.
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            .push_chat_error(mimir_core::llm::LlmError::QueueFull)
+            .push_chat_error(mimir_core::llm::LlmError::QueueFull)
+            .build(),
+    );
+    let env = hook_env(Some(mock.clone()), Some(1)).await;
+    stage(&env.connector, prose_email()).await;
+    env.connector.extract().await.expect("extract");
+    wait_for(|| async { env.connector.prose_retry.lock().unwrap().terminal_count() == 1 }).await;
+    assert_eq!(
+        mock.system_chat_calls().len(),
+        1,
+        "no retry after a terminal failure"
+    );
+    assert_eq!(env.engine.pending_depth().await, 0);
+}
+
+#[tokio::test]
+async fn malformed_message_records_durable_terminal_failure() {
+    // A message the hook cannot parse can never be retried into a valid
+    // RFC 822 message, so the handler must record a durable terminal ledger
+    // entry — the connector health path reports failed extractions from the
+    // ledger, and the item must not be re-staged on every cycle.
+    let env = hook_env(None, None).await;
+    let payload = crate::email::llm::EmailExtractionPayload {
+        // An empty raw message has no headers, so `MessageParser` rejects it
+        // (probe: `MessageParser::parse(&[])` is `None`).
+        raw: Vec::new(),
+        uid_validity: 17,
+        uid: 43,
+        raw_ref: "17:43".to_string(),
+        user_identity: Some("Devansh".to_string()),
+        instance_id: env.connector.instance_id,
+        connector_type: env.connector.connector_type(),
+        kg: Arc::clone(&env.kg),
+        llm: Arc::new(MockLlmClient::builder().build()),
+        ledger: Arc::clone(&env.connector.prose_retry),
+        max_attempts: 3,
+    };
+    env.engine
+        .trigger(Trigger::ConnectorItemStaged {
+            item_id: "17:43".to_string(),
+            payload: Arc::new(payload),
+        })
+        .await;
+    wait_for(|| async { env.connector.prose_retry.lock().unwrap().terminal_count() == 1 }).await;
+    wait_for(|| async { env.engine.pending_depth().await == 0 }).await;
+    assert!(
+        env.connector
+            .prose_retry
+            .lock()
+            .unwrap()
+            .is_terminal("17:43"),
+        "malformed-message terminal failure must be durable in the ledger"
+    );
+    let durable = env
+        .connector
+        .durable_state()
+        .expect("dirty ledger persists");
+    let restored = crate::email::llm::retry::ProseRetryLedger::from_json(&durable);
+    assert_eq!(restored.terminal_count(), 1);
+}
+
+#[tokio::test]
+async fn restart_resume_re_stages_legacy_pending_retries_from_durable_state() {
+    // Legacy migration (issue #386): a pending retry persisted by the
+    // pre-hooks engine is drained at construction so its raw bytes re-stage
+    // into the buffer and are re-enqueued as hooks on the next cycle.
+    let legacy = serde_json::json!({
+        "pending": {
+            "17:42": {
+                "uid_validity": 17,
+                "uid": 42,
+                "raw_b64": base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    prose_email(),
+                ),
+                "attempts": 1,
+                "last_error": "queue full",
+                "skip_cycles": 1
+            }
+        },
+        "terminal": [],
+        "tombstones": []
+    });
+    let mock = llm_tool_response(
+        r#"{"facts": [{
+                "subject": "the user",
+                "subject_type": "Person",
+                "relationship_type": "has_appointment",
+                "object": "Dentist check-up",
+                "object_is_entity": true,
+                "object_type": "Event",
+                "temporal": {"valid_from": "2026-08-11T14:00:00Z"},
+                "event_type": "Appointment"
+            }]}"#,
+    );
+    let env = hook_env(Some(mock.clone()), None).await;
+    // Rebuild the connector seeded from the legacy durable state.
+    let mut config = app_config();
+    config["__instance_id"] = serde_json::json!(env.connector.instance_id);
+    config["__durable_state"] = serde_json::Value::String(legacy.to_string());
+    let restarted = EmailConnector::from_config_with_deps(
+        config,
+        EmailConnectorDeps {
+            user_identity: Some("Devansh".to_string()),
+            llm_backend: Some(mock.clone()),
+            kg: Some(Arc::clone(&env.kg)),
+            hook_engine: Some(Arc::clone(&env.engine)),
+            ..Default::default()
+        },
+    )
+    .expect("config");
+    assert_eq!(
+        restarted.buffer.lock().await.len(),
+        1,
+        "legacy pending retry must be re-staged from durable state"
+    );
+    // The next extraction cycle enqueues the re-staged message as a hook.
+    restarted.extract().await.expect("extract");
+    wait_for(|| has_fact(&env.kg, "has_appointment", "Dentist check-up")).await;
+    assert_eq!(mock.system_chat_calls().len(), 1);
+}
+
+#[tokio::test]
+async fn queue_full_re_stages_email_as_durable_overflow() {
+    // Issue #442 review: a full `connector_item.remember` pending queue must
+    // never advance the cursor past a staged email whose LLM extraction was
+    // not enqueued. `extract()` records the message as a durable overflow
+    // entry (raw bytes base64-encoded, bounded) instead of dropping it, and
+    // the next extraction cycle re-stages and re-attempts it.
+    let mock = llm_tool_response(
+        r#"{"facts": [{
+                "subject": "the user",
+                "subject_type": "Person",
+                "relationship_type": "has_appointment",
+                "object": "Dentist check-up",
+                "object_is_entity": true,
+                "object_type": "Event",
+                "temporal": {"valid_from": "2026-08-11T14:00:00Z"},
+                "event_type": "Appointment"
+            }]}"#,
+    );
+    // `max_pending = 0` makes every trigger report `QueueFull`.
+    let env = hook_env_with_policy(Some(mock.clone()), None, Some(0)).await;
+    stage(&env.connector, prose_email()).await;
+    env.connector.extract().await.expect("extract");
+    assert_eq!(
+        env.engine.pending_depth().await,
+        0,
+        "a full queue must reject the enqueue"
+    );
+    assert!(
+        !has_fact(&env.kg, "has_appointment", "Dentist check-up").await,
+        "no hook instance ran while the queue was full"
+    );
+    let durable = env
+        .connector
+        .durable_state()
+        .expect("queue-full overflow must be durable");
+    let mut restored = crate::email::llm::retry::ProseRetryLedger::from_json(&durable);
+    let drained = restored.drain_pending();
+    assert_eq!(drained.len(), 1, "the rejected email must be recorded");
+    assert_eq!(
+        drained[0].raw().as_deref(),
+        Some(prose_email().as_slice()),
+        "the overflow record must carry the raw RFC 822 bytes"
+    );
+
+    // A still-full queue on the next cycle re-records the overflow instead
+    // of losing the message; the email only leaves the ledger once the
+    // enqueue succeeds.
+    env.connector.extract().await.expect("extract");
+    let durable_again = env
+        .connector
+        .durable_state()
+        .expect("overflow must survive the retry cycle");
+    let mut restored_again = crate::email::llm::retry::ProseRetryLedger::from_json(&durable_again);
+    assert_eq!(restored_again.drain_pending().len(), 1);
+
+    // Once the queue has room, a restarted connector seeded from the same
+    // durable state re-stages the email and the hook extracts it (the IMAP
+    // cursor has advanced past the message, so only the ledger can recover
+    // it).
+    let recovered = hook_env(Some(mock.clone()), None).await;
+    let mut config = app_config();
+    config["__instance_id"] = serde_json::json!(recovered.connector.instance_id);
+    config["__durable_state"] = serde_json::Value::String(durable_again);
+    let restarted = EmailConnector::from_config_with_deps(
+        config,
+        EmailConnectorDeps {
+            user_identity: Some("Devansh".to_string()),
+            llm_backend: Some(mock.clone()),
+            kg: Some(Arc::clone(&recovered.kg)),
+            hook_engine: Some(Arc::clone(&recovered.engine)),
+            ..Default::default()
+        },
+    )
+    .expect("config");
+    assert_eq!(
+        restarted.buffer.lock().await.len(),
+        1,
+        "the durable overflow must re-stage into the buffer"
+    );
+    restarted.extract().await.expect("extract");
+    wait_for(|| has_fact(&recovered.kg, "has_appointment", "Dentist check-up")).await;
+    assert_eq!(mock.system_chat_calls().len(), 1);
 }
 
 /// Build a plain-prose email fixture (no iMIP, no JSON-LD) that reaches the
@@ -199,224 +630,18 @@ See you Tuesday 3pm. Please arrive 10 minutes early.\r\n"
 }
 
 fn llm_tool_message(json: &str) -> mimir_core::llm::Message {
-    let tool_call = mimir_core::llm::ToolCall {
-        index: 0,
-        id: "call_1".into(),
-        call_type: "function".into(),
-        function: mimir_core::llm::FunctionCall {
-            name: "extract_email_facts".into(),
-            arguments: json.into(),
-        },
-    };
     mimir_core::llm::Message {
-        role: "assistant".into(),
+        role: "assistant".to_string(),
         content: String::new(),
-        tool_calls: Some(vec![tool_call]),
+        tool_calls: Some(vec![mimir_core::llm::types::ToolCall {
+            index: 0,
+            id: "call_1".to_string(),
+            call_type: "function".to_string(),
+            function: mimir_core::llm::types::FunctionCall {
+                name: "extract_email_facts".to_string(),
+                arguments: json.to_string(),
+            },
+        }]),
         tool_call_id: None,
     }
-}
-
-#[tokio::test]
-async fn llm_failure_is_bounded_and_terminates_after_max_attempts() {
-    // A persistently failing message exhausts its bounded retry budget
-    // (default 3 attempts, exponential cycle backoff): after the third
-    // failure it is marked permanently failed, stops consuming LLM calls,
-    // and is no longer re-staged.
-    let mock = Arc::new(
-        MockLlmClient::builder()
-            .push_chat_error(mimir_core::llm::LlmError::QueueFull)
-            .push_chat_error(mimir_core::llm::LlmError::QueueFull)
-            .push_chat_error(mimir_core::llm::LlmError::QueueFull)
-            .build(),
-    );
-    let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
-    stage(&connector, prose_email()).await;
-
-    // Attempt 1 (cycle 1) fails → re-staged with a 1-cycle backoff.
-    connector.extract().await.expect("extract");
-    assert_eq!(mock.system_chat_calls().len(), 1);
-    // Cycle 2: backoff — no LLM call, message still staged.
-    connector.extract().await.expect("extract");
-    assert_eq!(mock.system_chat_calls().len(), 1);
-    assert_eq!(
-        connector.buffer.lock().await.len(),
-        1,
-        "backoff keeps the message staged"
-    );
-    // Attempt 2 (cycle 3) fails → re-staged with a 2-cycle backoff.
-    connector.extract().await.expect("extract");
-    assert_eq!(mock.system_chat_calls().len(), 2);
-    // Cycles 4-5: backoff.
-    connector.extract().await.expect("extract");
-    connector.extract().await.expect("extract");
-    assert_eq!(mock.system_chat_calls().len(), 2);
-    // Attempt 3 (cycle 6) fails → terminal failure: dropped, no re-stage.
-    connector.extract().await.expect("extract");
-    assert_eq!(mock.system_chat_calls().len(), 3);
-    assert!(
-        connector.buffer.lock().await.is_empty(),
-        "terminal failure must stop re-staging"
-    );
-    // Cycle 7: nothing staged, no further calls.
-    connector.extract().await.expect("extract");
-    assert_eq!(mock.system_chat_calls().len(), 3);
-
-    // The terminal failure is recorded durably and stops future attempts.
-    let terminal = connector.prose_retry.lock().unwrap().terminal_count();
-    assert_eq!(terminal, 1, "one terminal failure recorded");
-    let durable = connector.durable_state().expect("dirty ledger persists");
-    let restored = crate::email::llm::retry::ProseRetryLedger::from_json(&durable);
-    assert_eq!(restored.terminal_count(), 1);
-    assert!(
-        restored.pending().next().is_none(),
-        "no pending retries remain"
-    );
-}
-
-#[tokio::test]
-async fn llm_retry_succeeds_within_budget_and_clears_the_ledger() {
-    // Two failures, then a success: the third attempt extracts the prose
-    // facts and settles the ledger (no pending retry, no terminal record).
-    let mock = Arc::new(
-        MockLlmClient::builder()
-            .push_chat_error(mimir_core::llm::LlmError::QueueFull)
-            .push_chat_error(mimir_core::llm::LlmError::QueueFull)
-            .push_chat_message(
-                llm_tool_message(
-                    r#"{"facts": [{
-                        "subject": "the user",
-                        "subject_type": "Person",
-                        "relationship_type": "has_appointment",
-                        "object": "Dentist check-up",
-                        "object_is_entity": true,
-                        "object_type": "Event",
-                        "temporal": {"valid_from": "2026-08-11T14:00:00Z"},
-                        "event_type": "Appointment"
-                    }]}"#,
-                ),
-                Default::default(),
-            )
-            .build(),
-    );
-    let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
-    stage(&connector, prose_email()).await;
-
-    connector.extract().await.expect("extract"); // attempt 1 fails
-    connector.extract().await.expect("extract"); // backoff
-    connector.extract().await.expect("extract"); // attempt 2 fails
-    connector.extract().await.expect("extract"); // backoff
-    connector.extract().await.expect("extract"); // backoff
-    let facts = connector.extract().await.expect("extract"); // attempt 3 succeeds
-    assert_eq!(mock.system_chat_calls().len(), 3);
-    assert_eq!(facts.len(), 1, "{facts:?}");
-    assert_eq!(facts[0].relationship_type, "has_appointment");
-    assert_eq!(facts[0].raw_reference.as_deref(), Some("17:42"));
-    assert!(
-        connector.buffer.lock().await.is_empty(),
-        "successful extraction must not re-stage"
-    );
-    let ledger = connector.prose_retry.lock().unwrap();
-    assert_eq!(ledger.terminal_count(), 0);
-    assert!(
-        ledger.pending().next().is_none(),
-        "ledger settled after success"
-    );
-}
-
-#[tokio::test]
-async fn restart_resume_re_stages_pending_retries_from_durable_state() {
-    // Simulate a daemon restart: capture the durable ledger after one
-    // failure, build a fresh connector with it injected (the supervisor
-    // injects the persisted `__durable_state`), and verify the pending
-    // message is re-staged and retried without an IMAP re-fetch.
-    let mock = Arc::new(
-        MockLlmClient::builder()
-            .push_chat_error(mimir_core::llm::LlmError::QueueFull)
-            .push_chat_message(
-                llm_tool_message(
-                    r#"{"facts": [{
-                        "subject": "the user",
-                        "subject_type": "Person",
-                        "relationship_type": "has_appointment",
-                        "object": "Dentist check-up",
-                        "object_is_entity": true,
-                        "object_type": "Event",
-                        "temporal": {"valid_from": "2026-08-11T14:00:00Z"},
-                        "event_type": "Appointment"
-                    }]}"#,
-                ),
-                Default::default(),
-            )
-            .build(),
-    );
-    let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
-    stage(&connector, prose_email()).await;
-    connector.extract().await.expect("extract");
-    assert_eq!(mock.system_chat_calls().len(), 1);
-    let durable = connector
-        .durable_state()
-        .expect("ledger is dirty after a failure");
-
-    // Restart: a brand-new connector seeded from the persisted state.
-    let mut config = app_config();
-    config["__durable_state"] = serde_json::Value::String(durable);
-    let restarted = EmailConnector::from_config_with_deps(
-        config,
-        None,
-        Some("Devansh".to_string()),
-        None,
-        Some(mock.clone()),
-    )
-    .expect("config");
-    assert_eq!(
-        restarted.buffer.lock().await.len(),
-        1,
-        "pending retry must be re-staged from durable state"
-    );
-
-    // The next extraction cycle (after the backoff) retries attempt 2 and
-    // succeeds against the re-staged raw bytes.
-    restarted.extract().await.expect("extract"); // backoff cycle
-    let facts = restarted.extract().await.expect("extract"); // attempt 2
-    assert_eq!(mock.system_chat_calls().len(), 2);
-    assert_eq!(facts.len(), 1, "{facts:?}");
-    assert_eq!(facts[0].raw_reference.as_deref(), Some("17:42"));
-}
-
-#[tokio::test]
-async fn configurable_max_attempts_fails_terminal_immediately() {
-    // `llm_extraction_max_attempts: 1` bounds the retry budget to a single
-    // attempt: the first failure is terminal, so no LLM call is ever
-    // repeated and nothing stays staged.
-    let mock = Arc::new(
-        MockLlmClient::builder()
-            .push_chat_error(mimir_core::llm::LlmError::QueueFull)
-            .push_chat_error(mimir_core::llm::LlmError::QueueFull)
-            .build(),
-    );
-    let mut config = app_config();
-    config["llm_extraction_max_attempts"] = serde_json::json!(1);
-    let connector = EmailConnector::from_config_with_deps(
-        config,
-        None,
-        Some("Devansh".to_string()),
-        None,
-        Some(mock.clone()),
-    )
-    .expect("config");
-    stage(&connector, prose_email()).await;
-
-    connector.extract().await.expect("extract");
-    assert_eq!(mock.system_chat_calls().len(), 1);
-    assert!(
-        connector.buffer.lock().await.is_empty(),
-        "terminal failure must stop re-staging"
-    );
-    connector.extract().await.expect("extract");
-    assert_eq!(
-        mock.system_chat_calls().len(),
-        1,
-        "no retry after a terminal failure"
-    );
-    assert_eq!(connector.prose_retry.lock().unwrap().terminal_count(), 1);
 }

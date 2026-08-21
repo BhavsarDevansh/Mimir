@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.131.2] — 2026-08-21
+
+### Fix: PR #442 review feedback — full-queue data loss, shutdown waiter race, and test-wait scoping
+
+- `connector_item.remember` full-queue rejections no longer drop the staged email: when the hook's pending queue is full, `extract` records the message in the Email connector's durable ledger as a bounded queue-overflow entry (raw RFC 822 bytes base64-encoded, capped at 1024 mirroring the queue cap) instead of letting the IMAP cursor advance past an un-enqueued message. Every extraction cycle drains the overflow back into the staged buffer and re-attempts the enqueue, and a restart re-stages it from the persisted durable state; the ledger's pending map now also covers this overflow path (the legacy pre-hooks drain is unchanged).
+- `HookEngine::shutdown` registers the dispatch-loop exit waiter (`Notify::notified`) before sending the shutdown signal, so a prompt loop exit can no longer race ahead of the waiter and leave shutdown waiting out the full 5-second timeout.
+- The non-canonical-predicate connector test now waits for both `pending_depth() == 0` and `running_count() == 0` (the handler can still be inserting after the queue drains), and the server incognito-test idle wait is scoped to the `remember.chat` pending queue only, so an unrelated running hook (e.g. `memory.condensation` under the fast-learning config) can no longer make it flaky.
+- Docs updated: `docs/hooks.md`, `docs/email-connector.md`, and the wiki email-connector page now describe the durable queue-overflow path (the stale pre-hooks "512 KiB / 32 pending messages" wording is gone).
+- Version bumped 0.131.1 → 0.131.2 (patch — bugfixes).
+
+## [0.131.1] — 2026-08-21
+
+### Fix: PR #442 review feedback — job-queue documentation accuracy
+
+- `docs/wiki/job-queue.md` now separates scheduler rules from per-hook queue policies instead of claiming all background jobs share one pipeline: scheduled jobs (nightly optimization, pending-fact cleanup, events scan) follow the scheduler's dedupe/debounce/cooldown/idle-gate lifecycle, while `remember.chat` (per-session debounce, idle-gated), `memory.condensation` (scheduler debounce/cooldown, idle-gated), and `connector_item.remember` (FIFO, ungated) each apply their own hook policy.
+- `docs/job-queue.md` corrects the typed job identifier documentation: `DaemonJob` covers only `knowledge.optimization`, `knowledge.pending_cleanup` and `events.upcoming_scan_{idx}` are plain `Job` registrations, and `JobQueue::run_now`/`JobQueue::status` accept the persistent job ID as `&str`.
+- Version bumped 0.131.0 → 0.131.1 (patch — documentation fix).
+
+## [0.131.0] — 2026-08-21
+
+### Feature: hooks engine — typed background tasks with per-hook queue policies (issue #386)
+
+- Added a typed hooks engine in `mimir-core/src/hooks/`: a minimal `Trigger` enum (`TurnCompleted`, `ConnectorItemStaged`, `FactInserted`), per-hook `QueuePolicy` (`Multiple` FIFO, `SingularFirstWins`, `SingularLastWins` with debounce + payload merge), `KeyScope` (`Global`/`PerKey`), execution `Gate` (`IdleGated` cooldown + LLM-pool idle, `Ungated`), and `RetryPolicy` with capped exponential backoff. A single dispatch loop drains the in-memory pending queue through the durable `JobQueue`; each registered hook owns its durable job whose handler executes the currently running instance via a `Weak` reference. `force_run` bypasses all gates for manual refreshes, and `pending_depth`/`pending_depth_for`/`running_count` provide observability.
+- Migrated remembering and memory condensation onto hooks: `remember.chat` (per-session `SingularLastWins` debounced by `agent.remember_debounce_seconds`, default 10, idle-gated, non-incognito only, fired on both blocking and streaming chat paths, with a bounded retry budget for transient extraction failures), `connector_item.remember` (per-item `Multiple` FIFO, ungated, with the Email connector's retry/terminal-failure policy moved into the hook runner and terminal failures recorded durably in the shared `ProseRetryLedger`), and `memory.condensation` (global `SingularLastWins`, idle-gated, replacing the dirty-signal scheduler submission; `POST /memory/refresh` force-runs it).
+- Removed the `remember` tool from the registry and the personality operating directives; the `remember_tool_schema` remains as the extraction schema for the hook pipeline. Incognito turns never enqueue any hook (asserted by server integration tests).
+- Surfaced the pending hook queue depth as `hook_queue_depth` in `GET /status`.
+- DRY: the LLM-pool idle check shared by the scheduler and the hooks engine now lives in one `LlmBackend::pool_is_idle` default method.
+- Docs: new `docs/hooks.md` + `docs/wiki/hooks.md`; updated `docs/learning-orchestration.md`, `docs/fact-extraction-pipeline.md`, `docs/librarian-agent.md`, `docs/personality-system.md`, `docs/tools-registry.md`, `docs/chat-server.md`, `docs/email-connector.md`, `docs/job-queue.md`, `docs/memory-system.md`, `docs/nightly-optimization.md`, `docs/shutdown.md`, `README.md`, `Mimir-Implementation-Context.md`, and the wiki pages (personality, librarian, tools, server, knowledge-graph, fact-extraction, connectors, memory, job-queue, configuration, what-works-now, daemon-shutdown, cli-commands).
+- Version bumped 0.130.6 → 0.131.0 (minor — new feature).
+
+### Fix: PR #442 review feedback — bounded pending queues, shutdown handshake, and durability accuracy
+
+- `Hook::max_pending` bounds `QueuePolicy::Multiple` pending depth (the Email connector registers `connector_item.remember` with a 1024-instance cap); over-capacity triggers return a new `TriggerStatus::QueueFull` and the connector logs the drop instead of retaining raw email payloads without bound. Staged emails are now consumed by value so the raw RFC 822 bytes move into the hook payload instead of being cloned.
+- `HookEngine::shutdown()` now awaits the dispatch loop's exit (via an internal exit signal) after cancelling the in-flight run, so the terminal `job_runs` status is written before the SQLite pool closes; the dispatch loop also checks the shutdown signal before starting any new run. Timed-out durable runs are requeued as retryable failures instead of silently dropped.
+- `ChatLearningHandler`'s turn merge keeps the accumulated transcript when a malformed payload arrives; `confirm_fact` now sets the condensation dirty signal so a confirmed sensitive fact re-ranks condensed memory; malformed-message hook failures are recorded durably in the `ProseRetryLedger`; `ConnectorSupervisor` always injects its own knowledge graph into connector factories (the `with_knowledge_graph` builder is gone); the email hook registration is gated on the `gmail` feature; `StatusResponse::hook_queue_depth` gained `#[serde(default)]` so a new CLI works against older daemons; the Email connector's dependency injection was grouped into a named `EmailConnectorDeps` struct.
+- Tests: incognito persistence checks now observe the configured user's facts after the hook queue drains, the non-canonical-predicate test waits on queue drain instead of a fixed sleep, and new unit tests cover pending-capacity rejection, shutdown cancellation/finalisation, timeout requeue, malformed-message ledger durability, condensation-dirty on confirm, and older `/status` payloads.
+- Docs: `docs/hooks.md`, `docs/shutdown.md`, `docs/memory-system.md`, `docs/fact-extraction-pipeline.md`, `docs/knowledge-graph-schema.md`, `docs/job-queue.md`, and the wiki pages (hooks, memory, cli-commands, configuration, librarian-agent, personality, server, what-works-now) corrected for the actual hook entrypoint, unit-payload contract, restart durability, LLM-pool-idle gating, environment-variable override, custom-preset behaviour, and incognito persistence.
+
 ## [0.130.6] — 2026-08-21
 
 ### Fix: PR #437 review feedback (deterministic config watcher regression tests)

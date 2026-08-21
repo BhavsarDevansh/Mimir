@@ -145,7 +145,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 |---------|--------|----------------------|
 | Tool registry | ✅ Works | Object-safe `Tool` trait; per-tool permissions (auto/ask/disabled) persisted to `tools.toml`. |
 | Skill registry | ✅ Works | Object-safe `Skill` trait with `SkillContext`; built-in, user, and generated origins. |
-| Builtin tools | ✅ Works | `get_current_time` (local timezone + UTC offset, [#45](https://github.com/BhavsarDevansh/Mimir/issues/45) fixed), `echo`, `get_weather` (wttr.in, metric-only), `search_conversation_history`; knowledge-graph tools `kg_query`, `kg_related`, `kg_search`, `kg_expand_catalogue`, `kg_facts_in_catalogue`, `remember`, `retrieve_context`. |
+| Builtin tools | ✅ Works | `get_current_time` (local timezone + UTC offset, [#45](https://github.com/BhavsarDevansh/Mimir/issues/45) fixed), `echo`, `get_weather` (wttr.in, metric-only), `search_conversation_history`; knowledge-graph tools `kg_query`, `kg_related`, `kg_search`, `kg_expand_catalogue`, `kg_facts_in_catalogue`, `retrieve_context`. The `remember` tool was removed in [#386](https://github.com/BhavsarDevansh/Mimir/issues/386) — learning is now the server-side `remember.chat` hook. |
 | Builtin skills | ✅ Works | `research_synthesis`, `test_driven_development`. |
 | User skills | ✅ Works | Markdown files in `~/.config/mimir/skills/` with YAML frontmatter. |
 | Generated skills | ❌ Not implemented | Post-session reflection loop, utility scoring, pruning, and promotion are scaffolded but unused ([#20](https://github.com/BhavsarDevansh/Mimir/issues/20)). |
@@ -157,7 +157,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
 | Knowledge graph memory | ✅ Works | Live condensed memory (~2,500 chars) ranked from the knowledge graph (confidence × category × temporal boost × priority × centrality) and injected into every system prompt. |
-| LLM-orchestrated learning | ✅ Works | The LLM calls the `remember` tool during conversation; learning no longer fires automatically on every turn ([#137](https://github.com/BhavsarDevansh/Mimir/issues/137)). No safety-net fallback if the LLM never calls `remember` ([#156](https://github.com/BhavsarDevansh/Mimir/issues/156)). |
+| Hook-driven learning | ✅ Works | The `remember.chat` background hook extracts facts after each non-incognito turn, debounced per session and idle-gated ([#386](https://github.com/BhavsarDevansh/Mimir/issues/386)); supersedes the LLM-orchestrated `remember` tool ([#137](https://github.com/BhavsarDevansh/Mimir/issues/137)) and the Librarian fallback ([#156](https://github.com/BhavsarDevansh/Mimir/issues/156)). |
 | Frozen snapshots | ✅ Works | Condensed memory is read from `system_state` once per session; changes don't affect the current chat. |
 | Knowledge-graph managed | ✅ Works | Memory is a ranked view of the graph; no `memory.md` file. |
 | Size limit enforcement | ✅ Works | Configurable `char_limit` (default 2,500). |
@@ -178,7 +178,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
 | Presets | ✅ Works | `transparent`, `concise`, `warm`, `formal`, plus custom `.personality.md` files. |
-| System prompt generation | ✅ Works | Preset tone + shared operating directives (honesty, retrieval, learning) + condensed memory block, explicitly marked as a non-exhaustive subset ([#138](https://github.com/BhavsarDevansh/Mimir/issues/138)). |
+| System prompt generation | ✅ Works | Preset tone + shared operating directives (honesty, retrieval) + condensed memory block, explicitly marked as a non-exhaustive subset ([#138](https://github.com/BhavsarDevansh/Mimir/issues/138)); learning runs server-side via the `remember.chat` background hook, not a prompt directive. |
 | CLI override | ✅ Works | `--personality` flag on `mimir ask` and `mimir chat`. |
 
 ### Deployment & Operations
@@ -247,7 +247,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
-| Job queue + scheduler | ✅ Works | SQLite-backed queue with dedup, debounce, cooldown, idle gating; memory condensation, nightly optimization, pending cleanup, and events scan jobs. |
+| Job queue + scheduler | ✅ Works | SQLite-backed queue with dedup, debounce, cooldown, idle gating; nightly optimization, pending cleanup, and events scan jobs. Memory condensation runs through the hooks engine instead (issue #386), applying the same dedupe/debounce/cooldown/idle-gate rules per hook. |
 | Resource-limit enforcement | ✅ Works | Per-job timeouts, graceful cancellation (daemon shutdown cancels in-flight runs, recorded as `cancelled`), and best-effort CPU affinity / nice / cgroup v2 memory limits wired from `[knowledge.optimization]` ([#91](https://github.com/BhavsarDevansh/Mimir/issues/91)). |
 
 ### LLM Client & Worker Pool
@@ -262,7 +262,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
 | Librarian agent | ✅ Works | On-demand fact extraction from labelled transcripts; registered in the daemon but no longer auto-triggered every turn ([#137](https://github.com/BhavsarDevansh/Mimir/issues/137), [#139](https://github.com/BhavsarDevansh/Mimir/issues/139)). |
-| Automatic Librarian fallback | ❌ Not implemented | No safety net if the conversational LLM never calls `remember` ([#156](https://github.com/BhavsarDevansh/Mimir/issues/156)). |
+| Automatic Librarian fallback | ✅ Superseded | Every non-incognito session gets debounced hook-driven extraction, so no fallback is needed ([#386](https://github.com/BhavsarDevansh/Mimir/issues/386) supersedes [#156](https://github.com/BhavsarDevansh/Mimir/issues/156)). |
 | Retrieval agent | ✅ Works | `retrieve_context` dispatches parallel retrieval agents (KG + conversation search, ≤ 25 rounds) ([#128](https://github.com/BhavsarDevansh/Mimir/issues/128)). |
 
 ---
@@ -325,7 +325,7 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 |-----------|-------|
 | Session compaction (LLM summarisation of old turns) | [#279](https://github.com/BhavsarDevansh/Mimir/issues/279) |
 | `mimir chat` session persistence / auto-resume | [#280](https://github.com/BhavsarDevansh/Mimir/issues/280) |
-| Automatic Librarian fallback when `remember` is not called | [#156](https://github.com/BhavsarDevansh/Mimir/issues/156) |
+| Automatic Librarian fallback when `remember` is not called | [#156](https://github.com/BhavsarDevansh/Mimir/issues/156) — superseded by the hooks engine ([#386](https://github.com/BhavsarDevansh/Mimir/issues/386)) |
 | Generated skills: reflection loop, utility scoring, pruning | [#20](https://github.com/BhavsarDevansh/Mimir/issues/20) |
 | Tool backlog: time-to/since, web, wikipedia, weather, timezone, calculator, curl, sports, stocks, flights, distance, RSS | [#83](https://github.com/BhavsarDevansh/Mimir/issues/83), [#93](https://github.com/BhavsarDevansh/Mimir/issues/93)–[#106](https://github.com/BhavsarDevansh/Mimir/issues/106) |
 | Config hot-reload propagation to scheduler/jobs | [#286](https://github.com/BhavsarDevansh/Mimir/issues/286) |
@@ -382,7 +382,7 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | [#25](https://github.com/BhavsarDevansh/Mimir/issues/25) — Unix socket transport | TCP is the only transport | TCP on `127.0.0.1:8080` is secure for local use |
 | [#279](https://github.com/BhavsarDevansh/Mimir/issues/279) — no session compaction | Very long conversations are trimmed, not summarised | Keep `max_turns` modest (10–30) |
 | [#280](https://github.com/BhavsarDevansh/Mimir/issues/280) — chat session not persisted | Restarting `mimir chat` starts a new session | Use `/history` to resume |
-| [#156](https://github.com/BhavsarDevansh/Mimir/issues/156) — no Librarian fallback | Learning depends on the LLM calling `remember` | None; mention important facts explicitly |
+| [#156](https://github.com/BhavsarDevansh/Mimir/issues/156) — no Librarian fallback | Superseded by hook-driven learning ([#386](https://github.com/BhavsarDevansh/Mimir/issues/386)) | None needed |
 | [#20](https://github.com/BhavsarDevansh/Mimir/issues/20) — no generated skills | Skills are built-in or hand-written only | Write your own skill files |
 | [#143](https://github.com/BhavsarDevansh/Mimir/issues/143) — no proactive notifications | Events surface only in the "Upcoming" memory section | Check `mimir memory` / the Upcoming section |
 | [#120](https://github.com/BhavsarDevansh/Mimir/issues/120) — no kb import/export | Knowledge graph is not portable to Obsidian/CSV | Use the daemon API or CLI CRUD |

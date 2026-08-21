@@ -26,6 +26,7 @@ futures = "0.3"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 anyhow = "1.0"
+async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 dashmap = "6.2"
 tokio-stream = "0.1"
@@ -57,3 +58,4 @@ tempfile = "3"
 # (issue #329); test-only, off in production builds. `process` is declared
 # directly because shutdown.rs calls nix::unistd::getpid().
 nix = { version = "0.31", features = ["process", "signal"] }
+tokio-util = "0.7"

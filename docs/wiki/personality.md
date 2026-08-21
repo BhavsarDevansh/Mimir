@@ -36,18 +36,15 @@ Operating principles:
   history. If its findings are still not enough, refine the task and dispatch
   again. Continue until you have a confident answer or have confirmed the
   information is not in your knowledge base.
-- Call the `remember` tool whenever the user states or reveals something worth
-  saving — explicit assertions, corrections, and meaningful casual mentions.
-  Do not call it for pure chitchat or greetings.
 
 Core facts about the user (condensed subset — not a complete picture; treat
 as starting context, not exhaustive):
 [condensed memory text]
 ```
 
-The **operating principles** are appended to every preset — built-in or custom — so the behavioural contract (honesty, retrieval, learning) holds regardless of personality tone. They tell the LLM that the injected facts are a curated subset, not a complete record: when the core facts are insufficient it should dispatch a retrieval agent via the `retrieve_context` tool rather than inventing answers, and it should persist anything worth saving by calling `remember`. The lower-level `kg_query`/`kg_search`/`kg_related` tools are the retrieval agent's internal tools and are not surfaced to the core LLM.
+The **operating principles** are appended to every preset — built-in or custom — so the behavioural contract (honesty and retrieval) holds regardless of personality tone. They tell the LLM that the injected facts are a curated subset, not a complete record: when the core facts are insufficient it should dispatch a retrieval agent via the `retrieve_context` tool rather than inventing answers. Learning is handled by the server-side `remember.chat` background hook, so the prompt carries no learning directive and the model cannot be steered into or out of remembering. The lower-level `kg_query`/`kg_search`/`kg_related` tools are the retrieval agent's internal tools and are not surfaced to the core LLM.
 
-If no memory facts exist yet, the core-facts block is omitted — but the operating principles are still appended so the "do not invent facts" and "call `remember`" rules always apply.
+If no memory facts exist yet, the core-facts block is omitted — but the operating principles are still appended so the "do not invent facts" rule always applies.
 
 ## How to Select a Preset
 
@@ -84,7 +81,7 @@ export MIMIR_PERSONALITY_PRESET="concise"
    preset = "cheery"
    ```
 
-Custom presets override built-ins with the same name. The file body is used verbatim as the system prompt — no special syntax required.
+Custom presets override built-ins with the same name. The file body supplies the preset tone text — no special syntax required — and the shared operating principles (honesty and retrieval) are still appended by the daemon, so the behavioural contract holds for custom personalities too.
 
 ## Examples
 

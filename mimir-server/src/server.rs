@@ -53,7 +53,7 @@ pub async fn start_server_with_llm_and_listener(
     listener: tokio::net::TcpListener,
     api_token: Arc<str>,
 ) -> anyhow::Result<()> {
-    let (app_state, scheduler_shutdown_rx) =
+    let (app_state, scheduler_shutdown_rx, hook_shutdown_rx) =
         AppState::from_config_with_llm(Arc::clone(&config), llm_client, api_token).await?;
     let state = Arc::new(app_state);
 
@@ -74,18 +74,24 @@ pub async fn start_server_with_llm_and_listener(
         sched.start(sched_shutdown_rx).await;
     });
 
-    // ---- Listen for KG dirty signal and submit condensation ----
+    // ---- Start hooks engine dispatch loop ----
+    let hook_engine = Arc::clone(&state.hook_engine);
+    tokio::spawn(async move {
+        hook_engine.start(hook_shutdown_rx).await;
+    });
+
+    // ---- Listen for KG dirty signal and trigger condensation hook ----
     if state.user_entity_id.is_some() {
         let notify = state.knowledge_graph.condensation_notify();
-        let sched = Arc::clone(&state.scheduler);
+        let hook_engine = Arc::clone(&state.hook_engine);
         let mut shutdown_rx = state.shutdown_tx.subscribe();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     _ = shutdown_rx.changed() => break,
                     _ = notify.notified() => {
-                        use mimir_core::scheduler::DaemonJob;
-                        sched.submit(DaemonJob::MemoryCondensation).await;
+                        use mimir_core::hooks::Trigger;
+                        hook_engine.trigger(Trigger::FactInserted).await;
                     }
                 }
             }

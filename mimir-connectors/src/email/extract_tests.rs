@@ -9,10 +9,10 @@ use mimir_knowledge::normalize::NormalizedFact;
 pub(super) fn connector_with_identity(name: Option<&str>) -> EmailConnector {
     EmailConnector::from_config_with_deps(
         app_config(),
-        None,
-        name.map(|n| n.to_string()),
-        None,
-        None,
+        EmailConnectorDeps {
+            user_identity: name.map(|n| n.to_string()),
+            ..Default::default()
+        },
     )
     .expect("config")
 }
@@ -282,8 +282,8 @@ async fn extract_cancel_in_same_batch_drops_request_facts_for_the_uid() {
 async fn extract_cancel_before_request_in_same_batch_drops_request_facts() {
     let connector = connector_with_identity(Some("Devansh"));
     // A CANCEL staged *before* its REQUEST in the same sync batch: buffer
-    // order is not guaranteed to match iMIP order (re-staged LLM retries are
-    // pushed to the back of the buffer, and mail delivery can invert order).
+    // order is not guaranteed to match iMIP order (a failed cycle's re-fetch
+    // appends its window to the tail, and mail delivery can invert order).
     // The tombstone filter must run after the whole message loop, not only
     // at CANCEL time, or the REQUEST facts would be inserted after the
     // supervisor's trash pass and survive.
@@ -335,10 +335,10 @@ async fn cancel_tombstones_survive_restart_via_durable_state() {
     config["__durable_state"] = serde_json::Value::String(durable);
     let restarted = EmailConnector::from_config_with_deps(
         config,
-        None,
-        Some("Devansh".to_string()),
-        None,
-        None,
+        EmailConnectorDeps {
+            user_identity: Some("Devansh".to_string()),
+            ..Default::default()
+        },
     )
     .expect("config");
     assert_eq!(

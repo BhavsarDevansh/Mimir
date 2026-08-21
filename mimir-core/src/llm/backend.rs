@@ -127,6 +127,17 @@ pub trait LlmBackend: Send + Sync + Debug {
         0
     }
 
+    /// Whether the backing worker pool is completely idle: no queued user or
+    /// system jobs and no in-flight jobs.
+    ///
+    /// Shared by the background scheduler and the hooks engine so idle-gated
+    /// background work never steals LLM capacity from interactive chat.
+    async fn pool_is_idle(&self) -> bool {
+        self.user_queue_depth().await == 0
+            && self.system_queue_depth().await == 0
+            && self.in_flight_count() == 0
+    }
+
     /// Gracefully shut down the backend, releasing resources.
     ///
     /// The default implementation is a no-op so existing mocks are unaffected.

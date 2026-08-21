@@ -20,9 +20,10 @@ When any of these signals fire, the server enters graceful shutdown:
 
 `AppState::shutdown()` performs the following steps:
 
-1. **Scheduler shutdown** (`BackgroundScheduler::shutdown()`)
+1. **Scheduler + hooks shutdown** (`BackgroundScheduler::shutdown()` and `HookEngine::shutdown()`)
    - Signals the scheduler's private `watch::Sender` so the dispatch loop breaks cleanly.
-   - This prevents new background jobs from starting during teardown and ensures any in-flight job's DB record is updated before the runtime drops.
+   - Signals the hooks engine's shutdown channel, cancels the in-flight hook run, and awaits the dispatch loop's exit so no new hook run can start during teardown.
+   - Because shutdown waits for the dispatch loop, the in-flight run's terminal `job_runs` status is written before the SQLite pool closes and the runtime drops.
 
 2. **SQLite pool close** (`ContextManager::close()`)
    - Calls `sqlx::SqlitePool::close().await` to flush WAL and close connections.
@@ -41,7 +42,7 @@ After the drain completes (or the drain bound elapses), `start_server_with_llm_a
 
 - the config file-watcher's async relay task (its exit drops the lifetime-channel sender that keeps the `spawn_blocking` watcher loop alive, so the `notify` debouncer is dropped and the thread exits within 250 ms),
 - the SIGHUP reload handler,
-- the condensation-notify listener.
+- the hooks dispatch loop (which replaced the condensation-notify listener in #386).
 
 The broadcast is sent while the runtime is still fully alive, so the tasks are guaranteed to be polled and tear down deterministically. Previously the SIGTERM/Ctrl-C path never sent on `shutdown_tx` (only `POST /stop` did), so background shutdown relied on `AppState` being dropped during runtime teardown to resolve the watchers' `shutdown_rx.changed()` via sender-drop — a race that, when lost, left the file-watcher `spawn_blocking` thread alive and deadlocked tokio's `BlockingPool::shutdown` until systemd aborted the unit with `SIGABRT`. The explicit broadcast removes that race.
 

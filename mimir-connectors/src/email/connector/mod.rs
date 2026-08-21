@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 use tokio::sync::Mutex;
 
@@ -14,7 +14,9 @@ use crate::email::config::EmailConfigDto;
 use crate::email::imap;
 use crate::oauth::OAuthHttpClient;
 use crate::secrets::SecretStore;
+use mimir_core::hooks::HookEngine;
 use mimir_core::llm::LlmBackend;
+use mimir_knowledge::KnowledgeGraph;
 
 mod construct;
 mod credentials;
@@ -75,15 +77,19 @@ pub struct EmailConnector {
     /// Staged raw RFC 822 messages awaiting extraction (drained by `extract`).
     buffer: Mutex<Vec<imap::RawEmail>>,
     /// Durable connector state (issues #262, #283): the bounded
-    /// LLM-extraction retry ledger (pending retries with attempt counts +
-    /// exponential cycle backoff, and terminal failures with reasons) plus
-    /// the buffered iMIP `CANCEL` tombstones awaiting the supervisor's
-    /// deletion pass. Persisted by the supervisor via
+    /// LLM-extraction terminal-failure ledger plus the buffered iMIP
+    /// `CANCEL` tombstones awaiting the supervisor's deletion pass. Retry
+    /// moved to the hooks engine (issue #386); the ledger records terminal
+    /// failures plus the durable queue-overflow backlog written when the
+    /// `connector_item.remember` pending queue is full (issue #442 review).
+    /// Persisted by the supervisor via
     /// [`Connector::durable_state`](crate::connector::Connector::durable_state)
     /// and re-injected at construction (`__durable_state`), so bounded
-    /// retries and pending cancellations survive daemon restarts. A
-    /// `std::sync::Mutex` (never held across an `await`).
-    prose_retry: StdMutex<crate::email::llm::ProseRetryLedger>,
+    /// terminal records and pending cancellations survive daemon restarts.
+    /// Shared with the `connector_item.remember` hook handler via `Arc` so
+    /// terminal failures are recorded even after the connector instance is
+    /// dropped. A `std::sync::Mutex` (never held across an `await`).
+    prose_retry: Arc<StdMutex<crate::email::llm::ProseRetryLedger>>,
     /// Canonical user identity name (the `config.toml` `[identity] name`),
     /// injected via [`ConnectorContext::user_identity`] so connector-sourced
     /// facts that are user-scoped — iMIP invite extraction's
@@ -98,4 +104,22 @@ pub struct EmailConnector {
     /// through [`LlmBackend::system_chat_message`] so they sit on the
     /// shared pool's system queue, below user-chat priority.
     llm_backend: Option<Arc<dyn LlmBackend>>,
+    /// Shared knowledge graph, injected via [`ConnectorContext`] so the
+    /// prose-extraction hook (issue #386) can insert facts through the
+    /// shared pipeline with connector provenance. `None` when no graph is
+    /// configured; the hook layer is then skipped.
+    kg: Option<Arc<KnowledgeGraph>>,
+    /// Shared hooks engine, injected via [`ConnectorContext`] so prose
+    /// emails are enqueued as `ConnectorItemStaged` instances (issue #386).
+    /// `None` when no engine is configured; the hook layer is then skipped.
+    hook_engine: Option<Arc<HookEngine>>,
+    /// Connector instance id (supervisor-injected `__instance_id`), used
+    /// for hook provenance.
+    instance_id: i32,
+    /// Version of the last [`Connector::durable_state`] snapshot, so
+    /// `durable_state_persisted` can keep the ledger dirty when a hook
+    /// handler mutated it between the snapshot and the persist (issue #386).
+    durable_snapshot_version: AtomicU64,
 }
+
+pub use construct::EmailConnectorDeps;

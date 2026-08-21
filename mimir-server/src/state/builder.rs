@@ -11,12 +11,14 @@ use mimir_core::{
     config::{Config, ReloadableConfig},
     context::ContextManager,
     geocoder::Geocoder,
+    hooks::{Gate, Hook, HookEngine, KeyScope, QueuePolicy, RetryPolicy, Trigger, TriggerKind},
     job_queue::{Job, JobContext, JobPriority, JobQueue},
     llm::{LlmBackend, LlmClient},
-    scheduler::{BackgroundScheduler, DaemonJob},
+    scheduler::BackgroundScheduler,
     tools::ToolRegistry,
 };
 
+use super::hooks::{ChatLearningHandler, CondensationHandler, merge_chat_turns};
 use super::identity::seed_identity_facts;
 use super::{AppState, warn_err};
 
@@ -220,12 +222,6 @@ pub(super) async fn init_knowledge_graph(
     );
     register_tool(
         tool_registry,
-        Arc::new(mimir_knowledge::RememberTool::new(Arc::clone(
-            &knowledge_graph,
-        ))),
-    );
-    register_tool(
-        tool_registry,
         Arc::new(mimir_knowledge::RetrieveContextTool::new(
             Arc::clone(&knowledge_graph),
             Arc::clone(context_manager),
@@ -254,8 +250,8 @@ pub(super) async fn init_job_queue(cfg: &Config) -> anyhow::Result<Arc<JobQueue>
 pub(super) async fn init_agent_runtime() -> Arc<AgentRuntime> {
     // The LibrarianAgent is registered so it remains available for future
     // on-demand/bulk extraction, but it is no longer auto-invoked from the
-    // chat route (issue #137; learning is now LLM-orchestrated via the
-    // `remember` tool).
+    // chat route (issue #137; learning is now hook-driven via the
+    // `remember.chat` hook, issue #386).
     let agent_runtime = Arc::new(AgentRuntime::new());
     agent_runtime
         .register::<mimir_knowledge::librarian::LibrarianAgent>(
@@ -266,15 +262,17 @@ pub(super) async fn init_agent_runtime() -> Arc<AgentRuntime> {
 }
 
 /// Initialise the background scheduler and register the daemon's system jobs:
-/// knowledge optimization, memory condensation, pending-fact cleanup, and the
-/// events upcoming-scan (one job per configured run time).
+/// knowledge optimization, pending-fact cleanup, and the events upcoming-scan
+/// (one job per configured run time). Memory condensation moved to the hooks
+/// engine (issue #386); the optimization runner triggers it via the shared
+/// hook engine instead of the scheduler.
 pub(super) async fn init_scheduler(
     cfg: &Config,
     job_queue: &Arc<JobQueue>,
     llm: &Arc<dyn LlmBackend>,
     kg: &Arc<mimir_knowledge::KnowledgeGraph>,
     activity: &Arc<AtomicU64>,
-    user_entity_id: Option<i32>,
+    hook_engine: &Arc<HookEngine>,
     backup_dir: std::path::PathBuf,
 ) -> anyhow::Result<(Arc<BackgroundScheduler>, tokio::sync::watch::Receiver<bool>)> {
     let scheduler_cfg = cfg.scheduler.clone();
@@ -296,7 +294,7 @@ pub(super) async fn init_scheduler(
     let schedule =
         mimir_core::job_queue::DailySchedule::parse(&cfg.knowledge.optimization.schedule_time)?;
 
-    let scheduler_for_opt = Arc::clone(&scheduler);
+    let hook_engine_for_opt = Arc::clone(hook_engine);
     let opt_job = Job::new(
         "knowledge.optimization",
         JobPriority::System,
@@ -306,7 +304,7 @@ pub(super) async fn init_scheduler(
             let kg = Arc::clone(&kg_for_job);
             let llm = Arc::clone(&llm_for_job);
             let activity = Arc::clone(&activity_for_job);
-            let scheduler = Arc::clone(&scheduler_for_opt);
+            let hook_engine = Arc::clone(&hook_engine_for_opt);
             let backup_dir = backup_dir.clone();
             let timeout = timeout_minutes;
             let schedule_time = schedule_time.clone();
@@ -335,7 +333,7 @@ pub(super) async fn init_scheduler(
                             Utc::now() - last < five_minutes
                         },
                         || async move {
-                            scheduler.submit(DaemonJob::MemoryCondensation).await;
+                            hook_engine.trigger(Trigger::FactInserted).await;
                         },
                     )
                     .await
@@ -346,41 +344,6 @@ pub(super) async fn init_scheduler(
     )
     .with_resource_limits(resource_limits);
     job_queue.register(opt_job).await?;
-
-    // Register memory condensation job.
-    let kg_for_cond = Arc::clone(kg);
-    let llm_for_cond = Arc::clone(llm);
-    let char_limit = cfg.memory.char_limit as usize;
-    let top_n = cfg.memory.condensation_top_n as usize;
-
-    let cond_job = Job::new(
-        "memory.condensation",
-        JobPriority::System,
-        None,
-        true,
-        move |_ctx: JobContext| {
-            let kg = Arc::clone(&kg_for_cond);
-            let llm = Arc::clone(&llm_for_cond);
-            let uid = user_entity_id;
-            let limit = char_limit;
-            let top_n = top_n;
-            Box::pin(async move {
-                if let Some(subject_id) = uid {
-                    let condenser = mimir_knowledge::condensation::MemoryCondenser::new(
-                        kg, llm, subject_id, limit, top_n,
-                    );
-                    condenser
-                        .run()
-                        .await
-                        .map_err(|e| mimir_core::job_queue::JobError::Handler(e.to_string()))?;
-                } else {
-                    tracing::debug!("memory.condensation: no user entity configured; skipping");
-                }
-                Ok(())
-            })
-        },
-    );
-    job_queue.register(cond_job).await?;
 
     // Register the pending sensitive-fact auto-cleanup job (issue #141).
     // Hard-deletes facts still awaiting confirmation past the configured
@@ -475,6 +438,103 @@ pub(super) fn optimization_resource_limits(
     }
 }
 
+/// Initialise the hooks engine (issue #386) and register the daemon's hooks:
+/// `remember.chat` (debounced per-session turn extraction), `memory.condensation`
+/// (global last-wins fact-dirty condensation), and `connector_item.remember`
+/// (per-item FIFO connector extraction).
+pub(super) async fn init_hook_engine(
+    cfg: &Config,
+    job_queue: &Arc<JobQueue>,
+    llm: &Arc<dyn LlmBackend>,
+    kg: &Arc<mimir_knowledge::KnowledgeGraph>,
+    user_entity_id: Option<i32>,
+) -> anyhow::Result<(Arc<HookEngine>, tokio::sync::watch::Receiver<bool>)> {
+    let (engine, shutdown_rx) = HookEngine::new(Arc::clone(job_queue), Arc::clone(llm));
+
+    // remember.chat: one debounced extraction per session; idle-gated so
+    // background learning never steals LLM capacity from interactive chat.
+    // Transient extraction failures are retried with backoff so a burst of
+    // turns is never lost to a provider hiccup (issue #386).
+    engine
+        .register(Hook {
+            id: "remember.chat".to_string(),
+            trigger: TriggerKind::TurnCompleted,
+            key_scope: KeyScope::PerKey,
+            policy: QueuePolicy::SingularLastWins {
+                debounce: std::time::Duration::from_secs(
+                    cfg.agent.remember_debounce_seconds as u64,
+                ),
+            },
+            gate: Gate::IdleGated {
+                cooldown: std::time::Duration::from_secs(cfg.scheduler.cooldown_seconds as u64),
+            },
+            retry: RetryPolicy {
+                max_attempts: 3,
+                backoff: std::time::Duration::from_secs(30),
+            },
+            max_pending: None,
+            merge: Some(merge_chat_turns),
+            handler: Arc::new(ChatLearningHandler::new(Arc::clone(kg), Arc::clone(llm))),
+        })
+        .await?;
+
+    // memory.condensation: global last-wins with the scheduler's debounce and
+    // cooldown, preserving the pre-hook dirty-signal behaviour.
+    engine
+        .register(Hook {
+            id: "memory.condensation".to_string(),
+            trigger: TriggerKind::FactInserted,
+            key_scope: KeyScope::Global,
+            policy: QueuePolicy::SingularLastWins {
+                debounce: std::time::Duration::from_secs(cfg.scheduler.debounce_seconds as u64),
+            },
+            gate: Gate::IdleGated {
+                cooldown: std::time::Duration::from_secs(cfg.scheduler.cooldown_seconds as u64),
+            },
+            retry: RetryPolicy::default(),
+            max_pending: None,
+            merge: None,
+            handler: Arc::new(CondensationHandler::new(
+                Arc::clone(kg),
+                Arc::clone(llm),
+                user_entity_id,
+                cfg.memory.char_limit as usize,
+                cfg.memory.condensation_top_n as usize,
+            )),
+        })
+        .await?;
+
+    // connector_item.remember: every staged item enqueues individually
+    // (FIFO), ungated — LLM calls route through the shared worker pool's
+    // system queue. The retry budget is per-connector
+    // (`llm_extraction_max_attempts`, carried in the payload), so the hook's
+    // own cap is a generous safety bound; the handler records terminal
+    // failures durably in the connector's retry ledger. The handler lives in
+    // `mimir-connectors::email`, which exists only with the `gmail` feature.
+    #[cfg(feature = "gmail")]
+    engine
+        .register(Hook {
+            id: "connector_item.remember".to_string(),
+            trigger: TriggerKind::ConnectorItemStaged,
+            key_scope: KeyScope::PerKey,
+            policy: QueuePolicy::Multiple,
+            gate: Gate::Ungated,
+            retry: RetryPolicy {
+                max_attempts: u8::MAX,
+                backoff: std::time::Duration::from_secs(30),
+            },
+            // Bound the per-item FIFO queue: a sync can stage many prose
+            // emails, and each payload carries the raw RFC 822 bytes, so an
+            // unbounded queue could retain unbounded payload memory.
+            max_pending: Some(1024),
+            merge: None,
+            handler: Arc::new(mimir_connectors::email::EmailExtractionHook::new()),
+        })
+        .await?;
+
+    Ok((engine, shutdown_rx))
+}
+
 /// Initialise the connector framework: register the built-in backend factories
 /// (feature-gated), wire the supervisor with the shared services, and restore
 /// `Active` runners from the connectors table.
@@ -483,6 +543,7 @@ pub(super) async fn init_connector_framework(
     kg: &Arc<mimir_knowledge::KnowledgeGraph>,
     llm: &Arc<dyn LlmBackend>,
     geocoder: Option<Arc<dyn Geocoder>>,
+    hook_engine: &Arc<HookEngine>,
     shutdown_tx: &tokio::sync::watch::Sender<bool>,
 ) -> anyhow::Result<(Arc<ConnectorRegistry>, Arc<ConnectorSupervisor>)> {
     // Build the registry of built-in connector backends, gated by the
@@ -577,7 +638,8 @@ pub(super) async fn init_connector_framework(
     };
     let connector_supervisor = connector_supervisor
         .with_user_identity(cfg.identity.name.clone())
-        .with_llm_backend(Arc::clone(llm));
+        .with_llm_backend(Arc::clone(llm))
+        .with_hook_engine(Arc::clone(hook_engine));
     let connector_supervisor = Arc::new(connector_supervisor);
 
     // Spawn a runner for every connector row already in `Active` state so
@@ -601,7 +663,11 @@ impl AppState {
     /// Build `AppState` from the global [`ReloadableConfig`].
     pub async fn from_config(
         config: Arc<ReloadableConfig>,
-    ) -> anyhow::Result<(Self, tokio::sync::watch::Receiver<bool>)> {
+    ) -> anyhow::Result<(
+        Self,
+        tokio::sync::watch::Receiver<bool>,
+        tokio::sync::watch::Receiver<bool>,
+    )> {
         let api_token = Arc::from(mimir_core::auth::load_or_create_api_token()?.as_str());
         let llm_client: Arc<dyn LlmBackend> =
             Arc::new(LlmClient::new(config.snapshot().await.llm.clone()).await?);
@@ -616,12 +682,16 @@ impl AppState {
     ///
     /// Startup order is a composition of the per-subsystem init helpers:
     /// context manager → tool registry → knowledge graph → job queue → agent
-    /// runtime → background scheduler → connector framework.
+    /// runtime → hooks engine → background scheduler → connector framework.
     pub async fn from_config_with_llm(
         config: Arc<ReloadableConfig>,
         llm_client: Arc<dyn LlmBackend>,
         api_token: Arc<str>,
-    ) -> anyhow::Result<(Self, tokio::sync::watch::Receiver<bool>)> {
+    ) -> anyhow::Result<(
+        Self,
+        tokio::sync::watch::Receiver<bool>,
+        tokio::sync::watch::Receiver<bool>,
+    )> {
         let cfg = config.snapshot().await;
 
         let context_manager = init_context_manager(&cfg).await?;
@@ -632,13 +702,21 @@ impl AppState {
         let job_queue = init_job_queue(&cfg).await?;
         let agent_runtime = init_agent_runtime().await;
         let last_user_activity = Arc::new(AtomicU64::new(0));
+        let (hook_engine, hook_shutdown_rx) = init_hook_engine(
+            &cfg,
+            &job_queue,
+            &llm_client,
+            &kg_init.knowledge_graph,
+            kg_init.user_entity_id,
+        )
+        .await?;
         let (scheduler, scheduler_shutdown_rx) = init_scheduler(
             &cfg,
             &job_queue,
             &llm_client,
             &kg_init.knowledge_graph,
             &last_user_activity,
-            kg_init.user_entity_id,
+            &hook_engine,
             kg_init.backup_dir,
         )
         .await?;
@@ -647,6 +725,7 @@ impl AppState {
             &kg_init.knowledge_graph,
             &llm_client,
             kg_init.geocoder,
+            &hook_engine,
             &shutdown_tx,
         )
         .await?;
@@ -666,6 +745,7 @@ impl AppState {
                 knowledge_graph: kg_init.knowledge_graph,
                 job_queue,
                 agent_runtime,
+                hook_engine,
                 scheduler,
                 last_user_activity,
                 user_entity_id: kg_init.user_entity_id,
@@ -674,6 +754,7 @@ impl AppState {
                 api_token,
             },
             scheduler_shutdown_rx,
+            hook_shutdown_rx,
         ))
     }
 }

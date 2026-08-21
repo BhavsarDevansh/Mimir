@@ -130,8 +130,3 @@ static REMEMBER_TOOL_SCHEMA: LazyLock<serde_json::Value> = LazyLock::new(|| {
 pub fn remember_tool_schema() -> &'static serde_json::Value {
     &REMEMBER_TOOL_SCHEMA
 }
-
-/// Return just the inner `parameters` schema for use with the `Tool` trait.
-pub fn remember_tool_params_schema() -> serde_json::Value {
-    remember_tool_schema()["function"]["parameters"].clone()
-}

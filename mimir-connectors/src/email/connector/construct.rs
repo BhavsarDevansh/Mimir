@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 use tokio::sync::Mutex;
 
@@ -11,12 +11,28 @@ use crate::email::config::{
     DEFAULT_DISPLAY_NAME, DEFAULT_SLUG, EmailAuthMethod, EmailConfigDto, parse_cursor,
 };
 use crate::email::connector::EmailConnector;
-use crate::email::imap;
 use crate::email::llm::ProseRetryLedger;
 use crate::oauth::OAuthHttpClient;
 use crate::secrets::SecretStore;
+use mimir_core::hooks::HookEngine;
 use mimir_core::llm::LlmBackend;
+use mimir_knowledge::KnowledgeGraph;
 use tracing::warn;
+
+/// Optional shared services injected into an [`EmailConnector`] at
+/// construction. The daemon supplies the live services through the factory;
+/// tests override only the fields they exercise. Named fields keep the
+/// `Option`-heavy construction unambiguous (e.g. `user_identity` vs
+/// `cursor`, which share the type `Option<String>`).
+#[derive(Default)]
+pub struct EmailConnectorDeps {
+    pub secret_store: Option<Arc<dyn SecretStore>>,
+    pub user_identity: Option<String>,
+    pub cursor: Option<String>,
+    pub llm_backend: Option<Arc<dyn LlmBackend>>,
+    pub kg: Option<Arc<KnowledgeGraph>>,
+    pub hook_engine: Option<Arc<HookEngine>>,
+}
 
 /// Build a connector from its parsed configuration, a shared secret store
 /// (optional), and the supervisor-injected cursor.
@@ -26,19 +42,30 @@ impl EmailConnector {
         secret_store: Option<Arc<dyn SecretStore>>,
         cursor: Option<String>,
     ) -> Result<Self, ConnectorError> {
-        Self::from_config_with_deps(config, secret_store, None, cursor, None)
+        Self::from_config_with_deps(
+            config,
+            EmailConnectorDeps {
+                secret_store,
+                cursor,
+                ..Default::default()
+            },
+        )
     }
 
-    /// Build a connector with optional injected dependencies: the canonical
-    /// user identity and a shared LLM backend (tests inject a mock; the
-    /// daemon passes the live backend through the factory).
+    /// Build a connector with optional injected dependencies (tests inject
+    /// mocks; the daemon passes the live services through the factory).
     pub fn from_config_with_deps(
         config: serde_json::Value,
-        secret_store: Option<Arc<dyn SecretStore>>,
-        user_identity: Option<String>,
-        cursor: Option<String>,
-        llm_backend: Option<Arc<dyn LlmBackend>>,
+        deps: EmailConnectorDeps,
     ) -> Result<Self, ConnectorError> {
+        let EmailConnectorDeps {
+            secret_store,
+            user_identity,
+            cursor,
+            llm_backend,
+            kg,
+            hook_engine,
+        } = deps;
         // Recover the supervisor-injected slug before parsing the DTO: serde
         // ignores unknown fields (the DTO has no `deny_unknown_fields`), so
         // the injected `__slug` / `__cursor` keys pass through harmlessly.
@@ -47,6 +74,11 @@ impl EmailConnector {
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .unwrap_or_else(|| DEFAULT_SLUG.to_string());
+        // Recover the supervisor-injected instance id for hook provenance.
+        let instance_id = config
+            .get("__instance_id")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
         // Seed the durable connector state (issues #262, #283) from the
         // supervisor-injected `__durable_state` (the `connectors.durable_state`
         // column persisted after the previous cycle): the bounded
@@ -72,22 +104,23 @@ impl EmailConnector {
             EmailAuthMethod::OAuth { .. } => Some(OAuthHttpClient::new()?),
             EmailAuthMethod::AppPassword { .. } => None,
         };
-        let pending_items: Vec<_> = ledger.pending().cloned().collect();
+        // Re-stage pending retries — legacy pre-hooks entries (issue #386)
+        // and queue-overflow entries written when the hook's pending queue
+        // was full (issue #442 review) — into the buffer; the next cycle
+        // re-enqueues them as hooks. Entries without a decodable payload are
+        // dropped (they were never persisted with one, or the payload is
+        // corrupt).
+        let pending_items = ledger.drain_pending();
         let mut buffer = Vec::with_capacity(pending_items.len());
         for pending in pending_items {
-            match pending.raw() {
-                Some(raw) => buffer.push(imap::RawEmail {
-                    uid: pending.uid,
-                    uid_validity: pending.uid_validity,
-                    internal_date: None,
-                    raw,
-                }),
+            let raw_ref = pending.raw_ref();
+            match pending.into_staged_item() {
+                Some(mail) => buffer.push(mail),
                 None => {
                     warn!(
-                        raw_ref = %pending.raw_ref(),
-                        "dropping pending prose retry with missing or undecodable payload"
+                        raw_ref = %raw_ref,
+                        "dropping legacy pending prose retry with missing or undecodable payload"
                     );
-                    ledger.settle(&pending.raw_ref());
                 }
             }
         }
@@ -104,9 +137,13 @@ impl EmailConnector {
             resync_pending: AtomicBool::new(false),
             supports_idle: StdMutex::new(None),
             buffer: Mutex::new(buffer),
-            prose_retry: StdMutex::new(ledger),
+            prose_retry: Arc::new(StdMutex::new(ledger)),
             user_identity: normalize_user_identity(user_identity),
             llm_backend,
+            kg,
+            hook_engine,
+            instance_id,
+            durable_snapshot_version: AtomicU64::new(0),
         })
     }
 }

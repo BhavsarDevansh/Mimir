@@ -1,11 +1,19 @@
 mod common;
 use common::*;
 
-#[tokio::test]
-async fn test_chat_extracts_facts_after_response() {
-    // Inline learning (issue #137): the conversational LLM calls the
-    // `remember` tool while composing its reply, so facts are persisted
-    // during the chat turn itself — no background Librarian required.
+/// Config with zero debounce/cooldown so the `remember.chat` hook dispatches
+/// immediately after the turn instead of waiting for the production windows.
+fn fast_learning_config() -> Config {
+    let mut config = Config::default();
+    config.identity.name = "Devansh".to_string();
+    config.agent.remember_debounce_seconds = 0;
+    config.scheduler.cooldown_seconds = 0;
+    config
+}
+
+/// The extraction response the `remember.chat` hook's Librarian pipeline
+/// consumes: a `remember` tool call carrying one fact.
+fn extraction_message() -> Message {
     let remember_output = mimir_knowledge::extract::RememberOutput {
         facts: vec![mimir_knowledge::extract::ExtractedFact {
             classification: mimir_knowledge::extract::Classification::Explicit,
@@ -24,7 +32,7 @@ async fn test_chat_extracts_facts_after_response() {
             location: None,
         }],
     };
-    let extraction_msg = Message {
+    Message {
         role: "assistant".to_string(),
         content: "".to_string(),
         tool_calls: Some(vec![ToolCall {
@@ -37,21 +45,92 @@ async fn test_chat_extracts_facts_after_response() {
             },
         }]),
         tool_call_id: None,
-    };
+    }
+}
 
-    // The LLM orchestrates learning inline: its first response calls the
-    // `remember` tool to persist the fact, then it produces a final
-    // acknowledgement. There is no separate background extraction pass.
+/// Whether the KG holds `favourite_colour=blue` for the configured user.
+/// The user entity itself is created at daemon start, so incognito
+/// persistence checks must observe the *fact*, not the entity's existence.
+async fn has_favourite_colour(state: &Arc<AppState>) -> bool {
+    let search = state
+        .knowledge_graph
+        .search_entities("Devansh", 1)
+        .await
+        .unwrap();
+    let Some(result) = search.first() else {
+        return false;
+    };
+    let facts = state
+        .knowledge_graph
+        .get_facts_by_subject(result.entity.id, 100)
+        .await
+        .unwrap();
+    for fact in &facts {
+        let pred = state
+            .knowledge_graph
+            .relationship_type_name(fact.relationship_type_id)
+            .await;
+        if pred.as_deref() == Some("favourite_colour")
+            && fact.object_literal.as_deref() == Some("blue")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Poll until the KG holds `favourite_colour=blue` for the user, or return
+/// false after a timeout.
+async fn wait_for_favourite_colour(state: &Arc<AppState>) -> bool {
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if has_favourite_colour(state).await {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// Wait until the `remember.chat` hook has drained its pending queue, so a
+/// negative persistence assertion observes a fully dispatched run (the hook
+/// would have written facts by then if it fired). The wait is scoped to
+/// `remember.chat` only: `running_count()` spans the whole engine, and an
+/// unrelated hook such as `memory.condensation` (debounce and cooldown are
+/// both zero under `fast_learning_config`) may legitimately be running and
+/// would otherwise make the helper flaky.
+async fn wait_for_chat_hook_idle(state: &Arc<AppState>) {
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let pending = state.hook_engine.pending_depth_for("remember.chat").await;
+        if pending == 0 {
+            // Allow an already dispatched instance to finish writing facts.
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "remember.chat hook did not drain within 5s (pending={pending})"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn test_chat_extracts_facts_after_response() {
+    // Hook-driven learning (issue #386): the completed turn is enqueued for
+    // the debounced `remember.chat` hook, which runs the Librarian pipeline
+    // in the background — the conversational LLM never calls `remember`.
     let mock = Arc::new(
         MockLlmClient::builder()
-            .push_chat_message(extraction_msg, Usage::default())
             .push_chat("Got it!", Usage::default())
+            .push_chat_message(extraction_message(), Usage::default())
             .build(),
     );
 
-    let mut config = Config::default();
-    config.identity.name = "Devansh".to_string();
-    let (state, _temp) = test_state_with_config(mock, config).await;
+    let (state, _temp) = test_state_with_config(mock, fast_learning_config()).await;
     let app = mimir_server::build_app(state.clone());
 
     let body = serde_json::to_string(&serde_json::json!({
@@ -72,154 +151,36 @@ async fn test_chat_extracts_facts_after_response() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-
-    // Poll with timeout so the test is deterministic, not timing-dependent.
-    let mut found = false;
-    for _ in 0..50 {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        let search = state
-            .knowledge_graph
-            .search_entities("Devansh", 1)
-            .await
-            .unwrap();
-        if search.is_empty() {
-            continue;
-        }
-        let entity = &search[0].entity;
-
-        let facts = state
-            .knowledge_graph
-            .get_facts_by_subject(entity.id, 100)
-            .await
-            .unwrap();
-
-        for f in &facts {
-            let pred = state
-                .knowledge_graph
-                .relationship_type_name(f.relationship_type_id)
-                .await;
-            if pred.as_deref() == Some("favourite_colour")
-                && f.object_literal.as_deref() == Some("blue")
-            {
-                found = true;
-                break;
-            }
-        }
-        if found {
-            break;
-        }
-    }
-
     assert!(
-        found,
-        "expected favourite_colour=blue fact to be extracted within 2.5s"
+        wait_for_favourite_colour(&state).await,
+        "expected favourite_colour=blue fact to be extracted within 5s"
     );
 }
+
 #[tokio::test]
-async fn test_remember_tool_executes_and_writes_facts() {
+async fn test_remember_tool_is_not_registered() {
+    // Issue #386: the `remember` tool is removed from the registry — the
+    // conversational LLM must never be able to write facts directly.
     let mock = Arc::new(MockLlmClient::builder().build());
     let (state, _temp) = test_state(mock).await;
 
-    // Call the remember tool directly through the registry.
-    let args = serde_json::json!({
-        "facts": [
-            {
-                "classification": "Explicit",
-                "subject": "Alice",
-                "subject_type": "Person",
-                "relationship_type": "favourite_colour",
-                "object": "red",
-                "object_is_entity": false,
-                "is_sensitive": false,
-                "categories": []
-            }
-        ]
-    });
-
-    let output = state
-        .tool_registry
-        .execute("remember", args)
-        .await
-        .expect("remember tool should succeed");
-
-    let text = output.to_llm_text();
     assert!(
-        text.contains("inserted") || text.contains("matched"),
-        "expected success text, got: {}",
-        text
-    );
-
-    // Verify the fact exists.
-    let search = state
-        .knowledge_graph
-        .search_entities("Alice", 1)
-        .await
-        .unwrap();
-    assert!(!search.is_empty(), "expected entity 'Alice' to be created");
-    let entity = &search[0].entity;
-
-    let facts = state
-        .knowledge_graph
-        .get_facts_by_subject(entity.id, 100)
-        .await
-        .unwrap();
-
-    let mut found = false;
-    for f in &facts {
-        let pred = state
-            .knowledge_graph
-            .relationship_type_name(f.relationship_type_id)
-            .await;
-        if pred.as_deref() == Some("favourite_colour") && f.object_literal.as_deref() == Some("red")
-        {
-            found = true;
-            break;
-        }
-    }
-
-    assert!(
-        found,
-        "expected favourite_colour=red fact to be written via remember tool"
+        state.tool_registry.get("remember").is_none(),
+        "the remember tool must not be registered"
     );
 }
+
 #[tokio::test]
-async fn test_incognito_blocks_remember_tool_and_writes_no_facts() {
-    let tool_call = ToolCall {
-        index: 0,
-        id: "call_remember".to_string(),
-        call_type: "function".to_string(),
-        function: FunctionCall {
-            name: "remember".to_string(),
-            arguments: serde_json::json!({
-                "facts": [{
-                    "classification": "Explicit",
-                    "subject": "Incognito Test User",
-                    "subject_type": "Person",
-                    "relationship_type": "based_in",
-                    "object": "London",
-                    "object_is_entity": false,
-                    "is_sensitive": false,
-                    "categories": []
-                }]
-            })
-            .to_string(),
-        },
-    };
-    let first = Message {
-        role: "assistant".to_string(),
-        content: String::new(),
-        tool_calls: Some(vec![tool_call]),
-        tool_call_id: None,
-    };
+async fn test_incognito_turn_enqueues_no_hook_and_writes_no_facts() {
+    // Incognito stays a hard no-persistence guarantee (issue #155): the
+    // turn is never enqueued for the `remember.chat` hook.
     let mock = Arc::new(
         MockLlmClient::builder()
-            .push_chat_message(first, Usage::default())
             .push_chat("Noted.", Usage::default())
+            .push_chat_message(extraction_message(), Usage::default())
             .build(),
     );
-    let (state, _temp) = test_state(mock).await;
-    let kg = Arc::clone(&state.knowledge_graph);
+    let (state, _temp) = test_state_with_config(mock, fast_learning_config()).await;
     let app = mimir_server::build_app(state.clone());
 
     let body = serde_json::to_string(&serde_json::json!({
@@ -240,56 +201,36 @@ async fn test_incognito_blocks_remember_tool_and_writes_no_facts() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    // No entity/fact should have been created during the incognito turn.
-    let found = kg.search_entities("Incognito Test User", 10).await.unwrap();
+    assert_eq!(
+        state.hook_engine.pending_depth_for("remember.chat").await,
+        0,
+        "incognito turns must never enqueue the chat hook"
+    );
+    // Give any (incorrect) hook dispatch time to run to completion: the mock
+    // is configured with an extraction response, so a fired hook would have
+    // persisted the `Devansh` fact by the time the queue drains.
+    wait_for_chat_hook_idle(&state).await;
     assert!(
-        found.is_empty(),
-        "incognito turn must not persist entities, got: {found:?}"
+        !has_favourite_colour(&state).await,
+        "incognito turn must not persist facts (the user entity itself is created at daemon start)"
     );
 }
+
 #[tokio::test]
-async fn test_non_incognito_allows_remember_tool_and_persists_fact() {
-    // Control: the same tool call persists a fact when not incognito,
-    // proving the incognito guard is what prevents writes (issue #155).
-    let tool_call = ToolCall {
-        index: 0,
-        id: "call_remember".to_string(),
-        call_type: "function".to_string(),
-        function: FunctionCall {
-            name: "remember".to_string(),
-            arguments: serde_json::json!({
-                "facts": [{
-                    "classification": "Explicit",
-                    "subject": "Incognito Test User",
-                    "subject_type": "Person",
-                    "relationship_type": "based_in",
-                    "object": "London",
-                    "object_is_entity": false,
-                    "is_sensitive": false,
-                    "categories": []
-                }]
-            })
-            .to_string(),
-        },
-    };
-    let first = Message {
-        role: "assistant".to_string(),
-        content: String::new(),
-        tool_calls: Some(vec![tool_call]),
-        tool_call_id: None,
-    };
+async fn test_non_incognito_turn_enqueues_hook_and_persists_fact() {
+    // Control: the same turn enqueues the hook when not incognito, proving
+    // the incognito guard is what prevents learning (issue #155).
     let mock = Arc::new(
         MockLlmClient::builder()
-            .push_chat_message(first, Usage::default())
             .push_chat("Noted.", Usage::default())
+            .push_chat_message(extraction_message(), Usage::default())
             .build(),
     );
-    let (state, _temp) = test_state(mock).await;
-    let kg = Arc::clone(&state.knowledge_graph);
+    let (state, _temp) = test_state_with_config(mock, fast_learning_config()).await;
     let app = mimir_server::build_app(state.clone());
 
     let body = serde_json::to_string(&serde_json::json!({
-        "message": "remember that I am based in London",
+        "message": "My favourite colour is blue.",
         "incognito": false,
     }))
     .unwrap();
@@ -306,52 +247,26 @@ async fn test_non_incognito_allows_remember_tool_and_persists_fact() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let found = kg.search_entities("Incognito Test User", 10).await.unwrap();
     assert!(
-        !found.is_empty(),
-        "non-incognito turn should persist the entity/fact"
+        wait_for_favourite_colour(&state).await,
+        "non-incognito turn should persist the entity/fact via the hook"
     );
 }
+
 #[tokio::test]
-async fn test_incognito_blocks_remember_tool_and_writes_no_facts_stream() {
-    let tool_call = ToolCall {
-        index: 0,
-        id: "call_remember".to_string(),
-        call_type: "function".to_string(),
-        function: FunctionCall {
-            name: "remember".to_string(),
-            arguments: serde_json::json!({
-                "facts": [{
-                    "classification": "Explicit",
-                    "subject": "Incognito Test User",
-                    "subject_type": "Person",
-                    "relationship_type": "based_in",
-                    "object": "London",
-                    "object_is_entity": false,
-                    "is_sensitive": false,
-                    "categories": []
-                }]
-            })
-            .to_string(),
-        },
-    };
-    // The streaming endpoint reads from the mock's stream-response queue
-    // (push_stream / StreamItem), not the blocking chat-message queue, so
-    // queue a `remember` tool-call stream followed by the final reply.
+async fn test_incognito_stream_enqueues_no_hook_and_writes_no_facts() {
+    // The streaming path honours the same incognito contract: no hook
+    // instance is enqueued and no facts are persisted.
     let mock = Arc::new(
         MockLlmClient::builder()
-            .push_stream(vec![
-                Ok(StreamItem::ToolCalls(vec![tool_call])),
-                Ok(StreamItem::Usage(Usage::default())),
-            ])
             .push_stream(vec![
                 Ok(StreamItem::Text("Noted.".to_string())),
                 Ok(StreamItem::Usage(Usage::default())),
             ])
+            .push_chat_message(extraction_message(), Usage::default())
             .build(),
     );
-    let (state, _temp) = test_state(mock).await;
-    let kg = Arc::clone(&state.knowledge_graph);
+    let (state, _temp) = test_state_with_config(mock, fast_learning_config()).await;
     let app = mimir_server::build_app(state.clone());
 
     let body = serde_json::to_string(&serde_json::json!({
@@ -377,59 +292,35 @@ async fn test_incognito_blocks_remember_tool_and_writes_no_facts_stream() {
         .await
         .unwrap();
 
-    // No entity/fact should have been created during the incognito turn.
-    let found = kg.search_entities("Incognito Test User", 10).await.unwrap();
+    assert_eq!(
+        state.hook_engine.pending_depth_for("remember.chat").await,
+        0,
+        "incognito stream turns must never enqueue the chat hook"
+    );
+    wait_for_chat_hook_idle(&state).await;
     assert!(
-        found.is_empty(),
-        "incognito turn must not persist entities, got: {found:?}"
+        !has_favourite_colour(&state).await,
+        "incognito turn must not persist facts (the user entity itself is created at daemon start)"
     );
 }
+
 #[tokio::test]
-async fn test_non_incognito_allows_remember_tool_and_persists_fact_stream() {
-    // Control: the same tool call persists a fact when not incognito,
-    // proving the incognito guard is what prevents writes (issue #155).
-    let tool_call = ToolCall {
-        index: 0,
-        id: "call_remember".to_string(),
-        call_type: "function".to_string(),
-        function: FunctionCall {
-            name: "remember".to_string(),
-            arguments: serde_json::json!({
-                "facts": [{
-                    "classification": "Explicit",
-                    "subject": "Incognito Test User",
-                    "subject_type": "Person",
-                    "relationship_type": "based_in",
-                    "object": "London",
-                    "object_is_entity": false,
-                    "is_sensitive": false,
-                    "categories": []
-                }]
-            })
-            .to_string(),
-        },
-    };
-    // The streaming endpoint reads from the mock's stream-response queue
-    // (push_stream / StreamItem), not the blocking chat-message queue, so
-    // queue a `remember` tool-call stream followed by the final reply.
+async fn test_non_incognito_stream_enqueues_hook_and_persists_fact() {
+    // Control: the streaming path enqueues the hook when not incognito.
     let mock = Arc::new(
         MockLlmClient::builder()
-            .push_stream(vec![
-                Ok(StreamItem::ToolCalls(vec![tool_call])),
-                Ok(StreamItem::Usage(Usage::default())),
-            ])
             .push_stream(vec![
                 Ok(StreamItem::Text("Noted.".to_string())),
                 Ok(StreamItem::Usage(Usage::default())),
             ])
+            .push_chat_message(extraction_message(), Usage::default())
             .build(),
     );
-    let (state, _temp) = test_state(mock).await;
-    let kg = Arc::clone(&state.knowledge_graph);
+    let (state, _temp) = test_state_with_config(mock, fast_learning_config()).await;
     let app = mimir_server::build_app(state.clone());
 
     let body = serde_json::to_string(&serde_json::json!({
-        "message": "remember that I am based in London",
+        "message": "My favourite colour is blue.",
         "incognito": false,
     }))
     .unwrap();
@@ -447,14 +338,13 @@ async fn test_non_incognito_allows_remember_tool_and_persists_fact_stream() {
     assert_eq!(response.status(), StatusCode::OK);
 
     // Drain the SSE response body so the spawned stream task completes the
-    // `remember` tool execution (and fact persistence) before we assert.
+    // turn (and the hook enqueue) before we assert.
     let _bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
 
-    let found = kg.search_entities("Incognito Test User", 10).await.unwrap();
     assert!(
-        !found.is_empty(),
-        "non-incognito turn should persist the entity/fact"
+        wait_for_favourite_colour(&state).await,
+        "non-incognito stream turn should persist the entity/fact via the hook"
     );
 }

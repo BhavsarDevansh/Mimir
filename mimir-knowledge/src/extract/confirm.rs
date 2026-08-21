@@ -87,6 +87,12 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
 
     kg.pending_confirmations().write().await.remove(&fact_id);
 
+    // A confirmed fact is a fact mutation that can re-rank condensed memory
+    // (status and confidence changed), so route it through the same dirty
+    // signal as insert/update/forget/restore: the `memory.condensation` hook
+    // rebuilds on demand (issue #386).
+    kg.set_condensation_dirty();
+
     // Events subsystem (#74): sensitive facts skip overlay creation at
     // extraction time (they return `Pending` before reaching the event block).
     // Now that the fact is confirmed and Active, rebuild the overlay from the

@@ -86,17 +86,24 @@ pub const CANONICAL_PREDICATES: &[&str] = &[
 ];
 
 /// Relationship-type names the connectors emit deterministically (issue
-/// #412). Pinned in both directions: `mimir-connectors` tests assert every
-/// extractor-emitted predicate is registered here, and
+/// #412). Pinned in both directions:
 /// `connector_emitted_predicates_are_seeded_canonical` in
 /// `mimir-knowledge/tests/predicate_allowlist_test.rs` pins every entry to a
-/// seeded canonical row (migration 053), so a new connector predicate must
-/// land in both the emit site and the seed before it can be used. The email
-/// LLM layer validates its emitted predicates against
-/// [`is_canonical_predicate_name`], so even the open LLM surface cannot
-/// auto-create rows.
+/// seeded canonical row (migration 053), and the `mimir-connectors`
+/// registration tests assert every extractor-emitted predicate passes
+/// [`is_canonical_predicate_name`] — canonical vocabulary, a superset of this
+/// list, since `visited` (photos coords fallback, issue #250), `located_in`
+/// (iCal + JSON-LD) and `has_appointment` (email LLM) are canonical since
+/// migrations 013/050 and deliberately not listed here. A new connector
+/// predicate must therefore be seeded canonical before the connector tests
+/// pass; adding it here additionally pins the seed/const pair and documents
+/// the emit surface. The email LLM layer validates its emitted predicates
+/// against [`is_canonical_predicate_name`], so even the open LLM surface
+/// cannot auto-create rows outside the prompt-instructed
+/// `favourite_<thing>` family, which is canonical by design.
 pub const CONNECTOR_EMITTED_PREDICATES: &[&str] = &[
-    // Calendar / Email iMIP (mimir-connectors/src/ical/facts.rs).
+    // Calendar / Email iMIP (mimir-connectors/src/ical/facts.rs) and JSON-LD
+    // EventReservation (mimir-connectors/src/email/jsonld/reservations.rs).
     "has_event",
     "attending",
     // Photos (mimir-connectors/src/photos/scan.rs). `visited` is also

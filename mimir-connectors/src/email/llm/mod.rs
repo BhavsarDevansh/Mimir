@@ -39,9 +39,10 @@
 //! - [`schema`] — LLM tool schema, wire types, and system prompt.
 //! - [`parse`] — LLM-output parsing with Rust-side validation.
 //! - [`message`] — spam classification, body text, subject canonicalisation.
-//! - [`retry`] — the durable, bounded retry ledger for failed prose
-//!   extraction (issue #262): attempt counts, cycle backoff, terminal
-//!   failures, and the persisted ledger format.
+//! - [`retry`] — the durable terminal-failure ledger for failed prose
+//!   extraction (issues #262, #386): the hook runner owns retries, the
+//!   ledger records terminal failures, the iMIP tombstones, and the
+//!   persisted ledger format.
 
 mod hook;
 mod message;
@@ -101,8 +102,8 @@ pub(crate) async fn extract_prose_facts(
     );
     let messages = vec![LlmMessage::system(prompt), LlmMessage::user(user_turn)];
 
-    // Propagate LLM/parse failures so `extract()` can re-stage the raw email
-    // for retry instead of recording a silent empty success.
+    // Propagate LLM/parse failures so the hook runner re-enqueues the
+    // instance with backoff instead of recording a silent empty success.
     let assistant = backend
         .system_chat_message(messages, Some(vec![email_extraction_tool_schema().clone()]))
         .await

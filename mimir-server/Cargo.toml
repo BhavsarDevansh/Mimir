@@ -58,3 +58,4 @@ tempfile = "3"
 # (issue #329); test-only, off in production builds. `process` is declared
 # directly because shutdown.rs calls nix::unistd::getpid().
 nix = { version = "0.31", features = ["process", "signal"] }
+tokio-util = "0.7"

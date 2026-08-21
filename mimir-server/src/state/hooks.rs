@@ -141,7 +141,11 @@ impl HookHandler for ChatLearningHandler {
             }
             Err(error) => {
                 warn!("remember.chat hook failed: {error}");
-                HookOutcome::TerminalFailure
+                // Transient LLM/provider failures must not lose the
+                // accumulated transcript: the hook's retry policy (issue
+                // #386) re-enqueues the instance with backoff so the burst
+                // is re-extracted instead of dropped.
+                HookOutcome::RetryableFailure
             }
         }
     }

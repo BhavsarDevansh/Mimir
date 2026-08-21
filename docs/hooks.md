@@ -41,7 +41,7 @@ Singularity is either `Global` (one pending instance for the whole hook) or `Per
 
 ### Durability
 
-The pending queue is in-memory; runs stay durable in `JobQueue`. A daemon restart loses only pending instances — chat re-triggers on the next turn, connector items are re-staged by the durable sync cursor (issues #314, #332), and condensation re-triggers on the next fact write. Each registered hook owns one durable `JobQueue` job whose handler executes the hook's currently running instance via a `Weak<EngineInner>` reference (no reference cycle between engine and queue).
+The pending queue is in-memory; runs stay durable in `JobQueue`. A daemon restart loses only pending instances — chat re-triggers on the next turn, condensation re-triggers on the next fact write, and a connector cycle that failed before persisting its cursor re-fetches that window on the next cycle (issues #314, #332). Connector items whose extraction was still in flight when the daemon stopped are not re-fetched: the sync cursor has already advanced past them, so their LLM-layer extraction is skipped unless a full re-sync (e.g. a `UIDVALIDITY` change) re-stages them. Each registered hook owns one durable `JobQueue` job whose handler executes the hook's currently running instance via a `Weak<EngineInner>` reference (no reference cycle between engine and queue).
 
 ### Retry
 
@@ -55,6 +55,7 @@ Each hook has a `RetryPolicy { max_attempts, backoff }`. A handler returns `Hook
 - Key: `session_id`. Policy: `SingularLastWins` with debounce `agent.remember_debounce_seconds` (default 10) and `merge_chat_turns` accumulation, so a burst of messages becomes one extraction over the accumulated transcript.
 - Gate: `IdleGated` with the scheduler's cooldown.
 - Handler: `ChatLearningHandler` (`mimir-server/src/state/hooks.rs`) runs the existing Librarian extraction pipeline (`extract_facts_with_context`) with classification→confidence mapping, the sensitive-pending confirmation gate, and the overwrite/coexistence matrix still enforced in Rust, unchanged.
+- Retry: transient extraction failures are re-enqueued with time-based backoff (3 attempts, 30s base) so a provider hiccup never loses the accumulated transcript.
 
 ### `connector_item.remember`
 

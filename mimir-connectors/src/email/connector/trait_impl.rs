@@ -242,7 +242,7 @@ impl Connector for EmailConnector {
                         raw_ref: raw_ref.clone(),
                         user_identity: self.user_identity.clone(),
                         instance_id: self.instance_id,
-                        connector_type: ConnectorType::Gmail,
+                        connector_type: self.connector_type(),
                         kg: Arc::clone(kg),
                         llm: Arc::clone(backend),
                         ledger: Arc::clone(&self.prose_retry),

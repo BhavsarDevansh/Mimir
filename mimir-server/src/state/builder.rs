@@ -453,6 +453,8 @@ pub(super) async fn init_hook_engine(
 
     // remember.chat: one debounced extraction per session; idle-gated so
     // background learning never steals LLM capacity from interactive chat.
+    // Transient extraction failures are retried with backoff so a burst of
+    // turns is never lost to a provider hiccup (issue #386).
     engine
         .register(Hook {
             id: "remember.chat".to_string(),
@@ -466,7 +468,10 @@ pub(super) async fn init_hook_engine(
             gate: Gate::IdleGated {
                 cooldown: std::time::Duration::from_secs(cfg.scheduler.cooldown_seconds as u64),
             },
-            retry: RetryPolicy::default(),
+            retry: RetryPolicy {
+                max_attempts: 3,
+                backoff: std::time::Duration::from_secs(30),
+            },
             merge: Some(merge_chat_turns),
             handler: Arc::new(ChatLearningHandler::new(Arc::clone(kg), Arc::clone(llm))),
         })

@@ -9,8 +9,11 @@
 //!
 //! The pending queue is in-memory; runs stay durable in [`JobQueue`]. A
 //! daemon restart loses only pending instances — chat re-triggers on the next
-//! turn, connector items are re-staged by the durable sync cursor, and
-//! condensation re-triggers on the next fact write.
+//! turn, condensation re-triggers on the next fact write, and a connector
+//! cycle that failed before persisting its cursor re-fetches that window on
+//! the next cycle (issues #314, #332). Connector items whose extraction was
+//! still in flight when the daemon stopped are not re-fetched: the sync
+//! cursor has already advanced past them.
 
 #![deny(unsafe_code)]
 
@@ -808,9 +811,16 @@ impl EngineInner {
     }
 }
 
-/// Exponential backoff after `attempts` failed attempts: `base * 2^(attempts-1)`.
+/// Maximum backoff between retries: beyond this an instance would be parked
+/// for an absurd duration (and the doubling would overflow `Duration`).
+const MAX_BACKOFF: Duration = Duration::from_secs(3600);
+
+/// Exponential backoff after `attempts` failed attempts: `base * 2^(attempts-1)`,
+/// saturating at [`MAX_BACKOFF`] so an unbounded retry budget can never
+/// overflow or park an instance indefinitely.
 fn backoff_for(base: Duration, attempts: u8) -> Duration {
-    base * 2u32.saturating_pow(u32::from(attempts.saturating_sub(1)))
+    base.saturating_mul(2u32.saturating_pow(u32::from(attempts.saturating_sub(1))))
+        .min(MAX_BACKOFF)
 }
 
 #[cfg(test)]

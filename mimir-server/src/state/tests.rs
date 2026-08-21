@@ -2,8 +2,11 @@ use super::builder::{
     init_connector_framework, init_hook_engine, init_knowledge_graph, init_scheduler,
     optimization_resource_limits,
 };
+use super::hooks::ChatLearningHandler;
 use super::warn_err;
 use mimir_core::config::Config;
+use mimir_core::conversation::ConversationTurn;
+use mimir_core::hooks::{HookContext, HookHandler, HookOutcome};
 use mimir_core::llm::MockLlmClient;
 use mimir_core::tools::ToolRegistry;
 use std::sync::Arc;
@@ -90,6 +93,40 @@ async fn init_knowledge_graph_resolves_user_entity_and_registers_kg_tools() {
         );
     }
     assert!(init.backup_dir.ends_with("backups"));
+}
+
+#[tokio::test]
+async fn chat_learning_handler_returns_retryable_failure_on_extraction_error() {
+    // Issue #386: a transient extraction failure must not drop the
+    // accumulated transcript — the hook's retry policy re-enqueues the
+    // instance so the burst is re-extracted.
+    let temp = tempfile::tempdir().unwrap();
+    let kg = test_kg(&temp).await;
+    let llm: Arc<dyn mimir_core::llm::LlmBackend> = Arc::new(
+        MockLlmClient::builder()
+            .push_chat_error(mimir_core::llm::LlmError::QueueFull)
+            .build(),
+    );
+    let handler = ChatLearningHandler::new(Arc::clone(&kg), Arc::clone(&llm));
+    let outcome = handler
+        .run(
+            Arc::new(vec![ConversationTurn::new(
+                1,
+                "My favourite colour is blue",
+                "Noted.",
+            )]),
+            HookContext {
+                attempt: 1,
+                max_attempts: 3,
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
+            },
+        )
+        .await;
+    assert_eq!(
+        outcome,
+        HookOutcome::RetryableFailure,
+        "a transient extraction failure must be retried, not dropped"
+    );
 }
 
 #[tokio::test]

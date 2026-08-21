@@ -722,3 +722,25 @@ async fn force_run_rejects_unknown_and_running_hooks() {
     handler.release();
     handle.await.unwrap().unwrap();
 }
+
+#[test]
+fn backoff_doubles_per_attempt_and_caps_at_max() {
+    assert_eq!(
+        backoff_for(Duration::from_secs(30), 1),
+        Duration::from_secs(30)
+    );
+    assert_eq!(
+        backoff_for(Duration::from_secs(30), 2),
+        Duration::from_secs(60)
+    );
+    assert_eq!(
+        backoff_for(Duration::from_secs(30), 8),
+        Duration::from_secs(3600),
+        "backoff saturates at MAX_BACKOFF"
+    );
+    assert_eq!(
+        backoff_for(Duration::from_secs(30), u8::MAX),
+        Duration::from_secs(3600),
+        "the doubling must never overflow Duration"
+    );
+}

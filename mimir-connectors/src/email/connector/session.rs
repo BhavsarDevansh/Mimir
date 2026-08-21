@@ -119,10 +119,11 @@ impl EmailConnector {
 
         let fetched = u32::try_from(messages.len()).unwrap_or(u32::MAX);
         // Issue #332: a failed cycle's re-fetch must not duplicate messages
-        // that are already staged — the buffer can hold re-staged LLM retries
-        // (issue #262) or the previous cycle's un-drained window, and each
-        // failed cycle would otherwise double them. Dedupe by the
-        // `(uid_validity, uid)` identity (stable within one epoch).
+        // that are already staged — the buffer can hold the previous cycle's
+        // un-drained window or legacy pending retries re-staged at
+        // construction (issue #262), and each failed cycle would otherwise
+        // double them. Dedupe by the `(uid_validity, uid)` identity (stable
+        // within one epoch).
         {
             let mut buffer = self.buffer.lock().await;
             let mut seen: HashSet<(u32, u32)> =

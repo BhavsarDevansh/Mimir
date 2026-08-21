@@ -8,10 +8,11 @@
 //! gates.
 //!
 //! The pending queue is in-memory; runs stay durable in [`JobQueue`]. A
-//! daemon restart loses only pending instances — chat re-triggers on the next
-//! turn, condensation re-triggers on the next fact write, and a connector
-//! cycle that failed before persisting its cursor re-fetches that window on
-//! the next cycle (issues #314, #332). Connector items whose extraction was
+//! daemon restart loses pending instances, and connector hook runs that are
+//! in flight can also be skipped — chat re-triggers on the next turn,
+//! condensation re-triggers on the next fact write, and a connector cycle
+//! that failed before persisting its cursor re-fetches that window on the
+//! next cycle (issues #314, #332). Connector items whose extraction was
 //! still in flight when the daemon stopped are not re-fetched: the sync
 //! cursor has already advanced past them.
 
@@ -29,7 +30,9 @@ use thiserror::Error;
 use tokio::sync::{Mutex, Notify, RwLock, watch};
 use tracing::{debug, info, warn};
 
-use crate::job_queue::{Job, JobContext, JobError, JobPriority, JobQueue, JobRunSummary};
+use crate::job_queue::{
+    Job, JobContext, JobError, JobPriority, JobQueue, JobRunStatus, JobRunSummary,
+};
 use crate::llm::LlmBackend;
 
 /// Typed trigger events (v1 minimal enum; the #68 domain-event bus can
@@ -182,6 +185,12 @@ pub struct Hook {
     pub policy: QueuePolicy,
     pub gate: Gate,
     pub retry: RetryPolicy,
+    /// Cap on pending instances for [`QueuePolicy::Multiple`] hooks; `None`
+    /// leaves the pending queue unbounded. Enforced before enqueue so a
+    /// flood of triggers (e.g. many staged connector items in one sync)
+    /// cannot grow in-memory payload retention without bound; over-cap
+    /// triggers surface as [`TriggerStatus::QueueFull`] to the producer.
+    pub max_pending: Option<usize>,
     /// Optional payload merge for `LastWins` accumulation (e.g. chat turns
     /// accumulated since the last hook run).
     pub merge: Option<PayloadMerge>,
@@ -197,6 +206,9 @@ pub enum TriggerStatus {
     Dropped,
     /// `LastWins`: a pending instance was replaced with the latest payload.
     Replaced,
+    /// `Multiple`: the hook's pending queue is at [`Hook::max_pending`]
+    /// capacity, so the new instance was rejected and dropped.
+    QueueFull,
 }
 
 /// Per-hook result of a [`HookEngine::trigger`] call.
@@ -263,6 +275,10 @@ struct EngineInner {
     pending: Mutex<HashMap<String, VecDeque<PendingInstance>>>,
     /// Running instance per hook id (one run at a time per hook).
     running: Mutex<HashMap<String, RunningInstance>>,
+    /// Fired when the dispatch loop exits, so `shutdown` can await the
+    /// final in-flight run's terminal `job_runs` write before the caller
+    /// tears down the runtime.
+    dispatch_exited: Notify,
     /// Last user-activity instant (cooldown for idle-gated hooks). A
     /// `std::sync::Mutex` because it is never held across an `await`.
     last_user_activity: StdMutex<Option<Instant>>,
@@ -306,6 +322,7 @@ impl HookEngine {
                 hooks: RwLock::new(Vec::new()),
                 pending: Mutex::new(HashMap::new()),
                 running: Mutex::new(HashMap::new()),
+                dispatch_exited: Notify::new(),
                 last_user_activity: StdMutex::new(None),
                 notify: Notify::new(),
                 shutdown_tx,
@@ -405,13 +422,27 @@ impl HookEngine {
     }
 
     /// Signal the dispatch loop to shut down gracefully and cancel the
-    /// in-flight hook run.
+    /// in-flight hook run, then await the loop's exit so the terminal
+    /// `job_runs` status for the in-flight run is written before the caller
+    /// tears down the runtime (a detached loop could still be finalising the
+    /// run's DB record when the pool closes).
     pub async fn shutdown(&self) {
         let _ = self.inner.shutdown_tx.send(true);
-        let running = self.inner.running.lock().await;
-        for hook_id in running.keys() {
-            self.inner.job_queue.cancel(hook_id);
+        {
+            let running = self.inner.running.lock().await;
+            for hook_id in running.keys() {
+                self.inner.job_queue.cancel(hook_id);
+            }
         }
+        // The dispatch loop exits promptly once the shutdown signal is
+        // observed (see `start`); the timeout only guards against a caller
+        // that never started the loop.
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            self.inner.dispatch_exited.notified(),
+        )
+        .await
+        .ok();
     }
 
     /// Force a hook to run immediately, bypassing debounce, cooldown, idle
@@ -490,6 +521,10 @@ impl HookEngine {
     /// Runs until the shutdown watch channel fires.
     pub async fn start(self: Arc<Self>, mut shutdown_rx: watch::Receiver<bool>) {
         loop {
+            if *shutdown_rx.borrow() {
+                info!("hooks: shutting down");
+                break;
+            }
             if let Some((hook_id, instance)) = self.inner.next_dispatchable().await {
                 self.inner.dispatch(hook_id, instance).await;
                 continue;
@@ -507,6 +542,7 @@ impl HookEngine {
                 _ = tokio::time::sleep_until(deadline) => {}
             }
         }
+        self.inner.dispatch_exited.notify_waiters();
     }
 }
 
@@ -523,6 +559,9 @@ fn enqueue(
     let queue = pending.entry(hook_id.to_string()).or_default();
     match hook.policy {
         QueuePolicy::Multiple => {
+            if hook.max_pending.is_some_and(|cap| queue.len() >= cap) {
+                return TriggerStatus::QueueFull;
+            }
             queue.push_back(PendingInstance::new(key, payload, now));
             TriggerStatus::Enqueued
         }
@@ -709,6 +748,16 @@ impl EngineInner {
             (Ok(_), Some(HookOutcome::Success)) => {
                 debug!("hooks: '{hook_id}' succeeded");
             }
+            (Ok(summary), _) if summary.status == JobRunStatus::TimedOut => {
+                // The run hit the durable queue's timeout: the handler was
+                // aborted mid-flight. Treat it as a retryable failure so a
+                // timed-out connector extraction is re-attempted instead of
+                // silently dropped (the sync cursor has already advanced
+                // past the item).
+                warn!("hooks: '{hook_id}' timed out; requeueing instance");
+                self.requeue_after_failure(&hook_id, &hook, &mut instance)
+                    .await;
+            }
             (Ok(_), Some(HookOutcome::TerminalFailure)) => {
                 warn!("hooks: '{hook_id}' terminal failure; dropping instance");
             }
@@ -736,12 +785,22 @@ impl EngineInner {
         }
         instance.attempts = instance.attempts.saturating_add(1);
         instance.not_before = Instant::now() + backoff_for(hook.retry.backoff, instance.attempts);
-        self.pending
-            .lock()
-            .await
-            .entry(hook_id.to_string())
-            .or_default()
-            .push_back(instance.clone());
+        {
+            // Check the cap under the same lock as the push so a concurrent
+            // trigger cannot race past it.
+            let mut pending = self.pending.lock().await;
+            let at_capacity = hook
+                .max_pending
+                .is_some_and(|cap| pending.get(hook_id).map_or(0, VecDeque::len) >= cap);
+            if at_capacity {
+                warn!("hooks: '{hook_id}' pending queue at capacity; dropping failed instance");
+                return;
+            }
+            pending
+                .entry(hook_id.to_string())
+                .or_default()
+                .push_back(instance.clone());
+        }
         self.notify.notify_one();
     }
 

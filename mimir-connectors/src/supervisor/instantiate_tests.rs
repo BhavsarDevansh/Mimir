@@ -131,6 +131,50 @@ async fn instantiate_injects_null_cursor_when_absent() {
     );
 }
 
+/// `instantiate` must hand every connector factory the supervisor's own
+/// knowledge graph (issue #386 review): the supervisor writes connector rows
+/// and cursors through `self.kg`, so a second graph in the context could
+/// split facts and connector provenance across two databases.
+#[tokio::test]
+async fn instantiate_injects_supervisor_knowledge_graph() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = Arc::new(
+        KnowledgeGraph::init(&dir.path().join("kg.db"))
+            .await
+            .unwrap(),
+    );
+    let captured = Arc::new(std::sync::Mutex::new(None::<Arc<KnowledgeGraph>>));
+    let capture = Arc::clone(&captured);
+    let registry = ConnectorRegistry::new();
+    registry
+        .register(
+            ConnectorType::Photos,
+            "local".to_string(),
+            FnConnectorFactory::new(move |_config, ctx| {
+                *capture.lock().unwrap() = ctx.knowledge_graph.clone();
+                Ok(Arc::new(crate::MockConnector::default()) as Arc<dyn Connector>)
+            }),
+        )
+        .unwrap();
+    let (tx, rx) = watch::channel(false);
+    let supervisor = ConnectorSupervisor::new(
+        Arc::new(registry),
+        Arc::clone(&kg),
+        SupervisorConfig::default(),
+        rx,
+    );
+
+    supervisor
+        .instantiate(&row_with_cursor(None), ConnectorType::Photos)
+        .expect("instantiate succeeds");
+    let injected = captured.lock().unwrap().take().expect("context captured");
+    assert!(
+        Arc::ptr_eq(&kg, &injected),
+        "the factory context must carry the supervisor's own knowledge graph"
+    );
+    drop(tx);
+}
+
 #[tokio::test]
 async fn with_secret_store_propagates_into_factory_context() {
     let dir = tempfile::tempdir().unwrap();

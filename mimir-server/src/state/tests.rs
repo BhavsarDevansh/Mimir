@@ -2,7 +2,7 @@ use super::builder::{
     init_connector_framework, init_hook_engine, init_knowledge_graph, init_scheduler,
     optimization_resource_limits,
 };
-use super::hooks::ChatLearningHandler;
+use super::hooks::{ChatLearningHandler, merge_chat_turns};
 use super::warn_err;
 use mimir_core::config::Config;
 use mimir_core::conversation::ConversationTurn;
@@ -127,6 +127,38 @@ async fn chat_learning_handler_returns_retryable_failure_on_extraction_error() {
         HookOutcome::RetryableFailure,
         "a transient extraction failure must be retried, not dropped"
     );
+}
+
+#[test]
+fn merge_chat_turns_keeps_accumulation_when_new_payload_type_is_unexpected() {
+    // A malformed trigger payload must not discard the accumulated
+    // transcript: only the bad payload is lost, and the next valid turn
+    // still extracts everything accumulated so far (issue #386 review).
+    let turns = vec![ConversationTurn::new(1, "hello", "hi")];
+    let old: Arc<dyn std::any::Any + Send + Sync> = Arc::new(turns.clone());
+    let unexpected: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
+
+    let merged = merge_chat_turns(old, unexpected);
+    let merged_turns = merged
+        .downcast_ref::<Vec<ConversationTurn>>()
+        .expect("the accumulated turns must be preserved");
+    assert_eq!(merged_turns, &turns);
+}
+
+#[test]
+fn merge_chat_turns_appends_valid_new_turns() {
+    let old_turns = vec![ConversationTurn::new(1, "hello", "hi")];
+    let new_turns = vec![ConversationTurn::new(2, "my name is Devansh", "noted")];
+    let old = Arc::new(old_turns) as Arc<dyn std::any::Any + Send + Sync>;
+    let new = Arc::new(new_turns) as Arc<dyn std::any::Any + Send + Sync>;
+
+    let merged = merge_chat_turns(old, new);
+    let merged_turns = merged
+        .downcast_ref::<Vec<ConversationTurn>>()
+        .expect("merged payload must stay a turn list");
+    assert_eq!(merged_turns.len(), 2);
+    assert_eq!(merged_turns[0].user_message, "hello");
+    assert_eq!(merged_turns[1].user_message, "my name is Devansh");
 }
 
 #[tokio::test]

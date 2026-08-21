@@ -178,7 +178,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
 | Presets | ✅ Works | `transparent`, `concise`, `warm`, `formal`, plus custom `.personality.md` files. |
-| System prompt generation | ✅ Works | Preset tone + shared operating directives (honesty, retrieval, learning) + condensed memory block, explicitly marked as a non-exhaustive subset ([#138](https://github.com/BhavsarDevansh/Mimir/issues/138)). |
+| System prompt generation | ✅ Works | Preset tone + shared operating directives (honesty, retrieval) + condensed memory block, explicitly marked as a non-exhaustive subset ([#138](https://github.com/BhavsarDevansh/Mimir/issues/138)); learning runs server-side via the `remember.chat` background hook, not a prompt directive. |
 | CLI override | ✅ Works | `--personality` flag on `mimir ask` and `mimir chat`. |
 
 ### Deployment & Operations
@@ -247,7 +247,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
-| Job queue + scheduler | ✅ Works | SQLite-backed queue with dedup, debounce, cooldown, idle gating; memory condensation, nightly optimization, pending cleanup, and events scan jobs. |
+| Job queue + scheduler | ✅ Works | SQLite-backed queue with dedup, debounce, cooldown, idle gating; nightly optimization, pending cleanup, and events scan jobs. Memory condensation runs through the hooks engine instead (issue #386), applying the same dedupe/debounce/cooldown/idle-gate rules per hook. |
 | Resource-limit enforcement | ✅ Works | Per-job timeouts, graceful cancellation (daemon shutdown cancels in-flight runs, recorded as `cancelled`), and best-effort CPU affinity / nice / cgroup v2 memory limits wired from `[knowledge.optimization]` ([#91](https://github.com/BhavsarDevansh/Mimir/issues/91)). |
 
 ### LLM Client & Worker Pool

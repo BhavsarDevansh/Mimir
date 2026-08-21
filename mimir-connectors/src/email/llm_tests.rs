@@ -6,7 +6,9 @@ use std::time::Duration;
 use crate::email::config::config_tests::app_config;
 use crate::email::imap;
 use crate::email::llm::EmailExtractionHook;
-use mimir_core::hooks::{Gate, Hook, HookEngine, KeyScope, QueuePolicy, RetryPolicy, TriggerKind};
+use mimir_core::hooks::{
+    Gate, Hook, HookEngine, KeyScope, QueuePolicy, RetryPolicy, Trigger, TriggerKind,
+};
 use mimir_core::job_queue::JobQueue;
 use mimir_core::llm::MockLlmClient;
 use mimir_knowledge::KnowledgeGraph;
@@ -21,12 +23,11 @@ use super::extract_tests::{invite_email, plain_email};
 fn connector_with_llm(name: Option<&str>, backend: Option<Arc<dyn LlmBackend>>) -> EmailConnector {
     EmailConnector::from_config_with_deps(
         app_config(),
-        None,
-        name.map(|n| n.to_string()),
-        None,
-        backend,
-        None,
-        None,
+        EmailConnectorDeps {
+            user_identity: name.map(|n| n.to_string()),
+            llm_backend: backend,
+            ..Default::default()
+        },
     )
     .expect("config")
 }
@@ -104,6 +105,7 @@ async fn hook_env(backend: Option<Arc<dyn LlmBackend>>, max_attempts: Option<u8>
                 max_attempts: u8::MAX,
                 backoff: Duration::from_millis(10),
             },
+            max_pending: None,
             merge: None,
             handler: Arc::new(EmailExtractionHook::new()),
         })
@@ -119,12 +121,13 @@ async fn hook_env(backend: Option<Arc<dyn LlmBackend>>, max_attempts: Option<u8>
     }
     let connector = EmailConnector::from_config_with_deps(
         config,
-        None,
-        Some("Devansh".to_string()),
-        None,
-        backend,
-        Some(Arc::clone(&kg)),
-        Some(Arc::clone(&engine)),
+        EmailConnectorDeps {
+            user_identity: Some("Devansh".to_string()),
+            llm_backend: backend,
+            kg: Some(Arc::clone(&kg)),
+            hook_engine: Some(Arc::clone(&engine)),
+            ..Default::default()
+        },
     )
     .expect("config");
 
@@ -287,9 +290,10 @@ async fn llm_layer_drops_facts_with_non_canonical_predicates() {
     stage(&env.connector, prose_email()).await;
     env.connector.extract().await.expect("extract");
     wait_for(|| async { mock.system_chat_calls().len() == 1 }).await;
-    // Give the hook a moment to finish inserting; then assert no fact was
-    // authored for the dropped predicate.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The handler has run to completion once the queue drains, so the
+    // absence of the fact proves the predicate was dropped (a fixed sleep
+    // could pass before the insert attempt finished on a loaded runner).
+    wait_for(|| async { env.engine.pending_depth().await == 0 }).await;
     assert!(
         !has_fact(&env.kg, "owes", "the bank").await,
         "non-canonical predicate must be dropped"
@@ -410,6 +414,52 @@ async fn configurable_max_attempts_fails_terminal_immediately() {
 }
 
 #[tokio::test]
+async fn malformed_message_records_durable_terminal_failure() {
+    // A message the hook cannot parse can never be retried into a valid
+    // RFC 822 message, so the handler must record a durable terminal ledger
+    // entry — the connector health path reports failed extractions from the
+    // ledger, and the item must not be re-staged on every cycle.
+    let env = hook_env(None, None).await;
+    let payload = crate::email::llm::EmailExtractionPayload {
+        // An empty raw message has no headers, so `MessageParser` rejects it
+        // (probe: `MessageParser::parse(&[])` is `None`).
+        raw: Vec::new(),
+        uid_validity: 17,
+        uid: 43,
+        raw_ref: "17:43".to_string(),
+        user_identity: Some("Devansh".to_string()),
+        instance_id: env.connector.instance_id,
+        connector_type: env.connector.connector_type(),
+        kg: Arc::clone(&env.kg),
+        llm: Arc::new(MockLlmClient::builder().build()),
+        ledger: Arc::clone(&env.connector.prose_retry),
+        max_attempts: 3,
+    };
+    env.engine
+        .trigger(Trigger::ConnectorItemStaged {
+            item_id: "17:43".to_string(),
+            payload: Arc::new(payload),
+        })
+        .await;
+    wait_for(|| async { env.connector.prose_retry.lock().unwrap().terminal_count() == 1 }).await;
+    wait_for(|| async { env.engine.pending_depth().await == 0 }).await;
+    assert!(
+        env.connector
+            .prose_retry
+            .lock()
+            .unwrap()
+            .is_terminal("17:43"),
+        "malformed-message terminal failure must be durable in the ledger"
+    );
+    let durable = env
+        .connector
+        .durable_state()
+        .expect("dirty ledger persists");
+    let restored = crate::email::llm::retry::ProseRetryLedger::from_json(&durable);
+    assert_eq!(restored.terminal_count(), 1);
+}
+
+#[tokio::test]
 async fn restart_resume_re_stages_legacy_pending_retries_from_durable_state() {
     // Legacy migration (issue #386): a pending retry persisted by the
     // pre-hooks engine is drained at construction so its raw bytes re-stage
@@ -450,12 +500,13 @@ async fn restart_resume_re_stages_legacy_pending_retries_from_durable_state() {
     config["__durable_state"] = serde_json::Value::String(legacy.to_string());
     let restarted = EmailConnector::from_config_with_deps(
         config,
-        None,
-        Some("Devansh".to_string()),
-        None,
-        Some(mock.clone()),
-        Some(Arc::clone(&env.kg)),
-        Some(Arc::clone(&env.engine)),
+        EmailConnectorDeps {
+            user_identity: Some("Devansh".to_string()),
+            llm_backend: Some(mock.clone()),
+            kg: Some(Arc::clone(&env.kg)),
+            hook_engine: Some(Arc::clone(&env.engine)),
+            ..Default::default()
+        },
     )
     .expect("config");
     assert_eq!(

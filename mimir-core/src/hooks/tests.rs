@@ -87,6 +87,7 @@ fn hook(id: &str, policy: QueuePolicy, gate: Gate, handler: Arc<TestHandler>) ->
         policy,
         gate,
         retry: RetryPolicy::default(),
+        max_pending: None,
         merge: None,
         handler,
     }
@@ -157,6 +158,33 @@ async fn multiple_policy_enqueues_every_trigger_fifo() {
     );
     engine.shutdown().await;
     handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn multiple_policy_rejects_triggers_over_pending_capacity() {
+    // `Hook::max_pending` bounds the per-hook pending queue (issue #386
+    // review): the producer sees `QueueFull` instead of unbounded in-memory
+    // payload retention, and the queue keeps only the accepted instances.
+    let (engine, _temp, _shutdown_rx) = test_engine().await;
+    let handler = TestHandler::new(vec![]);
+    let mut h = hook("h", QueuePolicy::Multiple, Gate::Ungated, handler.clone());
+    h.max_pending = Some(2);
+    engine.register(h).await.unwrap();
+
+    assert_eq!(
+        engine.trigger(turn_trigger(1, "a")).await[0].status,
+        TriggerStatus::Enqueued
+    );
+    assert_eq!(
+        engine.trigger(turn_trigger(2, "b")).await[0].status,
+        TriggerStatus::Enqueued
+    );
+    assert_eq!(
+        engine.trigger(turn_trigger(3, "c")).await[0].status,
+        TriggerStatus::QueueFull,
+        "over-capacity triggers must surface as QueueFull"
+    );
+    assert_eq!(engine.pending_depth_for("h").await, 2);
 }
 
 #[tokio::test]
@@ -614,6 +642,96 @@ async fn shutdown_exits_dispatch_loop() {
     engine.shutdown().await;
     let result = tokio::time::timeout(Duration::from_secs(5), handle).await;
     assert!(result.is_ok(), "dispatch loop must exit on shutdown");
+}
+
+#[tokio::test]
+async fn shutdown_cancels_in_flight_run_and_keeps_pending_instances() {
+    // `shutdown` cancels the running instance, awaits the dispatch loop's
+    // exit (so the terminal `job_runs` status is written before teardown),
+    // and must never start a new dispatch after the signal (issue #386
+    // review).
+    let temp = tempfile::tempdir().unwrap();
+    let jq = Arc::new(JobQueue::init(temp.path().join("jobs.db")).await.unwrap());
+    let llm = Arc::new(MockLlmClient::builder().build());
+    let (engine, shutdown_rx) = HookEngine::new(jq.clone(), llm);
+    let handler = TestHandler::blocking(vec![]);
+    engine
+        .register(hook(
+            "h",
+            QueuePolicy::Multiple,
+            Gate::Ungated,
+            handler.clone(),
+        ))
+        .await
+        .unwrap();
+
+    engine.trigger(turn_trigger(1, "a")).await;
+    engine.trigger(turn_trigger(2, "b")).await;
+    let engine_clone = Arc::clone(&engine);
+    let handle = tokio::spawn(async move { engine_clone.start(shutdown_rx).await });
+    wait_for_async(|| async { engine.running_count().await == 1 }).await;
+
+    engine.shutdown().await;
+    let result = tokio::time::timeout(Duration::from_secs(5), handle).await;
+    assert!(result.is_ok(), "dispatch loop must exit on shutdown");
+    assert_eq!(
+        handler.calls().len(),
+        1,
+        "only the in-flight instance may run before shutdown"
+    );
+    assert_eq!(
+        engine.pending_depth_for("h").await,
+        1,
+        "pending instances must not dispatch after shutdown"
+    );
+    let status = jq.status("h").await.unwrap();
+    let last_run = status
+        .last_run
+        .expect("the cancelled run must be finalised");
+    assert_eq!(
+        last_run.status,
+        crate::job_queue::JobRunStatus::Cancelled,
+        "shutdown must finalise the in-flight run before teardown"
+    );
+    assert!(
+        last_run.finished_at.is_some(),
+        "the in-flight run must carry a finished_at timestamp"
+    );
+}
+
+#[tokio::test]
+async fn timed_out_run_is_requeued_as_retryable_failure() {
+    // A run that hits the durable queue's timeout is aborted mid-flight: the
+    // instance must be requeued with backoff instead of dropped, so a
+    // timed-out connector extraction is re-attempted (issue #386 review).
+    let temp = tempfile::tempdir().unwrap();
+    let jq = Arc::new(JobQueue::init(temp.path().join("jobs.db")).await.unwrap());
+    jq.set_default_timeout(Duration::from_millis(100)).await;
+    let llm = Arc::new(MockLlmClient::builder().build());
+    let (engine, shutdown_rx) = HookEngine::new(jq, llm);
+    let handler = TestHandler::blocking(vec![]);
+    let mut h = hook("h", QueuePolicy::Multiple, Gate::Ungated, handler.clone());
+    h.retry = RetryPolicy {
+        max_attempts: 2,
+        backoff: Duration::from_millis(10),
+    };
+    engine.register(h).await.unwrap();
+
+    engine.trigger(turn_trigger(1, "a")).await;
+    let engine_clone = Arc::clone(&engine);
+    let handle = tokio::spawn(async move { engine_clone.start(shutdown_rx).await });
+
+    // Attempt 1 times out and is requeued; attempt 2 times out and exhausts
+    // the retry budget.
+    wait_for(|| handler.calls().len() == 2).await;
+    wait_for_async(|| async { engine.pending_depth_for("h").await == 0 }).await;
+    assert_eq!(
+        handler.calls(),
+        vec![("a".to_string(), 1), ("a".to_string(), 2)],
+        "a timed-out run must be retried"
+    );
+    engine.shutdown().await;
+    handle.await.unwrap();
 }
 
 #[tokio::test]

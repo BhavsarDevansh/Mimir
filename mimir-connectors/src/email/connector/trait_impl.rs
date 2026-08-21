@@ -16,7 +16,7 @@ use crate::email::connector::EmailConnector;
 use crate::email::imap;
 use crate::email::jsonld;
 use crate::email::llm::{EmailExtractionPayload, health_with_terminal};
-use mimir_core::hooks::Trigger;
+use mimir_core::hooks::{Trigger, TriggerStatus};
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType};
 
 #[async_trait]
@@ -174,7 +174,7 @@ impl Connector for EmailConnector {
             std::mem::take(&mut *buffer)
         };
         let mut facts = Vec::new();
-        for mail in &staged {
+        for mail in staged {
             // An IMAP UID is unique only within one mailbox + `UIDVALIDITY`
             // epoch, so qualify the provenance reference as `{uid_validity}:{uid}`
             // (matching the persisted cursor format) to stay globally unique.
@@ -236,7 +236,10 @@ impl Connector for EmailConnector {
                     (&self.hook_engine, &self.llm_backend, &self.kg)
                 {
                     let payload = EmailExtractionPayload {
-                        raw: mail.raw.clone(),
+                        // Consume the staged item by value so the raw RFC 822
+                        // bytes move into the hook payload instead of being
+                        // cloned and retained twice.
+                        raw: mail.raw,
                         uid_validity: mail.uid_validity,
                         uid: mail.uid,
                         raw_ref: raw_ref.clone(),
@@ -248,12 +251,21 @@ impl Connector for EmailConnector {
                         ledger: Arc::clone(&self.prose_retry),
                         max_attempts: self.config.llm_extraction_max_attempts.clamp(1, u8::MAX),
                     };
-                    engine
+                    let outcomes = engine
                         .trigger(Trigger::ConnectorItemStaged {
                             item_id: raw_ref.clone(),
                             payload: Arc::new(payload),
                         })
                         .await;
+                    if outcomes
+                        .iter()
+                        .any(|o| o.status == TriggerStatus::QueueFull)
+                    {
+                        warn!(
+                            raw_ref,
+                            "connector_item.remember pending queue full; dropping staged email extraction"
+                        );
+                    }
                 } else {
                     // No backend or hook engine configured: nothing to
                     // extract.

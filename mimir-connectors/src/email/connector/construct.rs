@@ -20,6 +20,21 @@ use mimir_core::llm::LlmBackend;
 use mimir_knowledge::KnowledgeGraph;
 use tracing::warn;
 
+/// Optional shared services injected into an [`EmailConnector`] at
+/// construction. The daemon supplies the live services through the factory;
+/// tests override only the fields they exercise. Named fields keep the
+/// `Option`-heavy construction unambiguous (e.g. `user_identity` vs
+/// `cursor`, which share the type `Option<String>`).
+#[derive(Default)]
+pub struct EmailConnectorDeps {
+    pub secret_store: Option<Arc<dyn SecretStore>>,
+    pub user_identity: Option<String>,
+    pub cursor: Option<String>,
+    pub llm_backend: Option<Arc<dyn LlmBackend>>,
+    pub kg: Option<Arc<KnowledgeGraph>>,
+    pub hook_engine: Option<Arc<HookEngine>>,
+}
+
 /// Build a connector from its parsed configuration, a shared secret store
 /// (optional), and the supervisor-injected cursor.
 impl EmailConnector {
@@ -28,22 +43,30 @@ impl EmailConnector {
         secret_store: Option<Arc<dyn SecretStore>>,
         cursor: Option<String>,
     ) -> Result<Self, ConnectorError> {
-        Self::from_config_with_deps(config, secret_store, None, cursor, None, None, None)
+        Self::from_config_with_deps(
+            config,
+            EmailConnectorDeps {
+                secret_store,
+                cursor,
+                ..Default::default()
+            },
+        )
     }
 
-    /// Build a connector with optional injected dependencies: the canonical
-    /// user identity, a shared LLM backend, the shared knowledge graph, and
-    /// the shared hooks engine (tests inject mocks; the daemon passes the
-    /// live services through the factory).
+    /// Build a connector with optional injected dependencies (tests inject
+    /// mocks; the daemon passes the live services through the factory).
     pub fn from_config_with_deps(
         config: serde_json::Value,
-        secret_store: Option<Arc<dyn SecretStore>>,
-        user_identity: Option<String>,
-        cursor: Option<String>,
-        llm_backend: Option<Arc<dyn LlmBackend>>,
-        kg: Option<Arc<KnowledgeGraph>>,
-        hook_engine: Option<Arc<HookEngine>>,
+        deps: EmailConnectorDeps,
     ) -> Result<Self, ConnectorError> {
+        let EmailConnectorDeps {
+            secret_store,
+            user_identity,
+            cursor,
+            llm_backend,
+            kg,
+            hook_engine,
+        } = deps;
         // Recover the supervisor-injected slug before parsing the DTO: serde
         // ignores unknown fields (the DTO has no `deny_unknown_fields`), so
         // the injected `__slug` / `__cursor` keys pass through harmlessly.

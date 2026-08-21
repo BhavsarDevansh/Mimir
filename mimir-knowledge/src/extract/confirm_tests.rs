@@ -82,6 +82,14 @@ async fn confirm_flips_status_to_active_and_confidence_to_one() {
 
     // In-memory cache updated.
     assert!(!kg.pending_confirmations().read().await.contains(&fact_id));
+
+    // Confirmation is a fact mutation: it must mark condensation dirty so
+    // the `memory.condensation` hook rebuilds condensed memory on demand
+    // (issue #386 review).
+    assert!(
+        kg.condensation_dirty(),
+        "confirming a fact must set the condensation dirty signal"
+    );
 }
 
 #[tokio::test]

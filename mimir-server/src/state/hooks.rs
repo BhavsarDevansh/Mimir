@@ -29,7 +29,14 @@ pub fn merge_chat_turns(
     };
     let new_turns = match new.downcast::<Vec<ConversationTurn>>() {
         Ok(turns) => turns,
-        Err(new) => return new,
+        Err(_) => {
+            // A malformed trigger payload must not discard the accumulated
+            // transcript: keep the existing turns so only the bad payload is
+            // lost (one unexpected payload type would otherwise drop a whole
+            // debounced burst as a terminal failure).
+            warn!("remember.chat merge: unexpected new payload type; keeping accumulated turns");
+            return turns;
+        }
     };
     Arc::make_mut(&mut turns).extend(new_turns.iter().cloned());
     turns

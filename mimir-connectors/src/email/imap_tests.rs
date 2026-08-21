@@ -633,12 +633,10 @@ async fn imap_sync_then_extract_yields_invite_facts() {
     config["mode"] = serde_json::json!("poll");
     let connector = EmailConnector::from_config_with_deps(
         config,
-        None,
-        Some("Devansh".into()),
-        None,
-        None,
-        None,
-        None,
+        EmailConnectorDeps {
+            user_identity: Some("Devansh".into()),
+            ..Default::default()
+        },
     )
     .expect("config");
     let session = imap_login(Client::new(client), app_password_auth())

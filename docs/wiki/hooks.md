@@ -1,6 +1,6 @@
 # Background Hooks
 
-Mimir learns from your conversations and connected services through **background hooks** — small, deterministic background tasks that the daemon runs automatically. Hooks replaced the old approach where the chat model decided for itself whether to call a `remember` tool, which made learning depend on the model's behaviour and could be steered by what you said in the conversation.
+Mimir learns from your conversations and connected services through **background hooks** — small, typed background tasks that the daemon runs automatically. Hooks replaced the old approach where the chat model decided for itself whether to call a `remember` tool, which made learning depend on the model's behaviour and could be steered by what you said in the conversation.
 
 ## How it works
 
@@ -8,7 +8,7 @@ When something happens that Mimir might learn from — you finish a chat turn, a
 
 - **Debounce** — a burst of chat messages becomes one extraction instead of many, so Mimir does not fire an LLM call for every single message.
 - **Idle gating** — learning and memory condensation wait until you have stopped chatting and the LLM worker pool is idle, so background work never steals capacity from your conversation.
-- **Retry** — transient failures are retried with backoff; permanent failures are recorded and dropped so the same item is never re-processed forever.
+- **Retry** — transient failures are retried with backoff; permanent failures are recorded and dropped, so the same item is not re-processed for its current identity (a new mailbox epoch, e.g. after a `UIDVALIDITY` change, gives the message a fresh attempt).
 
 The pending queue lives in memory, so a daemon restart only loses work that has not started yet. Chat re-triggers on your next turn and memory condensation re-triggers on the next fact write. Connector items whose extraction was still in flight when the daemon stopped are skipped (the sync cursor has already advanced past them); a failed sync cycle re-fetches its window on the next cycle, and a full re-sync re-stages items that were not terminally failed.
 

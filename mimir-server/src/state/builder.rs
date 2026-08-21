@@ -472,6 +472,7 @@ pub(super) async fn init_hook_engine(
                 max_attempts: 3,
                 backoff: std::time::Duration::from_secs(30),
             },
+            max_pending: None,
             merge: Some(merge_chat_turns),
             handler: Arc::new(ChatLearningHandler::new(Arc::clone(kg), Arc::clone(llm))),
         })
@@ -491,6 +492,7 @@ pub(super) async fn init_hook_engine(
                 cooldown: std::time::Duration::from_secs(cfg.scheduler.cooldown_seconds as u64),
             },
             retry: RetryPolicy::default(),
+            max_pending: None,
             merge: None,
             handler: Arc::new(CondensationHandler::new(
                 Arc::clone(kg),
@@ -507,7 +509,9 @@ pub(super) async fn init_hook_engine(
     // system queue. The retry budget is per-connector
     // (`llm_extraction_max_attempts`, carried in the payload), so the hook's
     // own cap is a generous safety bound; the handler records terminal
-    // failures durably in the connector's retry ledger.
+    // failures durably in the connector's retry ledger. The handler lives in
+    // `mimir-connectors::email`, which exists only with the `gmail` feature.
+    #[cfg(feature = "gmail")]
     engine
         .register(Hook {
             id: "connector_item.remember".to_string(),
@@ -519,6 +523,10 @@ pub(super) async fn init_hook_engine(
                 max_attempts: u8::MAX,
                 backoff: std::time::Duration::from_secs(30),
             },
+            // Bound the per-item FIFO queue: a sync can stage many prose
+            // emails, and each payload carries the raw RFC 822 bytes, so an
+            // unbounded queue could retain unbounded payload memory.
+            max_pending: Some(1024),
             merge: None,
             handler: Arc::new(mimir_connectors::email::EmailExtractionHook::new()),
         })
@@ -631,7 +639,6 @@ pub(super) async fn init_connector_framework(
     let connector_supervisor = connector_supervisor
         .with_user_identity(cfg.identity.name.clone())
         .with_llm_backend(Arc::clone(llm))
-        .with_knowledge_graph(Arc::clone(kg))
         .with_hook_engine(Arc::clone(hook_engine));
     let connector_supervisor = Arc::new(connector_supervisor);
 

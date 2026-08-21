@@ -205,18 +205,6 @@ impl ConnectorSupervisor {
         self
     }
 
-    /// Inject the shared [`KnowledgeGraph`] made available to every
-    /// connector this supervisor constructs (issue #386).
-    ///
-    /// The Email connector's prose-extraction hook clones the graph out of
-    /// the context so the hook handler can insert extracted facts through
-    /// the shared `normalize_and_insert` pipeline with connector provenance.
-    /// Must be called before [`restore`](Self::restore) so already-spawned runners receive it.
-    pub fn with_knowledge_graph(mut self, kg: Arc<KnowledgeGraph>) -> Self {
-        self.context.knowledge_graph = Some(kg);
-        self
-    }
-
     /// Inject the shared [`HookEngine`] made available to every connector
     /// this supervisor constructs (issue #386).
     ///
@@ -369,12 +357,14 @@ impl ConnectorSupervisor {
                 serde_json::to_value(&row.durable_state)?,
             );
         }
-        Ok(self.registry.create_with_context(
-            connector_type,
-            &row.backend,
-            config,
-            &self.context,
-        )?)
+        // The connector-facing graph is always the supervisor's graph, so
+        // connector facts and the connector rows their provenance references
+        // can never land in different databases (issue #386 review).
+        let mut context = self.context.clone();
+        context.knowledge_graph = Some(Arc::clone(&self.kg));
+        Ok(self
+            .registry
+            .create_with_context(connector_type, &row.backend, config, &context)?)
     }
 }
 

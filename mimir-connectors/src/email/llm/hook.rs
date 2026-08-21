@@ -84,6 +84,17 @@ impl HookHandler for EmailExtractionHook {
                 raw_ref = %payload.raw_ref,
                 "connector_item.remember hook: could not parse RFC 822 message; dropping instance"
             );
+            // This payload can never be retried into a parseable message, so
+            // record the known-payload failure durably in the connector's
+            // retry ledger — the health path reports terminal failures from
+            // the ledger, and the item must not be re-staged on every cycle.
+            payload.ledger.lock().unwrap().record_terminal(
+                &payload.raw_ref,
+                payload.uid_validity,
+                payload.uid,
+                ctx.attempt,
+                "could not parse RFC 822 message".to_string(),
+            );
             return HookOutcome::TerminalFailure;
         };
         match extract_prose_facts(

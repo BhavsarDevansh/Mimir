@@ -141,6 +141,7 @@ pub async fn test_state_with_config(
                 cooldown: std::time::Duration::from_secs(config.scheduler.cooldown_seconds as u64),
             },
             retry: mimir_core::hooks::RetryPolicy::default(),
+            max_pending: None,
             merge: Some(mimir_server::state::hooks::merge_chat_turns),
             handler: Arc::new(mimir_server::state::hooks::ChatLearningHandler::new(
                 Arc::clone(&knowledge_graph),

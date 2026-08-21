@@ -81,7 +81,7 @@ export MIMIR_PERSONALITY_PRESET="concise"
    preset = "cheery"
    ```
 
-Custom presets override built-ins with the same name. The file body is used verbatim as the system prompt — no special syntax required.
+Custom presets override built-ins with the same name. The file body supplies the preset tone text — no special syntax required — and the shared operating principles (honesty and retrieval) are still appended by the daemon, so the behavioural contract holds for custom personalities too.
 
 ## Examples
 

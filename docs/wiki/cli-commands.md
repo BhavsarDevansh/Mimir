@@ -184,7 +184,7 @@ Print the live condensed memory block — a ranked summary of your most importan
 mimir memory
 ```
 
-Memory is regenerated on demand when facts change, and the `memory.condensation` background hook only condenses during LLM downtime so it never slows your conversations. Force a fresh condensation immediately:
+Memory is regenerated on demand when facts change, and the `memory.condensation` background hook only condenses when the LLM pool is idle so it never slows your conversations. Force a fresh condensation immediately:
 
 ```bash
 mimir memory --refresh

@@ -30,6 +30,7 @@ async fn register_slow_condensation_hook(state: &Arc<AppState>, sleep: std::time
             },
             gate: mimir_core::hooks::Gate::Ungated,
             retry: mimir_core::hooks::RetryPolicy::default(),
+            max_pending: None,
             merge: None,
             handler: Arc::new(SlowCondensation { sleep }),
         })

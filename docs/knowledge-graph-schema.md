@@ -253,7 +253,7 @@ The subsystems below are all implemented and documented separately:
 
 - Inference engine (`inference/`) — Rust-native transitivity, contradiction, and threshold rules. See [Inference Engine](inference-engine.md).
 - Optimization pipeline (`optimization/`) — Nightly dedup, confidence recalc, dormant cleanup, and compaction. See [Nightly Optimization](nightly-optimization.md).
-- Fact extraction (`extract.rs`) — hook-driven structured extraction with Rust validation. See [Fact Extraction Pipeline](fact-extraction-pipeline.md).
+- Fact extraction (`mimir-knowledge/src/extract/`) — hook-driven structured extraction with Rust validation. See [Fact Extraction Pipeline](fact-extraction-pipeline.md).
 - Confidence model — structural, graph-derived, no LLM, no decay. See [Confidence Model](Confidence-Model.md).
 
 ---

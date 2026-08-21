@@ -119,3 +119,5 @@ pub struct EmailConnector {
     /// handler mutated it between the snapshot and the persist (issue #386).
     durable_snapshot_version: AtomicU64,
 }
+
+pub use construct::EmailConnectorDeps;

@@ -22,8 +22,8 @@ When any of these signals fire, the server enters graceful shutdown:
 
 1. **Scheduler + hooks shutdown** (`BackgroundScheduler::shutdown()` and `HookEngine::shutdown()`)
    - Signals the scheduler's private `watch::Sender` so the dispatch loop breaks cleanly.
-   - Signals the hooks engine's shutdown channel and cancels the in-flight hook run.
-   - This prevents new background jobs from starting during teardown and ensures any in-flight job's DB record is updated before the runtime drops.
+   - Signals the hooks engine's shutdown channel, cancels the in-flight hook run, and awaits the dispatch loop's exit so no new hook run can start during teardown.
+   - Because shutdown waits for the dispatch loop, the in-flight run's terminal `job_runs` status is written before the SQLite pool closes and the runtime drops.
 
 2. **SQLite pool close** (`ContextManager::close()`)
    - Calls `sqlx::SqlitePool::close().await` to flush WAL and close connections.

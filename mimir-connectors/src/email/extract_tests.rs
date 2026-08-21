@@ -9,12 +9,10 @@ use mimir_knowledge::normalize::NormalizedFact;
 pub(super) fn connector_with_identity(name: Option<&str>) -> EmailConnector {
     EmailConnector::from_config_with_deps(
         app_config(),
-        None,
-        name.map(|n| n.to_string()),
-        None,
-        None,
-        None,
-        None,
+        EmailConnectorDeps {
+            user_identity: name.map(|n| n.to_string()),
+            ..Default::default()
+        },
     )
     .expect("config")
 }
@@ -337,12 +335,10 @@ async fn cancel_tombstones_survive_restart_via_durable_state() {
     config["__durable_state"] = serde_json::Value::String(durable);
     let restarted = EmailConnector::from_config_with_deps(
         config,
-        None,
-        Some("Devansh".to_string()),
-        None,
-        None,
-        None,
-        None,
+        EmailConnectorDeps {
+            user_identity: Some("Devansh".to_string()),
+            ..Default::default()
+        },
     )
     .expect("config");
     assert_eq!(

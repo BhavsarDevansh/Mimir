@@ -48,38 +48,68 @@ fn extraction_message() -> Message {
     }
 }
 
-/// Poll until the KG holds `favourite_colour=blue` for the user, or fail
-/// after a timeout.
+/// Whether the KG holds `favourite_colour=blue` for the configured user.
+/// The user entity itself is created at daemon start, so incognito
+/// persistence checks must observe the *fact*, not the entity's existence.
+async fn has_favourite_colour(state: &Arc<AppState>) -> bool {
+    let search = state
+        .knowledge_graph
+        .search_entities("Devansh", 1)
+        .await
+        .unwrap();
+    let Some(result) = search.first() else {
+        return false;
+    };
+    let facts = state
+        .knowledge_graph
+        .get_facts_by_subject(result.entity.id, 100)
+        .await
+        .unwrap();
+    for fact in &facts {
+        let pred = state
+            .knowledge_graph
+            .relationship_type_name(fact.relationship_type_id)
+            .await;
+        if pred.as_deref() == Some("favourite_colour")
+            && fact.object_literal.as_deref() == Some("blue")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Poll until the KG holds `favourite_colour=blue` for the user, or return
+/// false after a timeout.
 async fn wait_for_favourite_colour(state: &Arc<AppState>) -> bool {
     let deadline = Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        let search = state
-            .knowledge_graph
-            .search_entities("Devansh", 1)
-            .await
-            .unwrap();
-        if let Some(result) = search.first() {
-            let facts = state
-                .knowledge_graph
-                .get_facts_by_subject(result.entity.id, 100)
-                .await
-                .unwrap();
-            for fact in &facts {
-                let pred = state
-                    .knowledge_graph
-                    .relationship_type_name(fact.relationship_type_id)
-                    .await;
-                if pred.as_deref() == Some("favourite_colour")
-                    && fact.object_literal.as_deref() == Some("blue")
-                {
-                    return true;
-                }
-            }
+        if has_favourite_colour(state).await {
+            return true;
         }
         if Instant::now() >= deadline {
             return false;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// Wait until the `remember.chat` hook has neither pending nor running
+/// instances, so a negative persistence assertion observes a fully drained
+/// dispatch (the hook would have written facts by then if it fired).
+async fn wait_for_chat_hook_idle(state: &Arc<AppState>) {
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let pending = state.hook_engine.pending_depth_for("remember.chat").await;
+        let running = state.hook_engine.running_count().await;
+        if pending == 0 && running == 0 {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "remember.chat hook did not drain within 5s (pending={pending}, running={running})"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 }
 
@@ -142,10 +172,10 @@ async fn test_incognito_turn_enqueues_no_hook_and_writes_no_facts() {
     let mock = Arc::new(
         MockLlmClient::builder()
             .push_chat("Noted.", Usage::default())
+            .push_chat_message(extraction_message(), Usage::default())
             .build(),
     );
     let (state, _temp) = test_state_with_config(mock, fast_learning_config()).await;
-    let kg = Arc::clone(&state.knowledge_graph);
     let app = mimir_server::build_app(state.clone());
 
     let body = serde_json::to_string(&serde_json::json!({
@@ -171,10 +201,13 @@ async fn test_incognito_turn_enqueues_no_hook_and_writes_no_facts() {
         0,
         "incognito turns must never enqueue the chat hook"
     );
-    let found = kg.search_entities("Incognito Test User", 10).await.unwrap();
+    // Give any (incorrect) hook dispatch time to run to completion: the mock
+    // is configured with an extraction response, so a fired hook would have
+    // persisted the `Devansh` fact by the time the queue drains.
+    wait_for_chat_hook_idle(&state).await;
     assert!(
-        found.is_empty(),
-        "incognito turn must not persist entities, got: {found:?}"
+        !has_favourite_colour(&state).await,
+        "incognito turn must not persist facts (the user entity itself is created at daemon start)"
     );
 }
 
@@ -225,10 +258,10 @@ async fn test_incognito_stream_enqueues_no_hook_and_writes_no_facts() {
                 Ok(StreamItem::Text("Noted.".to_string())),
                 Ok(StreamItem::Usage(Usage::default())),
             ])
+            .push_chat_message(extraction_message(), Usage::default())
             .build(),
     );
     let (state, _temp) = test_state_with_config(mock, fast_learning_config()).await;
-    let kg = Arc::clone(&state.knowledge_graph);
     let app = mimir_server::build_app(state.clone());
 
     let body = serde_json::to_string(&serde_json::json!({
@@ -259,10 +292,10 @@ async fn test_incognito_stream_enqueues_no_hook_and_writes_no_facts() {
         0,
         "incognito stream turns must never enqueue the chat hook"
     );
-    let found = kg.search_entities("Incognito Test User", 10).await.unwrap();
+    wait_for_chat_hook_idle(&state).await;
     assert!(
-        found.is_empty(),
-        "incognito turn must not persist entities, got: {found:?}"
+        !has_favourite_colour(&state).await,
+        "incognito turn must not persist facts (the user entity itself is created at daemon start)"
     );
 }
 

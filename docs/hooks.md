@@ -20,13 +20,15 @@ This removes the prompt-injection path where a user could steer the model into o
 
 - `TurnCompleted { session_id, payload }` — a non-incognito chat turn completed (assistant response persisted).
 - `ConnectorItemStaged { item_id, payload }` — a connector item was staged and needs LLM extraction.
-- `FactInserted` — a fact was inserted / memory became dirty.
+- `FactInserted` — a fact was inserted / memory became dirty. Carries a unit `()` payload, so it suits handlers that ignore the trigger payload (e.g. `CondensationHandler`).
 
 Each trigger carries an `Arc<dyn Any + Send + Sync>` payload; handlers downcast to their expected type. The engine itself never inspects payload contents.
 
+`force_run` also submits a unit `()` payload, so it is only meaningful for handlers that do not depend on the trigger payload — `CondensationHandler` works, while `ChatLearningHandler` requires `Vec<ConversationTurn>` and returns `TerminalFailure` for `()`.
+
 ### Queue policies
 
-- `Multiple` — every trigger enqueues; FIFO.
+- `Multiple` — every trigger enqueues; FIFO. A `Multiple` hook can set `max_pending` to cap the pending queue; once the cap is reached, new triggers are rejected with `TriggerStatus::QueueFull` so the producer can bound in-memory payload retention (the Email connector logs the rejection).
 - `SingularFirstWins` — the first instance stays; new triggers are dropped while one is pending or running for the key.
 - `SingularLastWins { debounce }` — a pending instance is replaced with the latest payload and re-enqueued at the tail (true debounce); a running instance is unaffected and the new trigger enqueues a fresh pending instance. An optional `merge` function accumulates the new payload into the old one (e.g. chat turns since the last hook run).
 
@@ -41,7 +43,7 @@ Singularity is either `Global` (one pending instance for the whole hook) or `Per
 
 ### Durability
 
-The pending queue is in-memory; runs stay durable in `JobQueue`. A daemon restart loses only pending instances — chat re-triggers on the next turn, condensation re-triggers on the next fact write, and a connector cycle that failed before persisting its cursor re-fetches that window on the next cycle (issues #314, #332). Connector items whose extraction was still in flight when the daemon stopped are not re-fetched: the sync cursor has already advanced past them, so their LLM-layer extraction is skipped unless a full re-sync (e.g. a `UIDVALIDITY` change) re-stages them. Each registered hook owns one durable `JobQueue` job whose handler executes the hook's currently running instance via a `Weak<EngineInner>` reference (no reference cycle between engine and queue).
+The pending queue is in-memory; runs stay durable in `JobQueue`. A daemon restart loses pending instances, and connector hook runs that are in flight can also be skipped — chat re-triggers on the next turn, condensation re-triggers on the next fact write, and a connector cycle that failed before persisting its cursor re-fetches that window on the next cycle (issues #314, #332). Connector items whose extraction was still in flight when the daemon stopped are not re-fetched: the sync cursor has already advanced past them, so their LLM-layer extraction is skipped unless a full re-sync (e.g. a `UIDVALIDITY` change) re-stages them. Each registered hook owns one durable `JobQueue` job whose handler executes the hook's currently running instance via a `Weak<EngineInner>` reference (no reference cycle between engine and queue).
 
 ### Retry
 

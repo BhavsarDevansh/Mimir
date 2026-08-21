@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-08-19
+> **Last updated:** 2026-08-21
 >
-> **Version:** 0.124.2
+> **Version:** 0.130.5
 >
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in `CHANGELOG.md`; this file deliberately does not repeat either.
 
@@ -187,7 +187,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 |---------|--------|----------------------|
 | systemd user service | ✅ Works | `mimir init` offers to install and enable it on Linux. |
 | macOS launchd | ❌ Not implemented | `mimir init` prints "planned for a future phase" ([#285](https://github.com/BhavsarDevansh/Mimir/issues/285)). |
-| Graceful shutdown | ✅ Works | `mimir stop`, Ctrl-C, or SIGTERM; drains in-flight requests and tears down background tasks; shutdown cause is logged. |
+| Graceful shutdown | ✅ Works | `mimir stop`, Ctrl-C, or SIGTERM; drains in-flight requests and tears down background tasks; shutdown cause is logged. Runtime teardown never hangs on the config watcher thread, including error paths that drop the runtime before the shutdown broadcast ([#415](https://github.com/BhavsarDevansh/Mimir/issues/415)). |
 | Daemon startup (AppState construction) | ✅ Works | Per-subsystem init helpers (`init_context_manager`, `init_tool_registry`, `init_knowledge_graph`, `init_job_queue`, `init_agent_runtime`, `init_scheduler`, `init_connector_framework`) composed in a fixed order by `from_config_with_llm`; issue #281 added the `api_token` field to `AppState` (loaded or generated at startup). |
 | Daemon-down detection | ✅ Works | CLI probes `/health`; prompts to auto-start with a 10 s readiness timeout. |
 | API authentication | ✅ Works | Every route except `GET /health` requires a bearer token auto-generated at `~/.local/share/mimir/api_token` (mode `0600`); the CLI attaches it automatically, so commands work unmodified ([#281](https://github.com/BhavsarDevansh/Mimir/issues/281)). |

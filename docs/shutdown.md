@@ -39,11 +39,13 @@ When any of these signals fire, the server enters graceful shutdown:
 
 After the drain completes (or the drain bound elapses), `start_server_with_llm_and_listener` broadcasts `true` on `AppState::shutdown_tx` **before** calling `AppState::shutdown()`. This watch channel is subscribed to by every background task spawned from `start_server`:
 
-- the config file-watcher's async relay task (which sets the `spawn_blocking` watcher's `AtomicBool` stop flag, causing it to drop the `notify` debouncer and exit within 250 ms),
+- the config file-watcher's async relay task (its exit drops the lifetime-channel sender that keeps the `spawn_blocking` watcher loop alive, so the `notify` debouncer is dropped and the thread exits within 250 ms),
 - the SIGHUP reload handler,
 - the condensation-notify listener.
 
 The broadcast is sent while the runtime is still fully alive, so the tasks are guaranteed to be polled and tear down deterministically. Previously the SIGTERM/Ctrl-C path never sent on `shutdown_tx` (only `POST /stop` did), so background shutdown relied on `AppState` being dropped during runtime teardown to resolve the watchers' `shutdown_rx.changed()` via sender-drop — a race that, when lost, left the file-watcher `spawn_blocking` thread alive and deadlocked tokio's `BlockingPool::shutdown` until systemd aborted the unit with `SIGABRT`. The explicit broadcast removes that race.
+
+Error paths that never reach the broadcast (a panic, or an early return before it) no longer leak the watcher thread either: because the watcher's lifetime-channel sender is owned by the async task, dropping the task during runtime teardown disconnects the blocking loop and it exits within 250 ms, so `BlockingPool::shutdown` always completes (issue #415).
 
 ## Trigger Architecture
 

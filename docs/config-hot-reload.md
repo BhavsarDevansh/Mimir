@@ -49,7 +49,9 @@ Uses `notify` 8.2.0 with `notify-debouncer-full` 0.7.0:
 - Config file changes are filtered by filename (`ends_with("config.toml")`).
 - **`Access` events are ignored.** `notify` reports `Access` (open/read/close) events, and `reload()` itself reads the file — without filtering, those reads fed a self-reload loop that reloaded the config ~once per second even when it never changed, flooding the journal.
 - **Metadata dedupe.** Before signalling a reload, the watcher compares the file's `(mtime, size)` signature against the last reload it requested. Events with an unchanged signature are skipped silently, preventing repeated reloads when the file metadata has not changed between debounce windows.
-- On shutdown, an `AtomicBool` stop flag signals the blocking task to exit within 250ms. The flag is set deterministically by the server's shutdown broadcast (see `docs/shutdown.md`), not left to an `AppState`-drop race.
+- The blocking thread's lifetime is tied to the async watcher task via a `std::sync::mpsc` lifetime channel: the sender is owned by the async task, so the blocking loop observes `Disconnected` and exits whenever the task exits — on every exit branch, and when runtime teardown drops the task on an error path where the shutdown watch never fires (issue #415). Without this, the `spawn_blocking` thread kept looping on `recv_timeout` forever and tokio's runtime drop hung joining the blocking pool.
+- On the graceful path the server's shutdown broadcast (see `docs/shutdown.md`) still makes the async task exit promptly while the runtime is fully alive, so teardown stays deterministic; the lifetime channel additionally covers panics and early-return error paths that never reach the broadcast.
+- The shutdown receiver is subscribed before the task is spawned and the current value is checked before entering the loop (same pattern as the SIGHUP handler, issue #421), so a broadcast that lands before the task's first poll is still observed.
 
 ### SIGHUP Handler (Unix only)
 
@@ -90,3 +92,7 @@ Unit tests in `mimir-core/src/config/tests.rs`:
 - `test_reloadable_applies_non_sensitive_change`: Changes `personality.preset` and `memory.char_limit`, verifies new values.
 - `test_reloadable_rejects_sensitive_change`: Changes `llm.model`, verifies `SensitiveFieldChanged` error and old model retained.
 - `test_reloadable_rejects_invalid_toml`: Corrupts the file, verifies `Parse` error and old config retained.
+
+Regression tests in `mimir-server/src/server.rs`:
+- `test_config_watcher_thread_exits_when_runtime_dropped_without_shutdown`: Drops a runtime that spawned the watcher without firing the shutdown watch and asserts the drop completes (issue #415) — with the leak the blocking-pool join hung forever.
+- `test_config_watcher_reloads_on_file_change`: Writes new config content and asserts the debounced event is forwarded and reloaded into the snapshot.

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.130.5] — 2026-08-21
+
+### Fix: daemon config watcher thread leaks and hangs runtime shutdown on error paths (issue #415)
+
+- The config hot-reload watcher in `mimir-server/src/server.rs` now ties the `spawn_blocking` thread's lifetime to its async relay task through a `std::sync::mpsc` lifetime channel: the sender is owned by the async task, so the blocking loop observes `Disconnected` and exits whenever the task exits — on every exit branch, and when runtime teardown drops the task on an error path where the shutdown watch never fires (a panic, or an early return before the shutdown broadcast). Previously the blocking loop only exited via the `stop` flag set by the async task's shutdown branch, so a runtime dropped without the broadcast leaked the thread and tokio's runtime drop hung indefinitely joining the blocking pool.
+- The watcher was extracted into a testable `spawn_config_watcher` helper; it subscribes to the shutdown watch before spawning the task and checks the current value before entering its loop (same pattern as the SIGHUP handler, issue #421).
+- Added regression tests: dropping a runtime that spawned the watcher without firing the shutdown watch completes instead of hanging, and a content change on the config file is debounced, forwarded, and reloaded.
+- Docs updated: `docs/config-hot-reload.md`, `docs/shutdown.md`, `docs/unit-tests.md`, `docs/wiki/daemon-shutdown.md`, `docs/wiki/Testing-and-Benchmarks.md`, `docs/wiki/what-works-now.md`.
+- Version bumped 0.130.4 → 0.130.5 (patch — bug fix).
+
 ## [0.130.4] — 2026-08-21
 
 ### Fix: PR #436 review feedback (event overlay scan coverage and documentation)

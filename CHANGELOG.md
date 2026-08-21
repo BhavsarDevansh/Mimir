@@ -4,7 +4,7 @@
 
 ### Fix: reflow `VISION/03-Connectors/User-Experience.md` to the single-line prose standard (issue #418)
 
-- `VISION/03-Connectors/User-Experience.md` no longer violates the AGENTS.md single-line prose standard: the two hard-wrapped paragraphs after the connector-add wizard transcript (drift from PR #385) are merged back into single flowing lines, so the `md-reflow --check` guard no longer flags the file. Content is unchanged — only line wrapping (whitespace-collapsed diff equality per `scripts/md-reflow`).
+- `VISION/03-Connectors/User-Experience.md` no longer violates the AGENTS.md single-line prose standard: the hard-wrapped paragraph after the connector-add wizard transcript (drift from PR #385) is merged back into a single flowing line, so the `md-reflow --check` guard no longer flags the file. Content is unchanged — only line wrapping (whitespace-collapsed diff equality per `scripts/md-reflow`).
 - Version bumped 0.131.2 → 0.131.3 (patch — documentation fix).
 
 ## [0.131.2] — 2026-08-21

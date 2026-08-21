@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.130.2] — 2026-08-21
+
+### Fix: PR #435 review feedback (connector predicate rendering)
+
+- `purchased_from` facts now render in passive voice (`Order was purchased from Shop`), matching migration `053`'s seeded definition ("Subject was purchased from an organization"), and the memory renderer's exact-output pin now covers all 16 connector-emitted predicates, including the previously unpinned `attending`, `took_photo_at`, `departs_from`, `arrives_at`, `operated_by`, and `purchased_from` branches.
+- Corrected the `0.130.1` changelog entry to list the full connector-emitted grammar.
+- Version bumped 0.130.1 → 0.130.2 (patch — render phrase fix and test coverage).
+
+## [0.130.1] — 2026-08-21
+
+### Fix: PR #435 review feedback (connector predicate seeding)
+
+- The deterministic memory renderer now covers the complete connector-emitted predicate grammar (`has_event`, `attending`, `took_photo_at`, `took_photo`, `has_flight`, `departs_from`, `arrives_at`, `operated_by`, `has_booking`, `has_order`, `purchased_from`, `has_delivery`, `shipped_by`, `delivered_to`, `has_ticket`, `issued_by`), with the exact render output pinned in tests.
+- The Photos extraction test now asserts exactly which predicates each path emits (`took_photo_at` with GPS resolution, `took_photo` without), and the `oauth`/memory test counts in `docs/unit-tests.md` were reconciled with the suite (326 connector lib tests, 204 knowledge lib tests, 13 memory tests).
+- Migration `053` now starts each WHERE clause on its own line (SQLFluff LT14), and the connector docs qualify that seeded constraints apply where applicable (typed entity-object shapes; literal-object predicates such as `took_photo` stay unconstrained).
+- Version bumped 0.130.0 → 0.130.1 (patch — review fixes, test pins, and documentation).
+
+## [0.130.0] — 2026-08-21
+
+### Seed connector-emitted predicates as canonical ontology (issue #412)
+
+- Added migration `053`: the 16 predicates the connectors emit deterministically (`has_event`, `attending`, `took_photo_at`, `took_photo`, `has_flight`, `departs_from`, `arrives_at`, `operated_by`, `has_booking`, `has_order`, `purchased_from`, `has_delivery`, `shipped_by`, `delivered_to`, `has_ticket`, `issued_by`) are now seeded canonical rows with descriptions, self-aliases, and subject/object constraints mirroring the emit sites, so a connector sync never silently auto-creates a `relationship_types` row on first use. The seed is name-keyed (upgrades canonicalise pre-existing auto-created rows in place) and reconciles unreferenced auto-created vocabulary like migration `050`.
+- Added the public `CONNECTOR_EMITTED_PREDICATES` const and `is_canonical_predicate_name` helper in `mimir-knowledge` (re-exported at the crate root), and extended `CANONICAL_PREDICATES` with the new verbs so the strict conversational resolver accepts them too.
+- The email LLM extraction layer now validates the LLM-emitted `relationship_type` against the canonical vocabulary and drops non-canonical predicates with a warning instead of letting them auto-create rows; the tool-schema description now cites only canonical examples.
+- Added the seed pin in both directions: `mimir-connectors` tests assert every predicate emitted by the iCal, JSON-LD, and Photos extractors is canonical vocabulary (including the email LLM layer), and `mimir-knowledge` pins every registered connector predicate to a seeded canonical row with its constraint pair (`connector_emitted_predicates_are_seeded_canonical`).
+- Added render templates for the new predicates in the deterministic memory/upcoming renderer, and updated the predicate ontology docs (`docs/knowledge-graph-schema.md`, `docs/fact-extraction-pipeline.md`, `docs/email-connector.md`, `docs/unit-tests.md`, wiki pages).
+- Version bumped 0.129.1 → 0.130.0 (minor — additive ontology seed, migration, and public API surface).
+
 ## [0.129.1] — 2026-08-21
 
 ### Fix: PR #434 review feedback (category memory buckets)

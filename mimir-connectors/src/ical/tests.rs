@@ -189,6 +189,38 @@ fn vevent_to_facts_emits_primary_location_and_attendee_facts() {
     assert_eq!(facts[3].subject, "bob@example.com");
 }
 
+/// Every predicate the iCalendar extractor emits must be part of the canonical
+/// vocabulary (`mimir_knowledge::is_canonical_predicate_name`), which the
+/// knowledge crate pins to the migration seed (issue #412). A connector
+/// cannot silently auto-create a `relationship_types` row on first sync.
+#[test]
+fn emitted_predicates_are_registered_connector_vocabulary() {
+    let event = RawVEvent {
+        uid: Some("uid-1@test".into()),
+        summary: Some("Trip to Rome".into()),
+        starts_at: Some(Utc.with_ymd_and_hms(2025, 5, 3, 9, 0, 0).unwrap()),
+        ends_at: Some(Utc.with_ymd_and_hms(2025, 5, 7, 18, 0, 0).unwrap()),
+        location: Some("Rome".into()),
+        description: None,
+        status: Some("CONFIRMED".into()),
+        recurrence_rule: None,
+        attendees: vec!["Alice".into(), "bob@example.com".into()],
+        organizer: None,
+    };
+    let facts = vevent_to_facts(Some("Devansh"), &event, "raw-1");
+    assert!(
+        facts.len() >= 3,
+        "primary + location + attendees expected: {facts:?}"
+    );
+    for fact in facts {
+        assert!(
+            mimir_knowledge::is_canonical_predicate_name(&fact.relationship_type),
+            "calendar-emitted predicate {} must be canonical vocabulary",
+            fact.relationship_type
+        );
+    }
+}
+
 #[test]
 fn vevent_to_facts_skips_primary_when_no_user_identity() {
     let event = RawVEvent {

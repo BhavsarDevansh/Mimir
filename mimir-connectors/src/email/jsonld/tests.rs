@@ -505,6 +505,44 @@ fn reservation_package_flattens_sub_reservations() {
     );
 }
 
+/// Every predicate the JSON-LD extractor emits must be part of the canonical
+/// vocabulary (`mimir_knowledge::is_canonical_predicate_name`), which the
+/// knowledge crate pins to the migration seed (issue #412). A connector
+/// cannot silently auto-create a `relationship_types` row on first sync.
+#[test]
+fn all_extractor_families_emit_registered_predicates() {
+    let fixtures = [
+        // FlightReservation
+        flight_reservation_json(),
+        // LodgingReservation
+        r#"{"@type":"LodgingReservation","reservationId":"H1","checkinDate":"2025-08-20","checkoutDate":"2025-08-25","reservationFor":{"@type":"LodgingBusiness","name":"Grand Hotel","address":{"@type":"PostalAddress","streetAddress":"123 Via Roma"}}}"#,
+        // EventReservation
+        r#"{"@type":"EventReservation","reservationId":"E1","reservationFor":{"@type":"Event","name":"Symphony Concert","startDate":"2025-09-10T19:30:00+02:00","endDate":"2025-09-10T21:00:00+02:00","location":{"@type":"Place","name":"Royal Albert Hall"}}}"#,
+        // Order
+        r#"{"@type":"Order","orderNumber":"ORD-99","orderDate":"2025-08-01","merchant":{"@type":"Organization","name":"Acme Corp"}}"#,
+        // ParcelDelivery
+        r#"{"@type":"ParcelDelivery","trackingNumber":"TRK123","expectedArrivalFrom":"2025-08-05","expectedArrivalUntil":"2025-08-07","carrier":{"@type":"Organization","name":"DHL"},"deliveryAddress":{"@type":"PostalAddress","streetAddress":"10 Downing St"}}"#,
+        // Ticket
+        r#"{"@type":"Ticket","ticketNumber":"TKT-7","dateIssued":"2025-07-01","issuedBy":{"@type":"Organization","name":"TicketMaster"}}"#,
+        // ReservationPackage (flattens two flights)
+        r#"{"@type":"ReservationPackage","subReservation":[{"@type":"FlightReservation","reservationFor":{"@type":"Flight","flightNumber":"100","airline":"BA","departureAirport":{"name":"LHR"},"arrivalAirport":{"name":"JFK"},"departureTime":"2025-08-15T10:00:00Z","arrivalTime":"2025-08-15T14:00:00Z"}},{"@type":"FlightReservation","reservationFor":{"@type":"Flight","flightNumber":"200","airline":"BA","departureAirport":{"name":"JFK"},"arrivalAirport":{"name":"LHR"},"departureTime":"2025-08-25T18:00:00Z","arrivalTime":"2025-08-26T06:00:00Z"}}]}"#,
+    ];
+
+    for json in fixtures {
+        let v: Value = serde_json::from_str(json).unwrap();
+        let nodes = flatten_nodes(&v);
+        let facts = extract_node_facts(Some("Devansh"), nodes[0], "1:1");
+        assert!(!facts.is_empty(), "fixture {json} must produce facts");
+        for fact in facts {
+            assert!(
+                mimir_knowledge::is_canonical_predicate_name(&fact.relationship_type),
+                "email JSON-LD predicate {} must be canonical vocabulary",
+                fact.relationship_type
+            );
+        }
+    }
+}
+
 // --- Field helpers ----------------------------------------------------
 
 #[test]

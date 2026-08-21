@@ -2,9 +2,9 @@ use crate::graph::KnowledgeGraph;
 use crate::*;
 
 /// Canonical relationship-type names the conversational extraction path
-/// accepts (issue #401). Seeded by migrations 013/023/025/031/036/037, 050
-/// and 051; the prompt-instructed `favourite_<thing>` family is an open set
-/// handled separately by
+/// accepts (issue #401). Seeded by migrations 013/023/025/031/036/037, 050,
+/// 051 and 053; the prompt-instructed `favourite_<thing>` family is an open
+/// set handled separately by
 /// [`KnowledgeGraph::resolve_canonical_relationship_type`].
 ///
 /// Kept in sync with the seed by
@@ -64,6 +64,69 @@ pub const CANONICAL_PREDICATES: &[&str] = &[
     "bank_account",
     "credit_card",
     "insurance",
+    // Migration 053 (connector-emitted predicates, issue #412). Seeded so the
+    // connector path never auto-creates a runtime row; also usable by the
+    // conversational path now that they are canonical vocabulary.
+    "has_event",
+    "attending",
+    "took_photo_at",
+    "took_photo",
+    "has_flight",
+    "departs_from",
+    "arrives_at",
+    "operated_by",
+    "has_booking",
+    "has_order",
+    "purchased_from",
+    "has_delivery",
+    "shipped_by",
+    "delivered_to",
+    "has_ticket",
+    "issued_by",
+];
+
+/// Relationship-type names the connectors emit deterministically (issue
+/// #412). Pinned in both directions:
+/// `connector_emitted_predicates_are_seeded_canonical` in
+/// `mimir-knowledge/tests/predicate_allowlist_test.rs` pins every entry to a
+/// seeded canonical row (migration 053), and the `mimir-connectors`
+/// registration tests assert every extractor-emitted predicate passes
+/// [`is_canonical_predicate_name`] — canonical vocabulary, a superset of this
+/// list, since `visited` (photos coords fallback, issue #250), `located_in`
+/// (iCal + JSON-LD) and `has_appointment` (email LLM) are canonical since
+/// migrations 013/050 and deliberately not listed here. A new connector
+/// predicate must therefore be seeded canonical before the connector tests
+/// pass; adding it here additionally pins the seed/const pair and documents
+/// the emit surface. The email LLM layer validates its emitted predicates
+/// against [`is_canonical_predicate_name`], so even the open LLM surface
+/// cannot auto-create rows outside the prompt-instructed
+/// `favourite_<thing>` family, which is canonical by design.
+pub const CONNECTOR_EMITTED_PREDICATES: &[&str] = &[
+    // Calendar / Email iMIP (mimir-connectors/src/ical/facts.rs) and JSON-LD
+    // EventReservation (mimir-connectors/src/email/jsonld/reservations.rs).
+    "has_event",
+    "attending",
+    // Photos (mimir-connectors/src/photos/scan.rs). `visited` is also
+    // emitted (the coords-only fallback, issue #250) but has been canonical
+    // since migration 013, so it is not listed here.
+    "took_photo_at",
+    "took_photo",
+    // Email JSON-LD reservations (mimir-connectors/src/email/jsonld/).
+    "has_flight",
+    "departs_from",
+    "arrives_at",
+    "operated_by",
+    "has_booking",
+    "has_order",
+    "purchased_from",
+    "has_delivery",
+    "shipped_by",
+    "delivered_to",
+    "has_ticket",
+    "issued_by",
+    // `located_in` (iCal + JSON-LD) and `has_appointment` (email LLM) are
+    // also connector-emitted but were seeded canonically earlier (migrations
+    // 013/050), so they are not listed here.
 ];
 
 /// Predicates that represent a collection of independent values, so a
@@ -100,6 +163,23 @@ const FAVOURITE_PREDICATE_PREFIX: &str = "favourite_";
 pub(crate) fn is_favourite_family_predicate(name: &str) -> bool {
     name.strip_prefix(FAVOURITE_PREDICATE_PREFIX)
         .is_some_and(|thing| !thing.is_empty())
+}
+
+/// Whether a predicate name is part of the canonical vocabulary the strict
+/// resolver accepts — the seeded [`CANONICAL_PREDICATES`] allow-list or the
+/// open `favourite_<thing>` family — after alias normalisation. Pure Rust
+/// check, no database access.
+///
+/// Used by the email LLM connector layer (issue #412) so an LLM-emitted
+/// predicate can never auto-create a `relationship_types` row on first sync:
+/// the same [`CANONICAL_PREDICATES`] const the conversational boundary's
+/// strict resolver checks (plus the open `favourite_<thing>` family).
+pub fn is_canonical_predicate_name(name: &str) -> bool {
+    let Some(normalized) = normalize_alias(name) else {
+        return false;
+    };
+    CANONICAL_PREDICATES.contains(&normalized.as_str())
+        || is_favourite_family_predicate(&normalized)
 }
 
 impl KnowledgeGraph {

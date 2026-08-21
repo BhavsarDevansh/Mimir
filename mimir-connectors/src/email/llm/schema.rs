@@ -78,7 +78,7 @@ static EMAIL_EXTRACTION_TOOL_SCHEMA: LazyLock<serde_json::Value> = LazyLock::new
                                 },
                                 "relationship_type": {
                                     "type": "string",
-                                    "description": "The relationship or property being asserted (e.g. has_flight, has_event, has_appointment, owes, lives_at)."
+                                    "description": "The relationship or property being asserted, from the canonical predicate vocabulary (e.g. has_flight, has_event, has_appointment)."
                                 },
                                 "object": {
                                     "type": "string",

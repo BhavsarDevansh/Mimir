@@ -34,6 +34,18 @@ pub(super) fn build_fact(
     let subject_type = parse_entity_type(&fact.subject_type).map_err(|e| {
         ConnectorError::Parse(format!("invalid subject_type {:?}: {e}", fact.subject_type))
     })?;
+
+    // The LLM schema leaves relationship_type open, so Rust validates it
+    // against the canonical vocabulary (issue #412): a non-canonical
+    // predicate is dropped (the caller warns) instead of auto-creating a
+    // `relationship_types` row on first sync.
+    if !mimir_knowledge::is_canonical_predicate_name(&fact.relationship_type) {
+        return Err(ConnectorError::Parse(format!(
+            "non-canonical relationship_type {:?}",
+            fact.relationship_type
+        )));
+    }
+
     let object_type = fact
         .object_type
         .as_deref()

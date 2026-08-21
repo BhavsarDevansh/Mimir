@@ -14,7 +14,7 @@ The extraction pipeline applies Rust-side normalisation and splitting to improve
 
 ## Shared with connectors
 
-The resolve → confidence → sensitivity-gate → insert steps are not conversation-specific. They live in a single shared function, `mimir_knowledge::normalize::normalize_and_insert`, that both the chat `remember` path and service connectors call. Connectors build the same `NormalizedFact` values from their items and supply a connector `Provenance`, so facts learned from your email, calendar, or photos get the identical confidence scoring, corroboration, supersession, and sensitivity gating as facts you tell Mimir directly — including cross-source corroboration, where the same fact reported by two different connectors is merged into one knowledge-graph entry with boosted confidence rather than duplicated.
+The resolve → confidence → sensitivity-gate → insert steps are not conversation-specific. They live in a single shared function, `mimir_knowledge::normalize::normalize_and_insert`, that both the chat `remember` path and service connectors call. Connectors build the same `NormalizedFact` values from their items and supply a connector `Provenance`, so facts learned from your email, calendar, or photos get the identical confidence scoring, corroboration, supersession, and sensitivity gating as facts you tell Mimir directly — including cross-source corroboration, where the same fact reported by two connectors is merged into one knowledge-graph entry with boosted confidence rather than duplicated. Connector predicates are first-class ontology: every predicate the connectors emit (e.g. `has_event` for calendar entries, `attending`, `took_photo_at`, `has_flight`) is seeded as a canonical predicate with its own description and subject/object constraints, so a connector sync never invents a new predicate on the fly (issue #412).
 
 ## What Gets Extracted
 
@@ -67,7 +67,7 @@ When Mimir confirms a fact is sensitive, it stores it as **pending confirmation*
 Confidence is calculated by Mimir itself, not the AI. It depends on:
 
 - How directly you stated the fact (explicit vs casual)
-- Whether multiple sources agree (future feature)
+- Whether multiple sources agree (cross-source corroboration boosts confidence)
 - Whether the fact was inferred by rules (lower confidence)
 
 ## Your Control

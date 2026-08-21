@@ -25,7 +25,7 @@ cargo fmt --all -- --check
 
 ## What got better
 
-- Inline unit tests grew from ~12 to 63 (`mimir-api-types`), ~24 to 74 (`mimir-client`), 211 to 279 (`mimir-core` lib), 110 to 203 (`mimir-knowledge` lib), 38 to 46 (`mimir-server`; 44 on non-Unix platforms — the two SIGHUP regression tests in `server.rs` are Unix-only), and 29 to 84 (`mimir` bin); `mimir-connectors` currently carries 321 lib tests across the email/oauth/photos/supervisor/rate-limit/calendar/geocoder/ical/secrets modules (see `docs/unit-tests.md`).
+- Inline unit tests grew from ~12 to 63 (`mimir-api-types`), ~24 to 74 (`mimir-client`), 211 to 279 (`mimir-core` lib), 110 to 204 (`mimir-knowledge` lib), 38 to 46 (`mimir-server`; 44 on non-Unix platforms — the two SIGHUP regression tests in `server.rs` are Unix-only), and 29 to 84 (`mimir` bin); `mimir-connectors` currently carries 326 lib tests across the email/oauth/photos/supervisor/rate-limit/calendar/geocoder/ical/secrets modules (see `docs/unit-tests.md`).
 - Three new pure-helper benchmark suites cover pathways that were previously unbenchmarked.
 - Security-relevant tests now lock in that internal error details (LLM upstream text, context IDs, memory I/O messages, KG internal variants) are masked from HTTP clients with stable error codes.
 - The calendar knowledge-graph integration tests are deterministic under parallel load: they wait for the events-subsystem overlay (`get_event_by_fact`) instead of the bare fact list, and drive the tombstone cycle via `trigger_sync_by_slug` — closing the initial-cycle and tombstone-cycle races that previously made `calendar_kb_tests` flaky in full-suite runs (issues #320, #367).

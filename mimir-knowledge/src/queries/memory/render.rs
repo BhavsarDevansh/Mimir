@@ -61,6 +61,49 @@ pub(super) fn render_fact_line(fact: &RankedFact) -> String {
         "resides_in" => format!("{} resides in {}", fact.subject_name, fact.object_display),
         "owns" => format!("{} owns {}", fact.subject_name, fact.object_display),
         "visited" => format!("{} visited {}", fact.subject_name, fact.object_display),
+        "has_event" => format!("{} has an event {}", fact.subject_name, fact.object_display),
+        "attending" => format!("{} is attending {}", fact.subject_name, fact.object_display),
+        "took_photo_at" => format!(
+            "{} took a photo at {}",
+            fact.subject_name, fact.object_display
+        ),
+        "took_photo" => format!(
+            "{} took a photo of {}",
+            fact.subject_name, fact.object_display
+        ),
+        "has_flight" => format!("{} has a flight {}", fact.subject_name, fact.object_display),
+        "departs_from" => format!("{} departs from {}", fact.subject_name, fact.object_display),
+        "arrives_at" => format!("{} arrives at {}", fact.subject_name, fact.object_display),
+        "operated_by" => format!(
+            "{} is operated by {}",
+            fact.subject_name, fact.object_display
+        ),
+        "has_booking" => format!(
+            "{} has a booking {}",
+            fact.subject_name, fact.object_display
+        ),
+        "has_order" => format!("{} has an order {}", fact.subject_name, fact.object_display),
+        "purchased_from" => format!(
+            "{} was purchased from {}",
+            fact.subject_name, fact.object_display
+        ),
+        "has_delivery" => format!(
+            "{} has a delivery {}",
+            fact.subject_name, fact.object_display
+        ),
+        "shipped_by" => format!(
+            "{} was shipped by {}",
+            fact.subject_name, fact.object_display
+        ),
+        "delivered_to" => format!(
+            "{} was delivered to {}",
+            fact.subject_name, fact.object_display
+        ),
+        "has_ticket" => format!("{} has a ticket {}", fact.subject_name, fact.object_display),
+        "issued_by" => format!(
+            "{} was issued by {}",
+            fact.subject_name, fact.object_display
+        ),
         "created_on" => format!("{} created on {}", fact.subject_name, fact.object_display),
         "rejected_action" => format!(
             "{} rejected action {}",

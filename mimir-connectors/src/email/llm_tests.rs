@@ -119,6 +119,35 @@ async fn llm_layer_extracts_prose_when_no_deterministic_facts() {
 }
 
 #[tokio::test]
+async fn llm_layer_drops_facts_with_non_canonical_predicates() {
+    // The LLM schema allows any relationship_type string, so Rust validates
+    // the emitted predicate against the canonical vocabulary before a fact is
+    // built (issue #412): a non-canonical predicate must be warned and dropped
+    // instead of auto-creating a `relationship_types` row on first sync.
+    let mock = llm_tool_response(
+        r#"{"facts": [{
+                "subject": "the user",
+                "subject_type": "Person",
+                "relationship_type": "owes",
+                "object": "the bank",
+                "object_is_entity": false
+            }]}"#,
+    );
+    let connector = connector_with_llm(Some("Devansh"), Some(mock.clone()));
+    stage(&connector, prose_email()).await;
+    let facts = connector.extract().await.expect("extract");
+    assert!(
+        facts.is_empty(),
+        "non-canonical predicate must be dropped: {facts:?}"
+    );
+    assert_eq!(
+        mock.system_chat_calls().len(),
+        1,
+        "LLM layer must still run"
+    );
+}
+
+#[tokio::test]
 async fn llm_layer_spam_email_skips_call_and_yields_no_facts() {
     // An obvious bulk-marketing email is skipped by the Rust pre-filter
     // before any LLM call: no facts, no system-queue call.

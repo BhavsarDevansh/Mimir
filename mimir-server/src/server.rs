@@ -138,7 +138,7 @@ pub async fn start_server_with_llm_and_listener(
 
 /// Spawn the config hot-reload file watcher.
 ///
-/// A blocking thread (inotify + `notify_debouncer_full`) watches the config
+/// A blocking thread (`notify` + `notify_debouncer_full`) watches the config
 /// directory for content changes and forwards reload events to an async task
 /// that performs the reload. The blocking thread's lifetime is tied to the
 /// async task through a `std::sync::mpsc` lifetime channel: the sender is
@@ -468,15 +468,23 @@ mod tests {
             .expect("handler task must exit after shutdown")
             .expect_err("channel must close when the handler task exits");
     }
+}
 
-    /// Regression (issue #415): the config watcher's `spawn_blocking` thread
-    /// must exit when the async watcher task is dropped, even when the
-    /// shutdown watch never fires (e.g. a panic or early-return error path
-    /// drops the runtime before the shutdown broadcast). Previously the
-    /// blocking loop only exited via the `stop` flag set by the async task's
-    /// shutdown branch, so dropping the runtime without a shutdown broadcast
-    /// leaked the thread and tokio's runtime drop hung indefinitely joining
-    /// the blocking pool.
+/// Regression (issue #415): the config watcher's `spawn_blocking` thread
+/// must exit when the async watcher task is dropped, even when the
+/// shutdown watch never fires (e.g. a panic or early-return error path
+/// drops the runtime before the shutdown broadcast). Previously the
+/// blocking loop only exited via the `stop` flag set by the async task's
+/// shutdown branch, so dropping the runtime without a shutdown broadcast
+/// leaked the thread and tokio's runtime drop hung indefinitely joining
+/// the blocking pool.
+///
+/// The watcher itself is cross-platform (`notify`), so these tests live in a
+/// non-Unix-gated module and run on every platform.
+#[cfg(test)]
+mod watcher_tests {
+    use super::*;
+
     #[test]
     fn test_config_watcher_thread_exits_when_runtime_dropped_without_shutdown() {
         use std::time::Duration;
@@ -533,7 +541,7 @@ mod tests {
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
         let _watcher = spawn_config_watcher(Arc::clone(&config), shutdown_tx);
 
-        // Give the blocking thread time to register the inotify watch, then
+        // Give the blocking thread time to register the file watch, then
         // write different content. The length differs from the first write so
         // the metadata-signature dedupe cannot mistake it for a duplicate.
         tokio::time::sleep(Duration::from_millis(300)).await;

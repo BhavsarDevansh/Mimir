@@ -352,22 +352,25 @@ pub async fn delete_pending_event_meta(
 
 /// Retire the event overlay of a fact that is no longer valid (issue #413).
 ///
-/// Dismisses any active overlay so it stops advancing and surfacing, and drops
-/// any persisted pending-event shape. Called when a fact transitions to
-/// `Superseded`; idempotent (no-op for facts without an overlay or pending
-/// shape), so it is safe on every supersession path.
-pub(super) async fn retire_overlay_for_fact_in_tx(
+/// Dismisses any non-terminal overlay (`Pending`/`Active`/`Snoozed`) so it
+/// stops advancing and surfacing, and drops any persisted pending-event shape.
+/// `Completed` overlays are preserved: they are historical records of an event
+/// that already happened, and they never advance or surface. Called when a
+/// fact transitions to `Superseded`; idempotent (no-op for facts without an
+/// overlay or pending shape), so it is safe on every supersession path.
+pub(crate) async fn retire_overlay_for_fact_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     fact_id: i32,
     now: DateTime<Utc>,
 ) -> Result<(), KnowledgeError> {
     sqlx::query(
         "UPDATE events SET status_id = ?, addressed_at = COALESCE(?, addressed_at) \
-         WHERE fact_id = ? AND status_id != ?",
+         WHERE fact_id = ? AND status_id NOT IN (?, ?)",
     )
     .bind(EventStatus::Dismissed as i16)
     .bind(now)
     .bind(fact_id)
+    .bind(EventStatus::Completed as i16)
     .bind(EventStatus::Dismissed as i16)
     .execute(&mut **tx)
     .await?;

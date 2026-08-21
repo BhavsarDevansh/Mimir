@@ -444,6 +444,11 @@ async fn merge_fact_pair(
         .execute(&mut **tx)
         .await?;
 
+    // A merged fact is no longer a real event: retire its overlay so it stops
+    // advancing and surfacing (issue #413), matching the shared supersession
+    // transition in `queries::fact::status::set_status_tx`.
+    crate::queries::event::retire_overlay_for_fact_in_tx(tx, duplicate_id, now).await?;
+
     sqlx::query(
         "INSERT INTO fact_audit_log \
          (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \

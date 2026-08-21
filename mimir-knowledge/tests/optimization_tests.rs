@@ -554,3 +554,76 @@ async fn concurrent_full_runs_with_shared_backup_dir_do_not_corrupt_each_other()
         pool.close().await;
     }
 }
+
+#[tokio::test]
+async fn dedup_retires_duplicate_fact_event_overlay() {
+    use mimir_knowledge::models::enums::{
+        AutoCompletePolicy, EventStatus, EventType, RecurrenceType,
+    };
+    use mimir_knowledge::models::event::NewEvent;
+
+    let graph = TestGraph::new().await;
+    let person = graph.create_person("Devansh").await;
+    let london = graph.create_place("London").await;
+
+    let first = graph
+        .create_fact(person, "lives_in", Some(london), SourceType::Connector)
+        .await;
+
+    // Insert an identical duplicate directly (bypassing the insert pipeline),
+    // then give it an event overlay, like a legacy duplicate that was tracked.
+    let now = Utc::now();
+    let second_id: i32 = sqlx::query_scalar(
+        "INSERT INTO facts \
+         (subject_id, relationship_type_id, object_id, object_literal, valid_from, valid_until, \
+          confidence, fact_status_id, inferred, inference_depth, pending_confirmation, \
+          memory_priority_id, created_at, updated_at) \
+         VALUES (?, ?, ?, NULL, NULL, NULL, 0.80, ?, 0, 0, 0, 3, ?, ?) \
+         RETURNING id",
+    )
+    .bind(person)
+    .bind(first.relationship_type_id)
+    .bind(london)
+    .bind(FactStatus::Active as i16)
+    .bind(now)
+    .bind(now)
+    .fetch_one(graph.kg.pool())
+    .await
+    .unwrap();
+    graph
+        .kg
+        .insert_event(NewEvent {
+            fact_id: second_id,
+            entity_id: person,
+            trigger_date: now + Duration::days(5),
+            recurrence: RecurrenceType::Yearly,
+            event_type: EventType::Birthday,
+            auto_complete_policy: AutoCompletePolicy::Recurring,
+            requires_user_action: false,
+        })
+        .await
+        .unwrap();
+
+    let runner = OptimizationRunner::new(
+        &graph.kg,
+        OptimizationConfig::for_test(graph.backup_dir()),
+        None,
+    );
+
+    let summary = runner.run_pass(PassName::Deduplication).await.unwrap();
+    assert_eq!(summary.facts_merged, 1);
+
+    // The merged duplicate's overlay is retired so it stops advancing and
+    // surfacing (issue #413).
+    let overlay = graph
+        .kg
+        .get_event_by_fact(second_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        overlay.status(),
+        Some(EventStatus::Dismissed),
+        "duplicate fact's overlay was not retired by dedup"
+    );
+}

@@ -427,6 +427,13 @@ impl HookEngine {
     /// tears down the runtime (a detached loop could still be finalising the
     /// run's DB record when the pool closes).
     pub async fn shutdown(&self) {
+        // Register the exit waiter *before* signalling: the dispatch loop
+        // calls `notify_waiters()` as soon as it observes the signal, and a
+        // `Notified` future created after that call would miss the wake-up
+        // and sit out the full timeout. `notify_waiters()` notifications are
+        // delivered to futures created before the call, so creating the
+        // future up front closes the race.
+        let exited = self.inner.dispatch_exited.notified();
         let _ = self.inner.shutdown_tx.send(true);
         {
             let running = self.inner.running.lock().await;
@@ -437,12 +444,9 @@ impl HookEngine {
         // The dispatch loop exits promptly once the shutdown signal is
         // observed (see `start`); the timeout only guards against a caller
         // that never started the loop.
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            self.inner.dispatch_exited.notified(),
-        )
-        .await
-        .ok();
+        tokio::time::timeout(Duration::from_secs(5), exited)
+            .await
+            .ok();
     }
 
     /// Force a hook to run immediately, bypassing debounce, cooldown, idle

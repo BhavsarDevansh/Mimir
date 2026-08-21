@@ -11,7 +11,6 @@ use crate::email::config::{
     DEFAULT_DISPLAY_NAME, DEFAULT_SLUG, EmailAuthMethod, EmailConfigDto, parse_cursor,
 };
 use crate::email::connector::EmailConnector;
-use crate::email::imap;
 use crate::email::llm::ProseRetryLedger;
 use crate::oauth::OAuthHttpClient;
 use crate::secrets::SecretStore;
@@ -105,24 +104,21 @@ impl EmailConnector {
             EmailAuthMethod::OAuth { .. } => Some(OAuthHttpClient::new()?),
             EmailAuthMethod::AppPassword { .. } => None,
         };
-        // Legacy migration (issue #386): pending retries persisted by the
-        // pre-hooks engine re-stage into the buffer and are re-enqueued as
-        // hooks on the next cycle. Entries without a decodable payload are
+        // Re-stage pending retries — legacy pre-hooks entries (issue #386)
+        // and queue-overflow entries written when the hook's pending queue
+        // was full (issue #442 review) — into the buffer; the next cycle
+        // re-enqueues them as hooks. Entries without a decodable payload are
         // dropped (they were never persisted with one, or the payload is
         // corrupt).
-        let pending_items = ledger.drain_legacy_pending();
+        let pending_items = ledger.drain_pending();
         let mut buffer = Vec::with_capacity(pending_items.len());
         for pending in pending_items {
-            match pending.raw() {
-                Some(raw) => buffer.push(imap::RawEmail {
-                    uid: pending.uid,
-                    uid_validity: pending.uid_validity,
-                    internal_date: None,
-                    raw,
-                }),
+            let raw_ref = pending.raw_ref();
+            match pending.into_staged_item() {
+                Some(mail) => buffer.push(mail),
                 None => {
                     warn!(
-                        raw_ref = %pending.raw_ref(),
+                        raw_ref = %raw_ref,
                         "dropping legacy pending prose retry with missing or undecodable payload"
                     );
                 }

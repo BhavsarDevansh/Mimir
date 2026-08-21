@@ -29,7 +29,16 @@
 //! - **Legacy migration.** Pending retries persisted by the pre-hooks
 //!   engine are drained at construction so their raw bytes re-stage into
 //!   the buffer and are re-enqueued as hooks on the next cycle; the new
-//!   code path never writes pending entries.
+//!   code path writes the same map as a **durable queue-overflow**: when
+//!   the `connector_item.remember` hook's pending queue is full (issue
+//!   #442 review) `extract` records the staged email here (raw bytes
+//!   base64-encoded, bounded by [`MAX_PENDING_OVERFLOW`]) instead of
+//!   dropping it, so a full queue can never advance the IMAP cursor past a
+//!   message whose LLM extraction was not enqueued. Every extraction cycle
+//!   re-stages the recorded payloads into the buffer and re-attempts the
+//!   enqueue, and a restart re-stages them at construction (the cursor has
+//!   already advanced past the message, so an IMAP re-fetch would not find
+//!   it again).
 //! - **iMIP tombstones.** The ledger also carries the connector's buffered
 //!   iMIP `CANCEL` references (issue #283): each cancelled VEVENT's
 //!   namespaced reference is staged during `extract`, reported via
@@ -60,6 +69,14 @@ pub(crate) const DEFAULT_MAX_LLM_EXTRACTION_ATTEMPTS: u8 = 3;
 /// The oldest records are dropped first.
 pub(crate) const MAX_TERMINAL_FAILURES: usize = 64;
 
+/// Cap on retained queue-overflow entries so a mailbox staged faster than
+/// the hook queue drains cannot grow the durable ledger without bound
+/// (the server registers `connector_item.remember` with a 1024-instance
+/// pending cap, so the durable overflow mirrors the queue it backs up).
+/// When the cap is exceeded the excess entries are dropped in
+/// deterministic (raw-reference) order with a warning.
+pub(crate) const MAX_PENDING_OVERFLOW: usize = 1024;
+
 /// Combine a successful service probe with the retry ledger's terminal
 /// backlog: terminal LLM-extraction failures make the connector
 /// [`HealthStatus::Degraded`] (reachable, but repeated per-message failures)
@@ -73,10 +90,12 @@ pub(crate) fn health_with_terminal(probe: HealthStatus, terminal_failures: usize
     }
 }
 
-/// A pending retry persisted by the pre-hooks engine (issue #386). Only
-/// deserialised for the one-time migration: construction drains these
-/// entries so their raw bytes re-stage into the buffer and are re-enqueued
-/// as hooks on the next cycle. The new code path never writes them.
+/// A pending retry awaiting re-staging: either a legacy entry persisted by
+/// the pre-hooks engine (issue #386, drained once at construction) or a
+/// queue-overflow entry written by the hooks-engine path when the
+/// `connector_item.remember` pending queue was full (issue #442 review).
+/// Every extraction cycle drains these entries so their raw bytes re-stage
+/// into the buffer and are re-enqueued as hooks.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct PendingProse {
@@ -87,11 +106,12 @@ pub(crate) struct PendingProse {
     /// Raw RFC 822 bytes, base64-encoded so the payload survives a restart
     /// without an IMAP re-fetch (the cursor has already advanced past the
     /// message). `None` when the payload was not persisted (oversized or
-    /// corrupt); such entries are dropped at construction.
+    /// corrupt); such entries are dropped when re-staged.
     pub raw_b64: Option<String>,
-    /// Failed attempts so far (1-based).
+    /// Failed attempts so far (1-based; `0` for a queue-overflow entry,
+    /// which was rejected before its first attempt).
     pub attempts: u8,
-    /// Last failure reason.
+    /// Last failure reason (`"queue full"` for an overflow entry).
     pub last_error: String,
 }
 
@@ -100,6 +120,19 @@ impl PendingProse {
     /// matching the `raw_reference` the extraction cascade emits.
     pub fn raw_ref(&self) -> String {
         format!("{}:{}", self.uid_validity, self.uid)
+    }
+
+    /// The staged IMAP item this entry carries, or `None` when the persisted
+    /// payload is absent or corrupt (the item is then settled and dropped).
+    /// Shared by construction re-staging and the per-cycle overflow drain so
+    /// both re-stage the same way.
+    pub(crate) fn into_staged_item(self) -> Option<crate::email::imap::RawEmail> {
+        Some(crate::email::imap::RawEmail {
+            uid: self.uid,
+            uid_validity: self.uid_validity,
+            internal_date: None,
+            raw: self.raw()?,
+        })
     }
 
     /// Decoded raw RFC 822 bytes, or `None` when the persisted payload is
@@ -141,12 +174,12 @@ impl TerminalProseFailure {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct ProseRetryLedger {
-    /// Legacy pending retries from the pre-hooks engine (issue #386),
-    /// keyed by raw reference (`{uid_validity}:{uid}`). Drained at
-    /// construction; never written by the new code path. Serialised under
-    /// the historical `pending` key so a pre-hooks durable state parses.
-    #[serde(rename = "pending")]
-    legacy_pending: BTreeMap<String, PendingProse>,
+    /// Pending retries keyed by raw reference (`{uid_validity}:{uid}`):
+    /// legacy pre-hooks entries (issue #386) plus queue-overflow entries
+    /// written when the hook's pending queue is full (issue #442 review).
+    /// Serialised under the historical `pending` key so a pre-hooks
+    /// durable state parses unchanged.
+    pending: BTreeMap<String, PendingProse>,
     /// Terminally failed messages (oldest first, capped).
     terminal: Vec<TerminalProseFailure>,
     /// Buffered iMIP `CANCEL` references awaiting the supervisor's deletion
@@ -273,18 +306,47 @@ impl ProseRetryLedger {
         }
     }
 
-    /// Drain legacy pending retries (pre-hooks, issue #386) so construction
-    /// can re-stage their raw bytes into the buffer; the next cycle
+    /// Drain pending retries (legacy pre-hooks entries, issue #386, and
+    /// queue-overflow entries, issue #442 review) so the caller can
+    /// re-stage their raw bytes into the buffer; the next extraction cycle
     /// re-enqueues them as hooks. Marks the ledger dirty so the drained
-    /// state is persisted instead of re-staged on every restart.
-    pub(crate) fn drain_legacy_pending(&mut self) -> Vec<PendingProse> {
-        if self.legacy_pending.is_empty() {
+    /// state is persisted instead of re-staged on every cycle.
+    pub(crate) fn drain_pending(&mut self) -> Vec<PendingProse> {
+        if self.pending.is_empty() {
             return Vec::new();
         }
-        let drained: Vec<PendingProse> = self.legacy_pending.values().cloned().collect();
-        self.legacy_pending.clear();
+        let drained: Vec<PendingProse> = self.pending.values().cloned().collect();
+        self.pending.clear();
         self.touch();
         drained
+    }
+
+    /// Record a queue-overflow entry: a staged message whose
+    /// `connector_item.remember` enqueue was rejected because the hook's
+    /// pending queue was full (issue #442 review). The raw RFC 822 bytes
+    /// are persisted base64-encoded so a restart re-stages the message
+    /// without an IMAP re-fetch (the cursor has already advanced past it).
+    /// Marks the ledger dirty and caps the retained entries at
+    /// [`MAX_PENDING_OVERFLOW`], dropping excess entries with a warning.
+    pub(crate) fn record_overflow(
+        &mut self,
+        raw_ref: String,
+        uid_validity: u32,
+        uid: u32,
+        raw: Vec<u8>,
+    ) {
+        self.touch();
+        self.pending.insert(
+            raw_ref,
+            PendingProse {
+                uid_validity,
+                uid,
+                raw_b64: Some(STANDARD.encode(raw)),
+                attempts: 0,
+                last_error: "queue full".to_string(),
+            },
+        );
+        self.trim_pending();
     }
 
     /// Number of terminally failed messages (drives `Degraded` health).
@@ -296,13 +358,13 @@ impl ProseRetryLedger {
     /// and no buffered tombstones.
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.legacy_pending.is_empty() && self.terminal.is_empty() && self.tombstones.is_empty()
+        self.pending.is_empty() && self.terminal.is_empty() && self.tombstones.is_empty()
     }
 
     /// Drop every record without marking the ledger dirty (used by `forget`,
     /// where the row — and its durable state — is deleted anyway).
     pub(crate) fn clear(&mut self) {
-        self.legacy_pending.clear();
+        self.pending.clear();
         self.terminal.clear();
         self.tombstones.clear();
         self.dirty = false;
@@ -321,6 +383,24 @@ impl ProseRetryLedger {
         }
     }
 
+    /// Bound the queue-overflow map at [`MAX_PENDING_OVERFLOW`], dropping
+    /// the excess entries in deterministic key order (the map is keyed by
+    /// raw reference) with a warning, so a mailbox staged faster than the
+    /// hook queue drains cannot grow the persisted ledger without bound.
+    fn trim_pending(&mut self) {
+        if self.pending.len() > MAX_PENDING_OVERFLOW {
+            let excess = self.pending.len() - MAX_PENDING_OVERFLOW;
+            for _ in 0..excess {
+                let _ = self.pending.pop_first().expect("over-cap pending map");
+            }
+            warn!(
+                trimmed = excess,
+                cap = MAX_PENDING_OVERFLOW,
+                "queue-overflow ledger over capacity; dropping oldest entries"
+            );
+        }
+    }
+
     /// Normalise a restored ledger: a raw reference may be legacy-pending
     /// or terminal, never both (the terminal record is the stricter state,
     /// so any shadowed legacy-pending entry is dropped), and the terminal
@@ -329,7 +409,7 @@ impl ProseRetryLedger {
     fn sanitize(&mut self) {
         let mut changed = false;
         for terminal in &self.terminal {
-            changed |= self.legacy_pending.remove(&terminal.raw_ref()).is_some();
+            changed |= self.pending.remove(&terminal.raw_ref()).is_some();
         }
         let terminal_len = self.terminal.len();
         self.trim_terminal();
@@ -534,7 +614,7 @@ mod tests {
         });
         let restored = ProseRetryLedger::from_json(&value.to_string());
         assert!(
-            restored.legacy_pending.is_empty(),
+            restored.pending.is_empty(),
             "a terminal record must shadow a legacy-pending entry for the same reference"
         );
         assert!(restored.is_terminal("17:1"));
@@ -545,9 +625,9 @@ mod tests {
     }
 
     #[test]
-    fn drain_legacy_pending_marks_dirty_and_clears() {
+    fn drain_pending_marks_dirty_and_clears() {
         let mut ledger = ProseRetryLedger::default();
-        ledger.legacy_pending.insert(
+        ledger.pending.insert(
             "17:1".to_string(),
             PendingProse {
                 uid_validity: 17,
@@ -557,17 +637,75 @@ mod tests {
                 last_error: "e".to_string(),
             },
         );
-        let drained = ledger.drain_legacy_pending();
+        let drained = ledger.drain_pending();
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].raw().as_deref(), Some(b"raw bytes".as_slice()));
-        assert!(ledger.legacy_pending.is_empty());
+        assert!(ledger.pending.is_empty());
         assert!(
             ledger.dirty,
-            "draining legacy entries must mark the ledger for re-persist"
+            "draining pending entries must mark the ledger for re-persist"
         );
         assert!(
-            ledger.drain_legacy_pending().is_empty(),
+            ledger.drain_pending().is_empty(),
             "a second drain is a no-op"
+        );
+    }
+
+    #[test]
+    fn record_overflow_writes_durable_pending_entry_with_raw_bytes() {
+        let mut ledger = ProseRetryLedger::default();
+        ledger.record_overflow("17:42".to_string(), 17, 42, b"raw bytes".to_vec());
+        assert!(
+            ledger.dirty,
+            "a queue-overflow record must mark the ledger for re-persist"
+        );
+        let (_, json) = ledger.durable_json().expect("dirty ledger persists");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            value["pending"]["17:42"]["raw_b64"].is_string(),
+            "the overflow payload must be persisted base64-encoded"
+        );
+        let mut restored = ProseRetryLedger::from_json(&json);
+        let drained = restored.drain_pending();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].raw().as_deref(), Some(b"raw bytes".as_slice()));
+        assert_eq!(
+            drained[0].attempts, 0,
+            "an overflow entry was never attempted"
+        );
+    }
+
+    #[test]
+    fn record_overflow_replaces_an_existing_entry_for_the_same_reference() {
+        let mut ledger = ProseRetryLedger::default();
+        ledger.record_overflow("17:42".to_string(), 17, 42, b"first".to_vec());
+        let (version, _) = ledger.durable_json().expect("dirty");
+        ledger.record_overflow("17:42".to_string(), 17, 42, b"second".to_vec());
+        let (_, json) = ledger.durable_json().expect("dirty after replacement");
+        let mut restored = ProseRetryLedger::from_json(&json);
+        let drained = restored.drain_pending();
+        assert_eq!(drained.len(), 1, "a replacement keeps a single entry");
+        assert_eq!(drained[0].raw().as_deref(), Some(b"second".as_slice()));
+        ledger.mark_persisted(version);
+        assert!(
+            ledger.dirty,
+            "the replacement bumped the version, so the snapshot is stale"
+        );
+    }
+
+    #[test]
+    fn overflow_records_are_capped() {
+        let mut ledger = ProseRetryLedger::default();
+        for uid in 0..(MAX_PENDING_OVERFLOW + 5) {
+            ledger.record_overflow(format!("17:{uid}"), 17, uid as u32, b"x".to_vec());
+        }
+        let drained = ledger.drain_pending();
+        assert_eq!(drained.len(), MAX_PENDING_OVERFLOW);
+        assert!(
+            drained
+                .iter()
+                .any(|p| p.uid == (MAX_PENDING_OVERFLOW + 4) as u32),
+            "the newest overflow entries must survive the cap"
         );
     }
 

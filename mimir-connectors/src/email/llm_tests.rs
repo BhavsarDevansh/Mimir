@@ -63,6 +63,14 @@ struct HookEnv {
 }
 
 async fn hook_env(backend: Option<Arc<dyn LlmBackend>>, max_attempts: Option<u8>) -> HookEnv {
+    hook_env_with_policy(backend, max_attempts, None).await
+}
+
+async fn hook_env_with_policy(
+    backend: Option<Arc<dyn LlmBackend>>,
+    max_attempts: Option<u8>,
+    max_pending: Option<usize>,
+) -> HookEnv {
     let kg_dir = tempfile::tempdir().unwrap();
     let kg = Arc::new(
         KnowledgeGraph::init(&kg_dir.path().join("knowledge.db"))
@@ -105,7 +113,7 @@ async fn hook_env(backend: Option<Arc<dyn LlmBackend>>, max_attempts: Option<u8>
                 max_attempts: u8::MAX,
                 backoff: Duration::from_millis(10),
             },
-            max_pending: None,
+            max_pending,
             merge: None,
             handler: Arc::new(EmailExtractionHook::new()),
         })
@@ -293,7 +301,12 @@ async fn llm_layer_drops_facts_with_non_canonical_predicates() {
     // The handler has run to completion once the queue drains, so the
     // absence of the fact proves the predicate was dropped (a fixed sleep
     // could pass before the insert attempt finished on a loaded runner).
-    wait_for(|| async { env.engine.pending_depth().await == 0 }).await;
+    // `pending_depth()` alone can reach zero while the dispatched instance
+    // is still inserting, so also wait for the running count to drain.
+    wait_for(|| async {
+        env.engine.pending_depth().await == 0 && env.engine.running_count().await == 0
+    })
+    .await;
     assert!(
         !has_fact(&env.kg, "owes", "the bank").await,
         "non-canonical predicate must be dropped"
@@ -517,6 +530,91 @@ async fn restart_resume_re_stages_legacy_pending_retries_from_durable_state() {
     // The next extraction cycle enqueues the re-staged message as a hook.
     restarted.extract().await.expect("extract");
     wait_for(|| has_fact(&env.kg, "has_appointment", "Dentist check-up")).await;
+    assert_eq!(mock.system_chat_calls().len(), 1);
+}
+
+#[tokio::test]
+async fn queue_full_re_stages_email_as_durable_overflow() {
+    // Issue #442 review: a full `connector_item.remember` pending queue must
+    // never advance the cursor past a staged email whose LLM extraction was
+    // not enqueued. `extract()` records the message as a durable overflow
+    // entry (raw bytes base64-encoded, bounded) instead of dropping it, and
+    // the next extraction cycle re-stages and re-attempts it.
+    let mock = llm_tool_response(
+        r#"{"facts": [{
+                "subject": "the user",
+                "subject_type": "Person",
+                "relationship_type": "has_appointment",
+                "object": "Dentist check-up",
+                "object_is_entity": true,
+                "object_type": "Event",
+                "temporal": {"valid_from": "2026-08-11T14:00:00Z"},
+                "event_type": "Appointment"
+            }]}"#,
+    );
+    // `max_pending = 0` makes every trigger report `QueueFull`.
+    let env = hook_env_with_policy(Some(mock.clone()), None, Some(0)).await;
+    stage(&env.connector, prose_email()).await;
+    env.connector.extract().await.expect("extract");
+    assert_eq!(
+        env.engine.pending_depth().await,
+        0,
+        "a full queue must reject the enqueue"
+    );
+    assert!(
+        !has_fact(&env.kg, "has_appointment", "Dentist check-up").await,
+        "no hook instance ran while the queue was full"
+    );
+    let durable = env
+        .connector
+        .durable_state()
+        .expect("queue-full overflow must be durable");
+    let mut restored = crate::email::llm::retry::ProseRetryLedger::from_json(&durable);
+    let drained = restored.drain_pending();
+    assert_eq!(drained.len(), 1, "the rejected email must be recorded");
+    assert_eq!(
+        drained[0].raw().as_deref(),
+        Some(prose_email().as_slice()),
+        "the overflow record must carry the raw RFC 822 bytes"
+    );
+
+    // A still-full queue on the next cycle re-records the overflow instead
+    // of losing the message; the email only leaves the ledger once the
+    // enqueue succeeds.
+    env.connector.extract().await.expect("extract");
+    let durable_again = env
+        .connector
+        .durable_state()
+        .expect("overflow must survive the retry cycle");
+    let mut restored_again = crate::email::llm::retry::ProseRetryLedger::from_json(&durable_again);
+    assert_eq!(restored_again.drain_pending().len(), 1);
+
+    // Once the queue has room, a restarted connector seeded from the same
+    // durable state re-stages the email and the hook extracts it (the IMAP
+    // cursor has advanced past the message, so only the ledger can recover
+    // it).
+    let recovered = hook_env(Some(mock.clone()), None).await;
+    let mut config = app_config();
+    config["__instance_id"] = serde_json::json!(recovered.connector.instance_id);
+    config["__durable_state"] = serde_json::Value::String(durable_again);
+    let restarted = EmailConnector::from_config_with_deps(
+        config,
+        EmailConnectorDeps {
+            user_identity: Some("Devansh".to_string()),
+            llm_backend: Some(mock.clone()),
+            kg: Some(Arc::clone(&recovered.kg)),
+            hook_engine: Some(Arc::clone(&recovered.engine)),
+            ..Default::default()
+        },
+    )
+    .expect("config");
+    assert_eq!(
+        restarted.buffer.lock().await.len(),
+        1,
+        "the durable overflow must re-stage into the buffer"
+    );
+    restarted.extract().await.expect("extract");
+    wait_for(|| has_fact(&recovered.kg, "has_appointment", "Dentist check-up")).await;
     assert_eq!(mock.system_chat_calls().len(), 1);
 }
 

@@ -28,7 +28,7 @@ Each trigger carries an `Arc<dyn Any + Send + Sync>` payload; handlers downcast 
 
 ### Queue policies
 
-- `Multiple` — every trigger enqueues; FIFO. A `Multiple` hook can set `max_pending` to cap the pending queue; once the cap is reached, new triggers are rejected with `TriggerStatus::QueueFull` so the producer can bound in-memory payload retention (the Email connector logs the rejection).
+- `Multiple` — every trigger enqueues; FIFO. A `Multiple` hook can set `max_pending` to cap the pending queue; once the cap is reached, new triggers are rejected with `TriggerStatus::QueueFull` so the producer can bound in-memory payload retention. The Email connector turns the rejection into a durable queue-overflow record (raw bytes base64-encoded, bounded) and re-stages it on the next extraction cycle, so a full queue delays extraction instead of dropping the staged email (issue #442 review).
 - `SingularFirstWins` — the first instance stays; new triggers are dropped while one is pending or running for the key.
 - `SingularLastWins { debounce }` — a pending instance is replaced with the latest payload and re-enqueued at the tail (true debounce); a running instance is unaffected and the new trigger enqueues a fresh pending instance. An optional `merge` function accumulates the new payload into the old one (e.g. chat turns since the last hook run).
 

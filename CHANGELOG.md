@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.131.2] — 2026-08-21
+
+### Fix: PR #442 review feedback — full-queue data loss, shutdown waiter race, and test-wait scoping
+
+- `connector_item.remember` full-queue rejections no longer drop the staged email: when the hook's pending queue is full, `extract` records the message in the Email connector's durable ledger as a bounded queue-overflow entry (raw RFC 822 bytes base64-encoded, capped at 1024 mirroring the queue cap) instead of letting the IMAP cursor advance past an un-enqueued message. Every extraction cycle drains the overflow back into the staged buffer and re-attempts the enqueue, and a restart re-stages it from the persisted durable state; the ledger's pending map now also covers this overflow path (the legacy pre-hooks drain is unchanged).
+- `HookEngine::shutdown` registers the dispatch-loop exit waiter (`Notify::notified`) before sending the shutdown signal, so a prompt loop exit can no longer race ahead of the waiter and leave shutdown waiting out the full 5-second timeout.
+- The non-canonical-predicate connector test now waits for both `pending_depth() == 0` and `running_count() == 0` (the handler can still be inserting after the queue drains), and the server incognito-test idle wait is scoped to the `remember.chat` pending queue only, so an unrelated running hook (e.g. `memory.condensation` under the fast-learning config) can no longer make it flaky.
+- Docs updated: `docs/hooks.md`, `docs/email-connector.md`, and the wiki email-connector page now describe the durable queue-overflow path (the stale pre-hooks "512 KiB / 32 pending messages" wording is gone).
+- Version bumped 0.131.1 → 0.131.2 (patch — bugfixes).
+
 ## [0.131.1] — 2026-08-21
 
 ### Fix: PR #442 review feedback — job-queue documentation accuracy

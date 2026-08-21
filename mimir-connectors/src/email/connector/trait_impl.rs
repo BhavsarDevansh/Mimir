@@ -1,5 +1,6 @@
 //! [`Connector`] trait implementation for the email backend.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -171,6 +172,35 @@ impl Connector for EmailConnector {
         // a concurrent `sync()` cycle from staging new mail for the whole parse.
         let staged: Vec<imap::RawEmail> = {
             let mut buffer = self.buffer.lock().await;
+            // Re-stage durable queue-overflow payloads (issue #442 review):
+            // a message whose `connector_item.remember` enqueue was rejected
+            // when the hook's pending queue was full is recorded in the
+            // ledger with its raw bytes (and re-staged at construction after
+            // a restart); drain them now so this cycle re-attempts the
+            // enqueue instead of waiting for a restart. Legacy pre-hooks
+            // pending retries take the same path (issue #386).
+            // Dedupe against the current buffer (issue #332 mirror): a
+            // failed-cycle re-fetch or a `--full` re-sync can stage the same
+            // message the overflow entry carries, and `QueuePolicy::Multiple`
+            // would happily enqueue both copies.
+            let mut seen: HashSet<(u32, u32)> =
+                buffer.iter().map(|m| (m.uid_validity, m.uid)).collect();
+            for pending in self.prose_retry.lock().unwrap().drain_pending() {
+                let raw_ref = pending.raw_ref();
+                match pending.into_staged_item() {
+                    Some(mail) => {
+                        if seen.insert((mail.uid_validity, mail.uid)) {
+                            buffer.push(mail);
+                        }
+                    }
+                    None => {
+                        warn!(
+                            raw_ref = %raw_ref,
+                            "dropping pending prose retry with missing or undecodable payload"
+                        );
+                    }
+                }
+            }
             std::mem::take(&mut *buffer)
         };
         let mut facts = Vec::new();
@@ -236,10 +266,14 @@ impl Connector for EmailConnector {
                     (&self.hook_engine, &self.llm_backend, &self.kg)
                 {
                     let payload = EmailExtractionPayload {
-                        // Consume the staged item by value so the raw RFC 822
-                        // bytes move into the hook payload instead of being
-                        // cloned and retained twice.
-                        raw: mail.raw,
+                        // The payload owns a copy of the raw RFC 822 bytes;
+                        // the staged item itself stays alive for the duration
+                        // of the trigger call so a full-queue rejection can
+                        // persist the bytes as a durable overflow instead of
+                        // dropping the message (issue #442 review). The copy
+                        // is transient: on success the staged item is dropped
+                        // and only the hook payload retains the bytes.
+                        raw: mail.raw.clone(),
                         uid_validity: mail.uid_validity,
                         uid: mail.uid,
                         raw_ref: raw_ref.clone(),
@@ -262,8 +296,21 @@ impl Connector for EmailConnector {
                         .any(|o| o.status == TriggerStatus::QueueFull)
                     {
                         warn!(
-                            raw_ref,
-                            "connector_item.remember pending queue full; dropping staged email extraction"
+                            %raw_ref,
+                            "connector_item.remember pending queue full; re-staging email as durable overflow"
+                        );
+                        // The hook's pending queue is full, so the email
+                        // cannot be enqueued this cycle. Record it durably
+                        // (raw bytes base64-encoded, bounded) so the next
+                        // cycle — or a restart — re-stages and retries it;
+                        // otherwise `extract` would return Ok, the supervisor
+                        // would advance the IMAP cursor, and the message
+                        // would never be fetched again.
+                        self.prose_retry.lock().unwrap().record_overflow(
+                            raw_ref.clone(),
+                            mail.uid_validity,
+                            mail.uid,
+                            mail.raw,
                         );
                     }
                 } else {

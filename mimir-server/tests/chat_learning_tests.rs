@@ -94,20 +94,25 @@ async fn wait_for_favourite_colour(state: &Arc<AppState>) -> bool {
     }
 }
 
-/// Wait until the `remember.chat` hook has neither pending nor running
-/// instances, so a negative persistence assertion observes a fully drained
-/// dispatch (the hook would have written facts by then if it fired).
+/// Wait until the `remember.chat` hook has drained its pending queue, so a
+/// negative persistence assertion observes a fully dispatched run (the hook
+/// would have written facts by then if it fired). The wait is scoped to
+/// `remember.chat` only: `running_count()` spans the whole engine, and an
+/// unrelated hook such as `memory.condensation` (debounce and cooldown are
+/// both zero under `fast_learning_config`) may legitimately be running and
+/// would otherwise make the helper flaky.
 async fn wait_for_chat_hook_idle(state: &Arc<AppState>) {
     let deadline = Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let pending = state.hook_engine.pending_depth_for("remember.chat").await;
-        let running = state.hook_engine.running_count().await;
-        if pending == 0 && running == 0 {
+        if pending == 0 {
+            // Allow an already dispatched instance to finish writing facts.
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             return;
         }
         assert!(
             Instant::now() < deadline,
-            "remember.chat hook did not drain within 5s (pending={pending}, running={running})"
+            "remember.chat hook did not drain within 5s (pending={pending})"
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }

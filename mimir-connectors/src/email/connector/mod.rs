@@ -79,8 +79,10 @@ pub struct EmailConnector {
     /// Durable connector state (issues #262, #283): the bounded
     /// LLM-extraction terminal-failure ledger plus the buffered iMIP
     /// `CANCEL` tombstones awaiting the supervisor's deletion pass. Retry
-    /// moved to the hooks engine (issue #386); the ledger records only
-    /// terminal failures. Persisted by the supervisor via
+    /// moved to the hooks engine (issue #386); the ledger records terminal
+    /// failures plus the durable queue-overflow backlog written when the
+    /// `connector_item.remember` pending queue is full (issue #442 review).
+    /// Persisted by the supervisor via
     /// [`Connector::durable_state`](crate::connector::Connector::durable_state)
     /// and re-injected at construction (`__durable_state`), so bounded
     /// terminal records and pending cancellations survive daemon restarts.

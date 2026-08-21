@@ -10,7 +10,7 @@ When something happens that Mimir might learn from — you finish a chat turn, a
 - **Idle gating** — learning and memory condensation wait until you have stopped chatting and the LLM worker pool is idle, so background work never steals capacity from your conversation.
 - **Retry** — transient failures are retried with backoff; permanent failures are recorded and dropped, so the same item is not re-processed for its current identity (a new mailbox epoch, e.g. after a `UIDVALIDITY` change, gives the message a fresh attempt).
 
-The pending queue lives in memory, so a daemon restart only loses work that has not started yet. Chat re-triggers on your next turn and memory condensation re-triggers on the next fact write. Connector items whose extraction was still in flight when the daemon stopped are skipped (the sync cursor has already advanced past them); a failed sync cycle re-fetches its window on the next cycle, and a full re-sync re-stages items that were not terminally failed.
+The pending queue lives in memory, so a daemon restart only loses work that has not started yet. Chat re-triggers on your next turn and memory condensation re-triggers on the next fact write. Connector items whose extraction was still in flight when the daemon stopped are skipped (the sync cursor has already advanced past them), while messages the connector recorded as durable queue-overflow when the hook queue was full are re-staged on the next start; a failed sync cycle re-fetches its window on the next cycle, and a full re-sync re-stages items that were not terminally failed.
 
 ## The three hooks
 

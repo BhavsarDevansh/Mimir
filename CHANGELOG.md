@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.131.6] — 2026-08-21
+
+### Fix: `Mimir-Implementation-Context.md` no longer carries a manually-maintained VISION file count (issue #433)
+
+- The context header's `**Vision Docs:**` line stated `VISION/` contained "48 files, 10 sections", but the directory has since grown to 50 Markdown files, so the count had drifted. The exact file count is dropped in favour of a stable section list (`00-Overview` through `09-Roadmap`), which does not require manual maintenance when VISION documents are added or removed.
+- Version bumped 0.131.5 → 0.131.6 (patch — documentation fix).
+
 ## [0.131.5] — 2026-08-21
 
 ### Fix: reflow `docs/fact-extraction-pipeline.md` to the single-line prose standard (issue #432)

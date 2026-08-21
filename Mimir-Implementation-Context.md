@@ -2,9 +2,9 @@
 
 > **Created:** 2025-05-20
 >
-> **Last Updated:** 2026-08-20
+> **Last Updated:** 2026-08-21
 >
-> **Vision Docs:** `VISION/` directory (48 files, 10 sections)
+> **Vision Docs:** `VISION/` directory — 10 sections: `00-Overview`, `01-Core-Agent`, `02-Knowledge-Graph`, `03-Connectors`, `04-Reasoning-Engine`, `05-Proactive-Agent`, `06-Vision-Tracking`, `07-Journeys`, `08-Architecture`, `09-Roadmap`
 >
 > **Phase 1 Plan:** `VISION/09-Roadmap/Phase-1-Core-Agent.md`
 >

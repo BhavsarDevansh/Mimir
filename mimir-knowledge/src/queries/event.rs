@@ -181,49 +181,62 @@ pub async fn get_overdue_events(
 /// `trigger_date` has already passed (`trigger_date < now`) are returned, so
 /// the scan only loads and sorts rows that can actually advance.
 /// `RequiresUserAction` recurring deadlines/tasks stay past their trigger date
-/// and surface as overdue instead of being silently advanced.
+/// and surface as overdue instead of being silently advanced. Overlays of
+/// superseded/forgotten facts are excluded (issue #413) so a stale overlay can
+/// never advance, even if a supersession path forgot to retire it.
 pub async fn get_active_recurring(
     pool: &SqlitePool,
     now: DateTime<Utc>,
 ) -> Result<Vec<Event>, KnowledgeError> {
     let rows = sqlx::query_as::<_, Event>(
-        "SELECT id, fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, \
-                status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at \
-         FROM events \
-         WHERE status_id = ? \
-           AND recurrence_type_id != ? \
-           AND auto_complete_policy_id = ? \
-           AND requires_user_action = 0 \
-           AND trigger_date < ? \
-         ORDER BY trigger_date",
+        "SELECT e.id, e.fact_id, e.entity_id, e.trigger_date, e.recurrence_type_id, \
+                e.event_type_id, e.status_id, e.auto_complete_policy_id, \
+                e.requires_user_action, e.addressed_at, e.created_at \
+         FROM events e \
+         JOIN facts f ON f.id = e.fact_id \
+         WHERE e.status_id = ? \
+           AND e.recurrence_type_id != ? \
+           AND e.auto_complete_policy_id = ? \
+           AND e.requires_user_action = 0 \
+           AND e.trigger_date < ? \
+           AND f.fact_status_id NOT IN (?, ?) \
+         ORDER BY e.trigger_date",
     )
     .bind(EventStatus::Active as i16)
     .bind(RecurrenceType::None as i16)
     .bind(AutoCompletePolicy::Recurring as i16)
     .bind(now)
+    .bind(crate::models::fact::FactStatus::Superseded as i16)
+    .bind(crate::models::fact::FactStatus::Forgotten as i16)
     .fetch_all(pool)
     .await?;
     Ok(rows)
 }
 
 /// Active one-time events with `AutoCompleteOnDate` whose `trigger_date` has
-/// passed and should transition to `Completed`.
+/// passed and should transition to `Completed`. Overlays of superseded/forgotten
+/// facts are excluded (issue #413) so a stale overlay is never auto-completed.
 pub async fn get_past_due_auto_complete(
     pool: &SqlitePool,
     now: DateTime<Utc>,
 ) -> Result<Vec<Event>, KnowledgeError> {
     let rows = sqlx::query_as::<_, Event>(
-        "SELECT id, fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, \
-                status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at \
-         FROM events \
-         WHERE status_id = ? AND auto_complete_policy_id = ? AND recurrence_type_id = ? \
-           AND trigger_date < ? \
-         ORDER BY trigger_date",
+        "SELECT e.id, e.fact_id, e.entity_id, e.trigger_date, e.recurrence_type_id, \
+                e.event_type_id, e.status_id, e.auto_complete_policy_id, \
+                e.requires_user_action, e.addressed_at, e.created_at \
+         FROM events e \
+         JOIN facts f ON f.id = e.fact_id \
+         WHERE e.status_id = ? AND e.auto_complete_policy_id = ? AND e.recurrence_type_id = ? \
+           AND e.trigger_date < ? \
+           AND f.fact_status_id NOT IN (?, ?) \
+         ORDER BY e.trigger_date",
     )
     .bind(EventStatus::Active as i16)
     .bind(AutoCompletePolicy::AutoCompleteOnDate as i16)
     .bind(RecurrenceType::None as i16)
     .bind(now)
+    .bind(crate::models::fact::FactStatus::Superseded as i16)
+    .bind(crate::models::fact::FactStatus::Forgotten as i16)
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -334,5 +347,38 @@ pub async fn delete_pending_event_meta(
         .bind(fact_id)
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+/// Retire the event overlay of a fact that is no longer valid (issue #413).
+///
+/// Dismisses any non-terminal overlay (`Pending`/`Active`/`Snoozed`) so it
+/// stops advancing and surfacing, and drops any persisted pending-event shape.
+/// `Completed` overlays are preserved: they are historical records of an event
+/// that already happened, and they never advance or surface. Called when a
+/// fact transitions to `Superseded`; idempotent (no-op for facts without an
+/// overlay or pending shape), so it is safe on every supersession path.
+pub(crate) async fn retire_overlay_for_fact_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    fact_id: i32,
+    now: DateTime<Utc>,
+) -> Result<(), KnowledgeError> {
+    sqlx::query(
+        "UPDATE events SET status_id = ?, addressed_at = COALESCE(?, addressed_at) \
+         WHERE fact_id = ? AND status_id NOT IN (?, ?)",
+    )
+    .bind(EventStatus::Dismissed as i16)
+    .bind(now)
+    .bind(fact_id)
+    .bind(EventStatus::Completed as i16)
+    .bind(EventStatus::Dismissed as i16)
+    .execute(&mut **tx)
+    .await?;
+
+    sqlx::query("DELETE FROM pending_event_meta WHERE fact_id = ?")
+        .bind(fact_id)
+        .execute(&mut **tx)
+        .await?;
+
     Ok(())
 }

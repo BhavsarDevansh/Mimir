@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.130.4] — 2026-08-21
+
+### Fix: PR #436 review feedback (event overlay scan coverage and documentation)
+
+- `docs/events-reminders.md` now states that both the one-time and recurring branches of the Upcoming render apply the `fact_status_id NOT IN (Superseded, Forgotten)` filter, matching the queries — the one-time branch excludes `Superseded`/`Forgotten` facts in addition to the terminal-overlay suppression.
+- The supersession regression test now pins the one-time scan path: past-due `AutoCompleteOnDate` overlays on directly-`Superseded` and directly-`Forgotten` facts are neither auto-completed by the scan nor dropped (both stay `Active`), alongside the existing recurring-path assertions.
+- The dedup regression test now seeds `pending_event_meta` for the merged duplicate and asserts the row is removed alongside the overlay dismissal.
+- Version bumped 0.130.3 → 0.130.4 (patch — test coverage and documentation).
+
+## [0.130.3] — 2026-08-21
+
+### Fix: superseded facts retire their event overlays (issue #413)
+
+- `queries::fact::status::set_status_tx` now retires a fact's event overlay when the fact transitions to `Superseded`: any non-terminal overlay (`Pending`/`Active`/`Snoozed`) is dismissed (`status_id = Dismissed`, `addressed_at` set) and any persisted `pending_event_meta` row is deleted; `Completed` overlays are preserved as historical records. Because the retirement lives in the shared status transition, every supersession path stays in sync — the insert pipeline's overlap resolution (`queries/fact/conflict.rs`, which now delegates its status change to `set_status_tx` instead of duplicating the UPDATE + audit), the inference engine's contradiction rule, user status edits via `update_fact_status`, and the nightly dedup merge (`optimization/passes.rs`), which retires the merged duplicate's overlay directly.
+- The scan queries (`get_active_recurring`, `get_past_due_auto_complete`) and the Upcoming render's recurring branch now join `facts` and exclude `Superseded`/`Forgotten` facts (`fact_status_id NOT IN (5, 6)`) as a second line of defense, so a stale overlay can never advance, auto-complete, or surface even if a future supersession path forgets to retire it.
+- Added regression tests: a corrected recurring event retires the old overlay (dismissed, not advanced by the scan, only the corrected date surfaces in Upcoming), a directly-superseded fact's overlay is neither advanced nor surfaced, a `Completed` overlay survives supersession untouched, and the nightly dedup merge retires the merged duplicate's overlay.
+- Version bumped 0.130.2 → 0.130.3 (patch — bug fix and test coverage).
+
 ## [0.130.2] — 2026-08-21
 
 ### Fix: PR #435 review feedback (connector predicate rendering)

@@ -116,6 +116,14 @@ pub async fn set_status_tx(
         .execute(&mut **tx)
         .await?;
 
+    // A superseded fact is no longer a real event: retire its overlay so it
+    // stops advancing and surfacing (issue #413). Centralised here so every
+    // supersession path (insert pipeline, inference, user status edits) keeps
+    // the overlay lifecycle in sync with the fact status.
+    if new_status == FactStatus::Superseded {
+        crate::queries::event::retire_overlay_for_fact_in_tx(tx, fact_id, now).await?;
+    }
+
     let updated: Fact = sqlx::query_as::<_, Fact>(
         "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
          valid_from, valid_until, confidence, fact_status_id, inferred, \

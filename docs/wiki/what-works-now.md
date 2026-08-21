@@ -222,7 +222,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
-| Event overlay + scan job | ✅ Works | Lifecycle + recurrence overlay on facts; daily scan derives overlays, auto-completes past reminders, advances recurring events; "Upcoming" memory section ([#74](https://github.com/BhavsarDevansh/Mimir/issues/74)). |
+| Event overlay + scan job | ✅ Works | Lifecycle + recurrence overlay on facts; daily scan derives overlays, auto-completes past reminders, advances recurring events; "Upcoming" memory section ([#74](https://github.com/BhavsarDevansh/Mimir/issues/74)). Superseded facts retire their overlay (dismissed + pending shape dropped) and the scan/render queries exclude superseded/forgotten facts, so a corrected recurring event surfaces exactly once ([#413](https://github.com/BhavsarDevansh/Mimir/issues/413)). |
 | Proactive surface | ❌ Not implemented | Notifications, smart completion, and a `mimir events` CLI are Phase 5 work ([#143](https://github.com/BhavsarDevansh/Mimir/issues/143)). |
 
 ### Connectors (Phase 3)

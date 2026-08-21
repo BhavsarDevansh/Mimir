@@ -606,3 +606,412 @@ async fn test_recurring_event_not_duplicated_in_upcoming() {
     assert_eq!(event.status(), Some(EventStatus::Active));
     assert!(event.is_recurring());
 }
+
+#[tokio::test]
+async fn test_superseded_recurring_fact_overlay_retired() {
+    use mimir_knowledge::models::enums::{AutoCompletePolicy, EventStatus, EventType};
+    use mimir_knowledge::models::event::NewEvent;
+    use mimir_knowledge::models::fact::FactStatus;
+
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let entity = kg
+        .create_entity("Nora", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    // A recurring anniversary fact with an active recurring overlay whose next
+    // occurrence falls inside the upcoming horizon.
+    let old_fact = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("15 February".to_string()),
+            valid_from: Some(now - chrono::Duration::days(400)),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+    kg.insert_event(NewEvent {
+        fact_id: old_fact.id,
+        entity_id: entity.id,
+        trigger_date: now + chrono::Duration::days(5),
+        recurrence: RecurrenceType::Yearly,
+        event_type: EventType::Birthday,
+        auto_complete_policy: AutoCompletePolicy::Recurring,
+        requires_user_action: false,
+    })
+    .await
+    .unwrap();
+
+    // Correct the anniversary: an explicit overlapping fact supersedes the old
+    // one (issue #413).
+    let new_fact = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("16 February".to_string()),
+            valid_from: Some(now + chrono::Duration::days(6)),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    // The old fact is superseded and its overlay is retired (dismissed).
+    let old_after = kg.get_fact(old_fact.id).await.unwrap().unwrap();
+    assert_eq!(old_after.status().unwrap(), FactStatus::Superseded);
+    let old_event = kg.get_event_by_fact(old_fact.id).await.unwrap().unwrap();
+    assert_eq!(old_event.status(), Some(EventStatus::Dismissed));
+
+    // The scan must not advance the retired overlay, and must derive a fresh
+    // one for the corrected fact.
+    let summary = kg.run_events_scan(30).await.unwrap();
+    assert_eq!(summary.advanced, 0);
+    assert_eq!(summary.derived, 1);
+    let old_event_after = kg.get_event_by_fact(old_fact.id).await.unwrap().unwrap();
+    assert_eq!(old_event_after.trigger_date, old_event.trigger_date);
+
+    // Only the corrected date surfaces in the Upcoming section.
+    let section = mimir_knowledge::queries::memory::render_upcoming_section(
+        kg.pool(),
+        entity.id,
+        now,
+        30,
+        10,
+    )
+    .await
+    .unwrap();
+    assert!(section.contains("16 February"), "section was: {section}");
+    assert!(!section.contains("15 February"), "section was: {section}");
+    assert_ne!(old_fact.id, new_fact.id);
+}
+
+#[tokio::test]
+async fn test_superseded_fact_overlay_not_advanced_or_surfaced() {
+    use mimir_knowledge::models::enums::{AutoCompletePolicy, EventStatus, EventType};
+    use mimir_knowledge::models::event::NewEvent;
+
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let entity = kg
+        .create_entity("Omar", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    // Two recurring facts with active overlays: one past-due (would advance on
+    // scan) and one inside the upcoming horizon (would surface).
+    let past_fact = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("past anniversary".to_string()),
+            valid_from: Some(now - chrono::Duration::days(400)),
+            // Bounded so it does not overlap (and get superseded by) the
+            // second fact below — this test flips statuses directly.
+            valid_until: Some(now - chrono::Duration::days(350)),
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+    kg.insert_event(NewEvent {
+        fact_id: past_fact.id,
+        entity_id: entity.id,
+        trigger_date: now - chrono::Duration::days(1),
+        recurrence: RecurrenceType::Yearly,
+        event_type: EventType::Birthday,
+        auto_complete_policy: AutoCompletePolicy::Recurring,
+        requires_user_action: false,
+    })
+    .await
+    .unwrap();
+
+    let future_fact = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("future anniversary".to_string()),
+            valid_from: Some(now - chrono::Duration::days(300)),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+    kg.insert_event(NewEvent {
+        fact_id: future_fact.id,
+        entity_id: entity.id,
+        trigger_date: now + chrono::Duration::days(5),
+        recurrence: RecurrenceType::Yearly,
+        event_type: EventType::Birthday,
+        auto_complete_policy: AutoCompletePolicy::Recurring,
+        requires_user_action: false,
+    })
+    .await
+    .unwrap();
+
+    // Two past-due one-time facts with active overlays: the auto-complete pass
+    // would normally complete them, so they pin the one-time scan path too.
+    let superseded_one_time = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("superseded one-time reminder".to_string()),
+            valid_from: Some(now - chrono::Duration::days(200)),
+            valid_until: Some(now - chrono::Duration::days(150)),
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+    kg.insert_event(NewEvent {
+        fact_id: superseded_one_time.id,
+        entity_id: entity.id,
+        trigger_date: now - chrono::Duration::days(1),
+        recurrence: RecurrenceType::None,
+        event_type: EventType::Reminder,
+        auto_complete_policy: AutoCompletePolicy::AutoCompleteOnDate,
+        requires_user_action: false,
+    })
+    .await
+    .unwrap();
+
+    let forgotten_one_time = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("forgotten one-time reminder".to_string()),
+            valid_from: Some(now - chrono::Duration::days(120)),
+            valid_until: Some(now - chrono::Duration::days(90)),
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+    kg.insert_event(NewEvent {
+        fact_id: forgotten_one_time.id,
+        entity_id: entity.id,
+        trigger_date: now - chrono::Duration::days(1),
+        recurrence: RecurrenceType::None,
+        event_type: EventType::Reminder,
+        auto_complete_policy: AutoCompletePolicy::AutoCompleteOnDate,
+        requires_user_action: false,
+    })
+    .await
+    .unwrap();
+
+    // Simulate a supersession path that does not retire the overlay (e.g. a
+    // legacy row or a future writer): flip the facts to Superseded/Forgotten
+    // directly, leaving their overlays active.
+    sqlx::query("UPDATE facts SET fact_status_id = ? WHERE id IN (?, ?, ?)")
+        .bind(mimir_knowledge::models::fact::FactStatus::Superseded as i16)
+        .bind(past_fact.id)
+        .bind(future_fact.id)
+        .bind(superseded_one_time.id)
+        .execute(kg.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE facts SET fact_status_id = ? WHERE id = ?")
+        .bind(mimir_knowledge::models::fact::FactStatus::Forgotten as i16)
+        .bind(forgotten_one_time.id)
+        .execute(kg.pool())
+        .await
+        .unwrap();
+
+    // The scan must not advance recurring overlays or complete one-time
+    // overlays of superseded/forgotten facts.
+    let summary = kg.run_events_scan(30).await.unwrap();
+    assert_eq!(summary.advanced, 0);
+    assert_eq!(summary.completed, 0);
+    let past_event = kg.get_event_by_fact(past_fact.id).await.unwrap().unwrap();
+    assert_eq!(past_event.status(), Some(EventStatus::Active));
+    assert_eq!(
+        past_event.trigger_date,
+        now - chrono::Duration::days(1),
+        "superseded fact's overlay was advanced by the scan"
+    );
+    for (label, fact_id) in [
+        ("superseded", superseded_one_time.id),
+        ("forgotten", forgotten_one_time.id),
+    ] {
+        let event = kg.get_event_by_fact(fact_id).await.unwrap().unwrap();
+        assert_eq!(event.status(), Some(EventStatus::Active));
+        assert_eq!(
+            event.trigger_date,
+            now - chrono::Duration::days(1),
+            "{label} fact's one-time overlay was completed by the scan"
+        );
+    }
+
+    // The Upcoming section must not surface overlays of superseded facts.
+    let section = mimir_knowledge::queries::memory::render_upcoming_section(
+        kg.pool(),
+        entity.id,
+        now,
+        30,
+        10,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !section.contains("future anniversary"),
+        "superseded fact surfaced in section: {section}"
+    );
+}
+
+#[tokio::test]
+async fn test_superseded_fact_completed_overlay_preserved() {
+    use mimir_knowledge::models::enums::{AutoCompletePolicy, EventStatus, EventType};
+    use mimir_knowledge::models::event::NewEvent;
+    use mimir_knowledge::models::fact::FactStatus;
+
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let entity = kg
+        .create_entity("Priya", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    // A past one-time fact with an overlay the scan auto-completes.
+    let old_fact = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("old date".to_string()),
+            valid_from: Some(now - chrono::Duration::days(10)),
+            valid_until: Some(now - chrono::Duration::days(5)),
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+    kg.insert_event(NewEvent {
+        fact_id: old_fact.id,
+        entity_id: entity.id,
+        trigger_date: now - chrono::Duration::days(1),
+        recurrence: RecurrenceType::None,
+        event_type: EventType::Reminder,
+        auto_complete_policy: AutoCompletePolicy::AutoCompleteOnDate,
+        requires_user_action: false,
+    })
+    .await
+    .unwrap();
+
+    let summary = kg.run_events_scan(30).await.unwrap();
+    assert_eq!(summary.completed, 1);
+    let completed = kg.get_event_by_fact(old_fact.id).await.unwrap().unwrap();
+    assert_eq!(completed.status(), Some(EventStatus::Completed));
+
+    // An explicit overlapping fact supersedes the old one.
+    kg.insert_fact(NewFact {
+        subject_id: entity.id,
+        relationship_type: "is_in".to_string(),
+        object_id: None,
+        object_literal: Some("new date".to_string()),
+        valid_from: Some(now - chrono::Duration::days(8)),
+        valid_until: Some(now - chrono::Duration::days(3)),
+        source_type: SourceType::UserEdit,
+        connector_instance_id: None,
+        connector_type: None,
+        raw_reference: None,
+        extraction_method: None,
+        inferred: false,
+        inference_depth: 0,
+        confidence: Some(0.9),
+        parent_fact_ids: Vec::new(),
+        category_ids: Vec::new(),
+    })
+    .await
+    .unwrap();
+
+    let old_after = kg.get_fact(old_fact.id).await.unwrap().unwrap();
+    assert_eq!(old_after.status().unwrap(), FactStatus::Superseded);
+
+    // Retirement must not rewrite completed history: the overlay stays
+    // `Completed` (it already happened and never advances or surfaces).
+    let overlay = kg.get_event_by_fact(old_fact.id).await.unwrap().unwrap();
+    assert_eq!(
+        overlay.status(),
+        Some(EventStatus::Completed),
+        "completed overlay was dismissed by supersession"
+    );
+}

@@ -6,6 +6,7 @@ use sqlx::SqlitePool;
 use crate::KnowledgeError;
 use crate::models::category::{Category, CategoryWithCount, FactWithCategories, NewCategory};
 use crate::models::fact::FactStatus;
+use crate::models::memory::MemoryBucket;
 use std::collections::BTreeSet;
 
 /// List categories, optionally filtered by parent.
@@ -14,23 +15,19 @@ pub async fn list_categories(
     parent_id: Option<i32>,
 ) -> Result<Vec<Category>, KnowledgeError> {
     let rows = match parent_id {
-        Some(pid) => {
-            sqlx::query_as::<_, Category>(
-                "SELECT id, name, description, parent_id, memory_weight, created_at \
+        Some(pid) => sqlx::query_as::<_, Category>(
+            "SELECT id, name, description, parent_id, memory_weight, memory_bucket_id, created_at \
                  FROM categories WHERE parent_id = ? ORDER BY id",
-            )
-            .bind(pid)
-            .fetch_all(pool)
-            .await?
-        }
-        None => {
-            sqlx::query_as::<_, Category>(
-                "SELECT id, name, description, parent_id, memory_weight, created_at \
+        )
+        .bind(pid)
+        .fetch_all(pool)
+        .await?,
+        None => sqlx::query_as::<_, Category>(
+            "SELECT id, name, description, parent_id, memory_weight, memory_bucket_id, created_at \
                  FROM categories WHERE parent_id IS NULL ORDER BY id",
-            )
-            .fetch_all(pool)
-            .await?
-        }
+        )
+        .fetch_all(pool)
+        .await?,
     };
     Ok(rows)
 }
@@ -41,7 +38,7 @@ pub async fn get_category(
     id: i32,
 ) -> Result<Option<CategoryWithCount>, KnowledgeError> {
     let row: Option<CategoryWithCount> = sqlx::query_as(
-        "SELECT c.id, c.name, c.description, c.parent_id, c.memory_weight, c.created_at, \
+        "SELECT c.id, c.name, c.description, c.parent_id, c.memory_weight, c.memory_bucket_id, c.created_at, \
                 COUNT(fc.fact_id) as fact_count \
          FROM categories c \
          LEFT JOIN fact_categories fc ON fc.category_id = c.id \
@@ -60,7 +57,7 @@ pub async fn get_children(
     parent_id: i32,
 ) -> Result<Vec<Category>, KnowledgeError> {
     let rows = sqlx::query_as::<_, Category>(
-        "SELECT id, name, description, parent_id, memory_weight, created_at \
+        "SELECT id, name, description, parent_id, memory_weight, memory_bucket_id, created_at \
          FROM categories WHERE parent_id = ? ORDER BY id",
     )
     .bind(parent_id)
@@ -75,16 +72,24 @@ pub async fn insert_category(
     new: &NewCategory,
     _now: DateTime<Utc>,
 ) -> Result<Category, KnowledgeError> {
+    if let Some(bucket_id) = new.memory_bucket_id {
+        if MemoryBucket::try_from(bucket_id).is_err() {
+            return Err(KnowledgeError::Validation(format!(
+                "Unknown memory bucket id {bucket_id}; expected 1-5"
+            )));
+        }
+    }
     let category: Category = sqlx::query_as(
-        "INSERT INTO categories (id, name, description, parent_id, memory_weight) \
-         VALUES (?, ?, ?, ?, ?) \
-         RETURNING id, name, description, parent_id, memory_weight, created_at",
+        "INSERT INTO categories (id, name, description, parent_id, memory_weight, memory_bucket_id) \
+         VALUES (?, ?, ?, ?, ?, ?) \
+         RETURNING id, name, description, parent_id, memory_weight, memory_bucket_id, created_at",
     )
     .bind(new.id)
     .bind(&new.name)
     .bind(&new.description)
     .bind(new.parent_id)
     .bind(new.memory_weight)
+    .bind(new.memory_bucket_id)
     .fetch_one(pool)
     .await?;
     Ok(category)
@@ -132,7 +137,7 @@ pub async fn get_categories_for_fact(
     fact_id: i32,
 ) -> Result<Vec<Category>, KnowledgeError> {
     let rows = sqlx::query_as::<_, Category>(
-        "SELECT c.id, c.name, c.description, c.parent_id, c.memory_weight, c.created_at \
+        "SELECT c.id, c.name, c.description, c.parent_id, c.memory_weight, c.memory_bucket_id, c.created_at \
          FROM categories c \
          JOIN fact_categories fc ON fc.category_id = c.id \
          WHERE fc.fact_id = ? \

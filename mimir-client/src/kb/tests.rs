@@ -13,7 +13,7 @@ use mimir_api_types::{
 #[allow(unused_imports)]
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path, query_param},
+    matchers::{body_partial_json, method, path, query_param},
 };
 
 #[tokio::test]
@@ -25,6 +25,7 @@ async fn test_kb_categories_parsing() {
         description: None,
         parent_id: None,
         memory_weight: Some(1.0),
+        memory_bucket_id: Some(3),
     }];
     Mock::given(method("GET"))
         .and(path("/kb/categories"))
@@ -36,6 +37,7 @@ async fn test_kb_categories_parsing() {
     let cats = client.kb_categories(None).await.unwrap();
     assert_eq!(cats.len(), 1);
     assert_eq!(cats[0].id, 1);
+    assert_eq!(cats[0].memory_bucket_id, Some(3));
 }
 
 #[tokio::test]
@@ -47,6 +49,7 @@ async fn test_kb_category_show_parsing() {
         description: None,
         parent_id: None,
         memory_weight: Some(1.0),
+        memory_bucket_id: Some(3),
         fact_count: 5,
         children: vec![],
     };
@@ -60,6 +63,7 @@ async fn test_kb_category_show_parsing() {
     let cat = client.kb_category_show(1).await.unwrap();
     assert_eq!(cat.id, 1);
     assert_eq!(cat.fact_count, 5);
+    assert_eq!(cat.memory_bucket_id, Some(3));
 }
 
 #[tokio::test]
@@ -71,9 +75,15 @@ async fn test_kb_category_create_and_delete() {
         description: None,
         parent_id: None,
         memory_weight: Some(1.0),
+        memory_bucket_id: Some(3),
     };
     Mock::given(method("POST"))
         .and(path("/kb/categories"))
+        .and(body_partial_json(serde_json::json!({
+            "id": 42,
+            "name": "Places",
+            "memory_bucket_id": 3
+        })))
         .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
         .mount(&server)
         .await;
@@ -85,10 +95,11 @@ async fn test_kb_category_create_and_delete() {
 
     let client = MimirClient::new(server.uri());
     let cat = client
-        .kb_category_create(42, "Places".to_string(), None, None, None)
+        .kb_category_create(42, "Places".to_string(), None, None, None, Some(3))
         .await
         .unwrap();
     assert_eq!(cat.id, 42);
+    assert_eq!(cat.memory_bucket_id, Some(3));
     client.kb_category_delete(42).await.unwrap();
 }
 

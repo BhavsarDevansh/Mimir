@@ -89,6 +89,7 @@ async fn all_migrations_apply_cleanly() {
     assert!(names.contains(&"relationship_type_aliases".to_string()));
     assert!(names.contains(&"categories".to_string()));
     assert!(names.contains(&"fact_categories".to_string()));
+    assert!(names.contains(&"memory_buckets".to_string()));
     assert!(names.contains(&"extraction_methods".to_string()));
     assert!(names.contains(&"change_types".to_string()));
     assert!(names.contains(&"changed_by_types".to_string()));
@@ -117,6 +118,7 @@ async fn lookup_tables_seeded_correctly() {
         ("SELECT COUNT(*) FROM preference_categories", 7),
         ("SELECT COUNT(*) FROM preference_source_types", 3),
         ("SELECT COUNT(*) FROM relationship_types", 46),
+        ("SELECT COUNT(*) FROM memory_buckets", 5),
         ("SELECT COUNT(*) FROM connector_statuses", 4),
         ("SELECT COUNT(*) FROM connector_auth_states", 3),
     ];
@@ -389,4 +391,46 @@ async fn wal_and_foreign_keys_enabled() {
         .await
         .unwrap();
     assert_eq!(fk_enabled, 1);
+}
+
+#[tokio::test]
+async fn category_memory_bucket_seed_pins_taxonomy() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path: PathBuf = dir.path().join("knowledge.db");
+    let kg = KnowledgeGraph::init(&db_path).await.unwrap();
+
+    let rows: Vec<(i32, Option<String>)> = sqlx::query_as(
+        "SELECT c.id, b.name \
+         FROM categories c \
+         LEFT JOIN memory_buckets b ON b.id = c.memory_bucket_id \
+         ORDER BY c.id",
+    )
+    .fetch_all(kg.pool())
+    .await
+    .unwrap();
+
+    assert_eq!(rows.len(), 92, "category taxonomy seed drifted");
+    for (id, bucket) in rows {
+        let expected = expected_memory_bucket_name(id);
+        assert_eq!(
+            bucket.as_deref(),
+            Some(expected),
+            "category {id} has the wrong memory bucket"
+        );
+    }
+}
+
+/// Expected memory bucket per seeded category id, mirroring the taxonomy seed
+/// (migration 031) and the bucket backfill (migration 052): identity 100-199,
+/// upcoming 900-999, relationships 400-499 (including 460/480), preferences
+/// 300-399 plus the preference-ish outliers (570, 670, 680, 690, 830, 870),
+/// everything else general.
+fn expected_memory_bucket_name(id: i32) -> &'static str {
+    match id {
+        100..=199 => "Identity",
+        900..=999 => "Upcoming",
+        400..=499 => "Relationships",
+        300..=399 | 570 | 670 | 680 | 690 | 830 | 870 => "Preferences",
+        _ => "General",
+    }
 }

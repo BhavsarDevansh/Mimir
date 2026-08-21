@@ -241,10 +241,18 @@ pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url:
             parent,
             description,
             memory_weight,
+            memory_bucket_id,
         } => {
             let client = make_client(base_url);
             match client
-                .kb_category_create(id, name, parent, description, memory_weight)
+                .kb_category_create(
+                    id,
+                    name,
+                    parent,
+                    description,
+                    memory_weight,
+                    memory_bucket_id,
+                )
                 .await
             {
                 Ok(cat) => {

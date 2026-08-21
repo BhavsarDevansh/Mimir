@@ -9,7 +9,7 @@
 Mimir's knowledge graph organises facts with two complementary layers:
 
 - **Predicate aliases** — thin canonical verbs (`studied_at`, `works_at`, `has_partner`) with English synonyms (`attended`, `employer`, `wife`). Used to *canonicalise* the verb on a fact so the same relationship is never stored under multiple predicate rows.
-- **Categories (Dewey-Decimal taxonomy)** — the semantic home for grouping, hierarchy, and multi-tag precision. A fact carries 1–3 category tags; categories carry a `memory_weight` that drives memory ranking.
+- **Categories (Dewey-Decimal taxonomy)** — the semantic home for grouping, hierarchy, and multi-tag precision. A fact carries 1–3 category tags; categories carry a `memory_weight` that drives memory ranking and a `memory_bucket_id` that decides which memory section (Identity, Relationships, Preferences, Upcoming, or General) the fact is rendered under. Buckets are seeded with the taxonomy (migration `052`), so memory classification follows the data, not hard-coded id ranges.
 
 **Category aliases** map natural-language domain words (`"hobbies"`, `"education"`, `"family"`) to a category id, so a user or agent can ask for a domain by name and retrieve every fact in that domain — including subcategories — without knowing the numeric Dewey ids.
 
@@ -36,6 +36,7 @@ A predicate tree follows one axis (a predicate has one canonical name and one pa
 - Tag facts with the **most specific** subcategory available at extraction time (the LLM is instructed to assign 1–3 category ids).
 - Add new domain words via `insert_category_alias` rather than inventing new predicates — keep predicates as thin verbs.
 - Use the seeded predicate DAG parents (`employment`, `education`, `residence`, `containment`) for coarse verb generalisation in `kg_query --include-subtree`, and category subtrees for multi-axis grouping and memory ranking.
+- When adding a category outside the seeded taxonomy, set its memory bucket explicitly (`kb category add --memory-bucket-id 4` for a preference) — an unset bucket classifies as General.
 
 ## See also
 

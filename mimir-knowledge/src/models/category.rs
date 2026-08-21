@@ -11,6 +11,8 @@ pub struct Category {
     pub description: Option<String>,
     pub parent_id: Option<i32>,
     pub memory_weight: Option<f32>,
+    /// Memory bucket id (`memory_buckets` lookup); `None` classifies as General.
+    pub memory_bucket_id: Option<i16>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -22,6 +24,8 @@ pub struct NewCategory {
     pub description: Option<String>,
     pub parent_id: Option<i32>,
     pub memory_weight: Option<f32>,
+    /// Memory bucket id (`memory_buckets` lookup); `None` classifies as General.
+    pub memory_bucket_id: Option<i16>,
 }
 
 /// A category with its count of associated facts.
@@ -32,6 +36,8 @@ pub struct CategoryWithCount {
     pub description: Option<String>,
     pub parent_id: Option<i32>,
     pub memory_weight: Option<f32>,
+    /// Memory bucket id (`memory_buckets` lookup); `None` classifies as General.
+    pub memory_bucket_id: Option<i16>,
     pub created_at: DateTime<Utc>,
     pub fact_count: i64,
 }

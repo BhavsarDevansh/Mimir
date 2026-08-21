@@ -12,7 +12,7 @@
 
 ### Lookup Tables (Stable Integer IDs)
 
-Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `023`, `024`, `027`, `032`, `034`, `039`, and `046` with stable integer IDs that map to Rust enums via `#[repr(i16)]` discriminants:
+Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `023`, `024`, `027`, `032`, `034`, `039`, `046`, and `052` with stable integer IDs that map to Rust enums via `#[repr(i16)]` discriminants:
 
 - Migration `001` seeds `entity_types` (7 variants), `recurrence_types`, `location_types`, `fact_statuses`, `relation_types`, `source_types`, `preference_categories`, and `preference_source_types`. (`entity_date_types` was also seeded here but is dropped in migration `040` — see Events & Reminders.)
 - Migration `012` adds the `DateTime = 8` variant to `entity_types`.
@@ -22,6 +22,7 @@ Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `0
 - Migration `027` adds the `Rejected = 8` variant to `change_types`.
 - Migration `034` adds the `ContentUpdate = 9` variant to `change_types`.
 - Migration `039` seeds the events overlay lookups: `event_types`, `event_statuses`, and `auto_complete_policies`.
+- Migration `052` seeds `memory_buckets` (Identity, Upcoming, Relationships, Preferences, General) and backfills `categories.memory_bucket_id` from the taxonomy (issue #407).
 - The enum conversions in `mimir-knowledge` align the lookup identifiers across storage and the API/tool contracts: `ChangeType` / `ChangedBy` (`models::audit_log`) and `EntityType` (`models::entity`) expose `as_str()` + `TryFrom<i16>` (plus case-insensitive `FromStr` where input parsing exists), and the KB route / `kg_*` tool helpers delegate to them instead of re-typing the name tables (issue #358). Alignment is by stable identifier — `TryFrom<i16>` keeps the lookup rows and enum discriminants in lock-step — and the audit browse row (`queries::audit::AuditLogRow`) carries `changed_by_id` while both the `kb audit` route and the fact-detail route resolve `changed_by` through `ChangedBy::try_from(i16)` + `as_str()` (issue #380), so `GET /kb/audit` and `GET /kb/facts/{id}` render the same variant-style wire string (`User`, `System`, `InferenceEngine`, `NightlyOptimization`) rather than the lowercase lookup names.
 
 | Table | Rows | Rust Enum | Module |
@@ -42,6 +43,7 @@ Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `0
 | `event_statuses` | 5 | `EventStatus` | `models::enums` |
 | `auto_complete_policies` | 3 | `AutoCompletePolicy` | `models::enums` |
 | `memory_priorities` | 4 | `MemoryPriority` | `models::memory` |
+| `memory_buckets` | 5 | `MemoryBucket` | `models::memory` |
 
 ### Core Tables
 
@@ -62,7 +64,7 @@ Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `0
 | `relationship_type_aliases` | Globally-unique English synonyms → canonical relationship type id |
 | `relationship_type_hierarchy` | Parent/child edges between relationship types (seeded abstract parents for subtree queries; grouping still lives in `categories`) |
 | `relationship_constraints` | Valid subject/object entity-type combinations per relationship type (renamed from `predicate_constraints` by migration `031`) |
-| `categories` | Dewey-Decimal-style fact taxonomy with `memory_weight` |
+| `categories` | Dewey-Decimal-style fact taxonomy with `memory_weight` and `memory_bucket_id` (memory classification; see `docs/memory-system.md`) |
 | `fact_categories` | Many-to-many junction: facts ↔ categories (multi-tag precision + ranking) |
 | `category_aliases` | Natural-language domain words → category id (see Category Aliases) |
 
@@ -178,6 +180,7 @@ Migrations are strictly ordered by foreign-key dependencies:
 42. `049` — `connectors.durable_state` column: opaque, connector-owned durable state persisted by the supervisor (the Email connector's bounded LLM-extraction retry ledger) (#262)
 43. `050` — Seed remaining canonical predicates (`skill`, `has_appointment`, sensitive set) via name-keyed UPSERT + reconcile auto-created types (#401)
 44. `051` — Consolidate redundant predicates (`based_in`/`lived_in` → `resides_in`, `is_in` → `located_in`, name-keyed) + seed abstract DAG parents (`residence`, `employment`, `education`, `containment`) (#403)
+45. `052` — `memory_buckets` lookup + `categories.memory_bucket_id` backfilled from the taxonomy, making memory bucket classification data-driven instead of hard-coded ID ranges (#407)
 
 ---
 

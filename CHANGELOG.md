@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.129.1] — 2026-08-21
+
+### Fix: PR #434 review feedback (category memory buckets)
+
+- `POST /kb/categories` now returns the same `CategoryResponse` shape as the list and detail routes, so an unset `memory_bucket_id` is omitted instead of serialised as `null`.
+- The client KB tests now pin the `memory_bucket_id` wire contract: list and detail fixtures assert the decoded bucket id, and the create test sends `memory_bucket_id: 3` and matches it in the POST request body.
+- Corrected `docs/memory-system.md` to state that only `Identity` gets a reserved first fill phase — `Upcoming`, `Relationships`, `Preferences`, and `General` are filled together by score, and the lowest bucket id is the multi-category classification rule rather than a general fill-priority control.
+- Version bumped 0.129.0 → 0.129.1 (patch — response-shape consistency, test coverage, and documentation).
+
+## [0.129.0] — 2026-08-20
+
+### Refactor: memory bucket classification is now data-driven (issue #407)
+
+- Added migration `052`: a `memory_buckets` lookup table (Identity, Upcoming, Relationships, Preferences, General) and a `categories.memory_bucket_id` column backfilled from the taxonomy seeded in migration `031` (identity 100–199, upcoming 900–999, relationships 400–499, preferences 300–399 plus the outliers 570/670/680/690/830/870, everything else general). Bucket ids are ordered by priority, so a fact tagged with several categories resolves to `MIN(c.memory_bucket_id)` — the highest-priority bucket.
+- Removed the hard-coded category ID ranges and preference-extras list from `mimir-knowledge/src/queries/memory/`; the memory query now reads the bucket from the category row and `ranking.rs` only maps a stored bucket id to the `MemoryBucket` enum (falling back to General for unset or unknown ids). Adding, renaming, or re-parenting a category can no longer silently change memory bucketing.
+- Added `memory_bucket_id` (optional) to the category model, `kb category add --memory-bucket-id` CLI flag, and the `POST /kb/categories` body / category responses, so runtime-created categories can opt into a bucket instead of defaulting to General; unknown bucket ids are rejected with a validation error instead of a foreign-key failure.
+- Added tests pinning every seeded category to its expected bucket (migration test), a multi-category priority integration test, and unit tests for the bucket-id mapping.
+- Version bumped 0.128.2 → 0.129.0 (minor — refactor with an additive API field).
+
 ## [0.128.2] — 2026-08-20
 
 ### Bugfix: `memory.temporal_horizon` now drives the upcoming-events horizon (PR #431 review)

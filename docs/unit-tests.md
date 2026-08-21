@@ -35,8 +35,9 @@ A workspace-wide pass expanded inline unit-test coverage for pure helpers, wire 
 - `models/audit_log.rs`: 5 tests — `ChangeType` / `ChangedBy` `try_from<i16>` roundtrips (valid/invalid discriminants), `as_str` wire-contract names (incl. `content_update`), and `ChangeType` `FromStr` wire-string parsing (incl. case-insensitive).
 - `models/entity.rs`: 6 tests — discriminant stability, the `ENTITY_TYPES` const-array lock-step contract, `try_from<i16>` roundtrip, `as_str` wire-contract names, `FromStr` wire-string parsing (incl. case-insensitive), basic construction.
 - `tools/`: 1 test — the `kg_*` name helpers (`fact_status_name` / `source_type_name` / `entity_type_name`) match the wire contract with the `Unknown({id})` fallback.
+- `memory/` (`queries/memory/tests.rs`): 12 tests — calendar-day upcoming suffixes, temporal-boost values (zero/one/past/none), priority boost, bucket-id mapping (every seeded bucket plus General fallback for unset/unknown ids), schema/unknown-relationship rendering, char estimates.
 
-204 lib tests (up from 110).
+203 lib tests (up from 110).
 
 ## `mimir-server`
 

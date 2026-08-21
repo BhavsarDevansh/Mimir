@@ -33,6 +33,10 @@ Implemented in `mimir-knowledge/src/queries/memory/`.
 - **Centrality** boosts facts about well-connected entities (people mentioned often)
 - **Fill algorithm**: Sort by score descending, greedily fill the character budget, truncate last entry with `…` if exceeded
 
+### Memory Buckets
+
+Every ranked fact lands in one of five buckets — `Identity`, `Upcoming`, `Relationships`, `Preferences`, or `General` — which controls the section it is rendered under. Only `Identity` affects fill order: the fill algorithm reserves a first phase for identity facts (up to ~200 chars with rollover) and then fills the remaining budget by score across `Upcoming`, `Relationships`, `Preferences`, and `General` together. Bucket classification is data-driven: migration `052` added a `memory_buckets` lookup table and a `categories.memory_bucket_id` column, backfilled from the taxonomy seeded in migration `031` (identity 100–199, upcoming 900–999, relationships 400–499, preferences 300–399 plus the preference-ish outliers 570/670/680/690/830/870, everything else general). When a fact spans multiple categories, the memory query classifies it into the bucket with the lowest id (`MIN(c.memory_bucket_id)`); the ids encode classification priority (Identity 1 > Upcoming 2 > Relationships 3 > Preferences 4 > General 5), not a per-bucket fill-priority schedule. `mimir-knowledge/src/queries/memory/ranking.rs` only maps a stored bucket id to the `MemoryBucket` enum, falling back to `General` for unset or unknown ids — there are no hard-coded category ranges in Rust to drift from the taxonomy. Categories created at runtime without an explicit bucket (`kb category add --memory-bucket-id`) classify as `General`.
+
 ### LLM Condensation Pipeline
 
 Implemented in `mimir-knowledge/src/condensation.rs`.

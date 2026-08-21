@@ -9,7 +9,7 @@ use crate::KnowledgeError;
 use crate::models::fact::FactStatus;
 use crate::models::memory::{MemoryBucket, MemoryPriority, MemorySchema, RankedFact};
 use crate::queries::memory::ranking::{
-    compute_temporal_boost, determine_bucket, estimate_chars, truncate_fact,
+    bucket_from_id, compute_temporal_boost, estimate_chars, truncate_fact,
 };
 use crate::queries::memory::{BuildMemoryOptions, RawRankedFact};
 
@@ -50,7 +50,7 @@ pub async fn build_memory_schema_with_opts(
     opts: BuildMemoryOptions,
 ) -> Result<MemorySchema, KnowledgeError> {
     let mut sql = String::from(
-        "SELECT f.id AS fact_id, s.name AS subject_name, rt.name AS relationship_type, COALESCE(o.name, f.object_literal) AS object_name, f.object_literal, f.confidence, f.valid_from, GROUP_CONCAT(fc.category_id) AS category_ids, MAX(c.memory_weight) AS memory_weight, f.memory_priority_id FROM facts f JOIN entities s ON s.id = f.subject_id JOIN relationship_types rt ON rt.id = f.relationship_type_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN fact_categories fc ON fc.fact_id = f.id LEFT JOIN categories c ON c.id = fc.category_id WHERE f.subject_id = ? AND f.pending_confirmation = 0 AND f.fact_status_id NOT IN (?, ?) AND f.confidence >= ?",
+        "SELECT f.id AS fact_id, s.name AS subject_name, rt.name AS relationship_type, COALESCE(o.name, f.object_literal) AS object_name, f.object_literal, f.confidence, f.valid_from, GROUP_CONCAT(fc.category_id) AS category_ids, MAX(c.memory_weight) AS memory_weight, MIN(c.memory_bucket_id) AS memory_bucket_id, f.memory_priority_id FROM facts f JOIN entities s ON s.id = f.subject_id JOIN relationship_types rt ON rt.id = f.relationship_type_id LEFT JOIN entities o ON o.id = f.object_id LEFT JOIN fact_categories fc ON fc.fact_id = f.id LEFT JOIN categories c ON c.id = fc.category_id WHERE f.subject_id = ? AND f.pending_confirmation = 0 AND f.fact_status_id NOT IN (?, ?) AND f.confidence >= ?",
     );
     if opts.exclude_sensitive {
         sql.push_str(" AND rt.sensitive = FALSE");
@@ -98,7 +98,7 @@ pub async fn build_memory_schema_with_opts(
         let char_estimate =
             estimate_chars(&raw.subject_name, &raw.relationship_type, &object_display);
 
-        let bucket = determine_bucket(&cat_ids);
+        let bucket = bucket_from_id(raw.memory_bucket_id);
 
         ranked.push(RankedFact {
             fact_id: raw.fact_id,

@@ -1,6 +1,6 @@
 //! Memory ranking/rendering tests.
 
-use super::ranking::{compute_temporal_boost, determine_bucket, estimate_chars};
+use super::ranking::{bucket_from_id, compute_temporal_boost, estimate_chars};
 use super::render::{format_upcoming_line, render_fact_line};
 use super::*;
 use crate::models::memory::{MemoryBucket, MemoryPriority, MemorySchema, RankedFact};
@@ -69,28 +69,34 @@ fn priority_boost_values() {
 }
 
 #[test]
-fn bucket_identity_wins() {
-    assert_eq!(determine_bucket(&[150, 400]), MemoryBucket::Identity);
+fn bucket_from_id_maps_every_seeded_bucket() {
+    assert_eq!(
+        bucket_from_id(Some(MemoryBucket::Identity as i16)),
+        MemoryBucket::Identity
+    );
+    assert_eq!(
+        bucket_from_id(Some(MemoryBucket::Upcoming as i16)),
+        MemoryBucket::Upcoming
+    );
+    assert_eq!(
+        bucket_from_id(Some(MemoryBucket::Relationships as i16)),
+        MemoryBucket::Relationships
+    );
+    assert_eq!(
+        bucket_from_id(Some(MemoryBucket::Preferences as i16)),
+        MemoryBucket::Preferences
+    );
+    assert_eq!(
+        bucket_from_id(Some(MemoryBucket::General as i16)),
+        MemoryBucket::General
+    );
 }
 
 #[test]
-fn bucket_upcoming_second() {
-    assert_eq!(determine_bucket(&[910, 400]), MemoryBucket::Upcoming);
-}
-
-#[test]
-fn bucket_relationships_third() {
-    assert_eq!(determine_bucket(&[420, 300]), MemoryBucket::Relationships);
-}
-
-#[test]
-fn bucket_preferences_fourth() {
-    assert_eq!(determine_bucket(&[300, 500]), MemoryBucket::Preferences);
-}
-
-#[test]
-fn bucket_general_fallback() {
-    assert_eq!(determine_bucket(&[500, 600]), MemoryBucket::General);
+fn bucket_from_id_falls_back_to_general() {
+    assert_eq!(bucket_from_id(None), MemoryBucket::General);
+    assert_eq!(bucket_from_id(Some(0)), MemoryBucket::General);
+    assert_eq!(bucket_from_id(Some(99)), MemoryBucket::General);
 }
 
 #[test]

@@ -32,6 +32,7 @@ mimir memory --refresh
 |--------|---------------|
 | Confidence | How certain Mimir is (based on source quality and corroboration) |
 | Category | Identity facts (1.0) rank higher than hobbies (0.55) |
+| Bucket | Facts are grouped into Identity, Relationships, Preferences, Upcoming, and General sections from the category's seeded memory bucket |
 | Temporal boost | Upcoming birthdays and appointments get a recency boost |
 | Priority | Critical facts (partner, allergies) get a 2× multiplier |
 | Centrality | Facts about well-connected entities (people you mention often) rank higher |

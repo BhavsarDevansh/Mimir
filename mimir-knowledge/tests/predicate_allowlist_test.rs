@@ -330,6 +330,91 @@ async fn consolidated_aliases_resolve_to_canonical() {
 // Allow-list const is pinned to the seed
 // ---------------------------------------------------------------------------
 
+/// The (subject, object) entity-type pairs the connectors actually emit for
+/// their entity-object facts, mirroring the emit sites in `mimir-connectors`
+/// (pinned by the connector-side registration tests). Every pair must be
+/// seeded in `relationship_constraints` by migration 053 (issue #412) so the
+/// write boundary validates connector facts like any other canonical predicate.
+const CONNECTOR_PREDICATE_CONSTRAINTS: &[(&str, i16, i16)] = &[
+    // Person -> Event
+    ("has_event", 1, 3),
+    ("attending", 1, 3),
+    ("has_flight", 1, 3),
+    ("has_booking", 1, 3),
+    ("has_order", 1, 3),
+    ("has_delivery", 1, 3),
+    ("has_ticket", 1, 3),
+    // Person -> Place
+    ("took_photo_at", 1, 2),
+    // Event -> Place
+    ("departs_from", 3, 2),
+    ("arrives_at", 3, 2),
+    ("delivered_to", 3, 2),
+    // Event -> Organization
+    ("operated_by", 3, 6),
+    ("purchased_from", 3, 6),
+    ("shipped_by", 3, 6),
+    ("issued_by", 3, 6),
+];
+
+#[tokio::test]
+async fn connector_emitted_predicates_are_seeded_canonical() {
+    let tg = TestGraph::new().await;
+
+    for name in mimir_knowledge::CONNECTOR_EMITTED_PREDICATES {
+        // Strict resolution must succeed: the predicate must be seeded and in
+        // the canonical allow-list, so the connector path no longer
+        // auto-creates a runtime row on first sync (issue #412).
+        let id = tg
+            .kg
+            .resolve_canonical_relationship_type(name)
+            .await
+            .unwrap_or_else(|e| panic!("{name} must be seeded canonical: {e}"));
+
+        // The row must carry a real description, not the auto-created marker.
+        let (description,): (String,) =
+            sqlx::query_as("SELECT description FROM relationship_types WHERE id = ?")
+                .bind(id)
+                .fetch_one(tg.kg.pool())
+                .await
+                .unwrap();
+        assert!(
+            !description.starts_with("Auto-created relationship_type:"),
+            "{name} must be seeded with a real description, got: {description}"
+        );
+
+        // A self-alias must exist so the alias table stays the single source
+        // of truth.
+        let alias_id = tg.kg.resolve_relationship_type_alias(name).await.unwrap();
+        assert_eq!(alias_id, Some(id), "{name} self-alias missing");
+    }
+
+    // The entity-object emit shapes carry seeded subject/object constraints so
+    // the write boundary validates them like any other canonical predicate.
+    for (name, subject_type, object_type) in CONNECTOR_PREDICATE_CONSTRAINTS {
+        let id = tg
+            .kg
+            .get_relationship_type_id(name)
+            .await
+            .expect("constraint target must be seeded");
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM relationship_constraints \
+             WHERE relationship_type_id = ? AND allowed_subject_type_id = ? \
+               AND allowed_object_type_id = ?",
+        )
+        .bind(id)
+        .bind(subject_type)
+        .bind(object_type)
+        .fetch_one(tg.kg.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            count, 1,
+            "{name} must seed constraint ({subject_type}, {object_type})"
+        );
+    }
+}
+
 #[test]
 fn multi_valued_predicates_are_canonical() {
     for name in mimir_knowledge::MULTI_VALUED_PREDICATES {

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.130.0] — 2026-08-21
+
+### Seed connector-emitted predicates as canonical ontology (issue #412)
+
+- Added migration `053`: the 16 predicates the connectors emit deterministically (`has_event`, `attending`, `took_photo_at`, `took_photo`, `has_flight`, `departs_from`, `arrives_at`, `operated_by`, `has_booking`, `has_order`, `purchased_from`, `has_delivery`, `shipped_by`, `delivered_to`, `has_ticket`, `issued_by`) are now seeded canonical rows with descriptions, self-aliases, and subject/object constraints mirroring the emit sites, so a connector sync never silently auto-creates a `relationship_types` row on first use. The seed is name-keyed (upgrades canonicalise pre-existing auto-created rows in place) and reconciles unreferenced auto-created vocabulary like migration `050`.
+- Added the public `CONNECTOR_EMITTED_PREDICATES` const and `is_canonical_predicate_name` helper in `mimir-knowledge` (re-exported at the crate root), and extended `CANONICAL_PREDICATES` with the new verbs so the strict conversational resolver accepts them too.
+- The email LLM extraction layer now validates the LLM-emitted `relationship_type` against the canonical vocabulary and drops non-canonical predicates with a warning instead of letting them auto-create rows; the tool-schema description now cites only canonical examples.
+- Added the seed pin in both directions: `mimir-connectors` tests assert every predicate emitted by the iCal, JSON-LD, and Photos extractors is canonical vocabulary (including the email LLM layer), and `mimir-knowledge` pins every registered connector predicate to a seeded canonical row with its constraint pair (`connector_emitted_predicates_are_seeded_canonical`).
+- Added render templates for the new predicates in the deterministic memory/upcoming renderer, and updated the predicate ontology docs (`docs/knowledge-graph-schema.md`, `docs/fact-extraction-pipeline.md`, `docs/email-connector.md`, `docs/unit-tests.md`, wiki pages).
+- Version bumped 0.129.1 → 0.130.0 (minor — additive ontology seed, migration, and public API surface).
+
 ## [0.129.1] — 2026-08-21
 
 ### Fix: PR #434 review feedback (category memory buckets)

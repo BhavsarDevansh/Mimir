@@ -615,9 +615,17 @@ async fn connector_raw_reference_forget_is_idempotent_and_dismisses_overlay() {
         .unwrap();
 
     let alice = create_person(&kg, "Alice").await;
-    let london = create_place(&kg, "London").await;
+    let event = kg
+        .create_entity(
+            "Trip to Rome",
+            mimir_knowledge::models::entity::EntityType::Event,
+            &[],
+        )
+        .await
+        .unwrap()
+        .id;
     let instance = register_connector(&kg, "calendar-1").await;
-    let fact_id = connector_fact(&kg, alice, london, "has_event", instance, "raw-1").await;
+    let fact_id = connector_fact(&kg, alice, event, "has_event", instance, "raw-1").await;
 
     let trigger = Utc::now() + chrono::Duration::days(5);
     kg.insert_event(NewEvent {

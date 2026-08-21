@@ -117,7 +117,7 @@ async fn lookup_tables_seeded_correctly() {
         ("SELECT COUNT(*) FROM source_types", 6),
         ("SELECT COUNT(*) FROM preference_categories", 7),
         ("SELECT COUNT(*) FROM preference_source_types", 3),
-        ("SELECT COUNT(*) FROM relationship_types", 46),
+        ("SELECT COUNT(*) FROM relationship_types", 62),
         ("SELECT COUNT(*) FROM memory_buckets", 5),
         ("SELECT COUNT(*) FROM connector_statuses", 4),
         ("SELECT COUNT(*) FROM connector_auth_states", 3),

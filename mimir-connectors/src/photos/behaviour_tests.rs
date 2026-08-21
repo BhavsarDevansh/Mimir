@@ -137,6 +137,61 @@ async fn extract_reverse_geocodes_gps_into_took_photo_at_fact() {
     assert_eq!(connector.geocode_cache.lock().await.len(), 1);
 }
 
+/// Every predicate the Photos connector emits must be part of the canonical
+/// vocabulary (`mimir_knowledge::is_canonical_predicate_name`), which the
+/// knowledge crate pins to the migration seed (issue #412). A connector
+/// cannot silently auto-create a `relationship_types` row on first sync.
+#[tokio::test]
+async fn emitted_predicates_are_registered_connector_vocabulary() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = serde_json::json!({ "watch_dir": dir.path().to_string_lossy() });
+
+    // Place-resolved GPS → took_photo_at; no GPS → took_photo.
+    let connector = PhotosConnector::from_config_with_geocoder(
+        config,
+        Some(Arc::new(rome_geocoder()) as Arc<dyn mimir_core::geocoder::Geocoder>),
+        Some("Devansh".to_string()),
+    )
+    .unwrap();
+    connector.buffer.lock().await.extend([
+        gps_raw("a.jpg", 46.5, 7.5),
+        RawPhoto {
+            rel_path: "b.jpg".to_string(),
+            taken_at: DateTime::<Utc>::from_timestamp(1_715_000_000, 0).unwrap(),
+            latitude: None,
+            longitude: None,
+        },
+    ]);
+    let facts = connector.extract().await.unwrap();
+    assert_eq!(facts.len(), 2, "{facts:?}");
+    for fact in facts {
+        assert!(
+            mimir_knowledge::is_canonical_predicate_name(&fact.relationship_type),
+            "photos predicate {} must be canonical vocabulary",
+            fact.relationship_type
+        );
+    }
+
+    // GPS with no geocoder → the visited <coords-label> fallback (issue #250).
+    let connector = PhotosConnector::from_config_with_geocoder(
+        serde_json::json!({ "watch_dir": dir.path().to_string_lossy() }),
+        None,
+        Some("Devansh".to_string()),
+    )
+    .unwrap();
+    connector
+        .buffer
+        .lock()
+        .await
+        .push(gps_raw("c.jpg", 46.5, 7.5));
+    let facts = connector.extract().await.unwrap();
+    assert_eq!(facts.len(), 1, "{facts:?}");
+    assert_eq!(facts[0].relationship_type, "visited");
+    assert!(mimir_knowledge::is_canonical_predicate_name(
+        &facts[0].relationship_type
+    ));
+}
+
 /// The canonical user identity injected via `ConnectorContext::user_identity`
 /// (issue #246) wins over the per-instance `owner_name` config field, so
 /// photo facts resolve to the same `Person` entity the daemon resolves as

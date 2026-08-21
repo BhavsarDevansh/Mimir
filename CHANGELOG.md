@@ -4,7 +4,7 @@
 
 ### Fix: `docs/config-hot-reload.md` describes the watcher filename filter as a suffix match instead of exact match (issue #438)
 
-- The File Watcher section stated config changes are filtered by filename with `ends_with("config.toml")`, but `spawn_config_watcher` compares the event path's file name for exact equality against the config file's file name, so a differently-named file such as `myconfig.toml` is never watched. The wording now documents the exact-match behaviour.
+- The File Watcher section stated config changes are filtered by filename with `ends_with("config.toml")`, but `spawn_config_watcher` compares the event path's file name for exact equality against the config file's file name, so a differently named file such as `myconfig.toml` does not trigger a reload. The wording now documents the exact-match behaviour.
 - Version bumped 0.131.6 → 0.131.7 (patch — documentation fix).
 
 ## [0.131.6] — 2026-08-21

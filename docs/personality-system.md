@@ -15,7 +15,7 @@ The central struct lives in `mimir-core/src/personality.rs`. It holds:
 
 Construction (`Personality::new`) scans the user personalities directory (`~/.config/mimir/personalities/`) and merges custom presets with built-ins. Custom presets override built-ins when names collide.
 
-### `PersonalityPreset`
+### Built-In Presets
 
 Built-in presets are hardcoded as private helper methods on `Personality`:
 

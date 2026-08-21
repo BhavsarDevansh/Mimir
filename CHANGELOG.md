@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.131.4] — 2026-08-21
+
+### Fix: `docs/personality-system.md` no longer references a non-existent `PersonalityPreset` type (issue #426)
+
+- The "Module Design" section's `### PersonalityPreset` heading is renamed to `### Built-In Presets`, matching the actual implementation (built-in presets are private helper methods on `Personality` in `mimir-core/src/personality.rs`, not a standalone type). Content is unchanged — only the misleading heading is corrected.
+- Version bumped 0.131.3 → 0.131.4 (patch — documentation fix).
+
 ## [0.131.3] — 2026-08-21
 
 ### Fix: reflow `VISION/03-Connectors/User-Experience.md` to the single-line prose standard (issue #418)

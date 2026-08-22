@@ -143,7 +143,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
-| Tool registry | ✅ Works | Object-safe `Tool` trait; per-tool permissions (auto/ask/disabled) persisted to `tools.toml`. |
+| Tool registry | ✅ Works | Object-safe `Tool` trait; per-tool permissions (auto/ask/disabled) persisted to `tools.toml`; factory-registered tools (e.g. `retrieve_context`) are rebuilt per request with the request-resolved LLM via `ToolContext`, so every tool dispatches through the same path with uniform permission checks ([#441](https://github.com/BhavsarDevansh/Mimir/issues/441)). |
 | Skill registry | ✅ Works | Object-safe `Skill` trait with `SkillContext`; built-in, user, and generated origins. |
 | Builtin tools | ✅ Works | `get_current_time` (local timezone + UTC offset, [#45](https://github.com/BhavsarDevansh/Mimir/issues/45) fixed), `echo`, `get_weather` (wttr.in, metric-only), `search_conversation_history`; knowledge-graph tools `kg_query`, `kg_related`, `kg_search`, `kg_expand_catalogue`, `kg_facts_in_catalogue`, `retrieve_context`. The `remember` tool was removed in [#386](https://github.com/BhavsarDevansh/Mimir/issues/386) — learning is now the server-side `remember.chat` hook. |
 | Builtin skills | ✅ Works | `research_synthesis`, `test_driven_development`. |

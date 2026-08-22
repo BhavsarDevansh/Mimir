@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.132.0] — 2026-08-22
+
+### Refactor: `retrieve_context` dispatches through the `ToolRegistry` like every other tool (issue #441)
+
+- The chat route no longer special-cases `mimir_knowledge::RetrieveContextTool`: `ToolRegistry` gained a `ToolContext` (request-resolved LLM + incognito write-tool policy) and factory registration (`register_native_with_factory` / `register_with_factory`), so the tool is rebuilt per request with the request-resolved LLM (model/temperature overrides) and executes through the same path as all other tools.
+- Permission checks (Auto/Ask/Disabled) and the incognito write-tool guard now apply uniformly inside `ToolRegistry::execute`; the route's duplicated permission lookup and incognito guard were removed.
+- `ToolRegistry::execute` now takes `&ToolContext`; the retrieval agent, the `research_synthesis` skill, and registry tests pass an explicit context.
+- Version bumped 0.131.7 → 0.132.0 (minor — refactor).
+
 ## [0.131.7] — 2026-08-21
 
 ### Fix: `docs/config-hot-reload.md` describes the watcher filename filter as a suffix match instead of exact match (issue #438)

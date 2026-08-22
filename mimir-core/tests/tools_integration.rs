@@ -1,6 +1,42 @@
+use mimir_core::llm::backend::{LlmBackend, LlmStream};
+use mimir_core::llm::types::{LlmError, Message, Usage};
 use mimir_core::tools::*;
 use serde_json::json;
 use std::sync::Arc;
+
+/// Minimal LLM backend for registry tests that never call the LLM.
+#[derive(Debug)]
+struct DummyLlm;
+
+#[async_trait::async_trait]
+impl LlmBackend for DummyLlm {
+    async fn chat_message(
+        &self,
+        _messages: Vec<Message>,
+        _tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(Message, Usage), LlmError> {
+        unimplemented!("registry tests never call the LLM")
+    }
+
+    async fn chat_stream_with_usage(
+        &self,
+        _messages: Vec<Message>,
+        _tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<LlmStream, LlmError> {
+        unimplemented!("registry tests never call the LLM")
+    }
+
+    async fn fetch_model_context_window(&self) -> Result<Option<u32>, LlmError> {
+        unimplemented!("registry tests never call the LLM")
+    }
+}
+
+fn ctx() -> ToolContext {
+    ToolContext {
+        llm: Arc::new(DummyLlm),
+        allow_write_tools: true,
+    }
+}
 
 #[tokio::test]
 async fn test_register_native_tool_and_retrieve() {
@@ -85,7 +121,7 @@ async fn test_get_current_time_execution() {
         .unwrap();
 
     let output = registry
-        .execute("get_current_time", json!({}))
+        .execute("get_current_time", json!({}), &ctx())
         .await
         .unwrap();
     assert!(output.result.is_some());
@@ -118,7 +154,7 @@ async fn test_echo_execution() {
         .unwrap();
 
     let output = registry
-        .execute("echo", json!({"message": "hello world"}))
+        .execute("echo", json!({"message": "hello world"}), &ctx())
         .await
         .unwrap();
     assert_eq!(output.result, Some(json!("hello world")));
@@ -136,7 +172,7 @@ async fn test_permission_disabled_rejects() {
         .unwrap();
 
     let err = registry
-        .execute("echo", json!({"message": "hi"}))
+        .execute("echo", json!({"message": "hi"}), &ctx())
         .await
         .unwrap_err();
     assert!(matches!(err, ToolError::Disabled(_)));
@@ -150,7 +186,7 @@ async fn test_permission_ask_rejects() {
         .unwrap();
 
     let err = registry
-        .execute("echo", json!({"message": "hi"}))
+        .execute("echo", json!({"message": "hi"}), &ctx())
         .await
         .unwrap_err();
     assert!(matches!(err, ToolError::PermissionDenied(_)));
@@ -167,7 +203,7 @@ async fn test_permission_override() {
         .unwrap();
 
     let output = registry
-        .execute("echo", json!({"message": "hi"}))
+        .execute("echo", json!({"message": "hi"}), &ctx())
         .await
         .unwrap();
     assert_eq!(output.result, Some(json!("hi")));

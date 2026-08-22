@@ -30,6 +30,18 @@ fn register_tool(registry: &ToolRegistry, tool: Arc<dyn mimir_core::tools::Tool>
     );
 }
 
+fn register_tool_with_factory(
+    registry: &ToolRegistry,
+    tool: Arc<dyn mimir_core::tools::Tool>,
+    factory: mimir_core::tools::ToolFactory,
+) {
+    let name = tool.name().to_string();
+    warn_err(
+        registry.register_native_with_factory(tool, factory),
+        &format!("Failed to register {name} tool"),
+    );
+}
+
 /// Outputs of [`init_knowledge_graph`] consumed by later init steps.
 pub(super) struct KnowledgeGraphInit {
     pub(super) knowledge_graph: Arc<mimir_knowledge::KnowledgeGraph>,
@@ -220,13 +232,26 @@ pub(super) async fn init_knowledge_graph(
             &knowledge_graph,
         ))),
     );
-    register_tool(
+    // `retrieve_context` is rebuilt per request with the request-resolved
+    // LLM (model/temperature overrides) via a registry factory, so it flows
+    // through the same dispatch path and permission checks as every other
+    // tool (issue #441).
+    let retrieve_kg = Arc::clone(&knowledge_graph);
+    let retrieve_context_manager = Arc::clone(context_manager);
+    register_tool_with_factory(
         tool_registry,
         Arc::new(mimir_knowledge::RetrieveContextTool::new(
             Arc::clone(&knowledge_graph),
             Arc::clone(context_manager),
             Arc::clone(llm),
         )),
+        Arc::new(move |ctx: &mimir_core::tools::ToolContext| {
+            Arc::new(mimir_knowledge::RetrieveContextTool::new(
+                Arc::clone(&retrieve_kg),
+                Arc::clone(&retrieve_context_manager),
+                Arc::clone(&ctx.llm),
+            ))
+        }),
     );
 
     Ok(KnowledgeGraphInit {

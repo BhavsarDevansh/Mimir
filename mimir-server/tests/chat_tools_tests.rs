@@ -206,3 +206,109 @@ async fn test_chat_stream_executes_tool_calls_and_returns_final_response() {
         "expected two LLM stream calls (initial + agentic loop)"
     );
 }
+
+#[tokio::test]
+async fn test_chat_executes_retrieve_context_through_registry() {
+    // The main chat call asks the model to run `retrieve_context`; the
+    // retrieval agent then runs two internal rounds (kg_query, finish) on
+    // the same request-resolved LLM before the main chat produces its final
+    // answer (issue #441).
+    let retrieve_call = ToolCall {
+        index: 0,
+        id: "call_retrieve".to_string(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: "retrieve_context".to_string(),
+            arguments: serde_json::json!({"task": "Find Alice"}).to_string(),
+        },
+    };
+    let query_call = ToolCall {
+        index: 0,
+        id: "call_query".to_string(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: "kg_query".to_string(),
+            arguments: serde_json::json!({"entity_name": "Alice"}).to_string(),
+        },
+    };
+    let finish_call = ToolCall {
+        index: 0,
+        id: "call_finish".to_string(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: "finish_retrieval".to_string(),
+            arguments: "{}".to_string(),
+        },
+    };
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            .push_chat_message(
+                Message {
+                    role: "assistant".to_string(),
+                    content: "".to_string(),
+                    tool_calls: Some(vec![retrieve_call]),
+                    tool_call_id: None,
+                },
+                Usage::default(),
+            )
+            .push_chat_message(
+                Message {
+                    role: "assistant".to_string(),
+                    content: "".to_string(),
+                    tool_calls: Some(vec![query_call]),
+                    tool_call_id: None,
+                },
+                Usage::default(),
+            )
+            .push_chat_message(
+                Message {
+                    role: "assistant".to_string(),
+                    content: "".to_string(),
+                    tool_calls: Some(vec![finish_call]),
+                    tool_call_id: None,
+                },
+                Usage::default(),
+            )
+            .push_chat("Found Alice's preferences.", Usage::default())
+            .build(),
+    );
+    let (state, _temp) = test_state(mock.clone()).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let body =
+        serde_json::to_string(&serde_json::json!({"message": "What do I know about Alice?"}))
+            .unwrap();
+    let response = app
+        .oneshot(
+            authed_request()
+                .method("POST")
+                .uri("/chat")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let chat: ChatResponse = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(chat.response, "Found Alice's preferences.");
+
+    // Four LLM calls: main chat (retrieve_context) + two retrieval-agent
+    // rounds + main chat follow-up. The retrieval agent's first call carries
+    // the research system prompt, proving it ran on the request-resolved
+    // LLM via the registry factory.
+    let calls = mock.chat_calls();
+    assert_eq!(
+        calls.len(),
+        4,
+        "expected main chat + retrieval agent + follow-up calls"
+    );
+    assert!(
+        calls[1][0].content.contains("research subsystem"),
+        "retrieval agent should run on the request-resolved LLM"
+    );
+}

@@ -13,8 +13,6 @@ use mimir_core::conversation::ConversationTurn;
 use mimir_core::hooks::Trigger;
 use mimir_core::llm::types::StreamItem;
 use mimir_core::personality::Personality;
-use mimir_core::tools::{Tool, ToolPermission};
-
 use tracing::error;
 
 use crate::error;
@@ -36,40 +34,22 @@ async fn build_catalogue(knowledge_graph: &mimir_knowledge::KnowledgeGraph) -> S
     }
 }
 
-/// Execute a single tool call, ensuring `retrieve_context` uses the
-/// request-resolved LLM so per-request model overrides are respected.
+/// Execute a single tool call through the registry with the per-request
+/// context, so every tool — including `retrieve_context` — flows through the
+/// same dispatch path with uniform permission checks (issue #441).
 async fn execute_tool_call(
     registry: &mimir_core::tools::ToolRegistry,
     tool_name: &str,
     tool_arguments: &str,
-    kg: Arc<mimir_knowledge::KnowledgeGraph>,
-    context_manager: Arc<mimir_core::context::ContextManager>,
     llm: Arc<dyn mimir_core::llm::LlmBackend>,
     incognito: bool,
 ) -> Result<mimir_core::tools::ToolOutput, mimir_core::tools::ToolError> {
-    // Honour the incognito contract: never execute write-capable tools during
-    // an incognito turn so no facts are persisted (issue #155).
-    if incognito && registry.is_write_tool(tool_name) {
-        return Err(mimir_core::tools::ToolError::blocked_incognito(tool_name));
-    }
     let args = serde_json::from_str(tool_arguments).unwrap_or(serde_json::Value::Null);
-    if tool_name == mimir_knowledge::RetrieveContextTool::NAME {
-        if let Some(metadata) = registry.metadata(tool_name) {
-            match metadata.permission {
-                ToolPermission::Disabled => {
-                    return Err(mimir_core::tools::ToolError::disabled(tool_name));
-                }
-                ToolPermission::Ask => {
-                    return Err(mimir_core::tools::ToolError::permission_denied(tool_name));
-                }
-                ToolPermission::Auto => {}
-            }
-        }
-        let tool = mimir_knowledge::RetrieveContextTool::new(kg, context_manager, llm);
-        tool.execute(args).await
-    } else {
-        registry.execute(tool_name, args).await
-    }
+    let ctx = mimir_core::tools::ToolContext {
+        llm,
+        allow_write_tools: !incognito,
+    };
+    registry.execute(tool_name, args, &ctx).await
 }
 
 /// Resolve the common chat state shared by both the blocking and streaming handlers.
@@ -279,8 +259,6 @@ pub async fn chat_handler(
                         &state.tool_registry,
                         &tool_call.function.name,
                         &tool_call.function.arguments,
-                        Arc::clone(&state.knowledge_graph),
-                        Arc::clone(&state.context_manager),
                         Arc::clone(&llm),
                         incognito,
                     )
@@ -386,8 +364,6 @@ pub async fn chat_stream_handler(
     let user_message_clone = req.message.clone();
     let llm_clone = Arc::clone(&llm);
     let tool_registry_clone = Arc::clone(&state.tool_registry);
-    let kg_clone = Arc::clone(&state.knowledge_graph);
-    let context_manager_clone = Arc::clone(&state.context_manager);
 
     tokio::spawn(async move {
         let _permit = permit;
@@ -564,8 +540,6 @@ pub async fn chat_stream_handler(
                     &tool_registry_clone,
                     &tool_call.function.name,
                     &tool_call.function.arguments,
-                    Arc::clone(&kg_clone),
-                    Arc::clone(&context_manager_clone),
                     Arc::clone(&llm_clone),
                     incognito,
                 )

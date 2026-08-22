@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.132.2] — 2026-08-22
+
+### Fix: `scripts/tests/rustdoc_test.sh` guard passes on `main` again (issue #443)
+
+- The `MULTI_VALUED_PREDICATES` doc comment in `mimir-knowledge/src/graph/predicates.rs` no longer links to the private `is_favourite_family_predicate` helper; the helper is now a backtick code span, matching the documented convention that private items are never intra-doc link targets (`docs/connectors-framework.md`).
+- Fixing that error surfaced a second pre-existing guard failure: the `memory_refresh_handler` doc comment in `mimir-server/src/routes/memory.rs` linked to `HookEngine::force_run` with no `HookEngine` import in scope, so the link now uses the full `mimir_core::hooks::HookEngine::force_run` path.
+- The guard script and `docs/workspace.md` now list issue #443 alongside the earlier guard regressions (#276, #310, #337, #348).
+- Version bumped 0.132.1 → 0.132.2 (patch — build/doc fix).
+
 ## [0.132.1] — 2026-08-22
 
 ### Fix: `retrieve_context` test proves the request-resolved LLM is used, and `docs/tools-registry.md` describes write-tool helpers accurately (issue #441)

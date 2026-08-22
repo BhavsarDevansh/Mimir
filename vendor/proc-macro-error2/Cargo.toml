@@ -8,6 +8,12 @@
 # If you are reading this file be aware that the original Cargo.toml
 # will likely look very different (and much more reasonable).
 # See Cargo.toml.orig for the original contents.
+#
+# Mimir vendor trim (issue #446): the upstream `[[test]]` targets and the
+# trybuild dev-dependency are removed because `tests/` is not vendored; this
+# crate is a build-only dependency, so the declared targets would fail to
+# resolve. The `syn` full-feature dev-dependency is kept so the vendored
+# doc-tests still compile (they use `syn::Type`).
 
 [package]
 edition = "2021"
@@ -38,18 +44,6 @@ repository = "https://github.com/GnomedDev/proc-macro-error-2"
 name = "proc_macro_error2"
 path = "src/lib.rs"
 
-[[test]]
-name = "macro-errors"
-path = "tests/macro-errors.rs"
-
-[[test]]
-name = "ok"
-path = "tests/ok.rs"
-
-[[test]]
-name = "runtime-errors"
-path = "tests/runtime-errors.rs"
-
 [dependencies.proc-macro-error-attr2]
 version = "=2.0.0"
 
@@ -67,10 +61,6 @@ default-features = false
 [dev-dependencies.syn]
 version = "2"
 features = ["full"]
-
-[dev-dependencies.trybuild]
-version = "1.0.99"
-features = ["diff"]
 
 [features]
 default = ["syn-error"]

@@ -612,6 +612,31 @@ async fn push_first_sync_backfills_then_fetches_only_new_mail() {
 }
 
 #[tokio::test]
+async fn push_backfill_persists_cursor_when_idle_push_carries_no_new_mail() {
+    // Issue #397: after the backfill, an IDLE push that fires without a
+    // fetchable message (e.g. a re-signalled EXISTS) must still persist the
+    // backfill cursor — otherwise every following cycle sees no cursor and
+    // re-fetches the whole mailbox until the first real new mail arrives.
+    let cfg = FakeCfg {
+        messages: vec![(5u32, b"existing".to_vec())],
+        idle_push_exists: Some(1), // EXISTS re-signal; no appended messages
+        idle_push_messages: Vec::new(),
+        ..Default::default()
+    };
+    let (connector, session) = idle_harness(cfg, None).await;
+    let outcome = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("sync ok");
+    assert_eq!(outcome.fetched, 1, "the backfill must be reported");
+    assert_eq!(
+        outcome.new_cursor.as_deref(),
+        Some("17:5"),
+        "the backfill cursor must persist even when the push carried no new mail"
+    );
+}
+
+#[tokio::test]
 async fn no_backfill_first_sync_seeds_cursor_instead_of_fetching() {
     // Issue #397: "only new content from now on" seeds the cursor to the
     // mailbox's current UIDNEXT so the first cycle never full-fetches

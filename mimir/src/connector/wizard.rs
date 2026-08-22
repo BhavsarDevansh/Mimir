@@ -355,7 +355,7 @@ fn gmail_imap_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredent
         } else {
             parse_interval_minutes(prompts.input("Poll interval (minutes)", None)?)?
         };
-        Some(minutes * 60)
+        Some(interval_secs(minutes)?)
     };
     let backfill = prompts.select(
         "Existing mailbox content",
@@ -439,6 +439,15 @@ fn parse_interval_minutes(raw: String) -> Result<u64, String> {
         return Err("poll interval must be at least 1 minute".to_string());
     }
     Ok(minutes)
+}
+
+/// Convert a validated whole-minute poll interval to seconds; rejects a
+/// value whose `* 60` would overflow `u64` (a user-typed custom interval)
+/// before anything is registered.
+fn interval_secs(minutes: u64) -> Result<u64, String> {
+    minutes
+        .checked_mul(60)
+        .ok_or_else(|| "poll interval is too large".to_string())
 }
 
 /// CalDAV calendar wizard: collection URL + username, then app password

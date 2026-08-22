@@ -1186,6 +1186,27 @@ fn wizard_gmail_custom_interval_rejects_zero_before_registration() {
     );
 }
 
+#[test]
+fn wizard_gmail_custom_interval_rejects_overflowing_value() {
+    // A user-typed interval must never overflow `u64` on the secs
+    // conversion (`minutes * 60`), even for an absurd input.
+    let entry = gmail_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Input(String::new()),              // host
+        ScriptedAnswer::Input(String::new()),              // port
+        ScriptedAnswer::Input(String::new()),              // mailbox
+        ScriptedAnswer::Input("me@gmail.com".to_string()), // account email
+        ScriptedAnswer::Select(1),                         // Sync mode — every N minutes
+        ScriptedAnswer::Select(4),                         // Custom interval
+        ScriptedAnswer::Input(u64::MAX.to_string()),       // absurd: overflows * 60
+    ]);
+    let err = build_wizard_config(&entry, "personal-gmail", &prompts).unwrap_err();
+    assert!(
+        err.contains("too large"),
+        "an overflowing interval must be rejected with a clear message: {err}"
+    );
+}
+
 fn gmail_catalog_entry() -> mimir_api_types::ConnectorCatalogEntry {
     mimir_api_types::ConnectorCatalogEntry {
         connector_type: "gmail".to_string(),

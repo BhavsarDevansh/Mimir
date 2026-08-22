@@ -227,3 +227,64 @@ async fn with_secret_store_propagates_into_factory_context() {
         "with_secret_store must thread the store into the factory context"
     );
 }
+
+/// `resolved_mode` surfaces the mode the row's factory produces, with no
+/// side effects (issue #397) — the value behind `ConnectorResponse.mode`.
+#[tokio::test]
+async fn resolved_mode_returns_the_factory_connectors_mode() {
+    let (supervisor, _captured, _dir, _tx) = capturing_supervisor().await;
+    match supervisor.resolved_mode(&row_with_cursor(None)) {
+        Some(ConnectorMode::Polling { .. }) => {}
+        other => panic!("the default mock must resolve to polling, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn resolved_mode_returns_push_for_a_push_factory() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = Arc::new(
+        KnowledgeGraph::init(&dir.path().join("kg.db"))
+            .await
+            .unwrap(),
+    );
+    let registry = ConnectorRegistry::new();
+    registry
+        .register(
+            ConnectorType::Photos,
+            "local".to_string(),
+            FnConnectorFactory::new(|config, _ctx| {
+                let mock = crate::MockConnector::from_config(config)?;
+                Ok(Arc::new(mock) as Arc<dyn Connector>)
+            }),
+        )
+        .unwrap();
+    let (_tx, rx) = watch::channel(false);
+    let supervisor =
+        ConnectorSupervisor::new(Arc::new(registry), kg, SupervisorConfig::default(), rx);
+    let mut row = row_with_cursor(None);
+    row.config_json = serde_json::json!({ "mode": "push" }).to_string();
+    assert_eq!(
+        supervisor.resolved_mode(&row),
+        Some(ConnectorMode::Push),
+        "a push-configured row resolves to push mode"
+    );
+}
+
+#[tokio::test]
+async fn resolved_mode_is_none_for_unknown_type_and_invalid_config() {
+    let (supervisor, _captured, _dir, _tx) = capturing_supervisor().await;
+    let mut row = row_with_cursor(None);
+    row.connector_type_id = 999;
+    assert_eq!(
+        supervisor.resolved_mode(&row),
+        None,
+        "an unknown connector type must omit the mode"
+    );
+    let mut row = row_with_cursor(None);
+    row.config_json = "not json".to_string();
+    assert_eq!(
+        supervisor.resolved_mode(&row),
+        None,
+        "an invalid config must omit the mode"
+    );
+}

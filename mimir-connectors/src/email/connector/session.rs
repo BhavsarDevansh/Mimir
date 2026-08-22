@@ -178,6 +178,11 @@ impl EmailConnector {
             (Some(prev), max) if max > prev => Some(encode_cursor(uid_validity, max)),
             // Seeded first sync: persist the seed even when nothing arrived.
             _ if seed.is_some() => Some(encode_cursor(uid_validity, last_uid.unwrap_or(0))),
+            // Push backfill: persist the backfill cursor even when the IDLE
+            // push that woke the cycle carried no fetchable mail — otherwise
+            // the next cycle sees no cursor and re-backfills the whole
+            // mailbox until the first real new mail arrives (issue #397).
+            _ if backfilled > 0 => Some(encode_cursor(uid_validity, max_uid)),
             _ => None,
         };
         // Track whether a moved cursor is awaiting supervisor confirmation:

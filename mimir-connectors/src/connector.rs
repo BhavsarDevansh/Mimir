@@ -698,6 +698,22 @@ mod tests {
     }
 
     #[test]
+    fn connector_mode_wire_names_are_stable() {
+        // `wire_name` is the wire contract behind `ConnectorResponse.mode`
+        // (issue #397): it mirrors the serde `rename_all = "snake_case"`
+        // tag, so the two sources can never drift.
+        assert_eq!(ConnectorMode::Push.wire_name(), "push");
+        assert_eq!(
+            ConnectorMode::Polling {
+                interval: std::time::Duration::from_secs(300),
+                jitter: std::time::Duration::from_secs(30),
+            }
+            .wire_name(),
+            "polling"
+        );
+    }
+
+    #[test]
     fn context_empty_has_no_user_identity() {
         assert!(ConnectorContext::empty().user_identity.is_none());
     }

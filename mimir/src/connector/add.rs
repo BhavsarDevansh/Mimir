@@ -117,9 +117,15 @@ pub(crate) async fn handle_connector_add_with_opener(
             output.mode.as_deref().unwrap_or("-"),
             output.auth_state
         );
-        println!(
-            "Next: run `mimir connector resume {slug}` to activate it, then `mimir connector sync {slug}` to sync."
-        );
+        if output.mode.as_deref() == Some("push") {
+            println!(
+                "Next: run `mimir connector resume {slug}` to activate it — it then syncs automatically (push) and manual sync is not supported."
+            );
+        } else {
+            println!(
+                "Next: run `mimir connector resume {slug}` to activate it, then `mimir connector sync {slug}` to sync."
+            );
+        }
     } else {
         print_json(&output);
     }

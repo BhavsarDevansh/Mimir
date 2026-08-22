@@ -24,6 +24,8 @@ Mimir's main agent may launch **four** retrieval agents:
 
 Each retrieval agent runs in its own ephemeral session, querying the knowledge graph and searching conversation history for up to 25 rounds before returning a structured summary.
 
+Retrieval agents run on the same model you chose for the chat request, so per-request model overrides and the configured temperature are honoured while Mimir researches (issue #441).
+
 ## What You See
 
 In the streaming chat interface, you'll see:

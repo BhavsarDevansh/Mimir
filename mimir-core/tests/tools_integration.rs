@@ -1,6 +1,11 @@
+use mimir_core::llm::MockLlmClient;
 use mimir_core::tools::*;
 use serde_json::json;
 use std::sync::Arc;
+
+fn ctx() -> ToolContext {
+    ToolContext::new(Arc::new(MockLlmClient::builder().build()), true)
+}
 
 #[tokio::test]
 async fn test_register_native_tool_and_retrieve() {
@@ -85,7 +90,7 @@ async fn test_get_current_time_execution() {
         .unwrap();
 
     let output = registry
-        .execute("get_current_time", json!({}))
+        .execute("get_current_time", json!({}), &ctx())
         .await
         .unwrap();
     assert!(output.result.is_some());
@@ -118,7 +123,7 @@ async fn test_echo_execution() {
         .unwrap();
 
     let output = registry
-        .execute("echo", json!({"message": "hello world"}))
+        .execute("echo", json!({"message": "hello world"}), &ctx())
         .await
         .unwrap();
     assert_eq!(output.result, Some(json!("hello world")));
@@ -136,7 +141,7 @@ async fn test_permission_disabled_rejects() {
         .unwrap();
 
     let err = registry
-        .execute("echo", json!({"message": "hi"}))
+        .execute("echo", json!({"message": "hi"}), &ctx())
         .await
         .unwrap_err();
     assert!(matches!(err, ToolError::Disabled(_)));
@@ -150,7 +155,7 @@ async fn test_permission_ask_rejects() {
         .unwrap();
 
     let err = registry
-        .execute("echo", json!({"message": "hi"}))
+        .execute("echo", json!({"message": "hi"}), &ctx())
         .await
         .unwrap_err();
     assert!(matches!(err, ToolError::PermissionDenied(_)));
@@ -167,7 +172,7 @@ async fn test_permission_override() {
         .unwrap();
 
     let output = registry
-        .execute("echo", json!({"message": "hi"}))
+        .execute("echo", json!({"message": "hi"}), &ctx())
         .await
         .unwrap();
     assert_eq!(output.result, Some(json!("hi")));

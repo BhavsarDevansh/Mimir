@@ -189,6 +189,8 @@ Migration `051` (issue #403) seeds four query-only abstract parents so subtree e
 
 Launches a dedicated **RetrievalAgent** — an ephemeral LLM session with only retrieval tools — to investigate the knowledge graph and conversation history. The agent runs autonomously for up to 25 tool-call rounds, querying entities, traversing relationships, and searching past conversations. When satisfied, it calls `finish_retrieval` and returns a structured `RetrievedContext`.
 
+`retrieve_context` is registered in the `ToolRegistry` with a **factory** (issue #441): the registry stores a prototype instance for schema export, and rebuilds the tool per request with the request-resolved LLM (model/temperature overrides) from the `ToolContext` passed to `ToolRegistry::execute`. This means the tool flows through the same dispatch path as every other tool — the registry applies the permission level (Auto/Ask/Disabled) and the incognito write-tool guard uniformly, and the chat route has no special case for it.
+
 ### Output
 
 The tool returns a `ToolOutput` whose `result` field contains a JSON-serialized `RetrievedContext`:
@@ -235,4 +237,5 @@ Retrieved 1 facts across 1 entities, 0 relations, and 1 conversation snippets
 - `mimir-knowledge/src/retrieval/agent.rs`
 - `mimir-knowledge/src/retrieval/types.rs`
 - `mimir-knowledge/src/tools/retrieve_context.rs`
-- `mimir-server/src/state/` (registration)
+- `mimir-server/src/state/builder.rs` (registration with factory)
+- `mimir-core/src/tools/registry.rs` (`ToolContext`, `ToolFactory`, `execute`)

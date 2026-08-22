@@ -96,6 +96,28 @@ pub async fn test_state_with_config(
             Arc::clone(&knowledge_graph),
         )))
         .unwrap();
+    // `retrieve_context` is registered with a factory so it flows through
+    // the registry like every other tool, rebuilt per request with the
+    // request-resolved LLM (issue #441). Mirrors production wiring in
+    // `state/builder.rs`.
+    let retrieve_kg = Arc::clone(&knowledge_graph);
+    let retrieve_context_manager = Arc::clone(&context_manager);
+    tool_registry
+        .register_native_with_factory(
+            Arc::new(mimir_knowledge::RetrieveContextTool::new(
+                Arc::clone(&knowledge_graph),
+                Arc::clone(&context_manager),
+                Arc::clone(&llm),
+            )),
+            Arc::new(move |ctx: &mimir_core::tools::ToolContext| {
+                Arc::new(mimir_knowledge::RetrieveContextTool::new(
+                    Arc::clone(&retrieve_kg),
+                    Arc::clone(&retrieve_context_manager),
+                    Arc::clone(&ctx.llm),
+                ))
+            }),
+        )
+        .unwrap();
     let jobs_db_path = temp.path().join("jobs.db");
     let job_queue = Arc::new(JobQueue::init(&jobs_db_path).await.unwrap());
     let last_user_activity = Arc::new(std::sync::atomic::AtomicU64::new(

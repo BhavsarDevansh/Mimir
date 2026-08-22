@@ -1,8 +1,36 @@
 use super::{CliTool, CliToolConfig, Tool, ToolError, ToolOutput, ToolPermission};
+use crate::llm::LlmBackend;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
+
+/// Per-request runtime dependencies for tool execution.
+///
+/// Tools registered with a factory receive this context so they can be
+/// rebuilt with request-scoped dependencies — such as the request-resolved
+/// LLM with model/temperature overrides — that the registry's pre-built
+/// instances cannot carry (issue #441).
+pub struct ToolContext {
+    /// The request-resolved LLM backend.
+    pub llm: Arc<dyn LlmBackend>,
+    /// Whether write-capable tools may execute. Incognito turns pass `false`
+    /// so the registry blocks write tools uniformly (issue #155).
+    pub allow_write_tools: bool,
+}
+
+impl ToolContext {
+    /// Create a new tool context.
+    pub fn new(llm: Arc<dyn LlmBackend>, allow_write_tools: bool) -> Self {
+        Self {
+            llm,
+            allow_write_tools,
+        }
+    }
+}
+
+/// Rebuilds a tool with per-request runtime dependencies from a [`ToolContext`].
+pub type ToolFactory = Arc<dyn Fn(&ToolContext) -> Arc<dyn Tool> + Send + Sync>;
 
 /// Source of a tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +57,10 @@ pub struct ToolEntry {
     pub metadata: ToolMetadata,
     /// Original CLI config, if this is a CLI tool.
     pub cli_config: Option<CliToolConfig>,
+    /// Optional factory that rebuilds the tool with per-request runtime
+    /// dependencies (issue #441). When present, `execute` calls the factory
+    /// with the request context instead of using the stored instance.
+    pub factory: Option<ToolFactory>,
 }
 
 /// Dynamic registry for tool discovery, registration, and invocation.
@@ -79,6 +111,15 @@ impl ToolRegistry {
         self.register(tool, ToolSource::Native, ToolPermission::Auto)
     }
 
+    /// Register a native tool with a factory that rebuilds it per request.
+    pub fn register_native_with_factory(
+        &self,
+        tool: Arc<dyn Tool>,
+        factory: ToolFactory,
+    ) -> Result<(), ToolError> {
+        self.register_with_factory(tool, factory, ToolSource::Native, ToolPermission::Auto)
+    }
+
     /// Register a CLI tool with its config and default permission.
     pub fn register_cli(&self, config: CliToolConfig) -> Result<(), ToolError> {
         let permission = config.permission;
@@ -96,12 +137,34 @@ impl ToolRegistry {
         self.register_with_cli_config(tool, source, permission, None)
     }
 
+    /// Register a tool with a factory that rebuilds it per request.
+    pub fn register_with_factory(
+        &self,
+        tool: Arc<dyn Tool>,
+        factory: ToolFactory,
+        source: ToolSource,
+        permission: ToolPermission,
+    ) -> Result<(), ToolError> {
+        self.register_with_cli_config_and_factory(tool, source, permission, None, Some(factory))
+    }
+
     fn register_with_cli_config(
         &self,
         tool: Arc<dyn Tool>,
         source: ToolSource,
         permission: ToolPermission,
         cli_config: Option<CliToolConfig>,
+    ) -> Result<(), ToolError> {
+        self.register_with_cli_config_and_factory(tool, source, permission, cli_config, None)
+    }
+
+    fn register_with_cli_config_and_factory(
+        &self,
+        tool: Arc<dyn Tool>,
+        source: ToolSource,
+        permission: ToolPermission,
+        cli_config: Option<CliToolConfig>,
+        factory: Option<ToolFactory>,
     ) -> Result<(), ToolError> {
         let mut entries = self.entries.write().unwrap();
         let name = tool.name().to_string();
@@ -130,6 +193,7 @@ impl ToolRegistry {
                 tool,
                 metadata,
                 cli_config,
+                factory,
             },
         );
         Ok(())
@@ -225,16 +289,44 @@ impl ToolRegistry {
         self.metadata(name).map(|m| m.display_name)
     }
 
-    /// Execute a tool by name with the given JSON arguments.
-    pub async fn execute(&self, name: &str, args: Value) -> Result<ToolOutput, ToolError> {
-        let (tool, metadata) = self.get(name).ok_or_else(|| ToolError::not_found(name))?;
+    /// Execute a tool by name with the given JSON arguments and per-request context.
+    ///
+    /// Applies the registry's uniform checks — the incognito write-tool
+    /// guard, the permission level (Auto/Ask/Disabled), and factory
+    /// resolution — before invoking the tool (issue #441).
+    pub async fn execute(
+        &self,
+        name: &str,
+        args: Value,
+        ctx: &ToolContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let (is_write_tool, permission, factory, tool) = {
+            let entries = self.entries.read().unwrap();
+            let entry = entries
+                .get(name)
+                .ok_or_else(|| ToolError::not_found(name))?;
+            (
+                entry.metadata.is_write_tool,
+                entry.metadata.permission,
+                entry.factory.clone(),
+                Arc::clone(&entry.tool),
+            )
+        };
 
-        match metadata.permission {
+        if !ctx.allow_write_tools && is_write_tool {
+            return Err(ToolError::blocked_incognito(name));
+        }
+
+        match permission {
             ToolPermission::Disabled => return Err(ToolError::disabled(name)),
             ToolPermission::Ask => return Err(ToolError::permission_denied(name)),
             ToolPermission::Auto => {}
         }
 
+        let tool = match factory {
+            Some(factory) => factory(ctx),
+            None => tool,
+        };
         tool.execute(args).await
     }
 
@@ -278,5 +370,200 @@ impl ToolRegistry {
         let config = super::ToolsConfig { tools, permissions };
         drop(entries);
         config.save(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::MockLlmClient;
+    use async_trait::async_trait;
+
+    /// Test tool that reports the LLM backend it was built with.
+    struct LlmReportingTool {
+        llm: Arc<dyn LlmBackend>,
+    }
+
+    #[async_trait]
+    impl Tool for LlmReportingTool {
+        fn name(&self) -> &str {
+            "llm_reporting"
+        }
+
+        fn description(&self) -> &str {
+            "reports the LLM backend it was built with"
+        }
+
+        fn parameters_schema(&self) -> Value {
+            serde_json::json!({"type": "object", "properties": {}})
+        }
+
+        fn permission(&self) -> ToolPermission {
+            ToolPermission::Auto
+        }
+
+        async fn execute(&self, _args: Value) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                result: Some(serde_json::json!(format!("{:?}", self.llm))),
+                ..Default::default()
+            })
+        }
+    }
+
+    /// Test write-capable tool for the incognito guard.
+    struct WriteTool;
+
+    #[async_trait]
+    impl Tool for WriteTool {
+        fn name(&self) -> &str {
+            "write_tool"
+        }
+
+        fn description(&self) -> &str {
+            "writes state"
+        }
+
+        fn parameters_schema(&self) -> Value {
+            serde_json::json!({"type": "object", "properties": {}})
+        }
+
+        fn permission(&self) -> ToolPermission {
+            ToolPermission::Auto
+        }
+
+        async fn execute(&self, _args: Value) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput::default())
+        }
+
+        fn is_write_tool(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn factory_tool_executes_with_request_context() {
+        let registry = ToolRegistry::new();
+        let prototype_llm: Arc<dyn LlmBackend> = Arc::new(MockLlmClient::builder().build());
+        let request_llm: Arc<dyn LlmBackend> = Arc::new(
+            MockLlmClient::builder()
+                .push_chat("queued", crate::llm::Usage::default())
+                .build(),
+        );
+        registry
+            .register_native_with_factory(
+                Arc::new(LlmReportingTool {
+                    llm: Arc::clone(&prototype_llm),
+                }),
+                Arc::new(|ctx: &ToolContext| {
+                    Arc::new(LlmReportingTool {
+                        llm: Arc::clone(&ctx.llm),
+                    })
+                }),
+            )
+            .unwrap();
+
+        let output = registry
+            .execute(
+                "llm_reporting",
+                serde_json::json!({}),
+                &ToolContext::new(Arc::clone(&request_llm), true),
+            )
+            .await
+            .unwrap();
+
+        let reported = output.result.expect("tool should report its LLM");
+        assert_eq!(reported, serde_json::json!(format!("{:?}", request_llm)));
+        assert_ne!(reported, serde_json::json!(format!("{:?}", prototype_llm)));
+    }
+
+    #[tokio::test]
+    async fn factory_tool_respects_permission_checks() {
+        let llm: Arc<dyn LlmBackend> = Arc::new(MockLlmClient::builder().build());
+        let factory: ToolFactory = Arc::new(|ctx: &ToolContext| {
+            Arc::new(LlmReportingTool {
+                llm: Arc::clone(&ctx.llm),
+            })
+        });
+
+        let disabled = ToolRegistry::new();
+        disabled
+            .register_with_factory(
+                Arc::new(LlmReportingTool {
+                    llm: Arc::clone(&llm),
+                }),
+                Arc::clone(&factory),
+                ToolSource::Native,
+                ToolPermission::Disabled,
+            )
+            .unwrap();
+        assert_eq!(
+            disabled
+                .execute(
+                    "llm_reporting",
+                    serde_json::json!({}),
+                    &ToolContext::new(Arc::clone(&llm), true)
+                )
+                .await
+                .unwrap_err(),
+            ToolError::disabled("llm_reporting")
+        );
+
+        let ask = ToolRegistry::new();
+        ask.register_with_factory(
+            Arc::new(LlmReportingTool {
+                llm: Arc::clone(&llm),
+            }),
+            factory,
+            ToolSource::Native,
+            ToolPermission::Ask,
+        )
+        .unwrap();
+        assert_eq!(
+            ask.execute(
+                "llm_reporting",
+                serde_json::json!({}),
+                &ToolContext::new(Arc::clone(&llm), true)
+            )
+            .await
+            .unwrap_err(),
+            ToolError::permission_denied("llm_reporting")
+        );
+    }
+
+    #[tokio::test]
+    async fn factory_write_tool_is_blocked_in_incognito() {
+        let registry = ToolRegistry::new();
+        let llm: Arc<dyn LlmBackend> = Arc::new(MockLlmClient::builder().build());
+        registry
+            .register_native_with_factory(
+                Arc::new(WriteTool),
+                Arc::new(|_ctx: &ToolContext| Arc::new(WriteTool)),
+            )
+            .unwrap();
+
+        let err = registry
+            .execute(
+                "write_tool",
+                serde_json::json!({}),
+                &ToolContext::new(Arc::clone(&llm), false),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err, ToolError::blocked_incognito("write_tool"));
+    }
+
+    #[tokio::test]
+    async fn non_factory_tool_executes_with_context() {
+        let registry = ToolRegistry::with_builtins();
+        let llm: Arc<dyn LlmBackend> = Arc::new(MockLlmClient::builder().build());
+        let output = registry
+            .execute(
+                "echo",
+                serde_json::json!({"message": "hi"}),
+                &ToolContext::new(llm, true),
+            )
+            .await
+            .unwrap();
+        assert!(output.to_display_text().contains("hi"));
     }
 }

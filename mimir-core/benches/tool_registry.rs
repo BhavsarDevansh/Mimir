@@ -1,5 +1,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use mimir_core::tools::ToolRegistry;
+use mimir_core::llm::MockLlmClient;
+use mimir_core::tools::{ToolContext, ToolRegistry};
+use std::sync::Arc;
 
 fn bench_register(c: &mut Criterion) {
     c.bench_function("tool_registry_register", |b| {
@@ -27,10 +29,11 @@ fn bench_export_schema(c: &mut Criterion) {
 fn bench_execute(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let registry = ToolRegistry::with_builtins();
+    let ctx = ToolContext::new(Arc::new(MockLlmClient::builder().build()), true);
     c.bench_function("tool_registry_execute_echo", |b| {
         b.to_async(&rt).iter(|| async {
             let result = registry
-                .execute("echo", serde_json::json!({"message": "hello"}))
+                .execute("echo", serde_json::json!({"message": "hello"}), &ctx)
                 .await
                 .unwrap();
             std::hint::black_box(result);

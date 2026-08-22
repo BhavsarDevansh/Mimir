@@ -1,8 +1,10 @@
+use crate::llm::LlmBackend;
 use crate::llm::types::Message;
 use crate::skills::{Skill, SkillContext, SkillError, SkillInput, SkillOutput};
-use crate::tools::ToolPermission;
+use crate::tools::{ToolContext, ToolPermission};
 use async_trait::async_trait;
 use serde_json::Value;
+use std::sync::Arc;
 use tracing::debug;
 
 /// Synthesizes a research narrative from a topic using the LLM.
@@ -55,9 +57,10 @@ impl Skill for ResearchSynthesisSkill {
         debug!(skill = %self.name(), topic = %topic, "executing research synthesis");
 
         // Attempt to call get_current_time for temporal grounding if available.
+        let tool_ctx = ToolContext::new(Arc::clone(&ctx.llm_client) as Arc<dyn LlmBackend>, true);
         let time_context = if let Ok(output) = ctx
             .tool_registry
-            .execute("get_current_time", serde_json::json!({}))
+            .execute("get_current_time", serde_json::json!({}), &tool_ctx)
             .await
         {
             output.to_llm_text()

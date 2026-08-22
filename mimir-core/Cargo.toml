@@ -44,6 +44,10 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "process
 dashmap = "6.2"
 wiremock = "0.6.5"
 criterion = { version = "0.8.2", features = ["async_tokio"] }
+# Self-referential dev-dependency so integration tests and benches can use
+# `MockLlmClient` (feature-gated `mock-llm`), mirroring how downstream crates
+# opt in via dev-dependencies.
+mimir-core = { path = ".", features = ["mock-llm"] }
 
 [features]
 mock-llm = []

@@ -109,7 +109,7 @@ All `PathsError` variants include troubleshooting guidance in their error messag
 
 ## GeocoderConfig
 
-Controls the shared OSM Nominatim geocoder injected into the knowledge-graph entity-locations write path (S3 / #193) and the Photos connector (C2 / #196). When disabled, location facts persist with whatever coordinates or address the producer supplied and the missing half is never filled in (issue #227).
+Controls the shared OSM Nominatim geocoder injected into the knowledge-graph entity-locations write path (S3 / #193) and the Photos connector (C2 / #196). When disabled, location facts persist with whatever coordinates or address the producer supplied, and the missing half is never filled in (issue #227).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|

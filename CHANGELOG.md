@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.134.1] — 2026-08-22
+
+### Fix: PR #455 review feedback — contact email trimming and geocoder doc clarifications (issue #227)
+
+- `MIMIR_GEOCODER_CONTACT_EMAIL` now trims surrounding whitespace before being stored, and an all-whitespace value still clears the contact email.
+- `docs/config-system.md` fixes the disabled-geocoder sentence (comma before the second independent clause), and `docs/wiki/configuration.md` documents that changing `enabled`, `endpoint`, or `contact_email` requires a process restart because the geocoder is constructed once at startup and is not hot-reloaded.
+- Version bumped 0.134.0 → 0.134.1 (patch — review and documentation fixes).
+
 ## [0.134.0] — 2026-08-22
 
 ### Feature: geocoder configuration — disable toggle, self-hosted endpoint, contact email (issue #227)

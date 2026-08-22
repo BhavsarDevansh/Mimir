@@ -135,6 +135,7 @@ endpoint = "https://nominatim.openstreetmap.org"
 - `enabled = false` turns geocoding off entirely — location facts are still stored, just without the missing coordinates or place name filled in.
 - `endpoint` points at a self-hosted Nominatim instance for heavy use (recommended by Nominatim's usage policy).
 - `contact_email` is appended to the `User-Agent` sent to the instance; setting it is recommended when using the public one.
+- Changing `enabled`, `endpoint`, or `contact_email` requires a process restart: the geocoder is constructed once at startup and is not hot-reloaded.
 
 ## Proactivity Levels
 

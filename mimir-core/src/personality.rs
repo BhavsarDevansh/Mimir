@@ -1,16 +1,70 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tracing::warn;
 
 use crate::config::PersonalityConfig;
 use crate::paths;
 
+/// Where a preset comes from (issue #387).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum PresetSource {
+    /// Compiled into the binary.
+    Builtin,
+    /// Loaded from a `<name>.personality.md` file in the config directory.
+    Custom,
+}
+
+impl PresetSource {
+    /// Stable human-readable label.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PresetSource::Builtin => "Builtin",
+            PresetSource::Custom => "Custom",
+        }
+    }
+}
+
+impl std::fmt::Display for PresetSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A discovered preset: name, source, and optional description (issue #387).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PresetInfo {
+    pub name: String,
+    pub source: PresetSource,
+    pub description: Option<String>,
+}
+
+/// A non-fatal diagnostic emitted while resolving presets (issue #387).
+///
+/// The daemon logs these as warnings; `mimir personality list` prints them
+/// to stderr so a missing or malformed preset is never silently ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresetWarning {
+    /// The file the diagnostic refers to, when it is file-related.
+    pub path: Option<PathBuf>,
+    /// Human-readable reason.
+    pub reason: String,
+}
+
+/// A loaded preset: its verbatim prompt text plus discovery metadata.
+#[derive(Debug, Clone, PartialEq)]
+struct PresetEntry {
+    prompt: String,
+    source: PresetSource,
+    description: Option<String>,
+}
+
 /// The personality engine: resolves the active preset and composes system prompts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Personality {
     active_name: String,
-    registry: HashMap<String, String>,
+    registry: HashMap<String, PresetEntry>,
+    warnings: Vec<PresetWarning>,
 }
 
 impl Personality {
@@ -36,54 +90,49 @@ Core facts about the user (condensed subset — not a complete picture; treat as
     /// Create a `Personality` from the supplied config, scanning the default
     /// user personalities directory (`~/.config/mimir/personalities/`).
     pub fn new(config: &PersonalityConfig) -> Self {
-        let presets_dir = match paths::personalities_dir() {
-            Ok(dir) => dir,
-            Err(e) => {
-                warn!(error = %e, "failed to resolve personalities directory; custom personalities will not be loaded");
-                // Return early with only built-in presets when path resolution fails
-                return Self {
-                    active_name: if ["transparent", "concise", "warm", "formal"]
-                        .contains(&config.preset.as_str())
-                    {
-                        config.preset.clone()
-                    } else {
-                        warn!(
-                            preset = %config.preset,
-                            "unknown personality preset; falling back to 'transparent'"
-                        );
-                        "transparent".to_string()
-                    },
-                    registry: Self::built_in_presets(),
-                };
+        let personality = match paths::personalities_dir() {
+            Ok(presets_dir) => Self::from_path(&presets_dir, &config.preset),
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    "failed to resolve personalities directory; custom personalities will not be loaded"
+                );
+                let mut warnings = vec![PresetWarning {
+                    path: None,
+                    reason: format!("failed to resolve personalities directory: {error}"),
+                }];
+                let registry = Self::built_in_presets();
+                let active_name =
+                    Self::resolve_active_name(&registry, &config.preset, &mut warnings);
+                Self {
+                    active_name,
+                    registry,
+                    warnings,
+                }
             }
         };
-        Self::from_path(&presets_dir, &config.preset)
+        Self::log_warnings(&personality);
+        personality
     }
 
-    /// Create a `Personality` using a custom presets directory and preset name.
-    /// Useful in tests.
+    /// Create a `Personality` using a custom presets directory and preset
+    /// name. Used by tests and by `mimir personality list`, which scans the
+    /// same directory the daemon would.
     pub fn from_path(presets_dir: &Path, preset_name: &str) -> Self {
-        let mut registry = Self::built_in_presets();
-        let custom = Self::scan_custom_presets(presets_dir);
+        let (custom, mut warnings) = Self::scan_custom_presets(presets_dir);
 
+        let mut registry = Self::built_in_presets();
         // Custom overrides built-in.
-        for (name, prompt) in custom {
-            registry.insert(name, prompt);
+        for (name, entry) in custom {
+            registry.insert(name, entry);
         }
 
-        let active_name = if registry.contains_key(preset_name) {
-            preset_name.to_string()
-        } else {
-            warn!(
-                preset = %preset_name,
-                "unknown personality preset; falling back to 'transparent'"
-            );
-            "transparent".to_string()
-        };
+        let active_name = Self::resolve_active_name(&registry, preset_name, &mut warnings);
 
         Self {
             active_name,
             registry,
+            warnings,
         }
     }
 
@@ -98,7 +147,7 @@ Core facts about the user (condensed subset — not a complete picture; treat as
         let preset_prompt = self
             .registry
             .get(&self.active_name)
-            .cloned()
+            .map(|entry| entry.prompt.clone())
             .unwrap_or_else(Self::built_in_transparent);
 
         let base = format!("{}\n\n{}", preset_prompt, Self::OPERATING_DIRECTIVES);
@@ -111,11 +160,19 @@ Core facts about the user (condensed subset — not a complete picture; treat as
         }
     }
 
-    /// List all available preset names (built-in + custom), sorted alphabetically.
-    pub fn list_presets(&self) -> Vec<&str> {
-        let mut names: Vec<&str> = self.registry.keys().map(|s| s.as_str()).collect();
-        names.sort_unstable();
-        names
+    /// List all available presets (built-in + custom), sorted by name.
+    pub fn list_presets(&self) -> Vec<PresetInfo> {
+        let mut presets: Vec<PresetInfo> = self
+            .registry
+            .iter()
+            .map(|(name, entry)| PresetInfo {
+                name: name.clone(),
+                source: entry.source,
+                description: entry.description.clone(),
+            })
+            .collect();
+        presets.sort_by(|a, b| a.name.cmp(&b.name));
+        presets
     }
 
     /// Return the name of the active preset.
@@ -123,17 +180,57 @@ Core facts about the user (condensed subset — not a complete picture; treat as
         &self.active_name
     }
 
+    /// Non-fatal diagnostics collected while resolving presets: malformed or
+    /// unreadable custom preset files, unknown frontmatter keys, and an
+    /// unknown configured preset (issue #387).
+    pub fn warnings(&self) -> &[PresetWarning] {
+        &self.warnings
+    }
+
     // ------------------------------------------------------------------
     // Private helpers
     // ------------------------------------------------------------------
 
-    fn built_in_presets() -> HashMap<String, String> {
-        let mut m = HashMap::new();
-        m.insert("transparent".to_string(), Self::built_in_transparent());
-        m.insert("concise".to_string(), Self::built_in_concise());
-        m.insert("warm".to_string(), Self::built_in_warm());
-        m.insert("formal".to_string(), Self::built_in_formal());
-        m
+    fn built_in_presets() -> HashMap<String, PresetEntry> {
+        let mut registry = HashMap::new();
+        registry.insert(
+            "transparent".to_string(),
+            PresetEntry {
+                prompt: Self::built_in_transparent(),
+                description: Some(
+                    "Warm, efficient, shows its work and admits uncertainty — the default"
+                        .to_string(),
+                ),
+                source: PresetSource::Builtin,
+            },
+        );
+        registry.insert(
+            "concise".to_string(),
+            PresetEntry {
+                prompt: Self::built_in_concise(),
+                description: Some(
+                    "Minimal words, bullet points, no reasoning unless asked".to_string(),
+                ),
+                source: PresetSource::Builtin,
+            },
+        );
+        registry.insert(
+            "warm".to_string(),
+            PresetEntry {
+                prompt: Self::built_in_warm(),
+                description: Some("Conversational and companion-like, uses your name".to_string()),
+                source: PresetSource::Builtin,
+            },
+        );
+        registry.insert(
+            "formal".to_string(),
+            PresetEntry {
+                prompt: Self::built_in_formal(),
+                description: Some("Neutral, structured, professional, no contractions".to_string()),
+                source: PresetSource::Builtin,
+            },
+        );
+        registry
     }
 
     fn built_in_transparent() -> String {
@@ -182,37 +279,193 @@ Core facts about the user (condensed subset — not a complete picture; treat as
         .to_string()
     }
 
-    fn scan_custom_presets(presets_dir: &Path) -> Vec<(String, String)> {
+    /// Scan the custom presets directory for `<name>.personality.md` files.
+    ///
+    /// Returns the discovered (name, entry) pairs plus non-fatal diagnostics:
+    /// unreadable entries, invalid UTF-8, and malformed frontmatter are
+    /// skipped with a warning; unknown frontmatter keys are ignored with a
+    /// warning and the preset is still loaded (issue #387).
+    fn scan_custom_presets(presets_dir: &Path) -> (Vec<(String, PresetEntry)>, Vec<PresetWarning>) {
         let mut results = Vec::new();
+        let mut warnings = Vec::new();
+
         if !presets_dir.exists() {
-            return results;
+            return (results, warnings);
         }
 
         let entries = match std::fs::read_dir(presets_dir) {
-            Ok(e) => e,
-            Err(_) => return results,
+            Ok(entries) => entries,
+            Err(error) => {
+                warnings.push(PresetWarning {
+                    path: Some(presets_dir.to_path_buf()),
+                    reason: format!("cannot read personalities directory: {error}"),
+                });
+                return (results, warnings);
+            }
         };
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if let Some(ext) = path.extension() {
-                if ext != "md" {
+        for entry in entries {
+            let path = match entry {
+                Ok(entry) => entry.path(),
+                Err(error) => {
+                    warnings.push(PresetWarning {
+                        path: Some(presets_dir.to_path_buf()),
+                        reason: format!("cannot read directory entry: {error}"),
+                    });
                     continue;
                 }
-            } else {
+            };
+            let Some(name) = Self::preset_name_from_path(&path) else {
+                // Files that do not match the `<name>.personality.md`
+                // convention are ignored by design, not invalid presets.
                 continue;
-            }
-
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                // Only files ending in .personality.md
-                if let Some(prefix) = stem.strip_suffix(".personality")
-                    && let Ok(content) = std::fs::read_to_string(&path)
-                {
-                    results.push((prefix.to_string(), content));
-                }
+            };
+            match Self::parse_preset_content(&path, &mut warnings) {
+                Ok(entry) => results.push((name, entry)),
+                Err(reason) => warnings.push(PresetWarning {
+                    path: Some(path),
+                    reason,
+                }),
             }
         }
-        results
+
+        (results, warnings)
+    }
+
+    /// Extract the preset name from a `<name>.personality.md` path, returning
+    /// `None` for files that do not match the custom-preset naming convention.
+    fn preset_name_from_path(path: &Path) -> Option<String> {
+        if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            return None;
+        }
+        let stem = path.file_stem().and_then(|stem| stem.to_str())?;
+        stem.strip_suffix(".personality")
+            .map(|name| name.to_string())
+    }
+
+    /// Parse one custom preset file: optional YAML frontmatter with a
+    /// `description` key, followed by verbatim prompt text.
+    ///
+    /// Hard failures (unreadable file, invalid UTF-8, malformed frontmatter)
+    /// are returned as `Err(reason)` so the caller can warn and skip the
+    /// file. Non-fatal problems (unknown keys, non-string description) are
+    /// pushed to `warnings` and the file is still loaded.
+    fn parse_preset_content(
+        path: &Path,
+        warnings: &mut Vec<PresetWarning>,
+    ) -> Result<PresetEntry, String> {
+        let contents =
+            std::fs::read_to_string(path).map_err(|error| format!("cannot read file: {error}"))?;
+
+        let Some(split) = crate::frontmatter::split_yaml_frontmatter(&contents) else {
+            // No frontmatter: the whole body is the prompt, matching presets
+            // written before descriptions existed (backwards compatible).
+            return Ok(PresetEntry {
+                prompt: contents,
+                source: PresetSource::Custom,
+                description: None,
+            });
+        };
+        let (yaml, body) = split.map_err(str::to_string)?;
+
+        let value: serde_yaml::Value = serde_yaml::from_str(yaml)
+            .map_err(|error| format!("invalid YAML frontmatter: {error}"))?;
+
+        let mut description = None;
+        match value {
+            serde_yaml::Value::Mapping(mapping) => {
+                for (key, value) in mapping {
+                    let Some(key_str) = key.as_str() else {
+                        Self::push_soft_warning(
+                            warnings,
+                            path,
+                            "non-string frontmatter key ignored",
+                        );
+                        continue;
+                    };
+                    match (key_str, value) {
+                        ("description", serde_yaml::Value::String(text)) => {
+                            // Collapse internal newlines so a folded or
+                            // literal block stays a single-line label.
+                            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                            if !text.is_empty() {
+                                description = Some(text);
+                            }
+                        }
+                        ("description", _) => Self::push_soft_warning(
+                            warnings,
+                            path,
+                            "frontmatter `description` must be a string; ignoring it",
+                        ),
+                        (other, _) => Self::push_soft_warning(
+                            warnings,
+                            path,
+                            format!(
+                                "unsupported frontmatter key `{other}` ignored; only `description` is supported"
+                            ),
+                        ),
+                    }
+                }
+            }
+            // An empty document (`---\n---`) is an empty frontmatter: valid,
+            // with no description.
+            serde_yaml::Value::Null => {}
+            _ => Self::push_soft_warning(
+                warnings,
+                path,
+                "frontmatter must be a YAML mapping; ignoring frontmatter",
+            ),
+        }
+
+        Ok(PresetEntry {
+            prompt: body.to_string(),
+            source: PresetSource::Custom,
+            description,
+        })
+    }
+
+    /// Push a non-fatal, file-scoped diagnostic that does not prevent the
+    /// preset from loading.
+    fn push_soft_warning(
+        warnings: &mut Vec<PresetWarning>,
+        path: &Path,
+        reason: impl std::fmt::Display,
+    ) {
+        warnings.push(PresetWarning {
+            path: Some(path.to_path_buf()),
+            reason: reason.to_string(),
+        });
+    }
+
+    /// Resolve the active preset name, recording a diagnostic (and falling
+    /// back to `transparent`) when the configured name is unknown.
+    fn resolve_active_name(
+        registry: &HashMap<String, PresetEntry>,
+        preset_name: &str,
+        warnings: &mut Vec<PresetWarning>,
+    ) -> String {
+        if registry.contains_key(preset_name) {
+            preset_name.to_string()
+        } else {
+            warnings.push(PresetWarning {
+                path: None,
+                reason: format!(
+                    "unknown personality preset '{preset_name}'; falling back to 'transparent'"
+                ),
+            });
+            "transparent".to_string()
+        }
+    }
+
+    /// Log every stored diagnostic as a daemon-side warning.
+    fn log_warnings(personality: &Self) {
+        for warning in &personality.warnings {
+            warn!(
+                path = ?warning.path,
+                reason = %warning.reason,
+                "personality preset diagnostic"
+            );
+        }
     }
 }
 
@@ -389,11 +642,12 @@ mod tests {
 
         let p = Personality::from_path(dir.path(), "transparent");
         let presets = p.list_presets();
-        assert!(presets.contains(&"concise"));
-        assert!(presets.contains(&"formal"));
-        assert!(presets.contains(&"transparent"));
-        assert!(presets.contains(&"warm"));
-        assert!(presets.contains(&"cheerful"));
+        for name in ["concise", "formal", "transparent", "warm", "cheerful"] {
+            assert!(
+                presets.iter().any(|info| info.name == name),
+                "missing {name}"
+            );
+        }
     }
 
     #[test]
@@ -404,7 +658,247 @@ mod tests {
 
         let p = Personality::from_path(dir.path(), "transparent");
         let presets = p.list_presets();
-        assert!(!presets.contains(&"cheerful"));
-        assert!(!presets.contains(&"other"));
+        assert!(!presets.iter().any(|info| info.name == "cheerful"));
+        assert!(!presets.iter().any(|info| info.name == "other"));
+        assert!(p.warnings().is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // Preset discovery: descriptions, sources, diagnostics (issue #387)
+    // ------------------------------------------------------------------
+
+    fn preset_info<'a>(presets: &'a [PresetInfo], name: &str) -> &'a PresetInfo {
+        presets
+            .iter()
+            .find(|info| info.name == name)
+            .unwrap_or_else(|| panic!("preset `{name}` not found in {presets:#?}"))
+    }
+
+    #[test]
+    fn test_built_in_presets_have_descriptions() {
+        let p = Personality::from_path(Path::new("/nonexistent"), "transparent");
+        let presets = p.list_presets();
+        for name in ["transparent", "concise", "warm", "formal"] {
+            let info = preset_info(&presets, name);
+            assert_eq!(info.source, PresetSource::Builtin);
+            assert!(
+                info.description.as_deref().is_some_and(|d| !d.is_empty()),
+                "built-in preset `{name}` must carry a description"
+            );
+        }
+    }
+
+    #[test]
+    fn test_list_presets_reports_custom_source_and_description() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("cheerful.personality.md"),
+            "---\ndescription: Cheerful and upbeat\n---\nYou are cheerful!",
+        )
+        .unwrap();
+
+        let p = Personality::from_path(dir.path(), "transparent");
+        let presets = p.list_presets();
+        let info = preset_info(&presets, "cheerful");
+        assert_eq!(info.source, PresetSource::Custom);
+        assert_eq!(info.description.as_deref(), Some("Cheerful and upbeat"));
+        assert!(p.warnings().is_empty());
+    }
+
+    #[test]
+    fn test_frontmatter_body_is_verbatim_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("cheerful.personality.md"),
+            "---\ndescription: Cheerful\n---\n  You are cheerful!\n\nSecond line.",
+        )
+        .unwrap();
+
+        let p = Personality::from_path(dir.path(), "cheerful");
+        let prompt = p.system_prompt("");
+        // Leading whitespace after the closing fence is trimmed; the rest of
+        // the body is used verbatim as the prompt text.
+        assert!(prompt.starts_with("You are cheerful!\n\nSecond line."));
+        assert!(prompt.contains(Personality::OPERATING_DIRECTIVES));
+    }
+
+    #[test]
+    fn test_custom_preset_without_frontmatter_has_no_description() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("plain.personality.md"), "You are plain.").unwrap();
+
+        let p = Personality::from_path(dir.path(), "plain");
+        let presets = p.list_presets();
+        let info = preset_info(&presets, "plain");
+        assert_eq!(info.source, PresetSource::Custom);
+        assert_eq!(info.description, None);
+        assert!(p.warnings().is_empty());
+        assert!(p.system_prompt("").starts_with("You are plain."));
+    }
+
+    #[test]
+    fn test_frontmatter_without_description_is_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("plain.personality.md"),
+            "---\n---\nYou are plain.",
+        )
+        .unwrap();
+
+        let p = Personality::from_path(dir.path(), "plain");
+        let presets = p.list_presets();
+        let info = preset_info(&presets, "plain");
+        assert_eq!(info.description, None);
+        assert!(p.warnings().is_empty());
+    }
+
+    #[test]
+    fn test_unterminated_frontmatter_warns_and_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("broken.personality.md"),
+            "---\ndescription: Broken\nbody never closes",
+        )
+        .unwrap();
+
+        let p = Personality::from_path(dir.path(), "transparent");
+        assert!(!p.list_presets().iter().any(|info| info.name == "broken"));
+        assert_eq!(p.warnings().len(), 1);
+        assert_eq!(
+            p.warnings()[0].path.as_deref(),
+            Some(dir.path().join("broken.personality.md").as_path())
+        );
+        assert!(p.warnings()[0].reason.contains("not closed"));
+    }
+
+    #[test]
+    fn test_invalid_yaml_frontmatter_warns_and_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("broken.personality.md"),
+            "---\ndescription: [unclosed\n---\nbody",
+        )
+        .unwrap();
+
+        let p = Personality::from_path(dir.path(), "transparent");
+        assert!(!p.list_presets().iter().any(|info| info.name == "broken"));
+        assert_eq!(p.warnings().len(), 1);
+        assert!(p.warnings()[0].reason.contains("YAML"));
+    }
+
+    #[test]
+    fn test_unknown_frontmatter_key_warns_but_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("cheerful.personality.md"),
+            "---\nstyle: concise\ndescription: Cheerful\n---\nYou are cheerful!",
+        )
+        .unwrap();
+
+        let p = Personality::from_path(dir.path(), "cheerful");
+        let presets = p.list_presets();
+        let info = preset_info(&presets, "cheerful");
+        assert_eq!(info.description.as_deref(), Some("Cheerful"));
+        assert_eq!(p.warnings().len(), 1);
+        assert!(p.warnings()[0].reason.contains("style"));
+    }
+
+    #[test]
+    fn test_non_string_description_warns_but_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("weird.personality.md"),
+            "---\ndescription: [a, b]\n---\nYou are weird!",
+        )
+        .unwrap();
+
+        let p = Personality::from_path(dir.path(), "weird");
+        let presets = p.list_presets();
+        let info = preset_info(&presets, "weird");
+        assert_eq!(info.description, None);
+        assert_eq!(p.warnings().len(), 1);
+        assert!(p.warnings()[0].reason.contains("description"));
+    }
+
+    #[test]
+    fn test_multiline_description_collapses_whitespace() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("multi.personality.md"),
+            "---\ndescription: |\n  Line one\n  line two\n---\nbody",
+        )
+        .unwrap();
+
+        let p = Personality::from_path(dir.path(), "multi");
+        let presets = p.list_presets();
+        let info = preset_info(&presets, "multi");
+        assert_eq!(info.description.as_deref(), Some("Line one line two"));
+    }
+
+    #[test]
+    fn test_unreadable_custom_preset_warns_and_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory named like a preset file cannot be read as a file.
+        fs::create_dir(dir.path().join("broken.personality.md")).unwrap();
+
+        let p = Personality::from_path(dir.path(), "transparent");
+        assert!(!p.list_presets().iter().any(|info| info.name == "broken"));
+        assert_eq!(p.warnings().len(), 1);
+        assert!(p.warnings()[0].reason.contains("cannot read"));
+    }
+
+    #[test]
+    fn test_invalid_utf8_custom_preset_warns_and_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("broken.personality.md"),
+            [0xff, 0xfe, 0x00, 0x41],
+        )
+        .unwrap();
+
+        let p = Personality::from_path(dir.path(), "transparent");
+        assert!(!p.list_presets().iter().any(|info| info.name == "broken"));
+        assert_eq!(p.warnings().len(), 1);
+    }
+
+    #[test]
+    fn test_unknown_configured_preset_stores_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = Personality::from_path(dir.path(), "ghost");
+        assert_eq!(p.active_name(), "transparent");
+        assert_eq!(p.warnings().len(), 1);
+        assert!(p.warnings()[0].reason.contains("ghost"));
+    }
+
+    #[test]
+    fn test_custom_override_of_builtin_reports_custom_source_and_description() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("transparent.personality.md"),
+            "---\ndescription: My own transparent\n---\nCustom transparent override.",
+        )
+        .unwrap();
+
+        let p = Personality::from_path(dir.path(), "transparent");
+        let prompt = p.system_prompt("");
+        assert!(prompt.starts_with("Custom transparent override."));
+        let presets = p.list_presets();
+        let info = preset_info(&presets, "transparent");
+        assert_eq!(info.source, PresetSource::Custom);
+        assert_eq!(info.description.as_deref(), Some("My own transparent"));
+    }
+
+    #[test]
+    fn test_list_presets_is_sorted() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("zeta.personality.md"), "Z").unwrap();
+        fs::write(dir.path().join("alpha.personality.md"), "A").unwrap();
+
+        let p = Personality::from_path(dir.path(), "transparent");
+        let presets = p.list_presets();
+        let names: Vec<&str> = presets.iter().map(|info| info.name.as_str()).collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
     }
 }

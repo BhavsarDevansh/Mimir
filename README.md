@@ -28,7 +28,7 @@ Mimir is a **Rust workspace** with a modular, local-first design. Your data stay
 
 ### Crates
 
-- **`mimir`** — the single binary: the daemon plus the `mimir` CLI (`start`, `chat`, `ask`, `status`, `memory`, `kb`, `stop`).
+- **`mimir`** — the single binary: the daemon plus the `mimir` CLI (`start`, `chat`, `ask`, `status`, `memory`, `personality`, `kb`, `connector`, `stop`).
 - **`mimir-server`** — Axum HTTP server with SSE streaming, sessions, and graceful shutdown; exposes an OpenAI-compatible chat endpoint.
 - **`mimir-core`** — LLM client, configuration, context, tools, skills, and the personality system.
 - **`mimir-knowledge`** — the SQLite knowledge graph: entities, facts, temporal reasoning, live memory condensation, events/reminders, and proximity queries.
@@ -65,6 +65,9 @@ mimir status
 
 # View the live condensed memory block
 mimir memory
+
+# List available personality presets
+mimir personality list
 
 # Force memory condensation immediately
 mimir memory --refresh

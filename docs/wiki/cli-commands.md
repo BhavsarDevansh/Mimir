@@ -22,6 +22,9 @@ mimir status
 
 # View memory
 mimir memory
+
+# List personality presets
+mimir personality list
 ```
 
 ## `mimir start` — Start Daemon
@@ -191,6 +194,16 @@ mimir memory --refresh
 ```
 
 `--refresh` prints the condensation run id and status; it does not print the memory block itself. Run `mimir memory` again afterwards to see the updated summary.
+
+## `mimir personality list` — Personality Presets
+
+List every available personality preset — the four built-ins (`transparent`, `concise`, `warm`, `formal`) plus your custom `.personality.md` files — as a table of `NAME`, `SOURCE`, and `DESCRIPTION` columns, sorted by name. Custom presets without a description show `-`.
+
+```bash
+mimir personality list
+```
+
+The command runs locally and works without a daemon. Broken preset files (for example an unclosed `---` frontmatter block) are skipped with a warning that names the file, and an unknown configured preset prints a warning instead of failing. See [Personality](personality.md) for how to add descriptions to custom presets.
 
 ## `mimir tool` — Tool Management
 

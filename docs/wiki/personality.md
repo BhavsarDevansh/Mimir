@@ -61,6 +61,23 @@ Or set an environment variable:
 export MIMIR_PERSONALITY_PRESET="concise"
 ```
 
+## Discovering Presets
+
+`mimir personality list` shows every available preset — the four built-ins plus your custom files — with its source and description:
+
+```text
+NAME         SOURCE   DESCRIPTION
+cheerful     Custom   Cheerful and upbeat companion
+concise      Builtin  Minimal words, bullet points, no reasoning unless asked
+formal       Builtin  Neutral, structured, professional, no contractions
+transparent  Builtin  Warm, efficient, shows its work and admits uncertainty — the default
+warm         Builtin  Conversational and companion-like, uses your name
+```
+
+Presets without a description show `-`, and the list is sorted by name. The command works even when the daemon is not running, because presets are just local files.
+
+If a custom preset file is broken — for example the `---` frontmatter is never closed — the file is skipped and a warning is printed naming the file and the reason. The same warning appears in the daemon log if you use a preset name that does not exist; Mimir then falls back to `transparent` instead of failing.
+
 ## Creating a Custom Personality
 
 1. Create the personalities directory if it does not exist:
@@ -82,6 +99,19 @@ export MIMIR_PERSONALITY_PRESET="concise"
    ```
 
 Custom presets override built-ins with the same name. The file body supplies the preset tone text — no special syntax required — and the shared operating principles (honesty and retrieval) are still appended by the daemon, so the behavioural contract holds for custom personalities too.
+
+You can give a preset a short description that shows up in `mimir personality list` (and later in OpenAI-compatible model listings). Add a `description` line inside `---` frontmatter at the top of the file:
+
+```bash
+cat > ~/.config/mimir/personalities/cheery.personality.md << 'PROMPT'
+---
+description: Upbeat, optimistic, and encouraging
+---
+You are Mimir. You are upbeat, optimistic, and encouraging. You celebrate small wins and keep things light.
+PROMPT
+```
+
+The frontmatter is optional — a file without it is used exactly as before — and only `description` is supported. If a file claims to have frontmatter (starts with `---`) but is malformed, Mimir skips it and warns instead of guessing.
 
 ## Examples
 

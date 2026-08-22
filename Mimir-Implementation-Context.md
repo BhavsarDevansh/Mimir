@@ -49,8 +49,9 @@ mimir (single binary)
 │   ├── ToolRegistry + SkillRegistry
 │   ├── KnowledgeGraph (memory ranking + condensation)
 │   └── Future: connectors, proactive agent, reasoning engine
-└── Client mode (mimir ask, chat, status, memory, stop)
-    └── mimir-client (HTTP client → daemon)
+└── Client mode (mimir ask, chat, status, memory, personality, kb, connector, tool, skill, stop)
+    ├── mimir-client (HTTP client → daemon)
+    └── personality list runs locally — presets are files, not daemon state (issue #387)
 ```
 
 ### Library Crates (code organisation, not separate binaries)

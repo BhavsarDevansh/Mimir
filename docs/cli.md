@@ -24,6 +24,7 @@ mimir (single binary)
  ├── connector/      — Connector subcommand handlers
  ├── status.rs       — System status
  ├── memory_cmd.rs   — Memory viewer
+ ├── personality_cmd.rs — Personality preset discovery
  ├── init.rs         — First-run bootstrap
  └── daemon_guard.rs — Shared helper to ensure the daemon is running
 ```
@@ -82,6 +83,10 @@ Displays:
 ### `mimir memory`
 
 Prints the live condensed memory block from the knowledge graph.
+
+### `mimir personality list`
+
+Lists every available personality preset (built-in + custom) as a table with `NAME`, `SOURCE`, and `DESCRIPTION` columns, sorted by name. Custom presets without a description show `-`, and optional `description` frontmatter in custom preset files is parsed per `docs/personality-system.md` (issue #387). The command runs locally — presets are plain files in the config directory — so it needs no daemon. Non-fatal diagnostics (malformed preset files, an unknown configured preset) are printed to stderr while the command still exits successfully.
 
 ### `mimir connector`
 

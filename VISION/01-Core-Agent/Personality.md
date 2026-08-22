@@ -63,21 +63,21 @@ When the requested name is unknown, Mimir logs a warning and falls back to `tran
 
 ## Custom Presets
 
-Users can add custom presets as plain Markdown files: `<name>.personality.md` in the `personalities/` subdirectory of the XDG-resolved user config directory (`~/.config/mimir/personalities/` on Linux). The file stem (without the `.personality` suffix) is the preset name and the file body is used verbatim as the preset tone text — no frontmatter, TOML, or other syntax is parsed. Files that do not end in `.personality.md` are ignored, and custom presets override built-ins when names collide. The preset name is then selected through any of the mechanisms above.
+Users can add custom presets as plain Markdown files: `<name>.personality.md` in the `personalities/` subdirectory of the XDG-resolved user config directory (`~/.config/mimir/personalities/` on Linux). The file stem (without the `.personality` suffix) is the preset name and the file body is used verbatim as the preset tone text. An optional `description` may be given in minimal YAML frontmatter at the top of the file, delimited by standalone `---` lines; only the `description` key is supported, and files without frontmatter are used exactly as before (issue #387). Files that do not end in `.personality.md` are ignored, and custom presets override built-ins when names collide. The preset name is then selected through any of the mechanisms above.
 
 ## System Prompt Composition
 
 The final system prompt is composed in Rust by `Personality::system_prompt` when a session starts (and per request for incognito chats), in this order:
 
 1. The active preset's tone text.
-2. The shared operating directives, which encode Mimir's behavioural invariants — do not invent facts, dispatch the retrieval agent when context is insufficient, and call `remember` for anything worth saving (issue #138). They are owned by Rust and appended to every preset, built-in or custom, so behaviour never depends on preset wording or on which LLM model is configured.
+2. The shared operating directives, which encode Mimir's behavioural invariants — do not invent facts and dispatch the retrieval agent when context is insufficient (issue #138). They are owned by Rust and appended to every preset, built-in or custom, so behaviour never depends on preset wording or on which LLM model is configured. Learning is deliberately absent from the prompt: remembering runs server-side via the `remember.chat` background hook (issue #386).
 3. The core-facts block, a condensed subset of knowledge-graph memory injected when facts exist and explicitly framed as starting context, not an exhaustive picture.
 
 Preset text only controls tone. Conditional logic, tool rules, and workflow orchestration live in Rust, never in prompts.
 
-## Discovery & Diagnostics (planned)
+## Discovery & Diagnostics
 
-First-class discovery is planned but not yet implemented: a `mimir personality list` CLI command, optional description metadata in custom preset files, and visible warnings when the configured preset is missing or a custom file is invalid (issue #387). Until then, the runtime API (`Personality::list_presets`) exposes the available names and an unknown preset falls back to `transparent` with a log warning.
+Preset discovery is first-class (issue #387): `mimir personality list` renders every preset (built-in + custom) with its source and optional description, the runtime API exposes the same data via `Personality::list_presets` (`PresetInfo`), and diagnostics are never silent — an unknown configured preset and malformed or unreadable custom preset files produce warnings (daemon log or `mimir personality list` stderr) while falling back to `transparent` instead of failing.
 
 ## Non-Goals
 

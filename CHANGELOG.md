@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.133.0] — 2026-08-22
+
+### Feature: first-class personality preset discovery (issue #387)
+
+- New `mimir personality list` CLI command renders every preset (built-in + custom) as a table with `NAME`, `SOURCE`, and `DESCRIPTION` columns, sorted by name; it runs locally against the config directory and needs no daemon.
+- Custom preset files may carry an optional `description` in minimal YAML frontmatter delimited by standalone `---` lines; only the `description` key is supported, unknown keys (e.g. stale tone knobs) warn and are ignored, multi-line descriptions collapse to one line, and files without frontmatter behave exactly as before.
+- Diagnostics are no longer silent: an unknown configured preset and malformed, unreadable, or invalid-UTF-8 custom preset files produce warnings — daemon log or `mimir personality list` stderr — while still falling back to `transparent` and exiting successfully.
+- `Personality::list_presets` now returns `Vec<PresetInfo>` (name, `PresetSource` Builtin/Custom, optional description; serde-serializable for the future `/v1/models` surface, issue #388), built-in presets ship descriptions, and diagnostics are exposed via `Personality::warnings`.
+- The `---`-fenced YAML frontmatter splitter is extracted into `mimir-core/src/frontmatter.rs` and shared with the skills loader (DRY), with exact byte offsets for LF and CRLF line endings.
+- Docs updated: `docs/personality-system.md`, `docs/wiki/personality.md`, `docs/cli.md`, `docs/wiki/cli-commands.md`, `README.md`, `docs/wiki/what-works-now.md`, `Mimir-Implementation-Context.md`, and `VISION/01-Core-Agent/Personality.md` (which also drops the stale `remember`-tool wording from the operating-directives section).
+- Version bumped 0.132.4 → 0.133.0 (minor — new feature).
+
 ## [0.132.4] — 2026-08-22
 
 ### Fix: PR #452 review feedback hardens the future-incompat guard and fixes vendored docs (issue #446)

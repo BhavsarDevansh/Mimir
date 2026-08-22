@@ -11,7 +11,8 @@ The personality system defines how Mimir communicates. It provides built-in pres
 The central struct lives in `mimir-core/src/personality.rs`. It holds:
 
 - `active_name`: the currently selected preset name.
-- `registry`: a `HashMap<String, String>` of all available preset names to their raw system prompt text.
+- `registry`: a `HashMap<String, PresetEntry>` of preset names to their prompt text plus discovery metadata (source and optional description).
+- `warnings`: non-fatal diagnostics collected while scanning custom preset files and resolving the active preset (issue #387).
 
 Construction (`Personality::new`) scans the user personalities directory (`~/.config/mimir/personalities/`) and merges custom presets with built-ins. Custom presets override built-ins when names collide.
 
@@ -28,9 +29,18 @@ Built-in presets are hardcoded as private helper methods on `Personality`:
 
 ### Custom Presets
 
-Users create files named `<name>.personality.md` in `~/.config/mimir/personalities/`. The file stem (without `.personality.md`) becomes the preset name, and the file body is used verbatim as the system prompt. No frontmatter or TOML parsing is performed.
+Users create files named `<name>.personality.md` in `~/.config/mimir/personalities/`. The file stem (without the `.personality` suffix) becomes the preset name and the file body is used verbatim as the system prompt. Custom presets override built-ins when names collide, and the file's own description wins on collision.
 
-Files that do not end in `.personality.md` are ignored.
+Descriptions are optional and use minimal YAML frontmatter at the top of the file, delimited by standalone `---` lines; the remainder of the file stays verbatim prompt text:
+
+```markdown
+---
+description: Cheerful and upbeat companion
+---
+You are Mimir. You are upbeat, optimistic, and encouraging.
+```
+
+Only the `description` key is supported. Unknown frontmatter keys (for example the stale `style`/`verbosity` tone knobs) are ignored with a warning and the preset still loads, multi-line descriptions are collapsed to a single line, and files without frontmatter are treated exactly as before. Files that do not end in `.personality.md` are ignored by design, not warned about. A file that starts with `---` but never closes the block, contains invalid YAML, is unreadable, or is not valid UTF-8 is malformed: it is skipped with a warning that names the file and the reason (issue #387).
 
 ### System Prompt Composition
 
@@ -63,6 +73,8 @@ This composition is the responsibility of `Personality`; the caller passes the r
 2. Scan custom directory and overlay matches.
 3. If the requested preset name is not found, warn and fall back to `transparent`.
 
+All diagnostics are non-fatal and collected as data (`Personality::warnings`): the daemon logs them via `tracing::warn`, and `mimir personality list` prints them to stderr, so a missing or malformed preset is never silently ignored.
+
 ## Config Integration
 
 ```toml
@@ -80,5 +92,10 @@ export MIMIR_PERSONALITY_PRESET="formal"
 - `Personality::new(config: &PersonalityConfig) -> Self`
 - `Personality::from_path(presets_dir: &Path, preset_name: &str) -> Self`
 - `Personality::system_prompt(memory_content: &str) -> String`
-- `Personality::list_presets() -> Vec<&str>`
+- `Personality::list_presets() -> Vec<PresetInfo>` — name, source (`Builtin`/`Custom`), optional description, sorted by name; `PresetInfo` is `Serialize` for the future `/v1/models` surface (issue #388)
+- `Personality::warnings() -> &[PresetWarning]` — non-fatal diagnostics (malformed files, unknown configured preset)
 - `Personality::active_name() -> &str`
+
+## CLI: `mimir personality list`
+
+`mimir personality list` renders every available preset (built-in + custom) as a table with `NAME`, `SOURCE`, and `DESCRIPTION` columns, sorted by name. Custom presets without a description show `-`. The command runs entirely in the CLI process — presets are local files — so it works without a daemon, and it prints the same non-fatal diagnostics as the daemon to stderr while still exiting successfully.

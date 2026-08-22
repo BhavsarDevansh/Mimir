@@ -103,7 +103,7 @@ Status legend: **✅ Works** — implemented and usable today; **🟡 Partial** 
 
 ### CLI Commands
 
-All client commands talk to the daemon over HTTP. If the daemon is down, you are prompted to start it (unless stdin is not a TTY).
+All client commands talk to the daemon over HTTP except `mimir personality list`, which reads local preset files. If the daemon is down, client commands are prompted to start it (unless stdin is not a TTY).
 
 | Command | Status | Notes & pending work |
 |---------|--------|----------------------|
@@ -114,6 +114,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | `mimir chat` | ✅ Works | Interactive REPL with `/history` resume, `/memory`, `/status`, `/clear`, `/help`, multi-line input, and SSE streaming. The session id is not persisted across restarts — resuming requires `/history` navigation ([#280](https://github.com/BhavsarDevansh/Mimir/issues/280)). |
 | `mimir status` | ✅ Works | Health check: config, LLM reachability, queue depth, memory usage. |
 | `mimir memory` | ✅ Works | Prints the live condensed memory block; `--refresh` forces regeneration. |
+| `mimir personality list` | ✅ Works | Lists built-in + custom presets with source and optional description ([#387](https://github.com/BhavsarDevansh/Mimir/issues/387)). Runs locally — no daemon needed. |
 | `mimir tool list` | ✅ Works | Lists registered tools and their permissions. |
 | `mimir tool enable/disable/permission` | ✅ Works | Change tool permission levels (saved to `tools.toml`). |
 | `mimir skill list/show/add/delete/enable/disable` | ✅ Works | Manage skills (built-in, user-added). Generated-skill lifecycle is not implemented ([#20](https://github.com/BhavsarDevansh/Mimir/issues/20)). |
@@ -180,6 +181,7 @@ All client commands talk to the daemon over HTTP. If the daemon is down, you are
 | Presets | ✅ Works | `transparent`, `concise`, `warm`, `formal`, plus custom `.personality.md` files. |
 | System prompt generation | ✅ Works | Preset tone + shared operating directives (honesty, retrieval) + condensed memory block, explicitly marked as a non-exhaustive subset ([#138](https://github.com/BhavsarDevansh/Mimir/issues/138)); learning runs server-side via the `remember.chat` background hook, not a prompt directive. |
 | CLI override | ✅ Works | `--personality` flag on `mimir ask` and `mimir chat`. |
+| Preset discovery | ✅ Works | `mimir personality list` shows name/source/description ([#387](https://github.com/BhavsarDevansh/Mimir/issues/387)); custom presets can carry an optional `description` in `---` YAML frontmatter; malformed files and unknown configured presets warn instead of silently falling back. |
 
 ### Deployment & Operations
 

@@ -44,6 +44,7 @@ mod recorder;
 mod sync_impl;
 
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicU32;
 use std::time::Duration;
 
@@ -66,6 +67,14 @@ pub struct MockConnector {
     display_name: String,
     ctype: ConnectorType,
     mode: ConnectorMode,
+    /// Runtime override consulted by [`Connector::mode`](crate::connector::Connector::mode)
+    /// before the configured `mode` (issue #397 review). Lets a test flip a
+    /// running connector between push and polling — e.g. to prove a manual
+    /// sync trigger consults the *live* mode (an `auto`-mode email connector
+    /// resolves to polling once its capability probe completes) rather than a
+    /// spawn-time snapshot. Shared via `Arc` so the test and the supervisor's
+    /// cloned instance observe the same value.
+    mode_override: Option<Arc<StdMutex<Option<ConnectorMode>>>>,
     facts: Vec<MockFactConfig>,
     batch_size: Option<u32>,
     health: HealthStatus,
@@ -106,6 +115,7 @@ impl Default for MockConnector {
                 interval: Duration::from_millis(DEFAULT_INTERVAL_MS),
                 jitter: Duration::from_millis(DEFAULT_JITTER_MS),
             },
+            mode_override: None,
             facts: Vec::new(),
             batch_size: None,
             health: HealthStatus::Online,

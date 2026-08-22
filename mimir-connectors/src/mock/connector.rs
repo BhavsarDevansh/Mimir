@@ -27,7 +27,10 @@ impl Connector for MockConnector {
     }
 
     fn mode(&self) -> ConnectorMode {
-        self.mode
+        self.mode_override
+            .as_ref()
+            .and_then(|mode| *mode.lock().unwrap())
+            .unwrap_or(self.mode)
     }
 
     fn config_schema(&self) -> serde_json::Value {

@@ -445,6 +445,18 @@ pub trait Connector: Send + Sync {
     /// How the supervisor should run this connector (polling vs push).
     fn mode(&self) -> ConnectorMode;
 
+    /// Resolve [`mode`](Self::mode) for a freshly-constructed instance, or
+    /// `None` when the mode depends on a capability probe that has not run
+    /// yet (e.g. IMAP `IDLE` for `EmailSyncMode::Auto`). Supervisors and API
+    /// responses omit the mode instead of guessing, so a connector is never
+    /// reported as `Push` before its capability is known (issue #397 review).
+    /// The default reports [`mode`](Self::mode) — connectors whose mode is
+    /// fully config-determined (Calendar, Photos, explicit email modes) keep
+    /// the default.
+    fn mode_if_resolved(&self) -> Option<ConnectorMode> {
+        Some(self.mode())
+    }
+
     /// JSON Schema describing the connector's configuration surface.
     fn config_schema(&self) -> serde_json::Value;
 

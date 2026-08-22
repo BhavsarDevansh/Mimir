@@ -1,6 +1,7 @@
 //! Internal `MockConnector` behaviour (config-driven fact generation).
 
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicU32;
 use std::time::Duration;
 
@@ -67,6 +68,7 @@ impl MockConnector {
             display_name,
             ctype,
             mode,
+            mode_override: None,
             facts: parsed.facts,
             batch_size: parsed.batch_size,
             health: parsed.health,
@@ -93,6 +95,17 @@ impl MockConnector {
     /// for chaining; not exposed through the factory/config path.
     pub fn with_recorder(mut self, recorder: Arc<MockSyncRecorder>) -> Self {
         self.recorder = Some(recorder);
+        self
+    }
+
+    /// Attach a shared runtime mode override (issue #397 review): while the
+    /// override is `Some`, [`Connector::mode`](crate::connector::Connector::mode)
+    /// reports it instead of the configured mode. Consumes and returns `self`
+    /// for chaining; not exposed through the factory/config path. The test
+    /// and the supervisor's cloned instance share the same `Arc`, so flipping
+    /// the value is visible to `trigger_sync` without re-instantiating.
+    pub fn with_mode_override(mut self, mode: Arc<StdMutex<Option<ConnectorMode>>>) -> Self {
+        self.mode_override = Some(mode);
         self
     }
 

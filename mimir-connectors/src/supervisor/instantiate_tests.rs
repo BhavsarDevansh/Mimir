@@ -288,3 +288,94 @@ async fn resolved_mode_is_none_for_unknown_type_and_invalid_config() {
         "an invalid config must omit the mode"
     );
 }
+
+/// Build a Gmail/imap row carrying the given `config_json` and durable state
+/// for the email `resolved_mode` tests.
+fn gmail_row(config_json: &str, durable_state: Option<&str>) -> ConnectorRow {
+    ConnectorRow {
+        id: 8,
+        connector_type_id: ConnectorType::Gmail as i16,
+        slug: "gmail-personal".to_string(),
+        backend: "imap".to_string(),
+        display_name: "Gmail".to_string(),
+        config_json: config_json.to_string(),
+        status_id: ConnectorStatus::Active as i16,
+        auth_state_id: ConnectorAuthState::Authenticated as i16,
+        sync_cursor: None,
+        durable_state: durable_state.map(str::to_string),
+        last_sync_at: None,
+        last_error: None,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    }
+}
+
+#[tokio::test]
+async fn resolved_mode_omits_unprobed_auto_and_reads_persisted_capability() {
+    // Issue #397 review: an `auto`-mode email connector must not be reported
+    // as `push` before its IMAP capability probe completes. Once a previous
+    // cycle persisted the probed capability in the durable state, the
+    // config-only construction resolves the true mode (polling for an
+    // IDLE-less server, push otherwise).
+    let dir = tempfile::tempdir().unwrap();
+    let kg = Arc::new(
+        KnowledgeGraph::init(&dir.path().join("kg.db"))
+            .await
+            .unwrap(),
+    );
+    let registry = ConnectorRegistry::new();
+    registry
+        .register(
+            ConnectorType::Gmail,
+            "imap".to_string(),
+            crate::email::EmailConnectorFactory::new(),
+        )
+        .unwrap();
+    let (_tx, rx) = watch::channel(false);
+    let supervisor =
+        ConnectorSupervisor::new(Arc::new(registry), kg, SupervisorConfig::default(), rx);
+
+    let auto = r#"{"host":"imap.gmail.com","auth":{"kind":"app_password","username":"me@gmail.com"},"mode":"auto"}"#;
+    assert_eq!(
+        supervisor.resolved_mode(&gmail_row(auto, None)),
+        None,
+        "an unprobed auto connector must omit the mode, not claim push"
+    );
+
+    let durable_no_idle = serde_json::json!({
+        "pending": {},
+        "terminal": [],
+        "tombstones": [],
+        "supports_idle": false
+    })
+    .to_string();
+    assert!(
+        matches!(
+            supervisor.resolved_mode(&gmail_row(auto, Some(&durable_no_idle))),
+            Some(ConnectorMode::Polling { .. })
+        ),
+        "a persisted 'no IDLE' capability must resolve auto to polling"
+    );
+
+    let durable_idle = serde_json::json!({
+        "pending": {},
+        "terminal": [],
+        "tombstones": [],
+        "supports_idle": true
+    })
+    .to_string();
+    assert_eq!(
+        supervisor.resolved_mode(&gmail_row(auto, Some(&durable_idle))),
+        Some(ConnectorMode::Push),
+        "a persisted IDLE capability must resolve auto to push"
+    );
+
+    let poll = r#"{"host":"imap.gmail.com","auth":{"kind":"app_password","username":"me@gmail.com"},"mode":"poll"}"#;
+    assert!(
+        matches!(
+            supervisor.resolved_mode(&gmail_row(poll, None)),
+            Some(ConnectorMode::Polling { .. })
+        ),
+        "an explicit poll mode resolves without a probe"
+    );
+}

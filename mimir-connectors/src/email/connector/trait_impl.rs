@@ -55,6 +55,17 @@ impl Connector for EmailConnector {
         }
     }
 
+    fn mode_if_resolved(&self) -> Option<ConnectorMode> {
+        match self.config.mode {
+            // `Auto` needs the capability probe to pick between Push and
+            // Polling; a fresh instance (no cached capability yet) cannot
+            // resolve the mode, so the caller omits it instead of claiming
+            // Push before the probe completes (issue #397 review).
+            EmailSyncMode::Auto if self.supports_idle.lock().unwrap().is_none() => None,
+            _ => Some(self.mode()),
+        }
+    }
+
     fn config_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",

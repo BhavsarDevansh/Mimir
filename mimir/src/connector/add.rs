@@ -117,14 +117,20 @@ pub(crate) async fn handle_connector_add_with_opener(
             output.mode.as_deref().unwrap_or("-"),
             output.auth_state
         );
-        if output.mode.as_deref() == Some("push") {
-            println!(
+        match output.mode.as_deref() {
+            Some("push") => println!(
                 "Next: run `mimir connector resume {slug}` to activate it — it then syncs automatically (push) and manual sync is not supported."
-            );
-        } else {
-            println!(
+            ),
+            Some("polling") => println!(
                 "Next: run `mimir connector resume {slug}` to activate it, then `mimir connector sync {slug}` to sync."
-            );
+            ),
+            // `auto` email mode resolves to push or polling only after the
+            // first capability probe; until then the mode is unknown, so do
+            // not claim manual sync works or that it is unsupported (issue
+            // #397 review).
+            _ => println!(
+                "Next: run `mimir connector resume {slug}` to activate it — its sync mode (push vs polling) is detected on the first connect."
+            ),
         }
     } else {
         print_json(&output);

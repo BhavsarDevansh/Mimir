@@ -35,9 +35,6 @@ pub(super) struct ConnectorHandle {
     /// from the same `Arc<dyn Connector>` moved into the runner task, so both
     /// share one underlying instance.
     pub(super) connector: Arc<dyn Connector>,
-    /// Connector mode, captured at spawn so `trigger_sync` can reject push
-    /// connectors without holding the connector instance.
-    pub(super) mode: ConnectorMode,
     /// Sender half of the per-connector trigger channel.
     pub(super) trigger_tx: mpsc::Sender<TriggerRequest>,
     /// One-permit semaphore serialising concurrent `trigger_sync` callers.
@@ -268,9 +265,6 @@ impl ConnectorSupervisor {
         // a re-spawn never detaches a live task (dropping a `JoinHandle`
         // would leave the old runner polling untracked).
         self.stop(row.id).await;
-        // Capture the mode up front so `trigger_sync` can reject push
-        // connectors without holding the connector instance.
-        let mode = connector.mode();
         let (trigger_tx, trigger_rx) = mpsc::channel(TRIGGER_CHANNEL_CAPACITY);
         let semaphore = Arc::new(Semaphore::new(1));
         let (stop_tx, stop_rx) = watch::channel(false);
@@ -294,7 +288,6 @@ impl ConnectorSupervisor {
                 task: handle,
                 stop_tx,
                 connector,
-                mode,
                 trigger_tx,
                 semaphore,
             },
@@ -371,11 +364,14 @@ impl ConnectorSupervisor {
     /// the persisted config with no side effects (issue #397) — the mode
     /// surfaced by `ConnectorResponse` (add summary and `mimir connector
     /// list`). Unknown connector types or invalid configs yield `None` so the
-    /// response can omit the field.
+    /// response can omit the field. A mode that depends on a capability probe
+    /// (IMAP `IDLE` for `EmailSyncMode::Auto`) also yields `None` until the
+    /// probed capability was persisted by a previous cycle, so an unprobed
+    /// connector is never reported as `push` (issue #397 review).
     pub fn resolved_mode(&self, row: &ConnectorRow) -> Option<ConnectorMode> {
         let connector_type = row.connector_type()?;
         let connector = self.instantiate(row, connector_type).ok()?;
-        Some(connector.mode())
+        connector.mode_if_resolved()
     }
 }
 

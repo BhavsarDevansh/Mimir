@@ -27,6 +27,9 @@ struct FakeCfg {
     /// Omit the `UIDVALIDITY` response code on SELECT/EXAMINE to exercise
     /// the missing-UIDVALIDITY error path. `false` by default.
     omit_uid_validity: bool,
+    /// Omit the `UIDNEXT` response code on SELECT/EXAMINE to exercise the
+    /// missing-UIDNEXT first-sync seed error path. `false` by default.
+    omit_uid_next: bool,
 }
 
 impl Default for FakeCfg {
@@ -39,6 +42,7 @@ impl Default for FakeCfg {
             idle_push_messages: Vec::new(),
             second_uid_validity: None,
             omit_uid_validity: false,
+            omit_uid_next: false,
         }
     }
 }
@@ -123,10 +127,15 @@ async fn run_fake(
                 } else {
                     format!("* OK [UIDVALIDITY {uv}]\r\n")
                 };
+                let uidnext_line = if cfg.omit_uid_next {
+                    String::new()
+                } else {
+                    format!("* OK [UIDNEXT {next}]\r\n")
+                };
                 writer
                         .write_all(
                             format!(
-                                "* FLAGS (\\Seen)\r\n* {exists} EXISTS\r\n{uidvalidity_line}* OK [UIDNEXT {next}]\r\n{tag} OK [READ-WRITE] SELECT completed\r\n",
+                                "* FLAGS (\\Seen)\r\n* {exists} EXISTS\r\n{uidvalidity_line}{uidnext_line}{tag} OK [READ-WRITE] SELECT completed\r\n",
                             )
                             .as_bytes(),
                         )
@@ -657,6 +666,58 @@ async fn no_backfill_first_sync_seeds_cursor_instead_of_fetching() {
         "cursor seeds to UIDNEXT - 1 (the last existing UID)"
     );
     assert!(connector.buffer.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn no_backfill_uidvalidity_reset_still_full_resyncs() {
+    // Issue #397 review: a persisted cursor whose UIDVALIDITY no longer
+    // matches must full re-sync even with `initial_backfill: false` — the
+    // mailbox was recreated, so seeding from UIDNEXT would skip every
+    // message. The "only new content" seed applies to a true first sync
+    // (no persisted cursor) only.
+    let cfg = FakeCfg {
+        uid_validity: 99,
+        messages: vec![(1u32, b"fresh-1".to_vec())],
+        ..Default::default()
+    };
+    let (connector, session) = no_backfill_harness(cfg).await;
+    *connector.last_uid.lock().await = Some((17, 11));
+    let outcome = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("sync ok");
+    assert_eq!(
+        outcome.fetched, 1,
+        "a recreated mailbox must be full re-fetched even with no-backfill config"
+    );
+    assert_eq!(
+        outcome.new_cursor.as_deref(),
+        Some("99:1"),
+        "the re-sync must advance the cursor under the new UIDVALIDITY"
+    );
+}
+
+#[tokio::test]
+async fn no_backfill_first_sync_without_uidnext_errors() {
+    // Issue #397 review: "only new content" anchors the seed on UIDNEXT; a
+    // server that omits it must fail the sync rather than silently
+    // full-fetching content the user opted out of.
+    let cfg = FakeCfg {
+        omit_uid_next: true,
+        messages: vec![(1u32, b"existing".to_vec())],
+        ..Default::default()
+    };
+    let (connector, session) = no_backfill_harness(cfg).await;
+    let err = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect_err("a first sync without UIDNEXT must error");
+    assert!(
+        matches!(err, ConnectorError::Parse(_)),
+        "expected Parse error, got {err:?}"
+    );
+    let msg = format!("{err}");
+    assert!(msg.contains("UIDNEXT"), "error must name UIDNEXT: {msg}");
 }
 
 /// Build a connector (app-password, poll mode, `initial_backfill: false`)

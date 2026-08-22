@@ -95,9 +95,23 @@ impl EmailConnector {
         // "now" — the first cycle (no cursor) seeds the cursor to the
         // mailbox's current `UIDNEXT` instead of full-fetching, so only mail
         // arriving after setup is ingested. `full` overrides: an explicit
-        // full sync still fetches everything.
-        let seed = if last_uid.is_none() && !self.config.initial_backfill && !options.full {
-            info.uid_next.map(|next| next.saturating_sub(1))
+        // full sync still fetches everything. The seed applies only to a
+        // true first sync (`cursor.is_none()`), never to a persisted cursor
+        // whose UIDVALIDITY no longer matches: a recreated mailbox invalidates
+        // every prior UID, so it must full re-sync even when the user chose
+        // "only new content". A first sync that cannot anchor on a `UIDNEXT`
+        // fails instead of silently full-fetching content the user opted out
+        // of.
+        let seed = if cursor.is_none() && !self.config.initial_backfill && !options.full {
+            match info.uid_next {
+                Some(next) => Some(next.saturating_sub(1)),
+                None => {
+                    return Err(ConnectorError::Parse(
+                        "server did not report UIDNEXT; cannot seed the 'only new content' cursor"
+                            .into(),
+                    ));
+                }
+            }
         } else {
             None
         };
@@ -227,6 +241,10 @@ impl EmailConnector {
     /// connect, log in, probe `CAPABILITY` (caching IDLE support), and log
     /// out. Returns the cached `IDLE` capability. Callers map the
     /// [`ConnectorError`] onto their respective lifecycle enums.
+    /// The capability is also recorded in the durable state (issue #397
+    /// review) so a fresh instance — a daemon restart or a
+    /// `resolved_mode` construction — resolves `Auto` mode without a live
+    /// probe.
     pub(super) async fn probe_capability(&self) -> Result<bool, ConnectorError> {
         let (auth, refreshed) = self.resolve_credentials().await?;
         if let Some(b) = refreshed {
@@ -244,6 +262,7 @@ impl EmailConnector {
         };
         session.logout().await;
         *self.supports_idle.lock().unwrap() = Some(supports);
+        self.prose_retry.lock().unwrap().set_supports_idle(supports);
         Ok(supports)
     }
 }

@@ -28,6 +28,14 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+/// Default endpoint for the public OpenStreetMap Nominatim instance.
+///
+/// This is the single source of truth shared by the compiled-in
+/// `geocoder.endpoint` config default and the Nominatim backend
+/// (`mimir-connectors`), so the two cannot drift. Pointing at a self-hosted
+/// Nominatim instance is encouraged for heavy use (issue #227).
+pub const DEFAULT_NOMINATIM_ENDPOINT: &str = "https://nominatim.openstreetmap.org";
+
 /// A single geocoding result, normalised across backends.
 ///
 /// Fields are the subset required by issue #191's acceptance ("lat / lon /

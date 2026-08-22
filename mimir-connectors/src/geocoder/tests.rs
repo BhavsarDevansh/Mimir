@@ -139,3 +139,27 @@ fn config_user_agent_includes_email_when_set() {
     let cfg = NominatimConfig::new().with_contact_email("dev@example.com");
     assert!(cfg.user_agent_header().contains("(dev@example.com)"));
 }
+
+#[test]
+fn nominatim_config_from_geocoder_config_maps_endpoint_and_contact_email() {
+    let geocoder_cfg = mimir_core::config::GeocoderConfig {
+        enabled: true,
+        endpoint: "https://nominatim.example.com".to_string(),
+        contact_email: Some("ops@example.com".to_string()),
+    };
+    let config = NominatimConfig::from(&geocoder_cfg);
+    assert_eq!(config.endpoint, "https://nominatim.example.com");
+    assert_eq!(config.contact_email.as_deref(), Some("ops@example.com"));
+    let defaults = NominatimConfig::new();
+    assert_eq!(config.user_agent, defaults.user_agent);
+    assert_eq!(config.rate_limit, defaults.rate_limit);
+    assert_eq!(config.max_attempts, defaults.max_attempts);
+    assert_eq!(config.request_timeout, defaults.request_timeout);
+}
+
+#[test]
+fn nominatim_config_from_default_geocoder_config_equals_new() {
+    let config = NominatimConfig::from(&mimir_core::config::GeocoderConfig::default());
+    assert_eq!(config.endpoint, NominatimConfig::new().endpoint);
+    assert_eq!(config.contact_email, None);
+}

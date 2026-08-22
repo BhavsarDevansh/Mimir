@@ -33,6 +33,23 @@ async fn test_kg(temp: &tempfile::TempDir) -> Arc<mimir_knowledge::KnowledgeGrap
     )
 }
 
+/// Shared inputs for [`init_knowledge_graph`] tests: an empty tool registry, an
+/// isolated context manager, and a mock LLM backend.
+async fn kg_init_inputs(
+    temp: &tempfile::TempDir,
+) -> (
+    Arc<ToolRegistry>,
+    Arc<mimir_core::context::ContextManager>,
+    Arc<dyn mimir_core::llm::LlmBackend>,
+) {
+    let context_manager = Arc::new(
+        mimir_core::context::ContextManager::new(&temp.path().join("context.db"))
+            .await
+            .unwrap(),
+    );
+    (Arc::new(ToolRegistry::new()), context_manager, test_llm())
+}
+
 #[test]
 fn warn_err_returns_some_on_ok() {
     assert_eq!(
@@ -51,13 +68,7 @@ fn warn_err_returns_none_on_err() {
 async fn init_knowledge_graph_resolves_user_entity_and_registers_kg_tools() {
     let temp = tempfile::tempdir().unwrap();
     let config = test_config(&temp);
-    let tool_registry = ToolRegistry::new();
-    let context_manager = Arc::new(
-        mimir_core::context::ContextManager::new(&temp.path().join("context.db"))
-            .await
-            .unwrap(),
-    );
-    let llm = test_llm();
+    let (tool_registry, context_manager, llm) = kg_init_inputs(&temp).await;
 
     let init = init_knowledge_graph(&config, &tool_registry, &context_manager, &llm)
         .await
@@ -260,5 +271,42 @@ async fn init_connector_framework_registers_mock_backend() {
     assert!(
         backends.iter().any(|b| b == "test"),
         "mock connector backend registered under cfg(test)"
+    );
+}
+
+#[tokio::test]
+async fn init_knowledge_graph_disables_geocoder_when_configured_off() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = test_config(&temp);
+    config.geocoder.enabled = false;
+    let (tool_registry, context_manager, llm) = kg_init_inputs(&temp).await;
+
+    let init = init_knowledge_graph(&config, &tool_registry, &context_manager, &llm)
+        .await
+        .unwrap();
+
+    assert!(init.geocoder.is_none(), "geocoder disabled by config");
+    assert!(
+        init.knowledge_graph.geocoder().is_none(),
+        "knowledge graph must not hold a geocoder when disabled"
+    );
+}
+
+#[tokio::test]
+async fn init_knowledge_graph_enables_geocoder_by_default() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = test_config(&temp);
+    let (tool_registry, context_manager, llm) = kg_init_inputs(&temp).await;
+
+    let init = init_knowledge_graph(&config, &tool_registry, &context_manager, &llm)
+        .await
+        .unwrap();
+
+    let geocoder = init.geocoder.expect("geocoder enabled by default");
+    assert!(
+        init.knowledge_graph
+            .geocoder()
+            .is_some_and(|kg_geocoder| Arc::ptr_eq(&geocoder, kg_geocoder)),
+        "geocoder shared with knowledge graph"
     );
 }

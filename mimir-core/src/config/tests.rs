@@ -147,6 +147,7 @@ fn test_save_and_load() {
         identity: IdentityConfig::default(),
         knowledge: KnowledgeConfig::default(),
         scheduler: SchedulerConfig::default(),
+        geocoder: GeocoderConfig::default(),
     };
 
     original.save(&path).unwrap();
@@ -535,6 +536,11 @@ fn test_default_config_toml_is_valid() {
     assert_eq!(parsed.llm.model, "gpt-4o");
     assert_eq!(parsed.agent.name, "Mimir");
     assert_eq!(parsed.agent.max_tool_rounds, 100);
+    assert!(parsed.geocoder.enabled);
+    assert_eq!(
+        parsed.geocoder.endpoint,
+        crate::geocoder::DEFAULT_NOMINATIM_ENDPOINT
+    );
 }
 
 #[test]
@@ -559,4 +565,116 @@ model = "custom-model"
 
     let contents = std::fs::read_to_string(&cfg_path).unwrap();
     assert!(contents.contains("custom-model"));
+}
+
+#[test]
+fn test_geocoder_config_defaults() {
+    let config = Config::default();
+    assert!(config.geocoder.enabled);
+    assert_eq!(
+        config.geocoder.endpoint,
+        crate::geocoder::DEFAULT_NOMINATIM_ENDPOINT
+    );
+    assert_eq!(config.geocoder.contact_email, None);
+}
+
+#[test]
+fn test_geocoder_config_toml_parses() {
+    let toml_str = r#"
+[geocoder]
+enabled = false
+endpoint = "https://nominatim.example.com"
+contact_email = "ops@example.com"
+"#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    assert!(!config.geocoder.enabled);
+    assert_eq!(config.geocoder.endpoint, "https://nominatim.example.com");
+    assert_eq!(
+        config.geocoder.contact_email.as_deref(),
+        Some("ops@example.com")
+    );
+}
+
+#[test]
+fn test_geocoder_section_is_optional() {
+    let toml_str = r#"
+[llm]
+model = "gpt-4o"
+"#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    assert!(config.geocoder.enabled);
+    assert_eq!(
+        config.geocoder.endpoint,
+        crate::geocoder::DEFAULT_NOMINATIM_ENDPOINT
+    );
+    assert_eq!(config.geocoder.contact_email, None);
+}
+
+#[test]
+fn test_env_override_geocoder_enabled() {
+    let mut config = Config::default();
+    config.apply_env_overrides_with(|key| {
+        if key == "MIMIR_GEOCODER_ENABLED" {
+            Some("false".to_string())
+        } else {
+            None
+        }
+    });
+    assert!(!config.geocoder.enabled);
+}
+
+#[test]
+fn test_env_override_geocoder_enabled_invalid_ignored() {
+    let mut config = Config::default();
+    config.apply_env_overrides_with(|key| {
+        if key == "MIMIR_GEOCODER_ENABLED" {
+            Some("not_a_bool".to_string())
+        } else {
+            None
+        }
+    });
+    assert!(config.geocoder.enabled);
+}
+
+#[test]
+fn test_env_override_geocoder_endpoint() {
+    let mut config = Config::default();
+    config.apply_env_overrides_with(|key| {
+        if key == "MIMIR_GEOCODER_ENDPOINT" {
+            Some("https://nominatim.example.com".to_string())
+        } else {
+            None
+        }
+    });
+    assert_eq!(config.geocoder.endpoint, "https://nominatim.example.com");
+}
+
+#[test]
+fn test_env_override_geocoder_contact_email() {
+    let mut config = Config::default();
+    config.apply_env_overrides_with(|key| {
+        if key == "MIMIR_GEOCODER_CONTACT_EMAIL" {
+            Some("ops@example.com".to_string())
+        } else {
+            None
+        }
+    });
+    assert_eq!(
+        config.geocoder.contact_email.as_deref(),
+        Some("ops@example.com")
+    );
+}
+
+#[test]
+fn test_env_override_geocoder_contact_email_empty_clears() {
+    let mut config = Config::default();
+    config.geocoder.contact_email = Some("ops@example.com".to_string());
+    config.apply_env_overrides_with(|key| {
+        if key == "MIMIR_GEOCODER_CONTACT_EMAIL" {
+            Some(String::new())
+        } else {
+            None
+        }
+    });
+    assert_eq!(config.geocoder.contact_email, None);
 }

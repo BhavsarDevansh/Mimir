@@ -20,6 +20,7 @@ pub struct Config {
     pub knowledge: KnowledgeConfig,
     pub identity: IdentityConfig,
     pub scheduler: SchedulerConfig,
+    pub geocoder: GeocoderConfig,
 }
 
 /// Result of an initialisation attempt.
@@ -171,6 +172,36 @@ pub struct KnowledgeOptimizationConfig {
     /// Best-effort memory cap (MiB) for the whole process while the
     /// optimization job runs (Linux cgroup v2 only; skipped when unavailable).
     pub memory_limit_mb: Option<u32>,
+}
+
+/// Geocoding settings (Phase 3 S1 / issue #227).
+///
+/// Controls the shared [`Geocoder`](crate::geocoder::Geocoder) injected into
+/// the knowledge-graph entity-locations write path and the Photos connector.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GeocoderConfig {
+    /// Master switch. When `false`, no geocoder is constructed at startup:
+    /// location facts persist with whatever coordinates/address the producer
+    /// supplied and the missing half is never filled in.
+    pub enabled: bool,
+    /// Base endpoint of the OSM Nominatim instance (no trailing slash).
+    /// Defaults to the public instance; point at a self-hosted Nominatim for
+    /// heavy use.
+    pub endpoint: String,
+    /// Optional contact email appended to the `User-Agent` sent to the
+    /// instance (recommended for the public instance).
+    pub contact_email: Option<String>,
+}
+
+impl Default for GeocoderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            endpoint: crate::geocoder::DEFAULT_NOMINATIM_ENDPOINT.to_string(),
+            contact_email: None,
+        }
+    }
 }
 
 /// How eagerly the agent initiates actions on its own.

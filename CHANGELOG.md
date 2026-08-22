@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.134.0] — 2026-08-22
+
+### Feature: geocoder configuration — disable toggle, self-hosted endpoint, contact email (issue #227)
+
+- The shared geocoder now honours a `[geocoder]` section in `config.toml` (and `MIMIR_GEOCODER_ENABLED` / `MIMIR_GEOCODER_ENDPOINT` / `MIMIR_GEOCODER_CONTACT_EMAIL` env overrides): `enabled = false` disables geocoding entirely — location facts persist with whatever the producer supplied and the missing coords/place half is never filled in — `endpoint` points at a self-hosted Nominatim instance (the usage policy recommends this for heavy use), and `contact_email` is appended to the policy-compliant `User-Agent`.
+- `init_knowledge_graph` now builds `NominatimConfig` from the config section via `impl From<&GeocoderConfig> for NominatimConfig` (`mimir-connectors`) and skips injection when `enabled = false`, replacing the unconditional `with_defaults()` wiring; `DEFAULT_NOMINATIM_ENDPOINT` moved to `mimir-core::geocoder` so the compiled-in config default and the backend share one source of truth.
+- Docs updated: `docs/geocoder.md`, `docs/config-system.md`, `docs/entity-locations.md`, `docs/wiki/geocoding.md`, `docs/wiki/configuration.md`, `docs/wiki/what-works-now.md`, `Mimir-Implementation-Context.md`.
+- Version bumped 0.133.0 → 0.134.0 (minor — new feature).
+
 ## [0.133.0] — 2026-08-22
 
 ### Feature: first-class personality preset discovery (issue #387)

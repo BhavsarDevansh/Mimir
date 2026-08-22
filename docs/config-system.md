@@ -2,7 +2,7 @@
 
 > **Scope:** `mimir-core/src/config/`, `mimir-core/src/paths.rs`, `config/default.toml`
 >
-> **Last updated:** 2026-08-18
+> **Last updated:** 2026-08-22
 
 ## Architecture
 
@@ -61,6 +61,7 @@ Convenience wrapper that returns `dirs::config_dir() / "mimir" / "config.toml"`.
 | `LlmConfig` | `endpoint`, `api_key`, `model`, `max_tokens`, `temperature` | `temperature` is `f32` |
 | `AgentConfig` | `name`, `proactivity`, `verbose_reasoning` | `proactivity` is an enum |
 | `MemoryConfig` | `enabled`, `char_limit`, `auto_manage`, `temporal_horizon` | `temporal_horizon` is `u8` days |
+| `GeocoderConfig` | `enabled`, `endpoint`, `contact_email` | Controls the shared Nominatim geocoder (issue #227) |
 | `Proactivity` | `Never`, `ImportantOnly`, `Always` | Serialises as `snake_case` |
 
 ## Environment Variable Mapping
@@ -105,6 +106,26 @@ Invalid numeric or boolean values are ignored silently. Invalid `MIMIR_AGENT_PRO
 
 All `PathsError` variants include troubleshooting guidance in their error messages (e.g., "Ensure $HOME is set, or set $XDG_CONFIG_HOME to a valid path.").
 
+
+## GeocoderConfig
+
+Controls the shared OSM Nominatim geocoder injected into the knowledge-graph entity-locations write path (S3 / #193) and the Photos connector (C2 / #196). When disabled, location facts persist with whatever coordinates or address the producer supplied and the missing half is never filled in (issue #227).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `true` | Master switch; `false` skips geocoder construction at startup |
+| `endpoint` | `String` | `"https://nominatim.openstreetmap.org"` | Base URL of the Nominatim instance (no trailing slash); point at a self-hosted instance for heavy use |
+| `contact_email` | `Option<String>` | `None` | Contact email appended to the `User-Agent` (recommended for the public instance) |
+
+### Environment Variables
+
+| Variable | Target Field | Type |
+|----------|-------------|------|
+| `MIMIR_GEOCODER_ENABLED` | `geocoder.enabled` | `bool` |
+| `MIMIR_GEOCODER_ENDPOINT` | `geocoder.endpoint` | `String` |
+| `MIMIR_GEOCODER_CONTACT_EMAIL` | `geocoder.contact_email` | `String` (empty value clears the field) |
+
+Invalid boolean values are ignored silently, matching the rest of the env-override layer.
 
 ## ServerConfig
 

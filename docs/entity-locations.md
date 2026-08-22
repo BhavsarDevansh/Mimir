@@ -55,7 +55,7 @@ Both the ingestion caller (`normalize_and_insert`) and the background overlay wo
 
 The fix is a shared `KnowledgeGraph::write_lock` (`tokio::sync::Mutex`): `normalize_and_insert` holds it per-fact across its read-then-write transaction, and the overlay worker holds it across the `upsert_location` + `ensure_place_coordinates` DB writes (but **not** the geocode network call, which stays off-thread). The two writers can therefore never commit concurrently, eliminating the stale-snapshot `SQLITE_BUSY`. Reads stay fully concurrent (the lock is held only across write transactions).
 
-The `Geocoder` trait lives in `mimir-core` (so `mimir-knowledge` can name it without depending on `mimir-connectors`); the Nominatim default backend lives in `mimir-connectors` and is injected by the server at startup (`AppState::from_config_with_llm`).
+The `Geocoder` trait lives in `mimir-core` (so `mimir-knowledge` can name it without depending on `mimir-connectors`); the Nominatim default backend lives in `mimir-connectors` and is injected by the server at startup (`AppState::from_config_with_llm`). Since v0.134.0 (issue #227) the injection honours the `[geocoder]` config section: `enabled = false` leaves the geocoder `None` (locations persist with the producer-supplied half only), and `endpoint` / `contact_email` configure the backend.
 
 ## Re-statement deduplication (issue #228)
 

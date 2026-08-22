@@ -52,6 +52,17 @@ Each request acquires a token from the shared `RateLimiter` built from `RateLimi
 
 `NominatimConfig` is configurable: base `endpoint` (default the public instance; point at a self-hosted Nominatim for heavy use), descriptive `User-Agent` (required by the Nominatim usage policy), optional `contact_email` appended to the UA, the `RateLimitConfig`, `max_attempts`, and per-request `timeout`.
 
+**User-facing config surface (issue #227, v0.134.0):** the daemon builds the backend from the `[geocoder]` section of `config.toml`:
+
+```toml
+[geocoder]
+enabled = true
+endpoint = "https://nominatim.openstreetmap.org"
+# contact_email = "you@example.com"
+```
+
+`enabled = false` skips geocoder construction entirely — the knowledge graph and the connector supervisor hold `None` and location facts persist with whatever the producer supplied (the coords-only Photos fallback shape, per issue #250). `endpoint` points at a self-hosted Nominatim instance and `contact_email` is appended to the `User-Agent`; everything `NominatimConfig` exposes beyond these (rate limit, retry budget, timeout, `User-Agent` prefix) keeps its policy-compliant default. The mapping lives in `impl From<&GeocoderConfig> for NominatimConfig` (`mimir-connectors/src/geocoder/mod.rs`), and `mimir-server`'s `init_knowledge_graph` applies it when `enabled` is true. The default endpoint constant lives in `mimir-core::geocoder::DEFAULT_NOMINATIM_ENDPOINT` so the compiled-in config default and the backend cannot drift. Env overrides: `MIMIR_GEOCODER_ENABLED`, `MIMIR_GEOCODER_ENDPOINT`, `MIMIR_GEOCODER_CONTACT_EMAIL` (empty value clears the email).
+
 ## Consumers
 
 | Consumer | Issue | Where it consumes |

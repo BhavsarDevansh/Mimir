@@ -92,9 +92,9 @@ pub(super) fn init_tool_registry(context_manager: &Arc<ContextManager>) -> Arc<T
     tool_registry
 }
 
-/// Initialise the knowledge graph: open the DB, inject the default geocoder,
-/// resolve (or create) the user entity, seed identity facts, and register the
-/// knowledge-graph tools.
+/// Initialise the knowledge graph: open the DB, inject the configured
+/// geocoder (when `geocoder.enabled`), resolve (or create) the user entity,
+/// seed identity facts, and register the knowledge-graph tools.
 pub(super) async fn init_knowledge_graph(
     cfg: &Config,
     tool_registry: &ToolRegistry,
@@ -115,30 +115,36 @@ pub(super) async fn init_knowledge_graph(
         .join("backups");
     let mut knowledge_graph = mimir_knowledge::KnowledgeGraph::init(&kg_db_path).await?;
 
-    // Inject the default OSM Nominatim geocoder so the entity-locations
-    // write path (Phase 3 S3 / #193) can fill the missing half of a
-    // location (address -> coords or coords -> address). The backend does
-    // no network work until a location fact is actually processed, so this
-    // is cheap at startup. A config toggle / self-hosted endpoint can
-    // follow; for now the policy-compliant public-instance defaults apply.
-    // Construction only fails if the HTTP client or rate limiter cannot be
-    // built, in which case geocoding is disabled (locations still persist
-    // with whatever data the producer supplied) rather than aborting start.
-    // The geocoder is shared between the knowledge graph (entity-locations
-    // write path, S3 / #193) and the connector supervisor (Photos place
-    // extraction, C2 / #196), so build the Arc once and hand the same
-    // instance to both.
+    // Inject the OSM Nominatim geocoder so the entity-locations write path
+    // (Phase 3 S3 / #193) can fill the missing half of a location (fact +
+    // coords or coords + address). The backend does no network work until a
+    // location fact is actually processed, so this is cheap at startup.
+    // The `geocoder` config section (issue #227) can disable geocoding
+    // entirely or point at a self-hosted Nominatim instance / set a contact
+    // email; when disabled the geocoder stays `None` and locations persist
+    // with whatever data the producer supplied. Construction only fails if
+    // the HTTP client or rate limiter cannot be built, in which case
+    // geocoding is also disabled rather than aborting start. The geocoder
+    // is shared between the knowledge graph (entity-locations write path,
+    // S3 / #193) and the connector supervisor (Photos place extraction,
+    // C2 / #196), so build the Arc once and hand the same instance to both.
     let mut shared_geocoder: Option<Arc<dyn Geocoder>> = None;
-    match mimir_connectors::NominatimGeocoder::with_defaults() {
-        Ok(geocoder) => {
-            let geocoder: Arc<dyn Geocoder> = Arc::new(geocoder);
-            knowledge_graph.set_geocoder(Arc::clone(&geocoder));
-            shared_geocoder = Some(geocoder);
-            tracing::info!("Nominatim geocoder enabled for entity-locations write path");
+    if cfg.geocoder.enabled {
+        match mimir_connectors::NominatimGeocoder::new(mimir_connectors::NominatimConfig::from(
+            &cfg.geocoder,
+        )) {
+            Ok(geocoder) => {
+                let geocoder: Arc<dyn Geocoder> = Arc::new(geocoder);
+                knowledge_graph.set_geocoder(Arc::clone(&geocoder));
+                shared_geocoder = Some(geocoder);
+                tracing::info!("Nominatim geocoder enabled for entity-locations write path");
+            }
+            Err(error) => tracing::warn!(
+                "failed to initialise Nominatim geocoder; location geocoding disabled: {error}"
+            ),
         }
-        Err(error) => tracing::warn!(
-            "failed to initialise Nominatim geocoder; location geocoding disabled: {error}"
-        ),
+    } else {
+        tracing::info!("geocoding disabled by config (geocoder.enabled = false)");
     }
     let knowledge_graph = Arc::new(knowledge_graph);
 

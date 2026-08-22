@@ -141,6 +141,13 @@ max_turns = 20
 # db_path is resolved automatically; override only if needed.
 # db_path = "${USER_DATA_DIR}/mimir/knowledge.db"
 
+[geocoder]
+enabled = true
+# Point at a self-hosted Nominatim instance for heavy use,
+# e.g. https://nominatim.example.com
+endpoint = "https://nominatim.openstreetmap.org"
+# contact_email = "you@example.com"  # Optional: appended to the User-Agent (Nominatim policy)
+
 [personality]
 preset = "transparent"
 

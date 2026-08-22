@@ -65,6 +65,7 @@ fn print_connector_table(connectors: &[ConnectorResponse]) {
         connector_type: String,
         slug: String,
         backend: String,
+        mode: String,
         status: String,
         auth: String,
         items: i64,
@@ -78,6 +79,7 @@ fn print_connector_table(connectors: &[ConnectorResponse]) {
             connector_type: c.connector_type.clone(),
             slug: c.slug.clone(),
             backend: c.backend.clone(),
+            mode: c.mode.clone().unwrap_or_else(|| "-".to_string()),
             status: c.status.clone(),
             auth: c.auth_state.clone(),
             items: c.item_count,
@@ -96,6 +98,7 @@ fn print_connector_detail(conn: &ConnectorResponse) {
     println!("Slug:          {}", conn.slug);
     println!("Backend:       {}", conn.backend);
     println!("Display name:  {}", conn.display_name);
+    println!("Mode:          {}", conn.mode.as_deref().unwrap_or("-"));
     println!("Status:        {}", colored_status(&conn.status));
     println!("Auth state:    {}", colored_auth(&conn.auth_state));
     println!("Items:         {}", conn.item_count);

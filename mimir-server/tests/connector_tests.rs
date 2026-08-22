@@ -46,6 +46,11 @@ async fn test_connector_add_list_show_remove_round_trip() {
     assert_eq!(created.status, "setup");
     assert_eq!(created.auth_state, "unauthenticated");
     assert_eq!(created.item_count, 0);
+    assert_eq!(
+        created.mode.as_deref(),
+        Some("polling"),
+        "the mock backend resolves to polling mode (issue #397)"
+    );
     let id = created.id;
 
     // GET /connectors lists the instance.
@@ -66,6 +71,11 @@ async fn test_connector_add_list_show_remove_round_trip() {
     let list: mimir_api_types::ConnectorListResponse = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(list.connectors.len(), 1);
     assert_eq!(list.connectors[0].id, id);
+    assert_eq!(
+        list.connectors[0].mode.as_deref(),
+        Some("polling"),
+        "the list must surface the resolved mode"
+    );
 
     // GET /connectors/{id} shows it.
     let resp = app

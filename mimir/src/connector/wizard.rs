@@ -21,7 +21,9 @@ use serde_json::{Value, json};
 use super::add::no_backends_message;
 use super::add::register_and_ingest;
 use super::oauth::{open_in_browser, run_oauth_flow_with_opener_and_secret};
-use super::{CredentialKind, exit_with_error, make_client, render_client_error, title_case};
+use super::{
+    CredentialKind, exit_with_error, make_client, print_json, render_client_error, title_case,
+};
 
 /// Google OAuth authorize endpoint used as the Gmail IMAP default (the
 /// user's Google Cloud OAuth client points here).
@@ -36,6 +38,27 @@ const GMAIL_SCOPE: &str = "https://mail.google.com/";
 /// documented OAuth provider). The wizard pre-fills it so the authorize URL
 /// always carries a `scope` parameter.
 const CALDAV_SCOPE: &str = "https://www.googleapis.com/auth/calendar";
+/// Wizard sync-mode choices for the Gmail IMAP profile (issue #397):
+/// "Continuously — push" maps to `mode: auto` (IDLE when the server
+/// advertises it), "Every N minutes — polling" maps to `mode: poll` plus a
+/// `poll_interval_secs`.
+const SYNC_MODE_PUSH: &str = "Continuously — push (recommended)";
+const SYNC_MODE_POLL: &str = "Every N minutes — polling";
+/// Polling presets plus the custom-option sentinel; `INTERVAL_MINUTES` holds
+/// the matching minutes for the first four entries.
+const INTERVAL_OPTIONS: [&str; 5] = [
+    "5 minutes",
+    "15 minutes",
+    "30 minutes",
+    "60 minutes",
+    "Custom interval (minutes)",
+];
+const INTERVAL_MINUTES: [u64; 4] = [5, 15, 30, 60];
+/// Wizard first-sync choice for the Gmail IMAP profile (issue #397):
+/// import the existing mailbox, or start from "now" (seed the cursor so the
+/// first cycle skips existing mail).
+const BACKFILL_IMPORT: &str = "Import existing mailbox content (recommended)";
+const BACKFILL_NEW_ONLY: &str = "Only new content from now on";
 
 /// Interactive prompt driver. Production uses `inquire`; tests inject a
 /// scripted driver so the whole wizard (prompts → catalog → PKCE →
@@ -153,6 +176,10 @@ pub(crate) async fn handle_connector_add_wizard_with_deps(
 
     let (config, credential) =
         build_wizard_config(&entry, &slug, prompts).unwrap_or_else(|e| exit_with_error(e));
+    // Capture the wizard's sync choices for the post-activation summary
+    // (issue #397): the response carries the resolved mode, but the poll
+    // interval and the backfill choice live only in the config we register.
+    let sync_summary = wizard_sync_summary(&config);
 
     let (kind, oauth_bundle, secret) = match credential {
         WizardCredential::OAuth { client_secret } => {
@@ -177,21 +204,86 @@ pub(crate) async fn handle_connector_add_wizard_with_deps(
         &client,
         entry.connector_type.clone(),
         entry.backend.clone(),
-        slug,
+        slug.clone(),
         display_name,
         config,
         kind,
         oauth_bundle,
         secret,
-        json,
     )
     .await;
 
-    if !json {
-        println!(
-            "This connector imports data read-only by default — it does not write to the service on its own. Write-back actions run only when you explicitly invoke `mimir connector act {}`.",
-            output.slug
-        );
+    // Issue #397: adding a connector should just work — once credential
+    // ingest succeeds, activate it automatically (activation is the `resume`
+    // action, A2 / #203). The runner's first cycle syncs immediately
+    // (polling) or backfills the existing mailbox before blocking on IDLE
+    // (push), so no manual `resume` / `sync` ceremony remains. The flag form
+    // keeps the explicit lifecycle for scripts.
+    let (resumed, activated) = match client.connector_resume(output.id).await {
+        Ok(resumed) => (resumed, true),
+        Err(error) => {
+            eprintln!(
+                "Warning: connector '{slug}' was registered but activation failed: {} — run `mimir connector resume {slug}` to activate it.",
+                render_client_error(error)
+            );
+            (output, false)
+        }
+    };
+
+    if json {
+        print_json(&resumed);
+        return;
+    }
+    println!(
+        "Added connector '{}' ({} / {}, id {}, status {}, mode {}, auth {}).",
+        resumed.slug,
+        resumed.connector_type,
+        resumed.backend,
+        resumed.id,
+        resumed.status,
+        resumed.mode.as_deref().unwrap_or("-"),
+        resumed.auth_state
+    );
+    if activated {
+        if let Some(line) = sync_summary {
+            println!("Syncing now: {line}.");
+        }
+    } else {
+        println!("Activate it with `mimir connector resume {slug}` to start syncing.");
+    }
+    println!(
+        "This connector imports data read-only by default — it does not write to the service on its own. Write-back actions run only when you explicitly invoke `mimir connector act {}`.",
+        resumed.slug
+    );
+}
+
+/// One-line description of what a wizard-configured connector will do once
+/// activated, printed in the add summary (issue #397). `None` for profiles
+/// that do not carry the wizard's sync-mode keys (calendar / photos) — the
+/// summary's resolved `mode` column covers those.
+pub(crate) fn wizard_sync_summary(config: &Value) -> Option<String> {
+    match config.get("mode").and_then(Value::as_str) {
+        Some("poll") => {
+            let minutes = config
+                .get("poll_interval_secs")
+                .and_then(Value::as_u64)
+                .map(|secs| secs / 60);
+            Some(match minutes {
+                Some(1) => "polling every 1 minute".to_string(),
+                Some(n) => format!("polling every {n} minutes"),
+                None => "polling on a fixed interval".to_string(),
+            })
+        }
+        Some("auto") | Some("idle") => {
+            let new_only = config.get("initial_backfill").and_then(Value::as_bool) == Some(false);
+            Some(if new_only {
+                "push — listening for new mail via IMAP IDLE (existing mailbox content skipped)"
+                    .to_string()
+            } else {
+                "push — importing existing mailbox content, then listening for new mail via IMAP IDLE".to_string()
+            })
+        }
+        _ => None,
     }
 }
 
@@ -245,6 +337,30 @@ fn gmail_imap_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredent
         prompts.input("Account email (IMAP login)", None),
         "Account email",
     )?;
+    // Issue #397: ask the sync-mode decision up front — push (continuous,
+    // `mode: auto` → IDLE when advertised) vs polling with a preset or
+    // custom interval — plus whether the first sync imports the existing
+    // mailbox or starts from "now".
+    let push = prompts.select(
+        "Sync mode",
+        &[SYNC_MODE_PUSH.to_string(), SYNC_MODE_POLL.to_string()],
+    )? == 0;
+    let poll_interval_secs = if push {
+        None
+    } else {
+        let options = INTERVAL_OPTIONS.map(str::to_string).to_vec();
+        let choice = prompts.select("Poll interval", &options)?;
+        let minutes = if choice < INTERVAL_MINUTES.len() {
+            INTERVAL_MINUTES[choice]
+        } else {
+            parse_interval_minutes(prompts.input("Poll interval (minutes)", None)?)?
+        };
+        Some(minutes * 60)
+    };
+    let backfill = prompts.select(
+        "Existing mailbox content",
+        &[BACKFILL_IMPORT.to_string(), BACKFILL_NEW_ONLY.to_string()],
+    )? == 0;
     let oauth = prompts.select(
         "Authentication",
         &[
@@ -274,9 +390,18 @@ fn gmail_imap_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredent
             "client_id": client_id,
             "scopes": [GMAIL_SCOPE],
         });
-        let mut config = json!({ "host": host, "mailbox": mailbox, "auth": auth });
+        let mut config = json!({
+            "host": host,
+            "mailbox": mailbox,
+            "mode": if push { "auto" } else { "poll" },
+            "initial_backfill": backfill,
+            "auth": auth,
+        });
         if let Some(port) = port {
             config["port"] = json!(port);
+        }
+        if let Some(secs) = poll_interval_secs {
+            config["poll_interval_secs"] = json!(secs);
         }
         Ok((config, WizardCredential::OAuth { client_secret }))
     } else {
@@ -289,13 +414,31 @@ fn gmail_imap_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredent
         let mut config = json!({
             "host": host,
             "mailbox": mailbox,
+            "mode": if push { "auto" } else { "poll" },
+            "initial_backfill": backfill,
             "auth": {"kind": "app_password", "username": username},
         });
         if let Some(port) = port {
             config["port"] = json!(port);
         }
+        if let Some(secs) = poll_interval_secs {
+            config["poll_interval_secs"] = json!(secs);
+        }
         Ok((config, WizardCredential::Secret(password)))
     }
+}
+
+/// Parse a custom poll interval in whole minutes; rejects empty,
+/// non-numeric, and zero values before anything is registered.
+fn parse_interval_minutes(raw: String) -> Result<u64, String> {
+    let minutes = raw
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| "invalid poll interval (whole minutes, at least 1)".to_string())?;
+    if minutes == 0 {
+        return Err("poll interval must be at least 1 minute".to_string());
+    }
+    Ok(minutes)
 }
 
 /// CalDAV calendar wizard: collection URL + username, then app password

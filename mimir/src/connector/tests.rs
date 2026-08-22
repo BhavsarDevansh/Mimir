@@ -115,6 +115,7 @@ fn connector_fixture(id: i32, slug: &str) -> ConnectorResponse {
         display_name: slug.to_string(),
         status: "setup".to_string(),
         auth_state: "unauthenticated".to_string(),
+        mode: Some("push".to_string()),
         sync_cursor: None,
         last_sync_at: None,
         last_error: None,
@@ -1046,6 +1047,8 @@ fn wizard_gmail_oauth_config_uses_google_defaults() {
         ScriptedAnswer::Input(String::new()), // port → default
         ScriptedAnswer::Input(String::new()), // mailbox → default
         ScriptedAnswer::Input("me@gmail.com".to_string()), // account email
+        ScriptedAnswer::Select(0),            // Sync mode → push (recommended)
+        ScriptedAnswer::Select(0),            // Existing mailbox content — import
         ScriptedAnswer::Select(0),            // OAuth browser login
         ScriptedAnswer::Input("client-123".to_string()), // client id
         ScriptedAnswer::Password(String::new()), // client secret → none
@@ -1060,6 +1063,11 @@ fn wizard_gmail_oauth_config_uses_google_defaults() {
     assert_eq!(config["host"], "imap.gmail.com");
     assert_eq!(config["port"], 993);
     assert_eq!(config["mailbox"], "INBOX");
+    assert_eq!(
+        config["mode"], "auto",
+        "push maps to auto (IDLE when advertised)"
+    );
+    assert_eq!(config["initial_backfill"], true);
     assert_eq!(config["auth"]["kind"], "oauth");
     assert_eq!(config["auth"]["username"], "me@gmail.com");
     assert_eq!(
@@ -1092,6 +1100,8 @@ fn wizard_gmail_oauth_client_secret_stays_out_of_config_json() {
         ScriptedAnswer::Input(String::new()), // port → default
         ScriptedAnswer::Input(String::new()), // mailbox → default
         ScriptedAnswer::Input("me@gmail.com".to_string()), // account email
+        ScriptedAnswer::Select(0),            // Sync mode — push (recommended)
+        ScriptedAnswer::Select(0),            // Existing mailbox content — import
         ScriptedAnswer::Select(0),            // OAuth browser login
         ScriptedAnswer::Input("client-123".to_string()), // client id
         ScriptedAnswer::Password("s3cret".to_string()), // client secret (hidden)
@@ -1107,6 +1117,103 @@ fn wizard_gmail_oauth_client_secret_stays_out_of_config_json() {
         }
         other => panic!("expected OAuth credential, got {other:?}"),
     }
+}
+
+#[test]
+fn wizard_gmail_polling_custom_interval_and_new_only_maps_to_config() {
+    let entry = mimir_api_types::ConnectorCatalogEntry {
+        connector_type: "gmail".to_string(),
+        backend: "imap".to_string(),
+    };
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Input(String::new()), // host → default
+        ScriptedAnswer::Input(String::new()), // port → default
+        ScriptedAnswer::Input(String::new()), // mailbox → default
+        ScriptedAnswer::Input("me@gmail.com".to_string()), // account email
+        ScriptedAnswer::Select(1),            // Sync mode — every N minutes
+        ScriptedAnswer::Select(4),            // Custom interval
+        ScriptedAnswer::Input("7".to_string()), // 7 minutes
+        ScriptedAnswer::Select(1),            // Existing mailbox content — new only
+        ScriptedAnswer::Select(1),            // App password
+        ScriptedAnswer::Password("abcd efgh ijkl mnop".to_string()),
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "personal-gmail", &prompts).unwrap();
+    assert_eq!(config["mode"], "poll");
+    assert_eq!(config["poll_interval_secs"], 420);
+    assert_eq!(config["initial_backfill"], false);
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::Secret(_)
+    ));
+}
+
+#[test]
+fn wizard_gmail_polling_preset_interval_uses_preset() {
+    let entry = gmail_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Input(String::new()),              // host
+        ScriptedAnswer::Input(String::new()),              // port
+        ScriptedAnswer::Input(String::new()),              // mailbox
+        ScriptedAnswer::Input("me@gmail.com".to_string()), // account email
+        ScriptedAnswer::Select(1),                         // Sync mode — every N minutes
+        ScriptedAnswer::Select(2),                         // 30 minutes
+        ScriptedAnswer::Select(0),                         // Existing mailbox content — import
+        ScriptedAnswer::Select(1),                         // App password
+        ScriptedAnswer::Password("abcd efgh ijkl mnop".to_string()),
+    ]);
+    let (config, _) = build_wizard_config(&entry, "personal-gmail", &prompts).unwrap();
+    assert_eq!(config["mode"], "poll");
+    assert_eq!(config["poll_interval_secs"], 30 * 60);
+    assert_eq!(config["initial_backfill"], true);
+}
+
+#[test]
+fn wizard_gmail_custom_interval_rejects_zero_before_registration() {
+    let entry = gmail_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Input(String::new()),              // host
+        ScriptedAnswer::Input(String::new()),              // port
+        ScriptedAnswer::Input(String::new()),              // mailbox
+        ScriptedAnswer::Input("me@gmail.com".to_string()), // account email
+        ScriptedAnswer::Select(1),                         // Sync mode — every N minutes
+        ScriptedAnswer::Select(4),                         // Custom interval
+        ScriptedAnswer::Input("0".to_string()),            // invalid: zero minutes
+    ]);
+    let err = build_wizard_config(&entry, "personal-gmail", &prompts).unwrap_err();
+    assert!(
+        err.contains("at least 1 minute"),
+        "zero must be rejected with a clear message: {err}"
+    );
+}
+
+fn gmail_catalog_entry() -> mimir_api_types::ConnectorCatalogEntry {
+    mimir_api_types::ConnectorCatalogEntry {
+        connector_type: "gmail".to_string(),
+        backend: "imap".to_string(),
+    }
+}
+
+#[test]
+fn wizard_sync_summary_describes_push_and_polling_modes() {
+    let push = serde_json::json!({ "mode": "auto", "initial_backfill": true });
+    assert_eq!(
+        super::wizard::wizard_sync_summary(&push).as_deref(),
+        Some(
+            "push — importing existing mailbox content, then listening for new mail via IMAP IDLE"
+        )
+    );
+    let push_new_only = serde_json::json!({ "mode": "auto", "initial_backfill": false });
+    assert_eq!(
+        super::wizard::wizard_sync_summary(&push_new_only).as_deref(),
+        Some("push — listening for new mail via IMAP IDLE (existing mailbox content skipped)")
+    );
+    let poll = serde_json::json!({ "mode": "poll", "poll_interval_secs": 900 });
+    assert_eq!(
+        super::wizard::wizard_sync_summary(&poll).as_deref(),
+        Some("polling every 15 minutes")
+    );
+    let calendar = serde_json::json!({ "calendar_url": "https://dav.example.com/cal" });
+    assert_eq!(super::wizard::wizard_sync_summary(&calendar), None);
 }
 
 #[tokio::test]
@@ -1135,6 +1242,16 @@ async fn wizard_gmail_app_password_registers_end_to_end() {
         .expect(1)
         .mount(&daemon)
         .await;
+    // Issue #397: the wizard auto-activates the connector after credential
+    // ingest, so the daemon receives a `resume` without any user action.
+    let mut active = authenticated;
+    active.status = "active".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/resume"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&active))
+        .expect(1)
+        .mount(&daemon)
+        .await;
 
     let prompts = ScriptedPrompt::new(vec![
         ScriptedAnswer::Select(0), // Gmail (imap)
@@ -1144,6 +1261,8 @@ async fn wizard_gmail_app_password_registers_end_to_end() {
         ScriptedAnswer::Input(String::new()), // port → default
         ScriptedAnswer::Input(String::new()), // mailbox → default
         ScriptedAnswer::Input("me@gmail.com".to_string()),
+        ScriptedAnswer::Select(0), // Sync mode — push (recommended)
+        ScriptedAnswer::Select(0), // Existing mailbox content — import
         ScriptedAnswer::Select(1), // App password
         ScriptedAnswer::Password("abcd efgh ijkl mnop".to_string()),
     ]);
@@ -1158,6 +1277,16 @@ async fn wizard_gmail_app_password_registers_end_to_end() {
     assert_eq!(body["slug"], "personal-gmail");
     assert_eq!(body["display_name"], "Personal Gmail");
     assert_eq!(body["config_json"]["auth"]["username"], "me@gmail.com");
+    assert_eq!(body["config_json"]["mode"], "auto");
+    assert_eq!(body["config_json"]["initial_backfill"], true);
+    let resumes = requests
+        .iter()
+        .filter(|r| r.url.path() == "/connectors/1/resume")
+        .count();
+    assert_eq!(
+        resumes, 1,
+        "the wizard must auto-activate the connector after credential ingest"
+    );
 }
 
 #[tokio::test]
@@ -1309,7 +1438,9 @@ fn wizard_gmail_empty_app_password_is_rejected() {
         ScriptedAnswer::Input(String::new()), // port → default
         ScriptedAnswer::Input(String::new()), // mailbox → default
         ScriptedAnswer::Input("me@gmail.com".to_string()),
-        ScriptedAnswer::Select(1),               // App password
+        ScriptedAnswer::Select(0), // Sync mode — push (recommended)
+        ScriptedAnswer::Select(0), // Existing mailbox content — import
+        ScriptedAnswer::Select(1), // App password
         ScriptedAnswer::Password(String::new()), // empty app password
     ]);
     let err = build_wizard_config(&entry, "gmail", &prompts).unwrap_err();

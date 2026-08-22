@@ -31,6 +31,9 @@ fn default_poll_interval_secs() -> u64 {
 fn default_poll_jitter_secs() -> u64 {
     DEFAULT_POLL_JITTER.as_secs()
 }
+fn default_initial_backfill() -> bool {
+    true
+}
 fn default_idle_timeout_secs() -> u64 {
     DEFAULT_IDLE_TIMEOUT.as_secs()
 }
@@ -130,6 +133,14 @@ pub struct EmailConfigDto {
     /// Poll jitter in seconds. Defaults to 30.
     #[serde(default = "default_poll_jitter_secs")]
     pub poll_jitter_secs: u64,
+    /// Import existing mailbox content on the first sync (the first cycle
+    /// with no cursor). Set to `false` to start from "now": the first cycle
+    /// seeds the cursor to the mailbox's current `UIDNEXT` instead of
+    /// full-fetching, so only mail arriving after setup is ingested
+    /// (issue #397). Defaults to `true` — existing connectors keep the
+    /// full first sync.
+    #[serde(default = "default_initial_backfill")]
+    pub initial_backfill: bool,
     /// IDLE wait in seconds (re-issue IDLE before the ~29 min server logoff).
     /// Defaults to 1680 (28 min).
     #[serde(default = "default_idle_timeout_secs")]

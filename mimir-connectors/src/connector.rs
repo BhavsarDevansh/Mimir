@@ -307,6 +307,18 @@ pub enum ConnectorMode {
     Push,
 }
 
+impl ConnectorMode {
+    /// Stable wire name for the resolved mode, surfaced by
+    /// `ConnectorResponse.mode` (add summary + `mimir connector list`,
+    /// issue #397). Mirrors the serde `rename_all = "snake_case"` tag.
+    pub fn wire_name(&self) -> &'static str {
+        match self {
+            ConnectorMode::Push => "push",
+            ConnectorMode::Polling { .. } => "polling",
+        }
+    }
+}
+
 /// Options passed to [`Connector::sync`].
 ///
 /// `full` requests a complete re-fetch (ignoring any persisted cursor);

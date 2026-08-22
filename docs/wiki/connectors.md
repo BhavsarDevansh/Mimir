@@ -99,14 +99,20 @@ The `mimir connector` command group (A3 / #204) plumbs these routes so you never
 
 ```bash
 # Interactive wizard (recommended): picks the type from the daemon's catalog,
-# defaults the name/slug, and drives authentication — browser OAuth for Gmail
-# (Google endpoints pre-filled, your own OAuth client ID) or app passwords
+# defaults the name/slug, asks how the connector should sync (continuous push
+# vs polling with a preset/custom interval) and whether to import existing
+# content on the first sync, then drives authentication — browser OAuth for
+# Gmail (Google endpoints pre-filled, your own OAuth client ID) or app
+# passwords. Once credentials are in, the wizard activates the connector and
+# syncing starts automatically — no manual resume/sync needed.
 mimir connector add
 
-# Add (created in Setup — resume activates it)
+# Flag form for scripts: the connector is created in Setup; activate it with
+# `resume`, then sync manually (poll-mode connectors) or let push connectors
+# deliver new data automatically via IMAP IDLE.
 mimir connector add gmail --backend imap host=imap.gmail.com auth.kind=app_password auth.username=me@gmail.com
 
-# Activate and sync
+# Activate and sync (only needed for the flag form — the wizard does this)
 mimir connector resume gmail
 mimir connector sync gmail --since 7d
 

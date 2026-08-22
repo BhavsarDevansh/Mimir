@@ -366,6 +366,17 @@ impl ConnectorSupervisor {
             .registry
             .create_with_context(connector_type, &row.backend, config, &context)?)
     }
+
+    /// Resolve the mode a connector row would run in by constructing it from
+    /// the persisted config with no side effects (issue #397) — the mode
+    /// surfaced by `ConnectorResponse` (add summary and `mimir connector
+    /// list`). Unknown connector types or invalid configs yield `None` so the
+    /// response can omit the field.
+    pub fn resolved_mode(&self, row: &ConnectorRow) -> Option<ConnectorMode> {
+        let connector_type = row.connector_type()?;
+        let connector = self.instantiate(row, connector_type).ok()?;
+        Some(connector.mode())
+    }
 }
 
 #[cfg(test)]

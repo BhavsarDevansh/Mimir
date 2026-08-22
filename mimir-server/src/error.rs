@@ -211,7 +211,9 @@ pub fn trigger_error(e: mimir_connectors::TriggerError) -> Response {
         }
         TriggerError::PushUnsupported { id } => {
             let body = Json(ApiError::new(
-                format!("connector {id} runs in push mode; manual sync is not supported"),
+                format!(
+                    "connector {id} runs in push mode — it syncs automatically (IMAP IDLE / a file watcher) and manual sync is not supported"
+                ),
                 "CONNECTOR_PUSH_UNSUPPORTED",
             ));
             (StatusCode::CONFLICT, body).into_response()
@@ -533,6 +535,13 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CONFLICT);
         let body = body_json(resp).await;
         assert_eq!(body["code"], "CONNECTOR_PUSH_UNSUPPORTED");
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("syncs automatically"),
+            "the 409 must explain automatic push sync: {body}"
+        );
     }
 
     #[tokio::test]

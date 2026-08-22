@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.136.0] — 2026-08-22
+
+### Feature: `mimir connector add` just works — wizard auto-activation, sync-mode + backfill choices, resolved mode (issue #397)
+
+- The interactive wizard (`mimir connector add`) now asks the decisions that matter for the Gmail IMAP profile: sync mode ("Continuously — push (recommended)" → `mode: auto`/IDLE vs "Every N minutes — polling" with 5/15/30/60-minute presets or a custom interval → `mode: poll` + `poll_interval_secs`) and whether the first sync imports the existing mailbox (`initial_backfill`, default `true`) or starts from "now" (the cursor is seeded to the mailbox's `UIDNEXT − 1` so existing mail is never fetched).
+- After credential ingest the wizard auto-activates the connector (`POST /connectors/{id}/resume`) and syncing starts immediately — an immediate cycle for polling, the backfilled first cycle for push — and the summary prints the active state plus the resolved mode. The flag form keeps the explicit `Setup` → `resume` → `sync` lifecycle for scripts.
+- `ConnectorResponse` gains the resolved `mode` (`push` / `polling`), derived per row from the persisted config with no side effects (`ConnectorSupervisor::resolved_mode` + `ConnectorMode::wire_name`); the add summary, `mimir connector list` (new column), and `mimir connector status` (new detail line) use it.
+- Push backfill: a fresh push-mode Email connector now fetches the existing mailbox contents before blocking on IDLE, so `resume` on a brand-new connector imports the current inbox instead of waiting for the first new message; mail arriving during IDLE is fetched incrementally from the backfilled UID, and the backfill is deduped against the staged buffer (fake-IMAP-server tests cover both paths).
+- `mimir connector sync` on a push connector now returns a 409 that explains push connectors sync automatically (IMAP IDLE / a file watcher) instead of only rejecting; polling-mode connectors keep manual sync.
+- Docs: `docs/connector-management.md`, `docs/email-connector.md`, `docs/cli.md`, `docs/wiki/connectors.md`, `docs/wiki/email-connector.md`, `README.md`, and `docs/wiki/what-works-now.md` updated.
+- Version bumped 0.135.1 → 0.136.0 (minor — new feature).
+
 ## [0.135.1] — 2026-08-22
 
 ### Fix: PR #456 review feedback — heatmap consistency, reset warning, roadmap cleanup (issue #69)

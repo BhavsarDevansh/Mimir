@@ -50,13 +50,13 @@ pub fn make_fn(input: TokenStream) -> TokenStream {
 This is how the error is rendered in a terminal:
 
 <p align="center">
-<img src="https://user-images.githubusercontent.com/50968528/78830016-d3b46a80-79d6-11ea-9de2-972e8d7904ef.png" width="600">
+<img src="https://user-images.githubusercontent.com/50968528/78830016-d3b46a80-79d6-11ea-9de2-972e8d7904ef.png" alt="Terminal rendering of a proc-macro diagnostic with error, note, and help messages" width="600">
 </p>
 
 And this is what your users will see in their IDE:
 
 <p align="center">
-<img src="https://user-images.githubusercontent.com/50968528/78830547-a9af7800-79d7-11ea-822e-59e29bda335c.png" width="600">
+<img src="https://user-images.githubusercontent.com/50968528/78830547-a9af7800-79d7-11ea-822e-59e29bda335c.png" alt="IDE rendering of a proc-macro diagnostic" width="600">
 </p>
 
 ## Examples

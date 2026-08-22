@@ -254,8 +254,8 @@
 //! [`abort_call_site!`]: macro.abort_call_site.html
 //! [`emit_warning!`]: macro.emit_warning.html
 //! [`emit_error!`]: macro.emit_error.html
-//! [`emit_call_site_warning!`]: macro.emit_call_site_error.html
-//! [`emit_call_site_error!`]: macro.emit_call_site_warning.html
+//! [`emit_call_site_warning!`]: macro.emit_call_site_warning.html
+//! [`emit_call_site_error!`]: macro.emit_call_site_error.html
 //! [`diagnostic!`]: macro.diagnostic.html
 //! [`Diagnostic`]: struct.Diagnostic.html
 //!

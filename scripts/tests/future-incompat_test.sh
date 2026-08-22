@@ -10,17 +10,38 @@ set -euo pipefail
 # [patch.crates-io]. Dropping that patch, or a new dependency introducing a
 # similar warning, fails this guard at review time.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$SCRIPT_DIR"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$REPO_ROOT"
 
-OUTPUT="$(cargo clippy --workspace --all-targets --all-features 2>&1)" || {
+# A warm target/ directory can skip rustc for unchanged dependencies, hiding
+# the diagnostic; build in a fresh target directory so every dependency is
+# compiled, and inspect Cargo's stored report as well.
+TARGET_DIR="$(mktemp -d)"
+trap 'rm -rf "$TARGET_DIR"' EXIT
+export CARGO_TARGET_DIR="$TARGET_DIR"
+
+OUTPUT="$(cargo clippy --workspace --all-targets --all-features --future-incompat-report 2>&1)" || {
   echo "$OUTPUT"
   exit 1
 }
 
-if grep -q "will be rejected by a future version of Rust" <<<"$OUTPUT"; then
+# Cargo stores the future-incompat report separately; read it from the same
+# target directory. `cargo report` exits 101 when no report exists, which is
+# the clean case; any other failure must fail the guard instead of hiding
+# warnings.
+REPORT="$(cargo report future-incompatibilities 2>&1)" || {
+  case "$REPORT" in
+    *"no reports are currently available"*) REPORT="" ;;
+    *) echo "$REPORT" >&2
+       exit 1 ;;
+  esac
+}
+
+PATTERN="will be rejected by a future version of Rust|will become (an error|a hard error) in a future release"
+
+if grep -Eq "$PATTERN" <<<"$OUTPUT" || grep -Eq "$PATTERN" <<<"$REPORT"; then
   echo "error: dependency future-incompat warnings detected:" >&2
-  grep -B2 -A2 "will be rejected by a future version of Rust" <<<"$OUTPUT" >&2 || true
+  { echo "$OUTPUT"; echo "$REPORT"; } | grep -E -B2 -A2 "$PATTERN" >&2 || true
   echo "Patch or upgrade the offending crate (see vendor/proc-macro-error2 for the existing fix)." >&2
   exit 1
 fi

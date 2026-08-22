@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.132.4] — 2026-08-22
+
+### Fix: PR #452 review feedback hardens the future-incompat guard and fixes vendored docs (issue #446)
+
+- `scripts/tests/future-incompat_test.sh` now builds in a fresh target directory and inspects `cargo report future-incompatibilities` as well as the clippy output, so a warm `target/` cannot hide dependency future-incompat warnings once `[patch.crates-io]` is dropped; the `SCRIPT_DIR` variable is also renamed to `REPO_ROOT` to match its value.
+- `scripts/md-reflow` now skips only the repository-root `vendor/` tree instead of any directory named `vendor` at any depth, matching the scope documented in its README and test, and the doc comment describes the narrower rule.
+- The vendored `proc-macro-error2` README diagnostic screenshots gain alt text, and the rustdoc references for `emit_call_site_warning!`/`emit_call_site_error!` in `src/lib.rs` now point at their matching macro pages instead of being swapped.
+- Version bumped 0.132.3 → 0.132.4 (patch — build-guard and doc review fixes).
+
 ## [0.132.3] — 2026-08-22
 
 ### Fix: vendored `proc-macro-error2` removes the dependency future-incompat build warning (issue #446)

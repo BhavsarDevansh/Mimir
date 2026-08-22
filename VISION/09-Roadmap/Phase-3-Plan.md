@@ -76,7 +76,6 @@ Build the connector framework and implement one backend per core connector type,
 - **#65 entity locations** → Phase 3 core sub-issue (pairs with Geocoder; blocks Photos).
 - **#66 Obsidian watcher** → standalone, blocked-on #62/#120, reuses Phase 3 watcher infra.
 - **#67 pattern consolidation** → standalone, parallel KG work.
-- **#69 kb heatmap/reset** → standalone, deferred CLI polish.
 
 ## 3. Build order
 

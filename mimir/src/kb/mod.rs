@@ -7,15 +7,17 @@
 use crate::cli_util::{exit_with_error, make_client};
 use chrono::{DateTime, Utc};
 
+mod heatmap;
 mod maintenance;
 mod profile;
 mod query;
 #[cfg(test)]
 mod tests;
 
+pub use heatmap::handle_kb_heatmap;
 pub use maintenance::{
     KbForgetInput, handle_kb_category, handle_kb_confirm, handle_kb_forget, handle_kb_optimization,
-    handle_kb_pending, handle_kb_reject, handle_kb_restore, handle_kb_trash,
+    handle_kb_pending, handle_kb_reject, handle_kb_reset, handle_kb_restore, handle_kb_trash,
 };
 pub use profile::{handle_kb_audit, handle_kb_profile};
 pub use query::{handle_kb_browse, handle_kb_edit, handle_kb_query, handle_kb_show};

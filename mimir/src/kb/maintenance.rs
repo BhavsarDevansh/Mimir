@@ -2,9 +2,13 @@
 //! and pending-fact confirmation flows.
 
 use colored::Colorize;
+use is_terminal::IsTerminal;
 use mimir_api_types::{ForgetRequest, RestoreRequest};
+use mimir_client::MimirClient;
+use std::time::Duration;
 
 use super::{confidence_color, exit_with_error, make_client, truncate};
+use crate::connector::wizard::{InquirePrompt, PromptDriver};
 
 #[derive(Debug, Default)]
 pub struct KbForgetInput {
@@ -343,4 +347,120 @@ pub async fn handle_kb_reject(fact_id: i32, reason: Option<String>, base_url: &s
         Ok(()) => println!("Rejected and deleted fact {}.", fact_id),
         Err(e) => exit_with_error(e),
     }
+}
+
+// ------------------------------------------------------------------
+// kb reset
+// ------------------------------------------------------------------
+
+/// Outcome of a completed `kb reset` wipe.
+#[derive(Debug)]
+pub struct ResetOutcome {
+    /// Facts hard-deleted by the daemon (already backed up).
+    pub facts_deleted: u64,
+    /// Backup file created by the daemon before the wipe.
+    pub backup_path: Option<String>,
+}
+
+/// Injectable dependencies for the reset flow (tests script the prompt and
+/// skip the countdown).
+pub(crate) struct ResetFlowDeps<'a> {
+    pub prompt: &'a dyn PromptDriver,
+    pub countdown_seconds: u64,
+}
+
+/// `mimir kb reset` — dedicated full-wipe flow with explicit confirmation.
+///
+/// Safety lives in the CLI (live counts, exact-phrase prompt, countdown);
+/// the daemon still enforces the phrase and creates a backup before the
+/// hard delete via the shared `kb forget --all` machinery (issue #69).
+pub async fn handle_kb_reset(base_url: &str) {
+    if !std::io::stdin().is_terminal() {
+        exit_with_error(
+            "kb reset needs an interactive terminal for its safety confirmation. \
+             For a non-interactive full wipe use: mimir kb forget --all --confirmation-phrase \"DELETE EVERYTHING\"",
+        );
+    }
+    let client = make_client(base_url);
+    let deps = ResetFlowDeps {
+        prompt: &InquirePrompt,
+        countdown_seconds: 5,
+    };
+    match run_kb_reset(&client, deps).await {
+        Ok(Some(outcome)) => {
+            println!(
+                "Knowledge Graph wiped. {} facts deleted permanently.",
+                outcome.facts_deleted
+            );
+            if let Some(path) = outcome.backup_path {
+                println!("Backup created: {}", path);
+            }
+        }
+        Ok(None) => {
+            println!("Aborted: confirmation phrase did not match. No changes were made.")
+        }
+        Err(e) => exit_with_error(e),
+    }
+}
+
+/// Run the reset flow against the daemon: warn with live counts, require the
+/// exact phrase, count down, then dispatch the shared full-wipe path.
+///
+/// `Ok(None)` means the user did not confirm; `Ok(Some(_))` reports a
+/// completed wipe.
+pub(crate) async fn run_kb_reset(
+    client: &MimirClient,
+    deps: ResetFlowDeps<'_>,
+) -> Result<Option<ResetOutcome>, String> {
+    let heatmap = client
+        .kb_heatmap()
+        .await
+        .map_err(crate::connector::render_client_error)?;
+
+    println!("⚠️  WARNING: This will permanently delete ALL knowledge.");
+    println!(
+        "    This includes {} entities and {} non-trashed facts.",
+        heatmap.entities, heatmap.facts
+    );
+    println!("    Trashed facts will also be deleted permanently.");
+    println!("    Your configuration, connectors, and system settings will remain.");
+    println!();
+    println!("    This action CANNOT be undone from the trash bin.");
+    println!();
+
+    let phrase = deps
+        .prompt
+        .input("To confirm, type: DELETE EVERYTHING", None)
+        .map_err(|e| e.to_string())?;
+    if phrase != "DELETE EVERYTHING" {
+        return Ok(None);
+    }
+
+    for remaining in (1..=deps.countdown_seconds).rev() {
+        println!("Wiping in {remaining}…");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
+    let resp = client
+        .kb_forget(ForgetRequest {
+            fact_id: None,
+            predicate: None,
+            subject: None,
+            entity: None,
+            source: None,
+            from: None,
+            to: None,
+            all: true,
+            yes: false,
+            confirm_sensitive: false,
+            confirmation_phrase: Some("DELETE EVERYTHING".to_string()),
+            archive: false,
+        })
+        .await
+        .map_err(crate::connector::render_client_error)?;
+
+    Ok(Some(ResetOutcome {
+        facts_deleted: resp.forgotten_count,
+        backup_path: resp.backup_path,
+    }))
 }

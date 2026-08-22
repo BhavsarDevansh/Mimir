@@ -82,6 +82,10 @@ mimir kb pending
 mimir kb confirm 42
 mimir kb reject 42 --reason "entered in error"
 
+# Visualise knowledge density or wipe the graph (with confirmation)
+mimir kb heatmap
+mimir kb reset
+
 # Manage connectors (email, calendar, photos)
 mimir connector list
 mimir connector add gmail --backend imap host=imap.gmail.com auth.kind=app_password auth.username=me@gmail.com

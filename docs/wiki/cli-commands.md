@@ -387,6 +387,23 @@ mimir kb reject 42
 mimir kb reject 42 --reason "entered in error"
 ```
 
+### `mimir kb heatmap`
+
+Render a knowledge-density snapshot of the graph: totals (facts, entities, average confidence), top entities and predicates by fact count, facts per month, and the confidence distribution (explicit / connector / inference / casual bands). Trashed facts are excluded.
+
+```bash
+mimir kb heatmap
+mimir kb heatmap --json
+```
+
+### `mimir kb reset`
+
+Wipe the entire knowledge graph with an explicit confirmation flow: live entity/fact counts in the warning, exact phrase `DELETE EVERYTHING` (case-sensitive), a 5-second countdown, then a daemon-side backup and hard delete. Requires a terminal; scripts use `mimir kb forget --all --confirmation-phrase "DELETE EVERYTHING"` instead.
+
+```bash
+mimir kb reset
+```
+
 ## `mimir connector` — Connector Commands
 
 Manage connector instances (email, calendar, photos) through the daemon over HTTP. Every command supports `--json` for structured, scriptable output, and slug-based commands resolve slugs against the daemon's instance list.

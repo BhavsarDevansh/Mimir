@@ -135,6 +135,14 @@ pub enum KbCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Show a knowledge-density heatmap of the knowledge graph.
+    Heatmap {
+        /// Output raw JSON instead of a rendered heatmap.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Wipe the entire knowledge graph after an explicit confirmation flow.
+    Reset,
     /// Show a single fact by ID.
     Show {
         /// Fact ID.

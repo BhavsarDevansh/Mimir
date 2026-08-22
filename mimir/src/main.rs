@@ -56,6 +56,14 @@ async fn main() {
                 ensure_daemon(&base_url, &mut daemon_started).await;
                 kb::handle_kb_query(entity, predicate, min_confidence, json, &base_url).await;
             }
+            cli::KbCommands::Heatmap { json } => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                kb::handle_kb_heatmap(json, &base_url).await;
+            }
+            cli::KbCommands::Reset => {
+                ensure_daemon(&base_url, &mut daemon_started).await;
+                kb::handle_kb_reset(&base_url).await;
+            }
             cli::KbCommands::Show { fact_id, json } => {
                 ensure_daemon(&base_url, &mut daemon_started).await;
                 kb::handle_kb_show(fact_id, json, &base_url).await;

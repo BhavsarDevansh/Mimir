@@ -119,3 +119,196 @@ fn truncate_zero_max_yields_just_ellipsis_or_empty() {
     let out = truncate("abc", 0);
     assert_eq!(out, "…");
 }
+
+// ------------------------------------------------------------------
+// kb heatmap rendering (issue #69)
+// ------------------------------------------------------------------
+
+use mimir_api_types::{HeatmapBandRow, HeatmapCountRow, HeatmapResponse, HeatmapTemporalRow};
+
+fn heatmap_fixture() -> HeatmapResponse {
+    HeatmapResponse {
+        facts: 12_304,
+        entities: 847,
+        avg_confidence: 0.82,
+        top_entities: vec![
+            HeatmapCountRow {
+                name: "devansh".to_string(),
+                count: 1_247,
+            },
+            HeatmapCountRow {
+                name: "Alice".to_string(),
+                count: 623,
+            },
+        ],
+        predicates: vec![HeatmapCountRow {
+            name: "lives_in".to_string(),
+            count: 431,
+        }],
+        temporal: vec![HeatmapTemporalRow {
+            period: "2026-01".to_string(),
+            count: 88,
+        }],
+        confidence_bands: vec![
+            HeatmapBandRow {
+                label: "explicit (1.0)".to_string(),
+                count: 4_201,
+            },
+            HeatmapBandRow {
+                label: "connector (0.7-1.0)".to_string(),
+                count: 3_892,
+            },
+            HeatmapBandRow {
+                label: "inference (0.4-0.7)".to_string(),
+                count: 2_104,
+            },
+            HeatmapBandRow {
+                label: "casual (<0.4)".to_string(),
+                count: 1_107,
+            },
+        ],
+    }
+}
+
+#[test]
+fn render_heatmap_includes_totals_and_all_sections() {
+    let out = render_heatmap(&heatmap_fixture());
+    assert!(out.contains("Knowledge Graph Heatmap"));
+    assert!(out.contains("Facts: 12,304"));
+    assert!(out.contains("Entities: 847"));
+    assert!(out.contains("Avg Confidence: 0.82"));
+    assert!(out.contains("Top Entities by Facts:"));
+    assert!(out.contains("Predicates by Facts:"));
+    assert!(out.contains("Facts per Month:"));
+    assert!(out.contains("Confidence Distribution:"));
+    assert!(out.contains("devansh"));
+    assert!(out.contains("1,247"));
+    assert!(out.contains("explicit (1.0)"));
+    assert!(out.contains("2026-01"));
+}
+
+#[test]
+fn bar_line_scales_to_width_and_appends_count() {
+    assert_eq!(bar_line("Alice", 100, 200, 10, 7), "Alice   █████ 100");
+    assert_eq!(bar_line("Bob", 200, 200, 10, 7), "Bob     ██████████ 200");
+    assert_eq!(bar_line("empty", 0, 200, 10, 7), "empty    0");
+    assert_eq!(
+        bar_line("thousands", 1_247, 2_000, 10, 12),
+        "thousands    ██████ 1,247"
+    );
+}
+
+// ------------------------------------------------------------------
+// kb reset (issue #69)
+// ------------------------------------------------------------------
+
+use super::heatmap::{bar_line, render_heatmap};
+use super::maintenance::{ResetFlowDeps, run_kb_reset};
+use crate::connector::wizard::PromptDriver;
+use mimir_api_types::ForgetResponse;
+use mimir_client::MimirClient;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{body_partial_json, method, path},
+};
+
+/// Scripted [`PromptDriver`] for reset-flow tests: every `input` prompt
+/// consumes the next canned answer.
+struct ScriptedResetPrompt {
+    answers: std::cell::RefCell<Vec<String>>,
+}
+
+impl ScriptedResetPrompt {
+    fn new(answers: Vec<&str>) -> Self {
+        Self {
+            answers: std::cell::RefCell::new(answers.into_iter().map(String::from).collect()),
+        }
+    }
+}
+
+impl PromptDriver for ScriptedResetPrompt {
+    fn select(&self, _message: &str, _options: &[String]) -> Result<usize, String> {
+        panic!("reset flow never uses select")
+    }
+
+    fn input(&self, _message: &str, _default: Option<&str>) -> Result<String, String> {
+        self.answers
+            .borrow_mut()
+            .drain(..1)
+            .next()
+            .ok_or_else(|| "scripted prompt ran out of answers".to_string())
+    }
+
+    fn password(&self, _message: &str) -> Result<String, String> {
+        panic!("reset flow never uses password")
+    }
+}
+
+async fn mount_heatmap(server: &MockServer, resp: &HeatmapResponse) {
+    Mock::given(method("GET"))
+        .and(path("/kb/heatmap"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(resp))
+        .mount(server)
+        .await;
+}
+
+async fn mount_forget(server: &MockServer, resp: ForgetResponse) {
+    Mock::given(method("POST"))
+        .and(path("/kb/facts/forget"))
+        .and(body_partial_json(serde_json::json!({
+            "all": true,
+            "archive": false,
+            "confirmation_phrase": "DELETE EVERYTHING"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(resp))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn reset_wrong_phrase_aborts_without_wiping() {
+    let server = MockServer::start().await;
+    mount_heatmap(&server, &heatmap_fixture()).await;
+
+    let client = MimirClient::new(server.uri());
+    let deps = ResetFlowDeps {
+        prompt: &ScriptedResetPrompt::new(vec!["nope"]),
+        countdown_seconds: 0,
+    };
+
+    let outcome = run_kb_reset(&client, deps).await.unwrap();
+    assert!(outcome.is_none());
+    let hits = server.received_requests().await.unwrap();
+    assert!(hits.iter().all(|r| r.url.path() == "/kb/heatmap"));
+}
+
+#[tokio::test]
+async fn reset_confirmed_phrase_wipes_and_reports_backup() {
+    let server = MockServer::start().await;
+    mount_heatmap(&server, &heatmap_fixture()).await;
+    mount_forget(
+        &server,
+        ForgetResponse {
+            forgotten_count: 48_291,
+            backup_path: Some("/tmp/backups/knowledge.db.bak-test".to_string()),
+        },
+    )
+    .await;
+
+    let client = MimirClient::new(server.uri());
+    let deps = ResetFlowDeps {
+        prompt: &ScriptedResetPrompt::new(vec!["DELETE EVERYTHING"]),
+        countdown_seconds: 0,
+    };
+
+    let outcome = run_kb_reset(&client, deps).await.unwrap().unwrap();
+    assert_eq!(outcome.facts_deleted, 48_291);
+    assert_eq!(
+        outcome.backup_path.as_deref(),
+        Some("/tmp/backups/knowledge.db.bak-test")
+    );
+
+    let hits = server.received_requests().await.unwrap();
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[1].url.path(), "/kb/facts/forget");
+}

@@ -50,7 +50,7 @@ pub(crate) trait PromptDriver {
 }
 
 /// Production [`PromptDriver`] backed by `inquire`.
-struct InquirePrompt;
+pub(crate) struct InquirePrompt;
 
 impl PromptDriver for InquirePrompt {
     fn select(&self, message: &str, options: &[String]) -> Result<usize, String> {

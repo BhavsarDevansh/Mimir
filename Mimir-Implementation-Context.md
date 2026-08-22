@@ -245,6 +245,7 @@ The daemon will listen on both a Unix domain socket and a TCP socket once UDS is
 - Obsidian-compatible export/import (Markdown + YAML frontmatter + wiki-links).
 - Nightly optimization: deduplication, contradiction resolution, dormant cleanup.
 - **Events & reminders (#74, v0.57.0):** a lifecycle + recurrence overlay on facts. A future-dated fact is a one-time event; a recurring fact (e.g. a birthday) is a recurring event; a `requires_user_action` fact is a task. An `events.upcoming_scan` job (default 06:00 & 18:00) derives overlays, auto-completes past one-time events, and advances recurring events. Upcoming events surface in the "Upcoming" memory section. `entity_dates` is deprecated and removed (replaced by this overlay; recurrence logic moved to `models::recurrence`).
+- **Heatmap + reset CLI (#69, v0.135.0):** `mimir kb heatmap [--json]` renders a density snapshot from the daemon's read-only `GET /kb/heatmap` aggregate (totals, top entities/predicates, monthly fact distribution, confidence bands; trashed facts excluded), and `mimir kb reset` wipes the whole graph behind an interactive exact-phrase confirmation (`DELETE EVERYTHING`), a 5-second countdown, and a daemon-side backup before the hard delete (reusing the `kb forget --all` machinery). See `docs/kb-heatmap-reset.md`.
 
 ---
 

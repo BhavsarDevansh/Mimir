@@ -15,6 +15,7 @@
 mod browse;
 mod detail;
 mod forget;
+mod heatmap;
 mod helpers;
 mod optimization;
 mod params;
@@ -25,6 +26,7 @@ mod trash;
 pub use browse::{kb_audit_handler, kb_browse_handler, kb_profile_handler};
 pub use detail::{kb_edit_handler, kb_show_handler};
 pub use forget::kb_forget_handler;
+pub use heatmap::kb_heatmap_handler;
 pub use optimization::{kb_optimization_run_now_handler, kb_optimization_status_handler};
 pub use params::{
     AuditQueryParams, BrowseQueryParams, ProfileQueryParams, QueryParams, TrashQueryParams,

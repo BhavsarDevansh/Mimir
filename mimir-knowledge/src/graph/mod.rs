@@ -19,6 +19,7 @@ mod entities;
 mod events;
 mod extraction;
 mod facts;
+mod heatmap;
 mod lifecycle;
 mod locations;
 mod memory;

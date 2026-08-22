@@ -1,41 +1,10 @@
-use mimir_core::llm::backend::{LlmBackend, LlmStream};
-use mimir_core::llm::types::{LlmError, Message, Usage};
+use mimir_core::llm::MockLlmClient;
 use mimir_core::tools::*;
 use serde_json::json;
 use std::sync::Arc;
 
-/// Minimal LLM backend for registry tests that never call the LLM.
-#[derive(Debug)]
-struct DummyLlm;
-
-#[async_trait::async_trait]
-impl LlmBackend for DummyLlm {
-    async fn chat_message(
-        &self,
-        _messages: Vec<Message>,
-        _tools: Option<Vec<serde_json::Value>>,
-    ) -> Result<(Message, Usage), LlmError> {
-        unimplemented!("registry tests never call the LLM")
-    }
-
-    async fn chat_stream_with_usage(
-        &self,
-        _messages: Vec<Message>,
-        _tools: Option<Vec<serde_json::Value>>,
-    ) -> Result<LlmStream, LlmError> {
-        unimplemented!("registry tests never call the LLM")
-    }
-
-    async fn fetch_model_context_window(&self) -> Result<Option<u32>, LlmError> {
-        unimplemented!("registry tests never call the LLM")
-    }
-}
-
 fn ctx() -> ToolContext {
-    ToolContext {
-        llm: Arc::new(DummyLlm),
-        allow_write_tools: true,
-    }
+    ToolContext::new(Arc::new(MockLlmClient::builder().build()), true)
 }
 
 #[tokio::test]

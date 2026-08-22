@@ -7,6 +7,7 @@
 - The chat route no longer special-cases `mimir_knowledge::RetrieveContextTool`: `ToolRegistry` gained a `ToolContext` (request-resolved LLM + incognito write-tool policy) and factory registration (`register_native_with_factory` / `register_with_factory`), so the tool is rebuilt per request with the request-resolved LLM (model/temperature overrides) and executes through the same path as all other tools.
 - Permission checks (Auto/Ask/Disabled) and the incognito write-tool guard now apply uniformly inside `ToolRegistry::execute`; the route's duplicated permission lookup and incognito guard were removed.
 - `ToolRegistry::execute` now takes `&ToolContext`; the retrieval agent, the `research_synthesis` skill, and registry tests pass an explicit context.
+- `ToolContext::new` added, and `docs/tools-registry.md` updated to document the context, factory registration, and the new `execute` signature.
 - Version bumped 0.131.7 → 0.132.0 (minor — refactor).
 
 ## [0.131.7] — 2026-08-21

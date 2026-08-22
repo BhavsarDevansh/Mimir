@@ -57,10 +57,7 @@ impl Skill for ResearchSynthesisSkill {
         debug!(skill = %self.name(), topic = %topic, "executing research synthesis");
 
         // Attempt to call get_current_time for temporal grounding if available.
-        let tool_ctx = ToolContext {
-            llm: Arc::clone(&ctx.llm_client) as Arc<dyn LlmBackend>,
-            allow_write_tools: true,
-        };
+        let tool_ctx = ToolContext::new(Arc::clone(&ctx.llm_client) as Arc<dyn LlmBackend>, true);
         let time_context = if let Ok(output) = ctx
             .tool_registry
             .execute("get_current_time", serde_json::json!({}), &tool_ctx)

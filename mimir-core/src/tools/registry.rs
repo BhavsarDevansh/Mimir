@@ -19,6 +19,16 @@ pub struct ToolContext {
     pub allow_write_tools: bool,
 }
 
+impl ToolContext {
+    /// Create a new tool context.
+    pub fn new(llm: Arc<dyn LlmBackend>, allow_write_tools: bool) -> Self {
+        Self {
+            llm,
+            allow_write_tools,
+        }
+    }
+}
+
 /// Rebuilds a tool with per-request runtime dependencies from a [`ToolContext`].
 pub type ToolFactory = Arc<dyn Fn(&ToolContext) -> Arc<dyn Tool> + Send + Sync>;
 
@@ -430,13 +440,6 @@ mod tests {
         }
     }
 
-    fn context(llm: Arc<dyn LlmBackend>, allow_write_tools: bool) -> ToolContext {
-        ToolContext {
-            llm,
-            allow_write_tools,
-        }
-    }
-
     #[tokio::test]
     async fn factory_tool_executes_with_request_context() {
         let registry = ToolRegistry::new();
@@ -463,7 +466,7 @@ mod tests {
             .execute(
                 "llm_reporting",
                 serde_json::json!({}),
-                &context(Arc::clone(&request_llm), true),
+                &ToolContext::new(Arc::clone(&request_llm), true),
             )
             .await
             .unwrap();
@@ -498,7 +501,7 @@ mod tests {
                 .execute(
                     "llm_reporting",
                     serde_json::json!({}),
-                    &context(Arc::clone(&llm), true)
+                    &ToolContext::new(Arc::clone(&llm), true)
                 )
                 .await
                 .unwrap_err(),
@@ -519,7 +522,7 @@ mod tests {
             ask.execute(
                 "llm_reporting",
                 serde_json::json!({}),
-                &context(Arc::clone(&llm), true)
+                &ToolContext::new(Arc::clone(&llm), true)
             )
             .await
             .unwrap_err(),
@@ -542,7 +545,7 @@ mod tests {
             .execute(
                 "write_tool",
                 serde_json::json!({}),
-                &context(Arc::clone(&llm), false),
+                &ToolContext::new(Arc::clone(&llm), false),
             )
             .await
             .unwrap_err();
@@ -557,7 +560,7 @@ mod tests {
             .execute(
                 "echo",
                 serde_json::json!({"message": "hi"}),
-                &context(llm, true),
+                &ToolContext::new(llm, true),
             )
             .await
             .unwrap();

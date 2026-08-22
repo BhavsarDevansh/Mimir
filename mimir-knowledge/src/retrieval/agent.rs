@@ -145,10 +145,7 @@ impl RetrievalAgent {
 
             // Execute all non-finish_retrieval tool calls concurrently.
             let futures = call_infos.into_iter().map(|(id, name, args)| async move {
-                let ctx = mimir_core::tools::ToolContext {
-                    llm: Arc::clone(&self.llm),
-                    allow_write_tools: true,
-                };
+                let ctx = mimir_core::tools::ToolContext::new(Arc::clone(&self.llm), true);
                 match self.private_registry.execute(&name, args, &ctx).await {
                     Ok(output) => (id, name, Ok(output)),
                     Err(e) => {

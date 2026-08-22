@@ -45,10 +45,7 @@ async fn execute_tool_call(
     incognito: bool,
 ) -> Result<mimir_core::tools::ToolOutput, mimir_core::tools::ToolError> {
     let args = serde_json::from_str(tool_arguments).unwrap_or(serde_json::Value::Null);
-    let ctx = mimir_core::tools::ToolContext {
-        llm,
-        allow_write_tools: !incognito,
-    };
+    let ctx = mimir_core::tools::ToolContext::new(llm, !incognito);
     registry.execute(tool_name, args, &ctx).await
 }
 

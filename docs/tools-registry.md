@@ -21,9 +21,10 @@ The tool registry (`mimir-core::tools`) provides dynamic discovery, registration
 │     │  + permission   │                │
 │     └────────┬────────┘                │
 │              │                          │
-│         execute()                      │
-│     permission check                   │
-│     → delegate to Tool::execute        │
+│         execute(name, args, ctx)        │
+│     incognito guard + permission check  │
+│     → factory rebuild (if registered)   │
+│     → delegate to Tool::execute         │
 └─────────────────────────────────────────┘
 ```
 
@@ -45,9 +46,25 @@ Object-safe async trait (via `async-trait`) that every tool implements:
 ### `ToolRegistry`
 
 - Thread-safe via `RwLock<HashMap<String, ToolEntry>>`
-- Methods: `register`, `get`, `metadata`, `set_permission`, `list`, `export_openai_tools`, `execute`
+- Methods: `register`, `register_native_with_factory`, `register_with_factory`, `get`, `metadata`, `set_permission`, `list`, `export_openai_tools`, `execute`
 - Export helpers (issue #155): `export_openai_tools_filtered(allow_write_tools)`, `export_openai_tools_for_llm_with_writes(allow_write_tools)`, and `is_write_tool(name)` suppress write-capable tools from the LLM tool set and execution path during incognito turns. No built-in tool is currently write-capable (the `remember` tool was removed in #386 and replaced by the hooks engine), but the guard remains as defence-in-depth for future write tools.
 - `with_builtins()` creates a pre-populated registry with `GetCurrentTimeTool` and `EchoTool`
+- `execute(name, args, ctx)` applies the uniform checks — the incognito write-tool guard, the permission level, and factory resolution — before invoking the tool. `ToolContext` carries the per-request runtime dependencies (the request-resolved LLM and the incognito write-tool policy); tools registered with a `ToolFactory` (e.g. `retrieve_context`, issue #441) are rebuilt from the context on every call so request-scoped overrides are honoured, while the stored prototype instance continues to provide the schema for export.
+
+### `ToolContext`
+
+Per-request runtime dependencies passed to `ToolRegistry::execute`:
+
+| Field | Purpose |
+|-------|---------|
+| `llm` | The request-resolved LLM backend (model/temperature overrides) |
+| `allow_write_tools` | Whether write-capable tools may execute; incognito turns pass `false` so the registry blocks write tools uniformly (issue #155) |
+
+Constructed with `ToolContext::new(llm, allow_write_tools)`.
+
+### `ToolFactory`
+
+`Arc<dyn Fn(&ToolContext) -> Arc<dyn Tool> + Send + Sync>` — rebuilds a tool with per-request runtime dependencies. Registered via `register_native_with_factory` / `register_with_factory`; when present, `execute` calls the factory with the request context instead of using the stored instance.
 
 ### `ToolPermission`
 
@@ -211,7 +228,7 @@ Changes are persisted to `tools.toml` immediately.
 When the LLM backend receives a request via the `/chat` endpoint, enabled tools are forwarded in the OpenAI `tools` field. If the model responds with `tool_calls` instead of text:
 
 1. Each tool call is extracted from the assistant message.
-2. `ToolRegistry::execute` is invoked with the parsed JSON arguments.
+2. `ToolRegistry::execute` is invoked with the parsed JSON arguments and a per-request `ToolContext` (request-resolved LLM + incognito write-tool policy). Factory-registered tools such as `retrieve_context` are rebuilt from the context before execution, so per-request model/temperature overrides are honoured (issue #441).
 3. Results are rendered with `ToolOutput::to_llm_text()` and sent back as `role: tool` messages.
 4. A follow-up LLM call produces the final assistant response, which is persisted to the session.
 

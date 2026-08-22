@@ -367,12 +367,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | Events & reminders: notifications, smart completion, CLI | [#143](https://github.com/BhavsarDevansh/Mimir/issues/143) |
 | Domain events / proactive surfacing | [#68](https://github.com/BhavsarDevansh/Mimir/issues/68) |
 
-### Maintenance & Docs
-
-| Work item | Issue |
-|-----------|-------|
-| `tabled` 0.21 / proc-macro-error2 future rejection | [#275](https://github.com/BhavsarDevansh/Mimir/issues/275) |
-
 ---
 
 ## Known Limitations & Open Issues

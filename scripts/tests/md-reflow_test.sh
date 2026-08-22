@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Regression guard for issue #294: every repo `.md` file must keep the
-# AGENTS.md single-line prose standard (flowing single-line paragraphs and
-# list items, blank lines only between blocks). `md-reflow --check` reports
+# Regression guard for issue #294: every repo-authored `.md` file (the
+# third-party `vendor/` tree is skipped) must keep the AGENTS.md single-line
+# prose standard (flowing single-line paragraphs and list items, blank lines
+# only between blocks). `md-reflow --check` reports
 # every file whose prose would be reflowed and exits 1 when any file would
 # change or could not be read, so hard-wrap drift fails at review time.
 

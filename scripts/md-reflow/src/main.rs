@@ -122,8 +122,9 @@ fn main() {
     }
 }
 
-/// Recursively collect every `.md` file under `dir`, skipping `target` and
-/// `.git` directories.
+/// Recursively collect every `.md` file under `dir`, skipping `target`, `.git`
+/// and `vendor` directories (`vendor/` holds third-party crates whose docs are
+/// not subject to the repo's prose rules; see issue #446).
 fn collect_md_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
@@ -140,7 +141,7 @@ fn collect_md_files(dir: &Path) -> Vec<PathBuf> {
                 continue;
             }
             if ft.is_dir() {
-                if p.file_name().is_some_and(|n| n != "target" && n != ".git") {
+                if p.file_name().is_some_and(|n| n != "target" && n != ".git" && n != "vendor") {
                     stack.push(p);
                 }
             } else if ft.is_file() && p.extension().is_some_and(|x| x == "md") {
@@ -664,13 +665,17 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let sub = dir.join("sub");
+        let vendor = dir.join("vendor");
         std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir_all(&vendor).unwrap();
         let a = dir.join("a.md");
         let b = sub.join("b.md");
         let c = dir.join("c.txt");
+        let vendored = vendor.join("v.md");
         std::fs::write(&a, "# a\n").unwrap();
         std::fs::write(&b, "# b\n").unwrap();
         std::fs::write(&c, "not markdown\n").unwrap();
+        std::fs::write(&vendored, "# vendored\n").unwrap();
         let expanded = expand_paths(vec![dir.clone(), c.clone()]);
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(expanded, vec![a, c, b]);

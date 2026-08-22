@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.132.3] — 2026-08-22
+
+### Fix: vendored `proc-macro-error2` removes the dependency future-incompat build warning (issue #446)
+
+- `cargo clippy --workspace --all-targets` no longer warns that `proc-macro-error2 v2.0.1` contains code a future Rust toolchain will reject. The crate is abandoned upstream (last crates.io release 2024-09) and `tabled 0.21` → `tabled_derive 0.11` still depends on it, and no newer `tabled` release drops the dependency, so the workspace now vendors a patched copy at `vendor/proc-macro-error2` (the one-line rustc-suggested fix: `pub extern crate proc_macro`) pinned through `[patch.crates-io]` in the root `Cargo.toml`.
+- New regression guard `scripts/tests/future-incompat_test.sh` (issue #446) fails the review-time checks whenever any dependency emits a future-incompat warning, so the warning cannot silently return if the patch is dropped or a new dependency regresses.
+- `docs/workspace.md` documents the new guard, `docs/refactoring-module-split.md` drops the informational note about the warning, and `docs/wiki/what-works-now.md` removes the resolved `tabled`/`proc-macro-error2` work item.
+- Version bumped 0.132.2 → 0.132.3 (patch — build hygiene fix).
+
 ## [0.132.2] — 2026-08-22
 
 ### Fix: `scripts/tests/rustdoc_test.sh` guard passes on `main` again (issue #443)

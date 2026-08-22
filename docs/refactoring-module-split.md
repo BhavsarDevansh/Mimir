@@ -99,7 +99,7 @@ Splitting was done case by case, not mechanically. Files that were large but coh
 ## Verification
 
 - `cargo fmt --all` — clean.
-- `cargo clippy --workspace --all-targets` — zero warnings (the only remaining note is a third-party `proc-macro-error2` future-incompat warning, informational).
+- `cargo clippy --workspace --all-targets` — zero warnings (the third-party `proc-macro-error2` future-incompat warning noted here was removed in issue #446 by vendoring a patched copy of the abandoned crate).
 - `cargo test --workspace` — 1476 passed, 0 failed (unit, integration, and doc-tests).
 
 ## Related documentation

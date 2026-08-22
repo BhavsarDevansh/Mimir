@@ -30,6 +30,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: ConnectorCommands,
     },
+    /// Personality preset commands.
+    Personality {
+        #[command(subcommand)]
+        command: PersonalityCommands,
+    },
     /// Start the Mimir HTTP server (foreground daemon).
     Start,
     /// Stop the Mimir HTTP server.
@@ -88,6 +93,12 @@ pub enum Commands {
         #[arg(long)]
         refresh: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum PersonalityCommands {
+    /// List available personality presets (built-in and custom).
+    List,
 }
 
 #[derive(Subcommand)]

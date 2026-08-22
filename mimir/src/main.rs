@@ -10,6 +10,7 @@ mod daemon_guard;
 mod init;
 mod kb;
 mod memory_cmd;
+mod personality_cmd;
 mod start;
 mod status;
 mod stop;
@@ -281,6 +282,9 @@ async fn main() {
                 connector::handle_connector_act(slug, kind, payload, json_file, json, &base_url)
                     .await;
             }
+        },
+        cli::Commands::Personality { command } => match command {
+            cli::PersonalityCommands::List => personality_cmd::handle_personality_list(),
         },
         cli::Commands::Init => init::handle_init().await,
         cli::Commands::Start => start::handle_start().await,

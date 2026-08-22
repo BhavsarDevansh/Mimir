@@ -64,34 +64,20 @@ pub fn parse_skill_file(contents: &str) -> Result<SkillDefinition, SkillError> {
         ));
     }
 
-    let trimmed = contents.trim_start();
-    if !trimmed.starts_with("---") {
+    // Shared `---`-fenced frontmatter splitting (DRY with the personality
+    // preset loader, issue #387).
+    let Some(split) = crate::frontmatter::split_yaml_frontmatter(contents) else {
         return Err(SkillError::parse_error(
             "unparsed",
             "skill file must start with YAML frontmatter delimited by '---'",
         ));
-    }
-
-    // Find the second --- on its own line.
-    let after_first = &trimmed[3..];
-    let mut end_idx = None;
-    for (idx, line) in after_first.lines().enumerate() {
-        if line.trim() == "---" {
-            // Compute byte offset: sum of all previous line lengths + newline chars.
-            let offset: usize = after_first.lines().take(idx).map(|l| l.len() + 1).sum();
-            end_idx = Some(offset);
-            break;
-        }
-    }
-    let Some(end_idx) = end_idx else {
-        return Err(SkillError::parse_error(
+    };
+    let (yaml_str, body) = split.map_err(|_| {
+        SkillError::parse_error(
             "unparsed",
             "YAML frontmatter is not closed with a standalone '---' line",
-        ));
-    };
-
-    let yaml_str = &after_first[..end_idx].trim();
-    let body = after_first[end_idx + 3..].trim_start().to_string();
+        )
+    })?;
 
     let frontmatter: SkillFrontmatter = serde_yaml::from_str(yaml_str).map_err(|e| {
         SkillError::parse_error("unparsed", format!("invalid YAML frontmatter: {e}"))
@@ -106,7 +92,7 @@ pub fn parse_skill_file(contents: &str) -> Result<SkillDefinition, SkillError> {
 
     Ok(SkillDefinition {
         frontmatter,
-        body,
+        body: body.to_string(),
         source_path: None,
     })
 }

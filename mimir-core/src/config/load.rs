@@ -39,8 +39,6 @@ impl Config {
 
     /// Persist the current configuration to `path` as pretty-printed TOML.
     ///
-    /// Persist the current configuration to `path` as pretty-printed TOML.
-    ///
     /// Parent directories are created automatically.
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         if let Some(parent) = path.parent() {

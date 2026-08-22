@@ -2,8 +2,8 @@
 
 use mimir_api_types::{
     AuditQueryRequest, AuditQueryResponse, BrowseRequest, BrowseResponse, FactDetailResponse,
-    FactEditRequest, FactEditResponse, FactQueryParams, FactQueryResponse, ProfileRequest,
-    ProfileResponse,
+    FactEditRequest, FactEditResponse, FactQueryParams, FactQueryResponse, HeatmapResponse,
+    ProfileRequest, ProfileResponse,
 };
 
 use crate::MimirClient;
@@ -26,6 +26,11 @@ impl MimirClient {
             params.push(("limit", l.to_string()));
         }
         self.get_json(&self.url("kb/query"), &params).await
+    }
+
+    /// Fetch the knowledge-graph heatmap aggregates (issue #69).
+    pub async fn kb_heatmap(&self) -> Result<HeatmapResponse, ClientError> {
+        self.get_json(&self.url("kb/heatmap"), &()).await
     }
 
     /// Show a single fact by ID.

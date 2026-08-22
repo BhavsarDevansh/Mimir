@@ -27,7 +27,7 @@ mod query;
 mod sync;
 #[cfg(test)]
 mod tests;
-mod wizard;
+pub(crate) mod wizard;
 
 pub use actions::handle_connector_act;
 pub use add::handle_connector_add;
@@ -60,7 +60,7 @@ async fn resolve_connector(client: &MimirClient, slug: &str) -> ConnectorRespons
 /// Render a client error for the user, unwrapping the daemon's structured
 /// `ApiError` JSON body when present so the message is the human detail
 /// rather than raw JSON.
-fn render_client_error(e: mimir_client::ClientError) -> String {
+pub(crate) fn render_client_error(e: mimir_client::ClientError) -> String {
     match &e {
         mimir_client::ClientError::Server { status, message } => {
             format!("server error {status}: {}", server_error_detail(message))

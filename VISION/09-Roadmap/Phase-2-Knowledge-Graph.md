@@ -179,7 +179,7 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
   - `kb optimization --status` / `--run-now`
 - [ ] Output format: default colorized terminal (`tabled` crate), `--json` on every command
 - [ ] Confidence color coding: green >0.9, yellow 0.7–0.9, red <0.7
-- [ ] Phase 3+ deferred: `kb heatmap`, `kb reset`
+- [x] Phase 3+ deferred: `kb heatmap`, `kb reset` — delivered in v0.135.0 (issue #69): `mimir kb heatmap` renders totals, top entities/predicates, monthly fact distribution, and confidence bands (`--json` supported); `mimir kb reset` wipes the graph behind an exact-phrase confirmation, 5-second countdown, and automatic backup. See `docs/kb-heatmap-reset.md`.
 
 ### 2.17 Obsidian Export & Import
 - [ ] Export: entities → `.md` files with YAML frontmatter + wiki-links → `~/AgentKnowledge/`
@@ -225,7 +225,7 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 | File watcher for bidirectional Obsidian sync | 3 | `phase-3` |
 | Pattern consolidation in nightly optimization | 3 | `phase-3` |
 | Domain events / proactive surfacing | 5 | `phase-5` |
-| `kb heatmap` command | 3+ | `phase-3` |
-| `kb reset` command | 3+ | `phase-3` |
+| `kb heatmap` command | 3+ | `phase-3` — delivered v0.135.0 (#69) |
+| `kb reset` command | 3+ | `phase-3` — delivered v0.135.0 (#69) |
 | Property-based testing | 3 | `phase-3` |
 | Connector-specific E2E tests | 3 | `phase-3` |

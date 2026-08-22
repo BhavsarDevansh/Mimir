@@ -31,8 +31,8 @@ pub use connectors::{
 pub use kb::{
     AuditQueryRequest, AuditQueryResponse, AuditRow, BrowseEdge, BrowseRequest, BrowseResponse,
     CategoryDetailResponse, CategoryResponse, DependencyRow, FactDetailResponse, FactEditRequest,
-    FactEditResponse, FactQueryParams, FactQueryResponse, FactRow, ProfileGroup, ProfileRequest,
-    ProfileResponse, SourceRow,
+    FactEditResponse, FactQueryParams, FactQueryResponse, FactRow, HeatmapBandRow, HeatmapCountRow,
+    HeatmapResponse, HeatmapTemporalRow, ProfileGroup, ProfileRequest, ProfileResponse, SourceRow,
 };
 pub use kb_maintenance::{
     ConfirmFactResponse, ForgetRequest, ForgetResponse, PendingFactRow, PendingListResponse,

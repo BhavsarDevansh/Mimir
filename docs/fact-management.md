@@ -101,6 +101,10 @@ Overlap is checked with interval semantics (`[from, until)` where `None` = unbou
 
 `forget_connector_facts(instance_id)` trashes every fact a connector instance sourced (the connector-removal cascade), and `forget_connector_facts_by_raw_reference(instance_id, raw_references)` trashes only the facts that instance authored for the given `sources.raw_reference` values — the server-side-deletion (tombstone) path connectors use when their service reports a removed item (issue #247). The tombstone path removes only the matching `sources` rows and trashes a fact only when no sources remain, so a fact still corroborated by another connector or a non-connector source survives (PR #313 review). Both are idempotent, instance-scoped, and route through the same trash machinery; the `events.fact_id` FK cascade removes any events-subsystem overlay with the fact.
 
+### Full reset (`kb forget --all` / `kb reset`)
+
+`forget_facts` with `ForgetFilters::all` dispatches to `forget_all`, which requires `opts.confirmation_phrase == "DELETE EVERYTHING"` (case-sensitive), creates a timestamped backup via `VACUUM INTO` under `~/.local/share/mimir/backups/knowledge.db.bak-<timestamp>`, then either archives every fact to trash (`opts.archive`) or hard-deletes facts, entities, entity aliases/locations, preferences, sources, audit log, queues, and trash rows in one transaction. `mimir kb reset` is the dedicated interactive wrapper around the hard-delete path (issue #69) — see `docs/kb-heatmap-reset.md`. The facade marks condensation dirty after the wipe, so the next condensation pass rebuilds the memory block from the empty graph.
+
 ---
 
 ## Public API (`KnowledgeGraph`)

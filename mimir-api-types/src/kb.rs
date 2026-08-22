@@ -42,6 +42,46 @@ pub struct FactQueryResponse {
     pub facts: Vec<FactRow>,
 }
 
+/// A ranked count in the heatmap (top entity or predicate).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HeatmapCountRow {
+    pub name: String,
+    pub count: i64,
+}
+
+/// One `YYYY-MM` bucket in the heatmap's temporal distribution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HeatmapTemporalRow {
+    pub period: String,
+    pub count: i64,
+}
+
+/// One confidence band in the heatmap's distribution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HeatmapBandRow {
+    pub label: String,
+    pub count: i64,
+}
+
+/// Response for `GET /kb/heatmap` (issue #69): knowledge-density aggregates.
+///
+/// Totals cover the live graph: trashed (forgotten) facts are excluded from
+/// every fact count, band, and distribution. `top_entities` and `predicates`
+/// are ranked by count descending (ties by name ascending, top 10);
+/// `temporal` buckets facts by `YYYY-MM` of `valid_from` (falling back to
+/// `created_at`) ascending; `confidence_bands` is always in the fixed order
+/// explicit → connector → inference → casual.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HeatmapResponse {
+    pub facts: i64,
+    pub entities: i64,
+    pub avg_confidence: f32,
+    pub top_entities: Vec<HeatmapCountRow>,
+    pub predicates: Vec<HeatmapCountRow>,
+    pub temporal: Vec<HeatmapTemporalRow>,
+    pub confidence_bands: Vec<HeatmapBandRow>,
+}
+
 /// Source attached to a fact (detail view).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SourceRow {
@@ -589,6 +629,32 @@ mod tests {
                 changed_at: "2020-01-01T00:00:00Z".to_string(),
                 changed_by: None,
                 reason: None,
+            }],
+        };
+        assert_eq!(roundtrip(&resp), resp);
+    }
+
+    #[test]
+    fn heatmap_response_roundtrip() {
+        let resp = HeatmapResponse {
+            facts: 3,
+            entities: 2,
+            avg_confidence: 0.62,
+            top_entities: vec![HeatmapCountRow {
+                name: "Bob".to_string(),
+                count: 2,
+            }],
+            predicates: vec![HeatmapCountRow {
+                name: "works_at".to_string(),
+                count: 2,
+            }],
+            temporal: vec![HeatmapTemporalRow {
+                period: "2026-08".to_string(),
+                count: 3,
+            }],
+            confidence_bands: vec![HeatmapBandRow {
+                label: "explicit (1.0)".to_string(),
+                count: 0,
             }],
         };
         assert_eq!(roundtrip(&resp), resp);

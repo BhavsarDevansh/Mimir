@@ -106,6 +106,19 @@ Manages connector instances through the daemon's connector routes (Phase 3 A3 / 
 
 All commands resolve slugs client-side against `GET /connectors` (there is no by-slug route). Credential prompts and destructive confirmations require a terminal; scripts pass `--password-stdin`/`--token-stdin` (piped), `MIMIR_CONNECTOR_PASSWORD`/`MIMIR_CONNECTOR_TOKEN` (env), `--password`/`--token` (visible in `ps`/history — last resort), or `--yes`.
 
+### `mimir kb heatmap`
+
+Renders a knowledge-density snapshot of the knowledge graph as terminal bar charts: totals (facts, entities, average confidence), top entities and predicates by fact count, facts per month, and the confidence distribution (explicit / connector / inference / casual bands). Trashed facts are excluded. `--json` prints the raw `HeatmapResponse` for scripting (issue #69). Backed by the daemon's read-only `GET /kb/heatmap` aggregate; see `docs/kb-heatmap-reset.md` for the query semantics.
+
+```bash
+mimir kb heatmap
+mimir kb heatmap --json
+```
+
+### `mimir kb reset`
+
+Dedicated full-wipe flow (issue #69): prints live entity/fact counts, requires the exact phrase `DELETE EVERYTHING` (case-sensitive) interactively, runs a 5-second countdown, then dispatches the shared `kb forget --all` path — the daemon re-validates the phrase, creates a timestamped backup under `~/.local/share/mimir/backups/`, and hard-deletes the graph. Requires a terminal; the non-interactive equivalent is `mimir kb forget --all --confirmation-phrase "DELETE EVERYTHING"`. See `docs/kb-heatmap-reset.md`.
+
 ### `mimir kb` date filters
 
 KB audit and forget commands accept `--from`/`--to` date filters via `mimir/src/kb/mod.rs::parse_datetime`. Strings with an explicit timezone offset (RFC3339, e.g. `2020-06-15T10:30:00Z` or `...+02:00`) are preserved as UTC. Offsetless datetimes (`2020-06-15T10:30:00`, `2020-06-15 10:30:00`) and date-only inputs (`2020-06-15`) are interpreted in the CLI/daemon **local timezone** (sharing `DailySchedule::naive_to_utc_local`), so user-authored local times behave intuitively rather than being silently shifted to UTC (issue #168).

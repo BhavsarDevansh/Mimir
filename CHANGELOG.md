@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.132.1] — 2026-08-22
+
+### Fix: `retrieve_context` test proves the request-resolved LLM is used, and `docs/tools-registry.md` describes write-tool helpers accurately (issue #441)
+
+- `test_chat_executes_retrieve_context_through_registry` now resolves a distinct request LLM via a model override, asserting all request-path calls land on that backend and the startup backend receives none, so a factory that captures the startup LLM instead of `ctx.llm` cannot pass.
+- `docs/tools-registry.md` now describes `is_write_tool(name)` as a write-capability predicate, the `export_*` helpers as filtering the exported tool set, and the incognito execution guard as the separate responsibility of `ToolRegistry::execute`.
+- Version bumped 0.132.0 → 0.132.1 (patch — test hardening and documentation fix).
+
 ## [0.132.0] — 2026-08-22
 
 ### Refactor: `retrieve_context` dispatches through the `ToolRegistry` like every other tool (issue #441)

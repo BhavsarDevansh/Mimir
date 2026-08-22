@@ -40,14 +40,14 @@ Object-safe async trait (via `async-trait`) that every tool implements:
 | `description()` | LLM-facing explanation |
 | `parameters_schema()` | JSON Schema object for arguments |
 | `permission()` | Default `ToolPermission` |
-| `is_write_tool()` | Whether the tool mutates persistent state (default `false`). Used to suppress write-capable tools during incognito turns (issue #155). |
+| `is_write_tool()` | Whether the tool mutates persistent state (default `false`). Reports write capability to the registry; `ToolRegistry::execute` uses it to block write-capable tools during incognito turns (issue #155). |
 | `execute(args)` | Async invocation with `serde_json::Value` |
 
 ### `ToolRegistry`
 
 - Thread-safe via `RwLock<HashMap<String, ToolEntry>>`
 - Methods: `register`, `register_native_with_factory`, `register_with_factory`, `get`, `metadata`, `set_permission`, `list`, `export_openai_tools`, `execute`
-- Export helpers (issue #155): `export_openai_tools_filtered(allow_write_tools)`, `export_openai_tools_for_llm_with_writes(allow_write_tools)`, and `is_write_tool(name)` suppress write-capable tools from the LLM tool set and execution path during incognito turns. No built-in tool is currently write-capable (the `remember` tool was removed in #386 and replaced by the hooks engine), but the guard remains as defence-in-depth for future write tools.
+- Export helpers (issue #155): `export_openai_tools_filtered(allow_write_tools)` and `export_openai_tools_for_llm_with_writes(allow_write_tools)` filter write-capable tools out of the exported LLM tool set when `allow_write_tools` is `false`, while `is_write_tool(name)` only reports whether a named tool is write-capable. The execution-time guard that blocks write tools during incognito turns is the separate responsibility of `ToolRegistry::execute`. No built-in tool is currently write-capable (the `remember` tool was removed in #386 and replaced by the hooks engine), but the guard remains as defence-in-depth for future write tools.
 - `with_builtins()` creates a pre-populated registry with `GetCurrentTimeTool` and `EchoTool`
 - `execute(name, args, ctx)` applies the uniform checks — the incognito write-tool guard, the permission level, and factory resolution — before invoking the tool. `ToolContext` carries the per-request runtime dependencies (the request-resolved LLM and the incognito write-tool policy); tools registered with a `ToolFactory` (e.g. `retrieve_context`, issue #441) are rebuilt from the context on every call so request-scoped overrides are honoured, while the stored prototype instance continues to provide the schema for export.
 

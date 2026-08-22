@@ -29,3 +29,5 @@ In `--check` mode the exit code is 1 when any file would change or could not be 
 ## Verification
 
 The reflow is content-preserving: a whitespace-collapsed comparison of a file before and after reflow is identical (blank `>` separator lines excluded). The `--check` mode is the enforcement entry point, wired into the repo's review-time regression guards as `scripts/tests/md-reflow_test.sh` (issue #294), so hard-wrap drift fails at review time.
+
+Directory walks skip `target/` and `.git/` at any depth plus the repository-root `vendor/` tree: vendored third-party crates keep their upstream formatting and are not subject to the repo's single-line prose rules (issue #446).

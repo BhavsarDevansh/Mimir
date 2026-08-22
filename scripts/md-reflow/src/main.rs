@@ -123,7 +123,9 @@ fn main() {
 }
 
 /// Recursively collect every `.md` file under `dir`, skipping `target` and
-/// `.git` directories.
+/// `.git` directories at any depth plus the repository-root `vendor/` tree
+/// (vendored third-party crates keep their upstream formatting and are not
+/// subject to the repo's prose rules; see issue #446).
 fn collect_md_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
@@ -140,7 +142,10 @@ fn collect_md_files(dir: &Path) -> Vec<PathBuf> {
                 continue;
             }
             if ft.is_dir() {
-                if p.file_name().is_some_and(|n| n != "target" && n != ".git") {
+                let skipped = p.file_name().is_some_and(|n| n == "target" || n == ".git")
+                    || p.strip_prefix(dir)
+                        .is_ok_and(|rel| rel == Path::new("vendor"));
+                if !skipped {
                     stack.push(p);
                 }
             } else if ft.is_file() && p.extension().is_some_and(|x| x == "md") {
@@ -664,15 +669,42 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let sub = dir.join("sub");
+        let vendor = dir.join("vendor");
         std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir_all(&vendor).unwrap();
         let a = dir.join("a.md");
         let b = sub.join("b.md");
         let c = dir.join("c.txt");
+        let vendored = vendor.join("v.md");
         std::fs::write(&a, "# a\n").unwrap();
         std::fs::write(&b, "# b\n").unwrap();
         std::fs::write(&c, "not markdown\n").unwrap();
+        std::fs::write(&vendored, "# vendored\n").unwrap();
         let expanded = expand_paths(vec![dir.clone(), c.clone()]);
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(expanded, vec![a, c, b]);
+    }
+
+    #[test]
+    fn collect_md_files_skips_root_vendor_only() {
+        let dir =
+            std::env::temp_dir().join(format!("md-reflow-test-root-vendor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root_vendor = dir.join("vendor");
+        let nested_vendor = dir.join("docs").join("vendor");
+        std::fs::create_dir_all(&root_vendor).unwrap();
+        std::fs::create_dir_all(&nested_vendor).unwrap();
+        std::fs::write(dir.join("README.md"), "# top\n").unwrap();
+        std::fs::write(root_vendor.join("vendored.md"), "# vendored\n").unwrap();
+        std::fs::write(nested_vendor.join("authored.md"), "# authored\n").unwrap();
+        let files = collect_md_files(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            files,
+            vec![
+                dir.join("README.md"),
+                dir.join("docs").join("vendor").join("authored.md"),
+            ]
+        );
     }
 }

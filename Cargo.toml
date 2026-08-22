@@ -7,7 +7,7 @@ default-members = ["mimir"]
 sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "chrono", "uuid", "migrate"] }
 
 [workspace.package]
-version = "0.132.2"
+version = "0.132.4"
 authors = ["BhavsarDevansh"]
 license = "GPL-3.0"
 description = "A persistent personal intelligence that learns from your life"
@@ -15,3 +15,14 @@ repository = "https://github.com/BhavsarDevansh/Mimir"
 homepage = "https://github.com/BhavsarDevansh/Mimir"
 edition = "2024"
 rust-version = "1.85"
+
+[patch.crates-io]
+# proc-macro-error2 v2.0.1 is abandoned upstream (last crates.io release
+# 2024-09) and triggers rustc future-incompat lint E0365 (`pub use proc_macro`
+# re-exports a private extern crate), which becomes a hard build error on a
+# future toolchain. tabled 0.21 -> tabled_derive 0.11 still depends on it and
+# no fixed release exists (tabled master has already dropped the dependency,
+# so this patch can be removed once a tabled release without proc-macro-error2
+# ships), so a patched copy is vendored at vendor/proc-macro-error2 with the
+# one-line rustc-suggested fix (issue #446).
+proc-macro-error2 = { path = "vendor/proc-macro-error2" }

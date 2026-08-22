@@ -225,7 +225,5 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 | File watcher for bidirectional Obsidian sync | 3 | `phase-3` |
 | Pattern consolidation in nightly optimization | 3 | `phase-3` |
 | Domain events / proactive surfacing | 5 | `phase-5` |
-| `kb heatmap` command | 3+ | `phase-3` — delivered v0.135.0 (#69) |
-| `kb reset` command | 3+ | `phase-3` — delivered v0.135.0 (#69) |
 | Property-based testing | 3 | `phase-3` |
 | Connector-specific E2E tests | 3 | `phase-3` |

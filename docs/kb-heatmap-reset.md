@@ -20,7 +20,7 @@
 | `top_entities` | Top 10 entities by fact count, ties by name ascending |
 | `predicates` | Top 10 predicates by fact count, ties by name ascending |
 | `temporal` | Facts per `YYYY-MM` bucket of `valid_from` (falling back to `created_at`), ascending |
-| `confidence_bands` | Facts per confidence band, always in fixed order: `explicit (1.0)`, `connector (0.7-0.9)`, `inference (0.4-0.7)`, `casual (<0.4)` |
+| `confidence_bands` | Facts per confidence band, always in fixed order: `explicit (1.0)`, `connector (0.7-1.0)`, `inference (0.4-0.7)`, `casual (<0.4)` |
 
 The SQL lives in `mimir-knowledge/src/queries/heatmap.rs` behind the `KnowledgeGraph::heatmap()` facade delegate (`mimir-knowledge/src/graph/heatmap.rs`); the handler (`mimir-server/src/routes/kb/heatmap.rs`) maps the knowledge-level rows to the wire types (`mimir-api-types`). The client method is `MimirClient::kb_heatmap` (`mimir-client/src/kb/query.rs`).
 

@@ -419,9 +419,10 @@ pub(crate) async fn run_kb_reset(
 
     println!("⚠️  WARNING: This will permanently delete ALL knowledge.");
     println!(
-        "    This includes {} entities and {} facts.",
+        "    This includes {} entities and {} non-trashed facts.",
         heatmap.entities, heatmap.facts
     );
+    println!("    Trashed facts will also be deleted permanently.");
     println!("    Your configuration, connectors, and system settings will remain.");
     println!();
     println!("    This action CANNOT be undone from the trash bin.");

@@ -101,7 +101,7 @@ async fn test_kb_heatmap_returns_aggregates() {
         bands,
         vec![
             ("explicit (1.0)".to_string(), 0),
-            ("connector (0.7-0.9)".to_string(), 1),
+            ("connector (0.7-1.0)".to_string(), 1),
             ("inference (0.4-0.7)".to_string(), 1),
             ("casual (<0.4)".to_string(), 1)
         ]

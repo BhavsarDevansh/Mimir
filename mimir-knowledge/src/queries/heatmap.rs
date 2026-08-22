@@ -58,20 +58,24 @@ const TOP_N: i64 = 10;
 
 /// Compute the full heatmap snapshot.
 pub async fn heatmap(pool: &SqlitePool) -> Result<HeatmapData, KnowledgeError> {
+    // Read every aggregate inside one transaction so a concurrent write
+    // cannot interleave between statements and mix graph states.
+    let mut tx = pool.begin().await?;
+
     let facts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM facts WHERE fact_status_id <> ?")
         .bind(FORGOTTEN_STATUS_ID)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
 
     let entities: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entities")
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
 
     let avg_confidence: f64 = sqlx::query_scalar(
         "SELECT COALESCE(AVG(confidence), 0.0) FROM facts WHERE fact_status_id <> ?",
     )
     .bind(FORGOTTEN_STATUS_ID)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     let top_entities = sqlx::query_as::<_, HeatmapCount>(
@@ -82,7 +86,7 @@ pub async fn heatmap(pool: &SqlitePool) -> Result<HeatmapData, KnowledgeError> {
     )
     .bind(FORGOTTEN_STATUS_ID)
     .bind(TOP_N)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
 
     let predicates = sqlx::query_as::<_, HeatmapCount>(
@@ -93,7 +97,7 @@ pub async fn heatmap(pool: &SqlitePool) -> Result<HeatmapData, KnowledgeError> {
     )
     .bind(FORGOTTEN_STATUS_ID)
     .bind(TOP_N)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
 
     let temporal = sqlx::query_as::<_, HeatmapTemporal>(
@@ -102,13 +106,13 @@ pub async fn heatmap(pool: &SqlitePool) -> Result<HeatmapData, KnowledgeError> {
          GROUP BY period ORDER BY period ASC",
     )
     .bind(FORGOTTEN_STATUS_ID)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
 
     let confidence_bands = sqlx::query_as::<_, HeatmapBand>(
         "SELECT CASE \
            WHEN confidence = 1.0 THEN 'explicit (1.0)' \
-           WHEN confidence >= 0.7 THEN 'connector (0.7-0.9)' \
+           WHEN confidence >= 0.7 THEN 'connector (0.7-1.0)' \
            WHEN confidence >= 0.4 THEN 'inference (0.4-0.7)' \
            ELSE 'casual (<0.4)' \
          END AS label, COUNT(*) AS count \
@@ -116,10 +120,11 @@ pub async fn heatmap(pool: &SqlitePool) -> Result<HeatmapData, KnowledgeError> {
          GROUP BY label",
     )
     .bind(FORGOTTEN_STATUS_ID)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
 
     let confidence_bands = order_confidence_bands(confidence_bands);
+    tx.commit().await?;
 
     Ok(HeatmapData {
         facts,
@@ -137,7 +142,7 @@ pub async fn heatmap(pool: &SqlitePool) -> Result<HeatmapData, KnowledgeError> {
 fn order_confidence_bands(rows: Vec<HeatmapBand>) -> Vec<HeatmapBand> {
     let expected = [
         "explicit (1.0)",
-        "connector (0.7-0.9)",
+        "connector (0.7-1.0)",
         "inference (0.4-0.7)",
         "casual (<0.4)",
     ];

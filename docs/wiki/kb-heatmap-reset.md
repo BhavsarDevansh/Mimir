@@ -28,8 +28,8 @@ The output shows:
 - **Totals** — facts, entities, average confidence.
 - **Top entities by facts** — who/what the graph knows most about.
 - **Predicates by facts** — the most common fact types (e.g. `located_in`, `works_as`).
-- **Facts per month** — when the knowledge was created.
-- **Confidence distribution** — how much is certain (`explicit`), came from connectors, was inferred, or is tentative.
+- **Facts per month** — bucketed by the fact's `valid_from` date when set, otherwise its creation date.
+- **Confidence distribution** — how much of the graph sits in each numeric confidence band: `explicit (1.0)`, `connector (0.7-1.0)`, `inference (0.4-0.7)`, `casual (<0.4)`.
 
 Trashed facts are not counted, so the picture is of the live graph. For scripting or building your own visualisations:
 

@@ -1,10 +1,21 @@
 # Changelog
 
+## [0.135.1] — 2026-08-22
+
+### Fix: PR #456 review feedback — heatmap consistency, reset warning, roadmap cleanup (issue #69)
+
+- The connector confidence band is now labelled `connector (0.7-1.0)` everywhere (SQL, API contract tests, CLI fixture, docs, changelog) so the displayed interval matches the half-open `[0.7, 1.0)` predicate instead of mislabelling values above `0.9`.
+- `KnowledgeGraph::heatmap()` now reads every aggregate inside a single read transaction, so a concurrent write cannot interleave between statements and mix graph states.
+- `mimir kb reset` now labels the heatmap fact count as non-trashed and states that trashed facts are also deleted permanently, matching the full-wipe scope.
+- The reset-flow wiremock test now asserts `"archive": false` in the forget request, rejecting archival behaviour.
+- `docs/wiki/kb-heatmap-reset.md` describes the temporal bucket (`valid_from`, falling back to `created_at`) and the confidence distribution as numeric ranges; the delivered `kb heatmap`/`kb reset` rows were removed from the deferred/out-of-scope roadmap sections.
+- Version bumped 0.135.0 → 0.135.1 (patch — review fixes).
+
 ## [0.135.0] — 2026-08-22
 
 ### Feature: kb heatmap + kb reset (issue #69)
 
-- New `mimir kb heatmap [--json]` renders a knowledge-density snapshot of the graph as terminal bar charts: live totals (facts, entities, average confidence), top 10 entities and predicates by fact count (ties by name), facts per `YYYY-MM` month (from `valid_from`, falling back to `created_at`), and the confidence distribution in fixed bands (`explicit (1.0)`, `connector (0.7-0.9)`, `inference (0.4-0.7)`, `casual (<0.4)`). Trashed (forgotten) facts are excluded from every aggregate. Backed by a new read-only daemon route `GET /kb/heatmap` (`mimir-knowledge` `queries/heatmap.rs` + `KnowledgeGraph::heatmap()` facade, `mimir-api-types::HeatmapResponse`, `MimirClient::kb_heatmap`) — no new dependencies, no TUI (the `ratatui` option from the issue was judged unjustified; `--json` is the stable scripting surface).
+- New `mimir kb heatmap [--json]` renders a knowledge-density snapshot of the graph as terminal bar charts: live totals (facts, entities, average confidence), top 10 entities and predicates by fact count (ties by name), facts per `YYYY-MM` month (from `valid_from`, falling back to `created_at`), and the confidence distribution in fixed bands (`explicit (1.0)`, `connector (0.7-1.0)`, `inference (0.4-0.7)`, `casual (<0.4)`). Trashed (forgotten) facts are excluded from every aggregate. Backed by a new read-only daemon route `GET /kb/heatmap` (`mimir-knowledge` `queries/heatmap.rs` + `KnowledgeGraph::heatmap()` facade, `mimir-api-types::HeatmapResponse`, `MimirClient::kb_heatmap`) — no new dependencies, no TUI (the `ratatui` option from the issue was judged unjustified; `--json` is the stable scripting surface).
 - New `mimir kb reset` is a dedicated, safer full-wipe flow over the existing `kb forget --all` machinery: it prints live entity/fact counts, requires the exact phrase `DELETE EVERYTHING` (case-sensitive, interactive; the daemon re-validates it), runs a 5-second countdown, then hard-deletes the graph after the daemon creates a timestamped backup (`~/.local/share/mimir/backups/`). Non-interactive scripts keep using `mimir kb forget --all --confirmation-phrase "DELETE EVERYTHING"`.
 - Tests: knowledge-layer aggregation tests (`mimir-knowledge/tests/heatmap_tests.rs`), daemon route tests (`mimir-server/tests/kb_heatmap_tests.rs`), CLI rendering + reset-flow tests against a wiremock daemon (`mimir/src/kb/tests.rs`).
 - Docs: new `docs/kb-heatmap-reset.md` (technical) and `docs/wiki/kb-heatmap-reset.md` (user-facing); `docs/cli.md`, `docs/wiki/cli-commands.md`, `docs/fact-management.md`, `README.md`, `docs/wiki/what-works-now.md`, and the Phase 2/3 roadmap docs updated.

@@ -159,7 +159,7 @@ async fn heatmap_aggregates_totals_and_distributions() {
         bands,
         vec![
             ("explicit (1.0)", 1),
-            ("connector (0.7-0.9)", 1),
+            ("connector (0.7-1.0)", 1),
             ("inference (0.4-0.7)", 1),
             ("casual (<0.4)", 1)
         ]

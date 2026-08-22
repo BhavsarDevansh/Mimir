@@ -155,7 +155,7 @@ fn heatmap_fixture() -> HeatmapResponse {
                 count: 4_201,
             },
             HeatmapBandRow {
-                label: "connector (0.7-0.9)".to_string(),
+                label: "connector (0.7-1.0)".to_string(),
                 count: 3_892,
             },
             HeatmapBandRow {
@@ -257,6 +257,7 @@ async fn mount_forget(server: &MockServer, resp: ForgetResponse) {
         .and(path("/kb/facts/forget"))
         .and(body_partial_json(serde_json::json!({
             "all": true,
+            "archive": false,
             "confirmation_phrase": "DELETE EVERYTHING"
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(resp))

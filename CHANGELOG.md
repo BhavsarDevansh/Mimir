@@ -10,6 +10,7 @@
 - `Personality::list_presets` now returns `Vec<PresetInfo>` (name, `PresetSource` Builtin/Custom, optional description; serde-serializable for the future `/v1/models` surface, issue #388), built-in presets ship descriptions, and diagnostics are exposed via `Personality::warnings`.
 - The `---`-fenced YAML frontmatter splitter is extracted into `mimir-core/src/frontmatter.rs` and shared with the skills loader (DRY), with exact byte offsets for LF and CRLF line endings.
 - Docs updated: `docs/personality-system.md`, `docs/wiki/personality.md`, `docs/cli.md`, `docs/wiki/cli-commands.md`, `README.md`, `docs/wiki/what-works-now.md`, `Mimir-Implementation-Context.md`, and `VISION/01-Core-Agent/Personality.md` (which also drops the stale `remember`-tool wording from the operating-directives section).
+- Code-review fixes: a failed personalities-directory resolution is logged exactly once (the stored warning feeds both the daemon log and `mimir personality list` stderr), and `.personality.md` files that would register an empty preset name are ignored like other non-matching files.
 - Version bumped 0.132.4 → 0.133.0 (minor — new feature).
 
 ## [0.132.4] — 2026-08-22

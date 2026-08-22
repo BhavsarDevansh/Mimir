@@ -93,10 +93,6 @@ Core facts about the user (condensed subset — not a complete picture; treat as
         let personality = match paths::personalities_dir() {
             Ok(presets_dir) => Self::from_path(&presets_dir, &config.preset),
             Err(error) => {
-                warn!(
-                    error = %error,
-                    "failed to resolve personalities directory; custom personalities will not be loaded"
-                );
                 let mut warnings = vec![PresetWarning {
                     path: None,
                     reason: format!("failed to resolve personalities directory: {error}"),
@@ -333,13 +329,15 @@ Core facts about the user (condensed subset — not a complete picture; treat as
     }
 
     /// Extract the preset name from a `<name>.personality.md` path, returning
-    /// `None` for files that do not match the custom-preset naming convention.
+    /// `None` for files that do not match the custom-preset naming
+    /// convention or would produce an empty name (e.g. `.personality.md`).
     fn preset_name_from_path(path: &Path) -> Option<String> {
         if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
             return None;
         }
         let stem = path.file_stem().and_then(|stem| stem.to_str())?;
         stem.strip_suffix(".personality")
+            .filter(|name| !name.is_empty())
             .map(|name| name.to_string())
     }
 
@@ -660,6 +658,19 @@ mod tests {
         let presets = p.list_presets();
         assert!(!presets.iter().any(|info| info.name == "cheerful"));
         assert!(!presets.iter().any(|info| info.name == "other"));
+        assert!(p.warnings().is_empty());
+    }
+
+    #[test]
+    fn test_empty_preset_name_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        // `.personality.md` would strip to an empty name; it must not be
+        // registered as a preset.
+        fs::write(dir.path().join(".personality.md"), "Not a preset.").unwrap();
+
+        let p = Personality::from_path(dir.path(), "transparent");
+        let presets = p.list_presets();
+        assert!(!presets.iter().any(|info| info.name.is_empty()));
         assert!(p.warnings().is_empty());
     }
 

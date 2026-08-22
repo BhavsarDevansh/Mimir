@@ -49,7 +49,7 @@ pub async fn memory_handler(State(state): State<Arc<AppState>>) -> Result<String
 /// POST /memory/refresh
 ///
 /// Triggers the memory condensation hook immediately via
-/// [`HookEngine::force_run`], bypassing the hook's debounce, cooldown, and
+/// [`HookEngine::force_run`](mimir_core::hooks::HookEngine::force_run), bypassing the hook's debounce, cooldown, and
 /// idle gates.
 pub async fn memory_refresh_handler(
     State(state): State<Arc<AppState>>,

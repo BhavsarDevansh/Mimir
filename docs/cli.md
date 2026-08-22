@@ -7,7 +7,7 @@ The `mimir` binary provides a command-line interface for interacting with Mimir.
 - **Daemon mode** (`mimir start`): runs the persistent HTTP server in the foreground
 - **Client mode** (`mimir ask`, `mimir chat`, etc.): interacts with Mimir's subsystems
 
-All client-mode commands now talk to the daemon over HTTP through `mimir-client` — `ask`, `chat`, `kb`, `connector`, `memory`, and `status` all route through the daemon's Axum server (the daemon-guard auto-starts it when it is not running). No client-mode command touches the knowledge graph, memory, or LLM directly.
+All client-mode commands talk to the daemon over HTTP through `mimir-client` — `ask`, `chat`, `kb`, `connector`, `memory`, and `status` all route through the daemon's Axum server (the daemon-guard auto-starts it when it is not running). The one exception is `mimir personality list`, which reads local preset files and needs no daemon. No other client-mode command touches the knowledge graph, memory, or LLM directly.
 
 ## Architecture
 

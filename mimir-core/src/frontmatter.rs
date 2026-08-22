@@ -9,13 +9,14 @@
 /// Split a Markdown file into optional YAML frontmatter and body.
 ///
 /// Returns:
-/// - `None` when the file does not start with a `---` delimiter — the file
-///   has no frontmatter and the whole content is the body.
-/// - `Some(Err(_))` when the file starts with `---` but the block is never
-///   closed by a standalone `---` line (malformed frontmatter).
+/// - `None` when the file does not start with a standalone `---` delimiter
+///   line — the file has no frontmatter and the whole content is the body.
+/// - `Some(Err(_))` when the file starts with a standalone `---` line but
+///   the block is never closed by another standalone `---` line (malformed
+///   frontmatter).
 /// - `Some(Ok((yaml, body)))` otherwise, where `yaml` is the raw frontmatter
-///   content and `body` is the remaining text with leading whitespace
-///   trimmed. The closing delimiter line is not part of either.
+///   content and `body` is the remaining text verbatim. The closing
+///   delimiter line is not part of either.
 ///
 /// A `---` line inside the body does not close the block unless it is alone
 /// on its line; `\r\n` line endings are handled because each chunk carries
@@ -27,6 +28,11 @@ pub fn split_yaml_frontmatter(contents: &str) -> Option<Result<(&str, &str), &'s
     }
 
     let after_first = &trimmed[3..];
+    if !(after_first.is_empty() || after_first.starts_with('\n') || after_first.starts_with("\r\n"))
+    {
+        return None;
+    }
+
     let mut offset = 0usize;
     for chunk in after_first.split_inclusive('\n') {
         let line = chunk.trim_end_matches(['\r', '\n']);
@@ -36,7 +42,7 @@ pub fn split_yaml_frontmatter(contents: &str) -> Option<Result<(&str, &str), &'s
             // whole delimiter line (including its terminator).
             let yaml = &after_first[..offset];
             let body = &after_first[offset + chunk.len()..];
-            return Some(Ok((yaml.trim(), body.trim_start())));
+            return Some(Ok((yaml.trim(), body)));
         }
         offset += chunk.len();
     }
@@ -53,6 +59,11 @@ mod tests {
     #[test]
     fn no_frontmatter_returns_none() {
         assert_eq!(split_yaml_frontmatter("plain text"), None);
+    }
+
+    #[test]
+    fn non_delimiter_prefix_is_not_frontmatter() {
+        assert_eq!(split_yaml_frontmatter("--- Notes\nbody"), None);
     }
 
     #[test]
@@ -95,11 +106,11 @@ mod tests {
     }
 
     #[test]
-    fn body_leading_whitespace_is_trimmed() {
+    fn body_leading_whitespace_is_preserved() {
         let (_, body) = split_yaml_frontmatter("---\n---\n\n  \nbody")
             .expect("frontmatter present")
             .expect("closed");
-        assert_eq!(body, "body");
+        assert_eq!(body, "\n  \nbody");
     }
 
     #[test]

@@ -111,7 +111,7 @@ You are Mimir. You are upbeat, optimistic, and encouraging. You celebrate small 
 PROMPT
 ```
 
-The frontmatter is optional — a file without it is used exactly as before — and only `description` is supported. If a file claims to have frontmatter (starts with `---`) but is malformed, Mimir skips it and warns instead of guessing.
+The frontmatter is optional — a file without it is used exactly as before — and only `description` is supported. If a file claims to have frontmatter (starts with a standalone `---` line) but is malformed, Mimir skips it and warns instead of guessing.
 
 ## Examples
 

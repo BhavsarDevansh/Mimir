@@ -285,8 +285,16 @@ Core facts about the user (condensed subset — not a complete picture; treat as
         let mut results = Vec::new();
         let mut warnings = Vec::new();
 
-        if !presets_dir.exists() {
-            return (results, warnings);
+        match presets_dir.try_exists() {
+            Ok(true) => {}
+            Ok(false) => return (results, warnings),
+            Err(error) => {
+                warnings.push(PresetWarning {
+                    path: Some(presets_dir.to_path_buf()),
+                    reason: format!("cannot access personalities directory: {error}"),
+                });
+                return (results, warnings);
+            }
         }
 
         let entries = match std::fs::read_dir(presets_dir) {
@@ -727,10 +735,37 @@ mod tests {
 
         let p = Personality::from_path(dir.path(), "cheerful");
         let prompt = p.system_prompt("");
-        // Leading whitespace after the closing fence is trimmed; the rest of
-        // the body is used verbatim as the prompt text.
-        assert!(prompt.starts_with("You are cheerful!\n\nSecond line."));
+        // The body after the closing fence is preserved verbatim as the
+        // prompt text, including leading whitespace.
+        assert!(prompt.starts_with("  You are cheerful!\n\nSecond line."));
         assert!(prompt.contains(Personality::OPERATING_DIRECTIVES));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unreadable_presets_directory_warns() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let presets_dir = dir.path().join("personalities");
+        fs::create_dir(&presets_dir).unwrap();
+        // Blocking the parent directory makes the presets dir itself
+        // unstat-able, which `try_exists` reports as an access error.
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Root bypasses permission checks, so the error path cannot be
+        // exercised; restore permissions and skip rather than assert on a
+        // warning that will not fire.
+        if fs::metadata(&presets_dir).is_ok() {
+            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+
+        let p = Personality::from_path(&presets_dir, "transparent");
+        assert_eq!(p.warnings().len(), 1);
+        assert!(p.warnings()[0].reason.contains("cannot access"));
+
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     #[test]

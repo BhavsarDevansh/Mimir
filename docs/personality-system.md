@@ -40,7 +40,7 @@ description: Cheerful and upbeat companion
 You are Mimir. You are upbeat, optimistic, and encouraging.
 ```
 
-Only the `description` key is supported. Unknown frontmatter keys (for example the stale `style`/`verbosity` tone knobs) are ignored with a warning and the preset still loads, multi-line descriptions are collapsed to a single line, and files without frontmatter are treated exactly as before. Files that do not end in `.personality.md` are ignored by design, not warned about. A file that starts with `---` but never closes the block, contains invalid YAML, is unreadable, or is not valid UTF-8 is malformed: it is skipped with a warning that names the file and the reason (issue #387).
+Only the `description` key is supported. Unknown frontmatter keys (for example the stale `style`/`verbosity` tone knobs) are ignored with a warning and the preset still loads, multi-line descriptions are collapsed to a single line, and files without frontmatter are treated exactly as before. Files that do not end in `.personality.md` are ignored by design, not warned about. A file that starts with a standalone `---` line but never closes the block, contains invalid YAML, is unreadable, or is not valid UTF-8 is malformed: it is skipped with a warning that names the file and the reason (issue #387).
 
 ### System Prompt Composition
 

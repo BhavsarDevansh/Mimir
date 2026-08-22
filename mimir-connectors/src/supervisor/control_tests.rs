@@ -1,12 +1,14 @@
 use super::*;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use tokio::sync::watch;
 
-use crate::connector::{ConnectorAction, ConnectorError, HealthStatus, SyncOptions, SyncOutcome};
-use crate::{ActError, FnConnectorFactory, MockSyncRecorder};
+use crate::connector::{
+    ConnectorAction, ConnectorError, ConnectorMode, HealthStatus, SyncOptions, SyncOutcome,
+};
+use crate::{ActError, FnConnectorFactory, MockSyncRecorder, TriggerError, TriggerOutcome};
 use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::enums::ConnectorAuthState;
 
@@ -206,6 +208,80 @@ async fn resume_respawns_after_pause() {
         Some(ConnectorStatus::Active)
     );
     supervisor.stop(id).await;
+}
+
+#[tokio::test]
+async fn trigger_sync_consults_live_mode_not_spawn_snapshot() {
+    // Issue #397 review: the manual-sync push gate must consult the *live*
+    // connector's mode — an `auto`-mode email connector resolves to polling
+    // once its capability probe completes — rather than a mode snapshot
+    // captured at spawn (which would reject manual sync for a connector that
+    // actually polls).
+    let dir = tempfile::tempdir().unwrap();
+    let kg = Arc::new(
+        KnowledgeGraph::init(&dir.path().join("kg.db"))
+            .await
+            .unwrap(),
+    );
+    let registry = ConnectorRegistry::new();
+    let mode_override = Arc::new(StdMutex::new(None));
+    let override_handle = Arc::clone(&mode_override);
+    registry
+        .register(
+            ConnectorType::Gmail,
+            "test".to_string(),
+            FnConnectorFactory::new(move |config, _ctx| {
+                let connector = crate::MockConnector::from_config(config)?
+                    .with_mode_override(Arc::clone(&override_handle));
+                Ok(Arc::new(connector) as Arc<dyn Connector>)
+            }),
+        )
+        .unwrap();
+    let (_tx, rx) = watch::channel(false);
+    let supervisor = Arc::new(ConnectorSupervisor::new(
+        Arc::new(registry),
+        Arc::clone(&kg),
+        SupervisorConfig::default(),
+        rx,
+    ));
+    let row = kg
+        .create_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Gmail,
+            slug: "gmail-test".to_string(),
+            backend: "test".to_string(),
+            display_name: "Gmail Test".to_string(),
+            config_json: "{}".to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap();
+    supervisor.start(row.id).await.unwrap();
+    wait_for_status(&kg, row.id, ConnectorStatus::Active).await;
+
+    // The connector is polling; flipping the live mode to push must make
+    // manual sync report PushUnsupported…
+    *mode_override.lock().unwrap() = Some(ConnectorMode::Push);
+    let err = supervisor
+        .trigger_sync(row.id, SyncOptions::default())
+        .await
+        .expect_err("a live push-mode connector must reject manual sync");
+    assert!(
+        matches!(err, TriggerError::PushUnsupported { .. }),
+        "expected PushUnsupported, got {err:?}"
+    );
+
+    // …and flipping it back to polling must restore manual sync.
+    *mode_override.lock().unwrap() = None;
+    match supervisor
+        .trigger_sync(row.id, SyncOptions::default())
+        .await
+        .expect("a live polling-mode connector keeps manual sync")
+    {
+        TriggerOutcome::Ok { fetched, .. } => assert_eq!(fetched, 0),
+        other => panic!("expected a successful trigger outcome, got {other:?}"),
+    }
+    supervisor.stop(row.id).await;
 }
 
 #[tokio::test]

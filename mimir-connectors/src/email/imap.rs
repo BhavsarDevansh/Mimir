@@ -234,6 +234,10 @@ pub(crate) struct MailboxInfo {
     /// `UIDVALIDITY` of the selected mailbox; changes when the mailbox is
     /// recreated, invalidating all prior UIDs.
     pub uid_validity: u32,
+    /// The mailbox's `UIDNEXT` — the next UID the server will assign — when
+    /// the server reports it. Used to seed a "start from now" cursor so a
+    /// first sync skips existing mail (issue #397).
+    pub uid_next: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -255,8 +259,8 @@ impl<S: ImapStream> ImapSession<S> {
 
     /// `EXAMINE <mailbox>` (read-only; the connector never mutates mailbox
     /// state — `BODY.PEEK[]` already avoids marking messages `\Seen`).
-    /// Returns the `UIDVALIDITY` the connector uses to validate its persisted
-    /// cursor.
+    /// Returns the `UIDVALIDITY` (and `UIDNEXT`, when reported) the connector
+    /// uses to validate its persisted cursor / seed a first-sync cursor.
     pub(crate) async fn examine(&mut self, mailbox: &str) -> Result<MailboxInfo, ConnectorError> {
         let mbox = self
             .session
@@ -268,7 +272,10 @@ impl<S: ImapStream> ImapSession<S> {
                 "IMAP EXAMINE for `{mailbox}` returned no UIDVALIDITY"
             ))
         })?;
-        Ok(MailboxInfo { uid_validity })
+        Ok(MailboxInfo {
+            uid_validity,
+            uid_next: mbox.uid_next,
+        })
     }
 
     /// Probe the server `CAPABILITY` response; `true` if `IDLE` is advertised.

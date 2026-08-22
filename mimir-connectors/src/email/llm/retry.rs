@@ -1,6 +1,6 @@
 //! Durable Email-connector state: the terminal LLM-extraction failure
-//! ledger (issues #262, #386) plus the buffered iMIP `CANCEL` tombstones
-//! (issue #283).
+//! ledger (issues #262, #386), the buffered iMIP `CANCEL` tombstones
+//! (issue #283), and the cached IMAP `IDLE` capability (issue #397 review).
 //!
 //! Since the hooks engine (issue #386), retry of a failed prose extraction
 //! is owned by the hook runner: the `connector_item.remember` hook re-enqueues
@@ -47,6 +47,13 @@
 //!   supervisor's deletion pass re-reports the removals instead of losing
 //!   them (the CANCEL email is consumed by `extract` and the IMAP cursor
 //!   has already advanced past it, so the message is never re-fetched).
+//! - **IMAP capability.** The ledger carries the cached `IDLE` capability
+//!   from the last capability probe, so a fresh instance (a restart, or a
+//!   `ConnectorSupervisor::resolved_mode` construction) can resolve
+//!   `EmailSyncMode::Auto` without a live probe. The probe records the
+//!   capability once per connection and the supervisor persists it with the
+//!   next successful cycle; until then the mode is reported as unresolved
+//!   rather than guessed (issue #397 review).
 //!
 //! The ledger is pure policy over the extraction loop: it never touches the
 //! knowledge graph or the IMAP session (the crate is sqlx-free and the
@@ -163,7 +170,8 @@ impl TerminalProseFailure {
 }
 
 /// The durable state of one Email connector instance: the bounded
-/// terminal-failure ledger plus the buffered iMIP `CANCEL` tombstones.
+/// terminal-failure ledger, the buffered iMIP `CANCEL` tombstones, and the
+/// cached IMAP `IDLE` capability.
 ///
 /// Serialised to JSON for the `connectors.durable_state` column (via
 /// [`durable_json`](Self::durable_json)); `dirty` tracks changes since the
@@ -190,6 +198,13 @@ pub(crate) struct ProseRetryLedger {
     /// Persisted with the ledger so a restart between `extract` and the
     /// deletion pass re-reports the removals instead of losing them.
     tombstones: Vec<String>,
+    /// Cached IMAP `IDLE` capability from the last successful capability
+    /// probe (issue #397 review). `None` until the first probe completes.
+    /// Persisted with the ledger so a fresh instance resolves
+    /// `EmailSyncMode::Auto` without a live probe; omitted from the JSON
+    /// until known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    supports_idle: Option<bool>,
     /// Whether the ledger changed since the last successful persist.
     #[serde(skip)]
     dirty: bool,
@@ -217,6 +232,22 @@ impl ProseRetryLedger {
                 warn!(%error, "invalid persisted prose-retry ledger; starting fresh");
                 Self::default()
             }
+        }
+    }
+
+    /// The cached IMAP `IDLE` capability from the last probe, or `None`
+    /// before the first probe completes (issue #397 review).
+    pub(crate) fn supports_idle(&self) -> Option<bool> {
+        self.supports_idle
+    }
+
+    /// Cache the probed IMAP `IDLE` capability durably. Marks the ledger
+    /// dirty only when the value changes, so an unchanged re-probe never
+    /// forces an extra durable-state write.
+    pub(crate) fn set_supports_idle(&mut self, supports: bool) {
+        if self.supports_idle != Some(supports) {
+            self.supports_idle = Some(supports);
+            self.touch();
         }
     }
 
@@ -519,6 +550,55 @@ mod tests {
         assert!(restored.is_terminal("99:2"));
         restored.mark_persisted(version);
         assert_eq!(restored.durable_json(), None);
+    }
+
+    #[test]
+    fn supports_idle_rides_the_durable_state() {
+        // Issue #397 review: the probed IMAP IDLE capability is persisted
+        // with the ledger so a fresh instance resolves `Auto` mode without a
+        // live probe, and an unchanged re-probe never re-dirties the ledger.
+        let mut ledger = ProseRetryLedger::default();
+        assert_eq!(
+            ledger.supports_idle(),
+            None,
+            "unprobed until the first probe"
+        );
+        assert_eq!(ledger.durable_json(), None, "clean ledger persists nothing");
+        ledger.set_supports_idle(false);
+        assert_eq!(ledger.supports_idle(), Some(false));
+        let (_version, json) = ledger.durable_json().expect("dirty ledger serializes");
+        let mut restored = ProseRetryLedger::from_json(&json);
+        assert_eq!(
+            restored.supports_idle(),
+            Some(false),
+            "the persisted capability must survive a restart"
+        );
+        assert!(!restored.dirty, "restored ledger starts clean");
+        restored.set_supports_idle(false);
+        assert_eq!(
+            restored.durable_json(),
+            None,
+            "an unchanged re-probe must not force another persist"
+        );
+        restored.set_supports_idle(true);
+        assert!(
+            restored.durable_json().is_some(),
+            "a changed capability re-dirties the ledger"
+        );
+    }
+
+    #[test]
+    fn legacy_durable_state_has_no_cached_capability() {
+        // Durable states persisted before the capability was added (pre-issue
+        // #397 review) parse with `supports_idle` unset, so a restored
+        // connector stays "unprobed" until its next probe.
+        let legacy = serde_json::json!({
+            "pending": {},
+            "terminal": [],
+            "tombstones": []
+        });
+        let restored = ProseRetryLedger::from_json(&legacy.to_string());
+        assert_eq!(restored.supports_idle(), None);
     }
 
     #[test]

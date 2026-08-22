@@ -307,6 +307,18 @@ pub enum ConnectorMode {
     Push,
 }
 
+impl ConnectorMode {
+    /// Stable wire name for the resolved mode, surfaced by
+    /// `ConnectorResponse.mode` (add summary + `mimir connector list`,
+    /// issue #397). Mirrors the serde `rename_all = "snake_case"` tag.
+    pub fn wire_name(&self) -> &'static str {
+        match self {
+            ConnectorMode::Push => "push",
+            ConnectorMode::Polling { .. } => "polling",
+        }
+    }
+}
+
 /// Options passed to [`Connector::sync`].
 ///
 /// `full` requests a complete re-fetch (ignoring any persisted cursor);
@@ -432,6 +444,18 @@ pub trait Connector: Send + Sync {
 
     /// How the supervisor should run this connector (polling vs push).
     fn mode(&self) -> ConnectorMode;
+
+    /// Resolve [`mode`](Self::mode) for a freshly-constructed instance, or
+    /// `None` when the mode depends on a capability probe that has not run
+    /// yet (e.g. IMAP `IDLE` for `EmailSyncMode::Auto`). Supervisors and API
+    /// responses omit the mode instead of guessing, so a connector is never
+    /// reported as `Push` before its capability is known (issue #397 review).
+    /// The default reports [`mode`](Self::mode) — connectors whose mode is
+    /// fully config-determined (Calendar, Photos, explicit email modes) keep
+    /// the default.
+    fn mode_if_resolved(&self) -> Option<ConnectorMode> {
+        Some(self.mode())
+    }
 
     /// JSON Schema describing the connector's configuration surface.
     fn config_schema(&self) -> serde_json::Value;
@@ -683,6 +707,22 @@ mod tests {
         // resolves to the same entity instead of a duplicate person (#248).
         let ctx = ConnectorContext::empty().with_user_identity("  Devansh  ");
         assert_eq!(ctx.user_identity.as_deref(), Some("Devansh"));
+    }
+
+    #[test]
+    fn connector_mode_wire_names_are_stable() {
+        // `wire_name` is the wire contract behind `ConnectorResponse.mode`
+        // (issue #397): it mirrors the serde `rename_all = "snake_case"`
+        // tag, so the two sources can never drift.
+        assert_eq!(ConnectorMode::Push.wire_name(), "push");
+        assert_eq!(
+            ConnectorMode::Polling {
+                interval: std::time::Duration::from_secs(300),
+                jitter: std::time::Duration::from_secs(30),
+            }
+            .wire_name(),
+            "polling"
+        );
     }
 
     #[test]

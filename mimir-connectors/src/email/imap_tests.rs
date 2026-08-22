@@ -17,12 +17,19 @@ struct FakeCfg {
     /// `EXISTS` count to push during IDLE (signals new mail). `None` → IDLE
     /// times out with no push (connector returns fetched:0).
     idle_push_exists: Option<u32>,
+    /// Messages appended to the mailbox when the IDLE push fires, modelling
+    /// mail that arrives while the connector is blocked on IDLE. `empty` →
+    /// no new messages.
+    idle_push_messages: Vec<(u32, Vec<u8>)>,
     /// Second UIDVALIDITY returned on a *second* `SELECT` (UIDVALIDITY
     /// reset test). `None` → always returns `uid_validity`.
     second_uid_validity: Option<u32>,
     /// Omit the `UIDVALIDITY` response code on SELECT/EXAMINE to exercise
     /// the missing-UIDVALIDITY error path. `false` by default.
     omit_uid_validity: bool,
+    /// Omit the `UIDNEXT` response code on SELECT/EXAMINE to exercise the
+    /// missing-UIDNEXT first-sync seed error path. `false` by default.
+    omit_uid_next: bool,
 }
 
 impl Default for FakeCfg {
@@ -32,8 +39,10 @@ impl Default for FakeCfg {
             supports_idle: true,
             messages: Vec::new(),
             idle_push_exists: None,
+            idle_push_messages: Vec::new(),
             second_uid_validity: None,
             omit_uid_validity: false,
+            omit_uid_next: false,
         }
     }
 }
@@ -41,11 +50,12 @@ impl Default for FakeCfg {
 /// Drive a fake IMAP server over `stream`. Handles exactly the verbs the
 /// connector issues (greeting, LOGIN/AUTHENTICATE, SELECT, UID FETCH, IDLE,
 /// LOGOUT). Captures the decoded XOAUTH2 SASL response into `capture` when
-/// supplied.
+/// supplied, and every `UID FETCH` range into `fetch_ranges` when supplied.
 async fn run_fake(
     stream: tokio::io::DuplexStream,
-    cfg: FakeCfg,
+    mut cfg: FakeCfg,
     capture: Option<Arc<Mutex<Vec<u8>>>>,
+    fetch_ranges: Option<Arc<Mutex<Vec<String>>>>,
     select_count: Arc<Mutex<u32>>,
 ) {
     use base64::Engine as _;
@@ -117,10 +127,15 @@ async fn run_fake(
                 } else {
                     format!("* OK [UIDVALIDITY {uv}]\r\n")
                 };
+                let uidnext_line = if cfg.omit_uid_next {
+                    String::new()
+                } else {
+                    format!("* OK [UIDNEXT {next}]\r\n")
+                };
                 writer
                         .write_all(
                             format!(
-                                "* FLAGS (\\Seen)\r\n* {exists} EXISTS\r\n{uidvalidity_line}* OK [UIDNEXT {next}]\r\n{tag} OK [READ-WRITE] SELECT completed\r\n",
+                                "* FLAGS (\\Seen)\r\n* {exists} EXISTS\r\n{uidvalidity_line}{uidnext_line}{tag} OK [READ-WRITE] SELECT completed\r\n",
                             )
                             .as_bytes(),
                         )
@@ -138,6 +153,9 @@ async fn run_fake(
                     continue;
                 }
                 let range = parts.next().unwrap_or("1:*");
+                if let Some(ranges) = &fetch_ranges {
+                    ranges.lock().unwrap().push(range.to_string());
+                }
                 let start: u32 = range
                     .split(':')
                     .next()
@@ -172,7 +190,10 @@ async fn run_fake(
             "IDLE" => {
                 writer.write_all(b"+ idling\r\n").await.unwrap();
                 if let Some(exists) = cfg.idle_push_exists {
-                    // Push new mail, then await the client's DONE.
+                    // Deliver the newly-arrived mail, then push the EXISTS
+                    // signal and await the client's DONE.
+                    cfg.messages
+                        .extend(std::mem::take(&mut cfg.idle_push_messages));
                     writer
                         .write_all(format!("* {exists} EXISTS\r\n").as_bytes())
                         .await
@@ -216,7 +237,7 @@ async fn run_fake(
 async fn harness(cfg: FakeCfg) -> (EmailConnector, ImapSession<tokio::io::DuplexStream>) {
     let (client, server) = tokio::io::duplex(8 * 1024);
     let select_count = Arc::new(Mutex::new(0u32));
-    tokio::spawn(run_fake(server, cfg, None, Arc::clone(&select_count)));
+    tokio::spawn(run_fake(server, cfg, None, None, Arc::clone(&select_count)));
     let mut config = app_config();
     // Poll mode so run_sync skips IDLE and fetches immediately.
     config["mode"] = serde_json::json!("poll");
@@ -237,7 +258,7 @@ async fn idle_harness(
 ) -> (EmailConnector, ImapSession<tokio::io::DuplexStream>) {
     let (client, server) = tokio::io::duplex(8 * 1024);
     let select_count = Arc::new(Mutex::new(0u32));
-    tokio::spawn(run_fake(server, cfg, None, Arc::clone(&select_count)));
+    tokio::spawn(run_fake(server, cfg, None, None, Arc::clone(&select_count)));
     let mut config = app_config();
     config["mode"] = serde_json::json!("idle");
     config["idle_timeout_secs"] = 1.into();
@@ -525,6 +546,202 @@ async fn idle_timeout_no_new_mail_returns_zero() {
 }
 
 #[tokio::test]
+async fn push_first_sync_backfills_existing_mail_before_idle() {
+    // Issue #397: a fresh push-mode connector (no cursor) must import the
+    // existing mailbox before blocking on IDLE — otherwise the first cycle
+    // waits for the first new message while the current inbox is never
+    // fetched. Here the server pushes nothing, so only a backfill-first
+    // cycle can report the existing messages.
+    let cfg = FakeCfg {
+        messages: vec![
+            (5u32, b"existing-1".to_vec()),
+            (7u32, b"existing-2".to_vec()),
+        ],
+        idle_push_exists: None, // IDLE times out with no new mail
+        ..Default::default()
+    };
+    let (connector, session) = idle_harness(cfg, None).await;
+    let outcome = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("sync ok");
+    assert_eq!(outcome.fetched, 2, "existing mail must be backfilled");
+    assert_eq!(outcome.new_cursor.as_deref(), Some("17:7"));
+    let staged = connector.buffer.lock().await;
+    assert_eq!(staged.len(), 2);
+    assert_eq!(staged[0].raw, b"existing-1");
+    assert_eq!(staged[1].raw, b"existing-2");
+}
+
+#[tokio::test]
+async fn push_first_sync_backfills_then_fetches_only_new_mail() {
+    // Issue #397: after the backfill, mail arriving during IDLE is fetched
+    // incrementally from the backfilled UID — the whole mailbox must not be
+    // re-fetched.
+    let cfg = FakeCfg {
+        messages: vec![(5u32, b"existing".to_vec())],
+        idle_push_exists: Some(2),
+        idle_push_messages: vec![(8u32, b"new-mail".to_vec())],
+        ..Default::default()
+    };
+    let (client, server) = tokio::io::duplex(8 * 1024);
+    let select_count = Arc::new(Mutex::new(0u32));
+    let fetch_ranges: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    tokio::spawn(run_fake(
+        server,
+        cfg,
+        None,
+        Some(Arc::clone(&fetch_ranges)),
+        Arc::clone(&select_count),
+    ));
+    let mut config = app_config();
+    config["mode"] = serde_json::json!("idle");
+    config["idle_timeout_secs"] = 1.into();
+    let connector = EmailConnector::from_config(config, None, None).expect("config");
+    let session = imap_login(Client::new(client), app_password_auth())
+        .await
+        .expect("login");
+
+    let outcome = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("sync ok");
+    assert_eq!(outcome.fetched, 2, "backfill + new mail");
+    assert_eq!(outcome.new_cursor.as_deref(), Some("17:8"));
+    let staged = connector.buffer.lock().await;
+    assert_eq!(staged.len(), 2, "existing mail must not be staged twice");
+    assert_eq!(staged[0].raw, b"existing");
+    assert_eq!(staged[1].raw, b"new-mail");
+    let ranges = fetch_ranges.lock().unwrap();
+    assert_eq!(
+        ranges.as_slice(),
+        &["1:*".to_string(), "6:*".to_string()],
+        "backfill fetches everything once, then only mail after the backfilled UID"
+    );
+}
+
+#[tokio::test]
+async fn push_backfill_persists_cursor_when_idle_push_carries_no_new_mail() {
+    // Issue #397: after the backfill, an IDLE push that fires without a
+    // fetchable message (e.g. a re-signalled EXISTS) must still persist the
+    // backfill cursor — otherwise every following cycle sees no cursor and
+    // re-fetches the whole mailbox until the first real new mail arrives.
+    let cfg = FakeCfg {
+        messages: vec![(5u32, b"existing".to_vec())],
+        idle_push_exists: Some(1), // EXISTS re-signal; no appended messages
+        idle_push_messages: Vec::new(),
+        ..Default::default()
+    };
+    let (connector, session) = idle_harness(cfg, None).await;
+    let outcome = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("sync ok");
+    assert_eq!(outcome.fetched, 1, "the backfill must be reported");
+    assert_eq!(
+        outcome.new_cursor.as_deref(),
+        Some("17:5"),
+        "the backfill cursor must persist even when the push carried no new mail"
+    );
+}
+
+#[tokio::test]
+async fn no_backfill_first_sync_seeds_cursor_instead_of_fetching() {
+    // Issue #397: "only new content from now on" seeds the cursor to the
+    // mailbox's current UIDNEXT so the first cycle never full-fetches
+    // existing mail.
+    let cfg = FakeCfg {
+        messages: vec![(5u32, b"existing".to_vec())],
+        ..Default::default()
+    };
+    let (connector, session) = no_backfill_harness(cfg).await;
+    let outcome = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("sync ok");
+    assert_eq!(outcome.fetched, 0, "existing mail must not be fetched");
+    assert_eq!(
+        outcome.new_cursor.as_deref(),
+        Some("17:5"),
+        "cursor seeds to UIDNEXT - 1 (the last existing UID)"
+    );
+    assert!(connector.buffer.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn no_backfill_uidvalidity_reset_still_full_resyncs() {
+    // Issue #397 review: a persisted cursor whose UIDVALIDITY no longer
+    // matches must full re-sync even with `initial_backfill: false` — the
+    // mailbox was recreated, so seeding from UIDNEXT would skip every
+    // message. The "only new content" seed applies to a true first sync
+    // (no persisted cursor) only.
+    let cfg = FakeCfg {
+        uid_validity: 99,
+        messages: vec![(1u32, b"fresh-1".to_vec())],
+        ..Default::default()
+    };
+    let (connector, session) = no_backfill_harness(cfg).await;
+    *connector.last_uid.lock().await = Some((17, 11));
+    let outcome = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("sync ok");
+    assert_eq!(
+        outcome.fetched, 1,
+        "a recreated mailbox must be full re-fetched even with no-backfill config"
+    );
+    assert_eq!(
+        outcome.new_cursor.as_deref(),
+        Some("99:1"),
+        "the re-sync must advance the cursor under the new UIDVALIDITY"
+    );
+}
+
+#[tokio::test]
+async fn no_backfill_first_sync_without_uidnext_errors() {
+    // Issue #397 review: "only new content" anchors the seed on UIDNEXT; a
+    // server that omits it must fail the sync rather than silently
+    // full-fetching content the user opted out of.
+    let cfg = FakeCfg {
+        omit_uid_next: true,
+        messages: vec![(1u32, b"existing".to_vec())],
+        ..Default::default()
+    };
+    let (connector, session) = no_backfill_harness(cfg).await;
+    let err = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect_err("a first sync without UIDNEXT must error");
+    assert!(
+        matches!(err, ConnectorError::Parse(_)),
+        "expected Parse error, got {err:?}"
+    );
+    let msg = format!("{err}");
+    assert!(msg.contains("UIDNEXT"), "error must name UIDNEXT: {msg}");
+}
+
+/// Build a connector (app-password, poll mode, `initial_backfill: false`)
+/// + a fake session wired to a fake server with `cfg`.
+///
+/// Mirrors [`harness`] with the "only new content" first-sync config
+/// (issue #397).
+async fn no_backfill_harness(
+    cfg: FakeCfg,
+) -> (EmailConnector, ImapSession<tokio::io::DuplexStream>) {
+    let (client, server) = tokio::io::duplex(8 * 1024);
+    let select_count = Arc::new(Mutex::new(0u32));
+    tokio::spawn(run_fake(server, cfg, None, None, Arc::clone(&select_count)));
+    let mut config = app_config();
+    config["mode"] = serde_json::json!("poll");
+    config["initial_backfill"] = serde_json::json!(false);
+    let connector = EmailConnector::from_config(config, None, None).expect("config");
+    let session = imap_login(Client::new(client), app_password_auth())
+        .await
+        .expect("login");
+    (connector, session)
+}
+
+#[tokio::test]
 async fn xoauth2_login_sends_correct_sasl_response() {
     // Verify the XOAUTH2 SASL initial response the connector would send to
     // Gmail/Microsoft: base64("user=..\x01auth=Bearer <token>\x01\x01").
@@ -536,6 +753,7 @@ async fn xoauth2_login_sends_correct_sasl_response() {
         server,
         cfg,
         Some(Arc::clone(&captured)),
+        None,
         Arc::clone(&select_count),
     ));
     let auth = ImapAuth::Xoauth2 {
@@ -628,7 +846,7 @@ async fn imap_sync_then_extract_yields_invite_facts() {
     };
     let (client, server) = tokio::io::duplex(8 * 1024);
     let select_count = Arc::new(Mutex::new(0u32));
-    tokio::spawn(run_fake(server, cfg, None, Arc::clone(&select_count)));
+    tokio::spawn(run_fake(server, cfg, None, None, Arc::clone(&select_count)));
     let mut config = app_config();
     config["mode"] = serde_json::json!("poll");
     let connector = EmailConnector::from_config_with_deps(

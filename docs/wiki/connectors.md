@@ -99,14 +99,24 @@ The `mimir connector` command group (A3 / #204) plumbs these routes so you never
 
 ```bash
 # Interactive wizard (recommended): picks the type from the daemon's catalog,
-# defaults the name/slug, and drives authentication — browser OAuth for Gmail
-# (Google endpoints pre-filled, your own OAuth client ID) or app passwords
+# defaults the name/slug, asks how the connector should sync (continuous push
+# vs polling with a preset/custom interval) and whether to import existing
+# content on the first sync, then drives authentication — browser OAuth for
+# Gmail (Google endpoints pre-filled, your own OAuth client ID) or app
+# passwords. Once credentials are in, the wizard activates the connector and
+# syncing starts automatically — no manual resume/sync needed.
 mimir connector add
 
-# Add (created in Setup — resume activates it)
-mimir connector add gmail --backend imap host=imap.gmail.com auth.kind=app_password auth.username=me@gmail.com
+# Flag form for scripts: the connector is created in Setup; activate it with
+# `resume`. Set `mode=poll` (with an optional `poll_interval_secs`, default
+# 300s) so manual `sync` works — the omitted mode defaults to `auto`, which
+# selects IMAP IDLE when the server advertises it and then rejects manual
+# sync with `CONNECTOR_PUSH_UNSUPPORTED`. Push delivery (`mode=auto` or
+# `mode=idle`) is the alternative for scripts that let new mail arrive
+# automatically.
+mimir connector add gmail --backend imap host=imap.gmail.com auth.kind=app_password auth.username=me@gmail.com mode=poll poll_interval_secs=300
 
-# Activate and sync
+# Activate and sync (only needed for the flag form — the wizard does this)
 mimir connector resume gmail
 mimir connector sync gmail --since 7d
 
@@ -123,6 +133,8 @@ mimir connector forget gmail --yes       # trashes the connector's facts (recove
 # Write-back (Calendar)
 mimir connector act calendar create_event '{"summary":"Lunch","start":"2026-08-12T12:00:00Z"}'
 ```
+
+For `mode: auto` connectors, the `mode` shown by `status`/`list` is `-` until the first sync's capability probe detects whether the server supports IMAP IDLE — it then resolves to `push` or `polling` and stays accurate across restarts. Explicit `mode=poll`/`mode=idle` connectors resolve immediately.
 
 Running `mimir connector add` with no arguments starts an interactive wizard: it lists the daemon's supported `(type, backend)` pairs for you to pick from, confirms the display name and slug (defaults from the type and name), asks the per-backend questions (Gmail IMAP defaults to `imap.gmail.com:993`/`INBOX`), and guides authentication — OAuth browser login is the recommended Gmail path (the wizard pre-fills Google's authorization/token endpoints, you supply your own OAuth client ID from the Google Cloud Console, and the CLI launches the browser at the printed authorize URL, which you can also open manually — but the browser must run on the machine running `mimir`, because the PKCE callback binds to `127.0.0.1`), app passwords and OAuth client secrets are prompted hidden, and local backends (Photos) need no credential. The wizard requires a terminal; with piped stdin it fails fast and points at the flag form.
 

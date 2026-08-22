@@ -80,6 +80,7 @@ fn connector_fixture(id: i32, slug: &str) -> ConnectorResponse {
         display_name: slug.to_string(),
         status: "setup".to_string(),
         auth_state: "unauthenticated".to_string(),
+        mode: Some("push".to_string()),
         sync_cursor: None,
         last_sync_at: None,
         last_error: None,

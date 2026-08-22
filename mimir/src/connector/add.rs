@@ -94,7 +94,7 @@ pub(crate) async fn handle_connector_add_with_opener(
     };
     let secret = add_secret(&merged, password, token, password_stdin, token_stdin);
 
-    register_and_ingest(
+    let output = register_and_ingest(
         &client,
         connector_type,
         backend,
@@ -104,16 +104,46 @@ pub(crate) async fn handle_connector_add_with_opener(
         kind,
         oauth_bundle,
         secret,
-        json,
     )
     .await;
+    if !json {
+        println!(
+            "Added connector '{}' ({} / {}, id {}, status {}, mode {}, auth {}).",
+            output.slug,
+            output.connector_type,
+            output.backend,
+            output.id,
+            output.status,
+            output.mode.as_deref().unwrap_or("-"),
+            output.auth_state
+        );
+        match output.mode.as_deref() {
+            Some("push") => println!(
+                "Next: run `mimir connector resume {slug}` to activate it — it then syncs automatically (push) and manual sync is not supported."
+            ),
+            Some("polling") => println!(
+                "Next: run `mimir connector resume {slug}` to activate it, then `mimir connector sync {slug}` to sync."
+            ),
+            // `auto` email mode resolves to push or polling only after the
+            // first capability probe; until then the mode is unknown, so do
+            // not claim manual sync works or that it is unsupported (issue
+            // #397 review).
+            _ => println!(
+                "Next: run `mimir connector resume {slug}` to activate it — its sync mode (push vs polling) is detected on the first connect."
+            ),
+        }
+    } else {
+        print_json(&output);
+    }
 }
 
-/// Register the connector instance and ingest its credential, printing the
-/// summary. Shared by the flag-based `add` flow and the interactive wizard:
-/// the caller resolves the `(type, backend, name, slug, config)` and the
-/// credential (OAuth bundle or secret) *before* anything is registered, so a
-/// canceled prompt or aborted OAuth flow exits with nothing created.
+/// Register the connector instance and ingest its credential, returning the
+/// updated [`ConnectorResponse`]. Shared by the flag-based `add` flow and the
+/// interactive wizard: the caller resolves the
+/// `(type, backend, name, slug, config)` and the credential (OAuth bundle or
+/// secret) *before* anything is registered, so a canceled prompt or aborted
+/// OAuth flow exits with nothing created. The caller owns the summary output
+/// (the wizard auto-activates and reports the active state, issue #397).
 ///
 /// The daemon creates the instance in `Setup` (activation is the `resume`
 /// action, A2 / #203); credential ingest flips it to `authenticated`.
@@ -128,7 +158,6 @@ pub(crate) async fn register_and_ingest(
     kind: CredentialKind,
     oauth_bundle: Option<mimir_connectors::SecretBundle>,
     secret: Option<String>,
-    json: bool,
 ) -> mimir_api_types::ConnectorResponse {
     let request = AddConnectorRequest {
         connector_type,
@@ -173,17 +202,6 @@ pub(crate) async fn register_and_ingest(
         ),
     }
 
-    if json {
-        print_json(&output);
-    } else {
-        println!(
-            "Added connector '{slug}' ({} / {}, id {}, status {}, auth {}).",
-            output.connector_type, output.backend, output.id, output.status, output.auth_state
-        );
-        println!(
-            "Next: run `mimir connector resume {slug}` to activate it, then `mimir connector sync {slug}` to sync."
-        );
-    }
     output
 }
 

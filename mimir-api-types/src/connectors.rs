@@ -39,6 +39,12 @@ pub struct ConnectorResponse {
     pub display_name: String,
     pub status: ConnectorStatus,
     pub auth_state: ConnectorAuthState,
+    /// Resolved sync mode (`push` / `polling`), derived from the persisted
+    /// config by constructing the connector with no side effects
+    /// (issue #397). Omitted when the backend cannot be constructed from the
+    /// row (unknown type or invalid config).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
     pub sync_cursor: Option<String>,
     /// RFC-3339 timestamp of the last successful sync, if any.
     pub last_sync_at: Option<String>,

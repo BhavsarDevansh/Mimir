@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::oneshot;
@@ -40,14 +41,18 @@ impl ConnectorSupervisor {
         options: SyncOptions,
     ) -> Result<TriggerOutcome, TriggerError> {
         // Clone the sendable parts out of the lock before awaiting so the
-        // mutex is never held across an await.
-        let (trigger_tx, semaphore, mode, finished) = {
+        // mutex is never held across an await. The live connector (shared
+        // with the runner) is consulted for the mode — not a spawn-time
+        // snapshot — so an `auto`-mode connector that probed `IDLE`
+        // unsupported resolves to polling and keeps manual sync (issue #397
+        // review).
+        let (trigger_tx, semaphore, connector, finished) = {
             let guard = self.handles.lock().await;
             match guard.get(&id) {
                 Some(handle) => (
                     handle.trigger_tx.clone(),
                     handle.semaphore.clone(),
-                    handle.mode,
+                    Arc::clone(&handle.connector),
                     handle.task.is_finished(),
                 ),
                 None => {
@@ -70,7 +75,7 @@ impl ConnectorSupervisor {
             let status = row.and_then(|r| r.status());
             return Err(TriggerError::NotRunning { id, status });
         }
-        if mode == ConnectorMode::Push {
+        if connector.mode() == ConnectorMode::Push {
             return Err(TriggerError::PushUnsupported { id });
         }
         // Serialise concurrent triggers: only one caller holds the permit at a

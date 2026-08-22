@@ -91,21 +91,77 @@ impl EmailConnector {
             (Some((v, u)), false) if v == uid_validity => Some(u),
             _ => None,
         };
-        if cursor.is_some() && matches!(cursor, Some((v, _)) if v != uid_validity) {
+        // Issue #397: an `initial_backfill: false` connector starts from
+        // "now" — the first cycle (no cursor) seeds the cursor to the
+        // mailbox's current `UIDNEXT` instead of full-fetching, so only mail
+        // arriving after setup is ingested. `full` overrides: an explicit
+        // full sync still fetches everything. The seed applies only to a
+        // true first sync (`cursor.is_none()`), never to a persisted cursor
+        // whose UIDVALIDITY no longer matches: a recreated mailbox invalidates
+        // every prior UID, so it must full re-sync even when the user chose
+        // "only new content". A first sync that cannot anchor on a `UIDNEXT`
+        // fails instead of silently full-fetching content the user opted out
+        // of.
+        let seed = if cursor.is_none() && !self.config.initial_backfill && !options.full {
+            match info.uid_next {
+                Some(next) => Some(next.saturating_sub(1)),
+                None => {
+                    return Err(ConnectorError::Parse(
+                        "server did not report UIDNEXT; cannot seed the 'only new content' cursor"
+                            .into(),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+        let mut last_uid = match (last_uid, seed) {
+            (None, Some(seeded)) => Some(seeded),
+            (last_uid, _) => last_uid,
+        };
+        if cursor.is_some() && matches!(cursor, Some((v, _)) if v != uid_validity) && seed.is_none()
+        {
             warn!(
                 uid_validity,
                 "IMAP UIDVALIDITY changed; performing full re-sync"
             );
         }
 
-        let mut session = if idle {
+        // Issue #397: a fresh push-mode connector (no cursor) must import the
+        // existing mailbox before blocking on IDLE — otherwise the first
+        // cycle connects, EXAMINEs, and waits for the first new message while
+        // the current inbox is never fetched. The backfill runs once, then
+        // the cycle blocks on IDLE as usual.
+        let mut backfilled: u32 = 0;
+        let mut session = if idle && last_uid.is_none() {
+            let FetchResult { messages, max_uid } = session.fetch_since(None, uid_validity).await?;
+            backfilled = u32::try_from(messages.len()).unwrap_or(u32::MAX);
+            self.stage_messages(messages).await;
+            let (sess, new_data) = session.idle_wait(self.idle_timeout()).await?;
+            if !new_data {
+                // IDLE timed out / was interrupted with no new mail: report
+                // the backfill and its cursor so the supervisor persists it.
+                sess.logout().await;
+                return Ok(SyncOutcome {
+                    fetched: backfilled,
+                    new_cursor: Some(encode_cursor(uid_validity, max_uid)),
+                    fetched_at: Utc::now(),
+                });
+            }
+            // Continue incrementally from the backfilled UID so the whole
+            // mailbox is never re-fetched.
+            last_uid = Some(max_uid);
+            sess
+        } else if idle {
             let (sess, new_data) = session.idle_wait(self.idle_timeout()).await?;
             if !new_data {
                 // IDLE timed out / was interrupted with no new mail.
                 sess.logout().await;
                 return Ok(SyncOutcome {
                     fetched: 0,
-                    new_cursor: None,
+                    // Persist the "start from now" seed even when no mail
+                    // arrived, so the no-backfill choice survives a restart.
+                    new_cursor: seed.map(|s| encode_cursor(uid_validity, s)),
                     fetched_at: Utc::now(),
                 });
             }
@@ -117,23 +173,10 @@ impl EmailConnector {
         let FetchResult { messages, max_uid } = session.fetch_since(last_uid, uid_validity).await?;
         session.logout().await;
 
-        let fetched = u32::try_from(messages.len()).unwrap_or(u32::MAX);
-        // Issue #332: a failed cycle's re-fetch must not duplicate messages
-        // that are already staged — the buffer can hold the previous cycle's
-        // un-drained window or legacy pending retries re-staged at
-        // construction (issue #262), and each failed cycle would otherwise
-        // double them. Dedupe by the `(uid_validity, uid)` identity (stable
-        // within one epoch).
-        {
-            let mut buffer = self.buffer.lock().await;
-            let mut seen: HashSet<(u32, u32)> =
-                buffer.iter().map(|m| (m.uid_validity, m.uid)).collect();
-            for mail in messages {
-                if seen.insert((mail.uid_validity, mail.uid)) {
-                    buffer.push(mail);
-                }
-            }
-        }
+        let fetched = u32::try_from(messages.len())
+            .unwrap_or(u32::MAX)
+            .saturating_add(backfilled);
+        self.stage_messages(messages).await;
 
         // Report the cursor: persist on a full/first sync or when new mail
         // arrived; leave it unchanged when an incremental cycle fetched
@@ -147,6 +190,13 @@ impl EmailConnector {
         let new_cursor = match (last_uid, max_uid) {
             (None, _) => Some(encode_cursor(uid_validity, max_uid)),
             (Some(prev), max) if max > prev => Some(encode_cursor(uid_validity, max)),
+            // Seeded first sync: persist the seed even when nothing arrived.
+            _ if seed.is_some() => Some(encode_cursor(uid_validity, last_uid.unwrap_or(0))),
+            // Push backfill: persist the backfill cursor even when the IDLE
+            // push that woke the cycle carried no fetchable mail — otherwise
+            // the next cycle sees no cursor and re-backfills the whole
+            // mailbox until the first real new mail arrives (issue #397).
+            _ if backfilled > 0 => Some(encode_cursor(uid_validity, max_uid)),
             _ => None,
         };
         // Track whether a moved cursor is awaiting supervisor confirmation:
@@ -170,11 +220,31 @@ impl EmailConnector {
         })
     }
 
+    /// Stage fetched messages into the cycle buffer, deduplicating by the
+    /// `(uid_validity, uid)` identity (issue #332 mirror: a failed cycle's
+    /// re-fetch, a `--full` re-sync, or a push backfill (issue #397) can
+    /// stage the same message twice, and each duplicate would otherwise
+    /// double-insert facts).
+    async fn stage_messages(&self, messages: Vec<imap::RawEmail>) {
+        let mut buffer = self.buffer.lock().await;
+        let mut seen: HashSet<(u32, u32)> =
+            buffer.iter().map(|m| (m.uid_validity, m.uid)).collect();
+        for mail in messages {
+            if seen.insert((mail.uid_validity, mail.uid)) {
+                buffer.push(mail);
+            }
+        }
+    }
+
     /// Shared probe used by both [`Connector::authenticate`] and
     /// [`Connector::health`]: resolve credentials (refreshing OAuth),
     /// connect, log in, probe `CAPABILITY` (caching IDLE support), and log
     /// out. Returns the cached `IDLE` capability. Callers map the
     /// [`ConnectorError`] onto their respective lifecycle enums.
+    /// The capability is also recorded in the durable state (issue #397
+    /// review) so a fresh instance — a daemon restart or a
+    /// `resolved_mode` construction — resolves `Auto` mode without a live
+    /// probe.
     pub(super) async fn probe_capability(&self) -> Result<bool, ConnectorError> {
         let (auth, refreshed) = self.resolve_credentials().await?;
         if let Some(b) = refreshed {
@@ -192,6 +262,7 @@ impl EmailConnector {
         };
         session.logout().await;
         *self.supports_idle.lock().unwrap() = Some(supports);
+        self.prose_retry.lock().unwrap().set_supports_idle(supports);
         Ok(supports)
     }
 }

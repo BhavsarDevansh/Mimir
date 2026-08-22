@@ -129,6 +129,68 @@ fn auto_mode_falls_back_to_polling_when_idle_not_advertised() {
     assert!(matches!(connector.mode(), ConnectorMode::Polling { .. }));
 }
 
+#[test]
+fn auto_mode_if_resolved_is_none_until_capability_probe() {
+    // Issue #397 review: `Auto` cannot resolve push vs polling before the
+    // IMAP capability probe completes, so `mode_if_resolved` omits the mode
+    // instead of claiming Push. `mode()` itself keeps the unprobed Push
+    // default so the supervisor's push loop and `use_idle()` stay aligned.
+    let connector = EmailConnector::from_config(app_config(), None, None).expect("config");
+    assert!(
+        connector.mode_if_resolved().is_none(),
+        "an unprobed auto connector must not report a mode"
+    );
+    *connector.supports_idle.lock().unwrap() = Some(false);
+    assert!(matches!(
+        connector.mode_if_resolved(),
+        Some(ConnectorMode::Polling { .. })
+    ));
+    *connector.supports_idle.lock().unwrap() = Some(true);
+    assert!(matches!(
+        connector.mode_if_resolved(),
+        Some(ConnectorMode::Push)
+    ));
+}
+
+#[test]
+fn explicit_modes_always_resolve() {
+    // `poll` and `idle` are config-determined, so `mode_if_resolved` reports
+    // them even before any capability probe.
+    let mut cfg = app_config();
+    cfg["mode"] = serde_json::json!("poll");
+    let connector = EmailConnector::from_config(cfg, None, None).expect("config");
+    assert!(matches!(
+        connector.mode_if_resolved(),
+        Some(ConnectorMode::Polling { .. })
+    ));
+
+    let mut cfg = app_config();
+    cfg["mode"] = serde_json::json!("idle");
+    let connector = EmailConnector::from_config(cfg, None, None).expect("config");
+    assert!(matches!(
+        connector.mode_if_resolved(),
+        Some(ConnectorMode::Push)
+    ));
+}
+
+#[test]
+fn from_config_seeds_capability_from_durable_state() {
+    // Issue #397 review: a fresh instance seeded from a durable state that
+    // carries the probed IDLE capability resolves `Auto` mode without a live
+    // probe — the path behind `ConnectorSupervisor::resolved_mode` once a
+    // previous cycle persisted the capability.
+    let mut cfg = app_config();
+    cfg["mode"] = serde_json::json!("auto");
+    cfg["__durable_state"] = serde_json::Value::String(
+        serde_json::json!({ "pending": {}, "terminal": [], "tombstones": [], "supports_idle": false }).to_string(),
+    );
+    let connector = EmailConnector::from_config(cfg, None, None).expect("config");
+    assert!(matches!(
+        connector.mode_if_resolved(),
+        Some(ConnectorMode::Polling { .. })
+    ));
+}
+
 #[tokio::test]
 async fn auth_method_mismatch_is_an_error() {
     // App-password config but an OAuth bundle stored.

@@ -95,6 +95,11 @@ impl EmailConnector {
             .and_then(|v| v.as_str())
             .map(ProseRetryLedger::from_json)
             .unwrap_or_default();
+        // Seed the cached IMAP `IDLE` capability from the persisted durable
+        // state (issue #397 review): a fresh instance — a daemon restart or a
+        // `resolved_mode` construction — resolves `Auto` mode without a live
+        // probe once the previous cycle persisted the capability.
+        let supports_idle = ledger.supports_idle();
         let dto: EmailConfigDto = serde_json::from_value(config)
             .map_err(|e| ConnectorError::Config(format!("invalid email config: {e}")))?;
         // Only an OAuth-configured connector needs the hardened OAuth client;
@@ -135,7 +140,7 @@ impl EmailConnector {
             oauth_http,
             last_uid: Mutex::new(cursor.as_deref().and_then(parse_cursor)),
             resync_pending: AtomicBool::new(false),
-            supports_idle: StdMutex::new(None),
+            supports_idle: StdMutex::new(supports_idle),
             buffer: Mutex::new(buffer),
             prose_retry: Arc::new(StdMutex::new(ledger)),
             user_identity: normalize_user_identity(user_identity),

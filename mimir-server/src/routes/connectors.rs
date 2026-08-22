@@ -71,6 +71,20 @@ fn connector_type_string(row: &mimir_knowledge::models::connector::Connector) ->
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// Resolve the mode a row would run in by constructing it from the persisted
+/// config (no side effects) — the `push` / `polling` value surfaced by
+/// [`ConnectorResponse`] (issue #397). `None` when the row cannot be
+/// constructed (unknown type / invalid config).
+fn resolved_mode_string(
+    state: &AppState,
+    row: &mimir_knowledge::models::connector::Connector,
+) -> Option<String> {
+    state
+        .connector_supervisor
+        .resolved_mode(row)
+        .map(|m| m.wire_name().to_string())
+}
+
 /// Build a [`ConnectorResponse`] from a row, deriving its item count from the
 /// knowledge graph on demand. Shared by the list and single-instance routes.
 async fn to_response(
@@ -86,6 +100,7 @@ async fn to_response(
     let connector_type = connector_type_string(&row);
     let status = status_string(&row);
     let auth_state = auth_state_string(&row);
+    let mode = resolved_mode_string(state, &row);
     Ok(ConnectorResponse {
         id: row.id,
         connector_type,
@@ -94,6 +109,7 @@ async fn to_response(
         display_name: row.display_name,
         status,
         auth_state,
+        mode,
         sync_cursor: row.sync_cursor,
         last_sync_at: row.last_sync_at.map(|dt| dt.to_rfc3339()),
         last_error: row.last_error,
@@ -108,6 +124,7 @@ async fn to_response(
 fn to_response_with_count(
     row: mimir_knowledge::models::connector::Connector,
     item_count: i64,
+    mode: Option<String>,
 ) -> ConnectorResponse {
     let connector_type = connector_type_string(&row);
     let status = status_string(&row);
@@ -120,6 +137,7 @@ fn to_response_with_count(
         display_name: row.display_name,
         status,
         auth_state,
+        mode,
         sync_cursor: row.sync_cursor,
         last_sync_at: row.last_sync_at.map(|dt| dt.to_rfc3339()),
         last_error: row.last_error,
@@ -169,7 +187,8 @@ pub async fn connectors_list_handler(
         .into_iter()
         .map(|row| {
             let item_count = counts.get(&row.id).copied().unwrap_or(0);
-            to_response_with_count(row, item_count)
+            let mode = resolved_mode_string(&state, &row);
+            to_response_with_count(row, item_count, mode)
         })
         .collect();
     Ok(Json(ConnectorListResponse { connectors }))

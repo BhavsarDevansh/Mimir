@@ -120,7 +120,9 @@ impl Default for NominatimConfig {
 impl From<&mimir_core::config::GeocoderConfig> for NominatimConfig {
     /// Map the user-facing `geocoder` config section onto the backend config,
     /// keeping the policy-compliant defaults for everything the section does
-    /// not expose (user agent, rate limit, retry budget, timeout).
+    /// not expose (user agent, rate limit, retry budget, timeout). The
+    /// `enabled` switch is not part of the backend config; callers decide
+    /// whether to construct the geocoder at all.
     fn from(config: &mimir_core::config::GeocoderConfig) -> Self {
         let mut nominatim = Self::new().with_endpoint(config.endpoint.clone());
         if let Some(email) = &config.contact_email {

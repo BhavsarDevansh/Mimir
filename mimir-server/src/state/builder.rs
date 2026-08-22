@@ -116,9 +116,10 @@ pub(super) async fn init_knowledge_graph(
     let mut knowledge_graph = mimir_knowledge::KnowledgeGraph::init(&kg_db_path).await?;
 
     // Inject the OSM Nominatim geocoder so the entity-locations write path
-    // (Phase 3 S3 / #193) can fill the missing half of a location (fact +
-    // coords or coords + address). The backend does no network work until a
-    // location fact is actually processed, so this is cheap at startup.
+    // (Phase 3 S3 / #193) can fill the missing half of a location
+    // (address -> coords or coords -> address). The backend does no network
+    // work until a location fact is actually processed, so this is cheap at
+    // startup.
     // The `geocoder` config section (issue #227) can disable geocoding
     // entirely or point at a self-hosted Nominatim instance / set a contact
     // email; when disabled the geocoder stays `None` and locations persist

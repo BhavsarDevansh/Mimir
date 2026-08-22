@@ -108,7 +108,11 @@ impl Config {
         set_from_env!("MIMIR_GEOCODER_ENABLED", self.geocoder.enabled, bool);
         set_from_env!("MIMIR_GEOCODER_ENDPOINT", self.geocoder.endpoint);
         if let Some(v) = getenv("MIMIR_GEOCODER_CONTACT_EMAIL") {
-            self.geocoder.contact_email = if v.trim().is_empty() { None } else { Some(v) };
+            self.geocoder.contact_email = if v.trim().is_empty() {
+                None
+            } else {
+                Some(v.trim().to_string())
+            };
         }
         if let Some(v) = getenv("MIMIR_KNOWLEDGE_EVENTS_SCHEDULE_TIMES") {
             let times: Vec<String> = v

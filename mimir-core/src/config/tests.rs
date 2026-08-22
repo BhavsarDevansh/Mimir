@@ -678,3 +678,19 @@ fn test_env_override_geocoder_contact_email_empty_clears() {
     });
     assert_eq!(config.geocoder.contact_email, None);
 }
+
+#[test]
+fn test_env_override_geocoder_contact_email_trims_padding() {
+    let mut config = Config::default();
+    config.apply_env_overrides_with(|key| {
+        if key == "MIMIR_GEOCODER_CONTACT_EMAIL" {
+            Some("  ops@example.com  ".to_string())
+        } else {
+            None
+        }
+    });
+    assert_eq!(
+        config.geocoder.contact_email.as_deref(),
+        Some("ops@example.com")
+    );
+}

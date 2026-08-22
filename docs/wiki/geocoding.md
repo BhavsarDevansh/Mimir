@@ -18,9 +18,24 @@ The geocoder is pluggable: Nominatim is the default backend, but the design allo
 - **Entity locations:** an address extracted from email/calendar is geocoded to coordinates so proximity queries ("find places near X") work.
 - **Location search tool:** ask Mimir "where is London?" and get candidates with coordinates, country, and alternative names (planned, #98).
 
+## Configuration
+
+Mimir's geocoder is on by default and needs no setup. You can adjust it in the `[geocoder]` section of `config.toml` (or via the `MIMIR_GEOCODER_*` environment variables):
+
+```toml
+[geocoder]
+enabled = true
+endpoint = "https://nominatim.openstreetmap.org"
+# contact_email = "you@example.com"  # Optional: appended to the User-Agent (Nominatim policy)
+```
+
+- `enabled = false` turns geocoding off entirely. Location facts are still stored — an address stays an address and a photo's GPS stays coordinates — Mimir just never fills in the missing half.
+- `endpoint` points at a self-hosted Nominatim instance; this is what Nominatim's usage policy recommends for heavy use.
+- `contact_email` identifies you to the instance. Nominatim recommends it for the public service and it helps if your usage is ever flagged.
+
 ## Best practices
 
-- Heavy or repeated bulk geocoding should run against a **self-hosted Nominatim** instance rather than the shared public one.
+- Heavy or repeated bulk geocoding should run against a **self-hosted Nominatim** instance instead of the shared public source.
 - Set a contact email in configuration when using the public instance; Nominatim recommends it and it helps if your usage is ever flagged.
 - Geocoding is best-effort: an address that cannot be resolved is stored as the raw address (no coordinates) rather than blocking ingestion.
 

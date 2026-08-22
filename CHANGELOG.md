@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.134.1] — 2026-08-22
+
+### Fix: PR #455 review feedback — contact email trimming and geocoder doc clarifications (issue #227)
+
+- `MIMIR_GEOCODER_CONTACT_EMAIL` now trims surrounding whitespace before being stored, and an all-whitespace value still clears the contact email.
+- `docs/config-system.md` fixes the disabled-geocoder sentence (comma before the second independent clause), and `docs/wiki/configuration.md` documents that changing `enabled`, `endpoint`, or `contact_email` requires a process restart because the geocoder is constructed once at startup and is not hot-reloaded.
+- Version bumped 0.134.0 → 0.134.1 (patch — review and documentation fixes).
+
+## [0.134.0] — 2026-08-22
+
+### Feature: geocoder configuration — disable toggle, self-hosted endpoint, contact email (issue #227)
+
+- The shared geocoder now honours a `[geocoder]` section in `config.toml` (and `MIMIR_GEOCODER_ENABLED` / `MIMIR_GEOCODER_ENDPOINT` / `MIMIR_GEOCODER_CONTACT_EMAIL` env overrides): `enabled = false` disables geocoding entirely — location facts persist with whatever the producer supplied and the missing coords/place half is never filled in — `endpoint` points at a self-hosted Nominatim instance (the usage policy recommends this for heavy use), and `contact_email` is appended to the policy-compliant `User-Agent`.
+- `init_knowledge_graph` now builds `NominatimConfig` from the config section via `impl From<&GeocoderConfig> for NominatimConfig` (`mimir-connectors`) and skips injection when `enabled = false`, replacing the unconditional `with_defaults()` wiring; `DEFAULT_NOMINATIM_ENDPOINT` moved to `mimir-core::geocoder` so the compiled-in config default and the backend share one source of truth.
+- Docs updated: `docs/geocoder.md`, `docs/config-system.md`, `docs/entity-locations.md`, `docs/wiki/geocoding.md`, `docs/wiki/configuration.md`, `docs/wiki/what-works-now.md`, `Mimir-Implementation-Context.md`.
+- Version bumped 0.133.0 → 0.134.0 (minor — new feature).
+
 ## [0.133.0] — 2026-08-22
 
 ### Feature: first-class personality preset discovery (issue #387)

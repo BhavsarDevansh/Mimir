@@ -117,6 +117,25 @@ mimir ask "Hello"
 | `MIMIR_CONTEXT_DB_PATH` | Override the conversation-history database path | `/tmp/mimir/context.db` |
 | `MIMIR_KNOWLEDGE_DB_PATH` | Override the knowledge-graph database path | `/tmp/mimir/knowledge.db` |
 | `MIMIR_JOBS_DB_PATH` | Override the job-queue database path | `/tmp/mimir/jobs.db` |
+| `MIMIR_GEOCODER_ENABLED` | Enable or disable geocoding entirely | `true` or `false` |
+| `MIMIR_GEOCODER_ENDPOINT` | Base URL of the Nominatim instance | `https://nominatim.example.com` |
+| `MIMIR_GEOCODER_CONTACT_EMAIL` | Contact email appended to the `User-Agent` (empty clears it) | `you@example.com` |
+
+## Geocoding
+
+The `[geocoder]` section controls how Mimir turns place names and addresses into coordinates (and back):
+
+```toml
+[geocoder]
+enabled = true
+endpoint = "https://nominatim.openstreetmap.org"
+# contact_email = "you@example.com"  # Optional: appended to the User-Agent (Nominatim policy)
+```
+
+- `enabled = false` turns geocoding off entirely — location facts are still stored, just without the missing coordinates or place name filled in.
+- `endpoint` points at a self-hosted Nominatim instance for heavy use (recommended by Nominatim's usage policy).
+- `contact_email` is appended to the `User-Agent` sent to the instance; setting it is recommended when using the public one.
+- Changing `enabled`, `endpoint`, or `contact_email` requires a process restart: the geocoder is constructed once at startup and is not hot-reloaded.
 
 ## Proactivity Levels
 

@@ -31,7 +31,11 @@ mod parse;
 #[cfg(test)]
 mod tests;
 
-pub const DEFAULT_NOMINATIM_ENDPOINT: &str = "https://nominatim.openstreetmap.org";
+/// Default endpoint for the public OpenStreetMap Nominatim instance.
+///
+/// Re-exported from `mimir-core` so the compiled-in `geocoder.endpoint` config
+/// default and the backend share one source of truth (issue #227).
+pub use mimir_core::geocoder::DEFAULT_NOMINATIM_ENDPOINT;
 
 /// Per-request overall timeout. Nominatim responses are small and fast; this
 /// bounds a stalled connection without affecting the token-bucket pacing.
@@ -110,6 +114,21 @@ impl NominatimConfig {
 impl Default for NominatimConfig {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl From<&mimir_core::config::GeocoderConfig> for NominatimConfig {
+    /// Map the user-facing `geocoder` config section onto the backend config,
+    /// keeping the policy-compliant defaults for everything the section does
+    /// not expose (user agent, rate limit, retry budget, timeout). The
+    /// `enabled` switch is not part of the backend config; callers decide
+    /// whether to construct the geocoder at all.
+    fn from(config: &mimir_core::config::GeocoderConfig) -> Self {
+        let mut nominatim = Self::new().with_endpoint(config.endpoint.clone());
+        if let Some(email) = &config.contact_email {
+            nominatim = nominatim.with_contact_email(email.clone());
+        }
+        nominatim
     }
 }
 

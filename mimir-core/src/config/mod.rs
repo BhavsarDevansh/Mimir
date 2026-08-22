@@ -20,7 +20,7 @@ pub use base_url::{
 };
 pub use reload::{ConfigReloadError, ReloadableConfig};
 pub use types::{
-    AgentConfig, Config, ConfigError, ContextConfig, EventsConfig, IdentityConfig, InitResult,
-    KnowledgeConfig, KnowledgeOptimizationConfig, LlmConfig, MemoryConfig, PendingCleanupConfig,
-    PersonalityConfig, Proactivity, SchedulerConfig, ServerConfig,
+    AgentConfig, Config, ConfigError, ContextConfig, EventsConfig, GeocoderConfig, IdentityConfig,
+    InitResult, KnowledgeConfig, KnowledgeOptimizationConfig, LlmConfig, MemoryConfig,
+    PendingCleanupConfig, PersonalityConfig, Proactivity, SchedulerConfig, ServerConfig,
 };

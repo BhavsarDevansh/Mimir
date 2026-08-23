@@ -610,7 +610,7 @@ fn email_preset(provider: usize) -> EmailPreset {
                 auth_uri: Some(MICROSOFT_AUTH_URI),
                 token_endpoint: Some(MICROSOFT_TOKEN_ENDPOINT),
                 default_scopes: Some(MICROSOFT_IMAP_SCOPE),
-                client_id_help: "OAuth client ID (Entra ID app registration; the loopback redirect URI must be registered)",
+                client_id_help: "OAuth client ID (Entra ID app registration; register the loopback redirect URI http://localhost/callback)",
             }),
             app_password_first: false,
         },

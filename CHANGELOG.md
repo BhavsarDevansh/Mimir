@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.141.2] — 2026-08-23
+
+### Fix: OAuth PKCE redirect URI uses `localhost` so Microsoft Entra registrations match
+
+- The interactive PKCE login (`mimir connector add` / `auth` with `auth.kind=oauth`) now sends `http://localhost:<port>/callback` as the redirect URI instead of `http://127.0.0.1:<port>/callback`. Microsoft Entra ignores the port component only for `localhost` redirect URIs — an IP-literal loopback URI with a random ephemeral port can never match a registration, so the Outlook / Office 365 login failed with `invalid_request: redirect_uri is not valid`. The callback listener still binds `127.0.0.1` only; browsers resolve `localhost` and fall back to IPv4. Google desktop-app clients are unaffected (they accept any loopback port on `localhost` or `127.0.0.1`).
+- Microsoft app registrations must register the loopback redirect `http://localhost/callback` (any port matches); the wizard's Outlook preset help text now states the exact URI to register.
+- Tests: the mock-OAuth PKCE E2E assertion now expects the `localhost` redirect URI; the full PKCE round trip and the daemon-level CLI OAuth E2E pass.
+- Docs: `docs/oauth-client.md`, `docs/wiki/connectors.md`, `docs/cli.md`, and `docs/wiki/cli-commands.md` updated (redirect URI host, provider registration requirements).
+- Version bumped 0.141.1 → 0.141.2 (patch — bugfix).
+
 ## [0.141.1] — 2026-08-23
 
 ### Fix: OpenAI provider surface review hardening (PR #466 review)

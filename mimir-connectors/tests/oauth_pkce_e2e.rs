@@ -141,7 +141,7 @@ async fn full_pkce_flow_round_trips_against_mock_server() {
     assert_eq!(authorizes.len(), 1, "exactly one authorize request");
     assert_eq!(authorizes[0].client_id, "mimir-test-client");
     assert!(
-        authorizes[0].redirect_uri.starts_with("http://127.0.0.1:")
+        authorizes[0].redirect_uri.starts_with("http://localhost:")
             && authorizes[0].redirect_uri.ends_with("/callback"),
         "redirect_uri must be the loopback callback, got {}",
         authorizes[0].redirect_uri

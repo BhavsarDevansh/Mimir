@@ -118,10 +118,15 @@ pub async fn run_pkce_flow(
 
     // Bind the loopback callback listener on an ephemeral port. The redirect
     // URI is derived from the bound port, so the provider must accept
-    // loopback redirect URIs (RFC 8252 native-app pattern).
+    // loopback redirect URIs (RFC 8252 native-app pattern). The host is
+    // `localhost` (not `127.0.0.1`) because Microsoft Entra ignores the port
+    // component only for `localhost` redirect URIs — an IP-literal loopback
+    // URI is matched exactly, including the port, which a random ephemeral
+    // port can never satisfy. The listener itself stays bound to `127.0.0.1`
+    // (never `0.0.0.0`); browsers resolve `localhost` and fall back to IPv4.
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
-    let redirect_uri = format!("http://127.0.0.1:{port}{CALLBACK_PATH}");
+    let redirect_uri = format!("http://localhost:{port}{CALLBACK_PATH}");
 
     let client = BasicClient::new(ClientId::new(config.client_id.clone()))
         .set_auth_uri(

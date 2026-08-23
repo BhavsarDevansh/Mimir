@@ -140,7 +140,7 @@ Core facts about the user (condensed subset — not a complete picture; treat as
             Ok(presets_dir) => Self::from_path(&presets_dir, &config.preset),
             Err(error) => Self::fallback_with_warning(config, error),
         };
-        Self::log_warnings(&personality);
+        Self::log_warnings(&personality.warnings);
         personality
     }
 
@@ -495,8 +495,8 @@ Core facts about the user (condensed subset — not a complete picture; treat as
     }
 
     /// Log every stored diagnostic as a daemon-side warning.
-    fn log_warnings(personality: &Self) {
-        for warning in &personality.warnings {
+    fn log_warnings(warnings: &[PresetWarning]) {
+        for warning in warnings {
             warn!(
                 path = ?warning.path,
                 reason = %warning.reason,
@@ -564,7 +564,7 @@ impl PersonalityCache {
             Ok(presets_dir) => self.resolve_from_path(&presets_dir, &config.preset),
             Err(error) => {
                 let personality = Personality::fallback_with_warning(config, error);
-                Personality::log_warnings(&personality);
+                Personality::log_warnings(&personality.warnings);
                 personality
             }
         }
@@ -584,22 +584,36 @@ impl PersonalityCache {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let hit =
             fingerprint.is_some() && guard.dir == presets_dir && guard.fingerprint == fingerprint;
-        let (custom, warnings, fresh) = if hit {
-            (guard.custom.clone(), guard.warnings.clone(), false)
+        let (custom, warnings, fresh, scan_warning_count) = if hit {
+            (
+                guard.custom.clone(),
+                guard.warnings.clone(),
+                false,
+                guard.warnings.len(),
+            )
         } else {
             let (custom, warnings) = Personality::scan_custom_presets(presets_dir);
+            let scan_warning_count = warnings.len();
             guard.dir = presets_dir.to_path_buf();
             guard.fingerprint = fingerprint;
             guard.custom = custom.clone();
             guard.warnings = warnings.clone();
             guard.scans += 1;
-            (custom, warnings, true)
+            (custom, warnings, true, scan_warning_count)
         };
         drop(guard);
         let personality = Personality::from_scan(custom, warnings, preset_name);
-        if fresh {
-            Personality::log_warnings(&personality);
-        }
+        // Scan diagnostics are logged once per scan; on a cache hit only the
+        // per-request diagnostics added by resolution (an unknown preset
+        // falling back to `transparent`) are logged, so a persistently
+        // malformed preset does not re-log on every request while
+        // request-scoped diagnostics are never silently dropped.
+        let warnings = if fresh {
+            &personality.warnings[..]
+        } else {
+            &personality.warnings[scan_warning_count..]
+        };
+        Personality::log_warnings(warnings);
         personality
     }
 
@@ -634,7 +648,10 @@ impl PersonalityCache {
                 // excluded from the fingerprint.
                 continue;
             };
-            let metadata = entry.metadata().ok()?;
+            // Follow symlinks (`Path::metadata`, like the scan's
+            // `read_to_string` and size check) so edits to a symlinked
+            // preset's target invalidate the cache instead of pinning it.
+            let metadata = std::fs::metadata(&path).ok()?;
             entries.push(EntryFingerprint {
                 name,
                 len: metadata.len(),
@@ -1278,5 +1295,54 @@ mod tests {
                 .iter()
                 .any(|warning| warning.reason.contains("exceeds"))
         );
+    }
+
+    #[test]
+    fn test_cache_hit_still_reports_unknown_preset_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("cheerful.personality.md"),
+            "You are cheerful!",
+        )
+        .unwrap();
+
+        let cache = PersonalityCache::default();
+        let first = cache.resolve_from_path(dir.path(), "cheerful");
+        assert_eq!(first.active_name(), "cheerful");
+
+        // A cache hit with an unknown per-request override still reports the
+        // fallback diagnostic instead of silently swallowing it.
+        let second = cache.resolve_from_path(dir.path(), "does-not-exist");
+        assert_eq!(second.active_name(), "transparent");
+        assert_eq!(cache.scan_count(), 1);
+        assert!(
+            second
+                .warnings()
+                .iter()
+                .any(|warning| warning.reason.contains("unknown personality preset"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_cache_invalidates_when_symlinked_preset_target_changes() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("preset-target.txt");
+        let link = dir.path().join("cheerful.personality.md");
+        fs::write(&target, "Version one").unwrap();
+        symlink(&target, &link).unwrap();
+
+        let cache = PersonalityCache::default();
+        let first = cache.resolve_from_path(dir.path(), "cheerful");
+        assert!(first.system_prompt("").starts_with("Version one"));
+
+        // Same-length rewrite: only the target mtime changes, so the cache
+        // must track the target's metadata, not the symlink's.
+        fs::write(&target, "Version two").unwrap();
+        let second = cache.resolve_from_path(dir.path(), "cheerful");
+        assert!(second.system_prompt("").starts_with("Version two"));
+        assert_eq!(cache.scan_count(), 2);
     }
 }

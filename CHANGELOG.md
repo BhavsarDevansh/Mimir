@@ -5,7 +5,7 @@
 ### Fix: chat route no longer re-reads personality presets on every request (issue #453)
 
 - The daemon now owns a `PersonalityCache` in `AppState`; chat requests resolve the active preset through it, and the personalities directory is only re-scanned when a cheap metadata fingerprint (directory mtime + per-file name/size/mtime/kind, never file contents) says preset files changed. Per-request `personality_preset` overrides (`mimir ask -p`, `/personality`) still resolve against the cached registry.
-- Invalidation covers edited, added, and removed preset files plus the directory being created after startup; an unreadable directory always rescans so transient errors cannot pin a stale cache, and preset diagnostics are now logged once per scan instead of once per request.
+- Invalidation covers edited, added, and removed preset files plus the directory being created after startup; an unreadable directory always rescans so transient errors cannot pin a stale cache. Scan diagnostics are now logged once per scan instead of once per request, while per-request fallback diagnostics (unknown preset names) still log per request.
 - Custom preset files above 1 MiB (the same cap as skill files) still load but now emit a scan-time size-advisory warning (`MAX_PRESET_FILE_SIZE` in `mimir-core/src/personality.rs`).
 - The one-shot paths (`Personality::new`, `mimir personality list`) are unchanged; `Personality` construction internals were factored into a shared `from_scan` helper (DRY) with the cache.
 - Tests: eight new `PersonalityCache` unit tests in `mimir-core/src/personality.rs` cover first scan, cache hits (via `scan_count()`), content/add/remove invalidation, directory creation, warning refresh, and the size advisory.

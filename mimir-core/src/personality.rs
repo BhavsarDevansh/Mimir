@@ -625,7 +625,9 @@ impl PersonalityCache {
     /// unreadable directory always rescans (and re-warns) instead of being
     /// served from a stale cache. A *missing* directory has a stable,
     /// cacheable fingerprint so the daemon does not rescan a directory the
-    /// user never created.
+    /// user never created. A single preset-named entry that cannot be
+    /// stat-ed is fingerprinted as a zero-sized, mtime-less entry (the scan
+    /// reports it as a warning), so one bad entry cannot disable the cache.
     fn fingerprint(presets_dir: &Path) -> Option<DirFingerprint> {
         let dir_modified = presets_dir.metadata().ok().and_then(|m| m.modified().ok());
         let mut entries = Vec::new();
@@ -641,22 +643,36 @@ impl PersonalityCache {
         }
         let read_dir = std::fs::read_dir(presets_dir).ok()?;
         for entry in read_dir {
-            let entry = entry.ok()?;
-            let path = entry.path();
+            let path = match entry {
+                Ok(entry) => entry.path(),
+                Err(_) => {
+                    // A failing directory entry cannot be named or stat-ed;
+                    // the scan reports it as a warning, and it reappears in
+                    // the fingerprint as soon as the directory yields it
+                    // again. Skipping it keeps the rest of the fingerprint
+                    // cacheable instead of disabling the cache entirely.
+                    continue;
+                }
+            };
             let Some(name) = Personality::preset_name_from_path(&path) else {
-                // Non-preset files never affect the scan, so they are
+                // Non-preset entries never affect the scan, so they are
                 // excluded from the fingerprint.
                 continue;
             };
             // Follow symlinks (`Path::metadata`, like the scan's
             // `read_to_string` and size check) so edits to a symlinked
-            // preset's target invalidate the cache instead of pinning it.
-            let metadata = std::fs::metadata(&path).ok()?;
+            // preset's target invalidate the cache instead of pinning it. A
+            // preset-named entry that cannot be stat-ed (for example a
+            // dangling symlink) is recorded as a zero-sized, mtime-less
+            // entry so one bad entry cannot disable the cache; the scan
+            // reports it as a warning, and it is re-statted as soon as its
+            // target reappears.
+            let metadata = std::fs::metadata(&path).ok();
             entries.push(EntryFingerprint {
                 name,
-                len: metadata.len(),
-                modified: metadata.modified().ok(),
-                is_dir: metadata.is_dir(),
+                len: metadata.as_ref().map(|m| m.len()).unwrap_or_default(),
+                modified: metadata.as_ref().and_then(|m| m.modified().ok()),
+                is_dir: metadata.as_ref().is_some_and(|m| m.is_dir()),
             });
         }
         entries.sort();
@@ -1343,6 +1359,49 @@ mod tests {
         fs::write(&target, "Version two").unwrap();
         let second = cache.resolve_from_path(dir.path(), "cheerful");
         assert!(second.system_prompt("").starts_with("Version two"));
+        assert_eq!(cache.scan_count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_cache_hit_with_dangling_symlink_preset() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("good.personality.md"), "You are good!").unwrap();
+        let link = dir.path().join("broken.personality.md");
+        let missing_target = dir.path().join("missing-target.txt");
+        symlink(&missing_target, &link).unwrap();
+
+        let cache = PersonalityCache::default();
+        let first = cache.resolve_from_path(dir.path(), "good");
+        assert!(first.system_prompt("").starts_with("You are good!"));
+        assert!(
+            first
+                .warnings()
+                .iter()
+                .any(|warning| warning.reason.contains("cannot read file"))
+        );
+
+        // The dangling symlink cannot be stat-ed but must not disable the
+        // cache: the second resolution is a hit served from the cached scan
+        // (with its warning) instead of rescanning the directory.
+        let second = cache.resolve_from_path(dir.path(), "good");
+        assert!(second.system_prompt("").starts_with("You are good!"));
+        assert!(
+            second
+                .warnings()
+                .iter()
+                .any(|warning| warning.reason.contains("cannot read file"))
+        );
+        assert_eq!(cache.scan_count(), 1);
+
+        // Creating the symlink target changes the entry's metadata, so the
+        // next resolution rescans and picks the preset up.
+        fs::write(&missing_target, "Now it exists!").unwrap();
+        let third = cache.resolve_from_path(dir.path(), "broken");
+        assert_eq!(third.active_name(), "broken");
+        assert!(third.system_prompt("").starts_with("Now it exists!"));
         assert_eq!(cache.scan_count(), 2);
     }
 }

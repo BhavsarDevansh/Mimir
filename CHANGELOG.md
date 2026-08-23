@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.137.1] — 2026-08-23
+## [0.138.0] — 2026-08-23
 
 ### Fix: chat route no longer re-reads personality presets on every request (issue #453)
 
@@ -10,7 +10,7 @@
 - The one-shot paths (`Personality::new`, `mimir personality list`) are unchanged; `Personality` construction internals were factored into a shared `from_scan` helper (DRY) with the cache.
 - Tests: eight new `PersonalityCache` unit tests in `mimir-core/src/personality.rs` cover first scan, cache hits (via `scan_count()`), content/add/remove invalidation, directory creation, warning refresh, and the size advisory.
 - Docs: `docs/personality-system.md` and `docs/wiki/personality.md` updated with the caching design and user-facing behaviour.
-- Version bumped 0.137.0 → 0.137.1 (patch — performance fix).
+- Version bumped 0.137.0 → 0.138.0 (minor — new public API `PersonalityCache`).
 
 ## [0.137.0] — 2026-08-23
 

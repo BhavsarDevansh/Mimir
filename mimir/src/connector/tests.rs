@@ -1733,6 +1733,31 @@ fn wizard_email_custom_imap_oauth_rejects_empty_scopes() {
 }
 
 #[test]
+fn wizard_email_custom_imap_oauth_rejects_parsed_empty_scopes() {
+    // A non-blank answer that parses to zero scopes (e.g. `", ,"`) must be
+    // rejected too — `required` only checks the raw input, so without this
+    // guard the wizard would build an authorize request with no scope.
+    let entry = email_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(5), // Custom IMAP
+        ScriptedAnswer::Input("imap.example.com".to_string()),
+        ScriptedAnswer::Input(String::new()), // port → 993
+        ScriptedAnswer::Input(String::new()), // mailbox → INBOX
+        ScriptedAnswer::Input("me@example.com".to_string()),
+        ScriptedAnswer::Select(0), // Sync mode — push
+        ScriptedAnswer::Select(0), // Existing mailbox content — import
+        ScriptedAnswer::Select(1), // OAuth 2.0 — browser login
+        ScriptedAnswer::Input("https://auth.example.com/authorize".to_string()),
+        ScriptedAnswer::Input("https://auth.example.com/token".to_string()),
+        ScriptedAnswer::Input("client-custom".to_string()),
+        ScriptedAnswer::Password(String::new()),
+        ScriptedAnswer::Input(", ,".to_string()), // scopes → parses to []
+    ]);
+    let err = build_wizard_config(&entry, "custom-mail", &prompts).unwrap_err();
+    assert_eq!(err, "OAuth scopes is required");
+}
+
+#[test]
 fn wizard_calendar_google_preset_uses_google_endpoints_and_computed_url() {
     let entry = mimir_api_types::ConnectorCatalogEntry {
         connector_type: "calendar".to_string(),

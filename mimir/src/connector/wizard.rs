@@ -468,13 +468,17 @@ fn email_oauth_questions(
         ),
         "OAuth scopes",
     )?;
+    let scopes = parse_scopes(&scopes_raw);
+    if scopes.is_empty() {
+        return Err("OAuth scopes is required".to_string());
+    }
     let auth = json!({
         "kind": "oauth",
         "username": username,
         "auth_uri": auth_uri,
         "token_endpoint": token_endpoint,
         "client_id": client_id,
-        "scopes": parse_scopes(&scopes_raw),
+        "scopes": scopes,
     });
     Ok((auth, WizardCredential::OAuth { client_secret }))
 }
@@ -853,8 +857,9 @@ fn calendar_oauth_questions(
 
 /// Split a user-entered scope list on commas and/or whitespace into a JSON
 /// string array, dropping empty segments. The email OAuth prompts reject an
-/// empty answer via [`required`] before this runs, so a scope-less authorize
-/// request is never built (the custom IMAP preset has no default scope).
+/// empty answer via [`required`] and a parsed-empty list (e.g. `", ,"`) after
+/// this runs, so a scope-less authorize request is never built (the custom
+/// IMAP preset has no default scope).
 pub(crate) fn parse_scopes(raw: &str) -> Vec<String> {
     raw.split([',', ' ', '\t'])
         .map(str::trim)

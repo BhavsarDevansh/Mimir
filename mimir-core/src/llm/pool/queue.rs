@@ -15,7 +15,6 @@ impl LlmWorkerPool {
     ///
     /// Returns the assistant response and token usage when the job completes.
     /// Returns [`LlmError::QueueFull`] if the user queue is at capacity.
-    /// Enqueue a non-streaming chat job to the **user** queue and return the full message.
     pub async fn enqueue_chat_message(
         &self,
         messages: Vec<Message>,

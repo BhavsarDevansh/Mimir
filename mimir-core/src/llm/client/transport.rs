@@ -51,10 +51,7 @@ impl LlmClient {
         tools: Option<Vec<serde_json::Value>>,
         overrides: &LlmRequestOverrides,
     ) -> ChatRequest {
-        let model = overrides
-            .model
-            .clone()
-            .unwrap_or_else(|| self.config.model.clone());
+        let model = self.effective_model(overrides);
         let mut req = ChatRequest::new(model, messages)
             .with_temperature(overrides.temperature.unwrap_or(self.config.temperature))
             .with_stream(stream);
@@ -74,11 +71,7 @@ impl LlmClient {
     /// Falls back to a small built-in mapping for well-known models when the
     /// provider does not expose `context_window`.
     pub async fn fetch_model_context_window(&self) -> Result<Option<u32>, LlmError> {
-        let model = self
-            .overrides
-            .model
-            .clone()
-            .unwrap_or_else(|| self.config.model.clone());
+        let model = self.effective_model(&self.overrides);
         let url = format!("{}/models/{}", self.config.endpoint, model);
         let response = self
             .client
@@ -98,6 +91,15 @@ impl LlmClient {
         Ok(info
             .context_window
             .or_else(|| Self::known_context_window(&model)))
+    }
+
+    /// The upstream model to use for a request — the per-request override
+    /// when present, otherwise the configured model.
+    pub(super) fn effective_model(&self, overrides: &LlmRequestOverrides) -> String {
+        overrides
+            .model
+            .clone()
+            .unwrap_or_else(|| self.config.model.clone())
     }
 
     /// Built-in context-window sizes for popular models.

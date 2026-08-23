@@ -115,7 +115,7 @@ impl LlmClient {
         overrides: &LlmRequestOverrides,
     ) -> Result<(Message, Usage), LlmError> {
         let request = self.build_request(messages, false, tools, overrides);
-        debug!(endpoint = %self.config.endpoint, model = %self.config.model, "sending chat request");
+        debug!(endpoint = %self.config.endpoint, model = %request.model, "sending chat request");
 
         let response = self
             .retry_with_backoff(|| self.send_request(&request))
@@ -149,7 +149,7 @@ impl LlmClient {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
         let mut request = self.build_request(messages, true, tools, overrides);
         request.stream_options = Some(serde_json::json!({"include_usage": true}));
-        debug!(endpoint = %self.config.endpoint, model = %self.config.model, "sending streaming chat request with usage");
+        debug!(endpoint = %self.config.endpoint, model = %request.model, "sending streaming chat request with usage");
 
         let response = self
             .retry_with_backoff(|| self.send_request(&request))

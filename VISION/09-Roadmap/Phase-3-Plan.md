@@ -93,10 +93,12 @@ Framework + Mock → Photos (local) → Calendar (CalDAV) → Email (IMAP). Asce
 | `icalendar` | 0.17.6 | Calendar parse + build; Email iMIP VEVENTs (shared with `gmail`) | `calendar`, `gmail` |
 | `kamadak-exif` | 0.6.1 | Photos EXIF/GPS | `photos` |
 | `notify` | 8.2.0 | Photos file watcher (already in tree) | `photos` |
-| `keyring` | 4.1.2 | Optional secret backend | `secrets-keyring` (off by default) |
+| `keyring` | 3.6.3 | Optional secret backend | `secrets-keyring` (off by default) |
 | `argon2` / `chacha20poly1305` | — | Deferred (at-rest encryption) | not in V1 |
 
 All HTTP via `reqwest` (already a workspace dep). No `sqlx` in `mimir-connectors`.
+
+**Reconciliation decision (#188, v0.137.0):** the ledger row is pinned to `keyring 3.6.3` because every 4.x release requires Rust 1.88, above the workspace MSRV 1.85 (same cap as the `icalendar` pin, #239). The enabled keyring features are `apple-native` (macOS Keychain), `windows-native` (Windows Credential Manager), and `async-secret-service` + `crypto-rust` (Linux/BSD Secret Service over the pure-Rust zbus stack, D-Bus payloads encrypted with RustCrypto). The `sync-secret-service` variant was rejected because it needs the libdbus C library, and keyring's `tokio` feature is deliberately not enabled: zbus's `block_on` then panics when called inside a tokio runtime, while the default async-io runtime is safe to block on from any thread — the daemon calls the blocking `Entry` API from async tasks. Revisit 4.x when the workspace MSRV moves past 1.88.
 
 **Reconciliation decision (#240, v0.96.0):** `oauth2` 5.0.0's optional `reqwest` feature pins reqwest 0.12, which would duplicate the workspace's reqwest 0.13 HTTP/TLS stack. The chosen path is `oauth2` with `default-features = false` plus a custom [`OAuthHttpClient`](../../docs/oauth-client.md) adapter that implements the crate's `AsyncHttpClient` trait over the workspace reqwest 0.13 client — one reqwest major in the tree, the vetted PKCE/refresh protocol code, redirects disabled on OAuth calls, and the pre-existing HTTPS/loopback endpoint gate + secret-hygiene error mapping preserved. oauth2 5.0.0's unconditional deps are already in the tree except `rand 0.8` (a third rand line alongside 0.9/0.10; small and required by oauth2's PKCE verifier generation) and `thiserror 1.x` (already in the tree). No reqwest 0.12-compatible oauth2 release exists (latest is still 5.0.0 as of 2026-08-11), so "wait for an upgrade" is struck from the options.
 
@@ -117,7 +119,7 @@ Issues are tagged `phase-3`. Dependency references use "Blocked by: #N". Full sp
 - **F8** `ConnectorSupervisor` — supervised lifecycle (spawn/restart/backoff/circuit-breaker/startup-restore/graceful-shutdown/cursor-persistence)
 - **F9** Manual sync triggering (per-connector `Notify` + serialisation)
 - **F10** `SecretStore` trait + `SecretBundle` + `FileSecretStore`
-- **F11** `keyring` opt-in `SecretStore` backend *(deferred)*
+- **F11** `keyring` opt-in `SecretStore` backend — **implemented (#188, v0.137.0)**
 - **F12** Rate limiter + retry/backoff primitives
 - **F13** Mock connector (test harness, always compiled)
 
@@ -154,7 +156,7 @@ F2 ─┤            └─> F13 ───────────────�
 F3 ─┤                                             ┌──┤
 F4 ─┼─> F5                                       │  │
 F12 ─┘                                           │  │
-F10 ─> F11(deferred)                             │  │
+F10 ─> F11                                       │  │
                                                  │  ├─> C1 ─> C2 ─┐
 F12 ─> S1 ─> S2(deferred)                        │  │              │
 F2,F4,S1 ─> S3 ─> S4                             │  ├─> C3 ─> C4 ─┤

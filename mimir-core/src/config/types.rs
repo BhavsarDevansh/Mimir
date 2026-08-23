@@ -21,6 +21,7 @@ pub struct Config {
     pub identity: IdentityConfig,
     pub scheduler: SchedulerConfig,
     pub geocoder: GeocoderConfig,
+    pub secrets: SecretsConfig,
 }
 
 /// Result of an initialisation attempt.
@@ -204,6 +205,54 @@ impl Default for GeocoderConfig {
     }
 }
 
+/// Connector credential storage settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SecretsConfig {
+    /// Which secret-store backend the daemon uses for connector secrets.
+    ///
+    /// `file` (the default) stores plaintext per-slug JSON files under
+    /// `~/.local/share/mimir/secrets/` with `0600`/`0700` permissions;
+    /// `keychain` stores bundles in the OS credential store (macOS Keychain,
+    /// Linux/BSD Secret Service, Windows Credential Manager) and requires a
+    /// build with the `secrets-keyring` cargo feature.
+    pub backend: SecretsBackend,
+}
+
+/// Which credential store backs connector secrets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SecretsBackend {
+    /// Per-connector JSON files with strict Unix permissions (V1 default).
+    #[default]
+    File,
+    /// The OS credential store via the `keyring` crate (`secrets-keyring`
+    /// cargo feature; macOS Keychain / Linux or BSD Secret Service / Windows
+    /// Credential Manager).
+    Keychain,
+}
+
+impl fmt::Display for SecretsBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SecretsBackend::File => write!(f, "file"),
+            SecretsBackend::Keychain => write!(f, "keychain"),
+        }
+    }
+}
+
+impl FromStr for SecretsBackend {
+    type Err = ConfigError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "file" => Ok(SecretsBackend::File),
+            "keychain" => Ok(SecretsBackend::Keychain),
+            _ => Err(ConfigError::InvalidSecretsBackend(s.to_string())),
+        }
+    }
+}
+
 /// How eagerly the agent initiates actions on its own.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -258,6 +307,10 @@ pub enum ConfigError {
     /// The supplied proactivity value is not recognised.
     #[error("Invalid proactivity value: '{0}'. Expected 'never', 'important_only', or 'always'.")]
     InvalidProactivity(String),
+
+    /// The supplied secrets backend value is not recognised.
+    #[error("Invalid secrets backend: '{0}'. Expected 'file' or 'keychain'.")]
+    InvalidSecretsBackend(String),
 }
 
 impl Default for LlmConfig {

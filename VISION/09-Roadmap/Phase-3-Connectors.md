@@ -1,8 +1,8 @@
 # Phase 3: Connectors
 
-> **Status:** Implemented — framework (F1–F10, F12–F13; F11 keyring deferred), all three backends (C1–C7), CLI/server (A1–A4), and testing (T1–T2) have landed. The detailed issue breakdown and design decisions live in `VISION/09-Roadmap/Phase-3-Plan.md`; this file is the high-level deliverable checklist.
+> **Status:** Implemented — framework (F1–F13, including the F11 opt-in OS-keychain secret backend, #188), all three backends (C1–C7), CLI/server (A1–A4), and testing (T1–T2) have landed. The detailed issue breakdown and design decisions live in `VISION/09-Roadmap/Phase-3-Plan.md`; this file is the high-level deliverable checklist.
 >
-> **Last Updated:** 2026-08-16
+> **Last Updated:** 2026-08-23
 
 ## Goal
 Build the connector framework and implement 3 core connectors: Email, Calendar, and Photos.
@@ -17,6 +17,7 @@ Build the connector framework and implement 3 core connectors: Email, Calendar, 
 - [x] Error handling and retry logic (F12 / #189)
 - [x] Health monitoring (F8 / #185)
 - [x] Authentication framework (OAuth, token, local) (F10 / #187, #240, A4 / #205)
+- [x] Optional OS-keychain secret backend (F11 / #188) — `keyring` crate, feature-gated `secrets-keyring`, off by default, selected via `secrets.backend = "keychain"`
 
 ### 3.2 Gmail / IMAP Connector
 - [x] OAuth 2.0 authentication (C5 / #199)

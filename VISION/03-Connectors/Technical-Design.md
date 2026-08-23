@@ -101,12 +101,12 @@ The typed, parsed fact produced by `extract()` and consumed by the shared pipeli
 
 ## Authentication Patterns
 
-> **Note (updated 2026-07-17, #187 / F10):** the locked Phase 3 plan (`VISION/09-Roadmap/Phase-3-Plan.md`) is the source of truth for credential storage. V1 stores secrets **in plaintext** at rest — one `0600` JSON file per connector under `~/.local/share/mimir/secrets/<slug>.json`, consistent with the plaintext LLM API key in `config.toml` and the home-directory trust boundary. At-rest encryption (`argon2` + `chacha20poly1305`) and an OS keyring backend (`keyring`, #188) are **deferred** follow-ups. The earlier "stored encrypted at rest" wording below is superseded.
+> **Note (updated 2026-07-17, #187 / F10):** the locked Phase 3 plan (`VISION/09-Roadmap/Phase-3-Plan.md`) is the source of truth for credential storage. V1 stores secrets **in plaintext** at rest — one `0600` JSON file per connector under `~/.local/share/mimir/secrets/<slug>.json`, consistent with the plaintext LLM API key in `config.toml` and the home-directory trust boundary. An OS keyring backend (`keyring`, #188) landed as an opt-in `secrets-keyring` feature (`secrets.backend = "keychain"`); at-rest encryption (`argon2` + `chacha20poly1305`) remains a **deferred** follow-up. The earlier "stored encrypted at rest" wording below is superseded.
 
 ### OAuth 2.0 (Gmail, Google Calendar, GitHub, Spotify)
 - PKCE flow for native apps
 - Token refresh handled automatically
-- V1: plaintext `SecretBundle::OAuth` JSON file (mode `0600`); keyring / at-rest encryption deferred (see note above)
+- Default: plaintext `SecretBundle::OAuth` JSON file (mode `0600`); optional keyring backend (#188) behind `secrets-keyring`; at-rest encryption deferred (see note above)
 
 ### API Tokens (Home Assistant, GitHub PAT)
 - User provides token directly

@@ -148,6 +148,7 @@ fn test_save_and_load() {
         knowledge: KnowledgeConfig::default(),
         scheduler: SchedulerConfig::default(),
         geocoder: GeocoderConfig::default(),
+        secrets: SecretsConfig::default(),
     };
 
     original.save(&path).unwrap();
@@ -693,4 +694,56 @@ fn test_env_override_geocoder_contact_email_trims_padding() {
         config.geocoder.contact_email.as_deref(),
         Some("ops@example.com")
     );
+}
+
+#[test]
+fn test_secrets_config_defaults() {
+    let config = Config::default();
+    assert_eq!(config.secrets.backend, SecretsBackend::File);
+}
+
+#[test]
+fn test_secrets_config_toml_parses() {
+    let toml_str = r#"
+[secrets]
+backend = "keychain"
+"#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.secrets.backend, SecretsBackend::Keychain);
+}
+
+#[test]
+fn test_secrets_section_is_optional() {
+    let toml_str = r#"
+[llm]
+model = "gpt-4o"
+"#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.secrets.backend, SecretsBackend::File);
+}
+
+#[test]
+fn test_env_override_secrets_backend() {
+    let mut config = Config::default();
+    config.apply_env_overrides_with(|key| {
+        if key == "MIMIR_SECRETS_BACKEND" {
+            Some("keychain".to_string())
+        } else {
+            None
+        }
+    });
+    assert_eq!(config.secrets.backend, SecretsBackend::Keychain);
+}
+
+#[test]
+fn test_env_override_secrets_backend_invalid_ignored() {
+    let mut config = Config::default();
+    config.apply_env_overrides_with(|key| {
+        if key == "MIMIR_SECRETS_BACKEND" {
+            Some("not_a_backend".to_string())
+        } else {
+            None
+        }
+    });
+    assert_eq!(config.secrets.backend, SecretsBackend::File);
 }

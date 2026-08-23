@@ -168,6 +168,24 @@ futures = { version = "0.3", optional = true }
 # the `text/calendar` iMIP parts this issue extracts. License MIT/Apache-2.0
 # (GPL-3-compatible). Gated by the `gmail` feature.
 mail-parser = { version = "0.11.5", optional = true }
+# F11 (issue #188): optional OS-keychain secret backend. `keyring` 3.6.3 is
+# pinned because every 4.x release requires Rust 1.88, above the workspace
+# MSRV 1.85 (same reconciliation as `icalendar`, issue #239). Features select
+# the platform stores: macOS Keychain (`apple-native`), Windows Credential
+# Manager (`windows-native`), and the Linux/FreeBSD/OpenBSD Secret Service
+# over D-Bus (`async-secret-service` — the pure-Rust zbus variant; the
+# alternative `sync-secret-service` would pull libdbus, a C system library).
+# zbus's `tokio` feature is deliberately NOT enabled: keyring's `Entry` API
+# is blocking even with `async-secret-service` (it drives the D-Bus calls
+# through async-io's `block_on`), so per keyring's own guidance every call is
+# dispatched through `tokio::task::spawn_blocking` onto a dedicated blocking
+# worker in `src/secrets/keyring.rs` — the async `SecretStore` methods never
+# occupy a Tokio worker, and the async-io `block_on` parks the blocking
+# worker thread safely. `crypto-rust` encrypts secrets in transit across
+# D-Bus with RustCrypto (no OpenSSL). All gated by the `secrets-keyring`
+# feature (off by default: headless systemd boxes often lack a Secret Service
+# daemon).
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "async-secret-service", "crypto-rust"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
@@ -212,3 +230,8 @@ test-mock-oauth = ["oauth", "dep:rcgen", "dep:sha2", "dep:tokio-rustls", "dep:ru
 calendar = ["dep:icalendar", "dep:roxmltree", "dep:chrono-tz", "dep:uuid", "oauth"]
 ## IMAP email ingestion, Gmail and other providers (C5–C7).
 gmail = ["dep:async-imap", "dep:base64", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures", "dep:icalendar", "dep:chrono-tz", "dep:mail-parser", "oauth"]
+## Optional OS-keychain backend (F11 / #188): `KeyringSecretStore` over the
+## `keyring` crate (macOS Keychain / Linux Secret Service / Windows
+## Credential Manager). Off by default; daemon support is enabled by
+## building `mimir` (or `mimir-server`) with the `secrets-keyring` feature.
+secrets-keyring = ["dep:keyring"]

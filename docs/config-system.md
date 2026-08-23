@@ -62,6 +62,7 @@ Convenience wrapper that returns `dirs::config_dir() / "mimir" / "config.toml"`.
 | `AgentConfig` | `name`, `proactivity`, `verbose_reasoning` | `proactivity` is an enum |
 | `MemoryConfig` | `enabled`, `char_limit`, `auto_manage`, `temporal_horizon` | `temporal_horizon` is `u8` days |
 | `GeocoderConfig` | `enabled`, `endpoint`, `contact_email` | Controls the shared Nominatim geocoder (issue #227) |
+| `SecretsConfig` | `backend` | Connector credential store: `file` (default) or `keychain` (issue #188) |
 | `Proactivity` | `Never`, `ImportantOnly`, `Always` | Serialises as `snake_case` |
 
 ## Environment Variable Mapping
@@ -106,6 +107,22 @@ Invalid numeric or boolean values are ignored silently. Invalid `MIMIR_AGENT_PRO
 
 All `PathsError` variants include troubleshooting guidance in their error messages (e.g., "Ensure $HOME is set, or set $XDG_CONFIG_HOME to a valid path.").
 
+
+## SecretsConfig
+
+Controls which [`SecretStore`](connector-secret-store.md) backend the daemon uses for connector credentials (issue #188 / F11).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `backend` | `SecretsBackend` | `"file"` | `"file"` stores per-slug JSON files with `0600`/`0700` permissions (V1 default); `"keychain"` stores bundles in the OS credential store (macOS Keychain / Linux or BSD Secret Service / Windows Credential Manager) and requires a build with the `secrets-keyring` cargo feature |
+
+### Environment Variables
+
+| Variable | Target Field | Type |
+|----------|-------------|------|
+| `MIMIR_SECRETS_BACKEND` | `secrets.backend` | `SecretsBackend` (`"file"` / `"keychain"`) |
+
+Invalid values are ignored silently, matching the rest of the env-override layer. A configured `keychain` backend in a build without the `secrets-keyring` feature aborts daemon startup with an actionable error rather than silently falling back to plaintext files.
 
 ## GeocoderConfig
 

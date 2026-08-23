@@ -50,6 +50,44 @@ async fn kg_init_inputs(
     (Arc::new(ToolRegistry::new()), context_manager, test_llm())
 }
 
+#[cfg(not(feature = "secrets-keyring"))]
+#[test]
+fn keychain_backend_without_feature_fails_loudly() {
+    let mut config = Config::default();
+    config.secrets.backend = mimir_core::config::SecretsBackend::Keychain;
+    let err = super::builder::build_secret_store(&config).unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("secrets-keyring"),
+        "error must point at the missing cargo feature: {message}"
+    );
+    assert!(
+        message.contains("keychain"),
+        "error must name the configured backend: {message}"
+    );
+}
+
+#[cfg(all(
+    feature = "secrets-keyring",
+    any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "macos",
+        target_os = "windows"
+    )
+))]
+#[test]
+fn keychain_backend_with_feature_constructs_os_store() {
+    let mut config = Config::default();
+    config.secrets.backend = mimir_core::config::SecretsBackend::Keychain;
+    let store = super::builder::build_secret_store(&config).unwrap();
+    assert!(
+        store.is_some(),
+        "keychain backend must construct the OS-keychain store"
+    );
+}
+
 #[test]
 fn warn_err_returns_some_on_ok() {
     assert_eq!(

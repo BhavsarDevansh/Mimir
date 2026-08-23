@@ -39,4 +39,15 @@ pub enum SecretError {
          (expected file 0600 / dir 0700, no group or other bits)"
     )]
     InsecurePermissions { slug: String },
+
+    /// The OS credential store (keyring) failed the operation.
+    #[cfg(feature = "secrets-keyring")]
+    #[error("OS keychain operation failed: {0}")]
+    Keyring(#[from] keyring::Error),
+
+    /// The dedicated keyring blocking worker failed (the worker panicked or
+    /// the Tokio runtime shut down mid-operation).
+    #[cfg(feature = "secrets-keyring")]
+    #[error("OS keychain worker task failed: {0}")]
+    KeyringTask(#[from] tokio::task::JoinError),
 }

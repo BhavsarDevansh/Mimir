@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.137.0] — 2026-08-23
+
+### Feature: opt-in OS-keychain SecretStore backend (issue #188 / F11)
+
+- `KeyringSecretStore` implements the `SecretStore` trait over the `keyring` crate — macOS Keychain, Linux/FreeBSD/OpenBSD Secret Service (gnome-keyring / KWallet over D-Bus), and Windows Credential Manager. Each connector slug is one OS entry (keyring service `mimir`, account = slug) holding the serialized `SecretBundle` JSON — both backends round-trip the same JSON schema losslessly, differing only in formatting (the file store writes pretty-printed JSON, the keyring store compact JSON).
+- Feature-gated behind `secrets-keyring` (off by default — headless systemd boxes often lack a Secret Service daemon) and selected at daemon startup with the new `[secrets]` config section: `secrets.backend = "file"` (default) or `"keychain"`, with `MIMIR_SECRETS_BACKEND` env override. Requesting `keychain` in a build without the feature fails daemon startup with an actionable error instead of silently falling back to plaintext files.
+- Missing entries follow the `SecretStore` contract (`load` → `Ok(None)`, `delete` → `Ok(())`); platform failures surface as a new feature-gated `SecretError::Keyring` (HTTP 500 via the existing secret-error mapping); slug validation is shared with the file store (`[A-Za-z0-9_-]{1,128}`) before any keyring call.
+- Dependency reconciliation: `keyring` is pinned to 3.6.3 because every 4.x release requires Rust 1.88, above the workspace MSRV 1.85 (same cap as `icalendar`, #239). Linux uses the pure-Rust zbus Secret Service stack (`async-secret-service` + `crypto-rust`); keyring's `tokio` feature is deliberately off because zbus's `block_on` panics inside a tokio runtime, and the `sync-secret-service` variant is avoided because it needs the libdbus C library.
+- Review fixes: `keyring`'s `Entry` API is blocking even with `async-secret-service`, so every operation is dispatched through `tokio::task::spawn_blocking` onto a dedicated blocking worker (per keyring's own guidance) instead of running inline on the Tokio executor; a worker panic or runtime shutdown surfaces as the new feature-gated `SecretError::KeyringTask`; docs now state the keyring feature's supported targets (Linux, FreeBSD, OpenBSD, macOS, Windows) and make the file-store wording conditional on `secrets.backend = "file"`.
+- Docs: `docs/connector-secret-store.md`, `docs/connectors-framework.md`, `docs/config-system.md`, `docs/wiki/connectors.md`, `docs/wiki/configuration.md`, `docs/wiki/what-works-now.md`, `README.md`, `Mimir-Implementation-Context.md`, and both Phase 3 roadmap files updated; the `VISION/09-Roadmap/Phase-3-Plan.md` dependency ledger records the MSRV reconciliation.
+- Version bumped 0.136.0 → 0.137.0 (minor — new feature).
+
 ## [0.136.0] — 2026-08-22
 
 ### Feature: `mimir connector add` just works — wizard auto-activation, sync-mode + backfill choices, resolved mode (issue #397)

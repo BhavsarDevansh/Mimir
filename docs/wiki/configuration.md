@@ -120,6 +120,20 @@ mimir ask "Hello"
 | `MIMIR_GEOCODER_ENABLED` | Enable or disable geocoding entirely | `true` or `false` |
 | `MIMIR_GEOCODER_ENDPOINT` | Base URL of the Nominatim instance | `https://nominatim.example.com` |
 | `MIMIR_GEOCODER_CONTACT_EMAIL` | Contact email appended to the `User-Agent` (empty clears it) | `you@example.com` |
+| `MIMIR_SECRETS_BACKEND` | Connector credential store: `file` or `keychain` | `file` |
+
+## Connector Secrets Storage
+
+The `[secrets]` section controls where connector credentials live:
+
+```toml
+[secrets]
+backend = "file"  # or "keychain"
+```
+
+- `backend = "file"` (the default) stores each connector's credentials in a per-slug JSON file under `~/.local/share/mimir/secrets/` with `0600`/`0700` permissions, refused if the permissions are ever loosened.
+- `backend = "keychain"` stores credentials in your operating system's credential store — macOS Keychain, Linux/FreeBSD/OpenBSD Secret Service (gnome-keyring / KWallet), or Windows Credential Manager — but requires a build with the `secrets-keyring` cargo feature on a supported target (Linux, FreeBSD, OpenBSD, macOS, or Windows). The feature is off by default because headless Linux boxes often have no Secret Service daemon. On an unsupported target, or in a build without the feature, the daemon refuses to start with an explanatory error rather than silently storing secrets in plaintext.
+- Changing `backend` requires a process restart: the secret store is constructed once at startup and is not hot-reloaded.
 
 ## Geocoding
 

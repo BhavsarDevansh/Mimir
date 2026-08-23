@@ -468,10 +468,7 @@ fn email_oauth_questions(
         ),
         "OAuth scopes",
     )?;
-    let scopes = parse_scopes(&scopes_raw);
-    if scopes.is_empty() {
-        return Err("OAuth scopes is required".to_string());
-    }
+    let scopes = parse_scopes_required(&scopes_raw)?;
     let auth = json!({
         "kind": "oauth",
         "username": username,
@@ -825,7 +822,10 @@ fn caldav_app_password_provider(
 /// Prompt the OAuth client credentials for a CalDAV flow and assemble the
 /// auth block; the client secret never enters `config_json` — it travels in
 /// the credential bundle. Shared by the Google Calendar preset (endpoints
-/// pre-filled) and the custom CalDAV flow (user-supplied endpoints).
+/// pre-filled) and the custom CalDAV flow (user-supplied endpoints). A blank
+/// scopes answer keeps the [`CALDAV_SCOPE`] default, but a non-blank answer
+/// that parses to zero scopes (e.g. `", ,"`) is rejected so a scope-less
+/// authorize request is never built (mirrors `email_oauth_questions`).
 fn calendar_oauth_questions(
     prompts: &dyn PromptDriver,
     username: &str,
@@ -844,28 +844,40 @@ fn calendar_oauth_questions(
         "OAuth scopes (comma or space-separated)",
         Some(CALDAV_SCOPE),
     )?;
+    let scopes = parse_scopes_required(&scopes_raw)?;
     let auth = json!({
         "kind": "oauth",
         "username": username,
         "auth_uri": auth_uri,
         "token_endpoint": token_endpoint,
         "client_id": client_id,
-        "scopes": parse_scopes(&scopes_raw),
+        "scopes": scopes,
     });
     Ok((auth, WizardCredential::OAuth { client_secret }))
 }
 
 /// Split a user-entered scope list on commas and/or whitespace into a JSON
-/// string array, dropping empty segments. The email OAuth prompts reject an
-/// empty answer via [`required`] and a parsed-empty list (e.g. `", ,"`) after
-/// this runs, so a scope-less authorize request is never built (the custom
-/// IMAP preset has no default scope).
+/// string array, dropping empty segments.
 pub(crate) fn parse_scopes(raw: &str) -> Vec<String> {
     raw.split([',', ' ', '\t'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+/// Parse a user-entered OAuth scope list and reject a list that parses to
+/// zero scopes, so a scope-less authorize request is never built. Shared by
+/// the email and calendar OAuth prompts; the email prompt additionally
+/// rejects a blank answer via [`required`] (the custom IMAP preset has no
+/// default scope), while a blank calendar answer keeps the [`CALDAV_SCOPE`]
+/// default before this runs.
+fn parse_scopes_required(raw: &str) -> Result<Vec<String>, String> {
+    let scopes = parse_scopes(raw);
+    if scopes.is_empty() {
+        return Err("OAuth scopes is required".to_string());
+    }
+    Ok(scopes)
 }
 
 /// Local-photos wizard: a directory to watch; no credential.

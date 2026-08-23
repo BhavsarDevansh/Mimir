@@ -1918,6 +1918,31 @@ fn wizard_caldav_oauth_scope_prompt_accepts_custom_list() {
 }
 
 #[test]
+fn wizard_caldav_oauth_rejects_parsed_empty_scopes() {
+    // A blank scopes answer falls back to the CALDAV_SCOPE default, but a
+    // non-blank answer that parses to zero scopes (e.g. `", ,"`) must be
+    // rejected — otherwise the wizard would build an authorize request with
+    // no scope, the same scope-less failure the email path guards against.
+    let entry = mimir_api_types::ConnectorCatalogEntry {
+        connector_type: "calendar".to_string(),
+        backend: "caldav".to_string(),
+    };
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(3), // Calendar provider → Custom CalDAV
+        ScriptedAnswer::Input("https://dav.example.com/cal".to_string()),
+        ScriptedAnswer::Input("me@example.com".to_string()),
+        ScriptedAnswer::Select(1), // OAuth 2.0 — browser login
+        ScriptedAnswer::Input("https://auth.example.com/auth".to_string()),
+        ScriptedAnswer::Input("https://auth.example.com/token".to_string()),
+        ScriptedAnswer::Input("client-456".to_string()),
+        ScriptedAnswer::Password(String::new()),
+        ScriptedAnswer::Input(", ,".to_string()), // scopes → parses to []
+    ]);
+    let err = build_wizard_config(&entry, "calendar", &prompts).unwrap_err();
+    assert_eq!(err, "OAuth scopes is required");
+}
+
+#[test]
 fn parse_scopes_splits_on_commas_and_whitespace() {
     assert_eq!(parse_scopes("a,b c\td"), vec!["a", "b", "c", "d"]);
     assert_eq!(parse_scopes("  ,  "), Vec::<String>::new());

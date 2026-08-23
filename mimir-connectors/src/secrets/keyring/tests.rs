@@ -8,6 +8,7 @@
 //! Service / Keychain / Credential Manager stores.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
@@ -28,10 +29,26 @@ type MemoryEntries = Arc<Mutex<HashMap<(String, String), Vec<u8>>>>;
 #[derive(Debug, Clone, Default)]
 struct MemoryBackend {
     entries: MemoryEntries,
+    get_calls: Arc<AtomicUsize>,
+    set_calls: Arc<AtomicUsize>,
+    delete_calls: Arc<AtomicUsize>,
+}
+
+impl MemoryBackend {
+    /// `(get, set, delete)` invocation counts, for asserting that rejected
+    /// operations never reach the backend.
+    fn call_counts(&self) -> (usize, usize, usize) {
+        (
+            self.get_calls.load(Ordering::Relaxed),
+            self.set_calls.load(Ordering::Relaxed),
+            self.delete_calls.load(Ordering::Relaxed),
+        )
+    }
 }
 
 impl KeyringBackend for MemoryBackend {
     fn get_secret(&self, service: &str, account: &str) -> Result<Vec<u8>, KeyringError> {
+        self.get_calls.fetch_add(1, Ordering::Relaxed);
         self.entries
             .lock()
             .unwrap()
@@ -41,6 +58,7 @@ impl KeyringBackend for MemoryBackend {
     }
 
     fn set_secret(&self, service: &str, account: &str, secret: &[u8]) -> Result<(), KeyringError> {
+        self.set_calls.fetch_add(1, Ordering::Relaxed);
         self.entries
             .lock()
             .unwrap()
@@ -49,6 +67,7 @@ impl KeyringBackend for MemoryBackend {
     }
 
     fn delete_credential(&self, service: &str, account: &str) -> Result<(), KeyringError> {
+        self.delete_calls.fetch_add(1, Ordering::Relaxed);
         let mut entries = self.entries.lock().unwrap();
         if entries
             .remove(&(service.to_string(), account.to_string()))
@@ -198,7 +217,8 @@ async fn corrupt_payload_maps_to_corrupt_error_with_slug() {
 
 #[tokio::test]
 async fn invalid_slugs_are_rejected_before_touching_the_keyring() {
-    let store = test_store(MemoryBackend::default());
+    let backend = MemoryBackend::default();
+    let store = test_store(backend.clone());
     for slug in ["", "a/b", "..", "a b", "a.b", "ümlaut"] {
         assert!(
             matches!(
@@ -207,9 +227,19 @@ async fn invalid_slugs_are_rejected_before_touching_the_keyring() {
             ),
             "store must reject {slug:?}"
         );
+        assert_eq!(
+            backend.call_counts(),
+            (0, 0, 0),
+            "store must not touch the keyring for {slug:?}"
+        );
         assert!(
             matches!(store.load(slug).await, Err(SecretError::InvalidSlug { .. })),
             "load must reject {slug:?}"
+        );
+        assert_eq!(
+            backend.call_counts(),
+            (0, 0, 0),
+            "load must not touch the keyring for {slug:?}"
         );
         assert!(
             matches!(
@@ -217,6 +247,11 @@ async fn invalid_slugs_are_rejected_before_touching_the_keyring() {
                 Err(SecretError::InvalidSlug { .. })
             ),
             "delete must reject {slug:?}"
+        );
+        assert_eq!(
+            backend.call_counts(),
+            (0, 0, 0),
+            "delete must not touch the keyring for {slug:?}"
         );
     }
 }

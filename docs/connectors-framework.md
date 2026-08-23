@@ -411,13 +411,13 @@ Struct variants (`ApiToken { token }`, `AppPassword { password }`) are used rath
 The `connector remove` flow (server `DELETE /connectors/:id` + CLI `mimir connector remove`, issues #202/#204/#203) calls `SecretStore::delete` on removal. F10 delivers the `delete(slug)` capability and its tests; the end-to-end "remove wipes the secret file" behaviour is verified when Epic 4 lands.
 
 
-## What remains to be built
+## Phase 3 delivery status
 
-- **F11** — the optional OS-keyring backend landed (#188): `KeyringSecretStore` over the `keyring` crate, gated by `secrets-keyring`, selected via `secrets.backend = "keychain"`. The `SecretStore` + `FileSecretStore` + `InMemorySecretStore` (F10 / #187), the rate limiter / retry primitives (F12 / #189), and the configurable mock harness (F13 / #190, gated by `test-mock-connector`) have landed.
-- **C1–C7** — all concrete backends have landed: Photos (C1–C2), CalDAV Calendar (C3–C4), and IMAP Email (C5–C7).
-- **A1–A4** — server `AppState` registry/supervisor wiring, the connector CRUD/status/action routes, the `mimir connector` CLI, and the OAuth PKCE flow are all implemented (#202–#205).
+All Phase 3 framework pieces have landed: F1 (scaffold), F2 (instance table + facade), F3 (provenance FK), F4 (`normalize_and_insert` boundary), F5 (entity-resolution chain), F6 (the `Connector` trait + data types), F7 (the `ConnectorRegistry` + multi-backend factory dispatch), F8 (the `ConnectorSupervisor` supervised lifecycle), F10 (the `SecretStore` + `FileSecretStore` + `InMemorySecretStore`), F11 (the opt-in OS-keyring backend, #188: `KeyringSecretStore` over the `keyring` crate, gated by `secrets-keyring`, selected via `secrets.backend = "keychain"`), F12 (the rate limiter / retry primitives, #189), and F13 (the configurable mock harness, #190, gated by `test-mock-connector`).
 
-The framework pieces already landed: F1 (scaffold), F2 (instance table + facade), F3 (provenance FK), F4 (`normalize_and_insert` boundary), F5 (entity-resolution chain), F6 (the `Connector` trait + data types), F7 (the `ConnectorRegistry` + multi-backend factory dispatch), F8 (the `ConnectorSupervisor` supervised lifecycle), and F10 (the `SecretStore` + `FileSecretStore` + `InMemorySecretStore`).
+All concrete backends C1–C7 have landed: Photos (C1–C2), CalDAV Calendar (C3–C4), and IMAP Email (C5–C7).
+
+The server and CLI surfaces A1–A4 are implemented (#202–#205): `AppState` registry/supervisor wiring, the connector CRUD/status/action routes, the `mimir connector` CLI, and the OAuth PKCE flow.
 
 ## Verification
 

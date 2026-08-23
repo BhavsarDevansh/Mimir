@@ -1,7 +1,7 @@
 //! OS-keychain [`SecretStore`] backend (Phase 3 F11 / issue #188).
 //!
 //! [`KeyringSecretStore`] implements [`SecretStore`] over the `keyring` crate:
-//! macOS Keychain, Linux/BSD Secret Service (gnome-keyring / KWallet over
+//! macOS Keychain, Linux/FreeBSD/OpenBSD Secret Service (gnome-keyring / KWallet over
 //! D-Bus), and Windows Credential Manager. It is feature-gated behind
 //! `secrets-keyring` (off by default — headless systemd boxes often lack a
 //! Secret Service daemon, so the [`FileSecretStore`](super::file::FileSecretStore)
@@ -13,6 +13,7 @@
 //! keyring entry model. The payload is the serialized [`SecretBundle`].
 
 use async_trait::async_trait;
+use std::sync::Arc;
 
 use super::bundle::SecretBundle;
 use super::error::SecretError;
@@ -80,27 +81,51 @@ impl KeyringBackend for OsKeyringBackend {
 /// [`SecretError::Keyring`] — there is no silent fallback to the file store,
 /// because the user explicitly chose the keychain backend.
 ///
-/// Like [`FileSecretStore`](super::file::FileSecretStore), the blocking
-/// keyring calls are fast (tiny payloads, one D-Bus/Keychain round-trip) and
-/// run inline in the async `SecretStore` methods; the per-connector supervisor
-/// serialises access per slug anyway.
+/// The `keyring` crate's `Entry` API is blocking (the Linux Secret Service
+/// stack drives its D-Bus calls through async-io's `block_on`), so every
+/// operation is dispatched through [`tokio::task::spawn_blocking`] onto a
+/// dedicated blocking worker: the async `SecretStore` methods never occupy a
+/// Tokio worker with blocking Keychain / D-Bus I/O, and never risk the
+/// deadlock keyring warns about when its calls run on a tokio runtime thread.
 #[derive(Debug)]
 pub struct KeyringSecretStore {
-    backend: Box<dyn KeyringBackend>,
+    backend: Arc<dyn KeyringBackend>,
 }
 
 impl KeyringSecretStore {
     /// Create a store over the platform credential store.
     pub fn new() -> Self {
         Self {
-            backend: Box::new(OsKeyringBackend),
+            backend: Arc::new(OsKeyringBackend),
         }
     }
 
     /// Create a store over an explicit backend (headless unit tests).
     #[cfg(test)]
     fn with_backend(backend: Box<dyn KeyringBackend>) -> Self {
-        Self { backend }
+        Self {
+            backend: Arc::from(backend),
+        }
+    }
+
+    /// Run a blocking keyring operation on a dedicated tokio blocking worker.
+    ///
+    /// `keyring`'s `Entry` API blocks the calling thread even with
+    /// `async-secret-service`, and keyring's own docs warn against calling it
+    /// on a tokio runtime thread (deadlock risk), so every operation is
+    /// dispatched via [`tokio::task::spawn_blocking`]. The only failure of the
+    /// worker itself (panic or runtime shutdown) is surfaced as
+    /// [`SecretError::KeyringTask`]; the backend result passes through
+    /// unchanged.
+    async fn run_blocking<T, F>(&self, op: F) -> Result<T, SecretError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&dyn KeyringBackend) -> T + Send + 'static,
+    {
+        let backend = Arc::clone(&self.backend);
+        tokio::task::spawn_blocking(move || op(backend.as_ref()))
+            .await
+            .map_err(SecretError::from)
     }
 }
 
@@ -114,7 +139,11 @@ impl Default for KeyringSecretStore {
 impl SecretStore for KeyringSecretStore {
     async fn load(&self, slug: &str) -> Result<Option<SecretBundle>, SecretError> {
         validate_slug(slug)?;
-        match self.backend.get_secret(KEYRING_SERVICE, slug) {
+        let account = slug.to_string();
+        let result = self
+            .run_blocking(move |backend| backend.get_secret(KEYRING_SERVICE, &account))
+            .await?;
+        match result {
             Ok(bytes) => {
                 serde_json::from_slice(&bytes)
                     .map(Some)
@@ -131,14 +160,20 @@ impl SecretStore for KeyringSecretStore {
     async fn store(&self, slug: &str, bundle: &SecretBundle) -> Result<(), SecretError> {
         validate_slug(slug)?;
         let bytes = serde_json::to_vec(bundle)?;
-        self.backend
-            .set_secret(KEYRING_SERVICE, slug, &bytes)
-            .map_err(SecretError::Keyring)
+        let account = slug.to_string();
+        let result = self
+            .run_blocking(move |backend| backend.set_secret(KEYRING_SERVICE, &account, &bytes))
+            .await?;
+        result.map_err(SecretError::Keyring)
     }
 
     async fn delete(&self, slug: &str) -> Result<(), SecretError> {
         validate_slug(slug)?;
-        match self.backend.delete_credential(KEYRING_SERVICE, slug) {
+        let account = slug.to_string();
+        let result = self
+            .run_blocking(move |backend| backend.delete_credential(KEYRING_SERVICE, &account))
+            .await?;
+        match result {
             Ok(()) => Ok(()),
             Err(keyring::Error::NoEntry) => Ok(()),
             Err(source) => Err(SecretError::Keyring(source)),

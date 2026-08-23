@@ -44,4 +44,10 @@ pub enum SecretError {
     #[cfg(feature = "secrets-keyring")]
     #[error("OS keychain operation failed: {0}")]
     Keyring(#[from] keyring::Error),
+
+    /// The dedicated keyring blocking worker failed (the worker panicked or
+    /// the Tokio runtime shut down mid-operation).
+    #[cfg(feature = "secrets-keyring")]
+    #[error("OS keychain worker task failed: {0}")]
+    KeyringTask(#[from] tokio::task::JoinError),
 }

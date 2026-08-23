@@ -172,15 +172,19 @@ mail-parser = { version = "0.11.5", optional = true }
 # pinned because every 4.x release requires Rust 1.88, above the workspace
 # MSRV 1.85 (same reconciliation as `icalendar`, issue #239). Features select
 # the platform stores: macOS Keychain (`apple-native`), Windows Credential
-# Manager (`windows-native`), and the Linux/BSD Secret Service over D-Bus
-# (`async-secret-service` — the pure-Rust zbus variant; the alternative
-# `sync-secret-service` would pull libdbus, a C system library, and zbus's
-# `tokio` feature is deliberately NOT enabled because its `block_on` panics
-# inside a tokio runtime — with the default async-io runtime the blocking
-# Entry API is safe to call from any thread). `crypto-rust` encrypts secrets
-# in transit across D-Bus with RustCrypto (no OpenSSL). All gated by the
-# `secrets-keyring` feature (off by default: headless systemd boxes often
-# lack a Secret Service daemon).
+# Manager (`windows-native`), and the Linux/FreeBSD/OpenBSD Secret Service
+# over D-Bus (`async-secret-service` — the pure-Rust zbus variant; the
+# alternative `sync-secret-service` would pull libdbus, a C system library).
+# zbus's `tokio` feature is deliberately NOT enabled: keyring's `Entry` API
+# is blocking even with `async-secret-service` (it drives the D-Bus calls
+# through async-io's `block_on`), so per keyring's own guidance every call is
+# dispatched through `tokio::task::spawn_blocking` onto a dedicated blocking
+# worker in `src/secrets/keyring.rs` — the async `SecretStore` methods never
+# occupy a Tokio worker, and the async-io `block_on` parks the blocking
+# worker thread safely. `crypto-rust` encrypts secrets in transit across
+# D-Bus with RustCrypto (no OpenSSL). All gated by the `secrets-keyring`
+# feature (off by default: headless systemd boxes often lack a Secret Service
+# daemon).
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "async-secret-service", "crypto-rust"], optional = true }
 
 [dev-dependencies]

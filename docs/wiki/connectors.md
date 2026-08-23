@@ -40,7 +40,7 @@ The first real backend is in: the **Photos** local-filesystem connector (issue #
 
 ## How connector credentials are stored
 
-When you add a connector that needs a login (Gmail over OAuth, Fastmail over an app password, Home Assistant over an API token), Mimir stores its credentials in **one JSON file per connector**, under `~/.local/share/mimir/secrets/<connector-slug>.json`. The file is readable only by you (`0600`, group/other bits stripped) and the `secrets/` directory is `0700`. Mimir refuses to *read* a secret whose file or directory has been loosened (e.g. made world-readable) — it tells you to re-tighten the permissions rather than risk leaking the credential.
+With the default `secrets.backend = "file"`, Mimir stores each connector's credentials in **one JSON file per connector**, under `~/.local/share/mimir/secrets/<connector-slug>.json`. The file is readable only by you (`0600`, group/other bits stripped) and the `secrets/` directory is `0700`. Mimir refuses to *read* a secret whose file or directory has been loosened (e.g. made world-readable) — it tells you to re-tighten the permissions rather than risk leaking the credential.
 
 Three kinds of credential are supported, all in the same store:
 
@@ -48,16 +48,15 @@ Three kinds of credential are supported, all in the same store:
 - **API token** — a single bearer token (Home Assistant, GitHub PAT).
 - **App password** — a single password string (Fastmail, legacy IMAP).
 
-Credentials are stored **in plaintext by default**, deliberately — the same way your LLM API key is stored in `config.toml` — because Mimir is a local-first app that relies on your home directory being private (the home-directory trust boundary). If you prefer, an optional OS keyring backend (macOS Keychain / Linux or BSD Secret Service / Windows Credential Manager) is available for connector secrets: build with `--features secrets-keyring` and set `secrets.backend = "keychain"` in `config.toml` (issue #188). At-rest encryption is planned for a later release.
+With the `file` backend, credentials are stored **in plaintext**, deliberately — the same way your LLM API key is stored in `config.toml` — because Mimir is a local-first app that relies on your home directory being private (the home-directory trust boundary). If you prefer, an optional OS keyring backend (macOS Keychain / Linux, FreeBSD, or OpenBSD Secret Service / Windows Credential Manager) is available for connector secrets: build with `--features secrets-keyring` on a supported platform and set `secrets.backend = "keychain"` in `config.toml` (issue #188). At-rest encryption is planned for a later release.
 
 If the auth method configured for a connector does not match the kind of credential stored for it (for example, an app-password secret stored while the connector is configured for OAuth), Mimir fails auth with `authentication failed: auth method <kind> does not match stored secret kind`. Re-run `mimir connector auth` (or re-add the connector) with the credential kind that matches the config.
 
-Removing a connector wipes its secret file: `DELETE /connectors/{id}` deletes the slug-keyed secret before the row, and `POST /connectors/{id}/forget` deletes it as part of the cascade. The `mimir connector remove` CLI subcommand that plumbs these routes landed in A3 (#204).
+Removing a connector wipes its stored credential: `DELETE /connectors/{id}` deletes the slug-keyed secret before the row, and `POST /connectors/{id}/forget` deletes it as part of the cascade. The `mimir connector remove` CLI subcommand that plumbs these routes landed in A3 (#204).
 
 
 ## What is planned
 
-- **OS keyring backend** — implemented (#188): opt-in `secrets-keyring` cargo feature + `secrets.backend = "keychain"` stores connector secrets in the OS credential store (macOS Keychain / Linux or BSD Secret Service / Windows Credential Manager).
 - **Photos** — thumbnail generation and basic object extraction are deferred (not in the Phase 3 plan); a Google Photos API backend is a follow-on, out of scope.
 - **At-rest encryption** — encrypting stored connector secrets is planned for a later release.
 
@@ -69,7 +68,7 @@ See `VISION/09-Roadmap/Phase-3-Plan.md` for the full design and issue breakdown,
 
 ## Managing connectors (daemon routes)
 
-The daemon owns the connector framework and exposes the connector management (A1 / #202) and action (A2 / #203) routes. The `ConnectorRegistry` and `ConnectorSupervisor` are constructed at startup: the built-in Photos (`local`), Calendar (`caldav`), and Email (`imap`) factories are registered behind their cargo features, and the supervisor is wired with the shared geocoder, the `FileSecretStore`, the configured user identity (so the Calendar connector authors `user has_event` and the Photos connector authors `took_photo_at` against the canonical user entity), and the shared `Arc<dyn LlmBackend>` (so the Email prose-extraction layer routes through the system queue). `Active` connector runners are restored at startup and drained on graceful shutdown.
+The daemon owns the connector framework and exposes the connector management (A1 / #202) and action (A2 / #203) routes. The `ConnectorRegistry` and `ConnectorSupervisor` are constructed at startup: the built-in Photos (`local`), Calendar (`caldav`), and Email (`imap`) factories are registered behind their cargo features, and the supervisor is wired with the shared geocoder, the configured `SecretStore` (the `FileSecretStore` by default, the OS-keychain store when `secrets.backend = "keychain"` is configured), the configured user identity (so the Calendar connector authors `user has_event` and the Photos connector authors `took_photo_at` against the canonical user entity), and the shared `Arc<dyn LlmBackend>` (so the Email prose-extraction layer routes through the system queue). `Active` connector runners are restored at startup and drained on graceful shutdown.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -144,4 +143,4 @@ Non-OAuth configs (`auth.kind=app_password`/`api_token`) prompt for the credenti
 
 ## How OAuth authentication works
 
-OAuth connectors (Gmail, Google Calendar) authenticate with an access token that expires — typically after an hour. Mimir stores the access token, refresh token, and expiry in the connector's secret file, and **refreshes automatically**: when a sync starts with an expired (or nearly expired) token, the connector POSTs the stored refresh token to the provider's token endpoint, stores the fresh token bundle, and continues the sync with it. The refresh runs on the vetted `oauth2` library (issue #240), talks HTTP over the same reqwest stack as the rest of Mimir, never follows redirects, and only talks to HTTPS endpoints (or your own machine's loopback). If a refresh fails — for example because the provider revoked the refresh token — the connector flips to `auth_state=expired`, pauses, and you re-authenticate with `mimir connector auth <slug> auth.kind=oauth …` (re-supplying the OAuth client config), which runs the interactive PKCE login again.
+OAuth connectors (Gmail, Google Calendar) authenticate with an access token that expires — typically after an hour. Mimir stores the access token, refresh token, and expiry in the connector's stored credential, and **refreshes automatically**: when a sync starts with an expired (or nearly expired) token, the connector POSTs the stored refresh token to the provider's token endpoint, stores the fresh token bundle, and continues the sync with it. The refresh runs on the vetted `oauth2` library (issue #240), talks HTTP over the same reqwest stack as the rest of Mimir, never follows redirects, and only talks to HTTPS endpoints (or your own machine's loopback). If a refresh fails — for example because the provider revoked the refresh token — the connector flips to `auth_state=expired`, pauses, and you re-authenticate with `mimir connector auth <slug> auth.kind=oauth …` (re-supplying the OAuth client config), which runs the interactive PKCE login again.

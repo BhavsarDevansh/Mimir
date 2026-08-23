@@ -12,7 +12,6 @@ use mimir_api_types::{ChatRequest, ChatResponse, Usage};
 use mimir_core::conversation::ConversationTurn;
 use mimir_core::hooks::Trigger;
 use mimir_core::llm::types::StreamItem;
-use mimir_core::personality::Personality;
 use tracing::error;
 
 use crate::error;
@@ -104,12 +103,17 @@ async fn resolve_chat_state(
 
     let incognito = req.incognito == Some(true);
 
-    let personality = if let Some(ref preset) = req.personality_preset {
-        Personality::new(&mimir_core::config::PersonalityConfig {
-            preset: preset.clone(),
-        })
-    } else {
-        Personality::new(&cfg.personality)
+    // Resolve the active preset against the daemon's cached preset registry:
+    // preset files are only re-read when they (or the directory) changed,
+    // while per-request `personality_preset` overrides still resolve against
+    // the cached registry (issue #453).
+    let personality = match &req.personality_preset {
+        Some(preset) => state
+            .personality_cache
+            .resolve(&mimir_core::config::PersonalityConfig {
+                preset: preset.clone(),
+            }),
+        None => state.personality_cache.resolve(&cfg.personality),
     };
 
     let llm = state.resolve_llm(req.model.clone());

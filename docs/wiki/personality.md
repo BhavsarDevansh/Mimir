@@ -78,6 +78,12 @@ Presets without a description show `-`, and the list is sorted by name. The comm
 
 If a custom preset file is broken — for example the `---` frontmatter is never closed — the file is skipped and a warning is printed naming the file and the reason. The same warning appears in the daemon log if you use a preset name that does not exist; Mimir then falls back to `transparent` instead of failing.
 
+## How Mimir Reads Your Presets
+
+The daemon scans your personalities directory once and caches the result, so chat requests do not re-read preset files unless they changed. When you create, edit, or delete a preset file, the daemon notices on the next chat request and picks up the change automatically — no restart needed. Per-request overrides like `mimir ask --personality concise` and the chat `/personality` command resolve against the same cached presets, so they stay instant even with many custom files.
+
+Preset files larger than 1 MiB still work, but Mimir prints a warning when it scans them because every change re-reads the file in full. If you see that warning, consider trimming the file or moving most of its text elsewhere.
+
 ## Creating a Custom Personality
 
 1. Create the personalities directory if it does not exist:

@@ -75,6 +75,18 @@ This composition is the responsibility of `Personality`; the caller passes the r
 
 All diagnostics are non-fatal and collected as data (`Personality::warnings`): the daemon logs them via `tracing::warn`, and `mimir personality list` prints them to stderr, so a missing or malformed preset is never silently ignored.
 
+### Preset Scan Caching (issue #453)
+
+`Personality::new`/`from_path` scan the personalities directory on every call, so a naive per-request construction would re-read and re-parse every custom preset file on the hot chat path. The daemon therefore owns a `PersonalityCache` (one instance in `AppState`, shared by every request): `resolve(&PersonalityConfig)` returns a fully resolved `Personality` but only performs the directory scan when a cheap fingerprint says the directory changed.
+
+- The fingerprint is computed from directory and per-file metadata only — file names, sizes, mtimes, and entry kinds for files matching `<name>.personality.md` — never from file contents. On a fingerprint match the cached scan (custom presets + diagnostics) is reused and the active preset is re-resolved from the fresh config, so per-request `personality_preset` overrides still resolve against the cached registry.
+- Invalidation covers file content changes (size/mtime), added and removed preset files, and the directory itself being created after startup. An unreadable directory has no stable fingerprint and therefore always rescans, so transient errors cannot pin a stale cache.
+- Warnings are logged only when a scan actually runs, so a persistently malformed preset no longer re-logs on every request.
+- Custom preset files above `MAX_PRESET_FILE_SIZE` (1 MiB, matching the skill-file cap in `mimir-core/src/skills/markdown.rs`) still load, but the scan emits a size-advisory warning because every rescan reads the file in full.
+- The one-shot paths are unchanged: `Personality::new` (CLI-side resolution) and `Personality::from_path` (used by `mimir personality list`, which scans once per invocation) keep scanning every call.
+
+`PersonalityCache` is public and documented in `mimir-core/src/personality.rs`; `scan_count()` exposes the number of scans performed and is used by the unit tests to prove cache hits do not rescan.
+
 ## Config Integration
 
 ```toml
@@ -95,6 +107,9 @@ export MIMIR_PERSONALITY_PRESET="formal"
 - `Personality::list_presets() -> Vec<PresetInfo>` — name, source (`Builtin`/`Custom`), optional description, sorted by name; `PresetInfo` is `Serialize` for the future `/v1/models` surface (issue #388)
 - `Personality::warnings() -> &[PresetWarning]` — non-fatal diagnostics (malformed files, unknown configured preset)
 - `Personality::active_name() -> &str`
+- `PersonalityCache::resolve(config: &PersonalityConfig) -> Personality` — cache-backed resolution for the daemon's chat path; rescans only when the presets directory fingerprint changed
+- `PersonalityCache::resolve_from_path(presets_dir: &Path, preset_name: &str) -> Personality` — path-based variant used by tests
+- `PersonalityCache::scan_count() -> u64` — number of directory scans performed (observability/tests)
 
 ## CLI: `mimir personality list`
 

@@ -262,6 +262,7 @@ pub async fn test_state_with_config(
         connector_registry,
         connector_supervisor,
         api_token: Arc::from(TEST_TOKEN),
+        personality_cache: Arc::new(mimir_core::personality::PersonalityCache::default()),
     });
 
     (state, temp)

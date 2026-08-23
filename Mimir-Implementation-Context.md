@@ -209,7 +209,7 @@ The daemon exposes `GET /v1/models` and `POST /v1/chat/completions` (blocking + 
 ### Context Manager
 - SQLite-backed session and message storage
 - Sliding window of recent conversation
-- Token-aware trimming (removes oldest pairs first)
+- Token-aware trimming (removes oldest complete turns first)
 - Cumulative token usage tracking per session
 
 ---

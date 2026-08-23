@@ -715,6 +715,24 @@ async fn test_v1_chat_missing_user_message_returns_400() {
 }
 
 #[tokio::test]
+async fn test_v1_chat_empty_user_message_returns_400() {
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock.clone()).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let body = chat_body(
+        "gpt-4o",
+        serde_json::json!([{"role": "user", "content": "   "}]),
+        serde_json::json!({"user": "phone"}),
+    );
+    let (status, _, value) = post_v1_chat(&app, &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let error: OpenAiErrorBody = serde_json::from_value(value).unwrap();
+    assert_eq!(error.error.error_type, "invalid_request_error");
+    assert_eq!(error.error.param.as_deref(), Some("messages"));
+}
+
+#[tokio::test]
 async fn test_v1_chat_requires_auth() {
     let mock = Arc::new(MockLlmClient::builder().build());
     let (state, _temp) = test_state(mock.clone()).await;

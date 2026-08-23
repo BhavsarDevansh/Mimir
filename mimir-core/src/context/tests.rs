@@ -659,6 +659,56 @@ async fn trim_removes_whole_turns_including_tool_messages() {
 }
 
 #[tokio::test]
+async fn trim_token_budget_keeps_in_flight_turn() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+
+    // Complete turn 1 with known token counts.
+    mgr.add_user_message(sid, "u1").await.unwrap();
+    mgr.add_assistant_message(sid, "a1").await.unwrap();
+    mgr.record_usage(sid, 100, 100).await.unwrap();
+
+    // Turn 2 is in flight: its user message was just persisted and is the
+    // message the current request is answering.
+    mgr.add_user_message(sid, "u2").await.unwrap();
+    mgr.record_usage(sid, 50, 0).await.unwrap();
+
+    // A budget smaller than the in-flight turn alone: the token path would
+    // previously delete every turn (including the fresh u2) and leave the
+    // LLM call without the user's message.
+    mgr.trim_to_budget(sid, Some(1), 20).await.unwrap();
+
+    let msgs = mgr.export_messages(sid).await.unwrap();
+    assert_eq!(msgs.len(), 2, "in-flight turn must survive: {msgs:?}");
+    assert_eq!(msgs[0].role, "system");
+    assert_eq!(msgs[1].role, "user");
+    assert_eq!(msgs[1].content, "u2");
+}
+
+#[tokio::test]
+async fn trim_fallback_keeps_in_flight_turn() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+
+    // Turn 1 complete (u1 has tokens, a1 has none -> unknown-count fallback).
+    mgr.add_user_message(sid, "u1").await.unwrap();
+    mgr.record_usage(sid, 100, 0).await.unwrap();
+    mgr.add_assistant_message(sid, "a1").await.unwrap();
+
+    // Turn 2 in flight (no token counts yet).
+    mgr.add_user_message(sid, "u2").await.unwrap();
+
+    // max_turns = 1 forces the fallback target to zero turns; previously the
+    // fallback then deleted every turn including the in-flight u2 message.
+    mgr.trim_to_budget(sid, Some(1), 1).await.unwrap();
+
+    let msgs = mgr.export_messages(sid).await.unwrap();
+    assert_eq!(msgs.len(), 2, "in-flight turn must survive: {msgs:?}");
+    assert_eq!(msgs[1].role, "user");
+    assert_eq!(msgs[1].content, "u2");
+}
+
+#[tokio::test]
 async fn schema_migration_adds_user_key_and_tool_columns() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("migrate_openai.db");

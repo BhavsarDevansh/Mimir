@@ -109,7 +109,7 @@ impl ContextManager {
         let mut turn_tokens: Vec<i64> = Vec::new();
         let mut current = 0i64;
         let mut in_turn = false;
-        for (_id, role, tokens) in rows {
+        for (_id, role, tokens) in &rows {
             if role == "user" {
                 if in_turn {
                     turn_tokens.push(current);
@@ -123,6 +123,14 @@ impl ContextManager {
         }
         if in_turn {
             turn_tokens.push(current);
+        }
+
+        // The final turn is the one being answered right now: its user
+        // message (or trailing tool results) was just persisted and must
+        // never be trimmed away before the LLM call. Only complete turns
+        // are eligible for deletion (issue #388).
+        if rows.last().is_some_and(|(_, role, _)| role != "assistant") {
+            turn_tokens.pop();
         }
 
         let mut running = 0i64;
@@ -159,9 +167,18 @@ impl ContextManager {
 
         let mut ids_to_delete = Vec::new();
         let mut turns_found = 0i64;
+        let mut turns_removed = 0i64;
         let mut in_turn = false;
+        // Index of the final turn's user message in `rows`; the final turn
+        // is in-flight (no assistant reply yet) when the session's last
+        // message is not an assistant message.
+        let final_turn_start = rows
+            .iter()
+            .rposition(|(_, role)| role == "user")
+            .unwrap_or(usize::MAX);
+        let protect_final_turn = rows.last().is_some_and(|(_, role)| role != "assistant");
 
-        for (id, role) in rows {
+        for (index, (id, role)) in rows.iter().enumerate() {
             if role == "user" {
                 if turns_found >= n {
                     break;
@@ -170,7 +187,17 @@ impl ContextManager {
                 in_turn = true;
             }
             if in_turn {
-                ids_to_delete.push(id);
+                // The final turn is the in-flight turn being answered right
+                // now (its user message or tool results were just persisted);
+                // it has no assistant reply yet, so it must never be deleted
+                // mid-request (issue #388).
+                if protect_final_turn && index >= final_turn_start {
+                    break;
+                }
+                ids_to_delete.push(*id);
+                if role == "user" {
+                    turns_removed += 1;
+                }
             }
         }
 
@@ -181,7 +208,7 @@ impl ContextManager {
                 .await?;
         }
 
-        debug!(session_id = %session_id, turns_removed = turns_found, "deleted oldest turns");
+        debug!(session_id = %session_id, turns_removed, "deleted oldest turns");
         Ok(())
     }
 }

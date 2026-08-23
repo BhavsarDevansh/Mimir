@@ -50,7 +50,7 @@ Client-supplied `tools` schemas are merged with Mimir's own server-side tools:
 
 ## Errors
 
-`/v1` routes return the OpenAI error JSON shape `{"error": {"message", "type", "param", "code"}}`. A full worker-pool queue maps to `503 Service Unavailable` with `Retry-After: 5` and `code: "queue_full"`. The mapping is defensive today: the chat path currently bypasses the worker pool when temperature/model overrides are applied (issue #465), so queue-full backpressure is dead code on the hot path until that bypass is fixed.
+`/v1` routes return the OpenAI error JSON shape `{"error": {"message", "type", "param", "code"}}`. Malformed requests — invalid JSON, no user message, an empty user message, or a `tool` message without `tool_call_id` — map to `400 invalid_request_error`. A full worker-pool queue maps to `503 Service Unavailable` with `Retry-After: 5` and `code: "queue_full"`. The mapping is defensive today: the chat path currently bypasses the worker pool when temperature/model overrides are applied (issue #465), so queue-full backpressure is dead code on the hot path until that bypass is fixed.
 
 ## Implementation Notes
 

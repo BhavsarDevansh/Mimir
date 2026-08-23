@@ -118,6 +118,7 @@ struct TurnInput {
 /// error shape.
 enum TurnError {
     MissingUserMessage,
+    EmptyUserMessage,
     MissingToolCallId,
 }
 
@@ -134,6 +135,13 @@ impl TurnError {
             TurnError::MissingToolCallId => error::openai_error(
                 StatusCode::BAD_REQUEST,
                 "tool message is missing tool_call_id",
+                "invalid_request_error",
+                Some("messages"),
+                None,
+            ),
+            TurnError::EmptyUserMessage => error::openai_error(
+                StatusCode::BAD_REQUEST,
+                "user message must not be empty",
                 "invalid_request_error",
                 Some("messages"),
                 None,
@@ -157,6 +165,9 @@ fn extract_turn(messages: &[OpenAiChatMessage]) -> Result<TurnInput, TurnError> 
         .content
         .clone()
         .unwrap_or_default();
+    if user_message.trim().is_empty() {
+        return Err(TurnError::EmptyUserMessage);
+    }
     let mut trailing_tools = Vec::new();
     for msg in &messages[last_user_index + 1..] {
         if msg.role == "tool" {
@@ -773,7 +784,8 @@ async fn chat_completions_stream(
             }
 
             round += 1;
-            let tool_calls: Vec<ToolCall> = tool_calls_acc.values().cloned().collect();
+            let mut tool_calls: Vec<ToolCall> = tool_calls_acc.into_values().collect();
+            tool_calls.sort_by_key(|call| call.index);
             let (server_calls, client_calls) =
                 split_tool_calls(&tool_calls, &turn.client_tool_names);
 

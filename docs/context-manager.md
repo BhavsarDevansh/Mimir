@@ -73,12 +73,14 @@ Deltas are added to the stored cumulative totals on the session row and to the `
 
 `trim_to_budget(session_id, max_tokens, max_turns)` operates in two phases:
 
-1. **Turn cap (hard):** Count non-system messages.  If the count exceeds `max_turns * 2`, delete the oldest complete `(user, assistant)` pairs until the count is under the limit.
+1. **Turn cap (hard):** Count user messages (each user message starts a turn, so tool messages belong to their turn).  If the count exceeds `max_turns`, delete the oldest complete turns until the count is under the limit.
 
 2. **Token budget (soft):** If `SUM(token_count)` for the session exceeds `max_tokens`:
-   - If all non-system messages have known `token_count`, delete oldest pairs until the sum is under budget.
-   - If some messages lack `token_count` (e.g. streaming without usage), fall back to deleting oldest pairs until the pair count is under `max_turns / 2` (conservative).
+   - If all non-system messages have known `token_count`, delete oldest complete turns until the sum is under budget.
+   - If some messages lack `token_count` (e.g. streaming without usage), fall back to deleting oldest complete turns until the turn count is under `max_turns / 2` (conservative).
    - The system prompt is **never** deleted.
+
+A turn spans from a user message up to (but excluding) the next user message, so assistant tool-call messages and tool results are removed with their turn instead of being orphaned (issue #388).  The in-flight turn being answered — its user message was just persisted and has no assistant reply yet — is never trimmed away before the LLM call.
 
 ## API Surface
 

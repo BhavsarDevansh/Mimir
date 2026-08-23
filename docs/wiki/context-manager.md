@@ -21,13 +21,13 @@ To keep LLM requests fast and within token limits, Mimir trims old conversation 
 | `max_turns` | 20 | Hard cap on the number of back-and-forth exchanges kept. |
 | `max_tokens` | 4096 | Soft cap on the total token count of the conversation. |
 
-When either limit is exceeded, Mimir **drops the oldest complete pairs** of (user, assistant) messages.  The system prompt is never removed.
+When either limit is exceeded, Mimir **drops the oldest complete turns**.  A turn is every message from a user message up to the next user message, so assistant tool-call messages and tool results are removed with their turn.  The system prompt is never removed, and the in-flight turn being answered is never trimmed away.
 
 ### Example
 
 If `max_turns = 20` and you send 25 exchanges, the first 5 exchanges are deleted.  The system prompt plus the most recent 20 exchanges remain.
 
-If token usage is known and the total exceeds `max_tokens`, Mimir drops oldest pairs until the count is back under budget.
+If token usage is known and the total exceeds `max_tokens`, Mimir drops oldest complete turns until the count is back under budget.
 
 ## Configuring Limits
 

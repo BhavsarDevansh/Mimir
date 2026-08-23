@@ -1,6 +1,6 @@
 //! End-to-end `mimir connector` cycle against a real in-process daemon.
 //!
-//! Uses the `gmail/test` mock connector (registered in the daemon via the
+//! Uses the `email/test` mock connector (registered in the daemon via the
 //! `mock-connector` feature, enabled in this crate's dev-dependencies) so
 //! the full add → status → resume → sync → pause → resume → remove cycle
 //! runs without any external service — the acceptance criterion of
@@ -18,7 +18,7 @@ mod common;
 
 use common::TestDaemon;
 
-/// Canned facts for the `gmail/test` mock backend: two literal facts with
+/// Canned facts for the `email/test` mock backend: two literal facts with
 /// explicit raw references and a static cursor so sync progress is
 /// observable through `connector status`.
 const FACTS_CONFIG: &str = r#"{
@@ -91,7 +91,7 @@ fn connector_full_lifecycle_cycle() {
     let created = daemon.run_cli_json(&[
         "connector",
         "add",
-        "gmail",
+        "email",
         "--backend",
         "test",
         "--slug",
@@ -191,7 +191,7 @@ fn connector_full_lifecycle_cycle() {
 
 /// T1 / #206: a mock connector configured with `facts` lands queryable facts
 /// with `source_type=Connector`, provenance tied to the instance, and
-/// confidence from the connector reliability score (Gmail = 0.85).
+/// confidence from the connector reliability score (Email = 0.85).
 #[test]
 fn mock_sync_ingests_facts_with_provenance_and_confidence() {
     let daemon = TestDaemon::start();
@@ -232,7 +232,7 @@ fn mock_sync_ingests_facts_with_provenance_and_confidence() {
         "last_sync_at should be set after a successful sync: {status}"
     );
 
-    // Alice's fact is queryable with the Gmail reliability score (0.85).
+    // Alice's fact is queryable with the Email reliability score (0.85).
     let alice = daemon.run_cli_json(&["kb", "query", "Alice Mock", "--json"]);
     assert_eq!(alice["total"], 1);
     let fact = &alice["facts"][0];
@@ -367,8 +367,8 @@ fn connector_catalog_advertises_feature_gated_backends() {
         pairs,
         vec![
             ("calendar".to_string(), "caldav".to_string()),
-            ("gmail".to_string(), "imap".to_string()),
-            ("gmail".to_string(), "test".to_string()),
+            ("email".to_string(), "imap".to_string()),
+            ("email".to_string(), "test".to_string()),
             ("photos".to_string(), "local".to_string()),
         ]
     );

@@ -79,7 +79,7 @@ async fn forget_stops_runner_and_calls_connector_forget() {
     let registry = ConnectorRegistry::new();
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "test".to_string(),
             FnConnectorFactory::new(move |config, _ctx| {
                 created.fetch_add(1, Ordering::SeqCst);
@@ -100,7 +100,7 @@ async fn forget_stops_runner_and_calls_connector_forget() {
     );
     let row = kg
         .create_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "forget-live".to_string(),
             backend: "test".to_string(),
             display_name: "Forget Live".to_string(),
@@ -142,7 +142,7 @@ async fn forget_reinstantiates_when_not_running() {
     let registry = ConnectorRegistry::new();
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "test".to_string(),
             FnConnectorFactory::new(move |config, _ctx| {
                 let inner = crate::MockConnector::from_config(config)?;
@@ -162,7 +162,7 @@ async fn forget_reinstantiates_when_not_running() {
     );
     let row = kg
         .create_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "forget-cold".to_string(),
             backend: "test".to_string(),
             display_name: "Forget Cold".to_string(),

@@ -32,7 +32,7 @@ impl Connector for EmailConnector {
     }
 
     fn connector_type(&self) -> ConnectorType {
-        ConnectorType::Gmail
+        ConnectorType::Email
     }
 
     fn mode(&self) -> ConnectorMode {

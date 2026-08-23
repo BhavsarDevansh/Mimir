@@ -19,7 +19,8 @@ Build the connector framework and implement 3 core connectors: Email, Calendar, 
 - [x] Authentication framework (OAuth, token, local) (F10 / #187, #240, A4 / #205)
 - [x] Optional OS-keychain secret backend (F11 / #188) — `keyring` crate, feature-gated `secrets-keyring`, off by default, selected via `secrets.backend = "keychain"`
 
-### 3.2 Gmail / IMAP Connector
+### 3.2 Email (IMAP) Connector
+
 - [x] OAuth 2.0 authentication (C5 / #199)
 - [x] IMAP IDLE for real-time sync (C5 / #199)
 - [x] Email fetching and parsing (C5 / #199)
@@ -27,6 +28,7 @@ Build the connector framework and implement 3 core connectors: Email, Calendar, 
 - [x] Extract: flight confirmations, bookings, dates, contacts (C6 / #200, #249, C7 / #201)
 - [x] Incremental sync (track last UID) (C5 / #199)
 - [x] Envelope-context extraction: facts bound by the email's dates, sender, recipients, and spam signals (#398)
+- [x] Wizard provider presets: Gmail, Outlook / Office 365, Yahoo, Proton Mail (Bridge), iCloud, Custom IMAP (email) + Google Calendar, iCloud, Yahoo, Custom CalDAV (calendar); the IMAP mail type is the generic `Email` type (legacy `gmail` accepted as an alias) (#400)
 
 ### 3.3 Google Calendar / CalDAV Connector
 - [x] OAuth 2.0 or app password auth (C3 / #197)

@@ -27,7 +27,7 @@ async fn test_connector_add_list_show_remove_round_trip() {
     let resp = connector_post(
         app.clone(),
         serde_json::json!({
-            "connector_type": "gmail",
+            "connector_type": "email",
             "backend": "test",
             "slug": "personal",
             "display_name": "Personal",
@@ -41,7 +41,7 @@ async fn test_connector_add_list_show_remove_round_trip() {
         .unwrap();
     let created: mimir_api_types::ConnectorResponse = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(created.slug, "personal");
-    assert_eq!(created.connector_type, "gmail");
+    assert_eq!(created.connector_type, "email");
     assert_eq!(created.backend, "test");
     assert_eq!(created.status, "setup");
     assert_eq!(created.auth_state, "unauthenticated");
@@ -123,7 +123,7 @@ async fn test_connector_catalog_lists_registered_backend_pairs() {
     let (state, _temp) = test_state(mock).await;
     let app = mimir_server::build_app(state.clone());
 
-    // The test harness registers only the `gmail/test` mock pair, so the
+    // The test harness registers only the `email/test` mock pair, so the
     // catalog must surface exactly that — proving the route reflects the
     // registry rather than a hard-coded list.
     let resp = app
@@ -145,7 +145,7 @@ async fn test_connector_catalog_lists_registered_backend_pairs() {
     assert_eq!(
         catalog.entries,
         vec![mimir_api_types::ConnectorCatalogEntry {
-            connector_type: "gmail".to_string(),
+            connector_type: "email".to_string(),
             backend: "test".to_string(),
         }]
     );
@@ -157,7 +157,7 @@ async fn test_connector_add_rejects_existing_slug() {
     let (state, _temp) = test_state(mock).await;
     let app = mimir_server::build_app(state.clone());
     let body = serde_json::json!({
-        "connector_type": "gmail",
+        "connector_type": "email",
         "backend": "test",
         "slug": "dupe",
         "display_name": "Dupe",
@@ -179,7 +179,7 @@ async fn test_connector_add_concurrent_same_slug_one_wins() {
     let app = mimir_server::build_app(state.clone());
 
     let body = serde_json::json!({
-        "connector_type": "gmail",
+        "connector_type": "email",
         "backend": "test",
         "slug": "race",
         "display_name": "Race",
@@ -226,7 +226,7 @@ async fn test_connector_add_rejects_unregistered_backend() {
     let resp = connector_post(
         app,
         serde_json::json!({
-            "connector_type": "gmail",
+            "connector_type": "email",
             "backend": "no-such-backend",
             "slug": "x",
             "display_name": "X",
@@ -271,7 +271,7 @@ async fn test_connector_round_trip_via_mimir_client() {
     let client =
         mimir_client::MimirClient::with_token(format!("http://127.0.0.1:{port}"), TEST_TOKEN);
     let req = mimir_api_types::AddConnectorRequest {
-        connector_type: "gmail".to_string(),
+        connector_type: "email".to_string(),
         backend: "test".to_string(),
         slug: "via-client".to_string(),
         display_name: "Via Client".to_string(),
@@ -336,7 +336,7 @@ async fn test_connector_remove_deletes_stored_credentials() {
     let resp = connector_post(
         app.clone(),
         serde_json::json!({
-            "connector_type": "gmail",
+            "connector_type": "email",
             "backend": "test",
             "slug": slug,
             "display_name": "Secret Gmail",
@@ -386,7 +386,7 @@ async fn test_connector_remove_deletes_stored_credentials() {
     let resp = connector_post(
         app.clone(),
         serde_json::json!({
-            "connector_type": "gmail",
+            "connector_type": "email",
             "backend": "test",
             "slug": slug,
             "display_name": "Secret Gmail 2",
@@ -434,7 +434,7 @@ async fn create_test_connector(
     let resp = connector_post(
         app.clone(),
         serde_json::json!({
-            "connector_type": "gmail",
+            "connector_type": "email",
             "backend": "test",
             "slug": slug,
             "display_name": slug,
@@ -710,7 +710,7 @@ async fn test_connector_forget_cascade_trashes_facts_and_removes_row() {
             fact_id: fact.id,
             source_type: SourceType::Connector,
             connector_instance_id: Some(created.id),
-            connector_type: Some(mimir_knowledge::models::enums::ConnectorType::Gmail),
+            connector_type: Some(mimir_knowledge::models::enums::ConnectorType::Email),
             raw_reference: Some("raw-1".to_string()),
             extraction_method: None,
             changed_by: ChangedBy::System,

@@ -292,7 +292,7 @@ pub fn with_slug(slug: &str, extra: serde_json::Value) -> String {
 pub fn test_registry() -> Arc<ConnectorRegistry> {
     let registry = ConnectorRegistry::new();
     for ctype in [
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         ConnectorType::Calendar,
         ConnectorType::Photos,
     ] {
@@ -311,7 +311,7 @@ pub fn test_registry() -> Arc<ConnectorRegistry> {
 pub fn recording_registry(recorder: Arc<MockSyncRecorder>) -> Arc<ConnectorRegistry> {
     let registry = ConnectorRegistry::new();
     for ctype in [
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         ConnectorType::Calendar,
         ConnectorType::Photos,
     ] {

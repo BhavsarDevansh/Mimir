@@ -23,7 +23,7 @@ Confidence deliberately does **not** erode with age. A fact that was true yester
 | `System` | 1.0 |
 | `CasualMention` | 0.30 |
 | `Import` | 0.80 |
-| `Connector` | Per-connector reliability (default: Gmail=0.85, Calendar=0.90, Photos=0.80, LinkedIn=0.75) |
+| `Connector` | Per-connector reliability (default: Email=0.85, Calendar=0.90, Photos=0.80, LinkedIn=0.75) |
 | `Inference` | Computed from parents (see below) |
 | `Email` / `Calendar` / `Photo` / `Message` | Mapped to connector defaults (legacy) |
 

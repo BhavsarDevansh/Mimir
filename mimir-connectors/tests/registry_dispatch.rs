@@ -107,17 +107,17 @@ fn register_then_factory_lookup_succeeds() {
     let registry = ConnectorRegistry::new();
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "mock-imap",
-            fake_factory("imap", ConnectorType::Gmail),
+            fake_factory("imap", ConnectorType::Email),
         )
         .unwrap();
 
-    assert!(registry.is_registered(ConnectorType::Gmail, "mock-imap"));
-    assert!(!registry.is_registered(ConnectorType::Gmail, "mock-graph"));
+    assert!(registry.is_registered(ConnectorType::Email, "mock-imap"));
+    assert!(!registry.is_registered(ConnectorType::Email, "mock-graph"));
     assert!(
         registry
-            .factory(ConnectorType::Gmail, "mock-imap")
+            .factory(ConnectorType::Email, "mock-imap")
             .is_some()
     );
     assert_eq!(registry.len(), 1);
@@ -133,13 +133,13 @@ fn backends_for_type_lists_all_registered_backends() {
     for backend in ["z-backend", "a-backend", "m-backend"] {
         registry
             .register(
-                ConnectorType::Gmail,
+                ConnectorType::Email,
                 backend,
-                fake_factory(backend, ConnectorType::Gmail),
+                fake_factory(backend, ConnectorType::Email),
             )
             .unwrap();
     }
-    // A backend under a different type must not leak into the Gmail list;
+    // A backend under a different type must not leak into the Email list;
     // "a-backend" would sort first if it did, so the assertion catches it.
     registry
         .register(
@@ -150,7 +150,7 @@ fn backends_for_type_lists_all_registered_backends() {
         .unwrap();
 
     assert_eq!(
-        registry.backends_for(ConnectorType::Gmail),
+        registry.backends_for(ConnectorType::Email),
         vec!["a-backend", "m-backend", "z-backend"]
     );
 }
@@ -160,9 +160,9 @@ fn pairs_lists_all_registered_pairs_sorted_by_type_then_backend() {
     let registry = ConnectorRegistry::new();
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "imap",
-            fake_factory("imap", ConnectorType::Gmail),
+            fake_factory("imap", ConnectorType::Email),
         )
         .unwrap();
     registry
@@ -181,9 +181,9 @@ fn pairs_lists_all_registered_pairs_sorted_by_type_then_backend() {
         .unwrap();
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "graph",
-            fake_factory("graph", ConnectorType::Gmail),
+            fake_factory("graph", ConnectorType::Email),
         )
         .unwrap();
 
@@ -194,8 +194,8 @@ fn pairs_lists_all_registered_pairs_sorted_by_type_then_backend() {
         pairs,
         vec![
             (ConnectorType::Calendar, "caldav".to_string()),
-            (ConnectorType::Gmail, "graph".to_string()),
-            (ConnectorType::Gmail, "imap".to_string()),
+            (ConnectorType::Email, "graph".to_string()),
+            (ConnectorType::Email, "imap".to_string()),
             (ConnectorType::Photos, "local".to_string()),
         ]
     );
@@ -210,24 +210,24 @@ async fn two_backends_under_same_type_coexist_and_dispatch_correctly() {
     let registry = ConnectorRegistry::new();
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "mock-imap",
-            fake_factory("imap", ConnectorType::Gmail),
+            fake_factory("imap", ConnectorType::Email),
         )
         .unwrap();
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "mock-graph",
-            fake_factory("graph", ConnectorType::Gmail),
+            fake_factory("graph", ConnectorType::Email),
         )
         .unwrap();
 
     let imap = registry
-        .create(ConnectorType::Gmail, "mock-imap", json!({"slug": "acct1"}))
+        .create(ConnectorType::Email, "mock-imap", json!({"slug": "acct1"}))
         .unwrap();
     let graph = registry
-        .create(ConnectorType::Gmail, "mock-graph", json!({"slug": "acct1"}))
+        .create(ConnectorType::Email, "mock-graph", json!({"slug": "acct1"}))
         .unwrap();
 
     // Same config, different backends -> different connector instances.
@@ -235,8 +235,8 @@ async fn two_backends_under_same_type_coexist_and_dispatch_correctly() {
     assert_eq!(graph.id(), "graph:acct1");
 
     // Both report the same provenance/reliability axis (the type), not backend.
-    assert_eq!(imap.connector_type(), ConnectorType::Gmail);
-    assert_eq!(graph.connector_type(), ConnectorType::Gmail);
+    assert_eq!(imap.connector_type(), ConnectorType::Email);
+    assert_eq!(graph.connector_type(), ConnectorType::Email);
 }
 
 #[tokio::test]
@@ -244,15 +244,15 @@ async fn create_passes_config_to_factory() {
     let registry = ConnectorRegistry::new();
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "mock-imap",
-            fake_factory("imap", ConnectorType::Gmail),
+            fake_factory("imap", ConnectorType::Email),
         )
         .unwrap();
 
     let connector = registry
         .create(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "mock-imap",
             json!({"slug": "work-mail"}),
         )
@@ -266,9 +266,9 @@ async fn same_backend_name_under_different_types_dispatches_independently() {
     let registry = ConnectorRegistry::new();
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "mock",
-            fake_factory("gmail-mock", ConnectorType::Gmail),
+            fake_factory("gmail-mock", ConnectorType::Email),
         )
         .unwrap();
     registry
@@ -280,7 +280,7 @@ async fn same_backend_name_under_different_types_dispatches_independently() {
         .unwrap();
 
     let mail = registry
-        .create(ConnectorType::Gmail, "mock", json!({}))
+        .create(ConnectorType::Email, "mock", json!({}))
         .unwrap();
     let cal = registry
         .create(ConnectorType::Calendar, "mock", json!({}))
@@ -288,7 +288,7 @@ async fn same_backend_name_under_different_types_dispatches_independently() {
 
     assert_eq!(mail.id(), "gmail-mock:default");
     assert_eq!(cal.id(), "cal-mock:default");
-    assert_eq!(mail.connector_type(), ConnectorType::Gmail);
+    assert_eq!(mail.connector_type(), ConnectorType::Email);
     assert_eq!(cal.connector_type(), ConnectorType::Calendar);
 }
 
@@ -302,13 +302,13 @@ fn create_unknown_backend_returns_backend_not_found() {
     // `err().unwrap()` instead of `unwrap_err()`: the Ok type
     // (`Arc<dyn Connector>`) is not `Debug`.
     let err = registry
-        .create(ConnectorType::Gmail, "nope", json!({}))
+        .create(ConnectorType::Email, "nope", json!({}))
         .err()
         .unwrap();
     assert!(matches!(
         err,
         ConnectorError::BackendNotFound {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             ref backend
         } if backend == "nope"
     ));
@@ -319,22 +319,22 @@ fn register_duplicate_returns_backend_already_registered() {
     let registry = ConnectorRegistry::new();
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "mock-imap",
-            fake_factory("imap", ConnectorType::Gmail),
+            fake_factory("imap", ConnectorType::Email),
         )
         .unwrap();
     let err = registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "mock-imap",
-            fake_factory("imap2", ConnectorType::Gmail),
+            fake_factory("imap2", ConnectorType::Email),
         )
         .unwrap_err();
     assert!(matches!(
         err,
         ConnectorError::BackendAlreadyRegistered {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             ref backend
         } if backend == "mock-imap"
     ));
@@ -343,5 +343,5 @@ fn register_duplicate_returns_backend_already_registered() {
 #[test]
 fn factory_trait_is_object_safe() {
     // Factories are stored as Arc<dyn ConnectorFactory> inside the registry.
-    let _factory: Arc<dyn ConnectorFactory> = Arc::new(fake_factory("imap", ConnectorType::Gmail));
+    let _factory: Arc<dyn ConnectorFactory> = Arc::new(fake_factory("imap", ConnectorType::Email));
 }

@@ -6,7 +6,7 @@ User receives an email: "Your flight to Tokyo has been confirmed."
 ## Flow
 
 ### 1. Email Connector Syncs
-- Gmail connector fetches new email
+- Email connector fetches new email
 - Extracts structured data: flight number, dates, times, destinations
 
 ### 2. Knowledge Graph Update

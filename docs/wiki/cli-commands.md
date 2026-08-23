@@ -412,7 +412,7 @@ Manage connector instances (email, calendar, photos) through the daemon over HTT
 
 Register a new connector instance. The instance is created in `Setup` — run `mimir connector resume` to activate it, then `sync` to ingest.
 
-**Interactive wizard (recommended for first-time setup):** run `mimir connector add` with no arguments, and it guides you through everything — pick the connector type from the daemon's catalog (e.g. `Gmail (imap)`), confirm the display name (defaults to the type, e.g. `Gmail`), confirm the slug (defaults to the name, e.g. `gmail`), answer the per-type questions (Gmail IMAP defaults to `imap.gmail.com:993` / `INBOX`), and choose authentication. For Gmail, OAuth browser login is the recommended option: the wizard pre-fills Google's authorization and token endpoints, you paste your own OAuth client ID from the Google Cloud Console, and the CLI launches your browser at the authorization URL (the URL is printed first, so you can also open it manually — but the browser must run on the machine running `mimir` because the PKCE callback binds to `127.0.0.1`). The loopback redirect is handled automatically, and the exchanged tokens are stored by the daemon. An app-password path is also offered as a fallback. Local backends (e.g. Photos) need no credential. Secrets (app passwords, OAuth client secrets) are prompted hidden exactly once — there is no confirmation re-entry, so a single masked input is all a secret prompt expects (issue #399). The wizard only runs on a terminal — with piped input, it fails fast and points you at the flag form below.
+**Interactive wizard (recommended for first-time setup):** run `mimir connector add` with no arguments, and it guides you through everything — pick the connector type from the daemon's catalog (e.g. `Email (imap)`), confirm the display name (defaults to the type, e.g. `Email`), confirm the slug (defaults to the name, e.g. `email`), answer the per-type questions, and choose authentication. Email provider presets (issue #400) pre-fill the provider defaults — Gmail (`imap.gmail.com:993` / `INBOX`, Google OAuth endpoints and scope pre-filled, OAuth browser login recommended), Outlook / Office 365 (`outlook.office365.com:993`, Microsoft login endpoints + IMAP scope pre-filled, OAuth 2.0 only — Microsoft retired app passwords for IMAP), Yahoo (`imap.mail.yahoo.com:993`, app password), Proton Mail Bridge (`127.0.0.1:1143`, app password), iCloud (`imap.mail.me.com:993`, app password), or Custom IMAP — and the calendar wizard offers Google Calendar, iCloud, Yahoo, and Custom CalDAV presets. Every email preset also asks the sync-mode and first-sync-backfill questions (issue #397). For OAuth presets the CLI launches your browser at the authorization URL (the URL is printed first, so you can also open it manually — but the browser must run on the machine running `mimir` because the PKCE callback binds to `127.0.0.1`), the loopback redirect is handled automatically, and the exchanged tokens are stored by the daemon. App-password paths are offered where the provider supports them, and local backends (e.g. Photos) need no credential. Secrets (app passwords, OAuth client secrets) are prompted hidden exactly once — there is no confirmation re-entry, so a single masked input is all a secret prompt expects (issue #399). The wizard only runs on a terminal — with piped input, it fails fast and points you at the flag form below.
 
 ```bash
 mimir connector add                       # interactive wizard
@@ -426,14 +426,15 @@ The flag form gives the same result non-interactively, which is what scripts and
 # Photos: watch a local directory
 mimir connector add photos --backend local watch_dir=/home/me/Pictures
 
-# Email over an app password (prompts for the password, then ingests it)
-mimir connector add gmail --backend imap host=imap.gmail.com auth.kind=app_password auth.username=me@gmail.com
+# Email over an app password (prompts for the password, then ingests it). The
+# legacy `gmail` type name still works as an alias for `email`.
+mimir connector add email --backend imap host=imap.gmail.com auth.kind=app_password auth.username=me@gmail.com
 
 # Non-interactive: pipe the credential (recommended — keeps it out of shell history)
-cat secret.txt | mimir connector add gmail --backend imap host=imap.fastmail.com auth.kind=app_password auth.username=me@fastmail.com --password-stdin
+cat secret.txt | mimir connector add email --backend imap host=imap.fastmail.com auth.kind=app_password auth.username=me@fastmail.com --password-stdin
 
 # Non-interactive: pass the credential via an environment variable (avoids the command line; load it from a protected source)
-MIMIR_CONNECTOR_PASSWORD="$(cat secret.txt)" mimir connector add gmail --backend imap host=imap.fastmail.com auth.kind=app_password auth.username=me@fastmail.com
+MIMIR_CONNECTOR_PASSWORD="$(cat secret.txt)" mimir connector add email --backend imap host=imap.fastmail.com auth.kind=app_password auth.username=me@fastmail.com
 
 # Complex configs: full JSON object, with key=value overrides on top
 mimir connector add calendar --backend caldav --config-json '{"calendar_url":"https://dav.example.com/cal","auth":{"kind":"app_password","username":"me@example.com"}}' --slug work-cal
@@ -460,8 +461,8 @@ mimir connector catalog --json   # structured output for scripts
 mimir connector list              # table of every instance
 mimir connector list --json
 mimir connector status            # overview table
-mimir connector status gmail      # detailed view of one instance
-mimir connector status gmail --json
+mimir connector status email     # detailed view of one instance
+mimir connector status email --json
 ```
 
 ### `mimir connector sync`
@@ -469,7 +470,7 @@ mimir connector status gmail --json
 Trigger a manual sync. `--since` accepts human durations (`30s`, `5m`, `12h`, `7d`) or bare seconds and conflicts with `--full`:
 
 ```bash
-mimir connector sync gmail --since 7d
+mimir connector sync email --since 7d
 mimir connector sync photos --full --json
 ```
 
@@ -480,16 +481,16 @@ A connector that is not running (e.g. freshly added, still `Setup`) reports a 40
 Ingest credentials for an existing connector — completes an instance that was registered without credentials (a non-interactive `add`, or a credential the daemon later rejected) and re-auths after expiry, without `remove` + re-`add`:
 
 ```bash
-cat secret.txt | mimir connector auth gmail --password-stdin   # app-password backend (piped secret)
-MIMIR_CONNECTOR_TOKEN='api-token' mimir connector auth gmail   # API-token backend (env secret)
-mimir connector auth gmail --password 'app-pw'                 # app-password backend (flag — visible in `ps`/history)
-mimir connector auth gmail                                     # interactive: pick the kind, then enter the secret
+cat secret.txt | mimir connector auth email --password-stdin   # app-password backend (piped secret)
+MIMIR_CONNECTOR_TOKEN='api-token' mimir connector auth email   # API-token backend (env secret)
+mimir connector auth email --password 'app-pw'                # app-password backend (flag — visible in `ps`/history)
+mimir connector auth email                                    # interactive: pick the kind, then enter the secret
 ```
 
 The credential kind comes from the flags (`--password` / `--token` / `--password-stdin` / `--token-stdin` are mutually exclusive), the `MIMIR_CONNECTOR_PASSWORD` / `MIMIR_CONNECTOR_TOKEN` environment variables (exactly one set), an interactive selection when none is given, or the `auth.kind` of a re-supplied config (`--config-json` / `key=value` pairs). The same secret-hygiene guidance as `add` applies: prefer `--*-stdin` or the env vars over `--password` / `--token` for real credentials. An `auth.kind=oauth` config runs the interactive PKCE login (A4 / #205) instead of prompting — the daemon does not expose the stored config on the wire, so the OAuth fields (`auth.auth_uri`, `auth.token_endpoint`, `auth.client_id`, optional `auth.client_secret` / `auth.scopes`) are re-supplied. `auth.scopes` is a JSON array — pass it as a JSON value in the `key=value` pair (issue #289):
 
 ```bash
-mimir connector auth gmail auth.kind=oauth auth.auth_uri=https://accounts.google.com/o/oauth2/v2/auth auth.token_endpoint=https://oauth2.googleapis.com/token auth.client_id=... auth.username=you@gmail.com 'auth.scopes=["https://mail.google.com/"]'
+mimir connector auth email auth.kind=oauth auth.auth_uri=https://accounts.google.com/o/oauth2/v2/auth auth.token_endpoint=https://oauth2.googleapis.com/token auth.client_id=... auth.username=you@gmail.com 'auth.scopes=["https://mail.google.com/"]'
 ```
 
 After re-authing an expired connector, run `mimir connector resume <slug>` to restart its runner.
@@ -497,8 +498,8 @@ After re-authing an expired connector, run `mimir connector resume <slug>` to re
 ### `mimir connector pause` / `resume`
 
 ```bash
-mimir connector pause gmail        # stop the runner
-mimir connector resume gmail       # re-spawn the runner (activate)
+mimir connector pause email       # stop the runner
+mimir connector resume email      # re-spawn the runner (activate)
 ```
 
 ### `mimir connector remove` vs `forget`
@@ -511,8 +512,8 @@ Both delete the instance and its stored credentials; they differ in what happens
 Both confirm interactively; pass `--yes` to skip:
 
 ```bash
-mimir connector remove gmail --yes
-mimir connector forget gmail --yes --json
+mimir connector remove email --yes
+mimir connector forget email --yes --json
 ```
 
 ### `mimir connector act`

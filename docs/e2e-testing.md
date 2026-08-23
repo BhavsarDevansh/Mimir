@@ -47,11 +47,11 @@ The daemon-down assertions (`status`, `stop`, `memory`, and piped/empty `ask`) r
 
 ## Connector E2E (Phase 3 T1 / issue #206)
 
-`mimir/tests/connector_e2e.rs` extends the same pattern to the connector framework. The shared `TestDaemon` fixture (`mimir/tests/common/mod.rs`) starts the daemon with the `mock-connector` feature so the `gmail/test` mock backend is registered, and `run_cli_json` runs a CLI subcommand and parses its JSON stdout (asserting success first).
+`mimir/tests/connector_e2e.rs` extends the same pattern to the connector framework. The shared `TestDaemon` fixture (`mimir/tests/common/mod.rs`) starts the daemon with the `mock-connector` feature so the `email/test` mock backend is registered, and `run_cli_json` runs a CLI subcommand and parses its JSON stdout (asserting success first).
 
 The fact-ingestion tests configure the mock's `facts` knob via `mimir connector add --config-json`, then drive add → auth → resume → sync and verify the knowledge graph through the real HTTP surface:
 
-- `mimir kb query <entity> --json` — fact presence, predicate/object, and confidence (Gmail reliability score = 0.85).
+- `mimir kb query <entity> --json` — fact presence, predicate/object, and confidence (Email reliability score = 0.85).
 - `mimir kb show <fact_id> --json` — provenance: a `Connector` source with the instance id and `raw_reference`.
 - `mimir connector status --json` — `sync_cursor` persistence and the derived per-instance `item_count`.
 

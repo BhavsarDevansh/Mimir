@@ -305,7 +305,7 @@ async fn init_connector_framework_registers_mock_backend() {
     .await
     .unwrap();
 
-    let backends = registry.backends_for(mimir_knowledge::models::enums::ConnectorType::Gmail);
+    let backends = registry.backends_for(mimir_knowledge::models::enums::ConnectorType::Email);
     assert!(
         backends.iter().any(|b| b == "test"),
         "mock connector backend registered under cfg(test)"

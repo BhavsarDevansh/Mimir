@@ -198,7 +198,7 @@ pub async fn connectors_list_handler(
 /// pair the daemon can construct, sorted by type then backend.
 ///
 /// The registry is populated at startup from the daemon's cargo features
-/// (`photos` / `calendar` / `gmail`, plus the test mock under
+/// (`photos` / `calendar` / `email`, plus the test mock under
 /// `mock-connector`), so the catalog is the authoritative discovery surface
 /// for `mimir connector add` (issue #271) — users never have to guess a
 /// backend string, and shell completion / interactive wizards can build on

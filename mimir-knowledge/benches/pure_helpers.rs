@@ -25,7 +25,7 @@ fn bench_confidence_initial(c: &mut Criterion) {
         (SourceType::Import, None),
         (SourceType::Inference, None),
         (SourceType::Connector, Some(ConnectorType::Calendar)),
-        (SourceType::Connector, Some(ConnectorType::Gmail)),
+        (SourceType::Connector, Some(ConnectorType::Email)),
         (SourceType::Connector, None),
     ];
     c.bench_function("confidence_initial", |b| {
@@ -52,7 +52,7 @@ fn bench_confidence_inference(c: &mut Criterion) {
 
 fn bench_confidence_default_connector(c: &mut Criterion) {
     let connectors = [
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         ConnectorType::Calendar,
         ConnectorType::Photos,
         ConnectorType::LinkedIn,

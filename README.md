@@ -88,10 +88,10 @@ mimir kb reset
 
 # Manage connectors (email, calendar, photos)
 mimir connector list
-mimir connector add gmail --backend imap host=imap.gmail.com auth.kind=app_password auth.username=me@gmail.com
-mimir connector resume gmail
-mimir connector status gmail
-mimir connector sync gmail --since 7d
+mimir connector add email --backend imap host=imap.gmail.com auth.kind=app_password auth.username=me@gmail.com
+mimir connector resume email
+mimir connector status email
+mimir connector sync email --since 7d
 
 # Stop the daemon gracefully
 mimir stop

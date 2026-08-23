@@ -22,8 +22,8 @@ pub(crate) const DEFAULT_POLL_JITTER: Duration = Duration::from_secs(30);
 /// every 29 min to avoid server inactivity logoff; 28 min leaves a margin.
 pub(crate) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(28 * 60);
 
-pub(crate) const DEFAULT_SLUG: &str = "gmail";
-pub(crate) const DEFAULT_DISPLAY_NAME: &str = "Gmail";
+pub(crate) const DEFAULT_SLUG: &str = "email";
+pub(crate) const DEFAULT_DISPLAY_NAME: &str = "Email";
 
 fn default_poll_interval_secs() -> u64 {
     DEFAULT_POLL_INTERVAL.as_secs()
@@ -145,7 +145,7 @@ pub struct EmailConfigDto {
     /// Defaults to 1680 (28 min).
     #[serde(default = "default_idle_timeout_secs")]
     pub idle_timeout_secs: u64,
-    /// Display name override. Defaults to "Gmail".
+    /// Display name override. Defaults to "Email".
     #[serde(default)]
     pub display_name: Option<String>,
     /// Maximum LLM prose-extraction attempts per message before the message

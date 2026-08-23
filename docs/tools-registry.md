@@ -237,6 +237,6 @@ This loop is handled within both the `chat_handler` (blocking) and `chat_stream_
 ## Future Work
 
 - Actual interactive prompting for `Ask`-permission tools
-- Connector-based tools (e.g., Gmail, Calendar)
+- Connector-based tools (e.g., Email, Calendar)
 - Skill registry (higher-level compositions of tools)
 - Hot-reload of CLI tool definitions

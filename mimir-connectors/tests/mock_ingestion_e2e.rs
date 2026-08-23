@@ -65,19 +65,19 @@ fn literal_fact(subject: &str, rel: &str, object: &str, raw: &str) -> MockFactCo
     }
 }
 
-/// Register the mock factory under `(Gmail, "mock")` so the supervisor can
+/// Register the mock factory under `(Email, "mock")` so the supervisor can
 /// instantiate the configured connector row.
 fn mock_registry() -> Arc<ConnectorRegistry> {
     let registry = ConnectorRegistry::new();
     registry
-        .register(ConnectorType::Gmail, "mock", MockConnectorFactory)
+        .register(ConnectorType::Email, "mock", MockConnectorFactory)
         .unwrap();
     Arc::new(registry)
 }
 
 fn upsert_mock(slug: &str, config: serde_json::Value) -> UpsertConnectorInput {
     UpsertConnectorInput {
-        connector_type: ConnectorType::Gmail,
+        connector_type: ConnectorType::Email,
         slug: slug.to_string(),
         backend: "mock".to_string(),
         display_name: slug.to_string(),
@@ -128,7 +128,7 @@ async fn assert_connector_source(
         sources.iter().any(|s| {
             s.source_type_id == SourceType::Connector as i16
                 && s.connector_instance_id == Some(instance_id)
-                && s.connector_type_id == Some(ConnectorType::Gmail as i16)
+                && s.connector_type_id == Some(ConnectorType::Email as i16)
                 && s.raw_reference.as_deref() == Some(raw_reference)
                 && s.extraction_method_id == Some(ExtractionMethod::StructuredParse as i16)
         }),
@@ -202,7 +202,7 @@ async fn polling_mock_syncs_canned_facts_into_kb() {
         .expect("works_at Acme fact not found");
     assert!(
         (works_at.confidence - 0.85).abs() < 0.001,
-        "expected the Gmail reliability score (0.85), got {}",
+        "expected the Email reliability score (0.85), got {}",
         works_at.confidence
     );
     assert_connector_source(&kg, works_at.id, row.id, "m-1").await;

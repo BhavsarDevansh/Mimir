@@ -22,7 +22,7 @@ const CHAIN_PENALTY_BASE: f32 = 0.8;
 /// Per-connector default reliability scores, seeded from migration 020.
 pub fn default_connector_score(ct: ConnectorType) -> f32 {
     match ct {
-        ConnectorType::Gmail => 0.85,
+        ConnectorType::Email => 0.85,
         ConnectorType::Calendar => 0.90,
         ConnectorType::Photos => 0.80,
         ConnectorType::LinkedIn => 0.75,
@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     fn default_connector_scores() {
-        assert_eq!(default_connector_score(ConnectorType::Gmail), 0.85);
+        assert_eq!(default_connector_score(ConnectorType::Email), 0.85);
         assert_eq!(default_connector_score(ConnectorType::Calendar), 0.90);
         assert_eq!(default_connector_score(ConnectorType::Photos), 0.80);
         assert_eq!(default_connector_score(ConnectorType::LinkedIn), 0.75);

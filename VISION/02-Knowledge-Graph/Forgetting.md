@@ -72,9 +72,9 @@ $ agent kb forget --from 2025-01-01 --to 2025-01-31
 
 ### 5. By Source
 ```bash
-> "Forget everything you learned from my Gmail."
+> "Forget everything you learned from my email."
 
-I have removed 312 facts originally extracted from Gmail.
+I have removed 312 facts originally extracted from the email connector.
 This includes:
   - Travel: 45 facts
   - Events: 89 facts
@@ -86,7 +86,7 @@ This includes:
 ```
 
 ```bash
-$ agent kb forget --source gmail
+$ agent kb forget --source email
 312 facts moved to trash.
 ```
 

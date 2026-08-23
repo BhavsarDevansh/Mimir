@@ -716,7 +716,7 @@ mod tests {
 
         let row = kg
             .upsert_connector(UpsertConnectorInput {
-                connector_type: ConnectorType::Gmail,
+                connector_type: ConnectorType::Email,
                 slug: "flaky-del".to_string(),
                 backend: "mock".to_string(),
                 display_name: "Flaky Del".to_string(),
@@ -745,7 +745,7 @@ mod tests {
                 valid_until: None,
                 source_type: SourceType::Connector,
                 connector_instance_id: Some(row.id),
-                connector_type: Some(ConnectorType::Gmail),
+                connector_type: Some(ConnectorType::Email),
                 raw_reference: Some("del-1".to_string()),
                 extraction_method: Some(ExtractionMethod::StructuredParse),
                 inferred: false,
@@ -775,7 +775,7 @@ mod tests {
             connector.clone(),
             kg.clone(),
             row.id,
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             SyncOptions::default(),
         )
         .await;
@@ -787,7 +787,7 @@ mod tests {
             connector.clone(),
             kg.clone(),
             row.id,
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             SyncOptions::default(),
         )
         .await;
@@ -879,7 +879,7 @@ mod tests {
 
         let row = kg
             .upsert_connector(UpsertConnectorInput {
-                connector_type: ConnectorType::Gmail,
+                connector_type: ConnectorType::Email,
                 slug: "durable-state".to_string(),
                 backend: "mock".to_string(),
                 display_name: "Durable State".to_string(),
@@ -906,7 +906,7 @@ mod tests {
             connector.clone(),
             kg.clone(),
             row.id,
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             SyncOptions::default(),
         )
         .await;
@@ -1009,7 +1009,7 @@ mod tests {
 
         let row = kg
             .upsert_connector(UpsertConnectorInput {
-                connector_type: ConnectorType::Gmail,
+                connector_type: ConnectorType::Email,
                 slug: "cursor-adoption".to_string(),
                 backend: "mock".to_string(),
                 display_name: "Cursor Adoption".to_string(),
@@ -1040,7 +1040,7 @@ mod tests {
             connector.clone(),
             kg.clone(),
             row.id,
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             SyncOptions::default(),
         )
         .await;
@@ -1056,7 +1056,7 @@ mod tests {
             connector.clone(),
             kg.clone(),
             row.id,
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             SyncOptions::default(),
         )
         .await;

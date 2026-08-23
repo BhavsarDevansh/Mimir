@@ -54,7 +54,7 @@ async fn supervisor_with_row_and_recorder(
     let rec = Arc::clone(&recorder);
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "test".to_string(),
             FnConnectorFactory::new(move |config, _ctx| {
                 let connector =
@@ -75,7 +75,7 @@ async fn supervisor_with_row_and_recorder(
     );
     let row = kg
         .create_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "gmail-test".to_string(),
             backend: "test".to_string(),
             display_name: "Gmail Test".to_string(),
@@ -228,7 +228,7 @@ async fn trigger_sync_consults_live_mode_not_spawn_snapshot() {
     let override_handle = Arc::clone(&mode_override);
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "test".to_string(),
             FnConnectorFactory::new(move |config, _ctx| {
                 let connector = crate::MockConnector::from_config(config)?
@@ -246,7 +246,7 @@ async fn trigger_sync_consults_live_mode_not_spawn_snapshot() {
     ));
     let row = kg
         .create_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "gmail-test".to_string(),
             backend: "test".to_string(),
             display_name: "Gmail Test".to_string(),
@@ -402,7 +402,7 @@ async fn act_reinstantiates_after_runner_exits_naturally() {
     let count = Arc::clone(&creations);
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "test".to_string(),
             FnConnectorFactory::new(move |config, _ctx| {
                 count.fetch_add(1, Ordering::SeqCst);
@@ -424,7 +424,7 @@ async fn act_reinstantiates_after_runner_exits_naturally() {
 
     let row = kg
         .create_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "stale-act".to_string(),
             backend: "test".to_string(),
             display_name: "Stale".to_string(),
@@ -655,7 +655,7 @@ async fn stop_preempts_an_in_flight_auth_handshake() {
     let registry = ConnectorRegistry::new();
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "test".to_string(),
             FnConnectorFactory::new(move |config, _ctx| {
                 let inner = crate::MockConnector::from_config(config)?;
@@ -676,7 +676,7 @@ async fn stop_preempts_an_in_flight_auth_handshake() {
     );
     let row = kg
         .create_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "gated-auth".to_string(),
             backend: "test".to_string(),
             display_name: "Gated Auth".to_string(),
@@ -795,7 +795,7 @@ async fn shutdown_awaits_an_in_flight_cycle() {
     let registry = ConnectorRegistry::new();
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "test".to_string(),
             FnConnectorFactory::new(move |config, _ctx| {
                 let inner = crate::MockConnector::from_config(config)?;
@@ -819,7 +819,7 @@ async fn shutdown_awaits_an_in_flight_cycle() {
     );
     let row = kg
         .create_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "gated-sync".to_string(),
             backend: "test".to_string(),
             display_name: "Gated Sync".to_string(),

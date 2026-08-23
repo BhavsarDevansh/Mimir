@@ -77,6 +77,10 @@ pub(crate) async fn handle_connector_add_with_opener(
     opener: &(dyn Fn(&str) + Send + Sync),
 ) {
     let client = make_client(base_url);
+    // Legacy alias (issue #400): the IMAP mail type is the generic `email`
+    // type; `gmail` still registers the same connector for pre-rename
+    // scripts, and the default slug/display name follow the normalized type.
+    let connector_type = normalize_connector_type(&connector_type);
     validate_backend(&client, &connector_type, &backend).await;
     let merged =
         merge_config(&config, config_json.as_deref()).unwrap_or_else(|e| exit_with_error(e));
@@ -134,6 +138,20 @@ pub(crate) async fn handle_connector_add_with_opener(
         }
     } else {
         print_json(&output);
+    }
+}
+
+/// Normalize a user-supplied `connector_type` for the flag form: the legacy
+/// `gmail` spelling maps to the generic `email` type (issue #400) so
+/// pre-rename scripts keep working. The daemon accepts the alias too, but
+/// the CLI validates against the live catalog (registry keys), which only
+/// carries the canonical `email`.
+pub(crate) fn normalize_connector_type(connector_type: &str) -> String {
+    let normalized = connector_type.to_ascii_lowercase();
+    if normalized == "gmail" {
+        "email".to_string()
+    } else {
+        normalized
     }
 }
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.140.0] — 2026-08-23
+
+### Feature: wizard email + calendar provider presets, generic Email connector type (issue #400)
+
+- The interactive wizard (`mimir connector add`) now offers email provider presets that pre-fill the IMAP defaults and provider guidance: Gmail (`imap.gmail.com:993`, Google OAuth endpoints + `https://mail.google.com/` scope pre-filled, OAuth first with app-password fallback), Outlook / Office 365 (`outlook.office365.com:993`, Microsoft identity platform endpoints + `https://outlook.office.com/IMAP.AccessAsUser.All offline_access` scope, OAuth 2.0 only — Microsoft retired app passwords for Outlook.com / Exchange Online IMAP), Yahoo (`imap.mail.yahoo.com:993`, app password), Proton Mail Bridge (`127.0.0.1:1143`, app password), iCloud (`imap.mail.me.com:993`, app password), and custom IMAP (free-form, app password or user-supplied OAuth endpoints, with an empty OAuth scope list rejected). Presets are wizard-side defaults only — the backend stays `imap` for every provider, and the sync-mode / first-sync-backfill questions (issue #397) apply to every preset.
+- The calendar wizard got the same treatment: Google Calendar (primary-calendar CalDAV collection URL computed from the account email, Google OAuth), iCloud and Yahoo (server URL defaults, app password), and Custom CalDAV. Outlook / Office 365 is deliberately absent — Microsoft exposes no public CalDAV endpoint (a Microsoft Graph calendar backend is deferred as a follow-on).
+- The IMAP mail connector type is now the generic `Email` type: `ConnectorType::Gmail` (wire string `gmail`, DB id 1) is renamed `ConnectorType::Email` (wire string `email`, DB id unchanged — migration `054_rename_email_connector_type.sql` renames the seeded `connector_types` row), the legacy `gmail` wire string stays accepted as an input alias (CLI flag form normalizes it to `email`; the daemon's `FromStr` accepts both), the default email slug/display name became `email`/`Email`, and the `gmail` cargo feature was renamed `email` across `mimir-connectors` / `mimir-server` / the no-default-features test matrix.
+- Tests: 29 wizard tests covering every email and calendar preset (endpoint/scope/IMAP defaults, auth ordering — Outlook is OAuth-only and custom IMAP rejects blank or parsed-empty scope lists — sync questions), legacy-alias registration, enum wire-contract and discriminant-stability tests, migration seed test, and updated CLI/e2e/server/migrations suites.
+- Docs: `docs/email-connector.md`, `docs/connectors-framework.md`, `docs/connector-management.md`, `docs/cli.md`, `docs/oauth-client.md`, `docs/workspace.md`, `docs/unit-tests.md`, `docs/e2e-testing.md`, `docs/fact-extraction-pipeline.md`, `docs/Confidence-Model.md`, `docs/mock-connector.md`, the matching `docs/wiki/` pages, `README.md`, `Mimir-Implementation-Context.md`, and the Phase 3 VISION docs updated.
+- Version bumped 0.139.0 → 0.140.0 (minor — new feature; the `gmail` wire alias keeps pre-rename scripts working).
+
 ## [0.139.0] — 2026-08-23
 
 ### Feature: email facts are contextualised by the message envelope — dates, sender, recipients, spam signals (issue #398)

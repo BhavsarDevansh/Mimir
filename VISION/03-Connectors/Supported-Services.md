@@ -3,7 +3,8 @@
 ## Tier 1: Core (Phase 1-2)
 These are essential for basic functionality and should be built first.
 
-### Gmail / Email (IMAP)
+### Email (IMAP)
+
 - **Read:** Emails, headers, attachments metadata
 - **Extract:** Flight confirmations, bookings, receipts, addresses, dates, contacts
 - **Write:** None (read-only for safety)

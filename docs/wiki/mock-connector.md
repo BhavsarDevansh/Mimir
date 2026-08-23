@@ -6,7 +6,7 @@
 
 ## What it is
 
-The mock connector is Mimir's built-in test harness for the connector framework. It is a fake connector that emits pre-written ("canned") facts on a schedule you configure, so the framework and its supervisor can be tested end-to-end without connecting to any real service (no Gmail, no calendar, no photo library).
+The mock connector is Mimir's built-in test harness for the connector framework. It is a fake connector that emits pre-written ("canned") facts on a schedule you configure, so the framework and its supervisor can be tested end-to-end without connecting to any real service (no email account, no calendar, no photo library).
 
 It is **test-only**: the module is gated behind the off-by-default `test-mock-connector` feature so production builds never compile it, and the workspace test run enables the feature through the `mimir` binary's dev-dependencies.
 
@@ -47,7 +47,7 @@ It is also the vehicle for the end-to-end "sync → extract → insert → query
 
 The mock validates its `config_json` up front so misconfigurations fail loudly instead of silently misbehaving:
 
-- `__ctype` (when the supervisor injects it) must be a valid integer `ConnectorType`. An invalid value is rejected with a config error rather than silently defaulting to Gmail.
+- `__ctype` (when the supervisor injects it) must be a valid integer `ConnectorType`. An invalid value is rejected with a config error rather than silently defaulting to Email.
 - `batch_size` must be greater than zero. A zero would let `sync()` succeed forever while fetching nothing, so it is rejected.
 - The `facts` schema declares the required fields (`subject`, `relationship_type`, `object`) and the typed enums for entity/recurrence types, so a malformed fact is caught at config time.
 - The schema's entity/recurrence enum lists and defaults are generated from the real enum variant arrays (`ENTITY_TYPES` / `RECURRENCE_TYPES`), not re-typed by hand — so the schema stays in sync with the enums automatically.

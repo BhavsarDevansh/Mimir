@@ -21,7 +21,7 @@ mimir kb forget --predicate visited --yes
 mimir kb forget --entity "Alice" --yes
 
 # Everything from a given source
-mimir kb forget --source gmail --yes
+mimir kb forget --source email --yes
 
 # Facts created within a time window
 mimir kb forget --from 2025-01-01 --to 2025-06-30 --yes

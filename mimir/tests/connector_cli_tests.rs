@@ -74,7 +74,7 @@ async fn mount_health(server: &MockServer) {
 fn connector_fixture(id: i32, slug: &str) -> ConnectorResponse {
     ConnectorResponse {
         id,
-        connector_type: "gmail".to_string(),
+        connector_type: "email".to_string(),
         slug: slug.to_string(),
         backend: "test".to_string(),
         display_name: slug.to_string(),
@@ -124,7 +124,7 @@ async fn connector_catalog_lists_supported_backends() {
                 backend: "caldav".to_string(),
             },
             ConnectorCatalogEntry {
-                connector_type: "gmail".to_string(),
+                connector_type: "email".to_string(),
                 backend: "imap".to_string(),
             },
             ConnectorCatalogEntry {
@@ -155,7 +155,7 @@ async fn connector_catalog_lists_supported_backends() {
         status.success(),
         "connector catalog failed.\nstdout: {stdout}\nstderr: {stderr}"
     );
-    for needle in ["calendar", "caldav", "gmail", "imap", "photos", "local"] {
+    for needle in ["calendar", "caldav", "email", "imap", "photos", "local"] {
         assert!(
             stdout.contains(needle),
             "expected '{needle}' in catalog table, got:\n{stdout}"
@@ -246,7 +246,7 @@ async fn connector_add_ingest_failure_hints_at_auth() {
         .respond_with(
             ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
                 entries: vec![ConnectorCatalogEntry {
-                    connector_type: "gmail".to_string(),
+                    connector_type: "email".to_string(),
                     backend: "test".to_string(),
                 }],
             }),
@@ -301,7 +301,7 @@ async fn connector_add_ingest_failure_hints_at_auth() {
 async fn connector_add_rejects_unregistered_backend_before_credential_prompt() {
     let server = MockServer::start().await;
     mount_health(&server).await;
-    // The daemon supports gmail/imap and photos/local; the user asks for a
+    // The daemon supports email/imap and photos/local; the user asks for a
     // photos backend that does not exist.
     Mock::given(method("GET"))
         .and(path("/connectors/catalog"))
@@ -309,7 +309,7 @@ async fn connector_add_rejects_unregistered_backend_before_credential_prompt() {
             ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
                 entries: vec![
                     ConnectorCatalogEntry {
-                        connector_type: "gmail".to_string(),
+                        connector_type: "email".to_string(),
                         backend: "imap".to_string(),
                     },
                     ConnectorCatalogEntry {
@@ -370,7 +370,7 @@ async fn connector_add_rejects_unknown_type_with_supported_pairs_hint() {
         .respond_with(
             ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
                 entries: vec![ConnectorCatalogEntry {
-                    connector_type: "gmail".to_string(),
+                    connector_type: "email".to_string(),
                     backend: "imap".to_string(),
                 }],
             }),
@@ -405,7 +405,7 @@ async fn connector_add_rejects_unknown_type_with_supported_pairs_hint() {
         "expected an unknown-type rejection, got: {stderr}"
     );
     assert!(
-        stderr.contains("gmail/imap"),
+        stderr.contains("email/imap"),
         "expected the supported-pairs hint, got: {stderr}"
     );
     assert!(stdout.is_empty(), "expected no stdout, got: {stdout}");
@@ -523,7 +523,7 @@ async fn connector_add_reads_password_from_stdin() {
         .respond_with(
             ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
                 entries: vec![ConnectorCatalogEntry {
-                    connector_type: "gmail".to_string(),
+                    connector_type: "email".to_string(),
                     backend: "test".to_string(),
                 }],
             }),
@@ -586,7 +586,7 @@ async fn connector_add_reads_token_from_env() {
         .respond_with(
             ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
                 entries: vec![ConnectorCatalogEntry {
-                    connector_type: "gmail".to_string(),
+                    connector_type: "email".to_string(),
                     backend: "test".to_string(),
                 }],
             }),
@@ -871,7 +871,7 @@ async fn connector_add_stdin_secret_empty_fails() {
         .respond_with(
             ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
                 entries: vec![ConnectorCatalogEntry {
-                    connector_type: "gmail".to_string(),
+                    connector_type: "email".to_string(),
                     backend: "test".to_string(),
                 }],
             }),
@@ -923,7 +923,7 @@ async fn connector_add_flag_beats_env_secret() {
         .respond_with(
             ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
                 entries: vec![ConnectorCatalogEntry {
-                    connector_type: "gmail".to_string(),
+                    connector_type: "email".to_string(),
                     backend: "test".to_string(),
                 }],
             }),
@@ -987,7 +987,7 @@ async fn connector_add_stdin_beats_env_secret() {
         .respond_with(
             ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
                 entries: vec![ConnectorCatalogEntry {
-                    connector_type: "gmail".to_string(),
+                    connector_type: "email".to_string(),
                     backend: "test".to_string(),
                 }],
             }),

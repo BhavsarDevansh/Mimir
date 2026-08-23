@@ -46,7 +46,7 @@ fn test_connector_initial_uses_reliability_score() {
         0.90
     );
     assert_eq!(
-        confidence::initial(SourceType::Connector, Some(ConnectorType::Gmail)),
+        confidence::initial(SourceType::Connector, Some(ConnectorType::Email)),
         0.85
     );
     assert_eq!(
@@ -150,25 +150,25 @@ async fn test_connector_reliability_feedback() {
         .unwrap();
 
     let initial = kg
-        .connector_reliability(ConnectorType::Gmail)
+        .connector_reliability(ConnectorType::Email)
         .await
         .unwrap();
     assert!((initial - 0.85).abs() < 1e-4);
 
-    kg.adjust_connector_reliability(ConnectorType::Gmail, -0.02)
+    kg.adjust_connector_reliability(ConnectorType::Email, -0.02)
         .await
         .unwrap();
     let after_drop = kg
-        .connector_reliability(ConnectorType::Gmail)
+        .connector_reliability(ConnectorType::Email)
         .await
         .unwrap();
     assert!((after_drop - 0.83).abs() < 1e-4);
 
-    kg.adjust_connector_reliability(ConnectorType::Gmail, 0.01)
+    kg.adjust_connector_reliability(ConnectorType::Email, 0.01)
         .await
         .unwrap();
     let after_rise = kg
-        .connector_reliability(ConnectorType::Gmail)
+        .connector_reliability(ConnectorType::Email)
         .await
         .unwrap();
     assert!((after_rise - 0.84).abs() < 1e-4);
@@ -181,20 +181,20 @@ async fn test_connector_reliability_clamped() {
         .await
         .unwrap();
 
-    kg.adjust_connector_reliability(ConnectorType::Gmail, -1.0)
+    kg.adjust_connector_reliability(ConnectorType::Email, -1.0)
         .await
         .unwrap();
     let score = kg
-        .connector_reliability(ConnectorType::Gmail)
+        .connector_reliability(ConnectorType::Email)
         .await
         .unwrap();
     assert_eq!(score, 0.0);
 
-    kg.adjust_connector_reliability(ConnectorType::Gmail, 2.0)
+    kg.adjust_connector_reliability(ConnectorType::Email, 2.0)
         .await
         .unwrap();
     let score = kg
-        .connector_reliability(ConnectorType::Gmail)
+        .connector_reliability(ConnectorType::Email)
         .await
         .unwrap();
     assert_eq!(score, 1.0);
@@ -213,8 +213,8 @@ async fn test_connector_reliability_defaults_match_migration() {
 
     for &(ct, expected) in &[
         (
-            ConnectorType::Gmail,
-            confidence::default_connector_score(ConnectorType::Gmail),
+            ConnectorType::Email,
+            confidence::default_connector_score(ConnectorType::Email),
         ),
         (
             ConnectorType::Calendar,
@@ -387,8 +387,8 @@ async fn test_connector_confidence_uses_db_reliability() {
         .await
         .unwrap();
 
-    // Adjust Gmail reliability away from the default.
-    kg.adjust_connector_reliability(ConnectorType::Gmail, -0.02)
+    // Adjust Email reliability away from the default.
+    kg.adjust_connector_reliability(ConnectorType::Email, -0.02)
         .await
         .unwrap();
 
@@ -397,7 +397,7 @@ async fn test_connector_confidence_uses_db_reliability() {
 
     let gmail_instance = kg
         .upsert_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "gmail-1".to_string(),
             backend: "imap".to_string(),
             display_name: "Personal Gmail".to_string(),
@@ -419,7 +419,7 @@ async fn test_connector_confidence_uses_db_reliability() {
             valid_until: None,
             source_type: SourceType::Connector,
             connector_instance_id: Some(gmail_instance),
-            connector_type: Some(ConnectorType::Gmail),
+            connector_type: Some(ConnectorType::Email),
             raw_reference: Some("msg-123".to_string()),
             extraction_method: Some(
                 mimir_knowledge::models::source::ExtractionMethod::StructuredParse,

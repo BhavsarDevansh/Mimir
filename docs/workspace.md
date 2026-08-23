@@ -14,7 +14,7 @@ Mimir is organised as a Cargo workspace with one binary crate and six library cr
 | `mimir-client` | library | Thin HTTP client for talking to the daemon. Wraps `reqwest` and parses SSE streams into `StreamItem` values. |
 | `mimir-api-types` | library | Minimal shared serde wire types (`ChatRequest`, `ChatResponse`, `StatusResponse`, `Usage`, `StreamItem`) decoupling the server and client from `mimir-core`. |
 | `mimir-knowledge` | library | SQLite-based knowledge graph: entity/fact storage, temporal queries, provenance tracking, and full-text search (Phase 2). |
-| `mimir-connectors` | library | Service ingestion framework: background sync workers that fetch external data (email, calendar, photos) and normalize it into knowledge-graph facts. DB access only via the `KnowledgeGraph` facade (no direct `sqlx`). Feature-flagged by backend: `photos`, `calendar`, `gmail`; framework + mock always built. Phase 3 (scaffolded). |
+| `mimir-connectors` | library | Service ingestion framework: background sync workers that fetch external data (email, calendar, photos) and normalize it into knowledge-graph facts. DB access only via the `KnowledgeGraph` facade (no direct `sqlx`). Feature-flagged by backend: `photos`, `calendar`, `email`; framework + mock always built. Phase 3 (scaffolded). |
 
 ## Metadata Inheritance
 

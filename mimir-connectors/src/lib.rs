@@ -49,7 +49,7 @@
 //!   `default-features = false` and a custom `oauth::OAuthHttpClient` adapter
 //!   over the workspace's single reqwest 0.13 client — the crate's optional
 //!   reqwest 0.12 dependency never enters the tree. Gated by the `oauth`
-//!   feature (enabled by `calendar`, `gmail`, and the CLI).
+//!   feature (enabled by `calendar`, `email`, and the CLI).
 //! - [`secrets`] — [`SecretStore`] trait + [`SecretBundle`] enum +
 //!   [`FileSecretStore`] / [`InMemorySecretStore`] (F10 / #187) +
 //!   `KeyringSecretStore` (F11 / #188, opt-in `secrets-keyring`): per-connector
@@ -69,9 +69,9 @@
 //!
 //! # Feature flags
 //!
-//! `photos`, `calendar`, and `gmail` gate the per-type backends, which are
+//! `photos`, `calendar`, and `email` gate the per-type backends, which are
 //! added in later Phase 3 issues (C1–C7); `oauth` is the shared OAuth 2.0
-//! client + refresh layer enabled by `calendar`/`gmail` and the CLI PKCE flow.
+//! client + refresh layer enabled by `calendar`/`email` and the CLI PKCE flow.
 //! `test-mock-oauth` gates the in-process mock OAuth server used by the T2
 //! E2E tests and `test-mock-connector` gates the configurable mock connector
 //! harness (F13 / #190); both are test-only and off by default, and
@@ -82,13 +82,13 @@
 //! harness.
 
 pub mod connector;
-#[cfg(any(feature = "photos", feature = "calendar", feature = "gmail", test))]
+#[cfg(any(feature = "photos", feature = "calendar", feature = "email", test))]
 mod fact;
 pub mod geocoder;
 /// Shared iCalendar VEVENT parsing + fact extraction (Phase 3 C4 / #198
 /// and C6 / #200). Needed by both the Calendar and Email backends that
-/// consume iCalendar data; gated by `any(feature = "calendar", feature = "gmail")`.
-#[cfg(any(feature = "calendar", feature = "gmail"))]
+/// consume iCalendar data; gated by `any(feature = "calendar", feature = "email")`.
+#[cfg(any(feature = "calendar", feature = "email"))]
 pub mod ical;
 /// Configurable mock connector test harness (Phase 3 F13 / #190): an
 /// in-memory connector whose behaviour is driven entirely by `config_json`,
@@ -138,11 +138,11 @@ pub mod photos;
 #[cfg(feature = "calendar")]
 pub mod calendar;
 
-/// IMAP email connector (Phase 3 C5 / #199), gated by the `gmail` feature. An
+/// IMAP email connector (Phase 3 C5 / #199), gated by the `email` feature. An
 /// [`email::imap`] transport (IMAP `LOGIN` / `AUTHENTICATE XOAUTH2`, `UID
 /// FETCH` incremental sync, `IDLE` push) backs an [`EmailConnector`] running
 /// in `Push` (IDLE) or `Polling` (fallback) mode.
-#[cfg(feature = "gmail")]
+#[cfg(feature = "email")]
 pub mod email;
 
 pub use connector::{
@@ -167,7 +167,7 @@ pub use calendar::{
     CalendarAuthMethod, CalendarConfigDto, CalendarConnector, CalendarConnectorFactory,
 };
 
-#[cfg(feature = "gmail")]
+#[cfg(feature = "email")]
 pub use email::{
     EmailAuthMethod, EmailConfigDto, EmailConnector, EmailConnectorFactory, EmailSyncMode,
 };

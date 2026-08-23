@@ -65,7 +65,7 @@ fn literal_fact(subject: &str, rel: &str, object: &str, raw: &str) -> MockFactCo
     }
 }
 
-/// Register the mock factory under `(Gmail, "mock")` so the supervisor can
+/// Register the mock factory under `(Email, "mock")` so the supervisor can
 /// instantiate the configured connector row.
 fn mock_registry() -> Arc<ConnectorRegistry> {
     let registry = ConnectorRegistry::new();
@@ -202,7 +202,7 @@ async fn polling_mock_syncs_canned_facts_into_kb() {
         .expect("works_at Acme fact not found");
     assert!(
         (works_at.confidence - 0.85).abs() < 0.001,
-        "expected the Gmail reliability score (0.85), got {}",
+        "expected the Email reliability score (0.85), got {}",
         works_at.confidence
     );
     assert_connector_source(&kg, works_at.id, row.id, "m-1").await;

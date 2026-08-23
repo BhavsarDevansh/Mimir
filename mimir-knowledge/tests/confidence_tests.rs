@@ -387,7 +387,7 @@ async fn test_connector_confidence_uses_db_reliability() {
         .await
         .unwrap();
 
-    // Adjust Gmail reliability away from the default.
+    // Adjust Email reliability away from the default.
     kg.adjust_connector_reliability(ConnectorType::Email, -0.02)
         .await
         .unwrap();

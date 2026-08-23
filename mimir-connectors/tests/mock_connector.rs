@@ -17,7 +17,7 @@
 //!   task on shutdown for cancellation); F9 manual triggers are rejected for
 //!   push connectors, so push needs no trigger path.
 //! - `MockConnector::default()` preserves the legacy no-op identity
-//!   (`id "mock"`, `name "Mock Connector"`, type `Gmail`, `Polling`, health
+//!   (`id "mock"`, `name "Mock Connector"`, type `Email`, `Polling`, health
 //!   `Online`, empty `extract`) so existing trait tests keep passing.
 
 #![cfg(feature = "test-mock-connector")]
@@ -531,7 +531,7 @@ fn from_config_rejects_unknown_ctype() {
 }
 
 #[test]
-fn from_config_absent_ctype_defaults_to_gmail() {
+fn from_config_absent_ctype_defaults_to_email() {
     let mock = MockConnector::from_config(json!({})).unwrap();
     assert_eq!(mock.connector_type(), ConnectorType::Email);
 }

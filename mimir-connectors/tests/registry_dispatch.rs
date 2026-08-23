@@ -139,7 +139,7 @@ fn backends_for_type_lists_all_registered_backends() {
             )
             .unwrap();
     }
-    // A backend under a different type must not leak into the Gmail list;
+    // A backend under a different type must not leak into the Email list;
     // "a-backend" would sort first if it did, so the assertion catches it.
     registry
         .register(

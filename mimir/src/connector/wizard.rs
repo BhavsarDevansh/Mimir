@@ -68,7 +68,7 @@ const EMAIL_PROVIDER_OPTIONS: [&str; 6] = [
 /// follow-on), so a preset would always produce a broken connector.
 const CALENDAR_PROVIDER_OPTIONS: [&str; 4] =
     ["Google Calendar", "iCloud", "Yahoo", "Custom CalDAV"];
-/// Wizard sync-mode choices for the Gmail IMAP profile (issue #397):
+/// Wizard sync-mode choices for the email IMAP profile (issue #397):
 /// "Continuously — push" maps to `mode: auto` (IDLE when the server
 /// advertises it), "Every N minutes — polling" maps to `mode: poll` plus a
 /// `poll_interval_secs`.
@@ -84,7 +84,7 @@ const INTERVAL_OPTIONS: [&str; 5] = [
     "Custom interval (minutes)",
 ];
 const INTERVAL_MINUTES: [u64; 4] = [5, 15, 30, 60];
-/// Wizard first-sync choice for the Gmail IMAP profile (issue #397):
+/// Wizard first-sync choice for the email IMAP profile (issue #397):
 /// import the existing mailbox, or start from "now" (seed the cursor so the
 /// first cycle skips existing mail).
 const BACKFILL_IMPORT: &str = "Import existing mailbox content (recommended)";
@@ -691,34 +691,16 @@ fn calendar_provider_config(
                 ),
                 "Calendar URL",
             )?;
-            let client_id = required(
-                prompts.input(
-                    "OAuth client ID (Google Cloud Console → Credentials → OAuth client)",
-                    None,
-                ),
-                "OAuth client ID",
+            let (auth, credential) = calendar_oauth_questions(
+                prompts,
+                &username,
+                GOOGLE_AUTH_URI,
+                GOOGLE_TOKEN_ENDPOINT,
+                "OAuth client ID (Google Cloud Console → Credentials → OAuth client)",
             )?;
-            let client_secret = prompts.password("OAuth client secret (blank if none)")?;
-            let client_secret = if client_secret.trim().is_empty() {
-                None
-            } else {
-                Some(client_secret)
-            };
-            let scopes_raw = prompts.input(
-                "OAuth scopes (comma or space-separated)",
-                Some(CALDAV_SCOPE),
-            )?;
-            let auth = json!({
-                "kind": "oauth",
-                "username": username,
-                "auth_uri": GOOGLE_AUTH_URI,
-                "token_endpoint": GOOGLE_TOKEN_ENDPOINT,
-                "client_id": client_id,
-                "scopes": parse_scopes(&scopes_raw),
-            });
             Ok((
                 json!({ "calendar_url": calendar_url, "auth": auth }),
-                WizardCredential::OAuth { client_secret },
+                credential,
             ))
         }
         // iCloud: app-specific password only (two-factor authentication
@@ -791,29 +773,16 @@ fn calendar_provider_config(
                     prompts.input("Token endpoint URL", None),
                     "Token endpoint URL",
                 )?;
-                let client_id =
-                    required(prompts.input("OAuth client ID", None), "OAuth client ID")?;
-                let client_secret = prompts.password("OAuth client secret (blank if none)")?;
-                let client_secret = if client_secret.trim().is_empty() {
-                    None
-                } else {
-                    Some(client_secret)
-                };
-                let scopes_raw = prompts.input(
-                    "OAuth scopes (comma or space-separated)",
-                    Some(CALDAV_SCOPE),
+                let (auth, credential) = calendar_oauth_questions(
+                    prompts,
+                    &username,
+                    &auth_uri,
+                    &token_endpoint,
+                    "OAuth client ID",
                 )?;
-                let auth = json!({
-                    "kind": "oauth",
-                    "username": username,
-                    "auth_uri": auth_uri,
-                    "token_endpoint": token_endpoint,
-                    "client_id": client_id,
-                    "scopes": parse_scopes(&scopes_raw),
-                });
                 Ok((
                     json!({ "calendar_url": calendar_url, "auth": auth }),
-                    WizardCredential::OAuth { client_secret },
+                    credential,
                 ))
             } else {
                 let password = required_secret(prompts.password("App password"), "App password")?;
@@ -827,6 +796,39 @@ fn calendar_provider_config(
             }
         }
     }
+}
+
+/// Prompt the OAuth client credentials for a CalDAV flow and assemble the
+/// auth block; the client secret never enters `config_json` — it travels in
+/// the credential bundle. Shared by the Google Calendar preset (endpoints
+/// pre-filled) and the custom CalDAV flow (user-supplied endpoints).
+fn calendar_oauth_questions(
+    prompts: &dyn PromptDriver,
+    username: &str,
+    auth_uri: &str,
+    token_endpoint: &str,
+    client_id_help: &str,
+) -> Result<(Value, WizardCredential), String> {
+    let client_id = required(prompts.input(client_id_help, None), "OAuth client ID")?;
+    let client_secret = prompts.password("OAuth client secret (blank if none)")?;
+    let client_secret = if client_secret.trim().is_empty() {
+        None
+    } else {
+        Some(client_secret)
+    };
+    let scopes_raw = prompts.input(
+        "OAuth scopes (comma or space-separated)",
+        Some(CALDAV_SCOPE),
+    )?;
+    let auth = json!({
+        "kind": "oauth",
+        "username": username,
+        "auth_uri": auth_uri,
+        "token_endpoint": token_endpoint,
+        "client_id": client_id,
+        "scopes": parse_scopes(&scopes_raw),
+    });
+    Ok((auth, WizardCredential::OAuth { client_secret }))
 }
 
 /// Split a user-entered scope list on commas and/or whitespace into a JSON

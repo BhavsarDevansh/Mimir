@@ -1052,6 +1052,73 @@ async fn test_v1_chat_queue_full_returns_503_openai_shape() {
 }
 
 #[tokio::test]
+async fn test_v1_chat_stream_queue_full_returns_503_before_sse() {
+    // PR #477 review: queue admission must happen before the SSE response
+    // starts, so a full user queue returns the documented 503 + Retry-After
+    // instead of an SSE error event after `200 OK`.
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            .push_stream_error(LlmError::QueueFull)
+            .build(),
+    );
+    let (state, _temp) = test_state(mock.clone()).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let body = chat_body(
+        "gpt-4o",
+        serde_json::json!([{"role": "user", "content": "hi"}]),
+        serde_json::json!({"user": "phone", "stream": true}),
+    );
+    let response = app
+        .oneshot(
+            authed_request()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default(),
+        "5"
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(
+        !text.contains("event: error") && !text.contains("data: [DONE]"),
+        "queue-full admission must not start an SSE stream: {text:?}"
+    );
+    let error: OpenAiErrorBody = serde_json::from_str(&text).unwrap();
+    assert_eq!(error.error.error_type, "server_error");
+    assert_eq!(error.error.code.as_deref(), Some("queue_full"));
+
+    // The rejected turn must not leave the persisted user message behind.
+    let sessions = state.context_manager.list_sessions().await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    let msgs = state
+        .context_manager
+        .export_conversation(sessions[0].id)
+        .await
+        .unwrap()
+        .messages;
+    assert_eq!(
+        msgs.len(),
+        1,
+        "failed stream must roll back the request's messages: {msgs:?}"
+    );
+    assert_eq!(msgs[0].role, "system");
+}
+
+#[tokio::test]
 async fn test_v1_chat_invalid_json_returns_400_openai_shape() {
     let mock = Arc::new(MockLlmClient::builder().build());
     let (state, _temp) = test_state(mock.clone()).await;

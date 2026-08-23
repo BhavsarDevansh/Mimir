@@ -16,7 +16,7 @@ impl LlmClient {
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<(String, Usage), LlmError> {
         if let Some(pool) = &self.pool {
-            pool.enqueue_chat(messages, tools, self.overrides.clone())
+            pool.enqueue_chat_with_overrides(messages, tools, self.overrides.clone())
                 .await
         } else {
             self.chat_direct(messages, tools, &self.overrides).await
@@ -30,7 +30,7 @@ impl LlmClient {
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<(Message, Usage), LlmError> {
         if let Some(pool) = &self.pool {
-            pool.enqueue_chat_message(messages, tools, self.overrides.clone())
+            pool.enqueue_chat_message_with_overrides(messages, tools, self.overrides.clone())
                 .await
         } else {
             self.chat_message_direct(messages, tools, &self.overrides)
@@ -51,7 +51,7 @@ impl LlmClient {
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<(Message, Usage), LlmError> {
         if let Some(pool) = &self.pool {
-            pool.enqueue_system_chat_message(messages, tools, self.overrides.clone())
+            pool.enqueue_system_chat_message_with_overrides(messages, tools, self.overrides.clone())
                 .await
         } else {
             self.chat_message_direct(messages, tools, &self.overrides)
@@ -69,7 +69,7 @@ impl LlmClient {
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
         if let Some(pool) = &self.pool {
-            pool.enqueue_chat_stream(messages, tools, self.overrides.clone())
+            pool.enqueue_chat_stream_with_overrides(messages, tools, self.overrides.clone())
                 .await
         } else {
             self.chat_stream_with_usage_direct(messages, tools, &self.overrides)

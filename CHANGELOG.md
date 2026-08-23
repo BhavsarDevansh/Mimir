@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.141.4] — 2026-08-24
+
+### Fix: PR #477 review — source-compatible pool enqueue APIs and atomic stream admission
+
+- `LlmWorkerPool` regains the original public `enqueue_chat_message`, `enqueue_chat`, `enqueue_chat_stream`, `enqueue_system_chat_message`, `enqueue_system_chat`, and `enqueue_system_chat_stream` signatures (no `LlmRequestOverrides` argument); the override-taking behaviour moves to explicit `*_with_overrides` variants, so callers compiled against 0.141.2 keep compiling after the upgrade.
+- The OpenAI-compatible streaming route (`/v1/chat/completions` with `stream: true`) now admits the first stream job before the SSE response starts, so a full user queue returns `503` + `Retry-After: 5` instead of surfacing an SSE error event after `200 OK`.
+- Mock HTTP servers in the pool/client tests read the complete request (headers + `Content-Length` body) before parsing JSON instead of trusting a single `TcpStream::peek`; `MockLlmClientBuilder::push_stream_error` queues immediate stream admission failures for regression tests.
+- Version bumped 0.141.3 → 0.141.4 (patch — bugfix).
+
 ## [0.141.3] — 2026-08-23
 
 ### Fix: chat requests no longer bypass the LLM worker pool when overrides are applied (issue #465)

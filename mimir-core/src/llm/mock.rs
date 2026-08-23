@@ -13,6 +13,10 @@ struct CallRecord {
     tools: Option<Vec<serde_json::Value>>,
 }
 
+/// A queued stream response: an immediate admission failure or a sequence of
+/// stream items.
+type StreamResponse = Result<Vec<Result<StreamItem, LlmError>>, LlmError>;
+
 /// A programmable mock LLM backend for deterministic, fast tests.
 ///
 /// Responses are queued in FIFO order. Callers can assert on the messages
@@ -31,7 +35,7 @@ struct CallRecord {
 #[derive(Debug)]
 pub struct MockLlmClient {
     chat_responses: Mutex<VecDeque<Result<(Message, Usage), LlmError>>>,
-    stream_responses: Mutex<VecDeque<Vec<Result<StreamItem, LlmError>>>>,
+    stream_responses: Mutex<VecDeque<StreamResponse>>,
     context_window: Mutex<Option<u32>>,
     user_queue_depth_val: Mutex<usize>,
     system_queue_depth_val: Mutex<usize>,
@@ -175,7 +179,17 @@ impl MockLlmClientBuilder {
             .stream_responses
             .lock()
             .unwrap()
-            .push_back(items);
+            .push_back(Ok(items));
+        self
+    }
+
+    /// Queue an immediate stream admission failure (e.g. a full user queue).
+    pub fn push_stream_error(self, error: LlmError) -> Self {
+        self.client
+            .stream_responses
+            .lock()
+            .unwrap()
+            .push_back(Err(error));
         self
     }
 
@@ -266,10 +280,11 @@ impl LlmBackend for MockLlmClient {
             .unwrap()
             .push(CallRecord { messages, tools });
         match self.stream_responses.lock().unwrap().pop_front() {
-            Some(items) => {
+            Some(Ok(items)) => {
                 let stream = futures::stream::iter(items);
                 Ok(Box::pin(stream))
             }
+            Some(Err(e)) => Err(e),
             None => Err(LlmError::RetryExhausted { attempts: 1 }),
         }
     }

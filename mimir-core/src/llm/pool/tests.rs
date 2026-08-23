@@ -4,8 +4,37 @@ use super::*;
 use crate::config::LlmConfig;
 use crate::llm::types::{LlmError, LlmRequestOverrides, Message, StreamItem};
 use futures::StreamExt;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::Duration;
+
+/// Read a complete HTTP request (headers + `Content-Length` body) from a mock
+/// server socket so JSON parsing never sees a partially delivered body (PR #477 review).
+async fn read_complete_request(stream: &mut tokio::net::TcpStream) -> String {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 1024];
+    let header_end = loop {
+        if let Some(pos) = buf.windows(4).position(|window| window == b"\r\n\r\n") {
+            break pos + 4;
+        }
+        let n = stream.read(&mut chunk).await.expect("read request headers");
+        assert!(n > 0, "connection closed before request headers arrived");
+        buf.extend_from_slice(&chunk[..n]);
+    };
+    let content_length = String::from_utf8_lossy(&buf[..header_end])
+        .lines()
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .strip_prefix("content-length:")
+                .map(|value| value.trim().parse::<usize>().unwrap())
+        })
+        .unwrap_or(0);
+    while buf.len() < header_end + content_length {
+        let n = stream.read(&mut chunk).await.expect("read request body");
+        assert!(n > 0, "connection closed before the request body arrived");
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
 
 fn test_config() -> LlmConfig {
     LlmConfig {
@@ -33,13 +62,7 @@ async fn test_pool_enqueues_chat_job() {
 
     // This will fail with a network error, but it proves the job was
     // dequeued and processed by the worker.
-    let result = pool
-        .enqueue_chat(
-            vec![Message::user("hello")],
-            None,
-            LlmRequestOverrides::default(),
-        )
-        .await;
+    let result = pool.enqueue_chat(vec![Message::user("hello")], None).await;
     assert!(result.is_err());
 }
 
@@ -53,9 +76,7 @@ async fn test_pool_user_priority_over_system() {
         let mut order = Vec::new();
         for _ in 0..2 {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 1024];
-            let n = stream.peek(&mut buf).await.unwrap();
-            let req = String::from_utf8_lossy(&buf[..n]);
+            let req = read_complete_request(&mut stream).await;
             if req.contains("system-first") {
                 order.push("system");
             } else if req.contains("user-second") {
@@ -87,20 +108,12 @@ async fn test_pool_user_priority_over_system() {
         .unwrap();
 
     // Enqueue system first — it should sit in the system queue.
-    let system_job = pool.enqueue_system_chat(
-        vec![Message::system("system-first")],
-        None,
-        LlmRequestOverrides::default(),
-    );
+    let system_job = pool.enqueue_system_chat(vec![Message::system("system-first")], None);
     // Give the worker a moment to pick up the system job if it were to.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Enqueue user second — it should jump ahead.
-    let user_job = pool.enqueue_chat(
-        vec![Message::user("user-second")],
-        None,
-        LlmRequestOverrides::default(),
-    );
+    let user_job = pool.enqueue_chat(vec![Message::user("user-second")], None);
 
     let (sys_res, usr_res) = tokio::join!(system_job, user_job);
     assert!(sys_res.is_ok());
@@ -121,11 +134,7 @@ async fn test_pool_queue_full_returns_error() {
     let pool = LlmWorkerPool::new(test_config(), config).await.unwrap();
 
     let result = pool
-        .enqueue_chat(
-            vec![Message::user("overflow")],
-            None,
-            LlmRequestOverrides::default(),
-        )
+        .enqueue_chat(vec![Message::user("overflow")], None)
         .await;
     assert!(matches!(result, Err(LlmError::QueueFull)));
 }
@@ -137,9 +146,7 @@ async fn test_pool_stream_yields_text_and_usage() {
 
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 2048];
-        let n = stream.peek(&mut buf).await.unwrap();
-        let req = String::from_utf8_lossy(&buf[..n]);
+        let req = read_complete_request(&mut stream).await;
         assert!(req.contains("/chat/completions"));
 
         let sse_body = format!(
@@ -168,11 +175,7 @@ async fn test_pool_stream_yields_text_and_usage() {
         .unwrap();
 
     let mut stream = pool
-        .enqueue_chat_stream(
-            vec![Message::user("hello")],
-            None,
-            LlmRequestOverrides::default(),
-        )
+        .enqueue_chat_stream(vec![Message::user("hello")], None)
         .await
         .unwrap();
 
@@ -195,9 +198,7 @@ async fn test_pool_job_applies_request_overrides() {
 
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let n = stream.peek(&mut buf).await.unwrap();
-        let req = String::from_utf8_lossy(&buf[..n]);
+        let req = read_complete_request(&mut stream).await;
         let body = req.split("\r\n\r\n").nth(1).unwrap_or_default();
         let json: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(json["model"], "override-model");
@@ -231,7 +232,7 @@ async fn test_pool_job_applies_request_overrides() {
         max_tokens: Some(77),
     };
     let result = pool
-        .enqueue_chat(vec![Message::user("hello")], None, overrides)
+        .enqueue_chat_with_overrides(vec![Message::user("hello")], None, overrides)
         .await;
     assert!(result.is_ok());
 }
@@ -281,9 +282,7 @@ async fn test_in_flight_counter_tracks_active_jobs() {
 
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 1024];
-        let n = stream.peek(&mut buf).await.unwrap();
-        let req = String::from_utf8_lossy(&buf[..n]);
+        let req = read_complete_request(&mut stream).await;
         assert!(req.contains("/chat/completions"));
 
         // Sleep while "processing" so the counter stays elevated.
@@ -314,11 +313,7 @@ async fn test_in_flight_counter_tracks_active_jobs() {
     let pool_clone = pool.clone();
     let job = tokio::spawn(async move {
         pool_clone
-            .enqueue_chat(
-                vec![Message::user("hello")],
-                None,
-                LlmRequestOverrides::default(),
-            )
+            .enqueue_chat(vec![Message::user("hello")], None)
             .await
     });
 

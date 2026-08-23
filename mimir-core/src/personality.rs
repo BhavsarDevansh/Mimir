@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 use tracing::warn;
 
@@ -67,6 +69,50 @@ pub struct Personality {
     warnings: Vec<PresetWarning>,
 }
 
+/// Advisory maximum size of a custom preset file in bytes (1 MiB, matching
+/// `MAX_SKILL_FILE_SIZE`). Larger files still load, but the scan flags them
+/// so the user knows every rescan reads them in full (issue #453).
+const MAX_PRESET_FILE_SIZE: u64 = 1_048_576;
+
+/// A daemon-owned cache of the custom-preset scan, keyed by a cheap
+/// directory fingerprint (file names, sizes, and mtimes), so the hot chat
+/// path never re-reads or re-parses preset files unless they changed
+/// (issue #453). The active preset is still resolved per call, so
+/// per-request `personality_preset` overrides always resolve against the
+/// cached registry.
+#[derive(Debug, Default)]
+pub struct PersonalityCache {
+    inner: Mutex<CachedPresetScan>,
+}
+
+/// The cached result of the last scan of one presets directory.
+#[derive(Debug, Default)]
+struct CachedPresetScan {
+    dir: PathBuf,
+    fingerprint: Option<DirFingerprint>,
+    custom: Vec<(String, PresetEntry)>,
+    warnings: Vec<PresetWarning>,
+    scans: u64,
+}
+
+/// Cheap invalidation key for a presets directory: the directory's own
+/// mtime plus one fingerprint per matching preset file. File contents are
+/// never read while computing it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct DirFingerprint {
+    dir_modified: Option<SystemTime>,
+    entries: Vec<EntryFingerprint>,
+}
+
+/// Per-file part of a [`DirFingerprint`]: identity, size, mtime, and kind.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct EntryFingerprint {
+    name: String,
+    len: u64,
+    modified: Option<SystemTime>,
+    is_dir: bool,
+}
+
 impl Personality {
     /// Operating directives appended to every preset (issue #138). These are
     /// behavioural invariants of Mimir — retrieval and honesty — and apply
@@ -92,22 +138,9 @@ Core facts about the user (condensed subset — not a complete picture; treat as
     pub fn new(config: &PersonalityConfig) -> Self {
         let personality = match paths::personalities_dir() {
             Ok(presets_dir) => Self::from_path(&presets_dir, &config.preset),
-            Err(error) => {
-                let mut warnings = vec![PresetWarning {
-                    path: None,
-                    reason: format!("failed to resolve personalities directory: {error}"),
-                }];
-                let registry = Self::built_in_presets();
-                let active_name =
-                    Self::resolve_active_name(&registry, &config.preset, &mut warnings);
-                Self {
-                    active_name,
-                    registry,
-                    warnings,
-                }
-            }
+            Err(error) => Self::fallback_with_warning(config, error),
         };
-        Self::log_warnings(&personality);
+        Self::log_warnings(&personality.warnings);
         personality
     }
 
@@ -115,21 +148,8 @@ Core facts about the user (condensed subset — not a complete picture; treat as
     /// name. Used by tests and by `mimir personality list`, which scans the
     /// same directory the daemon would.
     pub fn from_path(presets_dir: &Path, preset_name: &str) -> Self {
-        let (custom, mut warnings) = Self::scan_custom_presets(presets_dir);
-
-        let mut registry = Self::built_in_presets();
-        // Custom overrides built-in.
-        for (name, entry) in custom {
-            registry.insert(name, entry);
-        }
-
-        let active_name = Self::resolve_active_name(&registry, preset_name, &mut warnings);
-
-        Self {
-            active_name,
-            registry,
-            warnings,
-        }
+        let (custom, warnings) = Self::scan_custom_presets(presets_dir);
+        Self::from_scan(custom, warnings, preset_name)
     }
 
     /// Return the system prompt for the active preset, composed with the
@@ -324,6 +344,17 @@ Core facts about the user (condensed subset — not a complete picture; treat as
                 // convention are ignored by design, not invalid presets.
                 continue;
             };
+            if let Some(size) = std::fs::metadata(&path).ok().map(|m| m.len()) {
+                if size > MAX_PRESET_FILE_SIZE {
+                    Self::push_soft_warning(
+                        &mut warnings,
+                        &path,
+                        format!(
+                            "preset file exceeds {MAX_PRESET_FILE_SIZE} bytes and is read in full on every rescan; consider trimming it"
+                        ),
+                    );
+                }
+            }
             match Self::parse_preset_content(&path, &mut warnings) {
                 Ok(entry) => results.push((name, entry)),
                 Err(reason) => warnings.push(PresetWarning {
@@ -464,14 +495,191 @@ Core facts about the user (condensed subset — not a complete picture; treat as
     }
 
     /// Log every stored diagnostic as a daemon-side warning.
-    fn log_warnings(personality: &Self) {
-        for warning in &personality.warnings {
+    fn log_warnings(warnings: &[PresetWarning]) {
+        for warning in warnings {
             warn!(
                 path = ?warning.path,
                 reason = %warning.reason,
                 "personality preset diagnostic"
             );
         }
+    }
+
+    /// Build a `Personality` from an already-scanned custom-preset set,
+    /// merging built-ins (custom wins on name collision) and resolving the
+    /// active preset. Shared by the one-shot constructors and the daemon
+    /// scan cache (DRY, issue #453).
+    fn from_scan(
+        custom: Vec<(String, PresetEntry)>,
+        mut warnings: Vec<PresetWarning>,
+        preset_name: &str,
+    ) -> Self {
+        let mut registry = Self::built_in_presets();
+        // Custom overrides built-in.
+        for (name, entry) in custom {
+            registry.insert(name, entry);
+        }
+        let active_name = Self::resolve_active_name(&registry, preset_name, &mut warnings);
+        Self {
+            active_name,
+            registry,
+            warnings,
+        }
+    }
+
+    /// Build a `Personality` with only built-in presets when the
+    /// personalities directory itself cannot be resolved.
+    fn fallback_with_warning(config: &PersonalityConfig, error: impl std::fmt::Display) -> Self {
+        let warnings = vec![PresetWarning {
+            path: None,
+            reason: format!("failed to resolve personalities directory: {error}"),
+        }];
+        Self::from_scan(Vec::new(), warnings, &config.preset)
+    }
+}
+
+impl PersonalityCache {
+    /// Create an empty preset cache.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of directory scans this cache has performed. Every call to
+    /// [`resolve`](Self::resolve) that finds a matching fingerprint is
+    /// served from the cache without counting.
+    pub fn scan_count(&self) -> u64 {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .scans
+    }
+
+    /// Resolve the active personality from the default user personalities
+    /// directory, re-reading preset files only when the directory
+    /// fingerprint changed. The daemon's hot chat path uses this instead of
+    /// [`Personality::new`] so requests never re-read or re-parse preset
+    /// files unless they changed (issue #453).
+    pub fn resolve(&self, config: &PersonalityConfig) -> Personality {
+        match paths::personalities_dir() {
+            Ok(presets_dir) => self.resolve_from_path(&presets_dir, &config.preset),
+            Err(error) => {
+                let personality = Personality::fallback_with_warning(config, error);
+                Personality::log_warnings(&personality.warnings);
+                personality
+            }
+        }
+    }
+
+    /// Path-based variant of [`resolve`](Self::resolve): resolve `preset_name`
+    /// against a cache of `presets_dir`, rescanning only when the directory
+    /// fingerprint changed. Used by tests and mirroring
+    /// [`Personality::from_path`].
+    pub fn resolve_from_path(&self, presets_dir: &Path, preset_name: &str) -> Personality {
+        let fingerprint = Self::fingerprint(presets_dir);
+        // A poisoned lock (a panic while scanning) must not brick every
+        // subsequent chat request; recover the cached state and continue.
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let hit =
+            fingerprint.is_some() && guard.dir == presets_dir && guard.fingerprint == fingerprint;
+        let (custom, warnings, fresh, scan_warning_count) = if hit {
+            (
+                guard.custom.clone(),
+                guard.warnings.clone(),
+                false,
+                guard.warnings.len(),
+            )
+        } else {
+            let (custom, warnings) = Personality::scan_custom_presets(presets_dir);
+            let scan_warning_count = warnings.len();
+            guard.dir = presets_dir.to_path_buf();
+            guard.fingerprint = fingerprint;
+            guard.custom = custom.clone();
+            guard.warnings = warnings.clone();
+            guard.scans += 1;
+            (custom, warnings, true, scan_warning_count)
+        };
+        drop(guard);
+        let personality = Personality::from_scan(custom, warnings, preset_name);
+        // Scan diagnostics are logged once per scan; on a cache hit only the
+        // per-request diagnostics added by resolution (an unknown preset
+        // falling back to `transparent`) are logged, so a persistently
+        // malformed preset does not re-log on every request while
+        // request-scoped diagnostics are never silently dropped.
+        let warnings = if fresh {
+            &personality.warnings[..]
+        } else {
+            &personality.warnings[scan_warning_count..]
+        };
+        Personality::log_warnings(warnings);
+        personality
+    }
+
+    /// Compute a cheap fingerprint of the presets directory: the directory's
+    /// own mtime plus `(name, size, mtime, kind)` for every file matching the
+    /// `<name>.personality.md` convention. File contents are never read.
+    ///
+    /// Returns `None` when the directory cannot be enumerated, so an
+    /// unreadable directory always rescans (and re-warns) instead of being
+    /// served from a stale cache. A *missing* directory has a stable,
+    /// cacheable fingerprint so the daemon does not rescan a directory the
+    /// user never created. A single preset-named entry that cannot be
+    /// stat-ed is fingerprinted as a zero-sized, mtime-less entry (the scan
+    /// reports it as a warning), so one bad entry cannot disable the cache.
+    fn fingerprint(presets_dir: &Path) -> Option<DirFingerprint> {
+        let dir_modified = presets_dir.metadata().ok().and_then(|m| m.modified().ok());
+        let mut entries = Vec::new();
+        match presets_dir.try_exists() {
+            Ok(true) => {}
+            Ok(false) => {
+                return Some(DirFingerprint {
+                    dir_modified: None,
+                    entries,
+                });
+            }
+            Err(_) => return None,
+        }
+        let read_dir = std::fs::read_dir(presets_dir).ok()?;
+        for entry in read_dir {
+            let path = match entry {
+                Ok(entry) => entry.path(),
+                Err(_) => {
+                    // A failing directory entry cannot be named or stat-ed;
+                    // the scan reports it as a warning, and it reappears in
+                    // the fingerprint as soon as the directory yields it
+                    // again. Skipping it keeps the rest of the fingerprint
+                    // cacheable instead of disabling the cache entirely.
+                    continue;
+                }
+            };
+            let Some(name) = Personality::preset_name_from_path(&path) else {
+                // Non-preset entries never affect the scan, so they are
+                // excluded from the fingerprint.
+                continue;
+            };
+            // Follow symlinks (`Path::metadata`, like the scan's
+            // `read_to_string` and size check) so edits to a symlinked
+            // preset's target invalidate the cache instead of pinning it. A
+            // preset-named entry that cannot be stat-ed (for example a
+            // dangling symlink) is recorded as a zero-sized, mtime-less
+            // entry so one bad entry cannot disable the cache; the scan
+            // reports it as a warning, and it is re-statted as soon as its
+            // target reappears.
+            let metadata = std::fs::metadata(&path).ok();
+            entries.push(EntryFingerprint {
+                name,
+                len: metadata.as_ref().map(|m| m.len()).unwrap_or_default(),
+                modified: metadata.as_ref().and_then(|m| m.modified().ok()),
+                is_dir: metadata.as_ref().is_some_and(|m| m.is_dir()),
+            });
+        }
+        entries.sort();
+        Some(DirFingerprint {
+            dir_modified,
+            entries,
+        })
     }
 }
 
@@ -946,5 +1154,254 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
+    }
+
+    // ------------------------------------------------------------------
+    // Preset-scan caching (issue #453)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_cache_resolves_custom_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("cheerful.personality.md"),
+            "You are cheerful!",
+        )
+        .unwrap();
+
+        let cache = PersonalityCache::default();
+        let p = cache.resolve_from_path(dir.path(), "cheerful");
+        assert_eq!(p.active_name(), "cheerful");
+        assert!(p.system_prompt("").starts_with("You are cheerful!"));
+        assert_eq!(cache.scan_count(), 1);
+    }
+
+    #[test]
+    fn test_cache_hit_does_not_rescan_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("cheerful.personality.md"),
+            "You are cheerful!",
+        )
+        .unwrap();
+
+        let cache = PersonalityCache::default();
+        let first = cache.resolve_from_path(dir.path(), "cheerful");
+        assert_eq!(first.active_name(), "cheerful");
+
+        // A per-request preset override resolves against the cached
+        // registry without re-scanning the directory (issue #453).
+        let second = cache.resolve_from_path(dir.path(), "transparent");
+        assert_eq!(second.active_name(), "transparent");
+        assert!(
+            second
+                .list_presets()
+                .iter()
+                .any(|info| info.name == "cheerful")
+        );
+        assert_eq!(cache.scan_count(), 1);
+    }
+
+    #[test]
+    fn test_cache_invalidates_when_preset_file_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("cheerful.personality.md");
+        fs::write(&file, "Version one").unwrap();
+
+        let cache = PersonalityCache::default();
+        let first = cache.resolve_from_path(dir.path(), "cheerful");
+        assert!(first.system_prompt("").starts_with("Version one"));
+
+        fs::write(&file, "Version two, longer").unwrap();
+        let second = cache.resolve_from_path(dir.path(), "cheerful");
+        assert!(second.system_prompt("").starts_with("Version two"));
+        assert_eq!(cache.scan_count(), 2);
+    }
+
+    #[test]
+    fn test_cache_invalidates_when_preset_file_added() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("alpha.personality.md"), "Alpha").unwrap();
+
+        let cache = PersonalityCache::default();
+        let first = cache.resolve_from_path(dir.path(), "transparent");
+        assert!(!first.list_presets().iter().any(|info| info.name == "beta"));
+
+        fs::write(dir.path().join("beta.personality.md"), "Beta").unwrap();
+        let second = cache.resolve_from_path(dir.path(), "beta");
+        assert_eq!(second.active_name(), "beta");
+        assert_eq!(cache.scan_count(), 2);
+    }
+
+    #[test]
+    fn test_cache_invalidates_when_preset_file_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("cheerful.personality.md");
+        fs::write(&file, "You are cheerful!").unwrap();
+
+        let cache = PersonalityCache::default();
+        let first = cache.resolve_from_path(dir.path(), "cheerful");
+        assert_eq!(first.active_name(), "cheerful");
+
+        fs::remove_file(&file).unwrap();
+        let second = cache.resolve_from_path(dir.path(), "cheerful");
+        assert_eq!(second.active_name(), "transparent");
+        assert!(
+            !second
+                .list_presets()
+                .iter()
+                .any(|info| info.name == "cheerful")
+        );
+        assert_eq!(cache.scan_count(), 2);
+    }
+
+    #[test]
+    fn test_cache_detects_personalities_directory_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        let presets = dir.path().join("personalities");
+
+        let cache = PersonalityCache::default();
+        let first = cache.resolve_from_path(&presets, "transparent");
+        assert_eq!(first.active_name(), "transparent");
+        assert!(
+            !first
+                .list_presets()
+                .iter()
+                .any(|info| info.name == "cheerful")
+        );
+
+        fs::create_dir(&presets).unwrap();
+        fs::write(presets.join("cheerful.personality.md"), "You are cheerful!").unwrap();
+        let second = cache.resolve_from_path(&presets, "cheerful");
+        assert_eq!(second.active_name(), "cheerful");
+        assert_eq!(cache.scan_count(), 2);
+    }
+
+    #[test]
+    fn test_cache_fresh_scan_reports_malformed_file_warnings() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("broken.personality.md");
+        fs::write(&file, "---\ndescription: [unclosed\n---\nbody").unwrap();
+
+        let cache = PersonalityCache::default();
+        let first = cache.resolve_from_path(dir.path(), "transparent");
+        assert_eq!(first.warnings().len(), 1);
+        assert!(first.warnings()[0].reason.contains("YAML"));
+
+        // Fixing the file invalidates the cached warnings.
+        fs::write(&file, "Fixed").unwrap();
+        let second = cache.resolve_from_path(dir.path(), "transparent");
+        assert!(second.warnings().is_empty());
+        assert_eq!(cache.scan_count(), 2);
+    }
+
+    #[test]
+    fn test_cache_warns_on_oversized_preset_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let big = "x".repeat(MAX_PRESET_FILE_SIZE as usize + 1);
+        fs::write(dir.path().join("big.personality.md"), &big).unwrap();
+
+        let cache = PersonalityCache::default();
+        let p = cache.resolve_from_path(dir.path(), "big");
+        // The oversized file still loads, but the scan flags it so the user
+        // knows every rescan reads it in full (issue #453).
+        assert!(p.list_presets().iter().any(|info| info.name == "big"));
+        assert!(
+            p.warnings()
+                .iter()
+                .any(|warning| warning.reason.contains("exceeds"))
+        );
+    }
+
+    #[test]
+    fn test_cache_hit_still_reports_unknown_preset_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("cheerful.personality.md"),
+            "You are cheerful!",
+        )
+        .unwrap();
+
+        let cache = PersonalityCache::default();
+        let first = cache.resolve_from_path(dir.path(), "cheerful");
+        assert_eq!(first.active_name(), "cheerful");
+
+        // A cache hit with an unknown per-request override still reports the
+        // fallback diagnostic instead of silently swallowing it.
+        let second = cache.resolve_from_path(dir.path(), "does-not-exist");
+        assert_eq!(second.active_name(), "transparent");
+        assert_eq!(cache.scan_count(), 1);
+        assert!(
+            second
+                .warnings()
+                .iter()
+                .any(|warning| warning.reason.contains("unknown personality preset"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_cache_invalidates_when_symlinked_preset_target_changes() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("preset-target.txt");
+        let link = dir.path().join("cheerful.personality.md");
+        fs::write(&target, "Version one").unwrap();
+        symlink(&target, &link).unwrap();
+
+        let cache = PersonalityCache::default();
+        let first = cache.resolve_from_path(dir.path(), "cheerful");
+        assert!(first.system_prompt("").starts_with("Version one"));
+
+        // Same-length rewrite: only the target mtime changes, so the cache
+        // must track the target's metadata, not the symlink's.
+        fs::write(&target, "Version two").unwrap();
+        let second = cache.resolve_from_path(dir.path(), "cheerful");
+        assert!(second.system_prompt("").starts_with("Version two"));
+        assert_eq!(cache.scan_count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_cache_hit_with_dangling_symlink_preset() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("good.personality.md"), "You are good!").unwrap();
+        let link = dir.path().join("broken.personality.md");
+        let missing_target = dir.path().join("missing-target.txt");
+        symlink(&missing_target, &link).unwrap();
+
+        let cache = PersonalityCache::default();
+        let first = cache.resolve_from_path(dir.path(), "good");
+        assert!(first.system_prompt("").starts_with("You are good!"));
+        assert!(
+            first
+                .warnings()
+                .iter()
+                .any(|warning| warning.reason.contains("cannot read file"))
+        );
+
+        // The dangling symlink cannot be stat-ed but must not disable the
+        // cache: the second resolution is a hit served from the cached scan
+        // (with its warning) instead of rescanning the directory.
+        let second = cache.resolve_from_path(dir.path(), "good");
+        assert!(second.system_prompt("").starts_with("You are good!"));
+        assert!(
+            second
+                .warnings()
+                .iter()
+                .any(|warning| warning.reason.contains("cannot read file"))
+        );
+        assert_eq!(cache.scan_count(), 1);
+
+        // Creating the symlink target changes the entry's metadata, so the
+        // next resolution rescans and picks the preset up.
+        fs::write(&missing_target, "Now it exists!").unwrap();
+        let third = cache.resolve_from_path(dir.path(), "broken");
+        assert_eq!(third.active_name(), "broken");
+        assert!(third.system_prompt("").starts_with("Now it exists!"));
+        assert_eq!(cache.scan_count(), 2);
     }
 }

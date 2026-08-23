@@ -15,7 +15,8 @@ use dashmap::DashMap;
 use mimir_connectors::{ConnectorRegistry, ConnectorSupervisor};
 use mimir_core::{
     agents::AgentRuntime, config::ReloadableConfig, context::ContextManager, hooks::HookEngine,
-    job_queue::JobQueue, llm::LlmBackend, scheduler::BackgroundScheduler, tools::ToolRegistry,
+    job_queue::JobQueue, llm::LlmBackend, personality::PersonalityCache,
+    scheduler::BackgroundScheduler, tools::ToolRegistry,
 };
 
 mod builder;
@@ -94,6 +95,9 @@ pub struct AppState {
     /// Local API token required on every route except `GET /health`
     /// (issue #281). Loaded (or generated) from the data dir at startup.
     pub api_token: Arc<str>,
+    /// Cached personality preset registry so chat requests never re-read or
+    /// re-parse preset files unless they changed (issue #453).
+    pub personality_cache: Arc<PersonalityCache>,
 }
 
 const MODEL_OVERRIDE_CACHE_CAP: usize = 16;

@@ -14,6 +14,7 @@ use mimir_core::{
     hooks::{Gate, Hook, HookEngine, KeyScope, QueuePolicy, RetryPolicy, Trigger, TriggerKind},
     job_queue::{Job, JobContext, JobPriority, JobQueue},
     llm::{LlmBackend, LlmClient},
+    personality::PersonalityCache,
     scheduler::BackgroundScheduler,
     tools::ToolRegistry,
 };
@@ -848,6 +849,7 @@ impl AppState {
                 connector_registry,
                 connector_supervisor,
                 api_token,
+                personality_cache: Arc::new(PersonalityCache::default()),
             },
             scheduler_shutdown_rx,
             hook_shutdown_rx,

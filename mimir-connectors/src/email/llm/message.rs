@@ -1,17 +1,18 @@
 //! Email message pre-processing: spam classification, body text, subject
 //! canonicalisation.
 
-use mail_parser::{Address, Message};
+use mail_parser::Message;
 
 /// Domains of bulk *marketing* platforms — providers whose product is
 /// newsletter/campaign delivery (Mailchimp, HubSpot, …). Mail sent from these
-/// is marketing, so it is skipped before any LLM call.
+/// is marketing, so it is skipped before any extraction layer.
 /// General-purpose email-service providers that also deliver transactional
 /// receipts, bookings, and account notices (SendGrid, Mailgun, Postmark,
 /// Amazon SES, Mandrill, SparkPost, Brevo) are deliberately *not* listed
 /// here: a booking or bank statement routed through them must still reach
-/// the LLM. Those messages are skipped only when they carry an explicit bulk
-/// signal (the `List-Unsubscribe` header — see [`is_likely_spam`]).
+/// the extraction cascade. Those messages are skipped only when they carry
+/// an explicit bulk signal (the `List-Unsubscribe` header — see
+/// [`is_likely_spam`]).
 const MARKETING_SENDER_DOMAINS: &[&str] = &[
     "mailchimp.com",
     "hubspot.com",
@@ -34,16 +35,17 @@ pub(super) fn sender_domain(from: Option<&str>) -> Option<String> {
     }
 }
 
-/// Conservative deterministic spam gate: skip the LLM only for obvious
-/// Conservative deterministic spam gate: skip the LLM only for obvious
-/// bulk-marketing mail. A message is skipped when either (a) it carries a
-/// `List-Unsubscribe` header — the universal bulk-mail signal (RFC 8058) that
-/// transactional receipts, bookings, and account notices never carry — or
-/// (b) its sender domain is a pure marketing platform (see
-/// [`MARKETING_SENDER_DOMAINS`]). Provider origin alone never skips a
-/// message, so a transactional email routed through a general-purpose ESP
-/// (SendGrid, Mailgun, Postmark, Amazon SES) still reaches the LLM.
-/// Everything else reaches the LLM, which decides "no facts" by returning an
+/// Conservative deterministic spam gate: skip a message for obvious
+/// bulk-marketing mail. The gate runs before every extraction layer — the
+/// iMIP and JSON-LD deterministic layers and the LLM prose layer — so a
+/// marketing broadcast can never author facts. A message is skipped when
+/// either (a) it carries a `List-Unsubscribe` header — the universal
+/// bulk-mail signal (RFC 8058) that transactional receipts, bookings, and
+/// account notices never carry — or (b) its sender domain is a pure
+/// marketing platform (see [`MARKETING_SENDER_DOMAINS`]). Provider origin
+/// alone never skips a message, so a transactional email routed through a
+/// general-purpose ESP (SendGrid, Mailgun, Postmark, Amazon SES) still
+/// reaches the cascade.
 pub(crate) fn is_likely_spam(from_addr: Option<&str>, has_unsubscribe: bool) -> bool {
     // Explicit bulk signal: a `List-Unsubscribe` header is present only on
     // bulk mail (newsletters, campaigns, promotional broadcasts). This gate
@@ -63,18 +65,6 @@ pub(crate) fn is_likely_spam(from_addr: Option<&str>, has_unsubscribe: bool) -> 
                 .strip_suffix(esp)
                 .is_some_and(|rest| rest.ends_with('.'))
     })
-}
-
-pub(crate) fn from_address(message: &Message<'_>) -> Option<String> {
-    match message.from()? {
-        Address::List(addrs) => addrs
-            .iter()
-            .find_map(|a| a.address.as_ref().map(|c| c.to_string())),
-        Address::Group(groups) => groups
-            .iter()
-            .flat_map(|g| g.addresses.iter())
-            .find_map(|a| a.address.as_ref().map(|c| c.to_string())),
-    }
 }
 
 /// Best-effort plain-text body: the first text/plain body, or the first HTML

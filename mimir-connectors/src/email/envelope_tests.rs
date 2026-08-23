@@ -93,6 +93,30 @@ fn envelope_carries_dates_sender_and_recipients() {
 }
 
 #[test]
+fn envelope_carries_the_body_text_for_prompt_reuse() {
+    // The envelope's body extraction is shared with the LLM prompt, so the
+    // prose layer never runs the body pass twice (issue #398 review).
+    let raw = crlf(base_email());
+    let message = parse(&raw);
+    let envelope = EmailEnvelope::from_message(&message, None, None);
+    assert_eq!(
+        envelope.body.as_deref().map(str::trim),
+        Some("Please pay rent by Friday."),
+        "the envelope reuses its body extraction for the LLM prompt"
+    );
+
+    // A subject-marked forward skips the body pass (the subject already
+    // classifies it), so the envelope body is `None` and the LLM layer
+    // extracts the body on demand for the prompt.
+    let raw = base_email().replacen("Subject: Rent reminder", "Subject: Fwd: Rent reminder", 1);
+    let raw = crlf(raw);
+    let message = parse(&raw);
+    let envelope = EmailEnvelope::from_message(&message, None, None);
+    assert!(envelope.is_forwarded);
+    assert_eq!(envelope.body, None);
+}
+
+#[test]
 fn wrong_recipient_detected_when_mailbox_absent_from_to_and_cc() {
     let raw = base_email().replace("devansh@example.com", "other@example.com");
     let raw = crlf(raw);

@@ -17,11 +17,12 @@
 //!   enums before a [`NormalizedFact`] is built. An invalid field is warned
 //!   and dropped, never trusted.
 //! - **Spam is classified in Rust, not by the LLM.** [`is_likely_spam`] skips
-//!   the LLM call entirely for obvious bulk-marketing infrastructure mail
-//!   (messages sent through known email-service-provider domains). Everything
-//!   else reaches the LLM, which returns an empty `facts` array when the prose
-//!   carries no real-world facts — so "some emails → no facts" judgment lives
-//!   in the LLM, while *obvious* spam never costs a call.
+//!   a message before every extraction layer for obvious bulk-marketing
+//!   infrastructure mail (messages sent through known email-service-provider
+//!   domains). Everything else reaches the cascade, and the LLM returns an
+//!   empty `facts` array when the prose carries no real-world facts — so
+//!   "some emails → no facts" judgment lives in the LLM, while *obvious*
+//!   spam never costs a call or a deterministic pass.
 //! - **System-queue routing.** Every LLM call goes through
 //!   [`LlmBackend::system_chat_message`], placing it on the shared
 //!   `LlmWorkerPool`'s system queue (priority below user chat) so a
@@ -87,7 +88,11 @@ pub(crate) async fn extract_prose_facts(
         return Ok(Vec::new());
     }
 
-    let Some(body) = body_text(message) else {
+    // The envelope already ran the body pass for the forwarded-body check;
+    // reuse it for the prompt. A subject-marked forward skips that pass, so
+    // fall back to a direct extraction in that case.
+    let body = envelope.body.clone().or_else(|| body_text(message));
+    let Some(body) = body else {
         debug!(
             raw_ref,
             "no decodable text body for LLM extraction; skipping"

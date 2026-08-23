@@ -274,6 +274,7 @@ async fn prose_prompt_carries_the_full_envelope() {
         "Misdirected: no",
         "Current date:",
         "Subject: Rent reminder",
+        "Please pay rent by Friday.",
     ] {
         assert!(
             user.content.contains(needle),

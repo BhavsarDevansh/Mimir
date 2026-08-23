@@ -14,7 +14,7 @@ use mail_parser::{Address, Message};
 use mimir_knowledge::models::enums::{EventType, RecurrenceType};
 use mimir_knowledge::normalize::NormalizedFact;
 
-use crate::email::llm::message::{body_text, from_address, is_likely_spam};
+use crate::email::llm::message::{body_text, is_likely_spam};
 
 /// How long an actionable item extracted from an email stays actionable
 /// when the message states no deadline of its own. The window anchors at
@@ -42,6 +42,11 @@ pub(crate) struct EmailEnvelope {
     pub reply_to: Vec<String>,
     /// Subject line.
     pub subject: String,
+    /// Best-effort plain-text body, extracted once and shared by the
+    /// forwarded-body check and the LLM prompt. `None` when the message has
+    /// no decodable text body, or when the subject already marks the message
+    /// as forwarded (the body pass is then skipped).
+    pub body: Option<String>,
     /// `List-Unsubscribe` header present (RFC 8058 bulk-mail signal).
     pub has_list_unsubscribe: bool,
     /// Deterministic bulk-marketing gate result ([`is_likely_spam`]).
@@ -63,7 +68,9 @@ impl EmailEnvelope {
     ) -> Self {
         let sent_date = message.date().and_then(datetime_to_utc);
         let received_date = internal_date.map(|d| d.with_timezone(&Utc));
-        let from = from_address(message);
+        let to = collect_addresses(message.to());
+        let cc = collect_addresses(message.cc());
+        let from = collect_addresses(message.from()).into_iter().next();
         let has_list_unsubscribe = message.header("List-Unsubscribe").is_some();
         let subject = message.subject().unwrap_or("").to_string();
         // The body is only needed to detect inline forwards; a subject that
@@ -71,19 +78,22 @@ impl EmailEnvelope {
         let subject_forwarded = forwarded_subject_prefix(&subject);
         let body = (!subject_forwarded).then(|| body_text(message)).flatten();
         let is_forwarded = subject_forwarded || is_forwarded_body(body.as_deref());
+        let is_wrong_recipient = wrong_recipient(&to, &cc, mailbox_address);
+        let is_spam = is_likely_spam(from.as_deref(), has_list_unsubscribe);
 
         Self {
             sent_date,
             received_date,
-            from: from.clone(),
-            to: collect_addresses(message.to()),
-            cc: collect_addresses(message.cc()),
+            from,
+            to,
+            cc,
             reply_to: collect_addresses(message.reply_to()),
             subject,
+            body,
             has_list_unsubscribe,
-            is_spam: is_likely_spam(from.as_deref(), has_list_unsubscribe),
+            is_spam,
             is_forwarded,
-            is_wrong_recipient: wrong_recipient(message, mailbox_address),
+            is_wrong_recipient,
         }
     }
 }
@@ -131,14 +141,13 @@ fn is_forwarded_body(body: Option<&str>) -> bool {
 /// Only email-looking mailbox addresses participate — an IMAP username
 /// without an `@` can never match a recipient. Returns `false` when no
 /// usable mailbox address is known.
-fn wrong_recipient(message: &Message<'_>, mailbox_address: Option<&str>) -> bool {
+fn wrong_recipient(to: &[String], cc: &[String], mailbox_address: Option<&str>) -> bool {
     let Some(mailbox) = mailbox_address.map(str::trim).filter(|m| m.contains('@')) else {
         return false;
     };
     let mailbox = mailbox.to_ascii_lowercase();
-    !collect_addresses(message.to())
-        .into_iter()
-        .chain(collect_addresses(message.cc()))
+    !to.iter()
+        .chain(cc.iter())
         .any(|a| a.trim().to_ascii_lowercase() == mailbox)
 }
 

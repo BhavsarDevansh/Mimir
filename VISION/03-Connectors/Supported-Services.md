@@ -4,6 +4,7 @@
 These are essential for basic functionality and should be built first.
 
 ### Email (IMAP)
+
 - **Read:** Emails, headers, attachments metadata
 - **Extract:** Flight confirmations, bookings, receipts, addresses, dates, contacts
 - **Write:** None (read-only for safety)

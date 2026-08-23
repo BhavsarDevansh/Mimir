@@ -1470,31 +1470,55 @@ fn wizard_email_gmail_empty_app_password_is_rejected() {
 }
 
 #[test]
-fn wizard_email_outlook_preset_defaults_to_app_password_first() {
+fn wizard_email_outlook_preset_is_oauth_only() {
+    // Microsoft retired basic-auth app passwords for Outlook.com and
+    // Exchange Online IMAP, so the preset must go straight to the OAuth
+    // prompts — there is no Authentication select and no app-password path.
     let entry = email_catalog_entry();
     let prompts = ScriptedPrompt::new(vec![
-        ScriptedAnswer::Select(1), // Email provider → Outlook / Office 365
-        ScriptedAnswer::Input(String::new()), // host → outlook.office365.com
-        ScriptedAnswer::Input(String::new()), // port → 993
-        ScriptedAnswer::Input(String::new()), // mailbox → INBOX
+        ScriptedAnswer::Select(1),            // Outlook / Office 365
+        ScriptedAnswer::Input(String::new()), // host → default
+        ScriptedAnswer::Input(String::new()), // port → default
+        ScriptedAnswer::Input(String::new()), // mailbox → default
         ScriptedAnswer::Input("me@outlook.com".to_string()),
-        ScriptedAnswer::Select(0), // Sync mode — push (recommended)
-        ScriptedAnswer::Select(0), // Existing mailbox content — import
-        ScriptedAnswer::Select(0), // App password (recommended)
-        ScriptedAnswer::Password("abcd efgh ijkl mnop".to_string()),
+        ScriptedAnswer::Select(0),            // Sync mode — push
+        ScriptedAnswer::Select(0),            // Existing mailbox content — import
+        ScriptedAnswer::Input(String::new()), // auth_uri → default
+        ScriptedAnswer::Input(String::new()), // token endpoint → default
+        ScriptedAnswer::Input("client-ms-123".to_string()),
+        ScriptedAnswer::Password(String::new()), // client secret → none
+        ScriptedAnswer::Input(String::new()),    // scopes → default
     ]);
     let (config, credential) = build_wizard_config(&entry, "personal-outlook", &prompts).unwrap();
     assert!(matches!(
         credential,
-        super::wizard::WizardCredential::Secret(_)
+        super::wizard::WizardCredential::OAuth {
+            client_secret: None
+        }
     ));
     assert_eq!(config["host"], "outlook.office365.com");
     assert_eq!(config["port"], 993);
     assert_eq!(config["mailbox"], "INBOX");
     assert_eq!(config["mode"], "auto");
     assert_eq!(config["initial_backfill"], true);
-    assert_eq!(config["auth"]["kind"], "app_password");
+    assert_eq!(config["auth"]["kind"], "oauth");
     assert_eq!(config["auth"]["username"], "me@outlook.com");
+    assert_eq!(
+        config["auth"]["auth_uri"],
+        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+    );
+    assert_eq!(
+        config["auth"]["token_endpoint"],
+        "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+    );
+    assert_eq!(config["auth"]["client_id"], "client-ms-123");
+    assert_eq!(
+        config["auth"]["scopes"],
+        serde_json::json!([
+            "https://outlook.office.com/IMAP.AccessAsUser.All",
+            "offline_access"
+        ])
+    );
 }
 
 #[test]
@@ -1508,7 +1532,6 @@ fn wizard_email_outlook_preset_oauth_uses_microsoft_endpoints() {
         ScriptedAnswer::Input("me@outlook.com".to_string()),
         ScriptedAnswer::Select(0),            // Sync mode — push
         ScriptedAnswer::Select(0),            // Existing mailbox content — import
-        ScriptedAnswer::Select(1),            // OAuth 2.0 — browser login
         ScriptedAnswer::Input(String::new()), // auth_uri → default
         ScriptedAnswer::Input(String::new()), // token endpoint → default
         ScriptedAnswer::Input("client-ms-123".to_string()),
@@ -1681,6 +1704,32 @@ fn wizard_email_custom_imap_oauth_accepts_user_endpoints() {
         "https://auth.example.com/token"
     );
     assert_eq!(config["auth"]["scopes"], serde_json::json!(["mail.read"]));
+}
+
+#[test]
+fn wizard_email_custom_imap_oauth_rejects_empty_scopes() {
+    // The custom IMAP preset has no default scope, so accepting a blank
+    // scopes prompt would build an authorize request with no scope and the
+    // flow could never obtain mailbox access — reject it like every other
+    // required prompt.
+    let entry = email_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(5), // Custom IMAP
+        ScriptedAnswer::Input("imap.example.com".to_string()),
+        ScriptedAnswer::Input(String::new()), // port → 993
+        ScriptedAnswer::Input(String::new()), // mailbox → INBOX
+        ScriptedAnswer::Input("me@example.com".to_string()),
+        ScriptedAnswer::Select(0), // Sync mode — push
+        ScriptedAnswer::Select(0), // Existing mailbox content — import
+        ScriptedAnswer::Select(1), // OAuth 2.0 — browser login
+        ScriptedAnswer::Input("https://auth.example.com/authorize".to_string()),
+        ScriptedAnswer::Input("https://auth.example.com/token".to_string()),
+        ScriptedAnswer::Input("client-custom".to_string()),
+        ScriptedAnswer::Password(String::new()),
+        ScriptedAnswer::Input(String::new()), // scopes → blank, no default
+    ]);
+    let err = build_wizard_config(&entry, "custom-mail", &prompts).unwrap_err();
+    assert_eq!(err, "OAuth scopes is required");
 }
 
 #[test]

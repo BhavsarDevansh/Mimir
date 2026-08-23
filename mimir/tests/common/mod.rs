@@ -1,7 +1,7 @@
 //! Shared fixtures for the `mimir` binary integration tests.
 //!
 //! [`TestDaemon`] starts the real daemon in-process (mock LLM + the
-//! `mock-connector` feature so the `gmail/test` harness backend is
+//! `mock-connector` feature so the `email/test` harness backend is
 //! registered) on a reserved loopback port, isolated in a temp
 //! HOME/XDG layout, so tests can drive the `mimir` CLI binary against it
 //! via `MIMIR_BASE_URL`.

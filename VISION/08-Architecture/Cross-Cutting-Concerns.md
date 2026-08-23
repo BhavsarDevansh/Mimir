@@ -3,9 +3,9 @@
 ## Security
 
 ### Authentication
-- All connector credentials encrypted at rest (AES-256-GCM)
-- Master key derived from user password or system keyring
-- No plaintext secrets in config files
+- Connector credentials are stored **plaintext at rest** in V1 — one `0600` JSON file per connector under `~/.local/share/mimir/secrets/<slug>.json` (parent directory `0700`), consistent with the plaintext LLM API key in `config.toml` and the home-directory trust boundary (Phase 3 plan, #187 / F10)
+- An OS-keychain backend (`secrets.backend = "keychain"`, feature `secrets-keyring`, #188) stores the same bundles in the OS keychain; at-rest encryption (`argon2` + `chacha20poly1305`) is a deferred follow-up
+- Credentials never enter `config_json` — OAuth client secrets travel in the credential bundle and stored bundles live in the dedicated secrets directory, not in config files
 - OAuth tokens refreshed automatically, never logged
 
 ### Authorization

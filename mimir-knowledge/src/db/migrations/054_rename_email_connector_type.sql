@@ -9,4 +9,6 @@
 -- this keeps the DB label consistent with the enum for tooling that reads
 -- the seed directly.
 
-UPDATE connector_types SET name = 'Email' WHERE id = 1;
+UPDATE connector_types
+SET name = 'Email'
+WHERE id = 1;

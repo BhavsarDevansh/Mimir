@@ -20,6 +20,7 @@ Build the connector framework and implement 3 core connectors: Email, Calendar, 
 - [x] Optional OS-keychain secret backend (F11 / #188) — `keyring` crate, feature-gated `secrets-keyring`, off by default, selected via `secrets.backend = "keychain"`
 
 ### 3.2 Email (IMAP) Connector
+
 - [x] OAuth 2.0 authentication (C5 / #199)
 - [x] IMAP IDLE for real-time sync (C5 / #199)
 - [x] Email fetching and parsing (C5 / #199)

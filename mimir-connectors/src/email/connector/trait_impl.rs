@@ -14,6 +14,7 @@ use crate::connector::{
 };
 use crate::email::config::{EmailSyncMode, parse_cursor};
 use crate::email::connector::EmailConnector;
+use crate::email::envelope::EmailEnvelope;
 use crate::email::imap;
 use crate::email::jsonld;
 use crate::email::llm::{EmailExtractionPayload, health_with_terminal};
@@ -216,6 +217,10 @@ impl Connector for EmailConnector {
             std::mem::take(&mut *buffer)
         };
         let mut facts = Vec::new();
+        // The mailbox address is per-instance and constant across the batch;
+        // derive it once so the envelope and every hook payload share the
+        // same value without re-reading the config per message.
+        let mailbox_address = self.mailbox_address();
         for mail in staged {
             // An IMAP UID is unique only within one mailbox + `UIDVALIDITY`
             // epoch, so qualify the provenance reference as `{uid_validity}:{uid}`
@@ -229,6 +234,21 @@ impl Connector for EmailConnector {
                 continue;
             }
             if let Some(message) = MessageParser::default().parse(&mail.raw) {
+                // Issue #398: derive the message envelope once — dates,
+                // sender, recipients, and the deterministic spam /
+                // forwarding / misdirection signals — and gate the whole
+                // cascade on it. Bulk mail is skipped before any layer, so
+                // a marketing broadcast carrying an iMIP invite or JSON-LD
+                // can no longer author facts.
+                let envelope = EmailEnvelope::from_message(
+                    &message,
+                    mail.internal_date,
+                    mailbox_address.as_deref(),
+                );
+                if envelope.is_spam {
+                    debug!(raw_ref, "skipping extraction cascade: bulk-marketing email");
+                    continue;
+                }
                 // Layers 1-2: deterministic extraction (structured parse). Both
                 // run on the same parsed Message so there is no second MIME
                 // parse, and both tag their facts with
@@ -286,6 +306,8 @@ impl Connector for EmailConnector {
                         // is transient: on success the staged item is dropped
                         // and only the hook payload retains the bytes.
                         raw: mail.raw.clone(),
+                        internal_date: mail.internal_date,
+                        mailbox_address: mailbox_address.clone(),
                         uid_validity: mail.uid_validity,
                         uid: mail.uid,
                         raw_ref: raw_ref.clone(),
@@ -322,6 +344,7 @@ impl Connector for EmailConnector {
                             raw_ref.clone(),
                             mail.uid_validity,
                             mail.uid,
+                            mail.internal_date,
                             mail.raw,
                         );
                     }

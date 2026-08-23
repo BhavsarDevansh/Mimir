@@ -145,7 +145,7 @@ async fn spam_email_skips_llm_call_entirely() {
         "Sale ends Sunday",
     );
     let msg = parse(&bytes);
-    let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:1")
+    let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:1", None, None)
         .await
         .expect("spam -> empty facts");
     assert!(facts.is_empty());
@@ -164,7 +164,7 @@ async fn no_fact_email_yields_empty_facts_array() {
         "Here are this week's links.",
     );
     let msg = parse(&bytes);
-    let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:2")
+    let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:2", None, None)
         .await
         .expect("no-fact -> empty facts");
     assert!(facts.is_empty());
@@ -194,7 +194,7 @@ async fn dentist_appointment_produces_typed_fact() {
         "See you Tuesday 3pm. Please arrive 10 minutes early.",
     );
     let msg = parse(&bytes);
-    let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:42")
+    let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:42", None, None)
         .await
         .expect("typed fact");
     assert_eq!(facts.len(), 1, "{facts:?}");
@@ -226,7 +226,7 @@ async fn invalid_event_type_hint_is_dropped_not_trusted() {
     let backend: Arc<dyn LlmBackend> = mock.clone();
     let bytes = email("a@example.com", "Hi", "body");
     let msg = parse(&bytes);
-    let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:3")
+    let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:3", None, None)
         .await
         .expect("dropped event_type");
     assert_eq!(facts.len(), 1);
@@ -248,7 +248,7 @@ async fn invalid_subject_type_drops_the_fact() {
     let backend: Arc<dyn LlmBackend> = mock.clone();
     let bytes = email("a@example.com", "Hi", "body");
     let msg = parse(&bytes);
-    let facts = extract_prose_facts(&backend, None, &msg, "17:4")
+    let facts = extract_prose_facts(&backend, None, &msg, "17:4", None, None)
         .await
         .expect("dropped subject_type");
     assert!(facts.is_empty(), "invalid subject_type drops the fact");
@@ -261,7 +261,7 @@ async fn unparseable_llm_output_is_a_retryable_error() {
     let backend: Arc<dyn LlmBackend> = mock.clone();
     let bytes = email("a@example.com", "Hi", "body");
     let msg = parse(&bytes);
-    let result = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:5").await;
+    let result = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:5", None, None).await;
     assert!(
         result.is_err(),
         "unparseable LLM output must not be a silent empty success"
@@ -280,6 +280,6 @@ async fn llm_backend_error_is_a_retryable_error() {
     let backend: Arc<dyn LlmBackend> = mock.clone();
     let bytes = email("a@example.com", "Hi", "body");
     let msg = parse(&bytes);
-    let result = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:6").await;
+    let result = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:6", None, None).await;
     assert!(result.is_err());
 }

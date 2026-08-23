@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.139.0] — 2026-08-23
+
+### Feature: email facts are contextualised by the message envelope — dates, sender, recipients, spam signals (issue #398)
+
+- The extraction cascade now derives one `EmailEnvelope` per message — sent date (RFC 5322 `Date`), received date (IMAP `INTERNALDATE`), `From`/`To`/`Cc`/`Reply-To`, subject, `List-Unsubscribe` state, and the deterministic spam / forwarded / wrong-recipient signals — and gates the whole cascade on it: the bulk-mail filter (`List-Unsubscribe` or a pure-marketing sender domain) now runs before the iMIP and JSON-LD layers too, so a marketing broadcast carrying a calendar invite or machine-readable receipt can no longer author facts.
+- The prose (LLM) layer is anchored with the full envelope plus the current UTC date, so relative phrases ("tomorrow", "next week", "overdue") resolve against real timestamps instead of model guesses; the temporal binding itself stays in Rust.
+- Prose facts without an explicit `valid_from` are anchored at the email's sent date (received date as fallback), and an actionable fact (task / deadline / reminder) without an explicit `valid_until` expires 30 days after that anchor (recurring facts are exempt — their recurrence owns the lifecycle) — urgency decays with the email's age, so a two-year-old "pay rent" reminder is recorded as history and can never surface as a current action item. Explicit machine-readable timestamps (iMIP `DTSTART`, JSON-LD reservation dates) are never overwritten.
+- Forwarded mail (a `Fwd:`/`FW:` subject prefix or the standard "Forwarded message" body separator) and misdirected mail (the mailbox address appears in neither `To` nor `Cc`) are mined for real facts but never for tasks: `requires_user_action` is forced false, so they cannot author obligations for the mailbox owner.
+- The `connector_item.remember` hook payload and the durable queue-overflow retry entry now carry the `INTERNALDATE` (and the mailbox address), so a re-staged or hook-delayed message reconstructs the same envelope context after a restart.
+- Tests: envelope derivation/classification/binding unit tests in `email/envelope.rs`; prompt-content, past-window, and never-actionable prose tests in `email/llm_tests.rs` (including an end-to-end hook-engine assertion against the persisted fact); cascade spam-gate tests for iMIP/JSON-LD in `email/extract_tests.rs`; and an `INTERNALDATE` round-trip test in `email/llm/retry.rs`.
+- Docs: `docs/email-connector.md` (new "Envelope context (issue #398)" section), `docs/wiki/email-connector.md` ("Emails are read in context"), `docs/wiki/what-works-now.md`, and `README.md` updated.
+- Version bumped 0.138.0 → 0.139.0 (minor — new behaviour, no public API break; `EmailExtractionPayload` gained internal fields).
+
 ## [0.138.0] — 2026-08-23
 
 ### Fix: chat route no longer re-reads personality presets on every request (issue #453)

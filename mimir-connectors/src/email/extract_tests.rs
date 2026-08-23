@@ -627,6 +627,103 @@ async fn extract_jsonld_unrecognised_type_produces_no_facts() {
 }
 
 #[tokio::test]
+async fn marketing_email_with_imip_produces_no_facts() {
+    // The spam gate runs before the deterministic layers too (issue #398):
+    // a bulk-marketing broadcast carrying an iMIP invite must not author
+    // facts.
+    let connector = connector_with_identity(Some("Devansh"));
+    let marketing = String::from_utf8(invite_email("REQUEST"))
+        .unwrap()
+        .replace("From: dentist@example.com", "From: campaigns@mailchimp.com")
+        .into_bytes();
+    connector.buffer.lock().await.push(imap::RawEmail {
+        uid: 7,
+        uid_validity: 17,
+        internal_date: None,
+        raw: marketing,
+    });
+    let facts = connector.extract().await.expect("extract");
+    assert!(facts.is_empty(), "bulk mail must not author invite facts");
+    assert!(
+        connector
+            .extract_deletions()
+            .await
+            .expect("deletions")
+            .is_empty(),
+        "bulk mail must not stage CANCEL tombstones either"
+    );
+}
+
+#[tokio::test]
+async fn marketing_email_with_jsonld_produces_no_facts() {
+    // Same gate for the JSON-LD layer (issue #398).
+    let connector = connector_with_identity(Some("Devansh"));
+    let marketing = String::from_utf8(jsonld_flight_email())
+        .unwrap()
+        .replace("From: noreply@airline.com", "From: news@hubspot.com")
+        .into_bytes();
+    connector.buffer.lock().await.push(imap::RawEmail {
+        uid: 8,
+        uid_validity: 17,
+        internal_date: None,
+        raw: marketing,
+    });
+    let facts = connector.extract().await.expect("extract");
+    assert!(
+        facts.is_empty(),
+        "bulk mail must not author JSON-LD facts: {facts:?}"
+    );
+}
+
+#[tokio::test]
+async fn jsonld_deterministic_dates_are_untouched_by_the_envelope() {
+    // Machine-readable layers carry explicit timestamps, so the envelope
+    // binding is a prose-layer feature (issue #398): a dateless JSON-LD
+    // order stays dateless instead of borrowing the email's date, keeping
+    // the deterministic extractors' explicit-date contract intact.
+    let connector = connector_with_identity(Some("Devansh"));
+    let order_email = r#"From: store@example.com
+To: devansh@example.com
+Subject: Your order
+Date: Mon, 04 Aug 2025 10:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="bnd"
+
+--bnd
+Content-Type: text/plain; charset="utf-8"
+
+Your order is confirmed.
+--bnd
+Content-Type: text/html; charset="utf-8"
+
+<html><body>
+<script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "Order",
+  "orderNumber": "ORD-42",
+  "merchant": { "@type": "Organization", "name": "Example Store" }
+}</script>
+</body></html>
+--bnd--
+"#;
+    connector.buffer.lock().await.push(imap::RawEmail {
+        uid: 9,
+        uid_validity: 17,
+        internal_date: None,
+        raw: order_email.replace('\n', "\r\n").into_bytes(),
+    });
+    let facts = connector.extract().await.expect("extract");
+    let has_order = facts
+        .iter()
+        .find(|f| f.relationship_type == "has_order")
+        .expect("has_order fact");
+    assert_eq!(
+        has_order.valid_from, None,
+        "a dateless machine-readable fact keeps its explicit datelessness"
+    );
+}
+
+#[tokio::test]
 async fn extract_cascade_runs_both_imip_and_jsonld_layers() {
     // An email with both a text/calendar invite AND a JSON-LD
     // EventReservation in the HTML body — both layers should produce facts.

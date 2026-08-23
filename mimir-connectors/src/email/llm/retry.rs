@@ -63,6 +63,7 @@ use std::collections::BTreeMap;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -110,6 +111,12 @@ pub(crate) struct PendingProse {
     pub uid_validity: u32,
     /// IMAP UID of the message within that `UIDVALIDITY` epoch.
     pub uid: u32,
+    /// IMAP `INTERNALDATE` of the message, RFC 3339 (the server receive
+    /// time is not part of the RFC 5322 headers, so the durable overflow
+    /// entry carries it for envelope reconstruction after a restart —
+    /// issue #398).
+    #[serde(default)]
+    pub internal_date: Option<String>,
     /// Raw RFC 822 bytes, base64-encoded so the payload survives a restart
     /// without an IMAP re-fetch (the cursor has already advanced past the
     /// message). `None` when the payload was not persisted (oversized or
@@ -137,7 +144,10 @@ impl PendingProse {
         Some(crate::email::imap::RawEmail {
             uid: self.uid,
             uid_validity: self.uid_validity,
-            internal_date: None,
+            internal_date: self
+                .internal_date
+                .as_deref()
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok()),
             raw: self.raw()?,
         })
     }
@@ -364,6 +374,7 @@ impl ProseRetryLedger {
         raw_ref: String,
         uid_validity: u32,
         uid: u32,
+        internal_date: Option<DateTime<FixedOffset>>,
         raw: Vec<u8>,
     ) {
         self.touch();
@@ -372,6 +383,7 @@ impl ProseRetryLedger {
             PendingProse {
                 uid_validity,
                 uid,
+                internal_date: internal_date.map(|d| d.to_rfc3339()),
                 raw_b64: Some(STANDARD.encode(raw)),
                 attempts: 0,
                 last_error: "queue full".to_string(),
@@ -712,6 +724,7 @@ mod tests {
             PendingProse {
                 uid_validity: 17,
                 uid: 1,
+                internal_date: None,
                 raw_b64: Some(STANDARD.encode(b"raw bytes")),
                 attempts: 1,
                 last_error: "e".to_string(),
@@ -734,7 +747,14 @@ mod tests {
     #[test]
     fn record_overflow_writes_durable_pending_entry_with_raw_bytes() {
         let mut ledger = ProseRetryLedger::default();
-        ledger.record_overflow("17:42".to_string(), 17, 42, b"raw bytes".to_vec());
+        let received = DateTime::parse_from_rfc3339("2025-08-20T09:05:00+00:00").unwrap();
+        ledger.record_overflow(
+            "17:42".to_string(),
+            17,
+            42,
+            Some(received),
+            b"raw bytes".to_vec(),
+        );
         assert!(
             ledger.dirty,
             "a queue-overflow record must mark the ledger for re-persist"
@@ -753,14 +773,25 @@ mod tests {
             drained[0].attempts, 0,
             "an overflow entry was never attempted"
         );
+        assert_eq!(
+            drained[0].internal_date.as_deref(),
+            Some("2025-08-20T09:05:00+00:00"),
+            "the INTERNALDATE survives the durable round-trip (issue #398)"
+        );
+        let staged = drained[0].clone().into_staged_item().expect("staged");
+        assert_eq!(
+            staged.internal_date,
+            Some(received),
+            "re-staging restores the INTERNALDATE for envelope reconstruction"
+        );
     }
 
     #[test]
     fn record_overflow_replaces_an_existing_entry_for_the_same_reference() {
         let mut ledger = ProseRetryLedger::default();
-        ledger.record_overflow("17:42".to_string(), 17, 42, b"first".to_vec());
+        ledger.record_overflow("17:42".to_string(), 17, 42, None, b"first".to_vec());
         let (version, _) = ledger.durable_json().expect("dirty");
-        ledger.record_overflow("17:42".to_string(), 17, 42, b"second".to_vec());
+        ledger.record_overflow("17:42".to_string(), 17, 42, None, b"second".to_vec());
         let (_, json) = ledger.durable_json().expect("dirty after replacement");
         let mut restored = ProseRetryLedger::from_json(&json);
         let drained = restored.drain_pending();
@@ -777,7 +808,7 @@ mod tests {
     fn overflow_records_are_capped() {
         let mut ledger = ProseRetryLedger::default();
         for uid in 0..(MAX_PENDING_OVERFLOW + 5) {
-            ledger.record_overflow(format!("17:{uid}"), 17, uid as u32, b"x".to_vec());
+            ledger.record_overflow(format!("17:{uid}"), 17, uid as u32, None, b"x".to_vec());
         }
         let drained = ledger.drain_pending();
         assert_eq!(drained.len(), MAX_PENDING_OVERFLOW);

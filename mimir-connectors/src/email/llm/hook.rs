@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
 use async_trait::async_trait;
+use chrono::{DateTime, FixedOffset};
 use mail_parser::MessageParser;
 use tracing::{debug, warn};
 
@@ -35,6 +36,13 @@ use super::retry::ProseRetryLedger;
 pub(crate) struct EmailExtractionPayload {
     /// Raw RFC 822 bytes.
     pub raw: Vec<u8>,
+    /// IMAP `INTERNALDATE` (server receive time) of the staged message.
+    /// Not part of the RFC 5322 headers, so it travels with the payload to
+    /// survive the hook boundary (issue #398).
+    pub internal_date: Option<DateTime<FixedOffset>>,
+    /// Mailbox address the connector authenticates as, used to detect mail
+    /// not addressed to the owner (issue #398).
+    pub mailbox_address: Option<String>,
     /// IMAP `UIDVALIDITY` of the mailbox the message was fetched from.
     pub uid_validity: u32,
     /// IMAP UID of the message within that `UIDVALIDITY` epoch.
@@ -102,6 +110,8 @@ impl HookHandler for EmailExtractionHook {
             payload.user_identity.as_deref(),
             &message,
             &payload.raw_ref,
+            payload.internal_date,
+            payload.mailbox_address.as_deref(),
         )
         .await
         {

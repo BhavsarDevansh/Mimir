@@ -122,4 +122,18 @@ pub struct EmailConnector {
     durable_snapshot_version: AtomicU64,
 }
 
+impl EmailConnector {
+    /// The mailbox address the connector authenticates as (the non-secret
+    /// `auth.username`), used to detect mail not addressed to the owner
+    /// (issue #398).
+    pub(crate) fn mailbox_address(&self) -> Option<String> {
+        match &self.config.auth {
+            crate::email::config::EmailAuthMethod::AppPassword { username }
+            | crate::email::config::EmailAuthMethod::OAuth { username, .. } => {
+                Some(username.clone())
+            }
+        }
+    }
+}
+
 pub use construct::EmailConnectorDeps;

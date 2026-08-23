@@ -65,7 +65,7 @@ pub(crate) fn is_likely_spam(from_addr: Option<&str>, has_unsubscribe: bool) -> 
     })
 }
 
-pub(super) fn from_address(message: &Message<'_>) -> Option<String> {
+pub(crate) fn from_address(message: &Message<'_>) -> Option<String> {
     match message.from()? {
         Address::List(addrs) => addrs
             .iter()
@@ -79,7 +79,7 @@ pub(super) fn from_address(message: &Message<'_>) -> Option<String> {
 
 /// Best-effort plain-text body: the first text/plain body, or the first HTML
 /// body stripped of markup when no text/plain part exists.
-pub(super) fn body_text(message: &Message<'_>) -> Option<String> {
+pub(crate) fn body_text(message: &Message<'_>) -> Option<String> {
     if let Some(text) = message.body_text(0) {
         let text = text.into_owned();
         if !text.trim().is_empty() {

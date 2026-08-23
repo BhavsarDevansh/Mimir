@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::config::LlmConfig;
-use crate::llm::types::{LlmError, Message, StreamItem};
+use crate::llm::types::{LlmError, LlmRequestOverrides, Message, StreamItem};
 use futures::StreamExt;
 use tokio::io::AsyncWriteExt;
 use tokio::time::Duration;
@@ -33,7 +33,13 @@ async fn test_pool_enqueues_chat_job() {
 
     // This will fail with a network error, but it proves the job was
     // dequeued and processed by the worker.
-    let result = pool.enqueue_chat(vec![Message::user("hello")], None).await;
+    let result = pool
+        .enqueue_chat(
+            vec![Message::user("hello")],
+            None,
+            LlmRequestOverrides::default(),
+        )
+        .await;
     assert!(result.is_err());
 }
 
@@ -81,12 +87,20 @@ async fn test_pool_user_priority_over_system() {
         .unwrap();
 
     // Enqueue system first — it should sit in the system queue.
-    let system_job = pool.enqueue_system_chat(vec![Message::system("system-first")], None);
+    let system_job = pool.enqueue_system_chat(
+        vec![Message::system("system-first")],
+        None,
+        LlmRequestOverrides::default(),
+    );
     // Give the worker a moment to pick up the system job if it were to.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Enqueue user second — it should jump ahead.
-    let user_job = pool.enqueue_chat(vec![Message::user("user-second")], None);
+    let user_job = pool.enqueue_chat(
+        vec![Message::user("user-second")],
+        None,
+        LlmRequestOverrides::default(),
+    );
 
     let (sys_res, usr_res) = tokio::join!(system_job, user_job);
     assert!(sys_res.is_ok());
@@ -107,7 +121,11 @@ async fn test_pool_queue_full_returns_error() {
     let pool = LlmWorkerPool::new(test_config(), config).await.unwrap();
 
     let result = pool
-        .enqueue_chat(vec![Message::user("overflow")], None)
+        .enqueue_chat(
+            vec![Message::user("overflow")],
+            None,
+            LlmRequestOverrides::default(),
+        )
         .await;
     assert!(matches!(result, Err(LlmError::QueueFull)));
 }
@@ -150,7 +168,11 @@ async fn test_pool_stream_yields_text_and_usage() {
         .unwrap();
 
     let mut stream = pool
-        .enqueue_chat_stream(vec![Message::user("hello")], None)
+        .enqueue_chat_stream(
+            vec![Message::user("hello")],
+            None,
+            LlmRequestOverrides::default(),
+        )
         .await
         .unwrap();
 
@@ -162,6 +184,56 @@ async fn test_pool_stream_yields_text_and_usage() {
     assert_eq!(items.len(), 2);
     assert!(matches!(&items[0], StreamItem::Text(t) if t == "Hello"));
     assert!(matches!(&items[1], StreamItem::Usage(u) if u.total_tokens == 4));
+}
+
+#[tokio::test]
+async fn test_pool_job_applies_request_overrides() {
+    // Issue #465: per-request overrides carried by the job must reach the
+    // upstream request, so override clones can stay on the shared pool.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 4096];
+        let n = stream.peek(&mut buf).await.unwrap();
+        let req = String::from_utf8_lossy(&buf[..n]);
+        let body = req.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let json: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json["model"], "override-model");
+        assert_eq!(json["temperature"], 0.9);
+        assert_eq!(json["max_tokens"], 77);
+
+        let body = r#"{"id":"1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+
+    let config = LlmConfig {
+        endpoint: format!("http://{}/v1", addr),
+        api_key: "test".to_string(),
+        model: "gpt-4o".to_string(),
+        max_tokens: Some(10),
+        temperature: 0.2,
+    };
+
+    let pool = LlmWorkerPool::new(config, tiny_pool_config())
+        .await
+        .unwrap();
+
+    let overrides = LlmRequestOverrides {
+        model: Some("override-model".to_string()),
+        temperature: Some(0.9),
+        max_tokens: Some(77),
+    };
+    let result = pool
+        .enqueue_chat(vec![Message::user("hello")], None, overrides)
+        .await;
+    assert!(result.is_ok());
 }
 
 #[tokio::test]
@@ -242,7 +314,11 @@ async fn test_in_flight_counter_tracks_active_jobs() {
     let pool_clone = pool.clone();
     let job = tokio::spawn(async move {
         pool_clone
-            .enqueue_chat(vec![Message::user("hello")], None)
+            .enqueue_chat(
+                vec![Message::user("hello")],
+                None,
+                LlmRequestOverrides::default(),
+            )
             .await
     });
 

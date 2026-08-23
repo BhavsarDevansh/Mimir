@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use crate::config::LlmConfig;
 use crate::llm::pool::LlmWorkerPool;
+use crate::llm::types::LlmRequestOverrides;
 
 mod backend;
 mod chat;
@@ -28,10 +29,14 @@ mod transport;
 /// By default all requests are routed through an internal [`LlmWorkerPool`]
 /// so that background tasks can coexist with user-facing requests without
 /// degrading latency. The pool can be replaced in tests via `Self::with_pool`.
+/// Per-request overrides (`with_model_override`, `with_temperature_override`,
+/// `with_max_tokens_override`) keep the pool and travel with the job payload,
+/// so overridden requests still enqueue on the user queue (issue #465).
 pub struct LlmClient {
     client: reqwest::Client,
     config: LlmConfig,
     pool: Option<Arc<LlmWorkerPool>>,
+    overrides: LlmRequestOverrides,
 }
 
 impl fmt::Debug for LlmClient {
@@ -43,6 +48,7 @@ impl fmt::Debug for LlmClient {
             .field("temperature", &self.config.temperature)
             .field("api_key", &"***REDACTED***")
             .field("has_pool", &self.pool.is_some())
+            .field("overrides", &self.overrides)
             .finish()
     }
 }
@@ -53,6 +59,7 @@ impl Clone for LlmClient {
             client: self.client.clone(),
             config: self.config.clone(),
             pool: self.pool.clone(),
+            overrides: self.overrides.clone(),
         }
     }
 }

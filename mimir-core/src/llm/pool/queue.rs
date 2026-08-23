@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 
 use crate::llm::pool::LlmWorkerPool;
-use crate::llm::types::{Job, LlmError, Message, StreamItem, Usage};
+use crate::llm::types::{Job, LlmError, LlmRequestOverrides, Message, StreamItem, Usage};
 
 impl LlmWorkerPool {
     /// Enqueue a non-streaming chat job to the **user** queue.
@@ -20,6 +20,7 @@ impl LlmWorkerPool {
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
+        overrides: LlmRequestOverrides,
     ) -> Result<(Message, Usage), LlmError> {
         let (tx, rx) = oneshot::channel();
         {
@@ -30,6 +31,7 @@ impl LlmWorkerPool {
             queue.push_back(Job::Chat {
                 messages,
                 tools,
+                overrides,
                 respond: tx,
             });
         }
@@ -46,8 +48,11 @@ impl LlmWorkerPool {
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
+        overrides: LlmRequestOverrides,
     ) -> Result<(String, Usage), LlmError> {
-        let (msg, usage) = self.enqueue_chat_message(messages, tools).await?;
+        let (msg, usage) = self
+            .enqueue_chat_message(messages, tools, overrides)
+            .await?;
         Ok((msg.content, usage))
     }
 
@@ -60,6 +65,7 @@ impl LlmWorkerPool {
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
+        overrides: LlmRequestOverrides,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
         let (tx, rx) = mpsc::channel::<Result<StreamItem, LlmError>>(64);
         {
@@ -70,6 +76,7 @@ impl LlmWorkerPool {
             queue.push_back(Job::ChatStream {
                 messages,
                 tools,
+                overrides,
                 respond: tx,
             });
         }
@@ -88,6 +95,7 @@ impl LlmWorkerPool {
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
+        overrides: LlmRequestOverrides,
     ) -> Result<(Message, Usage), LlmError> {
         let (tx, rx) = oneshot::channel();
         {
@@ -98,6 +106,7 @@ impl LlmWorkerPool {
             queue.push_back(Job::Chat {
                 messages,
                 tools,
+                overrides,
                 respond: tx,
             });
         }
@@ -111,8 +120,11 @@ impl LlmWorkerPool {
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
+        overrides: LlmRequestOverrides,
     ) -> Result<(String, Usage), LlmError> {
-        let (msg, usage) = self.enqueue_system_chat_message(messages, tools).await?;
+        let (msg, usage) = self
+            .enqueue_system_chat_message(messages, tools, overrides)
+            .await?;
         Ok((msg.content, usage))
     }
 
@@ -121,6 +133,7 @@ impl LlmWorkerPool {
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
+        overrides: LlmRequestOverrides,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
         let (tx, rx) = mpsc::channel::<Result<StreamItem, LlmError>>(64);
         {
@@ -131,6 +144,7 @@ impl LlmWorkerPool {
             queue.push_back(Job::ChatStream {
                 messages,
                 tools,
+                overrides,
                 respond: tx,
             });
         }

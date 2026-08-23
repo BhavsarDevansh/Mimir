@@ -110,17 +110,24 @@ impl LlmWorkerPool {
             Job::Chat {
                 messages,
                 tools,
+                overrides,
                 respond,
             } => {
-                let result = client.chat_message_direct(messages, tools).await;
+                let result = client
+                    .chat_message_direct(messages, tools, &overrides)
+                    .await;
                 let _ = respond.send(result);
             }
             Job::ChatStream {
                 messages,
                 tools,
+                overrides,
                 respond,
             } => {
-                match client.chat_stream_with_usage_direct(messages, tools).await {
+                match client
+                    .chat_stream_with_usage_direct(messages, tools, &overrides)
+                    .await
+                {
                     Ok(mut stream) => {
                         while let Some(item) = stream.next().await {
                             if respond.send(item).await.is_err() {

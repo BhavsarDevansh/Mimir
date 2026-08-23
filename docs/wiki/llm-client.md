@@ -38,6 +38,10 @@ export MIMIR_LLM_ENDPOINT="http://localhost:11434/v1"
 
 When you ask Mimir something in chat mode, the client opens an SSE (Server-Sent Events) connection to the LLM. Tokens arrive one by one and are displayed immediately, so you see the response being typed out rather than waiting for the full answer.
 
+## How Requests Are Queued
+
+Every LLM request — including per-request model and temperature overrides — is routed through a worker pool with two priority queues: your chat turns sit on the high-priority **user queue**, and background tasks (connector extraction, memory condensation) sit on the lower-priority **system queue**. Workers always drain the user queue first, so background work never steals capacity from an interactive conversation. If the queue is saturated, Mimir answers with a "server busy, retry later" response (`503` with a 5-second retry hint) instead of piling up unbounded requests.
+
 ## Error Handling
 
 The client distinguishes between different failure types:

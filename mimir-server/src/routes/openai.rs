@@ -719,9 +719,9 @@ async fn chat_completions_stream(
     let turn = resolve_openai_turn(&state, &req).await?;
     state.record_user_activity();
 
-    // Defensive pre-flight: the worker-pool bypass (#465) makes this a no-op
-    // on the hot path today, but once the bypass is fixed a full queue must
-    // surface as 503 before the SSE response starts.
+    // Pre-flight capacity check: overrides keep the worker pool (issue #465),
+    // so a saturated queue surfaces as 503 before the SSE response starts
+    // rather than after the client is already consuming the stream.
     if !turn.llm.user_queue_has_capacity().await {
         // The user message was already persisted by `resolve_openai_turn`;
         // remove it so a rejected turn leaves no orphaned final message.

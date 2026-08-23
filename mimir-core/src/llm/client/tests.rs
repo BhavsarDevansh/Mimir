@@ -6,6 +6,7 @@ use crate::llm::backend::LlmBackend;
 use crate::llm::types::{LlmError, Message, StreamChunk};
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
+use tokio::io::AsyncWriteExt;
 #[test]
 fn test_debug_does_not_leak_api_key() {
     let config = LlmConfig {
@@ -39,7 +40,7 @@ fn with_temperature_override_updates_temperature() {
         .with_temperature_override(0.7)
         .expect("temperature override supported");
     let debug = format!("{:?}", overridden);
-    assert!(debug.contains("temperature: 0.7"), "debug: {debug}");
+    assert!(debug.contains("temperature: Some(0.7)"), "debug: {debug}");
 }
 
 #[tokio::test]
@@ -95,9 +96,10 @@ fn with_max_tokens_override_updates_max_tokens() {
 }
 
 #[tokio::test]
-async fn with_temperature_override_disables_pooling() {
-    // Temperature overrides must disable pooling so the override is applied
-    // immediately rather than using cached workers.
+async fn with_temperature_override_preserves_pooling() {
+    // Issue #465: override clones must keep routing through the worker pool,
+    // otherwise interactive chat never enqueues on the user queue and
+    // queue-full backpressure (503 + Retry-After) is dead code on the hot path.
     let config = LlmConfig {
         endpoint: "https://api.openai.com/v1".to_string(),
         api_key: "sk-test".to_string(),
@@ -115,9 +117,63 @@ async fn with_temperature_override_disables_pooling() {
         .expect("temperature override supported");
     let debug = format!("{:?}", overridden);
     assert!(
-        debug.contains("has_pool: false"),
-        "temperature override must disable pooling: {debug}"
+        debug.contains("has_pool: true"),
+        "temperature override must preserve pooling: {debug}"
     );
+    assert_eq!(
+        overridden.worker_threads(),
+        1,
+        "override clone must keep the pool's worker threads"
+    );
+}
+
+#[tokio::test]
+async fn pooled_temperature_override_reaches_upstream_request() {
+    // Issue #465 regression: an override clone must enqueue on the shared
+    // pool *and* the override must travel with the job to the upstream request.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 4096];
+        let n = stream.peek(&mut buf).await.unwrap();
+        let req = String::from_utf8_lossy(&buf[..n]);
+        let body = req.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let json: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(
+            json["temperature"], 0.9,
+            "override must reach the upstream request: {json}"
+        );
+
+        let body = r#"{"id":"1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+
+    let config = LlmConfig {
+        endpoint: format!("http://{}/v1", addr),
+        api_key: "test".to_string(),
+        model: "gpt-4o".to_string(),
+        max_tokens: Some(10),
+        temperature: 0.2,
+    };
+    let client = LlmClient::new(config)
+        .await
+        .expect("LLM client must build in tests");
+
+    let overridden = client
+        .with_temperature_override(0.9)
+        .expect("temperature override supported");
+    let (message, _usage) = overridden
+        .chat_message(vec![Message::user("hello")], None)
+        .await
+        .expect("pooled override request must succeed");
+    assert_eq!(message.content, "ok");
 }
 
 #[test]

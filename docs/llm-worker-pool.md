@@ -2,7 +2,7 @@
 
 ## Overview
 
-`LlmWorkerPool` (`mimir-core/src/llm/pool/`) is a priority-based work distributor that ensures user-facing chat requests are always serviced before background system tasks. All LLM calls made via `LlmClient` now pass through this pool.
+`LlmWorkerPool` (`mimir-core/src/llm/pool/`) is a priority-based work distributor that ensures user-facing chat requests are always serviced before background system tasks. All LLM calls made via `LlmClient` pass through this pool — including per-request model / temperature / `max_tokens` overrides, which ride in the job payload instead of swapping the pool for a direct client (issue #465).
 
 ## Design
 
@@ -37,6 +37,8 @@ Each worker loops:
 
 When a queue is at capacity, `enqueue_chat()` (and its streaming variant) returns `LlmError::QueueFull`. Callers should translate this to an HTTP `503 Service Unavailable` with a `Retry-After` header.
 
+Because override clones keep the pool, this backpressure is live on the hot path: native chat (`POST /chat`, `POST /chat/stream`) and the OpenAI-compatible provider surface (`POST /v1/chat/completions`) all enqueue on the user queue, so a saturated queue surfaces as `503` instead of an unbounded direct HTTP call.
+
 ## Constructor Safety
 
 `LlmWorkerPool::new` is **all-or-nothing**: it builds every worker's `reqwest`-backed `LlmClient` up front into a `Vec` and only spawns worker tasks once *all* clients have succeeded. If any `LlmClient::new_direct` fails, `new` returns `Err` with no worker tasks spawned, so no detached/orphaned tasks are left behind. This avoids the partial-startup hazard where a later-iteration build failure would leave earlier workers spawned with no `LlmWorkerPool` handle to signal shutdown.
@@ -47,10 +49,22 @@ A successful `new` registers exactly `worker_threads` join handles, each joined 
 
 ```rust
 pub enum Job {
-    Chat { messages, respond: oneshot::Sender<Result<(String, Usage), LlmError>> },
-    ChatStream { messages, respond: mpsc::Sender<Result<StreamItem, LlmError>> },
+    Chat {
+        messages,
+        tools,
+        overrides: LlmRequestOverrides,
+        respond: oneshot::Sender<Result<(Message, Usage), LlmError>>,
+    },
+    ChatStream {
+        messages,
+        tools,
+        overrides: LlmRequestOverrides,
+        respond: mpsc::Sender<Result<StreamItem, LlmError>>,
+    },
 }
 ```
+
+`LlmRequestOverrides` (`mimir-core/src/llm/types.rs`) carries optional `model`, `temperature`, and `max_tokens` values; the worker applies them on top of its base configuration when it builds the upstream request, so concurrent jobs with different overrides never share mutable state.
 
 ## Client Integration
 
@@ -59,6 +73,7 @@ pub enum Job {
 - `LlmClient::new(config)` — async constructor that creates a default pool with 1 worker (spawned inside the Tokio runtime).
 - `LlmClient::with_pool(pool)` — injects a custom pool (useful in tests).
 - `LlmClient::new_direct(config)` — crate-internal constructor that bypasses the pool (used by workers).
+- `LlmBackend::with_model_override` / `with_temperature_override` / `with_max_tokens_override` — return pooled clones that record the override on the client; the next enqueue carries it in the job payload.
 
 ## Future Configuration
 

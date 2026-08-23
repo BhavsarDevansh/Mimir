@@ -264,6 +264,22 @@ impl Message {
     }
 }
 
+/// Per-request model and sampling overrides carried through the worker pool.
+///
+/// Override clones of [`LlmClient`](crate::llm::client::LlmClient) keep their
+/// worker pool and record the override here instead of swapping the pool for a
+/// direct client, so interactive chat stays on the user queue and queue-full
+/// backpressure actually applies (issue #465).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LlmRequestOverrides {
+    /// Upstream model to use instead of the configured model.
+    pub model: Option<String>,
+    /// Sampling temperature to use instead of the configured value.
+    pub temperature: Option<f32>,
+    /// `max_tokens` cap to use instead of the configured value.
+    pub max_tokens: Option<u32>,
+}
+
 /// A job dispatched to the LLM worker pool.
 pub enum Job {
     /// Non-streaming chat completion.
@@ -272,6 +288,8 @@ pub enum Job {
         messages: Vec<Message>,
         /// Optional tools to include in the request.
         tools: Option<Vec<serde_json::Value>>,
+        /// Per-request model/sampling overrides to apply when processing.
+        overrides: LlmRequestOverrides,
         /// Channel to send the result back.
         respond: tokio::sync::oneshot::Sender<Result<(Message, Usage), LlmError>>,
     },
@@ -281,6 +299,8 @@ pub enum Job {
         messages: Vec<Message>,
         /// Optional tools to include in the request.
         tools: Option<Vec<serde_json::Value>>,
+        /// Per-request model/sampling overrides to apply when processing.
+        overrides: LlmRequestOverrides,
         /// Channel to stream items back.
         respond: tokio::sync::mpsc::Sender<Result<StreamItem, LlmError>>,
     },

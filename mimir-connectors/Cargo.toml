@@ -141,11 +141,11 @@ uuid = { version = "1", features = ["v4"], optional = true }
 # is `runtime-async-std`). async-imap ships no TLS; we supply a rustls TLS
 # stream to `Client::new` (see below) instead of its `connect()` helper
 # (async-native-tls / OpenSSL), keeping the workspace on a single rustls TLS
-# stack. Gated by the `gmail` feature.
+# stack. Gated by the `email` feature.
 async-imap = { version = "0.11.3", default-features = false, features = ["runtime-tokio"], optional = true }
 # `base64` builds the XOAUTH2 SASL initial client response
 # (`base64("user=<u>\x01auth=Bearer <t>\x01\x01")`). Already in the tree at
-# 0.22.1 (async-imap's own dep), so this adds no new download. Gated by `gmail`.
+# 0.22.1 (async-imap's own dep), so this adds no new download. Gated by `email`.
 base64 = { version = "0.22", optional = true }
 # Raw IMAP runs over implicit-TLS (imaps:993). We hand-roll the TCP+rustls
 # handshake rather than use async-imap's `connect()` (which pulls
@@ -154,19 +154,19 @@ base64 = { version = "0.22", optional = true }
 # builds the `ClientConfig`; `rustls-native-certs` (0.8) loads the system trust
 # store, matching reqwest's `rustls-native-certs` feature. The `aws-lc-rs`
 # crypto provider matches the one reqwest's `rustls` feature already compiles,
-# so no second crypto provider enters the tree. All gated by `gmail`.
+# so no second crypto provider enters the tree. All gated by `email`.
 tokio-rustls = { version = "0.26", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws-lc-rs", "tls12"], optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 # `futures` streams the `uid_fetch` response (async-imap returns an impl
-# `Stream`). Already in the tree at 0.3.x, so no new download. Gated by `gmail`.
+# `Stream`). Already in the tree at 0.3.x, so no new download. Gated by `email`.
 futures = { version = "0.3", optional = true }
 # C6 (issue #200): email mail parsing. `mail-parser` (0.11.5, latest stable;
 # the issue spec's 0.11.4 is one patch behind) is the RFC 5322 / MIME parser
 # that turns the staged RFC 822 bytes into a structured `Message` (headers,
 # addresses, MIME parts). It decodes charsets / transfer encodings and exposes
 # the `text/calendar` iMIP parts this issue extracts. License MIT/Apache-2.0
-# (GPL-3-compatible). Gated by the `gmail` feature.
+# (GPL-3-compatible). Gated by the `email` feature.
 mail-parser = { version = "0.11.5", optional = true }
 # F11 (issue #188): optional OS-keychain secret backend. `keyring` 3.6.3 is
 # pinned because every 4.x release requires Rust 1.88, above the workspace
@@ -199,7 +199,7 @@ url = "2"
 mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
 
 [features]
-default = ["photos", "calendar", "gmail"]
+default = ["photos", "calendar", "email"]
 ## Shared OAuth test doubles (issues #290, #298): the fake-browser
 ## `self_callback_opener` and `parse_authorize_url` helpers plus the
 ## `mount_token_endpoint` wiremock mock used by the PKCE flow unit tests and
@@ -218,18 +218,18 @@ photos = ["dep:notify", "dep:notify-debouncer-full", "dep:kamadak-exif"]
 ## Shared OAuth 2.0 client + refresh helpers (issue #240): `oauth2` 5.0.0 with
 ## `default-features = false` + a custom `AsyncHttpClient` adapter over the
 ## workspace reqwest 0.13 client (see `src/oauth/`). Enabled by the OAuth
-## backends (`calendar`, `gmail`) and by the CLI's PKCE login flow (A4 / #205).
+## backends (`calendar`, `email`) and by the CLI's PKCE login flow (A4 / #205).
 oauth = ["dep:oauth2", "dep:http", "dep:url"]
 ## In-process mock OAuth 2.0 authorization server (Phase 3 T2 / #207): an
 ## HTTPS `/authorize` + HTTP `/token` loopback pair that the PKCE-flow E2E
 ## tests drive without a real provider. Test-only, off by default. Reuses the
 ## `oauth` feature (the flow under test) and the `tokio-rustls`/`rustls`/
-## `base64` optional deps already gated by `gmail`.
+## `base64` optional deps already gated by `email`.
 test-mock-oauth = ["oauth", "dep:rcgen", "dep:sha2", "dep:tokio-rustls", "dep:rustls", "dep:base64"]
 ## CalDAV calendar ingestion: read/sync + event fact extraction (C3–C4).
 calendar = ["dep:icalendar", "dep:roxmltree", "dep:chrono-tz", "dep:uuid", "oauth"]
 ## IMAP email ingestion, Gmail and other providers (C5–C7).
-gmail = ["dep:async-imap", "dep:base64", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures", "dep:icalendar", "dep:chrono-tz", "dep:mail-parser", "oauth"]
+email = ["dep:async-imap", "dep:base64", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures", "dep:icalendar", "dep:chrono-tz", "dep:mail-parser", "oauth"]
 ## Optional OS-keychain backend (F11 / #188): `KeyringSecretStore` over the
 ## `keyring` crate (macOS Keychain / Linux Secret Service / Windows
 ## Credential Manager). Off by default; daemon support is enabled by

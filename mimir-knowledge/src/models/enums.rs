@@ -211,10 +211,17 @@ const_assert!((MergeWorkflowStatus::Pending as i16) != 0);
 const_assert!((MergeResolution::Merged as i16) != 0);
 
 /// External service connectors that extract facts.
+///
+/// The IMAP mail type is the generic `Email` (id 1, issue #400): the wire
+/// string is `"email"` and the legacy `"gmail"` string stays accepted as an
+/// input alias so pre-rename scripts keep working. Renaming the variant must
+/// never renumber the discriminants — `connectors.connector_type_id`,
+/// `sources.connector_type_id`, and the seeded `connector_types` lookup rows
+/// pin them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Type, serde::Serialize, serde::Deserialize)]
 #[repr(i16)]
 pub enum ConnectorType {
-    Gmail = 1,
+    Email = 1,
     Calendar = 2,
     Photos = 3,
     LinkedIn = 4,
@@ -242,7 +249,7 @@ impl TryFrom<i16> for ConnectorType {
 
     fn try_from(value: i16) -> Result<Self, ()> {
         match value {
-            x if x == Self::Gmail as i16 => Ok(Self::Gmail),
+            x if x == Self::Email as i16 => Ok(Self::Email),
             x if x == Self::Calendar as i16 => Ok(Self::Calendar),
             x if x == Self::Photos as i16 => Ok(Self::Photos),
             x if x == Self::LinkedIn as i16 => Ok(Self::LinkedIn),
@@ -259,7 +266,7 @@ impl ConnectorType {
     /// independent of the derived `Debug` repr (issue #264).
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Gmail => "gmail",
+            Self::Email => "email",
             Self::Calendar => "calendar",
             Self::Photos => "photos",
             Self::LinkedIn => "linkedin",
@@ -273,11 +280,13 @@ impl std::str::FromStr for ConnectorType {
     /// Parse a lowercase wire `connector_type` string back into the enum.
     ///
     /// Mirrors [`ConnectorType::as_str`] so the input and output directions
-    /// share one string table (issue #264). Returns `Err(())` for an unknown
-    /// kind so the caller can surface a `400 Bad Request`.
+    /// share one string table (issue #264). The legacy `"gmail"` spelling
+    /// still maps to [`ConnectorType::Email`] so pre-rename scripts keep
+    /// working (issue #400). Returns `Err(())` for an unknown kind so the
+    /// caller can surface a `400 Bad Request`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "gmail" => Ok(Self::Gmail),
+            "email" | "gmail" => Ok(Self::Email),
             "calendar" => Ok(Self::Calendar),
             "photos" => Ok(Self::Photos),
             "linkedin" => Ok(Self::LinkedIn),
@@ -477,7 +486,7 @@ mod tests {
         assert_ne!(DedupStatus::Pending as i16, 0);
         assert_ne!(MergeWorkflowStatus::Pending as i16, 0);
         assert_ne!(MergeResolution::Merged as i16, 0);
-        assert_ne!(ConnectorType::Gmail as i16, 0);
+        assert_ne!(ConnectorType::Email as i16, 0);
     }
 
     #[test]
@@ -494,6 +503,7 @@ mod tests {
         rt(EventType::Deadline);
         rt(EventStatus::Snoozed);
         rt(AutoCompletePolicy::Recurring);
+        rt(ConnectorType::Email);
         rt(ConnectorType::Calendar);
         rt(MergeResolution::KeptSeparate);
     }
@@ -526,7 +536,7 @@ mod tests {
 
     #[test]
     fn connector_type_as_str_matches_wire_contract() {
-        assert_eq!(ConnectorType::Gmail.as_str(), "gmail");
+        assert_eq!(ConnectorType::Email.as_str(), "email");
         assert_eq!(ConnectorType::Calendar.as_str(), "calendar");
         assert_eq!(ConnectorType::Photos.as_str(), "photos");
         assert_eq!(ConnectorType::LinkedIn.as_str(), "linkedin");
@@ -535,7 +545,7 @@ mod tests {
     #[test]
     fn connector_type_from_str_roundtrips_wire_contract() {
         for t in [
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             ConnectorType::Calendar,
             ConnectorType::Photos,
             ConnectorType::LinkedIn,
@@ -544,6 +554,25 @@ mod tests {
         }
         assert_eq!(ConnectorType::from_str("rss"), Err(()));
         assert_eq!(ConnectorType::from_str(""), Err(()));
+    }
+
+    #[test]
+    fn connector_type_from_str_accepts_legacy_gmail_alias() {
+        // Issue #400: the generic email type replaced the Gmail-only type;
+        // the legacy lowercase wire string stays accepted so existing
+        // scripts and configs keep working after the rename. The enum's
+        // `FromStr` stays case-sensitive (lowercasing is the callers' job,
+        // e.g. `parse_connector_type` in the daemon routes).
+        assert_eq!(ConnectorType::from_str("gmail"), Ok(ConnectorType::Email));
+        assert_eq!(ConnectorType::from_str("GMAIL"), Err(()));
+    }
+
+    #[test]
+    fn connector_type_email_discriminant_is_stable() {
+        // The `connectors` / `sources` FK columns and the seeded
+        // `connector_types` lookup row pin id 1 to the email type; renaming
+        // the variant must never renumber it (issue #400).
+        assert_eq!(ConnectorType::Email as i16, 1);
     }
 
     #[test]
@@ -565,7 +594,7 @@ mod tests {
     }
 }
 
-const_assert!((ConnectorType::Gmail as i16) != 0);
+const_assert!((ConnectorType::Email as i16) != 0);
 
 const_assert!((ConnectorStatus::Setup as i16) != 0);
 const_assert!((ConnectorAuthState::Unauthenticated as i16) != 0);

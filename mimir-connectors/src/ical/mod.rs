@@ -19,7 +19,7 @@
 //!   events-subsystem overlay are left to the shared `normalize_and_insert`
 //!   pipeline; this function only builds the typed facts.
 //!
-//! Gated by `any(feature = "calendar", feature = "gmail")`: it is needed only
+//! Gated by `any(feature = "calendar", feature = "email")`: it is needed only
 //! by the two connector backends that consume iCalendar. The parsing helpers
 //! depend on `icalendar` (the `parser` submodule) and `chrono-tz`, both made
 //! available to either backend by their feature flags.

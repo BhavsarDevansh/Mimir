@@ -34,7 +34,7 @@ async fn extract_funnels_into_kb_with_resolution_and_provenance() {
     // valid `connector_instance_id` FK.
     let row = kg
         .upsert_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "gmail-personal".to_string(),
             backend: "imap".to_string(),
             display_name: "Gmail".to_string(),
@@ -61,7 +61,7 @@ async fn extract_funnels_into_kb_with_resolution_and_provenance() {
         facts,
         Provenance::connector(
             instance_id,
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             ExtractionMethod::StructuredParse,
         ),
     )
@@ -183,7 +183,7 @@ async fn extract_funnels_into_kb_with_resolution_and_provenance() {
             sources.iter().any(|s| {
                 s.source_type_id == mimir_knowledge::models::source::SourceType::Connector as i16
                     && s.connector_instance_id == Some(instance_id)
-                    && s.connector_type_id == Some(ConnectorType::Gmail as i16)
+                    && s.connector_type_id == Some(ConnectorType::Email as i16)
                     && s.raw_reference.as_deref() == Some("imip:dentist-1@example.com")
                     && s.extraction_method_id == Some(ExtractionMethod::StructuredParse as i16)
             }),
@@ -199,7 +199,7 @@ async fn cancel_invite_trashes_previously_extracted_facts() {
     let (kg, _dir) = init_kg().await;
     let row = kg
         .upsert_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "gmail-personal".to_string(),
             backend: "imap".to_string(),
             display_name: "Gmail".to_string(),
@@ -226,7 +226,7 @@ async fn cancel_invite_trashes_previously_extracted_facts() {
         facts,
         Provenance::connector(
             instance_id,
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             ExtractionMethod::StructuredParse,
         ),
     )
@@ -310,7 +310,7 @@ async fn extract_jsonld_funnels_into_kb_with_provenance() {
     let (kg, _dir) = init_kg().await;
     let row = kg
         .upsert_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "gmail-personal".to_string(),
             backend: "imap".to_string(),
             display_name: "Gmail".to_string(),
@@ -337,7 +337,7 @@ async fn extract_jsonld_funnels_into_kb_with_provenance() {
         facts,
         Provenance::connector(
             instance_id,
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             ExtractionMethod::StructuredParse,
         ),
     )
@@ -388,7 +388,7 @@ async fn extract_jsonld_funnels_into_kb_with_provenance() {
             sources.iter().any(|s| {
                 s.source_type_id == mimir_knowledge::models::source::SourceType::Connector as i16
                     && s.connector_instance_id == Some(instance_id)
-                    && s.connector_type_id == Some(ConnectorType::Gmail as i16)
+                    && s.connector_type_id == Some(ConnectorType::Email as i16)
                     && s.raw_reference.as_deref() == Some("17:99")
                     && s.extraction_method_id == Some(ExtractionMethod::StructuredParse as i16)
             }),

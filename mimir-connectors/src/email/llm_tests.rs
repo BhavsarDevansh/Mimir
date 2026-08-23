@@ -83,7 +83,7 @@ async fn hook_env_with_policy(
     // `connector_instance_id` FK.
     let row = kg
         .upsert_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "gmail-test".to_string(),
             backend: "imap".to_string(),
             display_name: "Gmail".to_string(),

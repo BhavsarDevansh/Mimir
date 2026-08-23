@@ -375,6 +375,42 @@ async fn fts5_virtual_table_exists() {
 }
 
 #[tokio::test]
+async fn connector_type_lookup_seed_matches_enum() {
+    // Issue #400: the persisted connector type for IMAP mail is the generic
+    // `email` type (id 1, renamed from "Gmail" by migration 054) so an
+    // Outlook/Yahoo/Proton connector is never labelled "gmail". The lookup
+    // seed must stay in lockstep with the `ConnectorType` enum.
+    let dir = tempfile::tempdir().unwrap();
+    let db_path: PathBuf = dir.path().join("knowledge.db");
+    let kg = KnowledgeGraph::init(&db_path).await.unwrap();
+
+    let rows: Vec<(i32, String)> =
+        sqlx::query_as("SELECT id, name FROM connector_types ORDER BY id")
+            .fetch_all(kg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (1, "Email".to_string()),
+            (2, "Calendar".to_string()),
+            (3, "Photos".to_string()),
+            (4, "LinkedIn".to_string()),
+        ],
+        "connector_types lookup seed drifted from the ConnectorType enum"
+    );
+    let (score,): (f64,) =
+        sqlx::query_as("SELECT score FROM connector_reliability WHERE connector_type_id = 1")
+            .fetch_one(kg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        score, 0.85,
+        "email reliability score must survive the rename"
+    );
+}
+
+#[tokio::test]
 async fn wal_and_foreign_keys_enabled() {
     let dir = tempfile::tempdir().unwrap();
     let db_path: PathBuf = dir.path().join("knowledge.db");

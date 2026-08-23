@@ -22,7 +22,7 @@ Build the connector framework and implement one backend per core connector type,
 - New crate `mimir-connectors` (`→ mimir-core`, `→ mimir-knowledge`; **no `sqlx` dependency** — DB access only via `KnowledgeGraph` facade). `#![deny(unsafe_code)]` at root.
 - `mimir-server → mimir-connectors` so the daemon owns a `ConnectorRegistry`.
 - Runtime `Connector` trait + `ConnectorRegistry` live in `mimir-connectors`; provenance `ConnectorType` stays in `mimir-knowledge`.
-- Feature flags: `default = ["photos","calendar","gmail"]`; framework + `mock` always built.
+- Feature flags: `default = ["photos","calendar","email"]`; framework + `mock` always built.
 - `ConnectorRegistry` constructed in `start_server`, stored in `AppState`; each connector runs as a supervised task.
 
 ### B. Extraction reuse (DRY)
@@ -85,12 +85,12 @@ Framework + Mock → Photos (local) → Calendar (CalDAV) → Email (IMAP). Asce
 
 | Crate | Version | Used by | Feature-gated |
 |-------|---------|---------|---------------|
-| `oauth2` | 5.0.0 (`default-features = false`) | Calendar, Email, CLI PKCE | `oauth` (enabled by `calendar`, `gmail`; also enabled by the `mimir` binary) |
+| `oauth2` | 5.0.0 (`default-features = false`) | Calendar, Email, CLI PKCE | `oauth` (enabled by `calendar`, `email`; also enabled by the `mimir` binary) |
 | `webbrowser` | 1.2.4 | CLI PKCE (A4): opens the provider's authorize URL in the default browser (cross-platform, MIT/Apache-2.0) | `mimir` binary |
 | `url` | 2.x (in tree) | CLI PKCE (A4): parses the loopback callback query string | `oauth` (mimir-connectors) |
-| `async-imap` | 0.11.3 | Email (IMAP + IDLE) | `gmail` |
-| `mail-parser` | 0.11.5 | Email parsing | `gmail` |
-| `icalendar` | 0.17.6 | Calendar parse + build; Email iMIP VEVENTs (shared with `gmail`) | `calendar`, `gmail` |
+| `async-imap` | 0.11.3 | Email (IMAP + IDLE) | `email` |
+| `mail-parser` | 0.11.5 | Email parsing | `email` |
+| `icalendar` | 0.17.6 | Calendar parse + build; Email iMIP VEVENTs (shared with `email`) | `calendar`, `email` |
 | `kamadak-exif` | 0.6.1 | Photos EXIF/GPS | `photos` |
 | `notify` | 8.2.0 | Photos file watcher (already in tree) | `photos` |
 | `keyring` | 3.6.3 | Optional secret backend | `secrets-keyring` (off by default) |
@@ -102,7 +102,7 @@ All HTTP via `reqwest` (already a workspace dep). No `sqlx` in `mimir-connectors
 
 **Reconciliation decision (#240, v0.96.0):** `oauth2` 5.0.0's optional `reqwest` feature pins reqwest 0.12, which would duplicate the workspace's reqwest 0.13 HTTP/TLS stack. The chosen path is `oauth2` with `default-features = false` plus a custom [`OAuthHttpClient`](../../docs/oauth-client.md) adapter that implements the crate's `AsyncHttpClient` trait over the workspace reqwest 0.13 client — one reqwest major in the tree, the vetted PKCE/refresh protocol code, redirects disabled on OAuth calls, and the pre-existing HTTPS/loopback endpoint gate + secret-hygiene error mapping preserved. oauth2 5.0.0's unconditional deps are already in the tree except `rand 0.8` (a third rand line alongside 0.9/0.10; small and required by oauth2's PKCE verifier generation) and `thiserror 1.x` (already in the tree). No reqwest 0.12-compatible oauth2 release exists (latest is still 5.0.0 as of 2026-08-11), so "wait for an upgrade" is struck from the options.
 
-**Reconciliation decision (#239, v0.102.1):** the ledger now reflects the MSRV-capped `icalendar` resolution. The workspace `rust-version` is 1.85, and every `icalendar` release from 0.17.7 onwards requires Rust 1.88, so Cargo resolves the `icalendar = "0.17"` declaration (in `mimir-connectors`, shared by the `calendar` and `gmail` features) to 0.17.6 — the latest 1.85-compatible release. The parser API used by the calendar connector (the nom-backed low-level `icalendar::parser` plus the builder) is fully present in 0.17.6, so the workspace toolchain stays at MSRV 1.85 and the ledger pins 0.17.6 (not 0.17.12); revisit only when a feature introduced in 0.17.7+ is actually needed. The `async-imap` 0.11.3 and `mail-parser` 0.11.5 rows were corrected to the declared versions in `mimir-connectors/Cargo.toml` while reconciling the ledger.
+**Reconciliation decision (#239, v0.102.1):** the ledger now reflects the MSRV-capped `icalendar` resolution. The workspace `rust-version` is 1.85, and every `icalendar` release from 0.17.7 onwards requires Rust 1.88, so Cargo resolves the `icalendar = "0.17"` declaration (in `mimir-connectors`, shared by the `calendar` and `email` features) to 0.17.6 — the latest 1.85-compatible release. The parser API used by the calendar connector (the nom-backed low-level `icalendar::parser` plus the builder) is fully present in 0.17.6, so the workspace toolchain stays at MSRV 1.85 and the ledger pins 0.17.6 (not 0.17.12); revisit only when a feature introduced in 0.17.7+ is actually needed. The `async-imap` 0.11.3 and `mail-parser` 0.11.5 rows were corrected to the declared versions in `mimir-connectors/Cargo.toml` while reconciling the ledger.
 
 ## 5. Issue breakdown
 

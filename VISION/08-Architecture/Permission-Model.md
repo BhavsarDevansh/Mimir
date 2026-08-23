@@ -78,7 +78,7 @@ struct Permission {
     id: String,
     category: String,        // e.g., "calendar_auto_add"
     scope: PermissionScope,  // specific | category | domain | full
-    sources: Vec<String>,    // e.g., ["gmail", "any"]
+    sources: Vec<String>,    // e.g., ["email", "any"]
     conditions: Vec<Condition>, // e.g., sender_filter, confidence_threshold
     granted_at: DateTime,
     revoked_at: Option<DateTime>,

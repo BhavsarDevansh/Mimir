@@ -384,7 +384,7 @@ async fn connector_location_overlay_persists() {
 
     let instance = kg
         .upsert_connector(models::connector::UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "gmail-1".to_string(),
             backend: "imap".to_string(),
             display_name: "Gmail".to_string(),
@@ -404,7 +404,7 @@ async fn connector_location_overlay_persists() {
         vec![fact],
         Provenance::connector(
             instance.id,
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             ExtractionMethod::StructuredParse,
         ),
     )

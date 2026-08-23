@@ -38,10 +38,10 @@ async fn trigger_harness(
     tempfile::TempDir,
 ) {
     let (kg, dir) = init_kg().await;
-    let mut input = upsert(slug, ConnectorType::Gmail, "test", ConnectorStatus::Active);
+    let mut input = upsert(slug, ConnectorType::Email, "test", ConnectorStatus::Active);
     let mut cfg = extra;
     if let serde_json::Value::Object(map) = &mut cfg {
-        map.insert("__ctype".to_string(), json!(ConnectorType::Gmail as i64));
+        map.insert("__ctype".to_string(), json!(ConnectorType::Email as i64));
         map.insert("interval_ms".to_string(), json!(PREEMPT_INTERVAL_MS));
         map.insert("cursor".to_string(), json!("c"));
     }
@@ -194,11 +194,11 @@ async fn trigger_sync_on_non_running_connector_errors() {
     let (kg, _dir) = init_kg().await;
     let mut input = upsert(
         "paused",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Paused,
     );
-    input.config_json = with_slug("paused", json!({ "__ctype": ConnectorType::Gmail as i64 }));
+    input.config_json = with_slug("paused", json!({ "__ctype": ConnectorType::Email as i64 }));
     let row = kg.upsert_connector(input).await.unwrap();
     let kg = Arc::new(kg);
 
@@ -282,13 +282,13 @@ async fn trigger_sync_on_push_connector_is_unsupported() {
     let (kg, _dir) = init_kg().await;
     let mut input = upsert(
         "pushy",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Active,
     );
     input.config_json = with_slug(
         "pushy",
-        json!({ "__ctype": ConnectorType::Gmail as i64, "mode": "push", "interval_ms": 3600000 }),
+        json!({ "__ctype": ConnectorType::Email as i64, "mode": "push", "interval_ms": 3600000 }),
     );
     let row = kg.upsert_connector(input).await.unwrap();
     let kg = Arc::new(kg);

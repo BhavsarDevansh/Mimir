@@ -289,12 +289,13 @@ async fn resolved_mode_is_none_for_unknown_type_and_invalid_config() {
     );
 }
 
-/// Build a Gmail/imap row carrying the given `config_json` and durable state
+/// Build an Email/imap row carrying the given `config_json` and durable state
 /// for the email `resolved_mode` tests.
+#[cfg(feature = "email")]
 fn gmail_row(config_json: &str, durable_state: Option<&str>) -> ConnectorRow {
     ConnectorRow {
         id: 8,
-        connector_type_id: ConnectorType::Gmail as i16,
+        connector_type_id: ConnectorType::Email as i16,
         slug: "gmail-personal".to_string(),
         backend: "imap".to_string(),
         display_name: "Gmail".to_string(),
@@ -310,6 +311,7 @@ fn gmail_row(config_json: &str, durable_state: Option<&str>) -> ConnectorRow {
     }
 }
 
+#[cfg(feature = "email")]
 #[tokio::test]
 async fn resolved_mode_omits_unprobed_auto_and_reads_persisted_capability() {
     // Issue #397 review: an `auto`-mode email connector must not be reported
@@ -326,7 +328,7 @@ async fn resolved_mode_omits_unprobed_auto_and_reads_persisted_capability() {
     let registry = ConnectorRegistry::new();
     registry
         .register(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "imap".to_string(),
             crate::email::EmailConnectorFactory::new(),
         )

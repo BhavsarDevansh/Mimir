@@ -2,7 +2,7 @@
 //! issue #184).
 //!
 //! The registry maps `(connector_type, backend) -> ConnectorFactory`. A
-//! connector *type* (`Gmail` / `Calendar` / `Photos` / …) is the provenance
+//! connector *type* (`Email` / `Calendar` / `Photos` / …) is the provenance
 //! and reliability axis — fixed and seeded. A *backend* (`imap`, `caldav`,
 //! `local-fs`, …) is the provider implementation chosen per instance and
 //! persisted as the `backend` column on the `connectors` table (F2). Adding a

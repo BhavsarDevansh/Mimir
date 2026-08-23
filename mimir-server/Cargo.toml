@@ -34,13 +34,13 @@ http = "1.2"
 uuid = { version = "1.23", features = ["v4"] }
 
 [features]
-default = ["photos", "calendar", "gmail"]
+default = ["photos", "calendar", "email"]
 ## Forwarded to mimir-connectors: register the Photos (local-fs) factory.
 photos = ["mimir-connectors/photos"]
 ## Forwarded to mimir-connectors: register the Calendar (CalDAV) factory.
 calendar = ["mimir-connectors/calendar"]
 ## Forwarded to mimir-connectors: register the Email (IMAP) factory.
-gmail = ["mimir-connectors/gmail"]
+email = ["mimir-connectors/email"]
 ## Register the mock connector factory (test harness) in the daemon registry.
 ## Enabled by the CLI e2e suite so `mimir connector` exercises a real
 ## add → resume → sync → pause → remove cycle against an in-process daemon.

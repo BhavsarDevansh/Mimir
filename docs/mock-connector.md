@@ -8,7 +8,7 @@ It lives in `mimir-connectors/src/mock/` and is test-only: the module and its re
 
 ## Public surface
 
-- `MockConnector` — the configurable connector. `MockConnector::default()` yields the legacy no-op identity (`id "mock"`, type `Gmail`, `Polling`, health `Online`, empty `extract`) so existing trait tests keep passing.
+- `MockConnector` — the configurable connector. `MockConnector::default()` yields the legacy no-op identity (`id "mock"`, type `Email`, `Polling`, health `Online`, empty `extract`) so existing trait tests keep passing.
 - `MockConnector::from_config(serde_json::Value) -> Result<Self, ConnectorError>` — build from `config_json` (with the supervisor-injected `__slug` / `__ctype` / `__instance_id`).
 - `MockConnector::with_recorder(Arc<MockSyncRecorder>) -> Self` — attach a sync-options observer for F9-style concurrency tests (not part of the config schema or the factory path).
 - `MockConnectorFactory` — `ConnectorFactory` that builds a `MockConnector` from its `config_json`; registered under a `(connector_type, backend)` pair.
@@ -69,7 +69,7 @@ Push connectors block inside `sync()` waiting for service events. The mock simul
 
 ## Instance identity
 
-The supervisor injects `__slug`, `__ctype`, and `__instance_id` into a connector's `config_json` before handing it to the factory (see `ConnectorSupervisor::instantiate`). `MockConnector::from_config` reads these to recover its identity (`id()`, `connector_type()`). When `__ctype` is absent it falls back to the legacy no-op identity (`Gmail`). When `__ctype` is present it must be an integer in range of `i16` and a known `ConnectorType` discriminant; otherwise `from_config` returns `ConnectorError::Config` rather than silently defaulting or wrapping.
+The supervisor injects `__slug`, `__ctype`, and `__instance_id` into a connector's `config_json` before handing it to the factory (see `ConnectorSupervisor::instantiate`). `MockConnector::from_config` reads these to recover its identity (`id()`, `connector_type()`). When `__ctype` is absent it falls back to the legacy no-op identity (`Email`). When `__ctype` is present it must be an integer in range of `i16` and a known `ConnectorType` discriminant; otherwise `from_config` returns `ConnectorError::Config` rather than silently defaulting or wrapping.
 
 ## Config validation
 
@@ -86,7 +86,7 @@ The `MockSyncRecorder` is cancellation-safe: `enter(options)` returns a `MockSyn
 
 - `tests/mock_connector.rs` — unit tests for config parsing, identity, both modes, canned-fact staging/draining, incremental `batch_size`, knobs, and the recorder.
 - `tests/supervisor_lifecycle_tests.rs` — the supervised-lifecycle behavioural suite now drives the `MockConnector` (the previous private `TestConnector` was removed — DRY).
-- `tests/mock_ingestion_e2e.rs` — the T1 vehicle: the real `ConnectorSupervisor` + `KnowledgeGraph` ingest a `MockConnector`'s canned facts in both polling and push modes, asserting KB facts + connector provenance (`SourceType::Connector`, `connector_instance_id`, `raw_reference`, `ExtractionMethod::StructuredParse`) and the exact Gmail reliability-score confidence (0.85).
+- `tests/mock_ingestion_e2e.rs` — the T1 vehicle: the real `ConnectorSupervisor` + `KnowledgeGraph` ingest a `MockConnector`'s canned facts in both polling and push modes, asserting KB facts + connector provenance (`SourceType::Connector`, `connector_instance_id`, `raw_reference`, `ExtractionMethod::StructuredParse`) and the exact Email reliability-score confidence (0.85).
 - `mimir/tests/connector_e2e.rs` — the daemon-level T1 harness (issue #206): the real `mimir` CLI drives an in-process daemon (built with the `mock-connector` feature) through add → auth → resume → sync, then verifies the KB via `mimir kb query` / `kb show --json` — facts land with `source_type=Connector`, provenance tied to the instance, confidence 0.85, and a second instance corroborating the same claim boosts confidence to 0.90 while a plain re-sync stays a re-statement no-op.
 
 ## Connections

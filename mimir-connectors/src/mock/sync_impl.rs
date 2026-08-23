@@ -33,7 +33,7 @@ impl MockConnector {
             .unwrap_or_else(default_slug);
 
         let ctype = match config.get("__ctype") {
-            None => ConnectorType::Gmail,
+            None => ConnectorType::Email,
             Some(value) => {
                 let id = value
                     .as_i64()

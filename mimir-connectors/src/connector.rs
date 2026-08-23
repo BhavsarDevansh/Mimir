@@ -439,7 +439,7 @@ pub trait Connector: Send + Sync {
     fn name(&self) -> &str;
 
     /// Provenance and reliability axis for this connector
-    /// (`Gmail` / `Calendar` / `Photos` / …).
+    /// (`Email` / `Calendar` / `Photos` / …).
     fn connector_type(&self) -> ConnectorType;
 
     /// How the supervisor should run this connector (polling vs push).

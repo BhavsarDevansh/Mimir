@@ -543,8 +543,8 @@ pub(super) async fn init_hook_engine(
     // (`llm_extraction_max_attempts`, carried in the payload), so the hook's
     // own cap is a generous safety bound; the handler records terminal
     // failures durably in the connector's retry ledger. The handler lives in
-    // `mimir-connectors::email`, which exists only with the `gmail` feature.
-    #[cfg(feature = "gmail")]
+    // `mimir-connectors::email`, which exists only with the `email` feature.
+    #[cfg(feature = "email")]
     engine
         .register(Hook {
             id: "connector_item.remember".to_string(),
@@ -676,11 +676,11 @@ pub(super) async fn init_connector_framework(
             tracing::warn!("Failed to register Calendar connector factory: {e}");
         }
     }
-    #[cfg(feature = "gmail")]
+    #[cfg(feature = "email")]
     {
         use mimir_connectors::EmailConnectorFactory;
         if let Err(e) = connector_registry.register(
-            mimir_knowledge::models::enums::ConnectorType::Gmail,
+            mimir_knowledge::models::enums::ConnectorType::Email,
             "imap".to_string(),
             EmailConnectorFactory,
         ) {
@@ -691,7 +691,7 @@ pub(super) async fn init_connector_framework(
     {
         use mimir_connectors::MockConnectorFactory;
         if let Err(e) = connector_registry.register(
-            mimir_knowledge::models::enums::ConnectorType::Gmail,
+            mimir_knowledge::models::enums::ConnectorType::Email,
             "test".to_string(),
             MockConnectorFactory,
         ) {

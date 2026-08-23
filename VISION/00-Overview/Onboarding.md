@@ -48,7 +48,7 @@ The wizard presents starting services. Some require auth, some work immediately.
 - **Calculator** — I can do math and date calculations
 
 **Services Requiring Auth:**
-- Email (Gmail, IMAP)
+- Email (IMAP — any provider)
 - Calendar (Google, Apple, CalDAV)
 - Photos (Google Photos, local folders)
 - GitHub
@@ -61,7 +61,7 @@ The wizard shows one service at a time:
 📧 Connect Email
 I can learn from your emails: trips, bookings, events, receipts.
 
-[Connect Gmail] [Connect IMAP] [Skip for now]
+[Connect Email] [Connect Calendar] [Skip for now]
 ```
 
 For each connected service, the wizard explains what Mimir will learn and what it will not do.

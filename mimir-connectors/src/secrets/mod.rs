@@ -63,7 +63,7 @@ mod store;
 ))]
 mod keyring;
 
-#[cfg(any(feature = "calendar", feature = "gmail"))]
+#[cfg(any(feature = "calendar", feature = "email"))]
 use crate::connector::ConnectorError;
 
 pub use bundle::SecretBundle;
@@ -89,7 +89,7 @@ pub use store::SecretStore;
 /// the non-secret `kind` strings cannot drift between the two connectors: a
 /// new auth variant is forced to map here, and `mismatch_error` callers pass
 /// `auth.discriminant()`.
-#[cfg(any(feature = "calendar", feature = "gmail"))]
+#[cfg(any(feature = "calendar", feature = "email"))]
 pub(crate) trait AuthMethodDiscriminant {
     /// The non-secret discriminant name (the serde `kind` tag), for error
     /// messages that must not `Debug`-format the OAuth `client_secret`.
@@ -103,7 +103,7 @@ pub(crate) trait AuthMethodDiscriminant {
 /// the `discriminant()` value stay in sync across both connectors. Only the
 /// non-secret auth-kind discriminant is included — never a `Debug` of the
 /// OAuth config (which could echo the client secret).
-#[cfg(any(feature = "calendar", feature = "gmail"))]
+#[cfg(any(feature = "calendar", feature = "email"))]
 pub(crate) fn mismatch_error(config_discriminant: &str) -> ConnectorError {
     ConnectorError::Authentication(format!(
         "auth method {} does not match stored secret kind",
@@ -111,6 +111,6 @@ pub(crate) fn mismatch_error(config_discriminant: &str) -> ConnectorError {
     ))
 }
 
-#[cfg(all(test, any(feature = "calendar", feature = "gmail")))]
+#[cfg(all(test, any(feature = "calendar", feature = "email")))]
 #[path = "mod_tests.rs"]
 mod tests;

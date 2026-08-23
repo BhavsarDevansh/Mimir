@@ -21,32 +21,32 @@ async fn restore_spawns_only_active_connectors() {
     let (kg, _dir) = init_kg().await;
     let mut a = upsert(
         "active",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Active,
     );
-    a.config_json = with_slug("active", json!({ "__ctype": ConnectorType::Gmail as i64 }));
+    a.config_json = with_slug("active", json!({ "__ctype": ConnectorType::Email as i64 }));
     let mut p = upsert(
         "paused",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Paused,
     );
-    p.config_json = with_slug("paused", json!({ "__ctype": ConnectorType::Gmail as i64 }));
+    p.config_json = with_slug("paused", json!({ "__ctype": ConnectorType::Email as i64 }));
     let mut e = upsert(
         "errored",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Error,
     );
-    e.config_json = with_slug("errored", json!({ "__ctype": ConnectorType::Gmail as i64 }));
+    e.config_json = with_slug("errored", json!({ "__ctype": ConnectorType::Email as i64 }));
     let mut s = upsert(
         "setup",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Setup,
     );
-    s.config_json = with_slug("setup", json!({ "__ctype": ConnectorType::Gmail as i64 }));
+    s.config_json = with_slug("setup", json!({ "__ctype": ConnectorType::Email as i64 }));
 
     kg.upsert_connector(a).await.unwrap();
     let paused_id = kg.upsert_connector(p).await.unwrap().id;
@@ -125,14 +125,14 @@ async fn none_cursor_preserves_existing_sync_cursor() {
     let (kg, _dir) = init_kg().await;
     let mut input = upsert(
         "nocursor",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Active,
     );
     // No "cursor" key => MockConnector returns new_cursor: None ("unchanged").
     input.config_json = with_slug(
         "nocursor",
-        json!({ "__ctype": ConnectorType::Gmail as i64 }),
+        json!({ "__ctype": ConnectorType::Email as i64 }),
     );
     let row = kg.upsert_connector(input).await.unwrap();
     let kg = Arc::new(kg);
@@ -187,13 +187,13 @@ async fn transient_failures_then_success_clears_last_error() {
     let (kg, _dir) = init_kg().await;
     let mut input = upsert(
         "flaky",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Active,
     );
     input.config_json = with_slug(
         "flaky",
-        json!({ "__ctype": ConnectorType::Gmail as i64, "fail_first": 2, "cursor": "recovered" }),
+        json!({ "__ctype": ConnectorType::Email as i64, "fail_first": 2, "cursor": "recovered" }),
     );
     let row = kg.upsert_connector(input).await.unwrap();
     let kg = Arc::new(kg);
@@ -233,13 +233,13 @@ async fn circuit_breaker_sets_error_after_max_failures() {
     let (kg, _dir) = init_kg().await;
     let mut input = upsert(
         "doomed",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Active,
     );
     input.config_json = with_slug(
         "doomed",
-        json!({ "__ctype": ConnectorType::Gmail as i64, "always_fail": true }),
+        json!({ "__ctype": ConnectorType::Email as i64, "always_fail": true }),
     );
     let row = kg.upsert_connector(input).await.unwrap();
     let kg = Arc::new(kg);
@@ -341,13 +341,13 @@ async fn task_panic_is_recovered_then_succeeds() {
     let (kg, _dir) = init_kg().await;
     let mut input = upsert(
         "panic",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Active,
     );
     input.config_json = with_slug(
         "panic",
-        json!({ "__ctype": ConnectorType::Gmail as i64, "panic_first": 1, "cursor": "p1" }),
+        json!({ "__ctype": ConnectorType::Email as i64, "panic_first": 1, "cursor": "p1" }),
     );
     let row = kg.upsert_connector(input).await.unwrap();
     let kg = Arc::new(kg);
@@ -382,7 +382,7 @@ async fn circuit_breaker_trips_on_repeated_panics() {
     let (kg, _dir) = init_kg().await;
     let mut input = upsert(
         "panic-doomed",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Active,
     );
@@ -390,7 +390,7 @@ async fn circuit_breaker_trips_on_repeated_panics() {
     // trip the breaker exactly like three ordinary failures.
     input.config_json = with_slug(
         "panic-doomed",
-        json!({ "__ctype": ConnectorType::Gmail as i64, "panic_first": 3 }),
+        json!({ "__ctype": ConnectorType::Email as i64, "panic_first": 3 }),
     );
     let row = kg.upsert_connector(input).await.unwrap();
     let kg = Arc::new(kg);
@@ -438,13 +438,13 @@ async fn push_mode_blocking_sync_cancels_on_shutdown() {
     let (kg, _dir) = init_kg().await;
     let mut input = upsert(
         "push",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Active,
     );
     input.config_json = with_slug(
         "push",
-        json!({ "__ctype": ConnectorType::Gmail as i64, "mode": "push", "interval_ms": 3600000 }),
+        json!({ "__ctype": ConnectorType::Email as i64, "mode": "push", "interval_ms": 3600000 }),
     );
     let row = kg.upsert_connector(input).await.unwrap();
     let kg = Arc::new(kg);

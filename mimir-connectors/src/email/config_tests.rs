@@ -71,8 +71,8 @@ fn from_config_seeds_cursor_and_slug() {
     let connector =
         EmailConnector::from_config(app_config(), None, Some("17:42".into())).expect("config");
     assert_eq!(connector.id(), "gmail-personal");
-    assert_eq!(connector.connector_type(), ConnectorType::Gmail);
-    assert_eq!(connector.name(), "Gmail");
+    assert_eq!(connector.connector_type(), ConnectorType::Email);
+    assert_eq!(connector.name(), "Email");
     assert_eq!(connector.port(), 993);
     assert_eq!(connector.mailbox(), "INBOX");
     assert_eq!(*connector.last_uid.try_lock().unwrap(), Some((17, 42)));

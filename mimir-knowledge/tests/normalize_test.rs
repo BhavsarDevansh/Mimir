@@ -61,7 +61,7 @@ async fn upsert(kg: &KnowledgeGraph, ct: ConnectorType, slug: &str) -> i32 {
     kg.upsert_connector(UpsertConnectorInput {
         connector_type: ct,
         slug: slug.to_string(),
-        backend: if ct == ConnectorType::Gmail {
+        backend: if ct == ConnectorType::Email {
             "imap".to_string()
         } else {
             "caldav".to_string()
@@ -129,7 +129,7 @@ async fn per_fact_extraction_method_override_wins_over_batch_provenance() {
     // method so `sources.extraction_method_id` records how *this* fact was
     // produced (#234).
     let (kg, _dir) = fresh_kg().await;
-    let email_instance = upsert(&kg, ConnectorType::Gmail, "email-1").await;
+    let email_instance = upsert(&kg, ConnectorType::Email, "email-1").await;
 
     let mut fact = rome_event("17:42", Some(parse_dt("2026-05-07T00:00:00Z")));
     // The batch is LLM-extracted, but this one fact came from a structured
@@ -141,7 +141,7 @@ async fn per_fact_extraction_method_override_wins_over_batch_provenance() {
         vec![fact],
         Provenance::connector(
             email_instance,
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             ExtractionMethod::LlmExtraction,
         ),
     )
@@ -166,7 +166,7 @@ async fn per_fact_extraction_method_override_wins_over_batch_provenance() {
 async fn cross_connector_corroboration_adds_source_and_boosts_confidence() {
     let (kg, _dir) = fresh_kg().await;
     let calendar_instance = upsert(&kg, ConnectorType::Calendar, "calendar-1").await;
-    let gmail_instance = upsert(&kg, ConnectorType::Gmail, "gmail-1").await;
+    let gmail_instance = upsert(&kg, ConnectorType::Email, "gmail-1").await;
 
     // Calendar: a "Trip to Rome" event spanning 2026-05-03 .. 2026-05-07.
     let first = normalize_and_insert(
@@ -197,7 +197,7 @@ async fn cross_connector_corroboration_adds_source_and_boosts_confidence() {
         vec![rome_event("gmail-msg-456", None)],
         Provenance::connector(
             gmail_instance,
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             ExtractionMethod::StructuredParse,
         ),
     )
@@ -329,7 +329,7 @@ async fn connector_fact_missing_raw_reference_is_rejected() {
 #[tokio::test]
 async fn sensitive_fact_persists_its_catalogue_categories() {
     let (kg, _dir) = fresh_kg().await;
-    let gmail_instance = upsert(&kg, ConnectorType::Gmail, "gmail-1").await;
+    let gmail_instance = upsert(&kg, ConnectorType::Email, "gmail-1").await;
 
     // A connector-sourced allergy flagged sensitive with the Allergies (230)
     // category lands as pending_confirmation via insert_sensitive_fact. Its
@@ -362,7 +362,7 @@ async fn sensitive_fact_persists_its_catalogue_categories() {
         vec![fact],
         Provenance::connector(
             gmail_instance,
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             ExtractionMethod::StructuredParse,
         ),
     )

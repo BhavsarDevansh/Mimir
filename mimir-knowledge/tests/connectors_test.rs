@@ -14,7 +14,7 @@ async fn init_kg() -> (KnowledgeGraph, tempfile::TempDir) {
 
 fn gmail_input(slug: &str) -> UpsertConnectorInput {
     UpsertConnectorInput {
-        connector_type: ConnectorType::Gmail,
+        connector_type: ConnectorType::Email,
         slug: slug.to_string(),
         backend: "imap".to_string(),
         display_name: "Personal Gmail".to_string(),
@@ -30,7 +30,7 @@ async fn upsert_creates_connector_with_defaults() {
     let c = kg.upsert_connector(gmail_input("personal")).await.unwrap();
 
     assert_eq!(c.slug, "personal");
-    assert_eq!(c.connector_type_id, ConnectorType::Gmail as i16);
+    assert_eq!(c.connector_type_id, ConnectorType::Email as i16);
     assert_eq!(c.backend, "imap");
     assert_eq!(c.config_json, "{}");
     assert_eq!(c.status(), Some(ConnectorStatus::Setup));
@@ -81,7 +81,7 @@ async fn upsert_on_existing_slug_updates_config_preserves_progress() {
     // Re-upsert with a changed config surface and explicit status/auth.
     let updated = kg
         .upsert_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "personal".to_string(),
             backend: "graph".to_string(),
             display_name: "Work Gmail".to_string(),
@@ -340,12 +340,12 @@ async fn upsert_rejects_type_mismatch_on_existing_slug() {
     // The original row is untouched: still Gmail, still Setup/Unauthenticated.
     let stored = kg.get_connector_by_slug("personal").await.unwrap().unwrap();
     assert_eq!(stored.id, original.id);
-    assert_eq!(stored.connector_type_id, ConnectorType::Gmail as i16);
+    assert_eq!(stored.connector_type_id, ConnectorType::Email as i16);
     assert_eq!(stored.status(), Some(ConnectorStatus::Setup));
 
     // A same-type re-upsert still updates the mutable surface.
     let same_type = UpsertConnectorInput {
-        connector_type: ConnectorType::Gmail,
+        connector_type: ConnectorType::Email,
         slug: "personal".to_string(),
         backend: "graph".to_string(),
         display_name: "Renamed".to_string(),
@@ -355,7 +355,7 @@ async fn upsert_rejects_type_mismatch_on_existing_slug() {
     };
     let updated = kg.upsert_connector(same_type).await.unwrap();
     assert_eq!(updated.id, original.id);
-    assert_eq!(updated.connector_type_id, ConnectorType::Gmail as i16);
+    assert_eq!(updated.connector_type_id, ConnectorType::Email as i16);
     assert_eq!(updated.backend, "graph");
     assert_eq!(updated.status(), Some(ConnectorStatus::Active));
 }
@@ -454,7 +454,7 @@ async fn create_connector_inserts_a_new_instance() {
     let (kg, _dir) = init_kg().await;
     let c = kg.create_connector(gmail_input("personal")).await.unwrap();
     assert_eq!(c.slug, "personal");
-    assert_eq!(c.connector_type_id, ConnectorType::Gmail as i16);
+    assert_eq!(c.connector_type_id, ConnectorType::Email as i16);
     assert_eq!(c.status(), Some(ConnectorStatus::Setup));
     assert_eq!(c.auth_state(), Some(ConnectorAuthState::Unauthenticated));
 
@@ -542,7 +542,7 @@ async fn connector_sourced_fact(kg: &KnowledgeGraph, instance_id: i32, value: &s
         fact_id: fact.id,
         source_type: SourceType::Connector,
         connector_instance_id: Some(instance_id),
-        connector_type: Some(ConnectorType::Gmail),
+        connector_type: Some(ConnectorType::Email),
         raw_reference: Some(format!("raw-{value}")),
         extraction_method: None,
         changed_by: ChangedBy::System,

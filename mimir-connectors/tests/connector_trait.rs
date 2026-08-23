@@ -33,7 +33,7 @@ fn mock_reports_identity_type_and_mode() {
 
     assert_eq!(mock.id(), "mock");
     assert_eq!(mock.name(), "Mock Connector");
-    assert_eq!(mock.connector_type(), ConnectorType::Gmail);
+    assert_eq!(mock.connector_type(), ConnectorType::Email);
     assert!(mock.config_schema().is_object());
 }
 
@@ -218,7 +218,7 @@ async fn trait_is_object_safe() {
     // Sync accessors through the trait object.
     assert_eq!(mock.id(), "mock");
     assert_eq!(mock.name(), "Mock Connector");
-    assert_eq!(mock.connector_type(), ConnectorType::Gmail);
+    assert_eq!(mock.connector_type(), ConnectorType::Email);
     assert!(matches!(mock.mode(), ConnectorMode::Polling { .. }));
     assert!(mock.config_schema().is_object());
 

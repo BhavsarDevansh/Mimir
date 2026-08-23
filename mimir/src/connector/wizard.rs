@@ -38,6 +38,36 @@ const GMAIL_SCOPE: &str = "https://mail.google.com/";
 /// documented OAuth provider). The wizard pre-fills it so the authorize URL
 /// always carries a `scope` parameter.
 const CALDAV_SCOPE: &str = "https://www.googleapis.com/auth/calendar";
+
+/// Microsoft identity platform authorize endpoint, pre-filled for the
+/// Outlook / Office 365 IMAP OAuth path (issue #400). The user still brings
+/// their own app registration: Mimir has no public client ID.
+const MICROSOFT_AUTH_URI: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
+/// Microsoft identity platform token endpoint.
+const MICROSOFT_TOKEN_ENDPOINT: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+/// IMAP XOAUTH2 scope for Outlook / Office 365 plus `offline_access` for
+/// refresh tokens (Microsoft's "authenticate an IMAP application by using
+/// OAuth" docs; the connector keeps a refresh token with skew).
+const MICROSOFT_IMAP_SCOPE: &str =
+    "https://outlook.office.com/IMAP.AccessAsUser.All offline_access";
+/// Email provider presets offered by the wizard (issue #400): each entry
+/// pre-fills IMAP defaults + provider guidance; `Custom IMAP` keeps the
+/// free-form flow. Presets are wizard-side defaults only — the backend stays
+/// `imap` for every provider.
+const EMAIL_PROVIDER_OPTIONS: [&str; 6] = [
+    "Gmail",
+    "Outlook / Office 365",
+    "Yahoo",
+    "Proton Mail (Bridge)",
+    "iCloud",
+    "Custom IMAP",
+];
+/// Calendar provider presets offered by the wizard (issue #400). Outlook /
+/// Office 365 is deliberately absent: Microsoft exposes no public CalDAV
+/// endpoint (the roadmap defers a Microsoft Graph calendar backend as a
+/// follow-on), so a preset would always produce a broken connector.
+const CALENDAR_PROVIDER_OPTIONS: [&str; 4] =
+    ["Google Calendar", "iCloud", "Yahoo", "Custom CalDAV"];
 /// Wizard sync-mode choices for the Gmail IMAP profile (issue #397):
 /// "Continuously — push" maps to `mode: auto` (IDLE when the server
 /// advertises it), "Every N minutes — polling" maps to `mode: poll` plus a
@@ -314,8 +344,8 @@ pub(crate) fn build_wizard_config(
     prompts: &dyn PromptDriver,
 ) -> Result<(Value, WizardCredential), String> {
     match (entry.connector_type.as_str(), entry.backend.as_str()) {
-        ("gmail", "imap") => gmail_imap_config(prompts),
-        ("calendar", "caldav") => caldav_config(prompts),
+        ("email", "imap") => email_imap_config(prompts),
+        ("calendar", "caldav") => calendar_provider_config(prompts),
         ("photos", "local") => photos_config(slug, prompts),
         (connector_type, backend) => Err(format!(
             "no interactive profile for '{connector_type}/{backend}' yet — use the flag form instead, e.g. `mimir connector add {connector_type} --backend {backend} --config-json '{{...}}'`"
@@ -323,24 +353,159 @@ pub(crate) fn build_wizard_config(
     }
 }
 
-/// Gmail IMAP wizard profile: Google defaults for host/port/mailbox, OAuth
-/// (browser login, recommended — Google has retired password IMAP) with the
-/// Google endpoints pre-filled, or app password as a fallback.
-fn gmail_imap_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredential), String> {
+/// Email IMAP wizard profile (issue #400): a provider list (Gmail, Outlook /
+/// Office 365, Yahoo, Proton Mail via the Bridge, iCloud, or a custom IMAP
+/// server) pre-fills the IMAP defaults and provider-specific guidance; the
+/// sync-mode / backfill questions (issue #397) apply to every provider. The
+/// backend stays `imap` for all of them — presets are wizard-side defaults,
+/// never new backends.
+fn email_imap_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredential), String> {
+    let options = EMAIL_PROVIDER_OPTIONS.map(str::to_string).to_vec();
+    let provider = prompts.select("Email provider", &options)?;
+    let preset = email_preset(provider);
+
+    let host_message = if preset.host_help.is_empty() {
+        "IMAP server host".to_string()
+    } else {
+        format!("IMAP server host ({})", preset.host_help)
+    };
     let host = required(
-        prompts.input("IMAP server host", Some("imap.gmail.com")),
+        prompts.input(&host_message, preset.host_default),
         "IMAP server host",
     )?;
-    let port = parse_port(prompts.input("IMAP port (blank = 993)", Some("993"))?)?;
+    let port = parse_port(prompts.input(
+        "IMAP port (blank = 993)",
+        Some(&preset.port_default.to_string()),
+    )?)?;
     let mailbox = required(prompts.input("Mailbox", Some("INBOX")), "Mailbox")?;
     let username = required(
         prompts.input("Account email (IMAP login)", None),
         "Account email",
     )?;
-    // Issue #397: ask the sync-mode decision up front — push (continuous,
-    // `mode: auto` → IDLE when advertised) vs polling with a preset or
-    // custom interval — plus whether the first sync imports the existing
-    // mailbox or starts from "now".
+    let sync = email_sync_questions(prompts)?;
+
+    // Authentication per provider: Gmail offers OAuth first (Google retired
+    // plain password IMAP; app passwords are the fallback), the providers
+    // with an OAuth path but no client ID default to the app password, and
+    // Yahoo / Proton / iCloud are app-password only (issue #400).
+    let (auth, credential) = if let Some(oauth) = preset.oauth {
+        let oauth_first = !preset.app_password_first;
+        let chosen_oauth = prompts.select(
+            "Authentication",
+            &[
+                if oauth_first {
+                    "OAuth 2.0 — browser login (recommended)".to_string()
+                } else {
+                    "App password (recommended — no app registration needed)".to_string()
+                },
+                if oauth_first {
+                    "App password".to_string()
+                } else {
+                    "OAuth 2.0 — browser login".to_string()
+                },
+            ],
+        )? == if oauth_first { 0 } else { 1 };
+        if chosen_oauth {
+            email_oauth_questions(prompts, &oauth, &username)?
+        } else {
+            let password =
+                required_secret(prompts.password(preset.app_password_hint), "App password")?;
+            (
+                json!({"kind": "app_password", "username": username}),
+                WizardCredential::Secret(password),
+            )
+        }
+    } else {
+        let password = required_secret(prompts.password(preset.app_password_hint), "App password")?;
+        (
+            json!({"kind": "app_password", "username": username}),
+            WizardCredential::Secret(password),
+        )
+    };
+    Ok((email_config(&host, port, &mailbox, &sync, auth), credential))
+}
+
+/// Resolve the OAuth branch for an email provider: prompts the endpoints and
+/// scopes (pre-filled for known providers, free-form for custom IMAP) and
+/// returns the auth block plus the credential to carry out of the flow. The
+/// OAuth client secret never enters `config_json` — it travels in the
+/// credential bundle.
+fn email_oauth_questions(
+    prompts: &dyn PromptDriver,
+    preset: &EmailOAuthPreset,
+    username: &str,
+) -> Result<(Value, WizardCredential), String> {
+    let auth_uri = required(
+        prompts.input("Authorization endpoint URL", preset.auth_uri),
+        "Authorization endpoint URL",
+    )?;
+    let token_endpoint = required(
+        prompts.input("Token endpoint URL", preset.token_endpoint),
+        "Token endpoint URL",
+    )?;
+    let client_id = required(
+        prompts.input(preset.client_id_help, None),
+        "OAuth client ID",
+    )?;
+    let client_secret = prompts.password("OAuth client secret (blank if none)")?;
+    let client_secret = if client_secret.trim().is_empty() {
+        None
+    } else {
+        Some(client_secret)
+    };
+    let scopes_raw = prompts.input(
+        "OAuth scopes (comma or space-separated)",
+        preset.default_scopes,
+    )?;
+    let auth = json!({
+        "kind": "oauth",
+        "username": username,
+        "auth_uri": auth_uri,
+        "token_endpoint": token_endpoint,
+        "client_id": client_id,
+        "scopes": parse_scopes(&scopes_raw),
+    });
+    Ok((auth, WizardCredential::OAuth { client_secret }))
+}
+
+/// Assemble the shared email `config_json` from the prompted values (issue
+/// #397): `mode` is `auto` (IDLE when advertised) for push, `poll` plus
+/// `poll_interval_secs` for polling, and `initial_backfill` carries the
+/// existing-content choice.
+fn email_config(
+    host: &str,
+    port: Option<u16>,
+    mailbox: &str,
+    sync: &EmailSyncChoices,
+    auth: Value,
+) -> Value {
+    let mut config = json!({
+        "host": host,
+        "mailbox": mailbox,
+        "mode": if sync.push { "auto" } else { "poll" },
+        "initial_backfill": sync.backfill,
+        "auth": auth,
+    });
+    if let Some(port) = port {
+        config["port"] = json!(port);
+    }
+    if let Some(secs) = sync.poll_interval_secs {
+        config["poll_interval_secs"] = json!(secs);
+    }
+    config
+}
+
+/// The wizard's sync decisions for an email connector (issue #397), shared
+/// by every provider preset: push (continuous, `mode: auto` → IDLE when the
+/// server advertises it) vs polling with a preset or custom interval, plus
+/// whether the first sync imports the existing mailbox or starts from "now".
+struct EmailSyncChoices {
+    push: bool,
+    poll_interval_secs: Option<u64>,
+    backfill: bool,
+}
+
+fn email_sync_questions(prompts: &dyn PromptDriver) -> Result<EmailSyncChoices, String> {
     let push = prompts.select(
         "Sync mode",
         &[SYNC_MODE_PUSH.to_string(), SYNC_MODE_POLL.to_string()],
@@ -361,70 +526,120 @@ fn gmail_imap_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredent
         "Existing mailbox content",
         &[BACKFILL_IMPORT.to_string(), BACKFILL_NEW_ONLY.to_string()],
     )? == 0;
-    let oauth = prompts.select(
-        "Authentication",
-        &[
-            "OAuth 2.0 — browser login (recommended)".to_string(),
-            "App password".to_string(),
-        ],
-    )? == 0;
-    if oauth {
-        let client_id = required(
-            prompts.input(
-                "OAuth client ID (Google Cloud Console → Credentials → OAuth client)",
-                None,
-            ),
-            "OAuth client ID",
-        )?;
-        let client_secret = prompts.password("OAuth client secret (blank if none)")?;
-        let client_secret = if client_secret.trim().is_empty() {
-            None
-        } else {
-            Some(client_secret)
-        };
-        let auth = json!({
-            "kind": "oauth",
-            "username": username,
-            "auth_uri": GOOGLE_AUTH_URI,
-            "token_endpoint": GOOGLE_TOKEN_ENDPOINT,
-            "client_id": client_id,
-            "scopes": [GMAIL_SCOPE],
-        });
-        let mut config = json!({
-            "host": host,
-            "mailbox": mailbox,
-            "mode": if push { "auto" } else { "poll" },
-            "initial_backfill": backfill,
-            "auth": auth,
-        });
-        if let Some(port) = port {
-            config["port"] = json!(port);
-        }
-        if let Some(secs) = poll_interval_secs {
-            config["poll_interval_secs"] = json!(secs);
-        }
-        Ok((config, WizardCredential::OAuth { client_secret }))
-    } else {
-        let password = required_secret(
-            prompts.password(
-                "App password (Google Account → Security → 2-Step Verification → App passwords)",
-            ),
-            "App password",
-        )?;
-        let mut config = json!({
-            "host": host,
-            "mailbox": mailbox,
-            "mode": if push { "auto" } else { "poll" },
-            "initial_backfill": backfill,
-            "auth": {"kind": "app_password", "username": username},
-        });
-        if let Some(port) = port {
-            config["port"] = json!(port);
-        }
-        if let Some(secs) = poll_interval_secs {
-            config["poll_interval_secs"] = json!(secs);
-        }
-        Ok((config, WizardCredential::Secret(password)))
+    Ok(EmailSyncChoices {
+        push,
+        poll_interval_secs,
+        backfill,
+    })
+}
+
+/// Wizard-side email provider defaults (issue #400). Every preset is a
+/// default + guidance bundle: the backend stays `imap` for all of them.
+struct EmailPreset {
+    /// Default IMAP host; `None` for the free-form custom flow.
+    host_default: Option<&'static str>,
+    /// Extra guidance for the host prompt (e.g. Proton Mail Bridge).
+    host_help: &'static str,
+    port_default: u16,
+    /// Where to create the app password, embedded in the prompt label.
+    app_password_hint: &'static str,
+    /// OAuth preset; `None` = the provider is app-password only.
+    oauth: Option<EmailOAuthPreset>,
+    /// `true` lists the app password first (the zero-setup path); `false`
+    /// lists OAuth first (Gmail — Google retired plain password IMAP).
+    app_password_first: bool,
+}
+
+/// OAuth endpoint/scope defaults for one email provider (issue #400).
+struct EmailOAuthPreset {
+    /// Authorization endpoint; `None` for the free-form custom flow.
+    auth_uri: Option<&'static str>,
+    /// Token endpoint; `None` for the free-form custom flow.
+    token_endpoint: Option<&'static str>,
+    /// Default scope string; `None` for the free-form custom flow.
+    default_scopes: Option<&'static str>,
+    /// Where the user obtains the OAuth client ID.
+    client_id_help: &'static str,
+}
+
+/// Provider → defaults table for the email wizard (issue #400). The index
+/// matches [`EMAIL_PROVIDER_OPTIONS`]; the trailing arm is `Custom IMAP`.
+fn email_preset(provider: usize) -> EmailPreset {
+    match provider {
+        // Gmail: Google endpoints pre-filled; OAuth first (recommended),
+        // app password as the fallback.
+        0 => EmailPreset {
+            host_default: Some("imap.gmail.com"),
+            host_help: "",
+            port_default: 993,
+            app_password_hint: "App password (Google Account → Security → 2-Step Verification → App passwords)",
+            oauth: Some(EmailOAuthPreset {
+                auth_uri: Some(GOOGLE_AUTH_URI),
+                token_endpoint: Some(GOOGLE_TOKEN_ENDPOINT),
+                default_scopes: Some(GMAIL_SCOPE),
+                client_id_help: "OAuth client ID (Google Cloud Console → Credentials → OAuth client)",
+            }),
+            app_password_first: false,
+        },
+        // Outlook / Office 365: Microsoft identity platform endpoints; app
+        // password first (no app registration needed), OAuth for users who
+        // already have an Entra ID app registration.
+        1 => EmailPreset {
+            host_default: Some("outlook.office365.com"),
+            host_help: "",
+            port_default: 993,
+            app_password_hint: "App password (Microsoft account → Security → Advanced security options → App passwords)",
+            oauth: Some(EmailOAuthPreset {
+                auth_uri: Some(MICROSOFT_AUTH_URI),
+                token_endpoint: Some(MICROSOFT_TOKEN_ENDPOINT),
+                default_scopes: Some(MICROSOFT_IMAP_SCOPE),
+                client_id_help: "OAuth client ID (Entra ID app registration; the loopback redirect URI must be registered)",
+            }),
+            app_password_first: true,
+        },
+        // Yahoo: app password only (2-Step Verification required).
+        2 => EmailPreset {
+            host_default: Some("imap.mail.yahoo.com"),
+            host_help: "",
+            port_default: 993,
+            app_password_hint: "App password (Yahoo Account Security → Generate app password; requires 2-Step Verification)",
+            oauth: None,
+            app_password_first: true,
+        },
+        // Proton Mail: no public IMAP — the Bridge exposes a local IMAP
+        // server on 127.0.0.1:1143 and issues its own app passwords.
+        3 => EmailPreset {
+            host_default: Some("127.0.0.1"),
+            host_help: "Proton Mail Bridge exposes a local IMAP server — start the Bridge and log in first",
+            port_default: 1143,
+            app_password_hint: "App password (Proton Mail Bridge → Generate Proton Mail Bridge app password)",
+            oauth: None,
+            app_password_first: true,
+        },
+        // iCloud: app password only (two-factor authentication required).
+        4 => EmailPreset {
+            host_default: Some("imap.mail.me.com"),
+            host_help: "",
+            port_default: 993,
+            app_password_hint: "App password (appleid.apple.com → Sign-In & Security → App-Specific Passwords; requires two-factor authentication)",
+            oauth: None,
+            app_password_first: true,
+        },
+        // Custom IMAP: free-form host/port/mailbox; app password first, or
+        // OAuth with user-supplied endpoints.
+        _ => EmailPreset {
+            host_default: None,
+            host_help: "",
+            port_default: 993,
+            app_password_hint: "App password",
+            oauth: Some(EmailOAuthPreset {
+                auth_uri: None,
+                token_endpoint: None,
+                default_scopes: None,
+                client_id_help: "OAuth client ID",
+            }),
+            app_password_first: true,
+        },
     }
 }
 
@@ -450,62 +665,167 @@ fn interval_secs(minutes: u64) -> Result<u64, String> {
         .ok_or_else(|| "poll interval is too large".to_string())
 }
 
-/// CalDAV calendar wizard: collection URL + username, then app password
-/// (the common provider path) or OAuth.
-fn caldav_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredential), String> {
-    let calendar_url = required(
-        prompts.input("Calendar (CalDAV) collection URL", None),
-        "Calendar URL",
-    )?;
-    let username = required(prompts.input("Username", None), "Username")?;
-    let oauth = prompts.select(
-        "Authentication",
-        &[
-            "App password".to_string(),
-            "OAuth 2.0 — browser login".to_string(),
-        ],
-    )? == 1;
-    if oauth {
-        let auth_uri = required(
-            prompts.input("Authorization endpoint URL", None),
-            "Authorization endpoint URL",
-        )?;
-        let token_endpoint = required(
-            prompts.input("Token endpoint URL", None),
-            "Token endpoint URL",
-        )?;
-        let client_id = required(prompts.input("OAuth client ID", None), "OAuth client ID")?;
-        let client_secret = prompts.password("OAuth client secret (blank if none)")?;
-        let client_secret = if client_secret.trim().is_empty() {
-            None
-        } else {
-            Some(client_secret)
-        };
-        let scopes_raw = prompts.input(
-            "OAuth scopes (comma or space-separated)",
-            Some(CALDAV_SCOPE),
-        )?;
-        let auth = json!({
-            "kind": "oauth",
-            "username": username,
-            "auth_uri": auth_uri,
-            "token_endpoint": token_endpoint,
-            "client_id": client_id,
-            "scopes": parse_scopes(&scopes_raw),
-        });
-        Ok((
-            json!({ "calendar_url": calendar_url, "auth": auth }),
-            WizardCredential::OAuth { client_secret },
-        ))
-    } else {
-        let password = required_secret(prompts.password("App password"), "App password")?;
-        Ok((
-            json!({
-                "calendar_url": calendar_url,
-                "auth": {"kind": "app_password", "username": username},
-            }),
-            WizardCredential::Secret(password),
-        ))
+/// Calendar (CalDAV) wizard profile (issue #400): a provider list (Google
+/// Calendar, iCloud, Yahoo, or a custom CalDAV server) pre-fills the
+/// collection-URL defaults and provider guidance. Outlook / Office 365 is
+/// absent because Microsoft exposes no public CalDAV endpoint (the roadmap
+/// defers a Microsoft Graph calendar backend as a follow-on).
+fn calendar_provider_config(
+    prompts: &dyn PromptDriver,
+) -> Result<(Value, WizardCredential), String> {
+    let options = CALENDAR_PROVIDER_OPTIONS.map(str::to_string).to_vec();
+    let provider = prompts.select("Calendar provider", &options)?;
+    match provider {
+        // Google Calendar: no app passwords — OAuth with the Google
+        // endpoints pre-filled. The primary calendar's CalDAV collection URL
+        // embeds the account email, so the default is computed after the
+        // username prompt (developers.google.com/calendar/caldav).
+        0 => {
+            let username = required(prompts.input("Google account email", None), "Username")?;
+            let default_url =
+                format!("https://apidata.googleusercontent.com/caldav/v2/{username}/events");
+            let calendar_url = required(
+                prompts.input(
+                    "Calendar (CalDAV) collection URL (defaults to the primary calendar)",
+                    Some(&default_url),
+                ),
+                "Calendar URL",
+            )?;
+            let client_id = required(
+                prompts.input(
+                    "OAuth client ID (Google Cloud Console → Credentials → OAuth client)",
+                    None,
+                ),
+                "OAuth client ID",
+            )?;
+            let client_secret = prompts.password("OAuth client secret (blank if none)")?;
+            let client_secret = if client_secret.trim().is_empty() {
+                None
+            } else {
+                Some(client_secret)
+            };
+            let scopes_raw = prompts.input(
+                "OAuth scopes (comma or space-separated)",
+                Some(CALDAV_SCOPE),
+            )?;
+            let auth = json!({
+                "kind": "oauth",
+                "username": username,
+                "auth_uri": GOOGLE_AUTH_URI,
+                "token_endpoint": GOOGLE_TOKEN_ENDPOINT,
+                "client_id": client_id,
+                "scopes": parse_scopes(&scopes_raw),
+            });
+            Ok((
+                json!({ "calendar_url": calendar_url, "auth": auth }),
+                WizardCredential::OAuth { client_secret },
+            ))
+        }
+        // iCloud: app-specific password only (two-factor authentication
+        // required); the per-account collection URL is not predictable, so
+        // the server URL is the default and the prompt says where to find
+        // the full one.
+        1 => {
+            let calendar_url = required(
+                prompts.input(
+                    "Calendar (CalDAV) collection URL (iCloud: paste your calendar's full URL, e.g. https://caldav.icloud.com/<id>/calendars/<name>/)",
+                    Some("https://caldav.icloud.com/"),
+                ),
+                "Calendar URL",
+            )?;
+            let username = required(prompts.input("Apple ID email", None), "Username")?;
+            let password = required_secret(
+                prompts.password("App password (appleid.apple.com → Sign-In & Security → App-Specific Passwords; requires two-factor authentication)"),
+                "App password",
+            )?;
+            Ok((
+                json!({
+                    "calendar_url": calendar_url,
+                    "auth": {"kind": "app_password", "username": username},
+                }),
+                WizardCredential::Secret(password),
+            ))
+        }
+        // Yahoo: app password only (2-Step Verification required).
+        2 => {
+            let calendar_url = required(
+                prompts.input(
+                    "Calendar (CalDAV) collection URL (Yahoo: your account's calendar URL under caldav.calendar.yahoo.com)",
+                    Some("https://caldav.calendar.yahoo.com/"),
+                ),
+                "Calendar URL",
+            )?;
+            let username = required(prompts.input("Yahoo email", None), "Username")?;
+            let password = required_secret(
+                prompts.password("App password (Yahoo Account Security → Generate app password; requires 2-Step Verification)"),
+                "App password",
+            )?;
+            Ok((
+                json!({
+                    "calendar_url": calendar_url,
+                    "auth": {"kind": "app_password", "username": username},
+                }),
+                WizardCredential::Secret(password),
+            ))
+        }
+        // Custom CalDAV: the original free-form flow, unchanged.
+        _ => {
+            let calendar_url = required(
+                prompts.input("Calendar (CalDAV) collection URL", None),
+                "Calendar URL",
+            )?;
+            let username = required(prompts.input("Username", None), "Username")?;
+            let oauth = prompts.select(
+                "Authentication",
+                &[
+                    "App password".to_string(),
+                    "OAuth 2.0 — browser login".to_string(),
+                ],
+            )? == 1;
+            if oauth {
+                let auth_uri = required(
+                    prompts.input("Authorization endpoint URL", None),
+                    "Authorization endpoint URL",
+                )?;
+                let token_endpoint = required(
+                    prompts.input("Token endpoint URL", None),
+                    "Token endpoint URL",
+                )?;
+                let client_id =
+                    required(prompts.input("OAuth client ID", None), "OAuth client ID")?;
+                let client_secret = prompts.password("OAuth client secret (blank if none)")?;
+                let client_secret = if client_secret.trim().is_empty() {
+                    None
+                } else {
+                    Some(client_secret)
+                };
+                let scopes_raw = prompts.input(
+                    "OAuth scopes (comma or space-separated)",
+                    Some(CALDAV_SCOPE),
+                )?;
+                let auth = json!({
+                    "kind": "oauth",
+                    "username": username,
+                    "auth_uri": auth_uri,
+                    "token_endpoint": token_endpoint,
+                    "client_id": client_id,
+                    "scopes": parse_scopes(&scopes_raw),
+                });
+                Ok((
+                    json!({ "calendar_url": calendar_url, "auth": auth }),
+                    WizardCredential::OAuth { client_secret },
+                ))
+            } else {
+                let password = required_secret(prompts.password("App password"), "App password")?;
+                Ok((
+                    json!({
+                        "calendar_url": calendar_url,
+                        "auth": {"kind": "app_password", "username": username},
+                    }),
+                    WizardCredential::Secret(password),
+                ))
+            }
+        }
     }
 }
 

@@ -44,7 +44,7 @@ fn default_preserves_legacy_identity() {
     let mock = MockConnector::default();
     assert_eq!(mock.id(), "mock");
     assert_eq!(mock.name(), "Mock Connector");
-    assert_eq!(mock.connector_type(), ConnectorType::Gmail);
+    assert_eq!(mock.connector_type(), ConnectorType::Email);
     assert!(matches!(mock.mode(), ConnectorMode::Polling { .. }));
     assert!(mock.config_schema().is_object());
 }
@@ -83,7 +83,7 @@ fn from_config_reads_injected_identity() {
 fn from_config_defaults_identity_when_unset() {
     let mock = MockConnector::from_config(json!({})).unwrap();
     assert_eq!(mock.id(), "mock");
-    assert_eq!(mock.connector_type(), ConnectorType::Gmail);
+    assert_eq!(mock.connector_type(), ConnectorType::Email);
 }
 
 #[test]
@@ -442,31 +442,31 @@ async fn recorder_observes_sync_options() {
 fn factory_builds_configured_mock() {
     let registry = ConnectorRegistry::new();
     registry
-        .register(ConnectorType::Gmail, "mock", MockConnectorFactory)
+        .register(ConnectorType::Email, "mock", MockConnectorFactory)
         .unwrap();
     let config = json!({
         "__slug": "gmail-mock",
-        "__ctype": ConnectorType::Gmail as i16,
+        "__ctype": ConnectorType::Email as i16,
         "cursor": "f1",
         "facts": [person_fact("Alice", "works_at", "Acme", "m-1")],
     });
     let connector = registry
-        .create(ConnectorType::Gmail, "mock", config)
+        .create(ConnectorType::Email, "mock", config)
         .unwrap();
     assert_eq!(connector.id(), "gmail-mock");
-    assert_eq!(connector.connector_type(), ConnectorType::Gmail);
+    assert_eq!(connector.connector_type(), ConnectorType::Email);
 }
 
 #[test]
 fn factory_invalid_config_returns_config_error() {
     let registry = ConnectorRegistry::new();
     registry
-        .register(ConnectorType::Gmail, "mock", MockConnectorFactory)
+        .register(ConnectorType::Email, "mock", MockConnectorFactory)
         .unwrap();
     // `interval_ms` expects a number; a string is invalid.
     let err = registry
         .create(
-            ConnectorType::Gmail,
+            ConnectorType::Email,
             "mock",
             json!({ "interval_ms": "oops" }),
         )
@@ -533,7 +533,7 @@ fn from_config_rejects_unknown_ctype() {
 #[test]
 fn from_config_absent_ctype_defaults_to_gmail() {
     let mock = MockConnector::from_config(json!({})).unwrap();
-    assert_eq!(mock.connector_type(), ConnectorType::Gmail);
+    assert_eq!(mock.connector_type(), ConnectorType::Email);
 }
 
 #[tokio::test]

@@ -118,7 +118,7 @@ CREATE TABLE facts (
 | Learning Mode | Initial Confidence | Basis |
 |---|---|---|
 | Explicit statement | 1.0 | User said it. Immutable barring explicit correction. |
-| Connector extraction | 0.70–0.90 | Per-connector reliability score tracked in Rust (e.g., Calendar 0.90, Gmail 0.85). |
+| Connector extraction | 0.70–0.90 | Per-connector reliability score tracked in Rust (e.g., Calendar 0.90, Email 0.85). |
 | Casual mention | 0.30 | Mentioned in passing. Low but real. |
 | Inference | Weighted avg | `avg(source_fact_confidences) × 0.8^depth`. Depth=1 from 0.90 source → 0.72. |
 

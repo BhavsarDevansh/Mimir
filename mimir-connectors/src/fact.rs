@@ -5,7 +5,7 @@
 //! no user action). [`connector_fact`] owns that boilerplate once so a new
 //! connector cannot silently drift on a default (e.g. forgetting
 //! `is_correction: false`), and the per-shape fields are the arguments.
-//! Compiled whenever any backend feature (`photos`, `calendar`, `gmail`) is
+//! Compiled whenever any backend feature (`photos`, `calendar`, `email`) is
 //! enabled, or under `cfg(test)` for the module's own unit tests, so the
 //! framework stays warning-free under `--no-default-features` (issue #342).
 

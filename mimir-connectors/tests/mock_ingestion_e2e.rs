@@ -70,14 +70,14 @@ fn literal_fact(subject: &str, rel: &str, object: &str, raw: &str) -> MockFactCo
 fn mock_registry() -> Arc<ConnectorRegistry> {
     let registry = ConnectorRegistry::new();
     registry
-        .register(ConnectorType::Gmail, "mock", MockConnectorFactory)
+        .register(ConnectorType::Email, "mock", MockConnectorFactory)
         .unwrap();
     Arc::new(registry)
 }
 
 fn upsert_mock(slug: &str, config: serde_json::Value) -> UpsertConnectorInput {
     UpsertConnectorInput {
-        connector_type: ConnectorType::Gmail,
+        connector_type: ConnectorType::Email,
         slug: slug.to_string(),
         backend: "mock".to_string(),
         display_name: slug.to_string(),
@@ -128,7 +128,7 @@ async fn assert_connector_source(
         sources.iter().any(|s| {
             s.source_type_id == SourceType::Connector as i16
                 && s.connector_instance_id == Some(instance_id)
-                && s.connector_type_id == Some(ConnectorType::Gmail as i16)
+                && s.connector_type_id == Some(ConnectorType::Email as i16)
                 && s.raw_reference.as_deref() == Some(raw_reference)
                 && s.extraction_method_id == Some(ExtractionMethod::StructuredParse as i16)
         }),

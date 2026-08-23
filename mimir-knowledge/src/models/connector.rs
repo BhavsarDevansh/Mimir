@@ -48,7 +48,7 @@ impl Connector {
     /// Typed connector kind, or `None` if the stored id is unknown.
     pub fn connector_type(&self) -> Option<ConnectorType> {
         match self.connector_type_id {
-            x if x == ConnectorType::Gmail as i16 => Some(ConnectorType::Gmail),
+            x if x == ConnectorType::Email as i16 => Some(ConnectorType::Email),
             x if x == ConnectorType::Calendar as i16 => Some(ConnectorType::Calendar),
             x if x == ConnectorType::Photos as i16 => Some(ConnectorType::Photos),
             x if x == ConnectorType::LinkedIn as i16 => Some(ConnectorType::LinkedIn),

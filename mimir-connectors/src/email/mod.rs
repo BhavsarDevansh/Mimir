@@ -1,4 +1,4 @@
-//! IMAP email connector (Phase 3 C5 / #199), gated by the `gmail` feature.
+//! IMAP email connector (Phase 3 C5 / #199), gated by the `email` feature.
 //!
 //! - `config` — connector configuration types, defaults, and cursor encoding.
 //! - `connector` — the [`EmailConnector`] implementation and its two-step

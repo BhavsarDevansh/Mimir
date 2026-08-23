@@ -14,7 +14,7 @@ When Mimir learns something, it looks at **how** it learned it:
 | System operation | 1.0 | Internal, deterministic. |
 | Casual mention in chat | 0.30 | Passing thought, not an assertion. |
 | Imported from a file | 0.80 | Bulk data, verified later. |
-| Extracted from Gmail | 0.85 | Per-connector reliability score. |
+| Extracted from Email | 0.85 | Per-connector reliability score. |
 | Extracted from Calendar | 0.90 | Calendar data is usually accurate. |
 | Reasoned by inference | Varies | Depends on parent facts and depth. |
 
@@ -62,9 +62,9 @@ Some facts are flagged as needing recalculation (`stale_confidence`). The nightl
 
 ## Connector Reliability
 
-Each connector (Gmail, Calendar, etc.) has a reliability score. When Mimir extracts a fact from that connector, the fact inherits the connector's current score.
+Each connector (Email, Calendar, etc.) has a reliability score. When Mimir extracts a fact from that connector, the fact inherits the connector's current score.
 
-If you correct a fact from Gmail, Gmail's score drops slightly. If a Gmail fact is later confirmed by another source, Gmail's score rises slightly. This only affects **future** facts — old facts keep the score they had when they were created.
+If you correct a fact from an email connector, that connector's score drops slightly. If the fact is later confirmed by another source, the score rises slightly. This only affects **future** facts — old facts keep the score they had when they were created.
 
 ## No Decay, No Guessing
 

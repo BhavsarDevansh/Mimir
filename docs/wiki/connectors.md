@@ -15,19 +15,19 @@ Importantly, connectors are **not** a separate pipeline. They push data through 
 **The Photos, Calendar, and Email (IMAP) connectors sync data and emit facts.** As of this version:
 
 - The `mimir-connectors` crate exists and is wired into the workspace.
-- The feature flags for the three core connector types (`photos`, `calendar`, `gmail`) are declared.
+- The feature flags for the three core connector types (`photos`, `calendar`, `email`) are declared.
 - The database-access boundary is in place: connectors talk to the knowledge graph only through its public facade and never touch the database pool directly.
-- The `connectors` instance-registry table exists (issue #179 / F2). Each row is one configured connector instance (e.g. a single Gmail account) and stores its type, backend, config, lifecycle status (`Setup`/`Active`/ `Paused`/`Error`), auth state (`Unauthenticated`/`Authenticated`/`Expired`), sync cursor, last sync time, and last error — so connectors survive daemon restarts. The `KnowledgeGraph` facade exposes `list_connectors`, `get_connector_by_slug`, `upsert_connector`, `update_sync_cursor`, `update_durable_state`, `update_sync_progress_and_durable_state`, `touch_last_sync`, `set_connector_status`, and `set_auth_state`.
+- The `connectors` instance-registry table exists (issue #179 / F2). Each row is one configured connector instance (e.g. a single email account) and stores its type, backend, config, lifecycle status (`Setup`/`Active`/ `Paused`/`Error`), auth state (`Unauthenticated`/`Authenticated`/`Expired`), sync cursor, last sync time, and last error — so connectors survive daemon restarts. The `KnowledgeGraph` facade exposes `list_connectors`, `get_connector_by_slug`, `upsert_connector`, `update_sync_cursor`, `update_durable_state`, `update_sync_progress_and_durable_state`, `touch_last_sync`, `set_connector_status`, and `set_auth_state`.
 
 The first real backend is in: the **Photos** local-filesystem connector (issue #195 / C1) — a read-only `notify` file watcher that extracts EXIF GPS + datetime and emits one fact per photo (`took_photo_at <place>`, `visited <coords-label>`, or `took_photo <rel_path>`, depending on what the GPS resolves; see [Photos Connector](photos-connector.md)). The **Calendar** connector (see [Calendar Connector](calendar-connector.md)) speaks CalDAV and syncs events with an incremental sync-token cursor; its `extract()` turns VEVENTs into the appointment fact cluster (`user has_event <event>` typed `EventType::Appointment`, `<event> located_in <place>`, `<attendee> attending <event>`) and its `act()` write-back creates/updates/deletes remote events (C4 / #198). The **Email** connector (see [Email Connector](email-connector.md)) speaks IMAP — `LOGIN` / `AUTHENTICATE XOAUTH2`, `IDLE` push with a polling fallback, and `UID FETCH` incremental sync with a UIDVALIDITY-safe cursor; its `extract()` runs a deterministic cascade (iMIP invites via C6 / #200, `schema.org` JSON-LD reservations via #249) with a last-resort LLM layer for unstructured prose such as flight and booking confirmations (C7 / #201). The `Connector` **trait and its data types are defined** (issue #183 / F6): every connector implements an async `Connector` interface with `sync` (fetch raw items) → `extract` (produce `NormalizedFact`s), plus `authenticate`, `health`, optional `act` write-back, and `forget`.
 
-**The multi-backend registry is in place (issue #184 / F7).** The `ConnectorRegistry` maps each `(connector_type, backend)` pair — e.g. `(Email, imap)` or `(Calendar, caldav)` — to a `ConnectorFactory` that constructs the right implementation from a connector's stored config. A connector *type* is the reliability/provenance axis; a *backend* is the provider implementation chosen per instance. Adding a new backend is a new factory registration — no database change — and many backends can coexist under one type. Reliability stays per-type, so a Gmail-IMAP fact and a future Gmail-Graph fact share the same confidence scoring. The configurable mock harness is now real (issue #190 / F13): see [Mock Connector](mock-connector.md).
+**The multi-backend registry is in place (issue #184 / F7).** The `ConnectorRegistry` maps each `(connector_type, backend)` pair — e.g. `(Email, imap)` or `(Calendar, caldav)` — to a `ConnectorFactory` that constructs the right implementation from a connector's stored config. A connector *type* is the reliability/provenance axis; a *backend* is the provider implementation chosen per instance. Adding a new backend is a new factory registration — no database change — and many backends can coexist under one type. Reliability stays per-type, so an Email-IMAP fact and a future Microsoft-Graph email fact share the same reliability level. The configurable mock harness is now real (issue #190 / F13): see [Mock Connector](mock-connector.md).
 
 **The supervised lifecycle is in place (issue #185 / F8).** A `ConnectorSupervisor` owns one background task per connector whose lifecycle status is `Active`, and centralises everything needed to keep a connector running safely: spawn on startup, exponential backoff and restart on a failed sync or a task panic, a circuit breaker that moves a connector to `Error` after repeated consecutive failures (so it does not hot-loop), pausing when the service reports expired auth, graceful shutdown over a shared `watch` channel, and persistence of each connector's sync cursor, so a restart resumes from where the last completed sync left off. `Paused`, `Error`, and `Setup` connectors are not auto-started. The daemon owns the supervisor at startup (A1 / #202): it restores `Active` runners, drains them on graceful shutdown, and exposes the action routes (A2 / #203) — `POST /connectors/{id}/pause` and `/resume` — so `mimir stop` does drive the supervisor. `ConnectorSupervisor::start(id)` (re-spawn one connector) is the internal supervisor method behind `resume`, not an HTTP route. The `mimir connector …` CLI plumbing is A3 (#204). Lifecycle operations are safe under concurrency (issue #266): `start` / `resume` / `pause` and the delete route are serialised per connector, so two overlapping `resume` calls can never spawn two runners for the same connector, a `pause` racing a `resume` can never leave a paused connector still running in the background, and stopping a connector always waits for its in-flight sync to fully unwind before returning.
 
 **Manual sync triggering is in place (issue #186 / F9).** The supervisor can be asked to sync a connector immediately, instead of waiting for its next polling interval. A `trigger_sync` call delivers options to the connector's runner — `--full` forces a complete re-fetch (ignoring the saved cursor) and `--since` limits the window — and waits for that cycle to finish, returning how many items it fetched. Concurrent triggers on the same connector are serialised (they queue and run one at a time, never in parallel), and triggering a connector that is paused or errored reports that it is not running. This is the library building block behind `POST /connectors/{id}/sync` (A2 / #203) and the `mimir connector sync <slug> [--full|--since]` CLI command (A3 / #204). Push-style connectors (like the Email connector's IMAP IDLE mode) do not have a polling interval to preempt, so manual triggers are not supported for them yet.
 
-**The shared ingestion boundary is in place (issue #181 / F4).** Connectors build `NormalizedFact`s from their items and call `mimir_knowledge::normalize::normalize_and_insert` with a connector `Provenance`, funnelling through the exact same entity-resolution → confidence → sensitivity-gate → insert pipeline as the `remember.chat` hook's conversational extraction. That means connector facts get corroboration for free: a Gmail flight fact and a Calendar event describing the same trip corroborate the single knowledge-graph fact (a source is added, confidence is boosted) instead of creating a duplicate.
+**The shared ingestion boundary is in place (issue #181 / F4).** Connectors build `NormalizedFact`s from their items and call `mimir_knowledge::normalize::normalize_and_insert` with a connector `Provenance`, funnelling through the exact same entity-resolution → confidence → sensitivity-gate → insert pipeline as the `remember.chat` hook's conversational extraction. That means connector facts get corroboration for free: an Email flight fact and a Calendar event describing the same date corroborate the single knowledge-graph fact (a source is added, confidence is boosted) instead of creating a duplicate.
 
 **The connector secret store is in place (issue #187 / F10).** A single `SecretStore` handles every auth kind (OAuth 2.0, API token, app password), persisted as one `0600` JSON file per connector under `~/.local/share/mimir/secrets/`. Loads fail closed if permissions are too loose, writes are atomic, and slugs are validated against path traversal. See [How connector credentials are stored](#how-connector-credentials-are-stored) below.
 
@@ -44,7 +44,7 @@ With the default `secrets.backend = "file"`, Mimir stores each connector's crede
 
 Three kinds of credential are supported, all in the same store:
 
-- **OAuth 2.0** — access token + optional refresh token + optional expiry (Gmail, Google Calendar).
+- **OAuth 2.0** — access token + optional refresh token + optional expiry (Gmail, Outlook/Office 365, Google Calendar).
 - **API token** — a single bearer token (Home Assistant, GitHub PAT).
 - **App password** — a single password string (Fastmail, legacy IMAP).
 
@@ -100,10 +100,13 @@ The `mimir connector` command group (A3 / #204) plumbs these routes so you never
 # Interactive wizard (recommended): picks the type from the daemon's catalog,
 # defaults the name/slug, asks how the connector should sync (continuous push
 # vs polling with a preset/custom interval) and whether to import existing
-# content on the first sync, then drives authentication — browser OAuth for
-# Gmail (Google endpoints pre-filled, your own OAuth client ID) or app
-# passwords. Once credentials are in, the wizard activates the connector and
-# syncing starts automatically — no manual resume/sync needed.
+# content on the first sync, then drives authentication. Email presets
+# (issue #400) pre-fill the provider defaults — Gmail (Google endpoints
+# pre-filled, your own OAuth client ID), Outlook/Office 365 (Microsoft
+# endpoints + IMAP scope pre-filled), Yahoo, Proton Mail Bridge, iCloud, or
+# custom IMAP — and calendar presets cover Google Calendar, iCloud, Yahoo,
+# and custom CalDAV. Once credentials are ready, the wizard activates the
+# connector and syncing starts automatically — no manual resume/sync needed.
 mimir connector add
 
 # Flag form for scripts: the connector is created in Setup; activate it with
@@ -113,21 +116,21 @@ mimir connector add
 # sync with `CONNECTOR_PUSH_UNSUPPORTED`. Push delivery (`mode=auto` or
 # `mode=idle`) is the alternative for scripts that let new mail arrive
 # automatically.
-mimir connector add gmail --backend imap host=imap.gmail.com auth.kind=app_password auth.username=me@gmail.com mode=poll poll_interval_secs=300
+mimir connector add email --backend imap host=imap.gmail.com auth.kind=app_password auth.username=me@gmail.com mode=poll poll_interval_secs=300
 
 # Activate and sync (only needed for the flag form — the wizard does this)
-mimir connector resume gmail
-mimir connector sync gmail --since 7d
+mimir connector resume email
+mimir connector sync email --since 7d
 
 # Status and lifecycle
-mimir connector status gmail
-mimir connector pause gmail
+mimir connector status email
+mimir connector pause email
 
 # Teardown — remove and forget are alternatives, not a sequence (remove deletes
 # the row, so a later forget on the same slug cannot resolve it)
-mimir connector remove gmail --yes       # detaches provenance; facts survive
+mimir connector remove email --yes       # detaches provenance; facts survive
 # or
-mimir connector forget gmail --yes       # trashes the connector's facts (recoverable 30 days)
+mimir connector forget email --yes       # trashes the connector's facts (recoverable 30 days)
 
 # Write-back (Calendar)
 mimir connector act calendar create_event '{"summary":"Lunch","start":"2026-08-12T12:00:00Z"}'
@@ -135,7 +138,7 @@ mimir connector act calendar create_event '{"summary":"Lunch","start":"2026-08-1
 
 For `mode: auto` connectors, the `mode` shown by `status`/`list` is `-` until the first sync's capability probe detects whether the server supports IMAP IDLE — it then resolves to `push` or `polling` and stays accurate across restarts. Explicit `mode=poll`/`mode=idle` connectors resolve immediately.
 
-Running `mimir connector add` with no arguments starts an interactive wizard: it lists the daemon's supported `(type, backend)` pairs for you to pick from, confirms the display name and slug (defaults from the type and name), asks the per-backend questions (Gmail IMAP defaults to `imap.gmail.com:993`/`INBOX`), and guides authentication — OAuth browser login is the recommended Gmail path (the wizard pre-fills Google's authorization/token endpoints, you supply your own OAuth client ID from the Google Cloud Console, and the CLI launches the browser at the printed authorize URL, which you can also open manually — but the browser must run on the machine running `mimir`, because the PKCE callback binds to `127.0.0.1`), app passwords and OAuth client secrets are prompted hidden, and local backends (Photos) need no credential. The wizard requires a terminal; with piped stdin it fails fast and points at the flag form.
+Running `mimir connector add` with no arguments starts an interactive wizard: it lists the daemon's supported `(type, backend)` pairs for you to pick from, confirms the display name and slug (defaults from the type and name), and asks the per-backend questions — for email it first picks a provider preset (Gmail, Outlook / Office 365, Yahoo, Proton Mail Bridge, iCloud, or Custom IMAP) that pre-fills the IMAP defaults (e.g. Gmail → `imap.gmail.com:993`/`INBOX`) and provider guidance, and for calendar it picks Google Calendar, iCloud, Yahoo, or Custom CalDAV (issue #400). The email presets with an OAuth path (Gmail, Outlook) pre-fill the provider's authorization/token endpoints and scope — you supply your own OAuth client ID from the provider's console — and the CLI launches the browser at the printed authorize URL, which you can also open manually (but the browser must run on the machine running `mimir`, because the PKCE callback binds to `127.0.0.1`); the app-password presets (Yahoo, Proton, iCloud) prompt for an app-specific password. All credentials are prompted hidden, and local backends (Photos) need no credential. The wizard requires a terminal; with piped stdin it fails fast and points at the flag form.
 
 Connectors are **read-only by default**: the framework imports data from the service into your local knowledge graph and does not write back to the service on its own. Write-back actions (e.g. Calendar `create_event`) run only when you explicitly dispatch them with `mimir connector act <slug>`, and the Email connector has no write-back at all. Credentials are stored by the daemon's secret store — by default per-slug files with `0600` permissions in a `0700` directory, refused if the permissions are ever loosened, or in the OS credential store when `secrets.backend = "keychain"` is configured (issue #188); see [Connector Secret Store](../connector-secret-store.md) for details (at-rest encryption is deferred).
 
@@ -143,4 +146,4 @@ Non-OAuth configs (`auth.kind=app_password`/`api_token`) prompt for the credenti
 
 ## How OAuth authentication works
 
-OAuth connectors (Gmail, Google Calendar) authenticate with an access token that expires — typically after an hour. Mimir stores the access token, refresh token, and expiry in the connector's stored credential, and **refreshes automatically**: when a sync starts with an expired (or nearly expired) token, the connector POSTs the stored refresh token to the provider's token endpoint, stores the fresh token bundle, and continues the sync with it. The refresh runs on the vetted `oauth2` library (issue #240), talks HTTP over the same reqwest stack as the rest of Mimir, never follows redirects, and only talks to HTTPS endpoints (or your own machine's loopback). If a refresh fails — for example because the provider revoked the refresh token — the connector flips to `auth_state=expired`, pauses, and you re-authenticate with `mimir connector auth <slug> auth.kind=oauth …` (re-supplying the OAuth client config), which runs the interactive PKCE login again.
+OAuth connectors (Gmail, Outlook/Office 365, Google Calendar) authenticate with an access token that expires — typically after an hour. Mimir stores the access token, refresh token, and expiry in the connector's stored credential, and **refreshes automatically**: when a sync starts with an expired (or nearly expired) token, the connector POSTs the stored refresh token to the provider's token endpoint, stores the fresh token bundle, and continues the sync with it. The refresh runs on the vetted `oauth2` library (issue #240), talks HTTP over the same reqwest stack as the rest of Mimir, never follows redirects, and only talks to HTTPS endpoints (or your own machine's loopback). If a refresh fails — for example because the provider revoked the refresh token — the connector flips to `auth_state=expired`, pauses, and you re-authenticate with `mimir connector auth <slug> auth.kind=oauth …` (re-supplying the OAuth client config), which runs the interactive PKCE login again.

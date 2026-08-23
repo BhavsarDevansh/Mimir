@@ -20,18 +20,18 @@ async fn stop_aborts_a_single_running_connector() {
     let (kg, _dir) = init_kg().await;
     let mut a = upsert(
         "stop-a",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Active,
     );
-    a.config_json = with_slug("stop-a", json!({ "__ctype": ConnectorType::Gmail as i64 }));
+    a.config_json = with_slug("stop-a", json!({ "__ctype": ConnectorType::Email as i64 }));
     let mut b = upsert(
         "stop-b",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Active,
     );
-    b.config_json = with_slug("stop-b", json!({ "__ctype": ConnectorType::Gmail as i64 }));
+    b.config_json = with_slug("stop-b", json!({ "__ctype": ConnectorType::Email as i64 }));
     let row_a = kg.upsert_connector(a).await.unwrap();
     let row_b = kg.upsert_connector(b).await.unwrap();
     let kg = Arc::new(kg);
@@ -70,13 +70,13 @@ async fn stop_returns_false_for_an_already_finished_runner() {
     // runner.
     let mut input = upsert(
         "stop-finished",
-        ConnectorType::Gmail,
+        ConnectorType::Email,
         "test",
         ConnectorStatus::Active,
     );
     input.config_json = with_slug(
         "stop-finished",
-        json!({ "__ctype": ConnectorType::Gmail as i64, "auth_fail": true }),
+        json!({ "__ctype": ConnectorType::Email as i64, "auth_fail": true }),
     );
     let row = kg.upsert_connector(input).await.unwrap();
     let kg = Arc::new(kg);

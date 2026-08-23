@@ -38,7 +38,7 @@ async fn place(kg: &KnowledgeGraph, name: &str) -> i32 {
 
 fn gmail_input(slug: &str) -> UpsertConnectorInput {
     UpsertConnectorInput {
-        connector_type: ConnectorType::Gmail,
+        connector_type: ConnectorType::Email,
         slug: slug.to_string(),
         backend: "imap".to_string(),
         display_name: "Personal Gmail".to_string(),
@@ -94,7 +94,7 @@ async fn connector_fact_round_trips_integer_instance_id() {
             alice,
             Some(london),
             Some(instance.id),
-            Some(ConnectorType::Gmail),
+            Some(ConnectorType::Email),
             Some("msg-1"),
             Some(ExtractionMethod::StructuredParse),
         ))
@@ -107,7 +107,7 @@ async fn connector_fact_round_trips_integer_instance_id() {
     // The denormalised connector_type_id is retained (Gmail = 1).
     assert_eq!(
         sources[0].connector_type_id,
-        Some(ConnectorType::Gmail as i16)
+        Some(ConnectorType::Email as i16)
     );
 }
 
@@ -188,7 +188,7 @@ async fn gate_rejects_missing_raw_reference_or_extraction_method() {
             alice,
             Some(london),
             Some(gmail.id),
-            Some(ConnectorType::Gmail),
+            Some(ConnectorType::Email),
             None,
             Some(ExtractionMethod::StructuredParse),
         ))
@@ -204,7 +204,7 @@ async fn gate_rejects_missing_raw_reference_or_extraction_method() {
             alice,
             Some(london),
             Some(gmail.id),
-            Some(ConnectorType::Gmail),
+            Some(ConnectorType::Email),
             Some("msg-1"),
             None,
         ))
@@ -226,7 +226,7 @@ async fn gate_rejects_unknown_connector_instance() {
             alice,
             Some(london),
             Some(999_999), // no such instance
-            Some(ConnectorType::Gmail),
+            Some(ConnectorType::Email),
             Some("msg-1"),
             Some(ExtractionMethod::StructuredParse),
         ))
@@ -354,7 +354,7 @@ async fn gate_still_requires_raw_reference_when_confidence_is_explicit() {
         alice,
         Some(london),
         Some(gmail.id),
-        Some(ConnectorType::Gmail),
+        Some(ConnectorType::Email),
         None, // missing raw_reference
         Some(ExtractionMethod::StructuredParse),
     );
@@ -409,7 +409,7 @@ async fn delete_connector_detaches_provenance_preserving_facts() {
             alice,
             Some(london),
             Some(gmail.id),
-            Some(ConnectorType::Gmail),
+            Some(ConnectorType::Email),
             Some("msg-1"),
             Some(ExtractionMethod::StructuredParse),
         ))
@@ -426,7 +426,7 @@ async fn delete_connector_detaches_provenance_preserving_facts() {
     // The denormalised connector kind is retained for post-deletion queries.
     assert_eq!(
         sources[0].connector_type_id,
-        Some(ConnectorType::Gmail as i16)
+        Some(ConnectorType::Email as i16)
     );
     assert_eq!(kg.count_sources_for_connector(gmail.id).await.unwrap(), 0);
 }

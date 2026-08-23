@@ -6,7 +6,7 @@
 
 ## What it is
 
-The Email connector reads your mailbox (Gmail, Outlook/Hotmail, iCloud Mail — any IMAP server) into Mimir and turns your mail into knowledge-graph facts. It speaks IMAP — the open mail protocol your provider already supports, so it works with any compliant server, no vendor lock-in.
+The Email connector reads your mailbox (Gmail, Outlook/Hotmail/Office 365, Yahoo Mail, Proton Mail via the Bridge, iCloud Mail — any IMAP server) into Mimir and turns your mail into knowledge-graph facts. It speaks IMAP — the open mail protocol your provider already supports, so it works with any compliant server, no vendor lock-in.
 
 It is a background sync worker that runs in two modes automatically:
 
@@ -74,13 +74,13 @@ This is a library component today (in `mimir-connectors`); the daemon wiring tha
 ## Authentication
 
 - **App password** — best for most providers. Generate an app-specific password in your provider's security settings (Gmail calls them "app passwords"); Mimir uses standard IMAP `LOGIN`. Your username is in the connector config; the password is stored securely.
-- **OAuth (Google / Microsoft)** — the connector stores your access + refresh token and refreshes the access token automatically before it expires, so you stay connected without re-authorising. The first token is obtained via the interactive PKCE sign-in flow (A4 / #205): running `mimir connector add` with no arguments lists the supported `(connector_type, backend)` pairs and lets you select Gmail, then offers OAuth browser login with Google's authorization/token endpoints pre-filled (you supply your own OAuth client ID from the Google Cloud Console), launches your browser at the printed authorize URL, and stores the exchanged token bundle. The flag form `mimir connector add gmail … auth.kind=oauth …` runs the same flow.
+- **OAuth (Google / Microsoft)** — the connector stores your access + refresh token and refreshes the access token automatically before it expires, so you stay connected without re-authorising. The first token is obtained via the interactive PKCE sign-in flow (A4 / #205): running `mimir connector add` with no arguments lists the supported `(connector_type, backend)` pairs, then the provider presets (issue #400) — selecting **Gmail** pre-fills Google's authorization/token endpoints and scope, selecting **Outlook / Office 365** pre-fills the Microsoft identity platform endpoints and the `IMAP.AccessAsUser.All offline_access` scope — and you bring only your own OAuth client ID from the provider's console (Google Cloud Console / Entra ID app registration). The wizard launches your browser at the printed authorize URL and stores the exchanged token bundle. Yahoo, Proton Mail (Bridge), and iCloud use app passwords only; the flag form `mimir connector add email … auth.kind=oauth …` runs the same OAuth flow.
 
 ## Privacy
 
 - Mimir only **reads** mail — it never sends, deletes, or marks messages. It uses `BODY.PEEK[]` so your unread mail stays unread.
 - All data is fetched and stored locally; no cloud intermediary.
-- "Forget everything from Gmail" is exposed through `mimir connector forget <slug>` (A3 / #204): the cascade trashes the connector's facts (recoverable 30 days), credentials, and row, beyond the library-level `forget()` wipe of cursor, buffer, and stored secret.
+- "Forget everything from this email connector" is exposed through `mimir connector forget <slug>` (A3 / #204): the cascade trashes the connector's facts (recoverable 30 days), credentials, and row, beyond the library-level `forget()` wipe of cursor, buffer, and stored secret.
 
 ## Config example
 

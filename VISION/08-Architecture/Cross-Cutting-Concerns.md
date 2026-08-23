@@ -31,7 +31,7 @@
 ### Data Minimization
 - Only extract facts relevant to user queries and patterns
 - Configurable retention policies per connector
-- "Forget everything from Gmail" is a first-class operation
+- "Forget everything from a connector" is a first-class operation
 - PII detection and optional redaction
 
 ### Consent Model
@@ -89,7 +89,7 @@ $ agent health
 Core Agent:     ● Healthy
 Knowledge Graph: ● Healthy (12,304 entities, 48,291 facts)
 Connectors:
-  Gmail:        ● Healthy (last sync: 2m ago)
+  Email:        ● Healthy (last sync: 2m ago)
   Calendar:     ● Healthy (last sync: 5m ago)
   Photos:       ● Healthy (last sync: 1h ago)
 Reasoning:      ● Healthy

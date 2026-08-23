@@ -109,7 +109,7 @@ async fn mount_add(server: &MockServer, created: &ConnectorResponse) {
 fn connector_fixture(id: i32, slug: &str) -> ConnectorResponse {
     ConnectorResponse {
         id,
-        connector_type: "gmail".to_string(),
+        connector_type: "email".to_string(),
         slug: slug.to_string(),
         backend: "test".to_string(),
         display_name: slug.to_string(),
@@ -389,7 +389,7 @@ fn credential_kind_detected_from_auth_tag() {
 
 #[test]
 fn title_case_uppercases_first_letter() {
-    assert_eq!(title_case("gmail"), "Gmail");
+    assert_eq!(title_case("email"), "Email");
     assert_eq!(title_case("calendar"), "Calendar");
     assert_eq!(title_case("photos"), "Photos");
     assert_eq!(title_case(""), "");
@@ -448,7 +448,7 @@ async fn add_with_app_password_ingests_credentials() {
         .respond_with(
             ResponseTemplate::new(200).set_body_json(&ConnectorCatalogResponse {
                 entries: vec![ConnectorCatalogEntry {
-                    connector_type: "gmail".to_string(),
+                    connector_type: "email".to_string(),
                     backend: "imap".to_string(),
                 }],
             }),
@@ -458,10 +458,10 @@ async fn add_with_app_password_ingests_credentials() {
     Mock::given(method("POST"))
         .and(path("/connectors"))
         .and(body_json(serde_json::json!({
-            "connector_type": "gmail",
+            "connector_type": "email",
             "backend": "imap",
-            "slug": "gmail",
-            "display_name": "Gmail",
+            "slug": "email",
+            "display_name": "Email",
             "config_json": {
                 "auth": {"kind": "app_password", "username": "me@example.com"},
                 "host": "imap.example.com"
@@ -1037,21 +1037,22 @@ fn wizard_password_prompt_disables_confirmation() {
 }
 
 #[test]
-fn wizard_gmail_oauth_config_uses_google_defaults() {
-    let entry = mimir_api_types::ConnectorCatalogEntry {
-        connector_type: "gmail".to_string(),
-        backend: "imap".to_string(),
-    };
+fn wizard_email_gmail_oauth_config_uses_google_defaults() {
+    let entry = email_catalog_entry();
     let prompts = ScriptedPrompt::new(vec![
-        ScriptedAnswer::Input(String::new()), // host → default
-        ScriptedAnswer::Input(String::new()), // port → default
-        ScriptedAnswer::Input(String::new()), // mailbox → default
+        ScriptedAnswer::Select(0),                         // Email provider → Gmail
+        ScriptedAnswer::Input(String::new()),              // host → default
+        ScriptedAnswer::Input(String::new()),              // port → default
+        ScriptedAnswer::Input(String::new()),              // mailbox → default
         ScriptedAnswer::Input("me@gmail.com".to_string()), // account email
-        ScriptedAnswer::Select(0),            // Sync mode → push (recommended)
-        ScriptedAnswer::Select(0),            // Existing mailbox content — import
-        ScriptedAnswer::Select(0),            // OAuth browser login
-        ScriptedAnswer::Input("client-123".to_string()), // client id
-        ScriptedAnswer::Password(String::new()), // client secret → none
+        ScriptedAnswer::Select(0),                         // Sync mode → push (recommended)
+        ScriptedAnswer::Select(0),                         // Existing mailbox content — import
+        ScriptedAnswer::Select(0),                         // OAuth browser login
+        ScriptedAnswer::Input(String::new()),              // auth_uri → Google default
+        ScriptedAnswer::Input(String::new()),              // token endpoint → Google default
+        ScriptedAnswer::Input("client-123".to_string()),   // client id
+        ScriptedAnswer::Password(String::new()),           // client secret → none
+        ScriptedAnswer::Input(String::new()),              // scopes → default Gmail
     ]);
     let (config, credential) = build_wizard_config(&entry, "personal-gmail", &prompts).unwrap();
     assert!(matches!(
@@ -1090,21 +1091,22 @@ fn wizard_gmail_oauth_config_uses_google_defaults() {
 }
 
 #[test]
-fn wizard_gmail_oauth_client_secret_stays_out_of_config_json() {
-    let entry = mimir_api_types::ConnectorCatalogEntry {
-        connector_type: "gmail".to_string(),
-        backend: "imap".to_string(),
-    };
+fn wizard_email_gmail_oauth_client_secret_stays_out_of_config_json() {
+    let entry = email_catalog_entry();
     let prompts = ScriptedPrompt::new(vec![
-        ScriptedAnswer::Input(String::new()), // host → default
-        ScriptedAnswer::Input(String::new()), // port → default
-        ScriptedAnswer::Input(String::new()), // mailbox → default
+        ScriptedAnswer::Select(0),                         // Email provider → Gmail
+        ScriptedAnswer::Input(String::new()),              // host → default
+        ScriptedAnswer::Input(String::new()),              // port → default
+        ScriptedAnswer::Input(String::new()),              // mailbox → default
         ScriptedAnswer::Input("me@gmail.com".to_string()), // account email
-        ScriptedAnswer::Select(0),            // Sync mode — push (recommended)
-        ScriptedAnswer::Select(0),            // Existing mailbox content — import
-        ScriptedAnswer::Select(0),            // OAuth browser login
-        ScriptedAnswer::Input("client-123".to_string()), // client id
-        ScriptedAnswer::Password("s3cret".to_string()), // client secret (hidden)
+        ScriptedAnswer::Select(0),                         // Sync mode — push (recommended)
+        ScriptedAnswer::Select(0),                         // Existing mailbox content — import
+        ScriptedAnswer::Select(0),                         // OAuth browser login
+        ScriptedAnswer::Input(String::new()),              // auth_uri → Google default
+        ScriptedAnswer::Input(String::new()),              // token endpoint → Google default
+        ScriptedAnswer::Input("client-123".to_string()),   // client id
+        ScriptedAnswer::Password("s3cret".to_string()),    // client secret (hidden)
+        ScriptedAnswer::Input(String::new()),              // scopes → default Gmail
     ]);
     let (config, credential) = build_wizard_config(&entry, "personal-gmail", &prompts).unwrap();
     assert!(
@@ -1120,21 +1122,19 @@ fn wizard_gmail_oauth_client_secret_stays_out_of_config_json() {
 }
 
 #[test]
-fn wizard_gmail_polling_custom_interval_and_new_only_maps_to_config() {
-    let entry = mimir_api_types::ConnectorCatalogEntry {
-        connector_type: "gmail".to_string(),
-        backend: "imap".to_string(),
-    };
+fn wizard_email_gmail_polling_custom_interval_and_new_only_maps_to_config() {
+    let entry = email_catalog_entry();
     let prompts = ScriptedPrompt::new(vec![
-        ScriptedAnswer::Input(String::new()), // host → default
-        ScriptedAnswer::Input(String::new()), // port → default
-        ScriptedAnswer::Input(String::new()), // mailbox → default
+        ScriptedAnswer::Select(0),                         // Email provider → Gmail
+        ScriptedAnswer::Input(String::new()),              // host → default
+        ScriptedAnswer::Input(String::new()),              // port → default
+        ScriptedAnswer::Input(String::new()),              // mailbox → default
         ScriptedAnswer::Input("me@gmail.com".to_string()), // account email
-        ScriptedAnswer::Select(1),            // Sync mode — every N minutes
-        ScriptedAnswer::Select(4),            // Custom interval
-        ScriptedAnswer::Input("7".to_string()), // 7 minutes
-        ScriptedAnswer::Select(1),            // Existing mailbox content — new only
-        ScriptedAnswer::Select(1),            // App password
+        ScriptedAnswer::Select(1),                         // Sync mode — every N minutes
+        ScriptedAnswer::Select(4),                         // Custom interval
+        ScriptedAnswer::Input("7".to_string()),            // 7 minutes
+        ScriptedAnswer::Select(1),                         // Existing mailbox content — new only
+        ScriptedAnswer::Select(1),                         // App password
         ScriptedAnswer::Password("abcd efgh ijkl mnop".to_string()),
     ]);
     let (config, credential) = build_wizard_config(&entry, "personal-gmail", &prompts).unwrap();
@@ -1148,9 +1148,10 @@ fn wizard_gmail_polling_custom_interval_and_new_only_maps_to_config() {
 }
 
 #[test]
-fn wizard_gmail_polling_preset_interval_uses_preset() {
-    let entry = gmail_catalog_entry();
+fn wizard_email_gmail_polling_preset_interval_uses_preset() {
+    let entry = email_catalog_entry();
     let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(0),                         // Email provider → Gmail
         ScriptedAnswer::Input(String::new()),              // host
         ScriptedAnswer::Input(String::new()),              // port
         ScriptedAnswer::Input(String::new()),              // mailbox
@@ -1168,9 +1169,10 @@ fn wizard_gmail_polling_preset_interval_uses_preset() {
 }
 
 #[test]
-fn wizard_gmail_custom_interval_rejects_zero_before_registration() {
-    let entry = gmail_catalog_entry();
+fn wizard_email_gmail_custom_interval_rejects_zero_before_registration() {
+    let entry = email_catalog_entry();
     let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(0),                         // Email provider → Gmail
         ScriptedAnswer::Input(String::new()),              // host
         ScriptedAnswer::Input(String::new()),              // port
         ScriptedAnswer::Input(String::new()),              // mailbox
@@ -1187,11 +1189,12 @@ fn wizard_gmail_custom_interval_rejects_zero_before_registration() {
 }
 
 #[test]
-fn wizard_gmail_custom_interval_rejects_overflowing_value() {
+fn wizard_email_gmail_custom_interval_rejects_overflowing_value() {
     // A user-typed interval must never overflow `u64` on the secs
     // conversion (`minutes * 60`), even for an absurd input.
-    let entry = gmail_catalog_entry();
+    let entry = email_catalog_entry();
     let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(0),                         // Email provider → Gmail
         ScriptedAnswer::Input(String::new()),              // host
         ScriptedAnswer::Input(String::new()),              // port
         ScriptedAnswer::Input(String::new()),              // mailbox
@@ -1207,9 +1210,9 @@ fn wizard_gmail_custom_interval_rejects_overflowing_value() {
     );
 }
 
-fn gmail_catalog_entry() -> mimir_api_types::ConnectorCatalogEntry {
+fn email_catalog_entry() -> mimir_api_types::ConnectorCatalogEntry {
     mimir_api_types::ConnectorCatalogEntry {
-        connector_type: "gmail".to_string(),
+        connector_type: "email".to_string(),
         backend: "imap".to_string(),
     }
 }
@@ -1243,7 +1246,7 @@ async fn wizard_gmail_app_password_registers_end_to_end() {
     Mock::given(method("GET"))
         .and(path("/connectors/catalog"))
         .respond_with(ResponseTemplate::new(200).set_body_json(catalog(&[
-            ("gmail", "imap"),
+            ("email", "imap"),
             ("calendar", "caldav"),
             ("photos", "local"),
         ])))
@@ -1275,9 +1278,10 @@ async fn wizard_gmail_app_password_registers_end_to_end() {
         .await;
 
     let prompts = ScriptedPrompt::new(vec![
-        ScriptedAnswer::Select(0), // Gmail (imap)
+        ScriptedAnswer::Select(0), // Email (imap)
         ScriptedAnswer::Input("Personal Gmail".to_string()),
         ScriptedAnswer::Input(String::new()), // slug → personal-gmail
+        ScriptedAnswer::Select(0),            // Email provider → Gmail
         ScriptedAnswer::Input(String::new()), // host → default
         ScriptedAnswer::Input(String::new()), // port → default
         ScriptedAnswer::Input(String::new()), // mailbox → default
@@ -1317,7 +1321,7 @@ async fn wizard_oauth_with_client_secret_keeps_it_out_of_config_json() {
     Mock::given(method("GET"))
         .and(path("/connectors/catalog"))
         .respond_with(ResponseTemplate::new(200).set_body_json(catalog(&[
-            ("gmail", "imap"),
+            ("email", "imap"),
             ("calendar", "caldav"),
             ("photos", "local"),
         ])))
@@ -1345,6 +1349,7 @@ async fn wizard_oauth_with_client_secret_keeps_it_out_of_config_json() {
         ScriptedAnswer::Select(1), // Calendar (caldav)
         ScriptedAnswer::Input("Personal Gmail".to_string()),
         ScriptedAnswer::Input(String::new()), // slug → personal-gmail
+        ScriptedAnswer::Select(3),            // Calendar provider → Custom CalDAV
         ScriptedAnswer::Input("https://dav.example.com/cal".to_string()),
         ScriptedAnswer::Input("me@gmail.com".to_string()),
         ScriptedAnswer::Select(1), // OAuth 2.0 — browser login
@@ -1417,13 +1422,13 @@ async fn wizard_photos_creates_without_credentials() {
 #[test]
 fn wizard_unknown_backend_errors_with_flag_form_hint() {
     let entry = mimir_api_types::ConnectorCatalogEntry {
-        connector_type: "gmail".to_string(),
+        connector_type: "email".to_string(),
         backend: "test".to_string(),
     };
     let prompts = ScriptedPrompt::new(vec![]);
-    let err = build_wizard_config(&entry, "gmail", &prompts).unwrap_err();
+    let err = build_wizard_config(&entry, "email", &prompts).unwrap_err();
     assert!(
-        err.contains("no interactive profile for 'gmail/test'"),
+        err.contains("no interactive profile for 'email/test'"),
         "unexpected error: {err}"
     );
     assert!(
@@ -1434,11 +1439,9 @@ fn wizard_unknown_backend_errors_with_flag_form_hint() {
 
 #[test]
 fn wizard_required_field_error_mentions_field() {
-    let entry = mimir_api_types::ConnectorCatalogEntry {
-        connector_type: "gmail".to_string(),
-        backend: "imap".to_string(),
-    };
+    let entry = email_catalog_entry();
     let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(0),            // Email provider → Gmail
         ScriptedAnswer::Input(String::new()), // host → default
         ScriptedAnswer::Input(String::new()), // port → default
         ScriptedAnswer::Input(String::new()), // mailbox → default
@@ -1449,12 +1452,10 @@ fn wizard_required_field_error_mentions_field() {
 }
 
 #[test]
-fn wizard_gmail_empty_app_password_is_rejected() {
-    let entry = mimir_api_types::ConnectorCatalogEntry {
-        connector_type: "gmail".to_string(),
-        backend: "imap".to_string(),
-    };
+fn wizard_email_gmail_empty_app_password_is_rejected() {
+    let entry = email_catalog_entry();
     let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(0),            // Email provider → Gmail
         ScriptedAnswer::Input(String::new()), // host → default
         ScriptedAnswer::Input(String::new()), // port → default
         ScriptedAnswer::Input(String::new()), // mailbox → default
@@ -1469,12 +1470,308 @@ fn wizard_gmail_empty_app_password_is_rejected() {
 }
 
 #[test]
+fn wizard_email_outlook_preset_defaults_to_app_password_first() {
+    let entry = email_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(1), // Email provider → Outlook / Office 365
+        ScriptedAnswer::Input(String::new()), // host → outlook.office365.com
+        ScriptedAnswer::Input(String::new()), // port → 993
+        ScriptedAnswer::Input(String::new()), // mailbox → INBOX
+        ScriptedAnswer::Input("me@outlook.com".to_string()),
+        ScriptedAnswer::Select(0), // Sync mode — push (recommended)
+        ScriptedAnswer::Select(0), // Existing mailbox content — import
+        ScriptedAnswer::Select(0), // App password (recommended)
+        ScriptedAnswer::Password("abcd efgh ijkl mnop".to_string()),
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "personal-outlook", &prompts).unwrap();
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::Secret(_)
+    ));
+    assert_eq!(config["host"], "outlook.office365.com");
+    assert_eq!(config["port"], 993);
+    assert_eq!(config["mailbox"], "INBOX");
+    assert_eq!(config["mode"], "auto");
+    assert_eq!(config["initial_backfill"], true);
+    assert_eq!(config["auth"]["kind"], "app_password");
+    assert_eq!(config["auth"]["username"], "me@outlook.com");
+}
+
+#[test]
+fn wizard_email_outlook_preset_oauth_uses_microsoft_endpoints() {
+    let entry = email_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(1),            // Outlook / Office 365
+        ScriptedAnswer::Input(String::new()), // host → default
+        ScriptedAnswer::Input(String::new()), // port → default
+        ScriptedAnswer::Input(String::new()), // mailbox → default
+        ScriptedAnswer::Input("me@outlook.com".to_string()),
+        ScriptedAnswer::Select(0),            // Sync mode — push
+        ScriptedAnswer::Select(0),            // Existing mailbox content — import
+        ScriptedAnswer::Select(1),            // OAuth 2.0 — browser login
+        ScriptedAnswer::Input(String::new()), // auth_uri → default
+        ScriptedAnswer::Input(String::new()), // token endpoint → default
+        ScriptedAnswer::Input("client-ms-123".to_string()),
+        ScriptedAnswer::Password(String::new()), // client secret → none
+        ScriptedAnswer::Input(String::new()),    // scopes → default
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "personal-outlook", &prompts).unwrap();
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::OAuth {
+            client_secret: None
+        }
+    ));
+    assert_eq!(config["auth"]["kind"], "oauth");
+    assert_eq!(
+        config["auth"]["auth_uri"],
+        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+    );
+    assert_eq!(
+        config["auth"]["token_endpoint"],
+        "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+    );
+    assert_eq!(config["auth"]["client_id"], "client-ms-123");
+    assert_eq!(
+        config["auth"]["scopes"],
+        serde_json::json!([
+            "https://outlook.office.com/IMAP.AccessAsUser.All",
+            "offline_access"
+        ])
+    );
+}
+
+#[test]
+fn wizard_email_yahoo_preset_uses_yahoo_defaults_and_app_password_only() {
+    let entry = email_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(2),            // Yahoo
+        ScriptedAnswer::Input(String::new()), // host → imap.mail.yahoo.com
+        ScriptedAnswer::Input(String::new()), // port → 993
+        ScriptedAnswer::Input(String::new()), // mailbox → INBOX
+        ScriptedAnswer::Input("me@yahoo.com".to_string()),
+        ScriptedAnswer::Select(1), // Sync mode — polling
+        ScriptedAnswer::Select(1), // 15 minutes
+        ScriptedAnswer::Select(0), // Existing mailbox content — import
+        ScriptedAnswer::Password("abcd efgh ijkl mnop".to_string()),
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "personal-yahoo", &prompts).unwrap();
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::Secret(_)
+    ));
+    assert_eq!(config["host"], "imap.mail.yahoo.com");
+    assert_eq!(config["port"], 993);
+    assert_eq!(config["mode"], "poll");
+    assert_eq!(config["poll_interval_secs"], 15 * 60);
+    assert_eq!(config["auth"]["kind"], "app_password");
+    assert_eq!(config["auth"]["username"], "me@yahoo.com");
+}
+
+#[test]
+fn wizard_email_icloud_preset_uses_icloud_defaults_and_app_password_only() {
+    let entry = email_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(4),            // iCloud
+        ScriptedAnswer::Input(String::new()), // host → imap.mail.me.com
+        ScriptedAnswer::Input(String::new()), // port → 993
+        ScriptedAnswer::Input(String::new()), // mailbox → INBOX
+        ScriptedAnswer::Input("me@icloud.com".to_string()),
+        ScriptedAnswer::Select(0), // Sync mode — push
+        ScriptedAnswer::Select(0), // Existing mailbox content — import
+        ScriptedAnswer::Password("abcd-efgh-ijkl-mnop".to_string()),
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "personal-icloud", &prompts).unwrap();
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::Secret(_)
+    ));
+    assert_eq!(config["host"], "imap.mail.me.com");
+    assert_eq!(config["port"], 993);
+    assert_eq!(config["mailbox"], "INBOX");
+    assert_eq!(config["auth"]["kind"], "app_password");
+    assert_eq!(config["auth"]["username"], "me@icloud.com");
+}
+
+#[test]
+fn wizard_email_proton_preset_uses_bridge_defaults_and_app_password_only() {
+    let entry = email_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(3),            // Proton Mail (Bridge)
+        ScriptedAnswer::Input(String::new()), // host → 127.0.0.1
+        ScriptedAnswer::Input(String::new()), // port → 1143
+        ScriptedAnswer::Input(String::new()), // mailbox → INBOX
+        ScriptedAnswer::Input("me@proton.me".to_string()),
+        ScriptedAnswer::Select(0), // Sync mode — push
+        ScriptedAnswer::Select(0), // Existing mailbox content — import
+        ScriptedAnswer::Password("abcd efgh ijkl mnop".to_string()),
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "personal-proton", &prompts).unwrap();
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::Secret(_)
+    ));
+    assert_eq!(config["host"], "127.0.0.1");
+    assert_eq!(config["port"], 1143);
+    assert_eq!(config["mailbox"], "INBOX");
+    assert_eq!(config["auth"]["kind"], "app_password");
+    assert_eq!(config["auth"]["username"], "me@proton.me");
+}
+
+#[test]
+fn wizard_email_custom_imap_keeps_free_form_flow() {
+    let entry = email_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(5), // Custom IMAP
+        ScriptedAnswer::Input("imap.example.com".to_string()),
+        ScriptedAnswer::Input("143".to_string()),
+        ScriptedAnswer::Input("Archive".to_string()),
+        ScriptedAnswer::Input("me@example.com".to_string()),
+        ScriptedAnswer::Select(0), // Sync mode — push
+        ScriptedAnswer::Select(1), // Existing mailbox content — new only
+        ScriptedAnswer::Select(0), // App password
+        ScriptedAnswer::Password("hunter2".to_string()),
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "custom-mail", &prompts).unwrap();
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::Secret(_)
+    ));
+    assert_eq!(config["host"], "imap.example.com");
+    assert_eq!(config["port"], 143);
+    assert_eq!(config["mailbox"], "Archive");
+    assert_eq!(config["mode"], "auto");
+    assert_eq!(config["initial_backfill"], false);
+    assert_eq!(config["auth"]["kind"], "app_password");
+    assert_eq!(config["auth"]["username"], "me@example.com");
+}
+
+#[test]
+fn wizard_email_custom_imap_oauth_accepts_user_endpoints() {
+    let entry = email_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(5), // Custom IMAP
+        ScriptedAnswer::Input("imap.example.com".to_string()),
+        ScriptedAnswer::Input(String::new()), // port → 993
+        ScriptedAnswer::Input(String::new()), // mailbox → INBOX
+        ScriptedAnswer::Input("me@example.com".to_string()),
+        ScriptedAnswer::Select(0), // Sync mode — push
+        ScriptedAnswer::Select(0), // Existing mailbox content — import
+        ScriptedAnswer::Select(1), // OAuth 2.0 — browser login
+        ScriptedAnswer::Input("https://auth.example.com/authorize".to_string()),
+        ScriptedAnswer::Input("https://auth.example.com/token".to_string()),
+        ScriptedAnswer::Input("client-custom".to_string()),
+        ScriptedAnswer::Password(String::new()),
+        ScriptedAnswer::Input("mail.read".to_string()),
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "custom-mail", &prompts).unwrap();
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::OAuth {
+            client_secret: None
+        }
+    ));
+    assert_eq!(config["auth"]["kind"], "oauth");
+    assert_eq!(
+        config["auth"]["auth_uri"],
+        "https://auth.example.com/authorize"
+    );
+    assert_eq!(
+        config["auth"]["token_endpoint"],
+        "https://auth.example.com/token"
+    );
+    assert_eq!(config["auth"]["scopes"], serde_json::json!(["mail.read"]));
+}
+
+#[test]
+fn wizard_calendar_google_preset_uses_google_endpoints_and_computed_url() {
+    let entry = mimir_api_types::ConnectorCatalogEntry {
+        connector_type: "calendar".to_string(),
+        backend: "caldav".to_string(),
+    };
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(0), // Google Calendar
+        ScriptedAnswer::Input("me@gmail.com".to_string()),
+        ScriptedAnswer::Input(String::new()), // URL → computed default
+        ScriptedAnswer::Input("client-google".to_string()),
+        ScriptedAnswer::Password(String::new()), // client secret → none
+        ScriptedAnswer::Input(String::new()),    // scopes → default
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "google-cal", &prompts).unwrap();
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::OAuth {
+            client_secret: None
+        }
+    ));
+    assert_eq!(
+        config["calendar_url"],
+        "https://apidata.googleusercontent.com/caldav/v2/me@gmail.com/events"
+    );
+    assert_eq!(config["auth"]["kind"], "oauth");
+    assert_eq!(config["auth"]["username"], "me@gmail.com");
+    assert_eq!(
+        config["auth"]["auth_uri"],
+        "https://accounts.google.com/o/oauth2/v2/auth"
+    );
+    assert_eq!(
+        config["auth"]["scopes"],
+        serde_json::json!(["https://www.googleapis.com/auth/calendar"])
+    );
+}
+
+#[test]
+fn wizard_calendar_icloud_preset_uses_icloud_url_and_app_password() {
+    let entry = mimir_api_types::ConnectorCatalogEntry {
+        connector_type: "calendar".to_string(),
+        backend: "caldav".to_string(),
+    };
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(1),            // iCloud
+        ScriptedAnswer::Input(String::new()), // URL → default
+        ScriptedAnswer::Input("me@icloud.com".to_string()),
+        ScriptedAnswer::Password("abcd-efgh-ijkl-mnop".to_string()),
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "icloud-cal", &prompts).unwrap();
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::Secret(_)
+    ));
+    assert_eq!(config["calendar_url"], "https://caldav.icloud.com/");
+    assert_eq!(config["auth"]["kind"], "app_password");
+    assert_eq!(config["auth"]["username"], "me@icloud.com");
+}
+
+#[test]
+fn wizard_calendar_yahoo_preset_uses_yahoo_url_and_app_password() {
+    let entry = mimir_api_types::ConnectorCatalogEntry {
+        connector_type: "calendar".to_string(),
+        backend: "caldav".to_string(),
+    };
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(2),            // Yahoo
+        ScriptedAnswer::Input(String::new()), // URL → default
+        ScriptedAnswer::Input("me@yahoo.com".to_string()),
+        ScriptedAnswer::Password("abcd efgh ijkl mnop".to_string()),
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "yahoo-cal", &prompts).unwrap();
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::Secret(_)
+    ));
+    assert_eq!(config["calendar_url"], "https://caldav.calendar.yahoo.com/");
+    assert_eq!(config["auth"]["kind"], "app_password");
+    assert_eq!(config["auth"]["username"], "me@yahoo.com");
+}
+
+#[test]
 fn wizard_caldav_whitespace_only_app_password_is_rejected() {
     let entry = mimir_api_types::ConnectorCatalogEntry {
         connector_type: "calendar".to_string(),
         backend: "caldav".to_string(),
     };
     let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(3), // Calendar provider → Custom CalDAV
         ScriptedAnswer::Input("https://dav.example.com/cal".to_string()),
         ScriptedAnswer::Input("me@example.com".to_string()),
         ScriptedAnswer::Select(0),                   // App password
@@ -1491,6 +1788,7 @@ fn wizard_caldav_oauth_config_includes_scopes() {
         backend: "caldav".to_string(),
     };
     let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(3), // Calendar provider → Custom CalDAV
         ScriptedAnswer::Input("https://dav.example.com/cal".to_string()),
         ScriptedAnswer::Input("me@example.com".to_string()),
         ScriptedAnswer::Select(1), // OAuth 2.0 — browser login
@@ -1528,6 +1826,7 @@ fn wizard_caldav_oauth_scope_prompt_accepts_custom_list() {
         backend: "caldav".to_string(),
     };
     let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(3), // Calendar provider → Custom CalDAV
         ScriptedAnswer::Input("https://dav.example.com/cal".to_string()),
         ScriptedAnswer::Input("me@example.com".to_string()),
         ScriptedAnswer::Select(1), // OAuth

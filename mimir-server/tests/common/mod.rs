@@ -219,7 +219,7 @@ pub async fn test_state_with_config(
     let connector_registry = Arc::new(mimir_connectors::ConnectorRegistry::new());
     connector_registry
         .register(
-            mimir_knowledge::models::enums::ConnectorType::Gmail,
+            mimir_knowledge::models::enums::ConnectorType::Email,
             "test".to_string(),
             mimir_connectors::MockConnectorFactory,
         )

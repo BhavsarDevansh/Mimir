@@ -26,7 +26,7 @@
 //! [`crate::supervisor`]). [`MockConnector::from_config`] reads these to
 //! recover its identity. When they are absent (e.g. a bare
 //! [`MockConnector::default`]) it falls back to the legacy no-op identity
-//! (`id "mock"`, type `Gmail`).
+//! (`id "mock"`, type `Email`).
 //!
 //! # Push mode
 //!
@@ -110,7 +110,7 @@ impl Default for MockConnector {
         Self {
             slug: default_slug(),
             display_name: default_display_name(),
-            ctype: ConnectorType::Gmail,
+            ctype: ConnectorType::Email,
             mode: ConnectorMode::Polling {
                 interval: Duration::from_millis(DEFAULT_INTERVAL_MS),
                 jitter: Duration::from_millis(DEFAULT_JITTER_MS),

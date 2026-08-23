@@ -61,7 +61,7 @@ async fn sources_unique_constraint() {
 
     let gmail_instance = kg
         .upsert_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "gmail-1".to_string(),
             backend: "imap".to_string(),
             display_name: "Personal Gmail".to_string(),
@@ -83,7 +83,7 @@ async fn sources_unique_constraint() {
             valid_until: None,
             source_type: SourceType::Connector,
             connector_instance_id: Some(gmail_instance),
-            connector_type: Some(ConnectorType::Gmail),
+            connector_type: Some(ConnectorType::Email),
             raw_reference: Some("msg-123".to_string()),
             extraction_method: Some(ExtractionMethod::StructuredParse),
             inferred: false,
@@ -473,7 +473,7 @@ async fn source_crud_adds_source_and_audit() {
 
     let gmail_instance = kg
         .upsert_connector(UpsertConnectorInput {
-            connector_type: ConnectorType::Gmail,
+            connector_type: ConnectorType::Email,
             slug: "gmail-1".to_string(),
             backend: "imap".to_string(),
             display_name: "Personal Gmail".to_string(),
@@ -490,7 +490,7 @@ async fn source_crud_adds_source_and_audit() {
             fact_id: fact.id,
             source_type: SourceType::Connector,
             connector_instance_id: Some(gmail_instance),
-            connector_type: Some(ConnectorType::Gmail),
+            connector_type: Some(ConnectorType::Email),
             raw_reference: Some("msg-456".to_string()),
             extraction_method: Some(ExtractionMethod::StructuredParse),
             changed_by: ChangedBy::User,

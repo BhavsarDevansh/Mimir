@@ -174,6 +174,195 @@ pub enum StreamItem {
     ToolCallStart(ToolCallStartInfo),
 }
 
+// ---------------------------------------------------------------------------
+// OpenAI-compatible provider surface (issue #388)
+// ---------------------------------------------------------------------------
+
+/// A message in an OpenAI chat completion request or response.
+///
+/// `content` is `None` for assistant messages that carry only tool calls
+/// (OpenAI serialises that as JSON `null`).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct OpenAiChatMessage {
+    pub role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<OpenAiToolCall>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+/// A function call inside an OpenAI tool call.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+pub struct OpenAiFunctionCall {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub arguments: String,
+}
+
+/// A tool call in an OpenAI response message.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct OpenAiToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub call_type: String,
+    pub function: OpenAiFunctionCall,
+}
+
+/// A streamed tool-call delta.
+///
+/// Mirrors the OpenAI streaming shape: the first delta for a call carries
+/// `index`, `id`, `type`, and the function name; later deltas carry only
+/// `index` and argument fragments.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct OpenAiToolCallDelta {
+    pub index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub call_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function: Option<OpenAiFunctionCall>,
+}
+
+/// Streaming options for an OpenAI chat completion request.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+pub struct OpenAiStreamOptions {
+    #[serde(default)]
+    pub include_usage: bool,
+}
+
+/// Request body for the OpenAI-compatible chat completions endpoint.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct OpenAiChatRequest {
+    pub model: String,
+    pub messages: Vec<OpenAiChatMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_completion_tokens: Option<u32>,
+    #[serde(default)]
+    pub stream: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<OpenAiStreamOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+}
+
+/// Token usage for an OpenAI chat completion.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+pub struct OpenAiUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+/// The assistant message in an OpenAI chat completion choice.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct OpenAiResponseMessage {
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<OpenAiToolCall>,
+}
+
+/// A single choice in an OpenAI chat completion response.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct OpenAiChoice {
+    pub index: u32,
+    pub message: OpenAiResponseMessage,
+    pub finish_reason: String,
+}
+
+/// Response body for the non-streaming OpenAI chat completions endpoint.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct OpenAiChatResponse {
+    pub id: String,
+    pub object: String,
+    pub created: u64,
+    pub model: String,
+    pub choices: Vec<OpenAiChoice>,
+    pub usage: OpenAiUsage,
+}
+
+/// The delta content in a streaming chunk.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+pub struct OpenAiDelta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<OpenAiToolCallDelta>,
+}
+
+/// A single choice within a streaming chunk.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct OpenAiStreamChoice {
+    pub index: u32,
+    pub delta: OpenAiDelta,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+}
+
+/// A single SSE chunk of a streaming OpenAI chat completion.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct OpenAiStreamChunk {
+    pub id: String,
+    pub object: String,
+    pub created: u64,
+    pub model: String,
+    pub choices: Vec<OpenAiStreamChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<OpenAiUsage>,
+}
+
+/// A single model entry in the OpenAI models list.
+///
+/// `description` is a Mimir extension (personality preset descriptions);
+/// `created` is always `0` because presets have no upstream creation time.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct OpenAiModel {
+    pub id: String,
+    pub object: String,
+    pub created: u64,
+    pub owned_by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// The OpenAI models list response.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct OpenAiModelList {
+    pub object: String,
+    pub data: Vec<OpenAiModel>,
+}
+
+/// A single OpenAI-shaped error.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct OpenAiError {
+    pub message: String,
+    #[serde(rename = "type")]
+    pub error_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub param: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+/// OpenAI-shaped error response body.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct OpenAiErrorBody {
+    pub error: OpenAiError,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,5 +702,272 @@ line2",
             error: Some("disk full".to_string()),
         };
         assert_eq!(roundtrip(&summary), summary);
+    }
+
+    // -- OpenAI-compatible provider surface (issue #388) --
+
+    #[test]
+    fn openai_chat_request_roundtrip() {
+        let req = OpenAiChatRequest {
+            model: "gpt-4o".to_string(),
+            messages: vec![
+                OpenAiChatMessage {
+                    role: "user".to_string(),
+                    content: Some("hello".to_string()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                OpenAiChatMessage {
+                    role: "assistant".to_string(),
+                    content: None,
+                    tool_calls: Some(vec![OpenAiToolCall {
+                        id: "call_1".to_string(),
+                        call_type: "function".to_string(),
+                        function: OpenAiFunctionCall {
+                            name: "get_weather".to_string(),
+                            arguments: "{\"location\":\"London\"}".to_string(),
+                        },
+                    }]),
+                    tool_call_id: None,
+                },
+                OpenAiChatMessage {
+                    role: "tool".to_string(),
+                    content: Some("sunny".to_string()),
+                    tool_calls: None,
+                    tool_call_id: Some("call_1".to_string()),
+                },
+            ],
+            temperature: Some(0.7),
+            max_tokens: Some(256),
+            max_completion_tokens: None,
+            stream: true,
+            stream_options: Some(OpenAiStreamOptions {
+                include_usage: true,
+            }),
+            tools: Some(vec![serde_json::json!({
+                "type": "function",
+                "function": {"name": "get_weather", "parameters": {"type": "object"}}
+            })]),
+            user: Some("phone".to_string()),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn openai_chat_request_sparse_omits_optional_fields() {
+        let req = OpenAiChatRequest {
+            model: "transparent".to_string(),
+            messages: vec![OpenAiChatMessage {
+                role: "user".to_string(),
+                content: Some("hi".to_string()),
+                tool_calls: None,
+                tool_call_id: None,
+            }],
+            temperature: None,
+            max_tokens: None,
+            max_completion_tokens: None,
+            stream: false,
+            stream_options: None,
+            tools: None,
+            user: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        for field in [
+            "\"temperature\"",
+            "\"max_tokens\"",
+            "\"max_completion_tokens\"",
+            "\"stream_options\"",
+            "\"tools\"",
+            "\"user\":",
+        ] {
+            assert!(
+                !json.contains(field),
+                "sparse request serialised `{field}`: {json}"
+            );
+        }
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn openai_chat_response_roundtrip() {
+        let resp = OpenAiChatResponse {
+            id: "chatcmpl-123".to_string(),
+            object: "chat.completion".to_string(),
+            created: 1_700_000_000,
+            model: "gpt-4o".to_string(),
+            choices: vec![OpenAiChoice {
+                index: 0,
+                message: OpenAiResponseMessage {
+                    role: "assistant".to_string(),
+                    content: Some("Hello!".to_string()),
+                    tool_calls: Vec::new(),
+                },
+                finish_reason: "stop".to_string(),
+            }],
+            usage: OpenAiUsage {
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                total_tokens: 15,
+            },
+        };
+        assert_eq!(roundtrip(&resp), resp);
+    }
+
+    #[test]
+    fn openai_tool_calls_response_serializes_null_content() {
+        let resp = OpenAiChatResponse {
+            id: "chatcmpl-123".to_string(),
+            object: "chat.completion".to_string(),
+            created: 1_700_000_000,
+            model: "gpt-4o".to_string(),
+            choices: vec![OpenAiChoice {
+                index: 0,
+                message: OpenAiResponseMessage {
+                    role: "assistant".to_string(),
+                    content: None,
+                    tool_calls: vec![OpenAiToolCall {
+                        id: "call_1".to_string(),
+                        call_type: "function".to_string(),
+                        function: OpenAiFunctionCall {
+                            name: "get_weather".to_string(),
+                            arguments: "{\"location\":\"London\"}".to_string(),
+                        },
+                    }],
+                },
+                finish_reason: "tool_calls".to_string(),
+            }],
+            usage: OpenAiUsage::default(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            value["choices"][0]["message"]["content"],
+            serde_json::Value::Null
+        );
+        assert_eq!(value["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!(
+            value["choices"][0]["message"]["tool_calls"][0]["type"],
+            "function"
+        );
+        assert_eq!(roundtrip(&resp), resp);
+    }
+
+    #[test]
+    fn openai_stream_chunk_roundtrip() {
+        let chunk = OpenAiStreamChunk {
+            id: "chatcmpl-123".to_string(),
+            object: "chat.completion.chunk".to_string(),
+            created: 1_700_000_000,
+            model: "gpt-4o".to_string(),
+            choices: vec![OpenAiStreamChoice {
+                index: 0,
+                delta: OpenAiDelta {
+                    role: Some("assistant".to_string()),
+                    content: Some("Hello".to_string()),
+                    tool_calls: Vec::new(),
+                },
+                finish_reason: None,
+            }],
+            usage: None,
+        };
+        assert_eq!(roundtrip(&chunk), chunk);
+    }
+
+    #[test]
+    fn openai_stream_chunk_tool_call_delta_shape() {
+        let chunk = OpenAiStreamChunk {
+            id: "chatcmpl-123".to_string(),
+            object: "chat.completion.chunk".to_string(),
+            created: 1_700_000_000,
+            model: "gpt-4o".to_string(),
+            choices: vec![OpenAiStreamChoice {
+                index: 0,
+                delta: OpenAiDelta {
+                    role: None,
+                    content: None,
+                    tool_calls: vec![OpenAiToolCallDelta {
+                        index: 0,
+                        id: Some("call_1".to_string()),
+                        call_type: Some("function".to_string()),
+                        function: Some(OpenAiFunctionCall {
+                            name: "get_weather".to_string(),
+                            arguments: "".to_string(),
+                        }),
+                    }],
+                },
+                finish_reason: None,
+            }],
+            usage: None,
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let delta = &value["choices"][0]["delta"]["tool_calls"][0];
+        assert_eq!(delta["index"], 0);
+        assert_eq!(delta["id"], "call_1");
+        assert_eq!(delta["type"], "function");
+        assert_eq!(delta["function"]["name"], "get_weather");
+        assert_eq!(roundtrip(&chunk), chunk);
+    }
+
+    #[test]
+    fn openai_usage_chunk_has_empty_choices() {
+        let chunk = OpenAiStreamChunk {
+            id: "chatcmpl-123".to_string(),
+            object: "chat.completion.chunk".to_string(),
+            created: 1_700_000_000,
+            model: "gpt-4o".to_string(),
+            choices: Vec::new(),
+            usage: Some(OpenAiUsage {
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                total_tokens: 15,
+            }),
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["choices"], serde_json::json!([]));
+        assert_eq!(value["usage"]["total_tokens"], 15);
+        assert_eq!(roundtrip(&chunk), chunk);
+    }
+
+    #[test]
+    fn openai_model_list_roundtrip() {
+        let list = OpenAiModelList {
+            object: "list".to_string(),
+            data: vec![
+                OpenAiModel {
+                    id: "transparent".to_string(),
+                    object: "model".to_string(),
+                    created: 0,
+                    owned_by: "mimir".to_string(),
+                    description: Some("Warm, efficient, shows its work".to_string()),
+                },
+                OpenAiModel {
+                    id: "custom".to_string(),
+                    object: "model".to_string(),
+                    created: 0,
+                    owned_by: "mimir".to_string(),
+                    description: None,
+                },
+            ],
+        };
+        assert_eq!(roundtrip(&list), list);
+    }
+
+    #[test]
+    fn openai_error_body_roundtrip() {
+        let body = OpenAiErrorBody {
+            error: OpenAiError {
+                message: "server busy, try again later".to_string(),
+                error_type: "server_error".to_string(),
+                param: None,
+                code: Some("queue_full".to_string()),
+            },
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["error"]["type"], "server_error");
+        assert_eq!(value["error"]["code"], "queue_full");
+        assert_eq!(roundtrip(&body), body);
     }
 }

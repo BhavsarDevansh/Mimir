@@ -82,4 +82,11 @@ impl LlmBackend for LlmClient {
         clone.pool = None;
         Some(Arc::new(clone))
     }
+
+    fn with_max_tokens_override(&self, max_tokens: u32) -> Option<Arc<dyn LlmBackend>> {
+        let mut clone = self.clone();
+        clone.config.max_tokens = Some(max_tokens);
+        clone.pool = None;
+        Some(Arc::new(clone))
+    }
 }

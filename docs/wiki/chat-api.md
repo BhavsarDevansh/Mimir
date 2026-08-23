@@ -68,3 +68,7 @@ Returns the full message history from the last compaction point (or all messages
 - **400** — Invalid JSON body.
 - **404** — Unknown `session_id`.
 - **503** — Server is busy. Retry after 5 seconds.
+
+## OpenAI-Compatible API
+
+Mimir also speaks the OpenAI chat-completions API on `/v1/chat/completions` (with `/v1/models` for the model list), so any OpenAI-compatible app can use Mimir as its LLM provider. See [Using Mimir as Your LLM Provider](llm-provider.md).

@@ -29,7 +29,7 @@ Mimir is a **Rust workspace** with a modular, local-first design. Your data stay
 ### Crates
 
 - **`mimir`** — the single binary: the daemon plus the `mimir` CLI (`start`, `chat`, `ask`, `status`, `memory`, `personality`, `kb`, `connector`, `stop`).
-- **`mimir-server`** — Axum HTTP server with SSE streaming, sessions, and graceful shutdown; exposes an OpenAI-compatible chat endpoint.
+- **`mimir-server`** — Axum HTTP server with SSE streaming, sessions, and graceful shutdown; exposes the native chat API plus an OpenAI-compatible provider surface (`/v1/models`, `/v1/chat/completions`) so any OpenAI-speaking app or device can use Mimir as its LLM provider.
 - **`mimir-core`** — LLM client, configuration, context, tools, skills, and the personality system.
 - **`mimir-knowledge`** — the SQLite knowledge graph: entities, facts, temporal reasoning, live memory condensation, events/reminders, and proximity queries.
 - **`mimir-connectors`** — the pluggable service-ingestion framework and its backends: the OSM Nominatim geocoder, the local-filesystem Photos connector (EXIF + file watcher), the CalDAV Calendar connector (sync-token incremental sync), and the IMAP Email connector (IDLE push + UID incremental sync + a three-layer extraction cascade: iMIP calendar invites #200, schema.org JSON-LD #249, and LLM extraction of unstructured prose #201) today.

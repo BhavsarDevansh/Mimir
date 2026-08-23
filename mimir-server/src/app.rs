@@ -17,16 +17,17 @@ use tower::ServiceBuilder;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::routes::{
-    chat_handler, chat_stream_handler, connector_actions_handler, connector_add_handler,
-    connector_catalog_handler, connector_forget_handler, connector_pause_handler,
-    connector_remove_handler, connector_resume_handler, connector_show_handler,
-    connector_sync_handler, connector_tokens_handler, connectors_list_handler, create_category,
-    delete_category, kb_audit_handler, kb_browse_handler, kb_confirm_fact_handler, kb_edit_handler,
-    kb_forget_handler, kb_heatmap_handler, kb_optimization_run_now_handler,
-    kb_optimization_status_handler, kb_pending_handler, kb_profile_handler, kb_query_handler,
-    kb_reject_fact_handler, kb_show_handler, kb_trash_empty_handler, kb_trash_list_handler,
-    kb_trash_restore_handler, list_categories, memory_handler, memory_refresh_handler,
-    session_messages_handler, sessions_handler, show_category, status_handler, stop_handler,
+    chat_completions_handler, chat_handler, chat_stream_handler, connector_actions_handler,
+    connector_add_handler, connector_catalog_handler, connector_forget_handler,
+    connector_pause_handler, connector_remove_handler, connector_resume_handler,
+    connector_show_handler, connector_sync_handler, connector_tokens_handler,
+    connectors_list_handler, create_category, delete_category, kb_audit_handler, kb_browse_handler,
+    kb_confirm_fact_handler, kb_edit_handler, kb_forget_handler, kb_heatmap_handler,
+    kb_optimization_run_now_handler, kb_optimization_status_handler, kb_pending_handler,
+    kb_profile_handler, kb_query_handler, kb_reject_fact_handler, kb_show_handler,
+    kb_trash_empty_handler, kb_trash_list_handler, kb_trash_restore_handler, list_categories,
+    memory_handler, memory_refresh_handler, models_handler, session_messages_handler,
+    sessions_handler, show_category, status_handler, stop_handler,
 };
 use crate::state::AppState;
 
@@ -109,6 +110,8 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route("/sessions/{id}/messages", get(session_messages_handler))
         .route("/chat", post(chat_handler))
         .route("/chat/stream", post(chat_stream_handler))
+        .route("/v1/models", get(models_handler))
+        .route("/v1/chat/completions", post(chat_completions_handler))
         .route(
             "/kb/optimization/status",
             get(kb_optimization_status_handler),

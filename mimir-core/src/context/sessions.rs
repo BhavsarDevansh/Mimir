@@ -11,6 +11,72 @@ impl ContextManager {
         &self,
         system_prompt: impl Into<String>,
     ) -> Result<i64, ContextError> {
+        self.insert_session(system_prompt, None).await
+    }
+
+    /// Create a session bound to an OpenAI `user` key (issue #388).
+    ///
+    /// The `user_key` is the conversation key clients present in the OpenAI
+    /// `user` field; a fixed key resumes one ongoing conversation in the
+    /// central profile.
+    pub async fn create_session_with_user_key(
+        &self,
+        user_key: &str,
+        system_prompt: impl Into<String>,
+    ) -> Result<i64, ContextError> {
+        self.insert_session(system_prompt, Some(user_key)).await
+    }
+
+    /// Look up the session bound to an OpenAI `user` key, if any.
+    pub async fn find_session_by_user_key(
+        &self,
+        user_key: &str,
+    ) -> Result<Option<i64>, ContextError> {
+        let id: Option<i64> = sqlx::query_scalar("SELECT id FROM sessions WHERE user_key = ?1")
+            .bind(user_key)
+            .fetch_optional(self.pool.as_ref())
+            .await?;
+        if let Some(id) = id {
+            self.sessions.lock().await.insert(id);
+        }
+        Ok(id)
+    }
+
+    /// Resolve the session for an OpenAI `user` key, creating it on first use.
+    ///
+    /// Race-safe: concurrent first requests for the same key may both miss
+    /// the lookup, but the partial unique index on `user_key` lets exactly
+    /// one insert win; the loser re-looks-up and adopts the winner's session
+    /// (first-writer-wins system prompt).
+    pub async fn resolve_openai_session(
+        &self,
+        user_key: &str,
+        system_prompt: impl Into<String>,
+    ) -> Result<i64, ContextError> {
+        if let Some(id) = self.find_session_by_user_key(user_key).await? {
+            return Ok(id);
+        }
+
+        match self
+            .create_session_with_user_key(user_key, system_prompt)
+            .await
+        {
+            Ok(id) => Ok(id),
+            Err(ContextError::Database(sqlx::Error::Database(db))) if db.is_unique_violation() => {
+                self.find_session_by_user_key(user_key)
+                    .await?
+                    .ok_or_else(|| ContextError::Database(sqlx::Error::Database(db)))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Insert a session row plus its system message in one transaction.
+    async fn insert_session(
+        &self,
+        system_prompt: impl Into<String>,
+        user_key: Option<&str>,
+    ) -> Result<i64, ContextError> {
         let now = Utc::now();
         let prompt = system_prompt.into();
 
@@ -18,12 +84,13 @@ impl ContextManager {
 
         sqlx::query(
             r#"
-            INSERT INTO sessions (system_prompt, created_at, updated_at, compacted_at)
-            VALUES (?1, ?2, ?2, NULL)
+            INSERT INTO sessions (system_prompt, created_at, updated_at, compacted_at, user_key)
+            VALUES (?1, ?2, ?2, NULL, ?3)
             "#,
         )
         .bind(&prompt)
         .bind(now)
+        .bind(user_key)
         .execute(&mut *tx)
         .await?;
 

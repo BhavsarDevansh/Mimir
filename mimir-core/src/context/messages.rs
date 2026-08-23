@@ -110,18 +110,11 @@ impl ContextManager {
         Ok(())
     }
 
-    /// Trim the session to respect `max_turns` and an optional `max_tokens`.
-    ///
-    /// 1. **Turn cap (hard):** if non-system messages > `max_turns * 2`,
-    ///    delete oldest complete (user, assistant) pairs.
-    /// 2. **Token budget (soft):** if `max_tokens` is `Some` and cumulative
-    ///    tokens exceed it, delete oldest complete pairs whose `token_count`
-    ///    is known.  If unknown, fall back to halving `max_turns`.
-    ///
+    /// Fetch every persisted message for a session in chronological order.
     async fn fetch_messages(&self, session_id: i64) -> Result<Vec<ContextMessage>, ContextError> {
         sqlx::query_as::<_, ContextMessage>(
             r#"
-            SELECT id, session_id, role, content, created_at, token_count
+            SELECT id, session_id, role, content, tool_calls, tool_call_id, created_at, token_count
             FROM messages
             WHERE session_id = ?1
             ORDER BY created_at ASC
@@ -141,7 +134,7 @@ impl ContextManager {
 
         let system: Vec<ContextMessage> = sqlx::query_as::<_, ContextMessage>(
             r#"
-            SELECT id, session_id, role, content, created_at, token_count
+            SELECT id, session_id, role, content, tool_calls, tool_call_id, created_at, token_count
             FROM messages
             WHERE session_id = ?1 AND role = 'system'
             ORDER BY created_at ASC
@@ -154,7 +147,7 @@ impl ContextManager {
 
         let rest: Vec<ContextMessage> = sqlx::query_as::<_, ContextMessage>(
             r#"
-            SELECT id, session_id, role, content, created_at, token_count
+            SELECT id, session_id, role, content, tool_calls, tool_call_id, created_at, token_count
             FROM messages
             WHERE session_id = ?1 AND role != 'system'
             ORDER BY created_at ASC
@@ -174,11 +167,15 @@ impl ContextManager {
             });
         }
         for row in rest {
+            let tool_calls = match row.tool_calls {
+                Some(json) => Some(serde_json::from_str(&json)?),
+                None => None,
+            };
             result.push(Message {
                 role: row.role,
                 content: row.content,
-                tool_calls: None,
-                tool_call_id: None,
+                tool_calls,
+                tool_call_id: row.tool_call_id,
             });
         }
         Ok(result)
@@ -197,24 +194,64 @@ impl ContextManager {
         Ok(ConversationExport { session, messages })
     }
 
+    /// Persist a `tool`-role message carrying a tool result (issue #388).
+    pub async fn add_tool_message(
+        &self,
+        session_id: i64,
+        tool_call_id: &str,
+        content: impl Into<String>,
+    ) -> Result<(), ContextError> {
+        self.add_message_with_tool(session_id, "tool", content, None, Some(tool_call_id))
+            .await
+    }
+
+    /// Persist an assistant message that issued tool calls (issue #388).
+    ///
+    /// The tool calls are stored as JSON so `export_messages` can round-trip
+    /// them into the OpenAI-shaped conversation for the next LLM call.
+    pub async fn add_assistant_tool_calls_message(
+        &self,
+        session_id: i64,
+        content: impl Into<String>,
+        tool_calls: &[crate::llm::types::ToolCall],
+    ) -> Result<(), ContextError> {
+        let json = serde_json::to_string(tool_calls)?;
+        self.add_message_with_tool(session_id, "assistant", content, Some(&json), None)
+            .await
+    }
+
     async fn add_message(
         &self,
         session_id: i64,
         role: &str,
         content: impl Into<String>,
     ) -> Result<(), ContextError> {
+        self.add_message_with_tool(session_id, role, content, None, None)
+            .await
+    }
+
+    async fn add_message_with_tool(
+        &self,
+        session_id: i64,
+        role: &str,
+        content: impl Into<String>,
+        tool_calls: Option<&str>,
+        tool_call_id: Option<&str>,
+    ) -> Result<(), ContextError> {
         self.ensure_session_exists(session_id).await?;
 
         let now = Utc::now();
         sqlx::query(
             r#"
-            INSERT INTO messages (session_id, role, content, created_at)
-            VALUES (?1, ?2, ?3, ?4)
+            INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             "#,
         )
         .bind(session_id)
         .bind(role)
         .bind(content.into())
+        .bind(tool_calls)
+        .bind(tool_call_id)
         .bind(now)
         .execute(self.pool.as_ref())
         .await?;
@@ -243,7 +280,7 @@ impl ContextManager {
         let messages = if let Some(ts) = compacted_at {
             sqlx::query_as::<_, ContextMessage>(
                 r#"
-                SELECT id, session_id, role, content, created_at, token_count
+                SELECT id, session_id, role, content, tool_calls, tool_call_id, created_at, token_count
                 FROM messages
                 WHERE session_id = ?1 AND created_at >= ?2
                 ORDER BY created_at ASC

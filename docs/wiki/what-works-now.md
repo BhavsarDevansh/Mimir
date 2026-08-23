@@ -2,7 +2,7 @@
 
 > **Last updated:** 2026-08-23
 >
-> **Version:** 0.139.0
+> **Version:** 0.141.0
 >
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in `CHANGELOG.md`; this file deliberately does not repeat either.
 
@@ -127,6 +127,7 @@ All client commands talk to the daemon over HTTP except `mimir personality list`
 |---------|--------|----------------------|
 | Streaming responses | ✅ Works | SSE `/chat/stream` endpoint with agentic tool loop; the old streaming bug ([#71](https://github.com/BhavsarDevansh/Mimir/issues/71)) is fixed. |
 | Non-streaming responses | ✅ Works | `/chat` endpoint; full response returned as JSON with tool-call info. |
+| OpenAI-compatible provider surface | ✅ Works | `GET /v1/models` + `POST /v1/chat/completions` (blocking + streaming) so OpenAI-speaking apps and devices can use Mimir as their LLM provider; the `user` field is a conversation key, model names select personality presets or pass through as upstream overrides, and client tool schemas merge with server tools ([#388](https://github.com/BhavsarDevansh/Mimir/issues/388)). Internal tool activity is not yet surfaced in v1 output ([#464](https://github.com/BhavsarDevansh/Mimir/issues/464)). |
 | Session persistence | ✅ Works | Each conversation gets a UUID; history is SQLite-backed and survives restarts. |
 | Session resume | ✅ Works | `/history` in `mimir chat` lists sessions and replays messages from the last compaction point. No auto-resume or `--session` flag ([#280](https://github.com/BhavsarDevansh/Mimir/issues/280)). |
 | Context trimming | ✅ Works | Drops oldest message pairs to `max_tokens` / `max_turns` config limits; system prompt preserved. |
@@ -283,6 +284,8 @@ The daemon exposes an OpenAI-compatible chat endpoint plus Mimir-specific manage
 | `GET` | `/sessions/{id}/messages` | Messages for a session (from last compaction point) |
 | `POST` | `/chat` | Blocking chat with agentic tool loop |
 | `POST` | `/chat/stream` | SSE streaming chat |
+| `GET` | `/v1/models` | OpenAI-compatible model list (personality presets) |
+| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completion (blocking + streaming) |
 | `POST` | `/stop` | Graceful shutdown (loopback only) |
 | `GET` | `/connectors` | List registered connector instances with derived item counts |
 | `POST` | `/connectors` | Register a new connector instance (add-only; validates the backend) |

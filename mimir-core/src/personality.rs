@@ -196,6 +196,15 @@ Core facts about the user (condensed subset — not a complete picture; treat as
         &self.active_name
     }
 
+    /// Whether a preset with the given name exists (built-in or custom).
+    ///
+    /// Used by the OpenAI-compatible provider surface to decide whether a
+    /// request `model` selects a personality preset or passes through as an
+    /// upstream model override (issue #388).
+    pub fn has_preset(&self, name: &str) -> bool {
+        self.registry.contains_key(name)
+    }
+
     /// Non-fatal diagnostics collected while resolving presets: malformed or
     /// unreadable custom preset files, unknown frontmatter keys, and an
     /// unknown configured preset (issue #387).

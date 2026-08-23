@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.141.0] — 2026-08-23
+
+### Feature: OpenAI-compatible provider surface — /v1/models + /v1/chat/completions (issue #388)
+
+- The daemon now exposes an OpenAI-compatible provider surface so any app or device that speaks the OpenAI chat-completions API can use Mimir as its LLM provider: `GET /v1/models` lists personality presets as models (with descriptions), and `POST /v1/chat/completions` answers blocking and streaming requests mapped onto Mimir's session, personality, and worker-pool infrastructure.
+- Session mapping: Mimir is single-tenant, so the OpenAI `user` field is a conversation key backed by a new nullable unique `user_key` column on the sessions table (with migration) — a fixed `user` resumes one persistent session in the central profile, race-safe via a partial unique index. The client's `messages` array is a stateless echo: only the last user message starts a new turn, and trailing `tool` messages continue an in-flight turn. Requests without `user` are incognito-style (memory context injected, nothing persisted, no learning hooks).
+- Model mapping: `model` names matching a personality preset select that preset; unknown names pass through as upstream model overrides with the configured default personality.
+- Tools: client-supplied `tools` schemas merge with Mimir's server-side tools (server tools always available; on a name collision the server-side tool wins and the client's definition is silently dropped). Client tool calls are returned to the client (`finish_reason: "tool_calls"`), the assistant tool-call message and server tool results are persisted, and the client's follow-up `tool` messages continue the turn. `remember` stays a server-side hook and fires only when the turn completes.
+- Sampling: per-request `temperature` wins over config; per-request `max_tokens`/`max_completion_tokens` applies only when the client sends it (no default cap), via the new `LlmBackend::with_max_tokens_override`.
+- Streaming: OpenAI chunk framing (`chat.completion.chunk`, `delta.role` on the first chunk, `finish_reason`), `stream_options.include_usage` final usage chunk, and terminal `data: [DONE]`. Internal tool activity stays invisible on v1 (tracked in #464).
+- Errors: `/v1` routes return the OpenAI error JSON shape; a full worker-pool queue maps to `503` with `Retry-After: 5` (defensive until the pool bypass in #465 is fixed).
+- ContextManager: tool-message persistence (`add_tool_message`, `add_assistant_tool_calls_message`) with `tool_calls`/`tool_call_id` columns (with migration) and export round-trip, plus turn-based trimming so tool messages are never orphaned when old turns are trimmed.
+- Tests: OpenAI wire-type round-trips, session-mapping/migration/tool-persistence/trim unit tests, `max_tokens` override tests, and 16 server integration tests covering model listing, blocking/streaming shapes, session resumption, incognito, preset selection, client-tool round-trips, server-tool collision/execution, auth, and the 503 error shape.
+- Docs: new `docs/llm-provider.md` (technical) and `docs/wiki/llm-provider.md` (usage); `docs/chat-server.md`, `docs/wiki/server.md`, `docs/wiki/chat-api.md`, `docs/wiki/what-works-now.md`, `README.md`, `Mimir-Implementation-Context.md`, and `VISION/08-Architecture/Multi-Device.md` updated.
+- Version bumped 0.140.1 → 0.141.0 (minor — new feature).
+
 ## [0.140.1] — 2026-08-23
 
 ### Fix: calendar wizard rejects an OAuth scope list that parses to empty (issue #462)

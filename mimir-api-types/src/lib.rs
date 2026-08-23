@@ -19,9 +19,13 @@ pub mod kb;
 pub mod kb_maintenance;
 
 pub use chat::{
-    ChatMessage, ChatRequest, ChatResponse, OptimizationRunNowResponse, OptimizationRunSummary,
-    OptimizationStatusResponse, SessionMessagesResponse, SessionSummary, StatusResponse,
-    StreamItem, ToolCallInfo, ToolCallStartInfo, Usage,
+    ChatMessage, ChatRequest, ChatResponse, OpenAiChatMessage, OpenAiChatRequest,
+    OpenAiChatResponse, OpenAiChoice, OpenAiDelta, OpenAiError, OpenAiErrorBody,
+    OpenAiFunctionCall, OpenAiModel, OpenAiModelList, OpenAiResponseMessage, OpenAiStreamChoice,
+    OpenAiStreamChunk, OpenAiStreamOptions, OpenAiToolCall, OpenAiToolCallDelta, OpenAiUsage,
+    OptimizationRunNowResponse, OptimizationRunSummary, OptimizationStatusResponse,
+    SessionMessagesResponse, SessionSummary, StatusResponse, StreamItem, ToolCallInfo,
+    ToolCallStartInfo, Usage,
 };
 pub use connectors::{
     ActionResultResponse, AddConnectorRequest, ConnectorActionRequest, ConnectorCatalogEntry,

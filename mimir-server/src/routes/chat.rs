@@ -17,10 +17,10 @@ use tracing::error;
 use crate::error;
 use crate::state::AppState;
 
-static INCOGNITO_COUNTER: AtomicI64 = AtomicI64::new(-1);
+pub(crate) static INCOGNITO_COUNTER: AtomicI64 = AtomicI64::new(-1);
 
 /// Build a catalogue appendix for the system prompt.
-async fn build_catalogue(knowledge_graph: &mimir_knowledge::KnowledgeGraph) -> String {
+pub(crate) async fn build_catalogue(knowledge_graph: &mimir_knowledge::KnowledgeGraph) -> String {
     match knowledge_graph.get_top_level_catalogue().await {
         Ok(cats) if !cats.is_empty() => {
             let mut lines = vec!["## Knowledge Catalogue".to_string()];
@@ -36,7 +36,7 @@ async fn build_catalogue(knowledge_graph: &mimir_knowledge::KnowledgeGraph) -> S
 /// Execute a single tool call through the registry with the per-request
 /// context, so every tool — including `retrieve_context` — flows through the
 /// same dispatch path with uniform permission checks (issue #441).
-async fn execute_tool_call(
+pub(crate) async fn execute_tool_call(
     registry: &mimir_core::tools::ToolRegistry,
     tool_name: &str,
     tool_arguments: &str,
@@ -48,24 +48,12 @@ async fn execute_tool_call(
     registry.execute(tool_name, args, &ctx).await
 }
 
-/// Resolve the common chat state shared by both the blocking and streaming handlers.
+/// Build the memory context block injected into the system prompt: the
+/// condensed memory plus (when available) the upcoming-events section.
 ///
-/// Returns `(session_id, llm, messages, incognito, permit_option)` where
-/// `permit_option` is `Some` only when the session is non-incognito and the
-/// caller must hold the permit until after the assistant response is persisted.
-async fn resolve_chat_state(
-    state: &Arc<AppState>,
-    req: &ChatRequest,
-) -> Result<
-    (
-        i64,
-        Arc<dyn mimir_core::llm::LlmBackend>,
-        Vec<mimir_core::llm::types::Message>,
-        bool,
-        Option<tokio::sync::OwnedSemaphorePermit>,
-    ),
-    axum::response::Response,
-> {
+/// Shared by the native chat routes and the OpenAI-compatible provider
+/// surface (issue #388).
+pub(crate) async fn build_memory_context(state: &Arc<AppState>) -> String {
     let condensed = match state.knowledge_graph.get_condensed_memory().await {
         Ok(Some(text)) => text,
         Ok(None) => String::new(),
@@ -90,7 +78,7 @@ async fn resolve_chat_state(
     } else {
         String::new()
     };
-    let memory = if upcoming.is_empty() {
+    if upcoming.is_empty() {
         condensed
     } else {
         format!(
@@ -99,7 +87,53 @@ async fn resolve_chat_state(
 {}",
             condensed, upcoming
         )
-    };
+    }
+}
+
+/// Compose the full system prompt: personality prompt + memory context +
+/// knowledge catalogue.
+///
+/// Shared by the native chat routes and the OpenAI-compatible provider
+/// surface (issue #388).
+pub(crate) async fn build_system_prompt(
+    state: &Arc<AppState>,
+    personality: &mimir_core::personality::Personality,
+    memory: &str,
+) -> String {
+    let catalogue = build_catalogue(&state.knowledge_graph).await;
+    if catalogue.is_empty() {
+        personality.system_prompt(memory)
+    } else {
+        format!(
+            "{}
+
+{}",
+            personality.system_prompt(memory),
+            catalogue
+        )
+    }
+}
+
+/// Resolve the common chat state shared by both the blocking and streaming handlers.
+///
+/// Returns `(session_id, llm, messages, incognito, permit_option)` where
+/// `permit_option` is `Some` only when the session is non-incognito and the
+/// caller must hold the permit until after the assistant response is persisted.
+async fn resolve_chat_state(
+    state: &Arc<AppState>,
+    req: &ChatRequest,
+) -> Result<
+    (
+        i64,
+        Arc<dyn mimir_core::llm::LlmBackend>,
+        Vec<mimir_core::llm::types::Message>,
+        bool,
+        Option<tokio::sync::OwnedSemaphorePermit>,
+    ),
+    axum::response::Response,
+> {
+    let memory = build_memory_context(state).await;
+    let cfg = state.config.snapshot().await;
 
     let incognito = req.incognito == Some(true);
 
@@ -135,18 +169,7 @@ async fn resolve_chat_state(
                 Err(e) => return Err(error::context_error(e)),
             },
             None => {
-                let catalogue = build_catalogue(&state.knowledge_graph).await;
-                let system_prompt = if catalogue.is_empty() {
-                    personality.system_prompt(&memory)
-                } else {
-                    format!(
-                        "{}
-
-{}",
-                        personality.system_prompt(&memory),
-                        catalogue
-                    )
-                };
+                let system_prompt = build_system_prompt(state, &personality, &memory).await;
                 state
                     .context_manager
                     .create_session(system_prompt)
@@ -157,18 +180,7 @@ async fn resolve_chat_state(
     };
 
     if incognito {
-        let catalogue = build_catalogue(&state.knowledge_graph).await;
-        let system_prompt = if catalogue.is_empty() {
-            personality.system_prompt(&memory)
-        } else {
-            format!(
-                "{}
-
-{}",
-                personality.system_prompt(&memory),
-                catalogue
-            )
-        };
+        let system_prompt = build_system_prompt(state, &personality, &memory).await;
         let messages = vec![
             mimir_core::llm::types::Message::system(&system_prompt),
             mimir_core::llm::types::Message::user(&req.message),

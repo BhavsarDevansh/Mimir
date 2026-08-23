@@ -27,7 +27,8 @@ impl ContextManager {
                 cumulative_prompt_tokens INTEGER NOT NULL DEFAULT 0,
                 cumulative_completion_tokens INTEGER NOT NULL DEFAULT 0,
                 summary TEXT,
-                compacted_at TEXT
+                compacted_at TEXT,
+                user_key TEXT
             )
             "#,
         )
@@ -41,6 +42,8 @@ impl ContextManager {
                 session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
+                tool_calls TEXT,
+                tool_call_id TEXT,
                 created_at TEXT NOT NULL,
                 token_count INTEGER
             )
@@ -67,6 +70,55 @@ impl ContextManager {
 
         if has_compacted_at == 0 {
             sqlx::query("ALTER TABLE sessions ADD COLUMN compacted_at TEXT")
+                .execute(pool)
+                .await?;
+        }
+
+        // Migration: add user_key to existing databases (issue #388). The
+        // partial unique index enforces one session per OpenAI `user` key
+        // while leaving native sessions (NULL user_key) unconstrained.
+        let has_user_key: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'user_key'",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if has_user_key == 0 {
+            sqlx::query("ALTER TABLE sessions ADD COLUMN user_key TEXT")
+                .execute(pool)
+                .await?;
+        }
+
+        sqlx::query(
+            r#"
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_user_key
+            ON sessions(user_key) WHERE user_key IS NOT NULL
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        // Migration: add tool-call columns to existing databases (issue #388).
+        let has_tool_calls: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'tool_calls'",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if has_tool_calls == 0 {
+            sqlx::query("ALTER TABLE messages ADD COLUMN tool_calls TEXT")
+                .execute(pool)
+                .await?;
+        }
+
+        let has_tool_call_id: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'tool_call_id'",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if has_tool_call_id == 0 {
+            sqlx::query("ALTER TABLE messages ADD COLUMN tool_call_id TEXT")
                 .execute(pool)
                 .await?;
         }
@@ -157,7 +209,8 @@ async fn migrate_text_to_integer(pool: &SqlitePool) -> Result<(), ContextError> 
             cumulative_prompt_tokens INTEGER NOT NULL DEFAULT 0,
             cumulative_completion_tokens INTEGER NOT NULL DEFAULT 0,
             summary TEXT,
-            compacted_at TEXT
+            compacted_at TEXT,
+            user_key TEXT
         )
         "#,
     )
@@ -215,6 +268,8 @@ async fn migrate_text_to_integer(pool: &SqlitePool) -> Result<(), ContextError> 
             session_id INTEGER NOT NULL REFERENCES sessions_new(id) ON DELETE CASCADE,
             role TEXT NOT NULL,
             content TEXT NOT NULL,
+            tool_calls TEXT,
+            tool_call_id TEXT,
             created_at TEXT NOT NULL,
             token_count INTEGER
         )
@@ -227,8 +282,8 @@ async fn migrate_text_to_integer(pool: &SqlitePool) -> Result<(), ContextError> 
     for (old_sid, new_sid) in &mapping {
         sqlx::query(
             r#"
-            INSERT INTO messages_new (id, session_id, role, content, created_at, token_count)
-            SELECT id, ?1, role, content, created_at, token_count
+            INSERT INTO messages_new (id, session_id, role, content, tool_calls, tool_call_id, created_at, token_count)
+            SELECT id, ?1, role, content, NULL, NULL, created_at, token_count
             FROM messages WHERE session_id = ?2
             "#,
         )

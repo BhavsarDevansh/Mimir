@@ -30,6 +30,8 @@ bind_addr = "127.0.0.1:8080"
 | `/memory` | `GET` | Live condensed memory block from the knowledge graph |
 | `/chat` | `POST` | Blocking chat completion |
 | `/chat/stream` | `POST` | SSE streaming chat completion |
+| `/v1/models` | `GET` | OpenAI-compatible model list (personality presets) |
+| `/v1/chat/completions` | `POST` | OpenAI-compatible chat completion (blocking + streaming) |
 | `/connectors` | `GET` | List registered connector instances with derived item counts |
 | `/connectors` | `POST` | Register a new connector instance (add-only) |
 | `/connectors/{id}` | `GET` | Show a single connector instance with its item count |

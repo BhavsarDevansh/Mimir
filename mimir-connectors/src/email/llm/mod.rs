@@ -17,11 +17,12 @@
 //!   enums before a [`NormalizedFact`] is built. An invalid field is warned
 //!   and dropped, never trusted.
 //! - **Spam is classified in Rust, not by the LLM.** [`is_likely_spam`] skips
-//!   the LLM call entirely for obvious bulk-marketing infrastructure mail
-//!   (messages sent through known email-service-provider domains). Everything
-//!   else reaches the LLM, which returns an empty `facts` array when the prose
-//!   carries no real-world facts — so "some emails → no facts" judgment lives
-//!   in the LLM, while *obvious* spam never costs a call.
+//!   a message before every extraction layer for obvious bulk-marketing
+//!   infrastructure mail (messages sent through known email-service-provider
+//!   domains). Everything else reaches the cascade, and the LLM returns an
+//!   empty `facts` array when the prose carries no real-world facts — so
+//!   "some emails → no facts" judgment lives in the LLM, while *obvious*
+//!   spam never costs a call or a deterministic pass.
 //! - **System-queue routing.** Every LLM call goes through
 //!   [`LlmBackend::system_chat_message`], placing it on the shared
 //!   `LlmWorkerPool`'s system queue (priority below user chat) so a
@@ -45,7 +46,7 @@
 //!   persisted ledger format.
 
 mod hook;
-mod message;
+pub(crate) mod message;
 mod parse;
 pub(crate) mod retry;
 mod schema;
@@ -56,15 +57,17 @@ mod tests;
 
 use std::sync::Arc;
 
+use chrono::{DateTime, FixedOffset, Utc};
 use mail_parser::Message;
 use mimir_core::llm::{LlmBackend, Message as LlmMessage};
 use mimir_knowledge::normalize::NormalizedFact;
 use tracing::{debug, warn};
 
 use crate::connector::ConnectorError;
+use crate::email::envelope::{EmailEnvelope, bind_prose_fact};
 pub use crate::email::llm::hook::EmailExtractionHook;
 pub(crate) use crate::email::llm::hook::EmailExtractionPayload;
-use crate::email::llm::message::{body_text, from_address, is_likely_spam};
+use crate::email::llm::message::body_text;
 use crate::email::llm::parse::{build_fact, parse_output};
 pub(crate) use crate::email::llm::retry::{
     DEFAULT_MAX_LLM_EXTRACTION_ATTEMPTS, ProseRetryLedger, health_with_terminal,
@@ -76,16 +79,20 @@ pub(crate) async fn extract_prose_facts(
     user_identity: Option<&str>,
     message: &Message<'_>,
     raw_ref: &str,
+    internal_date: Option<DateTime<FixedOffset>>,
+    mailbox_address: Option<&str>,
 ) -> Result<Vec<NormalizedFact>, ConnectorError> {
-    let from = from_address(message);
-    let has_unsubscribe = message.header("List-Unsubscribe").is_some();
-    if is_likely_spam(from.as_deref(), has_unsubscribe) {
-        debug!(raw_ref, from = ?from, "skipping LLM layer: bulk-marketing sender");
+    let envelope = EmailEnvelope::from_message(message, internal_date, mailbox_address);
+    if envelope.is_spam {
+        debug!(raw_ref, from = ?envelope.from, "skipping LLM layer: bulk-marketing sender");
         return Ok(Vec::new());
     }
 
-    let subject = message.subject().unwrap_or("").to_string();
-    let Some(body) = body_text(message) else {
+    // The envelope already ran the body pass for the forwarded-body check;
+    // reuse it for the prompt. A subject-marked forward skips that pass, so
+    // fall back to a direct extraction in that case.
+    let body = envelope.body.clone().or_else(|| body_text(message));
+    let Some(body) = body else {
         debug!(
             raw_ref,
             "no decodable text body for LLM extraction; skipping"
@@ -94,10 +101,42 @@ pub(crate) async fn extract_prose_facts(
     };
 
     let prompt = build_system_prompt(user_identity);
+    // The full envelope — dates, recipients, and the deterministic spam /
+    // forwarding / misdirection signals — anchors the model's reading of
+    // the prose (issue #398): relative phrases resolve against the Sent
+    // and Current dates instead of guesses, and forwarded or misdirected
+    // mail is only mined for facts that are true about the owner.
     let user_turn = format!(
-        "From: {}\nSubject: {}\n\nBody:\n{}",
-        from.unwrap_or_default(),
-        subject,
+        "From: {}\nTo: {}\nCc: {}\nReply-To: {}\nSent: {}\nReceived: {}\n\
+         List-Unsubscribe: {}\nForwarded: {}\nMisdirected: {}\nCurrent date: {}\n\
+         Resolve relative dates (tomorrow, next week, overdue) against the Sent \
+         and Current dates above; never invent absolute dates.\n\
+         Subject: {}\n\nBody:\n{}",
+        envelope.from.as_deref().unwrap_or_default(),
+        envelope.to.join(", "),
+        envelope.cc.join(", "),
+        envelope.reply_to.join(", "),
+        envelope
+            .sent_date
+            .map(|d| d.to_rfc3339())
+            .unwrap_or_else(|| "unknown".to_string()),
+        envelope
+            .received_date
+            .map(|d| d.to_rfc3339())
+            .unwrap_or_else(|| "unknown".to_string()),
+        if envelope.has_list_unsubscribe {
+            "present"
+        } else {
+            "absent"
+        },
+        if envelope.is_forwarded { "yes" } else { "no" },
+        if envelope.is_wrong_recipient {
+            "yes (the mailbox owner is not in To/Cc)"
+        } else {
+            "no"
+        },
+        Utc::now().to_rfc3339(),
+        envelope.subject,
         truncate_body(&body),
     );
     let messages = vec![LlmMessage::system(prompt), LlmMessage::user(user_turn)];
@@ -113,7 +152,10 @@ pub(crate) async fn extract_prose_facts(
     let mut facts = Vec::with_capacity(output.facts.len());
     for fact in output.facts {
         match build_fact(fact, user_identity, raw_ref) {
-            Ok(f) => facts.push(f),
+            Ok(mut f) => {
+                bind_prose_fact(&mut f, &envelope);
+                facts.push(f);
+            }
             Err(error) => warn!(raw_ref, "dropping invalid LLM email fact: {error}"),
         }
     }

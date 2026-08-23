@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use crate::email::config::config_tests::app_config;
 use crate::email::imap;
-use crate::email::llm::EmailExtractionHook;
+use crate::email::llm::{EmailExtractionHook, extract_prose_facts};
+use chrono::TimeZone;
 use mimir_core::hooks::{
     Gate, Hook, HookEngine, KeyScope, QueuePolicy, RetryPolicy, Trigger, TriggerKind,
 };
@@ -14,6 +15,7 @@ use mimir_core::llm::MockLlmClient;
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorStatus, ConnectorType};
+use mimir_knowledge::models::fact::Fact;
 
 use super::extract_tests::{invite_email, plain_email};
 
@@ -191,6 +193,278 @@ where
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+/// The persisted fact for the user with the given predicate and object.
+async fn find_fact(kg: &KnowledgeGraph, predicate: &str, object: &str) -> Option<Fact> {
+    let search = kg.search_entities("Devansh", 10).await.unwrap();
+    for result in &search {
+        let facts = kg
+            .get_facts_by_subject(result.entity.id, 100)
+            .await
+            .unwrap();
+        for fact in &facts {
+            let pred = kg.relationship_type_name(fact.relationship_type_id).await;
+            if pred.as_deref() != Some(predicate) {
+                continue;
+            }
+            if let Some(object_id) = fact.object_id {
+                if let Ok(Some(entity)) = kg.get_entity(object_id).await
+                    && entity.name == object
+                {
+                    return Some(fact.clone());
+                }
+            } else if fact.object_literal.as_deref() == Some(object) {
+                return Some(fact.clone());
+            }
+        }
+    }
+    None
+}
+
+/// A two-year-old prose reminder addressed to the mailbox owner.
+fn old_rent_email() -> Vec<u8> {
+    b"From: landlord@example.com\r\n\
+To: devansh@example.com\r\n\
+Subject: Rent reminder\r\n\
+Date: Tue, 20 Aug 2024 09:00:00 +0000\r\n\
+Content-Type: text/plain; charset=\"utf-8\"\r\n\
+\r\n\
+Please pay rent by Friday.\r\n"
+        .to_vec()
+}
+
+#[tokio::test]
+async fn prose_prompt_carries_the_full_envelope() {
+    // The LLM user turn must carry the message envelope — dates, sender,
+    // recipients, bulk signals — plus the current date, so relative
+    // phrases resolve against real timestamps (issue #398).
+    let mock = llm_tool_response(r#"{"facts": []}"#);
+    let raw = old_rent_email();
+    let message = mail_parser::MessageParser::default().parse(&raw).unwrap();
+    let internal = chrono::FixedOffset::east_opt(0)
+        .unwrap()
+        .with_ymd_and_hms(2024, 8, 20, 9, 5, 0)
+        .unwrap();
+    let backend: Arc<dyn LlmBackend> = mock.clone();
+    extract_prose_facts(
+        &backend,
+        Some("Devansh"),
+        &message,
+        "17:42",
+        Some(internal),
+        Some("devansh@example.com"),
+    )
+    .await
+    .expect("extract");
+
+    let calls = mock.system_chat_calls();
+    assert_eq!(calls.len(), 1);
+    let user = calls[0]
+        .iter()
+        .find(|m| m.role == "user")
+        .expect("user turn");
+    for needle in [
+        "From: landlord@example.com",
+        "To: devansh@example.com",
+        "Sent: 2024-08-20T09:00:00",
+        "Received: 2024-08-20T09:05:00",
+        "List-Unsubscribe: absent",
+        "Forwarded: no",
+        "Misdirected: no",
+        "Current date:",
+        "Subject: Rent reminder",
+        "Please pay rent by Friday.",
+    ] {
+        assert!(
+            user.content.contains(needle),
+            "prompt must include {needle:?}:\n{}",
+            user.content
+        );
+    }
+}
+
+#[tokio::test]
+async fn old_actionable_email_binds_past_valid_until() {
+    // A two-year-old "pay rent" email must produce a historical fact, never
+    // a current action item: the Rust binding anchors `valid_from` at the
+    // sent date and expires the actionable window 30 days later — in the
+    // past for old mail (issue #398 acceptance).
+    let mock = llm_tool_response(
+        r#"{"facts": [{
+                "subject": "the user",
+                "subject_type": "Person",
+                "relationship_type": "has_appointment",
+                "object": "pay rent",
+                "object_is_entity": false,
+                "requires_user_action": true
+            }]}"#,
+    );
+    let raw = old_rent_email();
+    let message = mail_parser::MessageParser::default().parse(&raw).unwrap();
+    let backend: Arc<dyn LlmBackend> = mock.clone();
+    let facts = extract_prose_facts(
+        &backend,
+        Some("Devansh"),
+        &message,
+        "17:42",
+        None,
+        Some("devansh@example.com"),
+    )
+    .await
+    .expect("extract");
+
+    assert_eq!(facts.len(), 1);
+    let fact = &facts[0];
+    assert!(fact.requires_user_action);
+    assert_eq!(
+        fact.valid_from,
+        Some(
+            chrono::Utc
+                .with_ymd_and_hms(2024, 8, 20, 9, 0, 0)
+                .single()
+                .unwrap()
+        ),
+        "valid_from anchors at the email's sent date"
+    );
+    let valid_until = fact.valid_until.expect("actionable fact has a window");
+    assert!(
+        valid_until < chrono::Utc::now(),
+        "a two-year-old email's actionable window is in the past: {valid_until}"
+    );
+}
+
+#[tokio::test]
+async fn forwarded_email_facts_are_not_actionable() {
+    // Forwarded mail conveys someone else's conversation: the model may
+    // still emit real-world facts, but Rust downgrades them to information
+    // (never `requires_user_action`, issue #398 acceptance).
+    let mock = llm_tool_response(
+        r#"{"facts": [{
+                "subject": "the user",
+                "subject_type": "Person",
+                "relationship_type": "has_appointment",
+                "object": "renew the lease",
+                "object_is_entity": false,
+                "temporal": {"valid_from": "2026-09-01T10:00:00Z"},
+                "requires_user_action": true,
+                "event_type": "Task"
+            }]}"#,
+    );
+    let raw = String::from_utf8(old_rent_email())
+        .unwrap()
+        .replace("Subject: Rent reminder", "Subject: Fwd: Rent reminder")
+        .into_bytes();
+    let message = mail_parser::MessageParser::default().parse(&raw).unwrap();
+    let backend: Arc<dyn LlmBackend> = mock.clone();
+    let facts = extract_prose_facts(
+        &backend,
+        Some("Devansh"),
+        &message,
+        "17:42",
+        None,
+        Some("devansh@example.com"),
+    )
+    .await
+    .expect("extract");
+
+    assert_eq!(facts.len(), 1);
+    assert!(
+        !facts[0].requires_user_action,
+        "forwarded mail is never actionable"
+    );
+    assert_eq!(
+        facts[0].valid_from,
+        Some(
+            chrono::Utc
+                .with_ymd_and_hms(2026, 9, 1, 10, 0, 0)
+                .single()
+                .unwrap()
+        ),
+        "explicit timestamps survive the envelope binding"
+    );
+}
+
+#[tokio::test]
+async fn wrong_recipient_email_facts_are_not_actionable() {
+    // Mail addressed to someone else (the owner is BCC'd) must not author
+    // obligations for the owner (issue #398).
+    let mock = llm_tool_response(
+        r#"{"facts": [{
+                "subject": "the user",
+                "subject_type": "Person",
+                "relationship_type": "has_appointment",
+                "object": "file the return",
+                "object_is_entity": false,
+                "requires_user_action": true
+            }]}"#,
+    );
+    let raw = String::from_utf8(old_rent_email())
+        .unwrap()
+        .replace("To: devansh@example.com", "To: other@example.com")
+        .into_bytes();
+    let message = mail_parser::MessageParser::default().parse(&raw).unwrap();
+    let backend: Arc<dyn LlmBackend> = mock.clone();
+    let facts = extract_prose_facts(
+        &backend,
+        Some("Devansh"),
+        &message,
+        "17:42",
+        None,
+        Some("devansh@example.com"),
+    )
+    .await
+    .expect("extract");
+
+    assert_eq!(facts.len(), 1);
+    assert!(
+        !facts[0].requires_user_action,
+        "misdirected mail is never actionable"
+    );
+}
+
+#[tokio::test]
+async fn old_actionable_email_lands_historical_fact_in_kb() {
+    // End-to-end through the hook engine: the persisted fact carries the
+    // envelope-derived past `valid_until`, so it can never surface as a
+    // current action item (issue #398 acceptance).
+    let mock = llm_tool_response(
+        r#"{"facts": [{
+                "subject": "the user",
+                "subject_type": "Person",
+                "relationship_type": "has_appointment",
+                "object": "pay rent",
+                "object_is_entity": false,
+                "requires_user_action": true
+            }]}"#,
+    );
+    let env = hook_env(Some(mock.clone()), None).await;
+    stage(&env.connector, old_rent_email()).await;
+    env.connector.extract().await.expect("extract");
+    wait_for(|| async {
+        find_fact(&env.kg, "has_appointment", "pay rent")
+            .await
+            .is_some()
+    })
+    .await;
+
+    let fact = find_fact(&env.kg, "has_appointment", "pay rent")
+        .await
+        .expect("inserted fact");
+    assert_eq!(
+        fact.valid_from,
+        Some(
+            chrono::Utc
+                .with_ymd_and_hms(2024, 8, 20, 9, 0, 0)
+                .single()
+                .unwrap()
+        )
+    );
+    let valid_until = fact.valid_until.expect("actionable window persisted");
+    assert!(
+        valid_until < chrono::Utc::now(),
+        "old mail's action window is in the past: {valid_until}"
+    );
 }
 
 #[tokio::test]
@@ -437,6 +711,8 @@ async fn malformed_message_records_durable_terminal_failure() {
         // An empty raw message has no headers, so `MessageParser` rejects it
         // (probe: `MessageParser::parse(&[])` is `None`).
         raw: Vec::new(),
+        internal_date: None,
+        mailbox_address: Some("devansh@example.com".to_string()),
         uid_validity: 17,
         uid: 43,
         raw_ref: "17:43".to_string(),

@@ -51,6 +51,15 @@ Not every email is machine-readable. A dentist's "see you Tuesday 3pm" with no c
 - The LLM call runs on Mimir's shared LLM **system queue** — at lower priority than your chat — so a connector call waiting in the queue never delays a queued chat, and a chat you send mid-extraction jumps ahead of any connector call that has not started yet. This is what the C7 acceptance criterion ("a queued chat preempts a waiting connector call") guarantees: pre-emption applies to connector calls waiting in the pool, not to a provider request already in flight.
 - User-scoped facts ("I have a flight…", "I have an appointment…") are authored against your canonical identity so they resolve to you and surface in your "Upcoming" section.
 
+### Emails are read in context (#398)
+
+Mimir reads every email with its envelope — when it was sent and received, who it was from and to, and whether it is bulk mail — so the facts it creates are bound by that context:
+
+- **Old mail stays old.** An email from two years ago can never turn into a current "do this now" item. Prose facts from a message are anchored to the email's own date, and an action item with no date of its own expires 30 days after the email — so the older the email, the further in the past its obligations are. A "pay rent" reminder from 2024 is recorded as history, not as something you owe today.
+- **Bulk mail is filtered before anything is extracted.** Marketing broadcasters (Mailchimp, HubSpot, and similar) and any mail carrying a `List-Unsubscribe` header are skipped entirely — even when they contain calendar invites or machine-readable receipts — so promotions cannot sneak facts into your knowledge graph. Transactional receipts and bookings from general-purpose delivery services (SendGrid, Mailgun, Postmark, Amazon SES) are still read.
+- **Forwarded and misdirected mail is informational.** Mail marked as forwarded (a "Fwd:" subject or the standard "Forwarded message" separator), or mail addressed to someone else that landed in your inbox, is still mined for real facts — but it is never treated as a task for you. Nothing in it can become an action item.
+- **Relative dates resolve for real.** The extractor is told the email's sent date and today's date, so "see you Tuesday", "next week", and "overdue" become real timestamps instead of guesses.
+
 ### If the LLM layer fails (#262)
 
 Sometimes the LLM cannot read an email — a provider hiccup, a network error, or a message the model refuses to process. Mimir never treats that as "nothing to extract": the `connector_item.remember` hook retries the message with backoff, while any facts the deterministic layers already found are kept. The retry is **bounded and restart-safe**:

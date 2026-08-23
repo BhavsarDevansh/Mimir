@@ -26,6 +26,7 @@ Build the connector framework and implement 3 core connectors: Email, Calendar, 
 - [x] Fact extraction: deterministic cascade with LLM fallback (C6–C7 / #200, #201, #249)
 - [x] Extract: flight confirmations, bookings, dates, contacts (C6 / #200, #249, C7 / #201)
 - [x] Incremental sync (track last UID) (C5 / #199)
+- [x] Envelope-context extraction: facts bound by the email's dates, sender, recipients, and spam signals (#398)
 
 ### 3.3 Google Calendar / CalDAV Connector
 - [x] OAuth 2.0 or app password auth (C3 / #197)

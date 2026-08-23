@@ -49,11 +49,13 @@ impl LlmClient {
         messages: Vec<Message>,
         stream: bool,
         tools: Option<Vec<serde_json::Value>>,
+        overrides: &LlmRequestOverrides,
     ) -> ChatRequest {
-        let mut req = ChatRequest::new(self.config.model.clone(), messages)
-            .with_temperature(self.config.temperature)
+        let model = self.effective_model(overrides);
+        let mut req = ChatRequest::new(model, messages)
+            .with_temperature(overrides.temperature.unwrap_or(self.config.temperature))
             .with_stream(stream);
-        if let Some(mt) = self.config.max_tokens {
+        if let Some(mt) = overrides.max_tokens.or(self.config.max_tokens) {
             req = req.with_max_tokens(mt);
         }
         if let Some(tools) = tools {
@@ -62,13 +64,15 @@ impl LlmClient {
         req
     }
 
-    /// Query the provider's `/models` endpoint for the configured model
+    /// Query the provider's `/models` endpoint for the effective model — the
+    /// per-request override when present, otherwise the configured model —
     /// and return its advertised context window (if any).
     ///
     /// Falls back to a small built-in mapping for well-known models when the
     /// provider does not expose `context_window`.
     pub async fn fetch_model_context_window(&self) -> Result<Option<u32>, LlmError> {
-        let url = format!("{}/models/{}", self.config.endpoint, self.config.model);
+        let model = self.effective_model(&self.overrides);
+        let url = format!("{}/models/{}", self.config.endpoint, model);
         let response = self
             .client
             .get(&url)
@@ -79,14 +83,23 @@ impl LlmClient {
 
         if !response.status().is_success() {
             // Provider doesn't support model introspection — fall back to known mapping.
-            return Ok(Self::known_context_window(&self.config.model));
+            return Ok(Self::known_context_window(&model));
         }
 
         let info: crate::llm::types::ModelInfo =
             response.json().await.map_err(LlmError::Network)?;
         Ok(info
             .context_window
-            .or_else(|| Self::known_context_window(&self.config.model)))
+            .or_else(|| Self::known_context_window(&model)))
+    }
+
+    /// The upstream model to use for a request — the per-request override
+    /// when present, otherwise the configured model.
+    pub(super) fn effective_model(&self, overrides: &LlmRequestOverrides) -> String {
+        overrides
+            .model
+            .clone()
+            .unwrap_or_else(|| self.config.model.clone())
     }
 
     /// Built-in context-window sizes for popular models.

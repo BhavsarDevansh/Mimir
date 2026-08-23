@@ -141,7 +141,7 @@ When a chat request sets `incognito: true`:
 - No session is created and neither the user message nor the assistant response is persisted.
 - **Write-capable tools are suppressed.** Tools implementing `Tool::is_write_tool() -> true` are excluded from the exported tool set, and any attempt to execute them during an incognito turn returns `ToolError::BlockedIncognito` so no facts are written to the knowledge graph. No built-in tool is currently write-capable (the `remember` tool was removed in #386), but the guard remains as defence-in-depth. Read-only KG tools remain available.
 - **No hooks fire.** Incognito turns never enqueue the `remember.chat` hook, so no background extraction runs and no facts are persisted (asserted by server integration tests).
-- The live configuration temperature is applied per request via `LlmBackend::with_temperature_override` (issue #80), so hot-reloaded `llm.temperature` changes take effect without restarting the daemon.
+- The live configuration temperature is applied per request via `LlmBackend::with_temperature_override` (issue #80), so hot-reloaded `llm.temperature` changes take effect without restarting the daemon. The override clone keeps the worker pool (issue #465), so incognito and persisted turns alike still enqueue on the user queue and queue-full backpressure applies.
 
 ## Concurrency
 

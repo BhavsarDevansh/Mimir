@@ -71,26 +71,23 @@ impl LlmBackend for LlmClient {
 
     fn with_model_override(&self, model: String) -> Option<Arc<dyn LlmBackend>> {
         let mut clone = self.clone();
-        clone.config.model = model;
-        clone.pool = None;
+        clone.overrides.model = Some(model);
         Some(Arc::new(clone))
     }
 
     fn with_temperature_override(&self, temperature: f32) -> Option<Arc<dyn LlmBackend>> {
         let mut clone = self.clone();
-        clone.config.temperature = temperature;
-        clone.pool = None;
+        clone.overrides.temperature = Some(temperature);
         Some(Arc::new(clone))
     }
 
     fn with_max_tokens_override(&self, max_tokens: u32) -> Option<Arc<dyn LlmBackend>> {
         let mut clone = self.clone();
-        clone.config.max_tokens = Some(max_tokens);
-        clone.pool = None;
+        clone.overrides.max_tokens = Some(max_tokens);
         Some(Arc::new(clone))
     }
 
     fn max_tokens(&self) -> Option<u32> {
-        self.config.max_tokens
+        self.overrides.max_tokens.or(self.config.max_tokens)
     }
 }

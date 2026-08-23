@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::config::LlmConfig;
 use crate::llm::client::LlmClient;
 use crate::llm::pool::{LlmWorkerPool, WorkerPoolConfig};
-use crate::llm::types::LlmError;
+use crate::llm::types::{LlmError, LlmRequestOverrides};
 
 impl LlmClient {
     pub async fn new(config: LlmConfig) -> Result<Self, LlmError> {
@@ -36,6 +36,7 @@ impl LlmClient {
             client,
             config,
             pool: Some(pool),
+            overrides: LlmRequestOverrides::default(),
         })
     }
 
@@ -48,6 +49,7 @@ impl LlmClient {
             client,
             config,
             pool: None,
+            overrides: LlmRequestOverrides::default(),
         })
     }
 

@@ -719,17 +719,32 @@ async fn chat_completions_stream(
     let turn = resolve_openai_turn(&state, &req).await?;
     state.record_user_activity();
 
-    // Defensive pre-flight: the worker-pool bypass (#465) makes this a no-op
-    // on the hot path today, but once the bypass is fixed a full queue must
-    // surface as 503 before the SSE response starts.
-    if !turn.llm.user_queue_has_capacity().await {
-        // The user message was already persisted by `resolve_openai_turn`;
-        // remove it so a rejected turn leaves no orphaned final message.
-        rollback_persisted_turn(&turn).await;
-        return Err(error::openai_llm_error(
-            mimir_core::llm::types::LlmError::QueueFull,
-        ));
-    }
+    // Admit the first stream job before the SSE response starts so queue
+    // saturation surfaces as 503 + Retry-After instead of an SSE error after
+    // `200 OK` (PR #477 review). Later tool-loop rounds enqueue inside the
+    // stream, where a mid-stream admission failure can only be an SSE error.
+    let mut conversation = turn.conversation.clone();
+    let mut round: u16 = 0;
+    let first_stream = match turn
+        .llm
+        .chat_stream_with_usage(
+            conversation.clone(),
+            if round < turn.max_rounds {
+                turn.merged_tools.clone()
+            } else {
+                None
+            },
+        )
+        .await
+    {
+        Ok(stream) => stream,
+        Err(e) => {
+            // The user message was already persisted by `resolve_openai_turn`;
+            // remove it so a rejected turn leaves no orphaned final message.
+            rollback_persisted_turn(&turn).await;
+            return Err(error::openai_llm_error(e));
+        }
+    };
 
     let include_usage = req
         .stream_options
@@ -744,31 +759,33 @@ async fn chat_completions_stream(
         // persisted (non-incognito only).
         let _permit = turn.permit.take();
 
-        let mut conversation = turn.conversation.clone();
-        let mut round: u16 = 0;
         let mut usage_acc: Option<Usage> = None;
         let mut sent_role = false;
+        let mut stream = Some(first_stream);
 
         'outer: loop {
-            let mut stream = match turn
-                .llm
-                .chat_stream_with_usage(
-                    conversation.clone(),
-                    if round < turn.max_rounds {
-                        turn.merged_tools.clone()
-                    } else {
-                        None
-                    },
-                )
-                .await
-            {
-                Ok(stream) => stream,
-                Err(e) => {
-                    error!("LLM stream error: {e}");
-                    rollback_persisted_turn(&turn).await;
-                    send_error_and_done(&event_tx).await;
-                    break 'outer;
-                }
+            let mut stream = match stream.take() {
+                Some(stream) => stream,
+                None => match turn
+                    .llm
+                    .chat_stream_with_usage(
+                        conversation.clone(),
+                        if round < turn.max_rounds {
+                            turn.merged_tools.clone()
+                        } else {
+                            None
+                        },
+                    )
+                    .await
+                {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        error!("LLM stream error: {e}");
+                        rollback_persisted_turn(&turn).await;
+                        send_error_and_done(&event_tx).await;
+                        break 'outer;
+                    }
+                },
             };
 
             let mut full_response = String::new();

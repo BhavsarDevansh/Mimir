@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.141.4] — 2026-08-24
+
+### Fix: PR #477 review — source-compatible pool enqueue APIs and atomic stream admission
+
+- `LlmWorkerPool` regains the original public `enqueue_chat_message`, `enqueue_chat`, `enqueue_chat_stream`, `enqueue_system_chat_message`, `enqueue_system_chat`, and `enqueue_system_chat_stream` signatures (no `LlmRequestOverrides` argument); the override-taking behaviour moves to explicit `*_with_overrides` variants, so callers compiled against 0.141.2 keep compiling after the upgrade.
+- The OpenAI-compatible streaming route (`/v1/chat/completions` with `stream: true`) now admits the first stream job before the SSE response starts, so a full user queue returns `503` + `Retry-After: 5` instead of surfacing an SSE error event after `200 OK`.
+- Mock HTTP servers in the pool/client tests read the complete request (headers + `Content-Length` body) before parsing JSON instead of trusting a single `TcpStream::peek`; `MockLlmClientBuilder::push_stream_error` queues immediate stream admission failures for regression tests.
+- Version bumped 0.141.3 → 0.141.4 (patch — bugfix).
+
+## [0.141.3] — 2026-08-23
+
+### Fix: chat requests no longer bypass the LLM worker pool when overrides are applied (issue #465)
+
+- `LlmBackend::with_model_override`, `with_temperature_override`, and `with_max_tokens_override` clones now keep the worker pool: the override is recorded on the client and carried through the job payload (`LlmRequestOverrides`) instead of swapping the pool for a direct HTTP client. Interactive chat (`/chat`, `/chat/stream`) and the OpenAI-compatible provider surface (`/v1/chat/completions`) therefore enqueue on the pool's user queue, so `LlmError::QueueFull` → `503` + `Retry-After: 5` backpressure is live on the hot path and the status endpoint's `queue_depth_user` reflects real chat load.
+- The pool worker applies job overrides when building the upstream request (model, temperature, `max_tokens`) without rebuilding its HTTP client; `LlmBackend::max_tokens` reports the effective override value, and `fetch_model_context_window` probes the effective model.
+- Tests: override clones preserve pooling; pooled temperature overrides reach the upstream request; pool jobs apply model/temperature/`max_tokens` overrides end-to-end.
+- Docs: `docs/llm-worker-pool.md`, `docs/llm-provider.md`, `docs/chat-server.md`, and `docs/wiki/llm-client.md` updated (pooled overrides, live 503 backpressure).
+- Version bumped 0.141.2 → 0.141.3 (patch — bugfix).
+
 ## [0.141.2] — 2026-08-23
 
 ### Fix: OAuth PKCE redirect URI uses `localhost` so Microsoft Entra registrations match

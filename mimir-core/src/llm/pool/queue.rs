@@ -8,18 +8,31 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 
 use crate::llm::pool::LlmWorkerPool;
-use crate::llm::types::{Job, LlmError, Message, StreamItem, Usage};
+use crate::llm::types::{Job, LlmError, LlmRequestOverrides, Message, StreamItem, Usage};
 
 impl LlmWorkerPool {
     /// Enqueue a non-streaming chat job to the **user** queue.
     ///
     /// Returns the assistant response and token usage when the job completes.
     /// Returns [`LlmError::QueueFull`] if the user queue is at capacity.
-    /// Enqueue a non-streaming chat job to the **user** queue and return the full message.
     pub async fn enqueue_chat_message(
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(Message, Usage), LlmError> {
+        self.enqueue_chat_message_with_overrides(messages, tools, LlmRequestOverrides::default())
+            .await
+    }
+
+    /// Enqueue a non-streaming chat job to the **user** queue with per-request overrides.
+    ///
+    /// Returns the assistant response and token usage when the job completes.
+    /// Returns [`LlmError::QueueFull`] if the user queue is at capacity.
+    pub async fn enqueue_chat_message_with_overrides(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+        overrides: LlmRequestOverrides,
     ) -> Result<(Message, Usage), LlmError> {
         let (tx, rx) = oneshot::channel();
         {
@@ -30,6 +43,7 @@ impl LlmWorkerPool {
             queue.push_back(Job::Chat {
                 messages,
                 tools,
+                overrides,
                 respond: tx,
             });
         }
@@ -47,7 +61,23 @@ impl LlmWorkerPool {
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<(String, Usage), LlmError> {
-        let (msg, usage) = self.enqueue_chat_message(messages, tools).await?;
+        self.enqueue_chat_with_overrides(messages, tools, LlmRequestOverrides::default())
+            .await
+    }
+
+    /// Enqueue a non-streaming chat job to the **user** queue with per-request overrides.
+    ///
+    /// Returns the assistant response text and token usage when the job completes.
+    /// Returns [`LlmError::QueueFull`] if the user queue is at capacity.
+    pub async fn enqueue_chat_with_overrides(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+        overrides: LlmRequestOverrides,
+    ) -> Result<(String, Usage), LlmError> {
+        let (msg, usage) = self
+            .enqueue_chat_message_with_overrides(messages, tools, overrides)
+            .await?;
         Ok((msg.content, usage))
     }
 
@@ -61,6 +91,21 @@ impl LlmWorkerPool {
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
+        self.enqueue_chat_stream_with_overrides(messages, tools, LlmRequestOverrides::default())
+            .await
+    }
+
+    /// Enqueue a streaming chat job to the **user** queue with per-request overrides.
+    ///
+    /// Returns a stream that yields [`StreamItem`] chunks as the worker
+    /// receives them from the LLM.
+    /// Returns [`LlmError::QueueFull`] if the user queue is at capacity.
+    pub async fn enqueue_chat_stream_with_overrides(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+        overrides: LlmRequestOverrides,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
         let (tx, rx) = mpsc::channel::<Result<StreamItem, LlmError>>(64);
         {
             let mut queue = self.inner.user_queue.lock().await;
@@ -70,6 +115,7 @@ impl LlmWorkerPool {
             queue.push_back(Job::ChatStream {
                 messages,
                 tools,
+                overrides,
                 respond: tx,
             });
         }
@@ -82,12 +128,26 @@ impl LlmWorkerPool {
         Ok(Box::pin(stream))
     }
 
-    /// Enqueue a non-streaming chat job to the **system** queue.
     /// Enqueue a non-streaming chat job to the **system** queue and return the full message.
     pub async fn enqueue_system_chat_message(
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<(Message, Usage), LlmError> {
+        self.enqueue_system_chat_message_with_overrides(
+            messages,
+            tools,
+            LlmRequestOverrides::default(),
+        )
+        .await
+    }
+
+    /// Enqueue a non-streaming chat job to the **system** queue with per-request overrides.
+    pub async fn enqueue_system_chat_message_with_overrides(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+        overrides: LlmRequestOverrides,
     ) -> Result<(Message, Usage), LlmError> {
         let (tx, rx) = oneshot::channel();
         {
@@ -98,6 +158,7 @@ impl LlmWorkerPool {
             queue.push_back(Job::Chat {
                 messages,
                 tools,
+                overrides,
                 respond: tx,
             });
         }
@@ -112,7 +173,20 @@ impl LlmWorkerPool {
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<(String, Usage), LlmError> {
-        let (msg, usage) = self.enqueue_system_chat_message(messages, tools).await?;
+        self.enqueue_system_chat_with_overrides(messages, tools, LlmRequestOverrides::default())
+            .await
+    }
+
+    /// Enqueue a non-streaming chat job to the **system** queue with per-request overrides.
+    pub async fn enqueue_system_chat_with_overrides(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+        overrides: LlmRequestOverrides,
+    ) -> Result<(String, Usage), LlmError> {
+        let (msg, usage) = self
+            .enqueue_system_chat_message_with_overrides(messages, tools, overrides)
+            .await?;
         Ok((msg.content, usage))
     }
 
@@ -121,6 +195,21 @@ impl LlmWorkerPool {
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
+        self.enqueue_system_chat_stream_with_overrides(
+            messages,
+            tools,
+            LlmRequestOverrides::default(),
+        )
+        .await
+    }
+
+    /// Enqueue a streaming chat job to the **system** queue with per-request overrides.
+    pub async fn enqueue_system_chat_stream_with_overrides(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<serde_json::Value>>,
+        overrides: LlmRequestOverrides,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
         let (tx, rx) = mpsc::channel::<Result<StreamItem, LlmError>>(64);
         {
@@ -131,6 +220,7 @@ impl LlmWorkerPool {
             queue.push_back(Job::ChatStream {
                 messages,
                 tools,
+                overrides,
                 respond: tx,
             });
         }

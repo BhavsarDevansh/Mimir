@@ -48,9 +48,9 @@ pub trait LlmBackend: Send + Sync + Debug {
     /// so one-call-at-a-time providers never block interactive chat.
     ///
     /// The default implementation delegates to [`Self::chat_message`] so
-    /// backends without a separate system queue (mocks, direct test clients,
-    /// model-override clones) run synchronously. Pool-backed backends
-    /// (`LlmClient`) override this to enqueue on the system queue.
+    /// backends without a separate system queue (mocks, direct test clients)
+    /// run synchronously. Pool-backed backends (`LlmClient`) override this to
+    /// enqueue on the system queue.
     async fn system_chat_message(
         &self,
         messages: Vec<Message>,
@@ -145,6 +145,10 @@ pub trait LlmBackend: Send + Sync + Debug {
 
     /// Return a clone of this backend with the model overridden.
     ///
+    /// `LlmClient` keeps the worker pool on the clone and carries the override
+    /// through the job payload, so a model override never bypasses queue
+    /// backpressure (issue #465).
+    ///
     /// The default implementation returns `None`, indicating that the backend
     /// does not support model overrides.
     fn with_model_override(&self, _model: String) -> Option<Arc<dyn LlmBackend>> {
@@ -156,8 +160,10 @@ pub trait LlmBackend: Send + Sync + Debug {
     ///
     /// This lets callers apply the live configuration temperature per request
     /// so that hot-reloaded temperature changes take effect without restarting
-    /// the daemon (issue #80). The default returns `None` (backend ignores the
-    /// override and uses its configured temperature).
+    /// the daemon (issue #80). `LlmClient` keeps the worker pool on the clone,
+    /// so a pooled chat request still enqueues on the user queue (issue #465).
+    /// The default returns `None` (backend ignores the override and uses its
+    /// configured temperature).
     fn with_temperature_override(&self, _temperature: f32) -> Option<Arc<dyn LlmBackend>> {
         None
     }
@@ -167,8 +173,10 @@ pub trait LlmBackend: Send + Sync + Debug {
     ///
     /// Lets the OpenAI-compatible provider surface apply a per-request
     /// `max_tokens` only when the client sends one, without forcing a
-    /// default cap (issue #388). The default returns `None` (backend ignores
-    /// the override and uses its configured `max_tokens`).
+    /// default cap (issue #388). `LlmClient` keeps the worker pool on the
+    /// clone, so the override still routes through the user queue (issue #465).
+    /// The default returns `None` (backend ignores the override and uses its
+    /// configured `max_tokens`).
     fn with_max_tokens_override(&self, _max_tokens: u32) -> Option<Arc<dyn LlmBackend>> {
         None
     }
@@ -176,9 +184,10 @@ pub trait LlmBackend: Send + Sync + Debug {
     /// The effective `max_tokens` sampling parameter of this backend, if any.
     ///
     /// Defaults to `None` so backends without a configured cap (mocks,
-    /// override-less clones) report none; `LlmClient` reports its configured
-    /// value. Lets callers and tests inspect the override outcome without
-    /// depending on `Debug` formatting (PR #466 review).
+    /// override-less clones) report none; `LlmClient` reports its effective
+    /// value (a per-request override wins over the configured cap). Lets
+    /// callers and tests inspect the override outcome without depending on
+    /// `Debug` formatting (PR #466 review).
     fn max_tokens(&self) -> Option<u32> {
         None
     }

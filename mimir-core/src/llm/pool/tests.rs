@@ -2,10 +2,39 @@
 
 use super::*;
 use crate::config::LlmConfig;
-use crate::llm::types::{LlmError, Message, StreamItem};
+use crate::llm::types::{LlmError, LlmRequestOverrides, Message, StreamItem};
 use futures::StreamExt;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::Duration;
+
+/// Read a complete HTTP request (headers + `Content-Length` body) from a mock
+/// server socket so JSON parsing never sees a partially delivered body (PR #477 review).
+async fn read_complete_request(stream: &mut tokio::net::TcpStream) -> String {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 1024];
+    let header_end = loop {
+        if let Some(pos) = buf.windows(4).position(|window| window == b"\r\n\r\n") {
+            break pos + 4;
+        }
+        let n = stream.read(&mut chunk).await.expect("read request headers");
+        assert!(n > 0, "connection closed before request headers arrived");
+        buf.extend_from_slice(&chunk[..n]);
+    };
+    let content_length = String::from_utf8_lossy(&buf[..header_end])
+        .lines()
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .strip_prefix("content-length:")
+                .map(|value| value.trim().parse::<usize>().unwrap())
+        })
+        .unwrap_or(0);
+    while buf.len() < header_end + content_length {
+        let n = stream.read(&mut chunk).await.expect("read request body");
+        assert!(n > 0, "connection closed before the request body arrived");
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
 
 fn test_config() -> LlmConfig {
     LlmConfig {
@@ -47,9 +76,7 @@ async fn test_pool_user_priority_over_system() {
         let mut order = Vec::new();
         for _ in 0..2 {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 1024];
-            let n = stream.peek(&mut buf).await.unwrap();
-            let req = String::from_utf8_lossy(&buf[..n]);
+            let req = read_complete_request(&mut stream).await;
             if req.contains("system-first") {
                 order.push("system");
             } else if req.contains("user-second") {
@@ -119,9 +146,7 @@ async fn test_pool_stream_yields_text_and_usage() {
 
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 2048];
-        let n = stream.peek(&mut buf).await.unwrap();
-        let req = String::from_utf8_lossy(&buf[..n]);
+        let req = read_complete_request(&mut stream).await;
         assert!(req.contains("/chat/completions"));
 
         let sse_body = format!(
@@ -162,6 +187,54 @@ async fn test_pool_stream_yields_text_and_usage() {
     assert_eq!(items.len(), 2);
     assert!(matches!(&items[0], StreamItem::Text(t) if t == "Hello"));
     assert!(matches!(&items[1], StreamItem::Usage(u) if u.total_tokens == 4));
+}
+
+#[tokio::test]
+async fn test_pool_job_applies_request_overrides() {
+    // Issue #465: per-request overrides carried by the job must reach the
+    // upstream request, so override clones can stay on the shared pool.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let req = read_complete_request(&mut stream).await;
+        let body = req.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let json: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json["model"], "override-model");
+        assert_eq!(json["temperature"], 0.9);
+        assert_eq!(json["max_tokens"], 77);
+
+        let body = r#"{"id":"1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+
+    let config = LlmConfig {
+        endpoint: format!("http://{}/v1", addr),
+        api_key: "test".to_string(),
+        model: "gpt-4o".to_string(),
+        max_tokens: Some(10),
+        temperature: 0.2,
+    };
+
+    let pool = LlmWorkerPool::new(config, tiny_pool_config())
+        .await
+        .unwrap();
+
+    let overrides = LlmRequestOverrides {
+        model: Some("override-model".to_string()),
+        temperature: Some(0.9),
+        max_tokens: Some(77),
+    };
+    let result = pool
+        .enqueue_chat_with_overrides(vec![Message::user("hello")], None, overrides)
+        .await;
+    assert!(result.is_ok());
 }
 
 #[tokio::test]
@@ -209,9 +282,7 @@ async fn test_in_flight_counter_tracks_active_jobs() {
 
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 1024];
-        let n = stream.peek(&mut buf).await.unwrap();
-        let req = String::from_utf8_lossy(&buf[..n]);
+        let req = read_complete_request(&mut stream).await;
         assert!(req.contains("/chat/completions"));
 
         // Sleep while "processing" so the counter stays elevated.

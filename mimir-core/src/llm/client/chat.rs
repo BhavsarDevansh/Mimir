@@ -7,7 +7,7 @@ use futures::{Stream, StreamExt};
 use tracing::debug;
 
 use crate::llm::client::LlmClient;
-use crate::llm::types::{ChatResponse, LlmError, Message, StreamItem, Usage};
+use crate::llm::types::{ChatResponse, LlmError, LlmRequestOverrides, Message, StreamItem, Usage};
 
 impl LlmClient {
     pub async fn chat(
@@ -16,9 +16,10 @@ impl LlmClient {
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<(String, Usage), LlmError> {
         if let Some(pool) = &self.pool {
-            pool.enqueue_chat(messages, tools).await
+            pool.enqueue_chat_with_overrides(messages, tools, self.overrides.clone())
+                .await
         } else {
-            self.chat_direct(messages, tools).await
+            self.chat_direct(messages, tools, &self.overrides).await
         }
     }
 
@@ -29,9 +30,11 @@ impl LlmClient {
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<(Message, Usage), LlmError> {
         if let Some(pool) = &self.pool {
-            pool.enqueue_chat_message(messages, tools).await
+            pool.enqueue_chat_message_with_overrides(messages, tools, self.overrides.clone())
+                .await
         } else {
-            self.chat_message_direct(messages, tools).await
+            self.chat_message_direct(messages, tools, &self.overrides)
+                .await
         }
     }
 
@@ -39,19 +42,20 @@ impl LlmClient {
     ///
     /// Routes through the backing [`LlmWorkerPool`](crate::llm::pool::LlmWorkerPool)'s system queue when pooled,
     /// so the call runs at lower priority than user chat (a queued user job is
-    /// drained first). When the client has no pool (model-override clones,
-    /// direct test clients) the call runs synchronously via
-    /// `Self::chat_message_direct` — the system/user
-    /// distinction only exists for a pooled client.
+    /// drained first). When the client has no pool (direct test clients) the
+    /// call runs synchronously via `Self::chat_message_direct` — the
+    /// system/user distinction only exists for a pooled client.
     pub async fn system_chat_message(
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<(Message, Usage), LlmError> {
         if let Some(pool) = &self.pool {
-            pool.enqueue_system_chat_message(messages, tools).await
+            pool.enqueue_system_chat_message_with_overrides(messages, tools, self.overrides.clone())
+                .await
         } else {
-            self.chat_message_direct(messages, tools).await
+            self.chat_message_direct(messages, tools, &self.overrides)
+                .await
         }
     }
 
@@ -65,9 +69,11 @@ impl LlmClient {
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
         if let Some(pool) = &self.pool {
-            pool.enqueue_chat_stream(messages, tools).await
+            pool.enqueue_chat_stream_with_overrides(messages, tools, self.overrides.clone())
+                .await
         } else {
-            self.chat_stream_with_usage_direct(messages, tools).await
+            self.chat_stream_with_usage_direct(messages, tools, &self.overrides)
+                .await
         }
     }
 
@@ -95,8 +101,9 @@ impl LlmClient {
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
+        overrides: &LlmRequestOverrides,
     ) -> Result<(String, Usage), LlmError> {
-        let (msg, usage) = self.chat_message_direct(messages, tools).await?;
+        let (msg, usage) = self.chat_message_direct(messages, tools, overrides).await?;
         Ok((msg.content, usage))
     }
 
@@ -105,9 +112,10 @@ impl LlmClient {
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
+        overrides: &LlmRequestOverrides,
     ) -> Result<(Message, Usage), LlmError> {
-        let request = self.build_request(messages, false, tools);
-        debug!(endpoint = %self.config.endpoint, model = %self.config.model, "sending chat request");
+        let request = self.build_request(messages, false, tools, overrides);
+        debug!(endpoint = %self.config.endpoint, model = %request.model, "sending chat request");
 
         let response = self
             .retry_with_backoff(|| self.send_request(&request))
@@ -137,10 +145,11 @@ impl LlmClient {
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<serde_json::Value>>,
+        overrides: &LlmRequestOverrides,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, LlmError>> + Send>>, LlmError> {
-        let mut request = self.build_request(messages, true, tools);
+        let mut request = self.build_request(messages, true, tools, overrides);
         request.stream_options = Some(serde_json::json!({"include_usage": true}));
-        debug!(endpoint = %self.config.endpoint, model = %self.config.model, "sending streaming chat request with usage");
+        debug!(endpoint = %self.config.endpoint, model = %request.model, "sending streaming chat request with usage");
 
         let response = self
             .retry_with_backoff(|| self.send_request(&request))

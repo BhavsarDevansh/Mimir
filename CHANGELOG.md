@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.140.1] — 2026-08-23
+
+### Fix: calendar wizard rejects an OAuth scope list that parses to empty (issue #462)
+
+- The Custom CalDAV OAuth path (`calendar_oauth_questions` in `mimir/src/connector/wizard.rs`) now mirrors the email OAuth guard: a non-blank scope answer that parses to zero scopes (e.g. `", ,"`) is rejected with "OAuth scopes is required" before any auth config is built, so the wizard can never produce an authorize request with `"scopes": []` and fail the PKCE flow. A blank answer still keeps the Google Calendar default scope, so the Google preset's prompt behaviour is unchanged.
+- Tests: new scripted-prompt wizard test `wizard_caldav_oauth_rejects_parsed_empty_scopes` covering the Custom CalDAV OAuth flow with a `", ,"` answer (connector suite now 70 tests).
+- Docs: `docs/connector-management.md`, `docs/unit-tests.md`, and `docs/wiki/connectors.md` updated to describe the guard.
+- Version bumped 0.140.0 → 0.140.1 (patch — bugfix).
+
 ## [0.140.0] — 2026-08-23
 
 ### Feature: wizard email + calendar provider presets, generic Email connector type (issue #400)

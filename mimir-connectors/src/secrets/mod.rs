@@ -42,7 +42,7 @@
 //! - `store` — the [`SecretStore`] trait and shared slug validation.
 //! - `file` — [`FileSecretStore`], the V1 on-disk store.
 //! - `memory` — [`InMemorySecretStore`], the test/helper store.
-//! - `keyring` — [`KeyringSecretStore`], the opt-in OS-keychain store (F11 /
+//! - `keyring` — `KeyringSecretStore`, the opt-in OS-keychain store (F11 /
 //!   #188, feature `secrets-keyring`, off by default).
 
 mod bundle;
@@ -53,7 +53,13 @@ mod store;
 
 #[cfg(all(
     feature = "secrets-keyring",
-    any(target_os = "linux", target_os = "macos", target_os = "windows")
+    any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "macos",
+        target_os = "windows"
+    )
 ))]
 mod keyring;
 
@@ -65,7 +71,13 @@ pub use error::SecretError;
 pub use file::FileSecretStore;
 #[cfg(all(
     feature = "secrets-keyring",
-    any(target_os = "linux", target_os = "macos", target_os = "windows")
+    any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "macos",
+        target_os = "windows"
+    )
 ))]
 pub use keyring::KeyringSecretStore;
 pub use memory::InMemorySecretStore;

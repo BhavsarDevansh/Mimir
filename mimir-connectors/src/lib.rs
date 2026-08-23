@@ -52,7 +52,7 @@
 //!   feature (enabled by `calendar`, `gmail`, and the CLI).
 //! - [`secrets`] — [`SecretStore`] trait + [`SecretBundle`] enum +
 //!   [`FileSecretStore`] / [`InMemorySecretStore`] (F10 / #187) +
-//!   [`KeyringSecretStore`] (F11 / #188, opt-in `secrets-keyring`): per-connector
+//!   `KeyringSecretStore` (F11 / #188, opt-in `secrets-keyring`): per-connector
 //!   credential storage, one store for all auth kinds (OAuth / API token / app
 //!   password). V1 default is file-backed, plaintext at rest, 0600/0700 perms.
 //! - [`supervisor`] — [`ConnectorSupervisor`] + [`SupervisorConfig`]
@@ -177,7 +177,13 @@ pub use rate_limit::{
 };
 #[cfg(all(
     feature = "secrets-keyring",
-    any(target_os = "linux", target_os = "macos", target_os = "windows")
+    any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "macos",
+        target_os = "windows"
+    )
 ))]
 pub use secrets::KeyringSecretStore;
 pub use secrets::{FileSecretStore, InMemorySecretStore, SecretBundle, SecretError, SecretStore};

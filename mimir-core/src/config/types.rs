@@ -209,7 +209,7 @@ impl Default for GeocoderConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct SecretsConfig {
-    /// Which [`SecretStore`] backend the daemon uses for connector secrets.
+    /// Which secret-store backend the daemon uses for connector secrets.
     ///
     /// `file` (the default) stores plaintext per-slug JSON files under
     /// `~/.local/share/mimir/secrets/` with `0600`/`0700` permissions;
@@ -227,7 +227,7 @@ pub enum SecretsBackend {
     #[default]
     File,
     /// The OS credential store via the `keyring` crate (`secrets-keyring`
-    /// cargo feature; macOS Keychain / Linux Secret Service / Windows
+    /// cargo feature; macOS Keychain / Linux or BSD Secret Service / Windows
     /// Credential Manager).
     Keychain,
 }

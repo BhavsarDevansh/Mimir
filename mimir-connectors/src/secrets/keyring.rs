@@ -73,7 +73,7 @@ impl KeyringBackend for OsKeyringBackend {
 
 /// [`SecretStore`] backed by the OS credential store via the `keyring` crate.
 ///
-/// One OS entry per connector slug under the keyring service [`KEYRING_SERVICE`],
+/// One OS entry per connector slug under the keyring service `KEYRING_SERVICE`,
 /// holding the serialized [`SecretBundle`]. Construction is side-effect free;
 /// the first operation connects to the platform store (Keychain / Secret
 /// Service / Credential Manager) and surfaces availability problems as

@@ -114,7 +114,7 @@ Controls which [`SecretStore`](connector-secret-store.md) backend the daemon use
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `backend` | `SecretsBackend` | `"file"` | `"file"` stores per-slug JSON files with `0600`/`0700` permissions (V1 default); `"keychain"` stores bundles in the OS credential store (macOS Keychain / Linux Secret Service / Windows Credential Manager) and requires a build with the `secrets-keyring` cargo feature |
+| `backend` | `SecretsBackend` | `"file"` | `"file"` stores per-slug JSON files with `0600`/`0700` permissions (V1 default); `"keychain"` stores bundles in the OS credential store (macOS Keychain / Linux or BSD Secret Service / Windows Credential Manager) and requires a build with the `secrets-keyring` cargo feature |
 
 ### Environment Variables
 

@@ -599,7 +599,13 @@ pub(super) fn build_secret_store(
         SecretsBackend::Keychain => {
             #[cfg(all(
                 feature = "secrets-keyring",
-                any(target_os = "linux", target_os = "macos", target_os = "windows")
+                any(
+                    target_os = "linux",
+                    target_os = "freebsd",
+                    target_os = "openbsd",
+                    target_os = "macos",
+                    target_os = "windows"
+                )
             ))]
             {
                 Ok(Some(std::sync::Arc::new(
@@ -608,13 +614,20 @@ pub(super) fn build_secret_store(
             }
             #[cfg(not(all(
                 feature = "secrets-keyring",
-                any(target_os = "linux", target_os = "macos", target_os = "windows")
+                any(
+                    target_os = "linux",
+                    target_os = "freebsd",
+                    target_os = "openbsd",
+                    target_os = "macos",
+                    target_os = "windows"
+                )
             )))]
             {
                 Err(anyhow::anyhow!(
-                    "secrets.backend = \"keychain\" requires the `secrets-keyring` cargo feature \
-                     (macOS Keychain / Linux Secret Service / Windows Credential Manager); \
-                     rebuild with `--features secrets-keyring` or set secrets.backend = \"file\""
+                    "secrets.backend = \"keychain\" requires a build with the `secrets-keyring` \
+                     cargo feature on a supported platform (macOS Keychain / Linux or BSD Secret \
+                     Service / Windows Credential Manager); rebuild with `--features \
+                     secrets-keyring` or set secrets.backend = \"file\""
                 ))
             }
         }

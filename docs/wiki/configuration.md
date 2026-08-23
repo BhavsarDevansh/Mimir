@@ -132,7 +132,7 @@ backend = "file"  # or "keychain"
 ```
 
 - `backend = "file"` (the default) stores each connector's credentials in a per-slug JSON file under `~/.local/share/mimir/secrets/` with `0600`/`0700` permissions, refused if the permissions are ever loosened.
-- `backend = "keychain"` stores credentials in your operating system's credential store — macOS Keychain, Linux Secret Service (gnome-keyring / KWallet), or Windows Credential Manager — but requires a build with the `secrets-keyring` cargo feature (off by default, because headless Linux boxes often have no Secret Service daemon). If you configure `keychain` in a build without the feature, the daemon refuses to start with an explanatory error rather than silently storing secrets in plaintext.
+- `backend = "keychain"` stores credentials in your operating system's credential store — macOS Keychain, Linux or BSD Secret Service (gnome-keyring / KWallet), or Windows Credential Manager — but requires a build with the `secrets-keyring` cargo feature (off by default, because headless Linux boxes often have no Secret Service daemon). If you configure `keychain` in a build without the feature, the daemon refuses to start with an explanatory error rather than silently storing secrets in plaintext.
 - Changing `backend` requires a process restart: the secret store is constructed once at startup and is not hot-reloaded.
 
 ## Geocoding

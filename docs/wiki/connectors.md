@@ -48,7 +48,7 @@ Three kinds of credential are supported, all in the same store:
 - **API token** — a single bearer token (Home Assistant, GitHub PAT).
 - **App password** — a single password string (Fastmail, legacy IMAP).
 
-Credentials are stored **in plaintext by default**, deliberately — the same way your LLM API key is stored in `config.toml` — because Mimir is a local-first app that relies on your home directory being private (the home-directory trust boundary). If you prefer, an optional OS keyring backend (macOS Keychain / Linux Secret Service / Windows Credential Manager) is available for connector secrets: build with `--features secrets-keyring` and set `secrets.backend = "keychain"` in `config.toml` (issue #188). At-rest encryption is planned for a later release.
+Credentials are stored **in plaintext by default**, deliberately — the same way your LLM API key is stored in `config.toml` — because Mimir is a local-first app that relies on your home directory being private (the home-directory trust boundary). If you prefer, an optional OS keyring backend (macOS Keychain / Linux or BSD Secret Service / Windows Credential Manager) is available for connector secrets: build with `--features secrets-keyring` and set `secrets.backend = "keychain"` in `config.toml` (issue #188). At-rest encryption is planned for a later release.
 
 If the auth method configured for a connector does not match the kind of credential stored for it (for example, an app-password secret stored while the connector is configured for OAuth), Mimir fails auth with `authentication failed: auth method <kind> does not match stored secret kind`. Re-run `mimir connector auth` (or re-add the connector) with the credential kind that matches the config.
 
@@ -57,7 +57,7 @@ Removing a connector wipes its secret file: `DELETE /connectors/{id}` deletes th
 
 ## What is planned
 
-- **OS keyring backend** — implemented (#188): opt-in `secrets-keyring` cargo feature + `secrets.backend = "keychain"` stores connector secrets in the OS credential store (macOS Keychain / Linux Secret Service / Windows Credential Manager).
+- **OS keyring backend** — implemented (#188): opt-in `secrets-keyring` cargo feature + `secrets.backend = "keychain"` stores connector secrets in the OS credential store (macOS Keychain / Linux or BSD Secret Service / Windows Credential Manager).
 - **Photos** — thumbnail generation and basic object extraction are deferred (not in the Phase 3 plan); a Google Photos API backend is a follow-on, out of scope.
 - **At-rest encryption** — encrypting stored connector secrets is planned for a later release.
 

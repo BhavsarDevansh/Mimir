@@ -15,7 +15,7 @@ curl -X POST http://127.0.0.1:8080/chat \\
 **Response:**
 ```json
 {
-  "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "session_id": 42,
   "response": "Hello! How can I help you today?",
   "usage": {
     "prompt_tokens": 12,
@@ -32,7 +32,7 @@ Include the `session_id` from the previous response:
 ```bash
 curl -X POST http://127.0.0.1:8080/chat \\
   -H "Content-Type: application/json" \\
-  -d '{"session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", "message": "What is the weather like?"}'
+  -d '{"session_id": 42, "message": "What is the weather like?"}'
 ```
 
 ## Streaming Responses

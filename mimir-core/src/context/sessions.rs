@@ -46,8 +46,12 @@ impl ContextManager {
     ///
     /// Race-safe: concurrent first requests for the same key may both miss
     /// the lookup, but the partial unique index on `user_key` lets exactly
-    /// one insert win; the loser re-looks-up and adopts the winner's session
-    /// (first-writer-wins system prompt).
+    /// one insert win; the loser re-looks-up and adopts the winner's session.
+    ///
+    /// The system prompt is first-writer-wins and kept for the session's
+    /// lifetime: the personality preset and the memory block captured at
+    /// creation are stored verbatim, so later preset or memory changes apply
+    /// only to sessions created afterwards (PR #466 review).
     pub async fn resolve_openai_session(
         &self,
         user_key: &str,

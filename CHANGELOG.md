@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.141.1] — 2026-08-23
+
+### Fix: OpenAI provider surface review hardening (PR #466 review)
+
+- Tool validation: client-supplied `tools` are validated before any session creation or persistence — a tool must be a `function` tool with a non-empty name and, when present, an object `parameters` schema; malformed definitions return `400 invalid_request_error` with `param: "tools"` instead of an opaque upstream failure.
+- Orphaned-turn prevention: a failed turn (queue-full, LLM error, or mid-stream failure) now rolls back the messages the request persisted (via the new `ContextManager::max_message_id` / `delete_messages_after` helpers), so the session never keeps a user-only final turn. Tool definitions are validated before session creation, so rejected requests leave nothing behind.
+- Streaming: tool-call deltas are buffered per round and only client-tool deltas are emitted, in `index` order — internal Mimir tool calls (and their accumulated `index` values) never reach the client stream. A mid-stream failure now emits an `event: error` frame followed by `data: [DONE]` so clients can distinguish failed streams from completed ones. Usage is accumulated across tool rounds in both the blocking and streaming paths (`LlmBackend::max_tokens` typed accessor added; `ToolCall.index` is no longer serialised upstream).
+- Trimming: `tool`-role messages are excluded from the unknown-token-count probe (they never carry token counts), so tool-using sessions keep precise token trimming; a turn whose final row is an assistant tool-call message is treated as in-flight in both trimming paths and is never deleted before the client sends its tool results.
+- Preset probing: `PersonalityCache::has_preset` checks preset existence without emitting per-request diagnostics, so upstream model names no longer log unknown-preset warnings on every request. The resumed keyed session's first-writer-wins system prompt is now explicitly documented.
+- Wire shape: tool-call responses always serialise `content` (explicit `null`), matching the OpenAI response shape.
+- Docs: `docs/context-manager.md`, `docs/wiki/context-manager.md`, `docs/llm-provider.md`, `docs/wiki/llm-provider.md`, `docs/chat-server.md`, `docs/wiki/chat-api.md`, `docs/wiki/what-works-now.md`, and `VISION/08-Architecture/Multi-Device.md` updated (schema columns, tool persistence, incognito persistence boundary, streaming failure framing, TLS claims limited to reverse-proxy traffic).
+- Tests: concurrency test now runs on a multi-thread runtime; new regression tests for tool-aware trimming, tool validation, usage accumulation, multi-tool stream ordering, stream-error framing + rollback, server-tool delta suppression, and queue-full rollback.
+- Version bumped 0.141.0 → 0.141.1 (patch — bugfixes).
+
 ## [0.141.0] — 2026-08-23
 
 ### Feature: OpenAI-compatible provider surface — /v1/models + /v1/chat/completions (issue #388)

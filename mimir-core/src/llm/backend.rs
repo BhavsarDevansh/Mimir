@@ -172,6 +172,16 @@ pub trait LlmBackend: Send + Sync + Debug {
     fn with_max_tokens_override(&self, _max_tokens: u32) -> Option<Arc<dyn LlmBackend>> {
         None
     }
+
+    /// The effective `max_tokens` sampling parameter of this backend, if any.
+    ///
+    /// Defaults to `None` so backends without a configured cap (mocks,
+    /// override-less clones) report none; `LlmClient` reports its configured
+    /// value. Lets callers and tests inspect the override outcome without
+    /// depending on `Debug` formatting (PR #466 review).
+    fn max_tokens(&self) -> Option<u32> {
+        None
+    }
 }
 
 #[cfg(test)]

@@ -238,6 +238,14 @@ impl ContextManager {
         tool_calls: Option<&str>,
         tool_call_id: Option<&str>,
     ) -> Result<(), ContextError> {
+        // Keep the persisted conversation OpenAI-shaped: a `tool` result must
+        // reference the call it answers, and only an assistant message may
+        // carry tool calls — never both on one row (PR #466 review).
+        debug_assert!(match role {
+            "tool" => tool_call_id.is_some() && tool_calls.is_none(),
+            "assistant" => tool_call_id.is_none(),
+            _ => tool_calls.is_none() && tool_call_id.is_none(),
+        });
         self.ensure_session_exists(session_id).await?;
 
         let now = Utc::now();
@@ -263,6 +271,41 @@ impl ContextManager {
             .await?;
 
         Ok(())
+    }
+
+    /// Highest message id persisted for the session (0 when empty).
+    ///
+    /// Used by the OpenAI surface as the rollback baseline for a request's
+    /// writes, so a failed turn can remove exactly the messages it added
+    /// (PR #466 review).
+    pub async fn max_message_id(&self, session_id: i64) -> Result<i64, ContextError> {
+        self.ensure_session_exists(session_id).await?;
+        let id: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM messages WHERE session_id = ?1")
+                .bind(session_id)
+                .fetch_one(self.pool.as_ref())
+                .await?;
+        Ok(id)
+    }
+
+    /// Delete every message persisted after `after_id` for the session.
+    ///
+    /// Restores a session to its pre-request state when an OpenAI turn fails
+    /// before completion; the caller holds the per-session permit, so no
+    /// concurrent request can interleave writes for the same session
+    /// (PR #466 review).
+    pub async fn delete_messages_after(
+        &self,
+        session_id: i64,
+        after_id: i64,
+    ) -> Result<u64, ContextError> {
+        self.ensure_session_exists(session_id).await?;
+        let result = sqlx::query("DELETE FROM messages WHERE session_id = ?1 AND id > ?2")
+            .bind(session_id)
+            .bind(after_id)
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected())
     }
 
     pub async fn get_messages_after_compaction(

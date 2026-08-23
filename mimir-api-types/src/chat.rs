@@ -267,7 +267,8 @@ pub struct OpenAiUsage {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct OpenAiResponseMessage {
     pub role: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // `content` is always serialised: tool-call responses carry an explicit
+    // `null`, matching the OpenAI wire shape (PR #466 review).
     pub content: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<OpenAiToolCall>,
@@ -840,10 +841,12 @@ line2",
         };
         let json = serde_json::to_string(&resp).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            value["choices"][0]["message"]["content"],
-            serde_json::Value::Null
+        let message = &value["choices"][0]["message"];
+        assert!(
+            message.get("content").is_some(),
+            "tool-call responses must serialise the content key: {json}"
         );
+        assert_eq!(message["content"], serde_json::Value::Null);
         assert_eq!(value["choices"][0]["finish_reason"], "tool_calls");
         assert_eq!(
             value["choices"][0]["message"]["tool_calls"][0]["type"],

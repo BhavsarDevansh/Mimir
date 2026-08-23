@@ -82,8 +82,16 @@ fn with_max_tokens_override_updates_max_tokens() {
     let overridden = client
         .with_max_tokens_override(256)
         .expect("max_tokens override supported");
-    let debug = format!("{:?}", overridden);
-    assert!(debug.contains("max_tokens: Some(256)"), "debug: {debug}");
+    assert_eq!(
+        overridden.max_tokens(),
+        Some(256),
+        "override must replace the configured value"
+    );
+    assert_eq!(
+        client.max_tokens(),
+        Some(10),
+        "the original client must keep its configured value"
+    );
 }
 
 #[tokio::test]

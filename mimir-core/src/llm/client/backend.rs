@@ -89,4 +89,8 @@ impl LlmBackend for LlmClient {
         clone.pool = None;
         Some(Arc::new(clone))
     }
+
+    fn max_tokens(&self) -> Option<u32> {
+        self.config.max_tokens
+    }
 }

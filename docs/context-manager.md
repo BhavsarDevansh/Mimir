@@ -33,14 +33,20 @@ CREATE TABLE IF NOT EXISTS sessions (
     cumulative_prompt_tokens INTEGER NOT NULL DEFAULT 0,
     cumulative_completion_tokens INTEGER NOT NULL DEFAULT 0,
     summary TEXT,
-    compacted_at TEXT
+    compacted_at TEXT,
+    user_key TEXT
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_user_key
+ON sessions(user_key) WHERE user_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
+    tool_calls TEXT,
+    tool_call_id TEXT,
     created_at TEXT NOT NULL,
     token_count INTEGER
 );
@@ -57,6 +63,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 - **Cascading delete** ensures `DELETE FROM sessions` removes all messages.
 - The `summary` column is reserved for Phase 2 summarisation work.
 - `compacted_at` is an RFC 3339 timestamp marking the start of the retained message window. Messages before this point were compacted/summarised in Phase 2.
+- `user_key` is the nullable OpenAI `user` conversation key (issue #388); the partial unique index allows exactly one session per non-NULL key while leaving native sessions unconstrained.
+- `tool_calls` stores the assistant's tool-call array as JSON for `export_messages` round-tripping, and `tool_call_id` links each `tool`-role result to the call it answers (issue #388).
 
 ## Token Attribution
 
@@ -76,11 +84,11 @@ Deltas are added to the stored cumulative totals on the session row and to the `
 1. **Turn cap (hard):** Count user messages (each user message starts a turn, so tool messages belong to their turn).  If the count exceeds `max_turns`, delete the oldest complete turns until the count is under the limit.
 
 2. **Token budget (soft):** If `SUM(token_count)` for the session exceeds `max_tokens`:
-   - If all non-system messages have known `token_count`, delete oldest complete turns until the sum is under budget.
-   - If some messages lack `token_count` (e.g. streaming without usage), fall back to deleting oldest complete turns until the turn count is under `max_turns / 2` (conservative).
+   - If all non-system messages have known `token_count`, delete the oldest complete turns until the sum is under budget. `tool`-role messages never carry token counts (usage is attributed only to user and assistant messages), so they are excluded from the unknown-count probe and do not force the conservative fallback.
+   - If some messages lack `token_count` (e.g. streaming without usage), fall back to deleting the oldest complete turns until the turn count is under `max_turns / 2` (conservative).
    - The system prompt is **never** deleted.
 
-A turn spans from a user message up to (but excluding) the next user message, so assistant tool-call messages and tool results are removed with their turn instead of being orphaned (issue #388).  The in-flight turn being answered — its user message was just persisted and has no assistant reply yet — is never trimmed away before the LLM call.
+A turn spans from a user message up to (but excluding) the next user message, so assistant tool-call messages and tool results are removed with their turn instead of being orphaned (issue #388).  The in-flight turn being answered — its user message was just persisted and has no final assistant reply yet (an assistant tool-call message still awaits the client's tool results) — is never trimmed away before the LLM call.
 
 ## API Surface
 
@@ -105,6 +113,10 @@ impl ContextManager {
     ) -> Result<Vec<Message>, ContextError>;
     pub async fn export_conversation(&self, session_id: i64
     ) -> Result<ConversationExport, ContextError>;
+    pub async fn max_message_id(&self, session_id: i64) -> Result<i64, ContextError>;
+    pub async fn delete_messages_after(
+        &self, session_id: i64, after_id: i64
+    ) -> Result<u64, ContextError>;
     pub async fn delete_session(&self, session_id: i64) -> Result<(), ContextError>;
     pub async fn search_messages(
         &self, query: &str, limit: usize, session_id: Option<i64>

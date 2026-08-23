@@ -558,7 +558,7 @@ async fn resolve_openai_session_distinct_user_keys() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resolve_openai_session_concurrent_creates_single_session() {
     let (mgr, _dir) = setup_manager().await;
     let mgr = std::sync::Arc::new(mgr);
@@ -706,6 +706,150 @@ async fn trim_fallback_keeps_in_flight_turn() {
     assert_eq!(msgs.len(), 2, "in-flight turn must survive: {msgs:?}");
     assert_eq!(msgs[1].role, "user");
     assert_eq!(msgs[1].content, "u2");
+}
+
+#[tokio::test]
+async fn trim_token_budget_ignores_tool_messages_in_unknown_count() {
+    use crate::llm::types::{FunctionCall, ToolCall};
+
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+
+    // Turn 1: user -> assistant(tool_calls) -> tool -> assistant, with token
+    // counts on the user and assistant messages. The tool message never
+    // carries a token count.
+    mgr.add_user_message(sid, "u1").await.unwrap();
+    mgr.record_usage(sid, 50, 0).await.unwrap();
+    let calls = vec![ToolCall {
+        index: 0,
+        id: "c1".to_string(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: "t".to_string(),
+            arguments: "{}".to_string(),
+        },
+    }];
+    mgr.add_assistant_tool_calls_message(sid, "", &calls)
+        .await
+        .unwrap();
+    mgr.record_usage(sid, 0, 100).await.unwrap();
+    mgr.add_tool_message(sid, "c1", "r1").await.unwrap();
+    mgr.add_assistant_message(sid, "a1").await.unwrap();
+    mgr.record_usage(sid, 0, 100).await.unwrap();
+
+    // Turn 2 in flight.
+    mgr.add_user_message(sid, "u2").await.unwrap();
+    mgr.record_usage(sid, 50, 0).await.unwrap();
+
+    // The tool message has token_count = NULL; previously it kept the
+    // unknown-count probe above zero forever and forced the conservative
+    // fallback (max_turns / 2) instead of precise token trimming.
+    mgr.trim_to_budget(sid, Some(1), 20).await.unwrap();
+
+    let msgs = mgr.export_messages(sid).await.unwrap();
+    assert_eq!(
+        msgs.len(),
+        2,
+        "precise token trimming must apply despite tool messages: {msgs:?}"
+    );
+    assert_eq!(msgs[0].role, "system");
+    assert_eq!(msgs[1].role, "user");
+    assert_eq!(msgs[1].content, "u2");
+}
+
+#[tokio::test]
+async fn trim_token_budget_keeps_turn_ending_in_assistant_tool_calls() {
+    use crate::llm::types::{FunctionCall, ToolCall};
+
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+
+    // Turn 1 complete with known token counts.
+    mgr.add_user_message(sid, "u1").await.unwrap();
+    mgr.add_assistant_message(sid, "a1").await.unwrap();
+    mgr.record_usage(sid, 100, 100).await.unwrap();
+
+    // Turn 2 in flight: the assistant issued tool calls and the client has
+    // not sent the results yet, so the turn must survive trimming.
+    mgr.add_user_message(sid, "u2").await.unwrap();
+    mgr.record_usage(sid, 50, 0).await.unwrap();
+    let calls = vec![ToolCall {
+        index: 0,
+        id: "c1".to_string(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: "t".to_string(),
+            arguments: "{}".to_string(),
+        },
+    }];
+    mgr.add_assistant_tool_calls_message(sid, "", &calls)
+        .await
+        .unwrap();
+    // The tool-call assistant message gets the completion tokens of the
+    // round that issued the call, so only the `tool`-role result lacks a
+    // token count.
+    mgr.record_usage(sid, 0, 100).await.unwrap();
+
+    mgr.trim_to_budget(sid, Some(1), 20).await.unwrap();
+
+    let msgs = mgr.export_messages(sid).await.unwrap();
+    assert_eq!(
+        msgs.len(),
+        3,
+        "turn awaiting tool results must survive: {msgs:?}"
+    );
+    assert_eq!(msgs[0].role, "system");
+    assert_eq!(msgs[1].role, "user");
+    assert_eq!(msgs[1].content, "u2");
+    assert_eq!(msgs[2].role, "assistant");
+    assert!(
+        msgs[2].tool_calls.is_some(),
+        "the assistant tool-call message must be kept"
+    );
+}
+
+#[tokio::test]
+async fn trim_fallback_keeps_turn_ending_in_assistant_tool_calls() {
+    use crate::llm::types::{FunctionCall, ToolCall};
+
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+
+    // Turn 1 has a known-token user message and an unknown-token assistant
+    // reply, so the token budget takes the conservative fallback path.
+    mgr.add_user_message(sid, "u1").await.unwrap();
+    mgr.record_usage(sid, 100, 0).await.unwrap();
+    mgr.add_assistant_message(sid, "a1").await.unwrap();
+
+    // Turn 2 in flight, ending in an assistant tool-call message.
+    mgr.add_user_message(sid, "u2").await.unwrap();
+    let calls = vec![crate::llm::types::ToolCall {
+        index: 0,
+        id: "c1".to_string(),
+        call_type: "function".to_string(),
+        function: crate::llm::types::FunctionCall {
+            name: "t".to_string(),
+            arguments: "{}".to_string(),
+        },
+    }];
+    mgr.add_assistant_tool_calls_message(sid, "", &calls)
+        .await
+        .unwrap();
+
+    // max_turns = 1 forces the fallback target to zero turns; the final
+    // assistant tool-call row must still count as in-flight, not complete.
+    mgr.trim_to_budget(sid, Some(1), 1).await.unwrap();
+
+    let msgs = mgr.export_messages(sid).await.unwrap();
+    assert_eq!(
+        msgs.len(),
+        3,
+        "turn awaiting tool results must survive the fallback: {msgs:?}"
+    );
+    assert_eq!(msgs[1].role, "user");
+    assert_eq!(msgs[1].content, "u2");
+    assert_eq!(msgs[2].role, "assistant");
+    assert!(msgs[2].tool_calls.is_some());
 }
 
 #[tokio::test]

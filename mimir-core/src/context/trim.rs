@@ -47,13 +47,17 @@ impl ContextManager {
 
         if total_tokens > (budget as i64) {
             let unknown_count: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND role != 'system' AND token_count IS NULL"
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND role NOT IN ('system', 'tool') AND token_count IS NULL"
             )
             .bind(session_id)
             .fetch_one(self.pool.as_ref())
             .await?;
 
             if unknown_count > 0 {
+                // `tool`-role messages never carry token counts (usage is
+                // attributed only to user/assistant messages), so they are
+                // excluded from the probe; otherwise a single tool round-trip
+                // would force the conservative fallback forever (PR #466 review).
                 // Some or all messages lack token counts: conservative fallback.
                 let target_turns = (max_turns as i64) / 2;
                 let current_turns: i64 = sqlx::query_scalar(
@@ -90,9 +94,9 @@ impl ContextManager {
         session_id: i64,
         max_tokens: u32,
     ) -> Result<i64, ContextError> {
-        let rows: Vec<(i64, String, Option<i64>)> = sqlx::query_as(
+        let rows: Vec<(i64, String, Option<String>, Option<i64>)> = sqlx::query_as(
             r#"
-            SELECT id, role, token_count FROM messages
+            SELECT id, role, tool_calls, token_count FROM messages
             WHERE session_id = ?1 AND role != 'system'
             ORDER BY created_at ASC
             "#,
@@ -101,7 +105,7 @@ impl ContextManager {
         .fetch_all(self.pool.as_ref())
         .await?;
 
-        let total: i64 = rows.iter().filter_map(|(_, _, t)| *t).sum();
+        let total: i64 = rows.iter().filter_map(|(_, _, _, t)| *t).sum();
         if total <= (max_tokens as i64) {
             return Ok(0);
         }
@@ -109,7 +113,7 @@ impl ContextManager {
         let mut turn_tokens: Vec<i64> = Vec::new();
         let mut current = 0i64;
         let mut in_turn = false;
-        for (_id, role, tokens) in &rows {
+        for (_id, role, _tool_calls, tokens) in &rows {
             if role == "user" {
                 if in_turn {
                     turn_tokens.push(current);
@@ -127,9 +131,14 @@ impl ContextManager {
 
         // The final turn is the one being answered right now: its user
         // message (or trailing tool results) was just persisted and must
-        // never be trimmed away before the LLM call. Only complete turns
-        // are eligible for deletion (issue #388).
-        if rows.last().is_some_and(|(_, role, _)| role != "assistant") {
+        // never be trimmed away before the LLM call. A turn is complete only
+        // when the final row is a plain assistant message — an assistant
+        // tool-call message still awaits the client's tool results, so it is
+        // in-flight too (issue #388, PR #466 review).
+        let final_turn_complete = rows
+            .last()
+            .is_some_and(|(_, role, tool_calls, _)| role == "assistant" && tool_calls.is_none());
+        if !final_turn_complete {
             turn_tokens.pop();
         }
 
@@ -154,9 +163,9 @@ impl ContextManager {
             return Ok(());
         }
 
-        let rows: Vec<(i64, String)> = sqlx::query_as(
+        let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
             r#"
-            SELECT id, role FROM messages
+            SELECT id, role, tool_calls FROM messages
             WHERE session_id = ?1 AND role != 'system'
             ORDER BY created_at ASC
             "#,
@@ -170,15 +179,18 @@ impl ContextManager {
         let mut turns_removed = 0i64;
         let mut in_turn = false;
         // Index of the final turn's user message in `rows`; the final turn
-        // is in-flight (no assistant reply yet) when the session's last
-        // message is not an assistant message.
+        // is in-flight when the session's last message is not a plain
+        // assistant reply (no reply yet, or an assistant tool-call message
+        // still awaiting the client's tool results).
         let final_turn_start = rows
             .iter()
-            .rposition(|(_, role)| role == "user")
+            .rposition(|(_, role, _)| role == "user")
             .unwrap_or(usize::MAX);
-        let protect_final_turn = rows.last().is_some_and(|(_, role)| role != "assistant");
+        let protect_final_turn = rows
+            .last()
+            .is_some_and(|(_, role, tool_calls)| role != "assistant" || tool_calls.is_some());
 
-        for (index, (id, role)) in rows.iter().enumerate() {
+        for (index, (id, role, _)) in rows.iter().enumerate() {
             if role == "user" {
                 if turns_found >= n {
                     break;

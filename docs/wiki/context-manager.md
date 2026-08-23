@@ -7,6 +7,7 @@ Mimir remembers every conversation you have.  Each chat is stored as a **session
 - A **system prompt** that defines Mimir's personality and rules for that session.
 - Every **user message** you send.
 - Every **assistant message** Mimir generates.
+- Assistant **tool-call messages** and the **tool results** that follow them, so agentic turns round-trip correctly across requests.
 - **Token counts** (when available) so Mimir knows how large the conversation is.
 - **Timestamps** for audit and debugging.
 
@@ -55,6 +56,7 @@ You can change the defaults in three ways (highest priority last):
 | System prompt | Yes | One per session. |
 | User messages | Yes | With timestamp and optional token count. |
 | Assistant messages | Yes | With timestamp and optional token count. |
+| Tool calls and tool results | Yes | Arguments and results can contain sensitive data; they are stored with their turn and trimmed with it. |
 | Raw LLM SSE chunks | No | Only the final text and usage are kept. |
 | Intermediate reasoning | No | If verbose reasoning is enabled, only the final reply is stored. |
 

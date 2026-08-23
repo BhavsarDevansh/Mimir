@@ -38,6 +38,7 @@ Destructive and sensitive routes are additionally loopback-only: the `require_lo
 ```
 
 **Response body (success):**
+
 ```json
 {
   "session_id": 42,

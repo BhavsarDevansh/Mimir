@@ -89,6 +89,9 @@ struct OpenAiTurn {
     state: Arc<AppState>,
     session_id: i64,
     incognito: bool,
+    /// Highest persisted message id before this request's writes; a failed
+    /// turn rolls back to this baseline so no orphaned messages remain.
+    baseline_message_id: i64,
     llm: Arc<dyn mimir_core::llm::LlmBackend>,
     conversation: Vec<Message>,
     max_rounds: u16,
@@ -120,6 +123,7 @@ enum TurnError {
     MissingUserMessage,
     EmptyUserMessage,
     MissingToolCallId,
+    InvalidTools,
 }
 
 impl TurnError {
@@ -144,6 +148,13 @@ impl TurnError {
                 "user message must not be empty",
                 "invalid_request_error",
                 Some("messages"),
+                None,
+            ),
+            TurnError::InvalidTools => error::openai_error(
+                StatusCode::BAD_REQUEST,
+                "each tool must be a function tool with a non-empty name and an object parameters schema",
+                "invalid_request_error",
+                Some("tools"),
                 None,
             ),
         }
@@ -215,7 +226,7 @@ fn convert_message(msg: &OpenAiChatMessage) -> Message {
 fn merge_tools(
     server: Option<Vec<serde_json::Value>>,
     client: Option<Vec<serde_json::Value>>,
-) -> (Option<Vec<serde_json::Value>>, HashSet<String>) {
+) -> Result<(Option<Vec<serde_json::Value>>, HashSet<String>), TurnError> {
     let server = server.unwrap_or_default();
     let client = client.unwrap_or_default();
     let server_names: HashSet<String> = server
@@ -225,15 +236,13 @@ fn merge_tools(
     let mut merged = server;
     let mut client_names = HashSet::new();
     for tool in client {
-        let Some(name) = tool["function"]["name"].as_str() else {
-            continue;
-        };
+        let name = validate_client_tool(&tool)?;
         // Server tools win collisions; duplicate client definitions are
         // also dropped (first wins) so the LLM never sees one name twice.
-        if server_names.contains(name) || client_names.contains(name) {
+        if server_names.contains(&name) || client_names.contains(&name) {
             continue;
         }
-        client_names.insert(name.to_string());
+        client_names.insert(name);
         merged.push(tool);
     }
     let merged = if merged.is_empty() {
@@ -241,7 +250,36 @@ fn merge_tools(
     } else {
         Some(merged)
     };
-    (merged, client_names)
+    Ok((merged, client_names))
+}
+
+/// Validate the minimum OpenAI tool shape a client must send (PR #466 review).
+///
+/// A tool must be a `function` tool with a non-blank function name, and the
+/// `parameters` schema, when present, must be a JSON object. Malformed
+/// definitions are rejected with a `400 invalid_request_error` on the
+/// `tools` field so the client learns which part of the request is wrong
+/// instead of receiving an opaque upstream failure.
+fn validate_client_tool(tool: &serde_json::Value) -> Result<String, TurnError> {
+    if tool.get("type").and_then(serde_json::Value::as_str) != Some("function") {
+        return Err(TurnError::InvalidTools);
+    }
+    let Some(function) = tool.get("function").filter(|f| f.is_object()) else {
+        return Err(TurnError::InvalidTools);
+    };
+    let Some(name) = function
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+    else {
+        return Err(TurnError::InvalidTools);
+    };
+    if let Some(parameters) = function.get("parameters")
+        && !parameters.is_object()
+    {
+        return Err(TurnError::InvalidTools);
+    }
+    Ok(name.to_string())
 }
 
 /// Split tool calls into server-side (executed here) and client-side
@@ -284,14 +322,15 @@ async fn resolve_openai_turn(
 
     // Model mapping: preset names select a personality; unknown names pass
     // through as upstream model overrides with the configured personality.
-    let candidate = state
-        .personality_cache
-        .resolve(&mimir_core::config::PersonalityConfig {
-            preset: req.model.clone(),
-        });
-    let is_preset = candidate.has_preset(&req.model);
+    // The preset probe is diagnostic-free, so an upstream model name does not
+    // log an unknown-preset warning on every request (PR #466 review).
+    let is_preset = state.personality_cache.has_preset(&req.model);
     let personality = if is_preset {
-        candidate
+        state
+            .personality_cache
+            .resolve(&mimir_core::config::PersonalityConfig {
+                preset: req.model.clone(),
+            })
     } else {
         state.personality_cache.resolve(&cfg.personality)
     };
@@ -314,6 +353,18 @@ async fn resolve_openai_turn(
     // cannot silently create a session keyed on "".
     let user_key = req.user.as_deref().filter(|key| !key.trim().is_empty());
     let incognito = user_key.is_none();
+
+    // Validate and merge tool definitions before any session creation or
+    // persistence, so a rejected request cannot leave a session or an
+    // orphaned user message behind.
+    let (merged_tools, client_tool_names) = merge_tools(
+        state
+            .tool_registry
+            .export_openai_tools_for_llm_with_writes(!incognito),
+        req.tools.clone(),
+    )
+    .map_err(TurnError::into_response)?;
+
     let session_id = if let Some(user_key) = user_key {
         let system_prompt = build_system_prompt(state, &personality, &memory).await;
         state
@@ -323,6 +374,20 @@ async fn resolve_openai_turn(
             .map_err(error::openai_context_error)?
     } else {
         INCOGNITO_COUNTER.fetch_sub(1, Ordering::SeqCst)
+    };
+
+    // Rollback baseline: a failed turn must not leave its just-persisted
+    // user message (or tool results) behind as an orphaned final turn. The
+    // per-session permit below guarantees no concurrent request interleaves
+    // writes for this session (PR #466 review).
+    let baseline_message_id = if incognito {
+        0
+    } else {
+        state
+            .context_manager
+            .max_message_id(session_id)
+            .await
+            .map_err(error::openai_context_error)?
     };
 
     let permit = if incognito {
@@ -359,43 +424,49 @@ async fn resolve_openai_turn(
     } else {
         // Stored history is authoritative: append the new user message (or
         // the continuation's tool results), trim, and export.
-        if input.trailing_tools.is_empty() {
+        let persist = async {
+            if input.trailing_tools.is_empty() {
+                state
+                    .context_manager
+                    .add_user_message(session_id, &input.user_message)
+                    .await?;
+            }
+            for (tool_call_id, content) in &input.trailing_tools {
+                state
+                    .context_manager
+                    .add_tool_message(session_id, tool_call_id, content)
+                    .await?;
+            }
             state
                 .context_manager
-                .add_user_message(session_id, &input.user_message)
-                .await
-                .map_err(error::openai_context_error)?;
+                .trim_to_budget(session_id, cfg.context.max_tokens, cfg.context.max_turns)
+                .await?;
+            state.context_manager.export_messages(session_id).await
+        };
+        match persist.await {
+            Ok(conversation) => conversation,
+            Err(e) => {
+                // A persistence failure must not leave the request's writes
+                // behind as an orphaned final turn (PR #466 review).
+                if let Err(rollback) = state
+                    .context_manager
+                    .delete_messages_after(session_id, baseline_message_id)
+                    .await
+                {
+                    error!(
+                        "failed to roll back persisted messages after context error: {rollback}"
+                    );
+                }
+                return Err(error::openai_context_error(e));
+            }
         }
-        for (tool_call_id, content) in &input.trailing_tools {
-            state
-                .context_manager
-                .add_tool_message(session_id, tool_call_id, content)
-                .await
-                .map_err(error::openai_context_error)?;
-        }
-        state
-            .context_manager
-            .trim_to_budget(session_id, cfg.context.max_tokens, cfg.context.max_turns)
-            .await
-            .map_err(error::openai_context_error)?;
-        state
-            .context_manager
-            .export_messages(session_id)
-            .await
-            .map_err(error::openai_context_error)?
     };
-
-    let (merged_tools, client_tool_names) = merge_tools(
-        state
-            .tool_registry
-            .export_openai_tools_for_llm_with_writes(!incognito),
-        req.tools.clone(),
-    );
 
     Ok(OpenAiTurn {
         state: Arc::clone(state),
         session_id,
         incognito,
+        baseline_message_id,
         llm,
         conversation,
         max_rounds: cfg.agent.max_tool_rounds,
@@ -444,6 +515,39 @@ async fn execute_server_tools(
             }
         }
     }
+}
+
+/// Delete every message this request persisted, restoring the session to its
+/// pre-request state when a turn fails before completion. Incognito requests
+/// persist nothing, so the rollback is a no-op (PR #466 review).
+async fn rollback_persisted_turn(turn: &OpenAiTurn) {
+    if turn.incognito {
+        return;
+    }
+    if let Err(e) = turn
+        .state
+        .context_manager
+        .delete_messages_after(turn.session_id, turn.baseline_message_id)
+        .await
+    {
+        error!("failed to roll back persisted messages after failed turn: {e}");
+    }
+}
+
+/// Accumulate a per-call usage report into the turn's running total.
+///
+/// Both the blocking and streaming paths span multiple LLM calls when tools
+/// run, so usage must be summed across rounds rather than overwritten
+/// (PR #466 review).
+fn accumulate_usage(acc: &mut Option<Usage>, usage: Usage) {
+    *acc = Some(match acc.take() {
+        Some(prev) => Usage {
+            prompt_tokens: prev.prompt_tokens + usage.prompt_tokens,
+            completion_tokens: prev.completion_tokens + usage.completion_tokens,
+            total_tokens: prev.total_tokens + usage.total_tokens,
+        },
+        None => usage,
+    });
 }
 
 /// Persist the final assistant response and enqueue the completed-turn
@@ -539,9 +643,10 @@ fn tool_calls_response(
 async fn run_blocking_turn(turn: &OpenAiTurn) -> Result<OpenAiChatResponse, Response> {
     let mut conversation = turn.conversation.clone();
     let mut round: u16 = 0;
+    let mut usage_acc: Option<Usage> = None;
 
     loop {
-        let (assistant_msg, usage) = turn
+        let (assistant_msg, usage) = match turn
             .llm
             .chat_message(
                 conversation.clone(),
@@ -552,7 +657,17 @@ async fn run_blocking_turn(turn: &OpenAiTurn) -> Result<OpenAiChatResponse, Resp
                 },
             )
             .await
-            .map_err(error::openai_llm_error)?;
+        {
+            Ok(result) => result,
+            Err(e) => {
+                // The turn failed before completing; remove the messages this
+                // request persisted so the session keeps no orphaned final
+                // turn (PR #466 review).
+                rollback_persisted_turn(turn).await;
+                return Err(error::openai_llm_error(e));
+            }
+        };
+        accumulate_usage(&mut usage_acc, usage);
 
         match assistant_msg.tool_calls {
             Some(ref tool_calls) if round < turn.max_rounds => {
@@ -576,12 +691,20 @@ async fn run_blocking_turn(turn: &OpenAiTurn) -> Result<OpenAiChatResponse, Resp
                 execute_server_tools(turn, &mut conversation, &server_calls).await;
 
                 if !client_calls.is_empty() {
-                    return Ok(tool_calls_response(turn, client_calls, usage));
+                    return Ok(tool_calls_response(
+                        turn,
+                        client_calls,
+                        usage_acc.unwrap_or_default(),
+                    ));
                 }
             }
             _ => {
                 finish_turn(turn, &assistant_msg.content).await;
-                return Ok(final_response(turn, assistant_msg.content, usage));
+                return Ok(final_response(
+                    turn,
+                    assistant_msg.content,
+                    usage_acc.unwrap_or_default(),
+                ));
             }
         }
     }
@@ -600,6 +723,9 @@ async fn chat_completions_stream(
     // on the hot path today, but once the bypass is fixed a full queue must
     // surface as 503 before the SSE response starts.
     if !turn.llm.user_queue_has_capacity().await {
+        // The user message was already persisted by `resolve_openai_turn`;
+        // remove it so a rejected turn leaves no orphaned final message.
+        rollback_persisted_turn(&turn).await;
         return Err(error::openai_llm_error(
             mimir_core::llm::types::LlmError::QueueFull,
         ));
@@ -639,12 +765,18 @@ async fn chat_completions_stream(
                 Ok(stream) => stream,
                 Err(e) => {
                     error!("LLM stream error: {e}");
+                    rollback_persisted_turn(&turn).await;
+                    send_error_and_done(&event_tx).await;
                     break 'outer;
                 }
             };
 
             let mut full_response = String::new();
             let mut tool_calls_acc: HashMap<u32, ToolCall> = HashMap::new();
+            // Tool-call deltas are buffered per round and emitted only when
+            // the round hands client tools back, so internal Mimir tool
+            // calls never reach the client stream (PR #466 review).
+            let mut buffered_tool_deltas: Vec<OpenAiToolCallDelta> = Vec::new();
 
             while let Some(item) = stream.next().await {
                 match item {
@@ -703,9 +835,23 @@ async fn chat_completions_stream(
                                 break 'outer;
                             }
                         }
-                        let converted: Vec<OpenAiToolCallDelta> = deltas
-                            .iter()
-                            .map(|delta| OpenAiToolCallDelta {
+                        for delta in &deltas {
+                            let entry = tool_calls_acc.entry(delta.index).or_default();
+                            // The accumulated call must keep its stream index
+                            // so multi-call rounds sort and split correctly
+                            // (the `ToolCall::default` index is 0).
+                            entry.index = delta.index;
+                            if !delta.id.is_empty() {
+                                entry.id = delta.id.clone();
+                            }
+                            if !delta.call_type.is_empty() {
+                                entry.call_type = delta.call_type.clone();
+                            }
+                            if !delta.function.name.is_empty() {
+                                entry.function.name = delta.function.name.clone();
+                            }
+                            entry.function.arguments.push_str(&delta.function.arguments);
+                            buffered_tool_deltas.push(OpenAiToolCallDelta {
                                 index: delta.index,
                                 id: if delta.id.is_empty() {
                                     None
@@ -721,49 +867,16 @@ async fn chat_completions_stream(
                                     name: delta.function.name.clone(),
                                     arguments: delta.function.arguments.clone(),
                                 }),
-                            })
-                            .collect();
-                        for delta in &deltas {
-                            let entry = tool_calls_acc.entry(delta.index).or_default();
-                            if !delta.id.is_empty() {
-                                entry.id = delta.id.clone();
-                            }
-                            if !delta.call_type.is_empty() {
-                                entry.call_type = delta.call_type.clone();
-                            }
-                            if !delta.function.name.is_empty() {
-                                entry.function.name = delta.function.name.clone();
-                            }
-                            entry.function.arguments.push_str(&delta.function.arguments);
-                        }
-                        if send_chunk(
-                            &event_tx,
-                            &turn,
-                            OpenAiDelta {
-                                role: None,
-                                content: None,
-                                tool_calls: converted,
-                            },
-                            None,
-                        )
-                        .await
-                        .is_err()
-                        {
-                            break 'outer;
+                            });
                         }
                     }
                     Ok(StreamItem::Usage(usage)) => {
-                        usage_acc = Some(match usage_acc {
-                            Some(prev) => Usage {
-                                prompt_tokens: prev.prompt_tokens + usage.prompt_tokens,
-                                completion_tokens: prev.completion_tokens + usage.completion_tokens,
-                                total_tokens: prev.total_tokens + usage.total_tokens,
-                            },
-                            None => usage,
-                        });
+                        accumulate_usage(&mut usage_acc, usage);
                     }
                     Err(e) => {
                         error!("LLM stream error: {e}");
+                        rollback_persisted_turn(&turn).await;
+                        send_error_and_done(&event_tx).await;
                         break 'outer;
                     }
                 }
@@ -811,8 +924,49 @@ async fn chat_completions_stream(
             execute_server_tools(&turn, &mut conversation, &server_calls).await;
 
             if !client_calls.is_empty() {
-                // Client tool calls: hand them back and end the stream; the
-                // client's follow-up `tool` messages continue the turn.
+                // Client tool calls: stream the buffered deltas for those
+                // calls (in index order; server-side deltas were never
+                // emitted) and end the stream. The client's follow-up `tool`
+                // messages continue the turn.
+                if !sent_role
+                    && send_chunk(
+                        &event_tx,
+                        &turn,
+                        OpenAiDelta {
+                            role: Some("assistant".to_string()),
+                            content: Some(String::new()),
+                            tool_calls: Vec::new(),
+                        },
+                        None,
+                    )
+                    .await
+                    .is_err()
+                {
+                    break 'outer;
+                }
+                let client_indices: HashSet<u32> =
+                    client_calls.iter().map(|call| call.index).collect();
+                buffered_tool_deltas.sort_by_key(|delta| delta.index);
+                for delta in buffered_tool_deltas
+                    .into_iter()
+                    .filter(|delta| client_indices.contains(&delta.index))
+                {
+                    if send_chunk(
+                        &event_tx,
+                        &turn,
+                        OpenAiDelta {
+                            role: None,
+                            content: None,
+                            tool_calls: vec![delta],
+                        },
+                        None,
+                    )
+                    .await
+                    .is_err()
+                    {
+                        break 'outer;
+                    }
+                }
                 let _ =
                     send_chunk(&event_tx, &turn, OpenAiDelta::default(), Some("tool_calls")).await;
                 if include_usage {
@@ -862,6 +1016,20 @@ async fn send_chunk(
         .send(Event::default().data(json))
         .await
         .map_err(|_| ())
+}
+
+/// Terminate a failed SSE stream: an `error` event followed by `[DONE]`, so
+/// clients can distinguish a completed stream from a failed one instead of
+/// stalling on a silently closed body (PR #466 review).
+async fn send_error_and_done(event_tx: &tokio::sync::mpsc::Sender<Event>) {
+    let _ = event_tx
+        .send(
+            Event::default()
+                .event("error")
+                .data("internal server error"),
+        )
+        .await;
+    let _ = event_tx.send(Event::default().data("[DONE]")).await;
 }
 
 /// Send the final usage chunk (`choices: []` + `usage`), emitted only when

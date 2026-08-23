@@ -108,7 +108,7 @@ If the agent evolves to support multiple users in a household:
 
 ## Security
 
-- All inter-device communication encrypted (TLS 1.3; today via a reverse proxy — the daemon stays reverse-proxy-first)
+- Inter-device communication is encrypted when traffic passes through a TLS-terminating reverse proxy. Direct daemon binds use bearer-token authentication and do not provide TLS.
 - No raw data leaves the home server
 - Device tokens for authentication (future; today every device presents the daemon's single bearer API token, issue #281)
 - Revocable per-device access (future)

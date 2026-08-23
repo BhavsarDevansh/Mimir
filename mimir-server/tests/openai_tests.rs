@@ -250,7 +250,7 @@ async fn test_v1_chat_client_tool_roundtrip() {
         call_type: "function".to_string(),
         function: FunctionCall {
             name: "get_stock_price".to_string(),
-            arguments: "{\"location\":\"London\"}".to_string(),
+            arguments: "{\"symbol\":\"AAPL\"}".to_string(),
         },
     };
     let mock = Arc::new(
@@ -294,6 +294,10 @@ async fn test_v1_chat_client_tool_roundtrip() {
         "get_stock_price"
     );
     assert_eq!(response.choices[0].message.tool_calls[0].id, "call_1");
+    assert_eq!(
+        response.choices[0].message.tool_calls[0].function.arguments, "{\"symbol\":\"AAPL\"}",
+        "the tool-call arguments must match the declared schema"
+    );
 
     // The client executes the tool and sends the result back; the turn
     // continues and completes with the final answer.
@@ -639,7 +643,7 @@ async fn test_v1_chat_stream_client_tool_deltas() {
     let tool_deltas: Vec<_> = chunks
         .iter()
         .filter_map(|chunk| chunk.choices.first())
-        .filter_map(|choice| choice.delta.tool_calls.first())
+        .flat_map(|choice| choice.delta.tool_calls.iter())
         .collect();
     assert_eq!(tool_deltas.len(), 2, "both tool-call deltas streamed");
     assert_eq!(tool_deltas[0].id.as_deref(), Some("call_1"));
@@ -654,6 +658,351 @@ async fn test_v1_chat_stream_client_tool_deltas() {
         "stream must end with finish_reason tool_calls"
     );
     assert!(text.trim_end().ends_with("data: [DONE]"));
+}
+
+#[tokio::test]
+async fn test_v1_chat_stream_multiple_client_tools_streamed_in_index_order() {
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            // Delivered out of order: index 1 arrives before index 0, and
+            // each call arrives as two deltas (header + arguments).
+            .push_stream(vec![
+                Ok(StreamItem::ToolCalls(vec![ToolCall {
+                    index: 1,
+                    id: "call_2".to_string(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "get_stock_price".to_string(),
+                        arguments: "{\"symbol\":".to_string(),
+                    },
+                }])),
+                Ok(StreamItem::ToolCalls(vec![ToolCall {
+                    index: 0,
+                    id: "call_1".to_string(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "get_stock_price".to_string(),
+                        arguments: "{\"symbol\":".to_string(),
+                    },
+                }])),
+                Ok(StreamItem::ToolCalls(vec![ToolCall {
+                    index: 1,
+                    id: String::new(),
+                    call_type: String::new(),
+                    function: FunctionCall {
+                        name: String::new(),
+                        arguments: "\"MSFT\"}".to_string(),
+                    },
+                }])),
+                Ok(StreamItem::ToolCalls(vec![ToolCall {
+                    index: 0,
+                    id: String::new(),
+                    call_type: String::new(),
+                    function: FunctionCall {
+                        name: String::new(),
+                        arguments: "\"AAPL\"}".to_string(),
+                    },
+                }])),
+            ])
+            .build(),
+    );
+    let (state, _temp) = test_state(mock.clone()).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let tools = serde_json::json!([{
+        "type": "function",
+        "function": {
+            "name": "get_stock_price",
+            "description": "Get the stock price",
+            "parameters": {"type": "object"}
+        }
+    }]);
+    let body = chat_body(
+        "gpt-4o",
+        serde_json::json!([{"role": "user", "content": "prices?"}]),
+        serde_json::json!({"user": "phone", "stream": true, "tools": tools}),
+    );
+    let response = app
+        .oneshot(
+            authed_request()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+
+    let chunks: Vec<OpenAiStreamChunk> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter(|data| *data != "[DONE]")
+        .map(|data| serde_json::from_str(data).unwrap())
+        .collect();
+
+    let tool_deltas: Vec<_> = chunks
+        .iter()
+        .filter_map(|chunk| chunk.choices.first())
+        .flat_map(|choice| choice.delta.tool_calls.iter())
+        .collect();
+    let indices: Vec<u32> = tool_deltas.iter().map(|delta| delta.index).collect();
+    assert_eq!(
+        indices.len(),
+        4,
+        "all buffered deltas must be emitted; stream text: {text:?}"
+    );
+    assert!(
+        indices.windows(2).all(|pair| pair[0] <= pair[1]),
+        "emitted tool-call indices must be non-decreasing: {indices:?}"
+    );
+    assert_eq!(indices[0], 0);
+    assert_eq!(indices[2], 1);
+    assert_eq!(tool_deltas[0].id.as_deref(), Some("call_1"));
+    assert_eq!(tool_deltas[2].id.as_deref(), Some("call_2"));
+    let last = chunks.last().unwrap();
+    assert_eq!(
+        last.choices[0].finish_reason.as_deref(),
+        Some("tool_calls"),
+        "stream must end with finish_reason tool_calls"
+    );
+    assert!(text.trim_end().ends_with("data: [DONE]"));
+}
+
+#[tokio::test]
+async fn test_v1_chat_stream_error_sends_error_event_and_done() {
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            .push_stream(vec![
+                Ok(StreamItem::Text("partial".to_string())),
+                Err(LlmError::RetryExhausted { attempts: 3 }),
+            ])
+            .build(),
+    );
+    let (state, _temp) = test_state(mock.clone()).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let body = chat_body(
+        "gpt-4o",
+        serde_json::json!([{"role": "user", "content": "hi"}]),
+        serde_json::json!({"user": "phone", "stream": true}),
+    );
+    let response = app
+        .oneshot(
+            authed_request()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+
+    assert!(
+        text.contains("event: error"),
+        "a failed stream must emit an error event: {text:?}"
+    );
+    assert!(
+        text.trim_end().ends_with("data: [DONE]"),
+        "a failed stream must terminate with [DONE]: {text:?}"
+    );
+
+    // The failed turn must not leave the persisted user message behind.
+    let sessions = state.context_manager.list_sessions().await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    let msgs = state
+        .context_manager
+        .export_conversation(sessions[0].id)
+        .await
+        .unwrap()
+        .messages;
+    assert_eq!(
+        msgs.len(),
+        1,
+        "failed stream must roll back the request's messages: {msgs:?}"
+    );
+    assert_eq!(msgs[0].role, "system");
+}
+
+#[tokio::test]
+async fn test_v1_chat_stream_server_tool_deltas_not_streamed_to_client() {
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            // Round 1: the model calls the server-side `echo` tool. The
+            // deltas must be executed internally and never reach the client.
+            .push_stream(vec![Ok(StreamItem::ToolCalls(vec![ToolCall {
+                index: 0,
+                id: "call_echo".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "echo".to_string(),
+                    arguments: "{\"message\":\"ping\"}".to_string(),
+                },
+            }]))])
+            .push_stream(vec![
+                Ok(StreamItem::Text("pong".to_string())),
+                Ok(StreamItem::Usage(Usage {
+                    prompt_tokens: 5,
+                    completion_tokens: 3,
+                    total_tokens: 8,
+                })),
+            ])
+            .build(),
+    );
+    let (state, _temp) = test_state(mock.clone()).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let body = chat_body(
+        "gpt-4o",
+        serde_json::json!([{"role": "user", "content": "echo ping"}]),
+        serde_json::json!({"user": "phone", "stream": true}),
+    );
+    let response = app
+        .oneshot(
+            authed_request()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+
+    let chunks: Vec<OpenAiStreamChunk> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter(|data| *data != "[DONE]")
+        .map(|data| serde_json::from_str(data).unwrap())
+        .collect();
+    assert!(
+        !text.contains("\"tool_calls\""),
+        "server-side tool deltas must never reach the client: {text:?}"
+    );
+    let content: String = chunks
+        .iter()
+        .filter_map(|chunk| chunk.choices.first())
+        .filter_map(|choice| choice.delta.content.clone())
+        .collect();
+    assert_eq!(content, "pong");
+    let last = chunks.last().unwrap();
+    assert_eq!(
+        last.choices[0].finish_reason.as_deref(),
+        Some("stop"),
+        "a server-tool round must end with the final answer, not tool_calls"
+    );
+    assert!(text.trim_end().ends_with("data: [DONE]"));
+
+    // The server executed the tool internally and persisted the round.
+    let sessions = state.context_manager.list_sessions().await.unwrap();
+    let msgs = state
+        .context_manager
+        .export_conversation(sessions[0].id)
+        .await
+        .unwrap()
+        .messages;
+    assert_eq!(msgs.len(), 5, "full round persisted: {msgs:?}");
+    assert_eq!(msgs[2].role, "assistant");
+    assert!(msgs[2].tool_calls.is_some(), "tool-call message persisted");
+    assert_eq!(msgs[3].role, "tool");
+    assert_eq!(msgs[4].content, "pong");
+}
+
+#[tokio::test]
+async fn test_v1_chat_invalid_client_tool_returns_400_with_param() {
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock.clone()).await;
+    let app = mimir_server::build_app(state.clone());
+
+    for tools in [
+        serde_json::json!([{"type": "not_a_function", "function": {"name": "x"}}]),
+        serde_json::json!([{"type": "function", "function": {"name": "x", "parameters": "nope"}}]),
+        serde_json::json!([{"type": "function", "function": {"name": ""}}]),
+        serde_json::json!([{"function": {"name": "x"}}]),
+    ] {
+        let body = chat_body(
+            "gpt-4o",
+            serde_json::json!([{"role": "user", "content": "hi"}]),
+            serde_json::json!({"user": "phone", "tools": tools}),
+        );
+        let (status, _, value) = post_v1_chat(&app, &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "tools: {tools}");
+        let error: OpenAiErrorBody = serde_json::from_value(value).unwrap();
+        assert_eq!(error.error.error_type, "invalid_request_error");
+        assert_eq!(error.error.param.as_deref(), Some("tools"));
+    }
+
+    // Validation runs before session creation and persistence, so a rejected
+    // request must not leave a session or an orphaned user message behind.
+    let sessions = state.context_manager.list_sessions().await.unwrap();
+    assert!(sessions.is_empty(), "no session for rejected tools");
+}
+
+#[tokio::test]
+async fn test_v1_chat_blocking_usage_accumulates_across_tool_rounds() {
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            .push_chat_message(
+                Message {
+                    role: "assistant".to_string(),
+                    content: String::new(),
+                    tool_calls: Some(vec![ToolCall {
+                        index: 0,
+                        id: "call_echo".to_string(),
+                        call_type: "function".to_string(),
+                        function: FunctionCall {
+                            name: "echo".to_string(),
+                            arguments: "{\"message\":\"ping\"}".to_string(),
+                        },
+                    }]),
+                    tool_call_id: None,
+                },
+                Usage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                    total_tokens: 15,
+                },
+            )
+            .push_chat(
+                "pong",
+                Usage {
+                    prompt_tokens: 3,
+                    completion_tokens: 2,
+                    total_tokens: 5,
+                },
+            )
+            .build(),
+    );
+    let (state, _temp) = test_state(mock.clone()).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let body = chat_body(
+        "gpt-4o",
+        serde_json::json!([{"role": "user", "content": "echo ping"}]),
+        serde_json::json!({"user": "phone"}),
+    );
+    let (status, _, value) = post_v1_chat(&app, &body).await;
+    assert_eq!(status, StatusCode::OK);
+    let response: OpenAiChatResponse = serde_json::from_value(value).unwrap();
+    assert_eq!(response.usage.prompt_tokens, 13, "usage must accumulate");
+    assert_eq!(response.usage.completion_tokens, 7);
+    assert_eq!(response.usage.total_tokens, 20);
 }
 
 #[tokio::test]
@@ -683,6 +1032,23 @@ async fn test_v1_chat_queue_full_returns_503_openai_shape() {
     let error: OpenAiErrorBody = serde_json::from_value(value).unwrap();
     assert_eq!(error.error.error_type, "server_error");
     assert_eq!(error.error.code.as_deref(), Some("queue_full"));
+
+    // The failed turn must not leave the persisted user message behind: the
+    // session keeps only its system prompt (PR #466 review).
+    let sessions = state.context_manager.list_sessions().await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    let msgs = state
+        .context_manager
+        .export_conversation(sessions[0].id)
+        .await
+        .unwrap()
+        .messages;
+    assert_eq!(
+        msgs.len(),
+        1,
+        "failed turn must roll back the request's messages: {msgs:?}"
+    );
+    assert_eq!(msgs[0].role, "system");
 }
 
 #[tokio::test]

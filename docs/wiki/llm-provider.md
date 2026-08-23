@@ -9,7 +9,7 @@ Point your app at `http://<mimir-host>:8080/v1` and use the daemon's API token a
 - `GET /v1/models` lists the personality presets you can use as model names.
 - `POST /v1/chat/completions` answers chat requests, with or without streaming.
 
-Every conversation is stored in Mimir's central profile, so anything you say from any device becomes part of the same memory — and Mimir's learning hooks pick up new facts from those conversations automatically.
+Conversations that carry a `user` key are stored in Mimir's central profile, so anything you say from any device under that key becomes part of the same memory — and Mimir's learning hooks pick up new facts from those conversations automatically. Requests without a `user` key are incognito: Mimir still answers with its memory context, but stores nothing and triggers no learning hooks.
 
 ## Quick Example
 
@@ -27,6 +27,8 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 ## Choosing a Conversation
 
 The `user` field is your conversation key. Use a fixed value per conversation (for example `"my-phone"` or `"work-laptop"`) and Mimir resumes that conversation on every request. Omit `user` for a one-off incognito-style question: Mimir still uses its memory to answer, but stores nothing and learns nothing from it.
+
+The first request for a `user` key captures the system prompt (personality preset plus the memory block at that moment) and keeps it for the lifetime of the conversation — new core facts or a changed preset apply only to conversations started afterwards.
 
 ## Model Names
 

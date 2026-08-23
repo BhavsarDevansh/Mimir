@@ -29,7 +29,9 @@ pub struct FunctionCall {
 /// A tool call issued by the assistant.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ToolCall {
-    #[serde(default)]
+    /// Stream-aggregation order; internal to Mimir and never sent upstream
+    /// (OpenAI messages carry no `index` on tool calls, PR #466 review).
+    #[serde(default, skip_serializing)]
     pub index: u32,
     #[serde(default)]
     pub id: String,

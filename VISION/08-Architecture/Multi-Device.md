@@ -18,6 +18,10 @@ The agent is designed for a single user who may access it from multiple devices 
 - Cache recent conversation context for offline viewing
 - Cannot run connectors or reasoning independently
 
+## Current Implementation (issue #388)
+
+The daemon now exposes an OpenAI-compatible provider surface — `GET /v1/models` and `POST /v1/chat/completions` (blocking + streaming) — so any app or device that speaks the OpenAI chat-completions API can point at the central Mimir server. Mimir is single-tenant, so there is no device identity: the OpenAI `user` field is a conversation key, and a fixed `user` value resumes one ongoing conversation in the central profile. Every device's conversations therefore feed the same memory and learning hooks, exactly as this vision assumes. Requests without `user` are incognito-style (memory context injected, nothing persisted). See `docs/llm-provider.md` and `docs/wiki/llm-provider.md`.
+
 ## Connection Methods
 
 ### Local Network
@@ -25,8 +29,8 @@ The agent is designed for a single user who may access it from multiple devices 
 Phone/Laptop/Desktop → WiFi/LAN → Home Server (agent-daemon:8080)
 ```
 - Fast, no internet required
-- Automatic discovery via mDNS/Bonjour
-- TLS with client certificates
+- Automatic discovery via mDNS/Bonjour (future)
+- TLS with client certificates (future; today the daemon is reverse-proxy-first and authenticates with its bearer API token)
 
 ### Remote Access
 ```
@@ -40,8 +44,8 @@ Phone (4G/5G) → Internet → Home Router → Home Server
 
 ### Conversation Sync
 - All conversations stored on home server
-- Any device can resume any conversation
-- Real-time sync via WebSocket
+- Any device can resume any conversation (today: a fixed OpenAI `user` key resumes the conversation on the provider surface)
+- Real-time sync via WebSocket (future)
 - Offline: last N conversations cached locally
 
 ### Notification Sync
@@ -104,7 +108,7 @@ If the agent evolves to support multiple users in a household:
 
 ## Security
 
-- All inter-device communication encrypted (TLS 1.3)
+- Inter-device communication is encrypted when traffic passes through a TLS-terminating reverse proxy. Direct daemon binds use bearer-token authentication and do not provide TLS.
 - No raw data leaves the home server
-- Device tokens for authentication
-- Revocable per-device access
+- Device tokens for authentication (future; today every device presents the daemon's single bearer API token, issue #281)
+- Revocable per-device access (future)

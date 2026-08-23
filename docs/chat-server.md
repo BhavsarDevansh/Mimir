@@ -14,6 +14,8 @@ The Mimir chat server is an Axum HTTP daemon that runs in-process as part of the
 | `GET` | `/sessions/{id}/messages` | Messages for a session from last compaction |
 | `POST` | `/chat` | Blocking chat completion |
 | `POST` | `/chat/stream` | SSE streaming chat completion |
+| `GET` | `/v1/models` | OpenAI-compatible model list (personality presets) |
+| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completion (blocking + streaming) |
 
 ## Authentication
 
@@ -30,15 +32,16 @@ Destructive and sensitive routes are additionally loopback-only: the `require_lo
 **Request body:**
 ```json
 {
-  "session_id": "optional-existing-uuid",
+  "session_id": 42,
   "message": "Hello, Mimir!"
 }
 ```
 
 **Response body (success):**
+
 ```json
 {
-  "session_id": "uuid-v4",
+  "session_id": 42,
   "response": "Hello! How can I help?",
   "usage": {
     "prompt_tokens": 10,
@@ -91,7 +94,7 @@ Keep-alive pings are sent every 10 seconds.
 ```json
 [
   {
-    "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "session_id": 42,
     "created_at": "2024-01-01T00:00:00Z",
     "updated_at": "2024-01-02T00:00:00Z",
     "preview": "Hello, Mimir!"
@@ -107,7 +110,7 @@ Sessions are ordered by `updated_at` descending. `preview` is the most recent us
 
 ```json
 {
-  "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "session_id": 42,
   "messages": [
     { "role": "system", "content": "...", "created_at": "2024-01-01T00:00:00Z" },
     { "role": "user", "content": "Hello", "created_at": "2024-01-01T00:00:01Z" },
@@ -160,3 +163,7 @@ The server reads its bind address from `[server].bind_addr` in `~/.config/mimir/
 `mimir-server` splits the daemon into `app.rs` (router assembly + bearer-token auth + loopback guard), `server.rs` (startup and background tasks), `shutdown.rs` (signal handling + bounded graceful drain), `state/` (shared `AppState` construction), `routes/` (one module per endpoint family — `chat.rs`, `connectors.rs`, `kb/`, `memory.rs`, `sessions.rs`, `status.rs`, `stop.rs`, `kb_categories.rs`), and `error.rs` (wire error mapping). The KB route family is further split by concern in `routes/kb/` (`query`, `detail`, `browse`, `pending`, `trash`, `forget`, `optimization`, `helpers`, `params`).
 
 `AppState` construction (`state/builder.rs`) is decomposed into per-subsystem init helpers composed by `from_config_with_llm` in a fixed startup order: `init_context_manager` → `init_tool_registry` → `init_knowledge_graph` (geocoder injection, user-entity resolution, identity-fact seeding, KG tool registration) → `init_job_queue` → `init_agent_runtime` → `init_scheduler` (registers the knowledge-optimization, pending-cleanup, and events-scan jobs) → `init_hook_engine` (registers the `remember.chat`, `memory.condensation`, and `connector_item.remember` hooks) → `init_connector_framework` (feature-gated factory registration, supervisor wiring, `restore()`). Each helper is independently unit-testable; issue #281 added the `api_token` field to `AppState` (loaded or generated at startup).
+
+## OpenAI-Compatible Provider Surface
+
+The daemon also exposes an OpenAI-compatible provider surface (`GET /v1/models` and `POST /v1/chat/completions`) so apps and devices that speak the OpenAI chat-completions API can use Mimir as their LLM provider. The OpenAI `user` field is a conversation key that resumes one persistent session in the central profile; requests without `user` are incognito-style. Model names matching a personality preset select that preset, and unknown names pass through as upstream model overrides. Client tool schemas are merged with Mimir's server-side tools (server wins on name collision), and `/v1` errors use the OpenAI error JSON shape. See `docs/llm-provider.md` for the full design and `docs/wiki/llm-provider.md` for usage.

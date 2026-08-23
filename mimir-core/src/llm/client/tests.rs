@@ -68,6 +68,32 @@ async fn new_returns_client_build_error_for_invalid_pool_config() {
     );
 }
 
+#[test]
+fn with_max_tokens_override_updates_max_tokens() {
+    // Issue #388: a per-request max_tokens must reach the request.
+    let config = LlmConfig {
+        endpoint: "https://api.openai.com/v1".to_string(),
+        api_key: "sk-test".to_string(),
+        model: "gpt-4o".to_string(),
+        max_tokens: Some(10),
+        temperature: 0.2,
+    };
+    let client = LlmClient::new_direct(config).expect("LLM direct client must build in tests");
+    let overridden = client
+        .with_max_tokens_override(256)
+        .expect("max_tokens override supported");
+    assert_eq!(
+        overridden.max_tokens(),
+        Some(256),
+        "override must replace the configured value"
+    );
+    assert_eq!(
+        client.max_tokens(),
+        Some(10),
+        "the original client must keep its configured value"
+    );
+}
+
 #[tokio::test]
 async fn with_temperature_override_disables_pooling() {
     // Temperature overrides must disable pooling so the override is applied

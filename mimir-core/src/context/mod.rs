@@ -43,6 +43,10 @@ pub enum ContextError {
     /// An I/O error occurred.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// A stored value could not be serialised or deserialised.
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
 }
 
 /// A persisted conversation message.
@@ -52,6 +56,10 @@ pub struct ContextMessage {
     pub session_id: i64,
     pub role: String,
     pub content: String,
+    /// JSON-encoded assistant tool calls (issue #388).
+    pub tool_calls: Option<String>,
+    /// Tool-call id for `tool`-role messages (issue #388).
+    pub tool_call_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub token_count: Option<u32>,
 }

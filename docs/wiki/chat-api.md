@@ -15,7 +15,7 @@ curl -X POST http://127.0.0.1:8080/chat \\
 **Response:**
 ```json
 {
-  "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "session_id": 42,
   "response": "Hello! How can I help you today?",
   "usage": {
     "prompt_tokens": 12,
@@ -32,7 +32,7 @@ Include the `session_id` from the previous response:
 ```bash
 curl -X POST http://127.0.0.1:8080/chat \\
   -H "Content-Type: application/json" \\
-  -d '{"session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", "message": "What is the weather like?"}'
+  -d '{"session_id": 42, "message": "What is the weather like?"}'
 ```
 
 ## Streaming Responses
@@ -68,3 +68,7 @@ Returns the full message history from the last compaction point (or all messages
 - **400** — Invalid JSON body.
 - **404** — Unknown `session_id`.
 - **503** — Server is busy. Retry after 5 seconds.
+
+## OpenAI-Compatible API
+
+Mimir also speaks the OpenAI chat-completions API on `/v1/chat/completions` (with `/v1/models` for the model list), so any OpenAI-compatible app can use Mimir as its LLM provider. See [Using Mimir as Your LLM Provider](llm-provider.md).

@@ -63,6 +63,84 @@ pub fn llm_error(e: mimir_core::llm::types::LlmError) -> Response {
     }
 }
 
+/// Build an OpenAI-shaped error response for the `/v1` provider surface
+/// (issue #388): `{"error": {"message", "type", "param", "code"}}`.
+pub fn openai_error(
+    status: StatusCode,
+    message: impl Into<String>,
+    error_type: impl Into<String>,
+    param: Option<&str>,
+    code: Option<&str>,
+) -> Response {
+    let body = Json(mimir_api_types::OpenAiErrorBody {
+        error: mimir_api_types::OpenAiError {
+            message: message.into(),
+            error_type: error_type.into(),
+            param: param.map(String::from),
+            code: code.map(String::from),
+        },
+    });
+    (status, body).into_response()
+}
+
+/// Return an OpenAI-shaped `BAD_REQUEST` response for invalid JSON.
+pub fn openai_json_rejection() -> Response {
+    openai_error(
+        StatusCode::BAD_REQUEST,
+        "invalid JSON body",
+        "invalid_request_error",
+        None,
+        None,
+    )
+}
+
+/// Convert a context error into an OpenAI-shaped HTTP response.
+pub fn openai_context_error(e: mimir_core::context::ContextError) -> Response {
+    error!("context error: {e}");
+    openai_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal server error",
+        "server_error",
+        None,
+        None,
+    )
+}
+
+/// Convert an LLM error into an OpenAI-shaped HTTP response.
+///
+/// Queue-full errors return `503 Service Unavailable` with a `Retry-After: 5`
+/// header, mirroring the native `llm_error` mapping (issue #388).
+pub fn openai_llm_error(e: mimir_core::llm::types::LlmError) -> Response {
+    match &e {
+        mimir_core::llm::types::LlmError::QueueFull => {
+            let body = Json(mimir_api_types::OpenAiErrorBody {
+                error: mimir_api_types::OpenAiError {
+                    message: "server busy, try again later".to_string(),
+                    error_type: "server_error".to_string(),
+                    param: None,
+                    code: Some("queue_full".to_string()),
+                },
+            });
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [(header::RETRY_AFTER, "5")],
+                body,
+            )
+                .into_response()
+        }
+        _ => {
+            error!("LLM error: {e}");
+            openai_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error",
+                "server_error",
+                None,
+                None,
+            )
+        }
+    }
+}
+
 /// Convert a memory I/O error into an HTTP response.
 pub fn memory_error(e: anyhow::Error) -> Response {
     error!("memory error: {e}");
@@ -311,6 +389,57 @@ mod tests {
         assert_eq!(resp.headers().get("retry-after").unwrap(), "5");
         let body = body_json(resp).await;
         assert_eq!(body["code"], "QUEUE_FULL");
+    }
+
+    #[tokio::test]
+    async fn openai_error_serializes_openai_shape() {
+        let resp = openai_error(
+            StatusCode::BAD_REQUEST,
+            "model is required",
+            "invalid_request_error",
+            Some("model"),
+            None,
+        );
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["message"], "model is required");
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["param"], "model");
+        assert!(body["error"]["code"].is_null());
+    }
+
+    #[tokio::test]
+    async fn openai_json_rejection_returns_400_openai_shape() {
+        let resp = openai_json_rejection();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+    }
+
+    #[tokio::test]
+    async fn openai_llm_error_queue_full_returns_503_with_retry_after() {
+        let resp = openai_llm_error(mimir_core::llm::types::LlmError::QueueFull);
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(resp.headers().get("retry-after").unwrap(), "5");
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["type"], "server_error");
+        assert_eq!(body["error"]["code"], "queue_full");
+    }
+
+    #[tokio::test]
+    async fn openai_llm_error_generic_masks_detail() {
+        let resp = openai_llm_error(mimir_core::llm::types::LlmError::StreamError(
+            "upstream detail".to_string(),
+        ));
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["message"], "internal server error");
+        assert!(
+            !body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("upstream detail")
+        );
     }
 
     #[tokio::test]

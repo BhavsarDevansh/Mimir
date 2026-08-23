@@ -196,6 +196,15 @@ Core facts about the user (condensed subset — not a complete picture; treat as
         &self.active_name
     }
 
+    /// Whether a preset with the given name exists (built-in or custom).
+    ///
+    /// Used by the OpenAI-compatible provider surface to decide whether a
+    /// request `model` selects a personality preset or passes through as an
+    /// upstream model override (issue #388).
+    pub fn has_preset(&self, name: &str) -> bool {
+        self.registry.contains_key(name)
+    }
+
     /// Non-fatal diagnostics collected while resolving presets: malformed or
     /// unreadable custom preset files, unknown frontmatter keys, and an
     /// unknown configured preset (issue #387).
@@ -539,6 +548,9 @@ Core facts about the user (condensed subset — not a complete picture; treat as
 }
 
 impl PersonalityCache {
+    /// Built-in preset names, kept in sync with [`Personality::built_in_presets`].
+    const BUILTIN_PRESET_NAMES: [&str; 4] = ["transparent", "concise", "warm", "formal"];
+
     /// Create an empty preset cache.
     pub fn new() -> Self {
         Self::default()
@@ -615,6 +627,52 @@ impl PersonalityCache {
         };
         Personality::log_warnings(warnings);
         personality
+    }
+
+    /// Whether a preset with the given name exists (built-in or custom),
+    /// without emitting per-request diagnostics.
+    ///
+    /// The OpenAI model-override path uses this probe so an unknown model
+    /// name — a normal upstream override, not a configuration mistake — does
+    /// not log an unknown-preset warning on every request (PR #466 review).
+    pub fn has_preset(&self, name: &str) -> bool {
+        if Self::is_builtin_preset(name) {
+            return true;
+        }
+        match paths::personalities_dir() {
+            Ok(presets_dir) => self.has_custom_preset_from_path(&presets_dir, name),
+            Err(_) => false,
+        }
+    }
+
+    /// Whether a custom preset exists under `presets_dir`, rescanning only
+    /// when the directory fingerprint changed (mirrors
+    /// [`Self::resolve_from_path`]). Scan diagnostics are logged by the next
+    /// `resolve`; this probe stays silent.
+    fn has_custom_preset_from_path(&self, presets_dir: &Path, name: &str) -> bool {
+        let fingerprint = Self::fingerprint(presets_dir);
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let hit =
+            fingerprint.is_some() && guard.dir == presets_dir && guard.fingerprint == fingerprint;
+        if !hit {
+            let (custom, warnings) = Personality::scan_custom_presets(presets_dir);
+            guard.dir = presets_dir.to_path_buf();
+            guard.fingerprint = fingerprint;
+            guard.custom = custom;
+            guard.warnings = warnings;
+            guard.scans += 1;
+        }
+        guard
+            .custom
+            .iter()
+            .any(|(preset_name, _)| preset_name == name)
+    }
+
+    fn is_builtin_preset(name: &str) -> bool {
+        Self::BUILTIN_PRESET_NAMES.contains(&name)
     }
 
     /// Compute a cheap fingerprint of the presets directory: the directory's
@@ -1200,6 +1258,42 @@ mod tests {
                 .any(|info| info.name == "cheerful")
         );
         assert_eq!(cache.scan_count(), 1);
+    }
+
+    #[test]
+    fn test_cache_has_preset_probe_finds_builtin_and_custom() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("cheerful.personality.md"),
+            "You are cheerful!",
+        )
+        .unwrap();
+
+        let cache = PersonalityCache::default();
+        assert!(cache.has_preset("transparent"), "built-in preset");
+        assert!(
+            cache.has_custom_preset_from_path(dir.path(), "cheerful"),
+            "custom preset"
+        );
+        assert!(
+            !cache.has_custom_preset_from_path(dir.path(), "gpt-4o"),
+            "upstream model name"
+        );
+        assert_eq!(cache.scan_count(), 1, "one scan for the custom probe");
+    }
+
+    #[test]
+    fn test_builtin_preset_names_match_registry() {
+        let registry = Personality::built_in_presets();
+        let names: Vec<&str> = registry.keys().map(String::as_str).collect();
+        for name in PersonalityCache::BUILTIN_PRESET_NAMES {
+            assert!(names.contains(&name), "missing built-in: {name}");
+        }
+        assert_eq!(
+            names.len(),
+            PersonalityCache::BUILTIN_PRESET_NAMES.len(),
+            "built-in registry must not drift from the name list"
+        );
     }
 
     #[test]

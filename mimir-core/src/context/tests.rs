@@ -526,4 +526,404 @@ async fn test_context_manager_close() {
     );
 }
 
+// -- OpenAI provider surface (issue #388) --
+
+#[tokio::test]
+async fn resolve_openai_session_creates_and_resumes() {
+    let (mgr, _dir) = setup_manager().await;
+    let first = mgr
+        .resolve_openai_session("phone", "first system prompt")
+        .await
+        .unwrap();
+    let second = mgr
+        .resolve_openai_session("phone", "second system prompt")
+        .await
+        .unwrap();
+    assert_eq!(first, second, "same user key must resume one session");
+
+    // First-writer-wins: the stored system prompt is the creation-time one.
+    let msgs = mgr.export_messages(first).await.unwrap();
+    assert_eq!(msgs[0].role, "system");
+    assert_eq!(msgs[0].content, "first system prompt");
+}
+
+#[tokio::test]
+async fn resolve_openai_session_distinct_user_keys() {
+    let (mgr, _dir) = setup_manager().await;
+    let phone = mgr.resolve_openai_session("phone", "sys").await.unwrap();
+    let laptop = mgr.resolve_openai_session("laptop", "sys").await.unwrap();
+    assert_ne!(
+        phone, laptop,
+        "distinct user keys must map to distinct sessions"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resolve_openai_session_concurrent_creates_single_session() {
+    let (mgr, _dir) = setup_manager().await;
+    let mgr = std::sync::Arc::new(mgr);
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let mgr = std::sync::Arc::clone(&mgr);
+        handles.push(tokio::spawn(async move {
+            mgr.resolve_openai_session("shared", "sys").await.unwrap()
+        }));
+    }
+    let mut ids = Vec::new();
+    for handle in handles {
+        ids.push(handle.await.unwrap());
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(
+        ids.len(),
+        1,
+        "concurrent resolves must converge on one session"
+    );
+}
+
+#[tokio::test]
+async fn tool_messages_roundtrip_through_export() {
+    use crate::llm::types::{FunctionCall, ToolCall};
+
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    mgr.add_user_message(sid, "weather?").await.unwrap();
+
+    let tool_calls = vec![ToolCall {
+        index: 0,
+        id: "call_1".to_string(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: "get_weather".to_string(),
+            arguments: "{\"location\":\"London\"}".to_string(),
+        },
+    }];
+    mgr.add_assistant_tool_calls_message(sid, "", &tool_calls)
+        .await
+        .unwrap();
+    mgr.add_tool_message(sid, "call_1", "sunny").await.unwrap();
+    mgr.add_assistant_message(sid, "It is sunny.")
+        .await
+        .unwrap();
+
+    let msgs = mgr.export_messages(sid).await.unwrap();
+    assert_eq!(msgs.len(), 5);
+    assert_eq!(msgs[0].role, "system");
+    assert_eq!(msgs[1].role, "user");
+    assert_eq!(msgs[2].role, "assistant");
+    assert_eq!(msgs[2].tool_calls.as_ref().unwrap(), &tool_calls);
+    assert_eq!(msgs[3].role, "tool");
+    assert_eq!(msgs[3].tool_call_id.as_deref(), Some("call_1"));
+    assert_eq!(msgs[3].content, "sunny");
+    assert_eq!(msgs[4].role, "assistant");
+    assert_eq!(msgs[4].tool_calls, None);
+    assert_eq!(msgs[4].tool_call_id, None);
+}
+
+#[tokio::test]
+async fn trim_removes_whole_turns_including_tool_messages() {
+    use crate::llm::types::{FunctionCall, ToolCall};
+
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+
+    // Turn 1: user -> assistant(tool_calls) -> tool -> assistant.
+    mgr.add_user_message(sid, "u1").await.unwrap();
+    let calls = vec![ToolCall {
+        index: 0,
+        id: "c1".to_string(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: "t".to_string(),
+            arguments: "{}".to_string(),
+        },
+    }];
+    mgr.add_assistant_tool_calls_message(sid, "", &calls)
+        .await
+        .unwrap();
+    mgr.add_tool_message(sid, "c1", "r1").await.unwrap();
+    mgr.add_assistant_message(sid, "a1").await.unwrap();
+
+    // Turn 2: plain user -> assistant.
+    mgr.add_user_message(sid, "u2").await.unwrap();
+    mgr.add_assistant_message(sid, "a2").await.unwrap();
+
+    mgr.trim_to_budget(sid, None, 1).await.unwrap();
+
+    let msgs = mgr.export_messages(sid).await.unwrap();
+    assert_eq!(msgs.len(), 3, "oldest turn must be removed whole: {msgs:?}");
+    assert_eq!(msgs[0].role, "system");
+    assert_eq!(msgs[1].content, "u2");
+    assert_eq!(msgs[2].content, "a2");
+}
+
+#[tokio::test]
+async fn trim_token_budget_keeps_in_flight_turn() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+
+    // Complete turn 1 with known token counts.
+    mgr.add_user_message(sid, "u1").await.unwrap();
+    mgr.add_assistant_message(sid, "a1").await.unwrap();
+    mgr.record_usage(sid, 100, 100).await.unwrap();
+
+    // Turn 2 is in flight: its user message was just persisted and is the
+    // message the current request is answering.
+    mgr.add_user_message(sid, "u2").await.unwrap();
+    mgr.record_usage(sid, 50, 0).await.unwrap();
+
+    // A budget smaller than the in-flight turn alone: the token path would
+    // previously delete every turn (including the fresh u2) and leave the
+    // LLM call without the user's message.
+    mgr.trim_to_budget(sid, Some(1), 20).await.unwrap();
+
+    let msgs = mgr.export_messages(sid).await.unwrap();
+    assert_eq!(msgs.len(), 2, "in-flight turn must survive: {msgs:?}");
+    assert_eq!(msgs[0].role, "system");
+    assert_eq!(msgs[1].role, "user");
+    assert_eq!(msgs[1].content, "u2");
+}
+
+#[tokio::test]
+async fn trim_fallback_keeps_in_flight_turn() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+
+    // Turn 1 complete (u1 has tokens, a1 has none -> unknown-count fallback).
+    mgr.add_user_message(sid, "u1").await.unwrap();
+    mgr.record_usage(sid, 100, 0).await.unwrap();
+    mgr.add_assistant_message(sid, "a1").await.unwrap();
+
+    // Turn 2 in flight (no token counts yet).
+    mgr.add_user_message(sid, "u2").await.unwrap();
+
+    // max_turns = 1 forces the fallback target to zero turns; previously the
+    // fallback then deleted every turn including the in-flight u2 message.
+    mgr.trim_to_budget(sid, Some(1), 1).await.unwrap();
+
+    let msgs = mgr.export_messages(sid).await.unwrap();
+    assert_eq!(msgs.len(), 2, "in-flight turn must survive: {msgs:?}");
+    assert_eq!(msgs[1].role, "user");
+    assert_eq!(msgs[1].content, "u2");
+}
+
+#[tokio::test]
+async fn trim_token_budget_ignores_tool_messages_in_unknown_count() {
+    use crate::llm::types::{FunctionCall, ToolCall};
+
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+
+    // Turn 1: user -> assistant(tool_calls) -> tool -> assistant, with token
+    // counts on the user and assistant messages. The tool message never
+    // carries a token count.
+    mgr.add_user_message(sid, "u1").await.unwrap();
+    mgr.record_usage(sid, 50, 0).await.unwrap();
+    let calls = vec![ToolCall {
+        index: 0,
+        id: "c1".to_string(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: "t".to_string(),
+            arguments: "{}".to_string(),
+        },
+    }];
+    mgr.add_assistant_tool_calls_message(sid, "", &calls)
+        .await
+        .unwrap();
+    mgr.record_usage(sid, 0, 100).await.unwrap();
+    mgr.add_tool_message(sid, "c1", "r1").await.unwrap();
+    mgr.add_assistant_message(sid, "a1").await.unwrap();
+    mgr.record_usage(sid, 0, 100).await.unwrap();
+
+    // Turn 2 in flight.
+    mgr.add_user_message(sid, "u2").await.unwrap();
+    mgr.record_usage(sid, 50, 0).await.unwrap();
+
+    // The tool message has token_count = NULL; previously it kept the
+    // unknown-count probe above zero forever and forced the conservative
+    // fallback (max_turns / 2) instead of precise token trimming.
+    mgr.trim_to_budget(sid, Some(1), 20).await.unwrap();
+
+    let msgs = mgr.export_messages(sid).await.unwrap();
+    assert_eq!(
+        msgs.len(),
+        2,
+        "precise token trimming must apply despite tool messages: {msgs:?}"
+    );
+    assert_eq!(msgs[0].role, "system");
+    assert_eq!(msgs[1].role, "user");
+    assert_eq!(msgs[1].content, "u2");
+}
+
+#[tokio::test]
+async fn trim_token_budget_keeps_turn_ending_in_assistant_tool_calls() {
+    use crate::llm::types::{FunctionCall, ToolCall};
+
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+
+    // Turn 1 complete with known token counts.
+    mgr.add_user_message(sid, "u1").await.unwrap();
+    mgr.add_assistant_message(sid, "a1").await.unwrap();
+    mgr.record_usage(sid, 100, 100).await.unwrap();
+
+    // Turn 2 in flight: the assistant issued tool calls and the client has
+    // not sent the results yet, so the turn must survive trimming.
+    mgr.add_user_message(sid, "u2").await.unwrap();
+    mgr.record_usage(sid, 50, 0).await.unwrap();
+    let calls = vec![ToolCall {
+        index: 0,
+        id: "c1".to_string(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: "t".to_string(),
+            arguments: "{}".to_string(),
+        },
+    }];
+    mgr.add_assistant_tool_calls_message(sid, "", &calls)
+        .await
+        .unwrap();
+    // The tool-call assistant message gets the completion tokens of the
+    // round that issued the call, so only the `tool`-role result lacks a
+    // token count.
+    mgr.record_usage(sid, 0, 100).await.unwrap();
+
+    mgr.trim_to_budget(sid, Some(1), 20).await.unwrap();
+
+    let msgs = mgr.export_messages(sid).await.unwrap();
+    assert_eq!(
+        msgs.len(),
+        3,
+        "turn awaiting tool results must survive: {msgs:?}"
+    );
+    assert_eq!(msgs[0].role, "system");
+    assert_eq!(msgs[1].role, "user");
+    assert_eq!(msgs[1].content, "u2");
+    assert_eq!(msgs[2].role, "assistant");
+    assert!(
+        msgs[2].tool_calls.is_some(),
+        "the assistant tool-call message must be kept"
+    );
+}
+
+#[tokio::test]
+async fn trim_fallback_keeps_turn_ending_in_assistant_tool_calls() {
+    use crate::llm::types::{FunctionCall, ToolCall};
+
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+
+    // Turn 1 has a known-token user message and an unknown-token assistant
+    // reply, so the token budget takes the conservative fallback path.
+    mgr.add_user_message(sid, "u1").await.unwrap();
+    mgr.record_usage(sid, 100, 0).await.unwrap();
+    mgr.add_assistant_message(sid, "a1").await.unwrap();
+
+    // Turn 2 in flight, ending in an assistant tool-call message.
+    mgr.add_user_message(sid, "u2").await.unwrap();
+    let calls = vec![crate::llm::types::ToolCall {
+        index: 0,
+        id: "c1".to_string(),
+        call_type: "function".to_string(),
+        function: crate::llm::types::FunctionCall {
+            name: "t".to_string(),
+            arguments: "{}".to_string(),
+        },
+    }];
+    mgr.add_assistant_tool_calls_message(sid, "", &calls)
+        .await
+        .unwrap();
+
+    // max_turns = 1 forces the fallback target to zero turns; the final
+    // assistant tool-call row must still count as in-flight, not complete.
+    mgr.trim_to_budget(sid, Some(1), 1).await.unwrap();
+
+    let msgs = mgr.export_messages(sid).await.unwrap();
+    assert_eq!(
+        msgs.len(),
+        3,
+        "turn awaiting tool results must survive the fallback: {msgs:?}"
+    );
+    assert_eq!(msgs[1].role, "user");
+    assert_eq!(msgs[1].content, "u2");
+    assert_eq!(msgs[2].role, "assistant");
+    assert!(msgs[2].tool_calls.is_some());
+}
+
+#[tokio::test]
+async fn schema_migration_adds_user_key_and_tool_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("migrate_openai.db");
+
+    // Create a pre-#388 database: sessions without user_key, messages
+    // without tool_calls / tool_call_id.
+    {
+        let pool = sqlx::SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&db)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+                CREATE TABLE sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    system_prompt TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    cumulative_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    cumulative_completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    summary TEXT,
+                    compacted_at TEXT
+                )
+                "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    token_count INTEGER
+                )
+                "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    let mgr = ContextManager::new(&db).await.unwrap();
+    let sid = mgr.resolve_openai_session("phone", "sys").await.unwrap();
+    let resumed = mgr.resolve_openai_session("phone", "sys").await.unwrap();
+    assert_eq!(sid, resumed);
+
+    let calls = vec![crate::llm::types::ToolCall {
+        index: 0,
+        id: "c1".to_string(),
+        call_type: "function".to_string(),
+        function: crate::llm::types::FunctionCall {
+            name: "t".to_string(),
+            arguments: "{}".to_string(),
+        },
+    }];
+    mgr.add_assistant_tool_calls_message(sid, "", &calls)
+        .await
+        .unwrap();
+    mgr.add_tool_message(sid, "c1", "r1").await.unwrap();
+
+    let msgs = mgr.export_messages(sid).await.unwrap();
+    assert_eq!(msgs[1].tool_calls.as_ref().unwrap(), &calls);
+    assert_eq!(msgs[2].tool_call_id.as_deref(), Some("c1"));
+}
+
 use super::path::expand_tilde_with_home;

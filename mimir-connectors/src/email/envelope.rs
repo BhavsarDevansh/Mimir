@@ -161,25 +161,35 @@ fn wrong_recipient(to: &[String], cc: &[String], mailbox_address: Option<&str>) 
 ///    produce a current action item. Recurring facts are exempt — their
 ///    lifecycle is owned by the recurrence, not by a one-off window.
 /// 3. Facts from forwarded or misdirected mail are never actionable —
-///    they convey someone else's conversation and are bounded to
-///    information only.
+///    `requires_user_action` is forced false and task-classified event
+///    types (task / deadline / reminder) are cleared before the window
+///    calculation, so they convey someone else's conversation and are
+///    bounded to information only.
 pub(crate) fn bind_prose_fact(fact: &mut NormalizedFact, envelope: &EmailEnvelope) {
+    if envelope.is_forwarded || envelope.is_wrong_recipient {
+        fact.requires_user_action = false;
+        if is_task_classified(fact.event_type) {
+            fact.event_type = None;
+        }
+    }
     if fact.valid_from.is_none() {
         fact.valid_from = envelope.sent_date.or(envelope.received_date);
     }
-    let actionable = fact.requires_user_action
-        || matches!(
-            fact.event_type,
-            Some(EventType::Task | EventType::Deadline | EventType::Reminder)
-        );
+    let actionable = fact.requires_user_action || is_task_classified(fact.event_type);
     if actionable && fact.valid_until.is_none() && fact.recurrence == RecurrenceType::None {
         fact.valid_until = fact
             .valid_from
             .map(|from| from + Duration::days(ACTIONABLE_WINDOW_DAYS));
     }
-    if envelope.is_forwarded || envelope.is_wrong_recipient {
-        fact.requires_user_action = false;
-    }
+}
+
+/// Whether the fact carries a task-classified event type — the event kinds
+/// that make a fact actionable and eligible for the one-off expiry window.
+fn is_task_classified(event_type: Option<EventType>) -> bool {
+    matches!(
+        event_type,
+        Some(EventType::Task | EventType::Deadline | EventType::Reminder)
+    )
 }
 
 #[cfg(test)]

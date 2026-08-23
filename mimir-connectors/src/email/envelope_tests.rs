@@ -281,22 +281,44 @@ fn bind_prose_fact_forwarded_and_wrong_recipient_are_not_actionable() {
     let message = parse(&raw);
     let envelope = EmailEnvelope::from_message(&message, None, Some("devansh@example.com"));
     assert!(envelope.is_wrong_recipient);
-    let mut fact = prose_fact(true);
-    bind_prose_fact(&mut fact, &envelope);
-    assert!(
-        !fact.requires_user_action,
-        "misdirected mail is never actionable"
-    );
+    for event_type in [EventType::Task, EventType::Deadline, EventType::Reminder] {
+        let mut fact = prose_fact(true);
+        fact.event_type = Some(event_type);
+        bind_prose_fact(&mut fact, &envelope);
+        assert!(
+            !fact.requires_user_action,
+            "misdirected mail is never actionable"
+        );
+        assert_eq!(
+            fact.event_type, None,
+            "task classification cannot survive the downgrade"
+        );
+        assert_eq!(
+            fact.valid_until, None,
+            "misdirected mail gains no actionable expiry window"
+        );
+    }
 
     let raw = base_email().replacen("Subject: Rent reminder", "Subject: Fwd: Rent reminder", 1);
     let raw = crlf(raw);
     let message = parse(&raw);
     let envelope = EmailEnvelope::from_message(&message, None, None);
     assert!(envelope.is_forwarded);
-    let mut fact = prose_fact(true);
-    bind_prose_fact(&mut fact, &envelope);
-    assert!(
-        !fact.requires_user_action,
-        "forwarded mail is never actionable"
-    );
+    for event_type in [EventType::Task, EventType::Deadline, EventType::Reminder] {
+        let mut fact = prose_fact(true);
+        fact.event_type = Some(event_type);
+        bind_prose_fact(&mut fact, &envelope);
+        assert!(
+            !fact.requires_user_action,
+            "forwarded mail is never actionable"
+        );
+        assert_eq!(
+            fact.event_type, None,
+            "task classification cannot survive the downgrade"
+        );
+        assert_eq!(
+            fact.valid_until, None,
+            "forwarded mail gains no actionable expiry window"
+        );
+    }
 }

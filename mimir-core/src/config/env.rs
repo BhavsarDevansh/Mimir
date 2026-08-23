@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use crate::config::types::{Config, Proactivity};
+use crate::config::types::{Config, Proactivity, SecretsBackend};
 
 impl Config {
     /// Apply environment variable overrides using the provided lookup function.
@@ -104,6 +104,11 @@ impl Config {
             "MIMIR_SCHEDULER_COOLDOWN_SECONDS",
             self.scheduler.cooldown_seconds,
             u16
+        );
+        set_from_env!(
+            "MIMIR_SECRETS_BACKEND",
+            self.secrets.backend,
+            SecretsBackend
         );
         set_from_env!("MIMIR_GEOCODER_ENABLED", self.geocoder.enabled, bool);
         set_from_env!("MIMIR_GEOCODER_ENDPOINT", self.geocoder.endpoint);

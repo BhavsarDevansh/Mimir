@@ -25,6 +25,13 @@ max_turns = 20
 db_path = "~/.local/share/mimir/context.db"
 # max_tokens = 4096  # Optional: token budget for conversation history
 
+[secrets]
+# Where connector credentials are stored: "file" (per-slug JSON files with
+# 0600/0700 permissions, the default) or "keychain" (macOS Keychain / Linux
+# Secret Service / Windows Credential Manager; requires a build with the
+# `secrets-keyring` cargo feature).
+backend = "file"
+
 [geocoder]
 enabled = true
 # Point at a self-hosted Nominatim instance for heavy use,

@@ -46,6 +46,12 @@ gmail = ["mimir-connectors/gmail"]
 ## add → resume → sync → pause → remove cycle against an in-process daemon.
 mock-connector = ["mimir-connectors/test-mock-connector"]
 
+## Forwarded to mimir-connectors: the opt-in OS-keychain secret backend
+## (F11 / #188). Off by default — headless systemd boxes often lack a Secret
+## Service daemon, so the file store stays the default. Build `mimir` with
+## `--features secrets-keyring` to enable it.
+secrets-keyring = ["mimir-connectors/secrets-keyring"]
+
 [dev-dependencies]
 mimir-client = { path = "../mimir-client" }
 mimir-core = { path = "../mimir-core", features = ["mock-llm"] }

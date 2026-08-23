@@ -39,4 +39,9 @@ pub enum SecretError {
          (expected file 0600 / dir 0700, no group or other bits)"
     )]
     InsecurePermissions { slug: String },
+
+    /// The OS credential store (keyring) failed the operation.
+    #[cfg(feature = "secrets-keyring")]
+    #[error("OS keychain operation failed: {0}")]
+    Keyring(#[from] keyring::Error),
 }

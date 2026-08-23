@@ -567,6 +567,60 @@ pub(super) async fn init_hook_engine(
     Ok((engine, shutdown_rx))
 }
 
+/// Select and construct the daemon's [`SecretStore`] from configuration.
+///
+/// `secrets.backend = "file"` (the default) yields the best-effort
+/// [`FileSecretStore`](mimir_connectors::FileSecretStore): a host without a
+/// writable home directory logs a warning and the daemon runs with connector
+/// credentials disabled, matching the pre-#188 behaviour.
+///
+/// `secrets.backend = "keychain"` is fail-loud: requesting the OS-keychain
+/// backend in a build without the `secrets-keyring` cargo feature aborts
+/// daemon startup with an actionable message rather than silently falling
+/// back to plaintext files — the user explicitly chose the OS credential
+/// store, so a quieter downgrade would violate that security decision. With
+/// the feature enabled, [`mimir_connectors::KeyringSecretStore`] is
+/// constructed (side-effect free; availability problems surface on the first
+/// credential operation as [`mimir_connectors::SecretError::Keyring`]).
+pub(super) fn build_secret_store(
+    cfg: &Config,
+) -> anyhow::Result<Option<std::sync::Arc<dyn mimir_connectors::SecretStore>>> {
+    use mimir_core::config::SecretsBackend;
+    match cfg.secrets.backend {
+        SecretsBackend::File => match mimir_connectors::FileSecretStore::new() {
+            Ok(store) => Ok(Some(std::sync::Arc::new(store))),
+            Err(error) => {
+                tracing::warn!(
+                    "FileSecretStore unavailable; connector credentials disabled: {error}"
+                );
+                Ok(None)
+            }
+        },
+        SecretsBackend::Keychain => {
+            #[cfg(all(
+                feature = "secrets-keyring",
+                any(target_os = "linux", target_os = "macos", target_os = "windows")
+            ))]
+            {
+                Ok(Some(std::sync::Arc::new(
+                    mimir_connectors::KeyringSecretStore::new(),
+                )))
+            }
+            #[cfg(not(all(
+                feature = "secrets-keyring",
+                any(target_os = "linux", target_os = "macos", target_os = "windows")
+            )))]
+            {
+                Err(anyhow::anyhow!(
+                    "secrets.backend = \"keychain\" requires the `secrets-keyring` cargo feature \
+                     (macOS Keychain / Linux Secret Service / Windows Credential Manager); \
+                     rebuild with `--features secrets-keyring` or set secrets.backend = \"file\""
+                ))
+            }
+        }
+    }
+}
+
 /// Initialise the connector framework: register the built-in backend factories
 /// (feature-gated), wire the supervisor with the shared services, and restore
 /// `Active` runners from the connectors table.
@@ -643,26 +697,23 @@ pub(super) async fn init_connector_framework(
     //
     // The secret store is best-effort: `FileSecretStore::new()` resolves
     // the secrets directory and may fail on hosts without a writable home
-    // (or in sandboxed tests). A missing store does not abort startup —
-    // connectors that need credentials will surface the gap at
+    // (or in sandboxed tests). A missing store does not block startup —
+    // the connectors that need credentials will surface the gap at
     // authentication and the user can reconfigure. This keeps the daemon
     // start path robust and avoids writing to a real secrets directory
     // during tests that exercise the connector routes with the mock
-    // connector (which needs no secrets).
+    // connector (which needs no secrets). A configured `keychain` backend
+    // that this build cannot provide is the one fail-loud exception
+    // (see [`build_secret_store`]).
     let connector_supervisor = ConnectorSupervisor::new(
         Arc::clone(&connector_registry),
         Arc::clone(kg),
         SupervisorConfig::default(),
         shutdown_tx.subscribe(),
     );
-    let connector_supervisor = match mimir_connectors::FileSecretStore::new() {
-        Ok(store) => connector_supervisor.with_secret_store(
-            std::sync::Arc::new(store) as std::sync::Arc<dyn mimir_connectors::SecretStore>
-        ),
-        Err(error) => {
-            tracing::warn!("FileSecretStore unavailable; connector credentials disabled: {error}");
-            connector_supervisor
-        }
+    let connector_supervisor = match build_secret_store(cfg)? {
+        Some(store) => connector_supervisor.with_secret_store(store),
+        None => connector_supervisor,
     };
     let connector_supervisor = match geocoder {
         Some(geocoder) => connector_supervisor.with_geocoder(geocoder),

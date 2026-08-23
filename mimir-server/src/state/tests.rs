@@ -50,6 +50,23 @@ async fn kg_init_inputs(
     (Arc::new(ToolRegistry::new()), context_manager, test_llm())
 }
 
+#[cfg(not(feature = "secrets-keyring"))]
+#[test]
+fn keychain_backend_without_feature_fails_loudly() {
+    let mut config = Config::default();
+    config.secrets.backend = mimir_core::config::SecretsBackend::Keychain;
+    let err = super::builder::build_secret_store(&config).unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("secrets-keyring"),
+        "error must point at the missing cargo feature: {message}"
+    );
+    assert!(
+        message.contains("keychain"),
+        "error must name the configured backend: {message}"
+    );
+}
+
 #[test]
 fn warn_err_returns_some_on_ok() {
     assert_eq!(

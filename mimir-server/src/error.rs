@@ -143,7 +143,8 @@ pub fn connector_error(e: mimir_connectors::ConnectorError) -> Response {
 ///
 /// `InvalidSlug` and `Corrupt` → `400`; `InsecurePermissions` → `500` (the
 /// store refuses to read a too-permissive file — surfaced as internal so the
-/// detail does not leak a path); `Paths` / `Io` / `Serialize` → `500`.
+/// detail does not leak a path); every other store failure (`Paths` / `Io` /
+/// `Serialize`, and `Keyring` in `secrets-keyring` builds) → `500`.
 pub fn secret_error(e: mimir_connectors::SecretError) -> Response {
     use mimir_connectors::SecretError;
     error!("secret store error: {e}");
@@ -151,10 +152,11 @@ pub fn secret_error(e: mimir_connectors::SecretError) -> Response {
         SecretError::InvalidSlug { .. } | SecretError::Corrupt { .. } => {
             (StatusCode::BAD_REQUEST, "SECRET_BAD_REQUEST", e.to_string())
         }
-        SecretError::InsecurePermissions { .. }
-        | SecretError::Paths(_)
-        | SecretError::Io(_)
-        | SecretError::Serialize(_) => (
+        // Every remaining variant is an internal store failure: `Paths`/`Io`/
+        // `Serialize`/`InsecurePermissions` (file store) and, in builds with
+        // `secrets-keyring`, `Keyring` (OS credential store failures). The
+        // wildcard keeps the 500 mapping stable as store backends grow.
+        _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "SECRET_ERROR",
             "internal secret store error".to_string(),

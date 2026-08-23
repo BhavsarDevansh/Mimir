@@ -22,5 +22,6 @@ pub use reload::{ConfigReloadError, ReloadableConfig};
 pub use types::{
     AgentConfig, Config, ConfigError, ContextConfig, EventsConfig, GeocoderConfig, IdentityConfig,
     InitResult, KnowledgeConfig, KnowledgeOptimizationConfig, LlmConfig, MemoryConfig,
-    PendingCleanupConfig, PersonalityConfig, Proactivity, SchedulerConfig, ServerConfig,
+    PendingCleanupConfig, PersonalityConfig, Proactivity, SchedulerConfig, SecretsBackend,
+    SecretsConfig, ServerConfig,
 };

@@ -65,10 +65,21 @@ pub fn secrets_file(slug: &str) -> Result<PathBuf, PathsError>; // secrets_dir()
 
 A `Mutex<HashMap<String, SecretBundle>>` backend, included as a test/helper for the `mock` connector and unit tests. Not for production persistence. Wrap in `Arc` to share across tasks.
 
+## KeyringSecretStore (F11 / #188, opt-in)
+
+An OS-keychain backend over the `keyring` crate — macOS Keychain, Linux/BSD Secret Service (gnome-keyring / KWallet over D-Bus), and Windows Credential Manager. Feature-gated behind `secrets-keyring` (off by default, because headless systemd boxes often lack a Secret Service daemon) and selected at daemon startup with `secrets.backend = "keychain"` (config section `[secrets]`, env override `MIMIR_SECRETS_BACKEND`; see `docs/config-system.md`).
+
+- **Entry mapping.** Each connector slug is one keyring entry: service `mimir`, account `<slug>`, payload the serialized `SecretBundle` JSON — the same bytes the file store writes, so bundles move losslessly between backends.
+- **No silent downgrade.** A `keychain` backend requested in a build without the `secrets-keyring` cargo feature aborts daemon startup with an actionable error. The user explicitly chose the OS store; falling back to plaintext files would violate that security decision.
+- **Availability is surfaced, not probed.** Construction is side-effect free; the first operation connects to the platform store. A headless box without a Secret Service daemon fails `load`/`store`/`delete` with `SecretError::Keyring` (wrapping the `keyring` error, e.g. `NoDefaultStore` / `NoStorageAccess`), which the connector auth paths already surface.
+- **NoEntry semantics.** A missing entry is `Ok(None)` on `load` and `Ok(())` on `delete`, matching the `SecretStore` contract (`load` returns `Ok(None)` for unauthenticated connectors; `delete` is idempotent).
+- **Same slug validation** as the file store (`[A-Za-z0-9_-]{1,128}`) runs before any keyring call, so a hostile slug can never be used as a keyring account name.
+- **Platform notes.** On Linux the Secret Service backend is the pure-Rust zbus stack with `async-io` (keyring's `tokio` feature is intentionally not enabled — zbus's `block_on` then panics inside a tokio runtime). Building the feature needs no C libraries; the `keyring` crate is pinned to 3.6.3 because 4.x requires Rust 1.88, above the workspace MSRV 1.85 (same cap as `icalendar`).
+
 ## Security model and explicit deferrals
 
 - **Plaintext at rest** is deliberate, consistent with the existing plaintext LLM API key in `config.toml` and the home-directory trust boundary. At-rest encryption (`argon2` + `chacha20poly1305`) is deferred (Phase 3 §7, out-of-scope). The earlier note in `VISION/03-Connectors/Technical-Design.md` saying tokens are "stored encrypted at rest" is **outdated**; the locked Phase-3 plan is the source of truth and was corrected in this change set.
-- **OS keyring** backend is tracked separately as #188 (deferred, feature-gated `secrets-keyring`, off by default — headless systemd boxes often lack a Secret Service daemon).
+- **OS keyring** backend is implemented (#188): `KeyringSecretStore`, feature-gated `secrets-keyring` (off by default — headless systemd boxes often lack a Secret Service daemon), selected via `secrets.backend = "keychain"`.
 - **Non-Unix targets:** file-mode enforcement is skipped (no portable mode concept). V1 targets Linux primarily; this is a documented limitation, not a hole — the store still refuses to deserialize corrupt/unknown bundles.
 - **Redacted `Debug`:** `SecretBundle` implements `std::fmt::Debug` manually so the variant discriminant (and non-secret fields like `expires_at`) print while the secret values (`access_token`, `refresh_token`, `token`, `password`) are replaced with `"<redacted>"`. This keeps `Debug`-formatting a `SecretStore` (via `ConnectorContext`), a `tracing` field, or a persisted error string from ever emitting plaintext credentials — the derived `Debug` would otherwise leak them through the `InMemorySecretStore` map.
 
@@ -76,7 +87,7 @@ A `Mutex<HashMap<String, SecretBundle>>` backend, included as a test/helper for 
 
 - **Struct variants, not newtypes.** `SecretBundle` uses `ApiToken { token }` / `AppPassword { password }` rather than `ApiToken(String)` because serde's internally-tagged `kind` representation requires map-typed variant payloads; the named fields also make the on-disk JSON self-describing.
 - **`OAuth` `Option` fields.** `refresh_token` and `expires_at` are `Option` since not all grants issue a refresh token or return an expiry (e.g. client-credentials, some OIDC providers).
-- **Async trait.** `SecretStore` is `#[async_trait]` so the deferred keyring / Secret Service backend (#188) can implement it without a breaking change, and so it composes with the async `Connector` pipeline. The V1 file backend does blocking I/O, which is fast for tiny JSON files.
+- **Async trait.** `SecretStore` is `#[async_trait]`, which let the OS-keychain backend (#188) implement the trait without a breaking change, and composes with the async `Connector` pipeline. The file and keyring backends do blocking I/O, which is fast for tiny JSON payloads.
 - **Shared mismatch error.** The Calendar and Email connectors build the `auth method X does not match stored secret kind` error through the shared `crate::secrets::mismatch_error` helper (issue #273), so the message text and the auth-kind `discriminant()` stay in sync across both backends and are pinned by unit tests. The `discriminant()` contract is shared via the `crate::secrets::AuthMethodDiscriminant` trait (issue #341), while the concrete `match` expressions remain connector-specific; each variant's mapping is pinned against its serde `kind` tag by unit tests.
 
 ## End-to-end secret wipe
@@ -86,9 +97,11 @@ The `connector remove` flow (server `DELETE /connectors/:id` + CLI `mimir connec
 ## Verification
 
 ```bash
-cargo test -p mimir-connectors --test secrets_store   # round-trip + perm + slug
-cargo test -p mimir-connectors                        # full crate
-cargo build -p mimir-connectors --no-default-features # framework + secrets ungated
+cargo test -p mimir-connectors --test secrets_store          # round-trip + perm + slug
+cargo test -p mimir-connectors --features secrets-keyring    # full crate + keyring store tests
+cargo test -p mimir-server --lib state::tests                # daemon wiring (fail-loud arm)
+cargo build -p mimir-connectors --no-default-features        # framework + secrets ungated
+cargo check -p mimir-server --features secrets-keyring       # feature-on daemon build
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```

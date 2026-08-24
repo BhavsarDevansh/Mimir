@@ -810,8 +810,6 @@ async fn trim_token_budget_keeps_turn_ending_in_assistant_tool_calls() {
 
 #[tokio::test]
 async fn trim_fallback_keeps_turn_ending_in_assistant_tool_calls() {
-    use crate::llm::types::{FunctionCall, ToolCall};
-
     let (mgr, _dir) = setup_manager().await;
     let sid = mgr.create_session("sys").await.unwrap();
 

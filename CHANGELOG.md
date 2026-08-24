@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.142.2] — 2026-08-24
+
+### Fix: unused `FunctionCall`/`ToolCall` imports removed from context trim-fallback test (issue #478)
+
+- `trim_fallback_keeps_turn_ending_in_assistant_tool_calls` in `mimir-core/src/context/tests.rs` imported `FunctionCall` and `ToolCall` from `crate::llm::types` while its body constructs the values with fully-qualified paths, so `cargo clippy --workspace --all-targets` emitted an unused-imports warning that fails any `-D warnings` gate. The two unused imports are dropped; the test body is unchanged and all 35 context-manager tests still pass.
+- Version bumped 0.142.1 → 0.142.2 (patch — build hygiene).
+
 ## [0.142.1] — 2026-08-24
 
 ### Fix: bounded IMAP connect / TLS-handshake / greeting timeouts (issue #476)

@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 
 use tokio::sync::Mutex;
 
@@ -72,6 +72,13 @@ pub struct EmailConnector {
     /// [`Connector::on_cycle_succeeded`], so a dropped-IDLE cycle's re-fetch
     /// actually runs before IDLE resumes.
     pub(crate) resync_pending: AtomicBool,
+    /// Consecutive IDLE `ConnectionLost` outcomes, used to escalate a
+    /// provider that keeps dropping the IDLE connection (an inactivity
+    /// limit shorter than the configured timeout, or a flaky path) to a
+    /// cycle failure so the supervisor's exponential backoff breaks the
+    /// otherwise immediate reconnect loop. Reset whenever an IDLE wait
+    /// completes normally (`NewData` / `Timeout`).
+    pub(crate) consecutive_connection_lost: AtomicU32,
     /// Cached `IDLE` capability, set by [`authenticate`](Connector::authenticate).
     /// `None` until the first successful capability probe. A
     /// `std::sync::Mutex` (never held across an `await`) so the

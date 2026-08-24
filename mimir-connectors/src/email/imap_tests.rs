@@ -667,6 +667,82 @@ async fn idle_connection_lost_after_timeout_returns_zero_without_error() {
 }
 
 #[tokio::test]
+async fn idle_connection_lost_on_seeded_first_sync_persists_seed_cursor() {
+    // Issue #397 seed + a dropped IDLE: with `initial_backfill: false` and
+    // no cursor, the first cycle seeds the cursor to `UIDNEXT − 1`; a
+    // provider inactivity close during that first IDLE must persist the seed
+    // (not `None`), so the "only new content" choice survives a restart —
+    // the seed-arm of the `ConnectionLost` branch is otherwise untested.
+    let cfg = FakeCfg {
+        messages: vec![(5u32, b"existing".to_vec())],
+        idle_drop_connection: true,
+        ..Default::default()
+    };
+    let (connector, session) = no_backfill_idle_harness(cfg).await;
+    let outcome = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("a dropped IDLE connection must not fail the cycle");
+    assert_eq!(outcome.fetched, 0);
+    assert_eq!(
+        outcome.new_cursor.as_deref(),
+        Some("17:5"),
+        "the seeded first sync must report UIDNEXT − 1 (5) as its cursor"
+    );
+    assert!(
+        connector.resync_pending.load(Ordering::SeqCst),
+        "a dropped IDLE connection must mark a re-sync pending"
+    );
+}
+
+#[tokio::test]
+async fn repeated_connection_lost_escalates_to_cycle_failure() {
+    // A provider that keeps dropping IDLE connections (an inactivity limit
+    // shorter than the configured timeout, or a flaky path) must not trigger
+    // an unbounded immediate-reconnect loop: after a run of consecutive
+    // `ConnectionLost` outcomes the cycle fails so the supervisor's
+    // exponential backoff applies. The re-sync marker stays set so the
+    // post-backoff cycle re-fetches the window before re-entering IDLE
+    // (issue #485 review).
+    let drop_cfg = || FakeCfg {
+        messages: vec![(5u32, b"existing".to_vec())],
+        idle_drop_connection: true,
+        ..Default::default()
+    };
+    let (connector, session) = no_backfill_idle_harness(drop_cfg()).await;
+    let first = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("the first dropped-IDLE cycle must succeed");
+    assert_eq!(first.fetched, 0);
+    assert_eq!(first.new_cursor.as_deref(), Some("17:5"));
+    connector.resync_pending.store(false, Ordering::SeqCst);
+
+    let (_, session) = no_backfill_idle_harness(drop_cfg()).await;
+    connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("the second dropped-IDLE cycle must still succeed");
+    connector.resync_pending.store(false, Ordering::SeqCst);
+
+    let (_, session) = no_backfill_idle_harness(drop_cfg()).await;
+    let err = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect_err(
+            "the third consecutive dropped-IDLE cycle must fail so the supervisor backs off",
+        );
+    assert!(
+        matches!(err, ConnectorError::Network(_)),
+        "expected a Network error, got {err:?}"
+    );
+    assert!(
+        connector.resync_pending.load(Ordering::SeqCst),
+        "the escalated cycle must keep the re-sync marker for the next cycle"
+    );
+}
+
+#[tokio::test]
 async fn idle_connection_lost_triggers_refetch_on_next_cycle() {
     // After a dropped IDLE connection, the next cycle must skip the IDLE
     // wait and re-fetch the window immediately — the push for that window
@@ -942,6 +1018,31 @@ async fn no_backfill_harness(
     (connector, session)
 }
 
+/// Build a connector (app-password, idle mode, `initial_backfill: false`)
+/// + a fake session wired to a fake server with `cfg`.
+///
+/// Mirrors [`idle_harness`] with the "only new content" first-sync config
+/// (issue #397).
+async fn no_backfill_idle_harness(
+    cfg: FakeCfg,
+) -> (EmailConnector, ImapSession<tokio::io::DuplexStream>) {
+    let (client, server) = tokio::io::duplex(8 * 1024);
+    let select_count = Arc::new(Mutex::new(0u32));
+    tokio::spawn(run_fake(server, cfg, None, None, Arc::clone(&select_count)));
+    let mut config = app_config();
+    config["mode"] = serde_json::json!("idle");
+    config["idle_timeout_secs"] = 1.into();
+    config["initial_backfill"] = serde_json::json!(false);
+    let connector = EmailConnector::from_config(config, None, None).expect("config");
+    let session = imap_login(
+        Client::new(client),
+        app_password_auth(),
+        tokio::time::Instant::now() + TEST_GREETING_BUDGET,
+    )
+    .await
+    .expect("login");
+    (connector, session)
+}
 #[tokio::test]
 async fn xoauth2_login_sends_correct_sasl_response() {
     // Verify the XOAUTH2 SASL initial response the connector would send to

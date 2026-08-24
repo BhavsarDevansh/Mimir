@@ -393,7 +393,10 @@ impl<S: ImapStream> ImapSession<S> {
             Ok(IdleResponse::Timeout) | Ok(IdleResponse::ManualInterrupt) => false,
             // The connection died while idling (provider inactivity close or
             // a network drop). The session is gone.
-            Err(_) => return Ok(IdleResult::ConnectionLost),
+            Err(err) => {
+                debug!(error = %err, "IMAP IDLE wait failed; treating as connection lost");
+                return Ok(IdleResult::ConnectionLost);
+            }
         };
         match handle.done().await {
             Ok(session) => Ok(if new_data {
@@ -403,7 +406,10 @@ impl<S: ImapStream> ImapSession<S> {
             }),
             // The connection died during the DONE handshake — the server
             // closed it while we were idling. Same as above.
-            Err(_) => Ok(IdleResult::ConnectionLost),
+            Err(err) => {
+                debug!(error = %err, "IMAP IDLE DONE handshake failed; treating as connection lost");
+                Ok(IdleResult::ConnectionLost)
+            }
         }
     }
 

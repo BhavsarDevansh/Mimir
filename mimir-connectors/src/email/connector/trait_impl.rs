@@ -389,6 +389,7 @@ impl Connector for EmailConnector {
         self.prose_retry.lock().unwrap().clear();
         *self.last_uid.lock().await = None;
         self.resync_pending.store(false, Ordering::SeqCst);
+        self.consecutive_connection_lost.store(0, Ordering::SeqCst);
         if let Some(store) = &self.secret_store {
             store.delete(&self.slug).await.map_err(|e| {
                 ConnectorError::Authentication(format!("secret delete failed: {e}"))

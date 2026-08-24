@@ -2,7 +2,7 @@
 
 use crate::context::ContextManager;
 use crate::context::{ContextError, MessageSearchResult};
-use crate::fts5::escape_fts5;
+use crate::fts5::escape_fts5_tokens;
 use sqlx::Row;
 
 impl ContextManager {
@@ -12,7 +12,7 @@ impl ContextManager {
         limit: usize,
         session_id: Option<i64>,
     ) -> Result<Vec<MessageSearchResult>, ContextError> {
-        let safe_query = escape_fts5(query);
+        let safe_query = escape_fts5_tokens(query);
         if safe_query.is_empty() {
             return Ok(Vec::new());
         }
@@ -23,7 +23,7 @@ impl ContextManager {
             sqlx::query(
                 r#"
                 SELECT m.session_id, m.role, m.created_at,
-                       snippet(messages_fts, -1, '<<<', '>>>', '...', 10) as snippet
+                       snippet(messages_fts, -1, '<<<', '>>>', '...', 30) as snippet
                 FROM messages_fts
                 JOIN messages m ON m.id = messages_fts.rowid
                 WHERE messages_fts MATCH ?1 AND m.session_id = ?2
@@ -40,7 +40,7 @@ impl ContextManager {
             sqlx::query(
                 r#"
                 SELECT m.session_id, m.role, m.created_at,
-                       snippet(messages_fts, -1, '<<<', '>>>', '...', 10) as snippet
+                       snippet(messages_fts, -1, '<<<', '>>>', '...', 30) as snippet
                 FROM messages_fts
                 JOIN messages m ON m.id = messages_fts.rowid
                 WHERE messages_fts MATCH ?1

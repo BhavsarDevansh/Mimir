@@ -60,6 +60,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 ```
 
 - **WAL mode** is enabled on every connection for better concurrency.
+- **Search semantics:** `search_messages` tokenises the query (splitting on any run of non-alphanumeric characters, mirroring the FTS5 unicode61 tokenizer) and AND-combines the quoted tokens, so every term must match in any order and hyphenated forms like `check-in` match `check in`. A query wrapped in double quotes keeps exact-phrase semantics. Each token is quoted before building the `MATCH` expression, so FTS5 operators cannot inject syntax. Snippets use a 30-token context window on each side of the hit (issue #493).
 - **Cascading delete** ensures `DELETE FROM sessions` removes all messages.
 - The `summary` column is reserved for Phase 2 summarisation work.
 - `compacted_at` is an RFC 3339 timestamp marking the start of the retained message window. Messages before this point were compacted/summarised in Phase 2.

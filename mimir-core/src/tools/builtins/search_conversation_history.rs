@@ -37,7 +37,7 @@ impl Tool for SearchConversationHistoryTool {
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The search query to look for in conversation history."
+                    "description": "The search query to look for in conversation history. All terms must match, in any order; wrap the whole query in double quotes to require an exact phrase."
                 },
                 "limit": {
                     "type": "integer",

@@ -7,7 +7,7 @@
 - Every socket read after authentication was unbounded, so a network path that black-holed mid-session (after the #476 connect/handshake bounds) still wedged the runner cycle indefinitely: `EXAMINE`, the `CAPABILITY` probe behind `supports_idle`, the streamed `UID FETCH` response, the `IDLE` init / `DONE` handshakes (the `wait_with_timeout` bound alone does not cover them), and the best-effort `LOGOUT` all awaited socket reads with no timeout.
 - A new `read_timeout_secs` config field (default 60) bounds each post-login read with a fresh per-command budget, reusing the shared `with_deadline` helper from #476 (DRY). Each expiry surfaces as `ConnectorError::Network`, so the cycle fails fast and the supervisor's exponential backoff / circuit breaker run as designed. A slow-but-alive connection that delivers bytes within 60 s per read is never cut off.
 - The config JSON schema now also advertises the #476 `connect_timeout_secs` / `handshake_timeout_secs` fields, which were missing from the schema.
-- Tests: fake-socket tests assert a stalled `EXAMINE`, `CAPABILITY`, `UID FETCH`, `IDLE` init, and `LOGOUT` each fail (or, for the best-effort logout, return) within the read budget as `ConnectorError::Network`; the config test pins the default and an override.
+- Tests: fake-socket tests assert a stalled `EXAMINE`, `CAPABILITY`, `UID FETCH`, `IDLE` init, `IDLE` `DONE` handshake, and `LOGOUT` each fail (or, for the best-effort logout, return) within the read budget as `ConnectorError::Network`; the config test pins the default and an override.
 - Docs: `docs/email-connector.md`, `docs/wiki/email-connector.md`, and `Mimir-Implementation-Context.md` updated.
 - Version bumped 0.144.0 → 0.144.1 (patch — backwards-compatible bugfix).
 

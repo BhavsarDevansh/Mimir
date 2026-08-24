@@ -371,13 +371,7 @@ impl<S: ImapStream> ImapSession<S> {
         while let Some(fetch) = with_deadline(
             tokio::time::Instant::now() + self.read_timeout,
             "IMAP UID FETCH response",
-            async {
-                match stream.next().await {
-                    Some(Ok(fetch)) => Ok(Some(fetch)),
-                    Some(Err(err)) => Err(err),
-                    None => Ok(None),
-                }
-            },
+            async { stream.next().await.transpose() },
             map_imap_error,
         )
         .await?

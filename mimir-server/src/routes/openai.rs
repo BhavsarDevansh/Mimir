@@ -354,16 +354,9 @@ async fn resolve_openai_turn(
         .await
         .map_err(error::openai_context_error)?;
 
-    // Rollback baseline: a failed turn must not leave its just-persisted
-    // user message (or tool results) behind as an orphaned final turn. The
-    // per-session permit below guarantees no concurrent request interleaves
-    // writes for this session (PR #466 review).
-    let baseline_message_id = state
-        .context_manager
-        .max_message_id(session_id)
-        .await
-        .map_err(error::openai_context_error)?;
-
+    // The per-session permit serialises requests for this session, so no
+    // concurrent request can interleave writes between the rollback baseline
+    // read below and this request's writes (PR #466 review).
     let permit = state
         .session_semaphore(session_id)
         .acquire_owned()
@@ -378,6 +371,16 @@ async fn resolve_openai_turn(
                 None,
             )
         })?;
+
+    // Rollback baseline: a failed turn must not leave its just-persisted
+    // user message (or tool results) behind as an orphaned final turn. Read
+    // while holding the permit, so the baseline always reflects the
+    // serialised position of this request's writes (PR #480 review).
+    let baseline_message_id = state
+        .context_manager
+        .max_message_id(session_id)
+        .await
+        .map_err(error::openai_context_error)?;
 
     // Stored history is authoritative: append the new user message (or the
     // continuation's tool results), trim, and export.
@@ -435,11 +438,15 @@ async fn resolve_openai_turn(
 
 /// Execute server-side tool calls, persisting results into the session and
 /// appending them to the in-memory conversation.
+///
+/// A persistence failure is propagated so the caller can fail the turn
+/// atomically: a response must never contain tool-derived output that the
+/// session did not store (PR #480 review).
 async fn execute_server_tools(
     turn: &OpenAiTurn,
     conversation: &mut Vec<Message>,
     server_calls: &[ToolCall],
-) {
+) -> Result<(), mimir_core::context::ContextError> {
     for tool_call in server_calls {
         let llm_text = match execute_tool_call(
             &turn.state.tool_registry,
@@ -459,15 +466,12 @@ async fn execute_server_tools(
             }
         };
         conversation.push(Message::tool(&tool_call.id, &llm_text));
-        if let Err(e) = turn
-            .state
+        turn.state
             .context_manager
             .add_tool_message(turn.session_id, &tool_call.id, &llm_text)
-            .await
-        {
-            error!("failed to persist tool message: {e}");
-        }
+            .await?;
     }
+    Ok(())
 }
 
 /// Delete every message this request persisted, restoring the session to its
@@ -625,7 +629,8 @@ async fn run_blocking_turn(turn: &OpenAiTurn) -> Result<OpenAiChatResponse, Resp
                     split_tool_calls(tool_calls, &turn.client_tool_names);
                 conversation.push(assistant_msg.clone());
 
-                turn.state
+                if let Err(e) = turn
+                    .state
                     .context_manager
                     .add_assistant_tool_calls_message(
                         turn.session_id,
@@ -633,9 +638,21 @@ async fn run_blocking_turn(turn: &OpenAiTurn) -> Result<OpenAiChatResponse, Resp
                         tool_calls,
                     )
                     .await
-                    .map_err(error::openai_context_error)?;
+                {
+                    // A tool-call persistence failure must fail the turn
+                    // atomically, restoring the pre-request session state
+                    // (PR #480 review).
+                    rollback_persisted_turn(turn).await;
+                    return Err(error::openai_context_error(e));
+                }
 
-                execute_server_tools(turn, &mut conversation, &server_calls).await;
+                if let Err(e) = execute_server_tools(turn, &mut conversation, &server_calls).await {
+                    // Tool results are part of the turn: if they cannot be
+                    // persisted, the turn must not complete with output the
+                    // session never stored (PR #480 review).
+                    rollback_persisted_turn(turn).await;
+                    return Err(error::openai_context_error(e));
+                }
 
                 if !client_calls.is_empty() {
                     return Ok(tool_calls_response(
@@ -747,7 +764,7 @@ async fn chat_completions_stream(
                         full_response.push_str(&text);
                         if !sent_role {
                             sent_role = true;
-                            if send_chunk(
+                            if send_chunk_or_rollback(
                                 &event_tx,
                                 &turn,
                                 OpenAiDelta {
@@ -763,7 +780,7 @@ async fn chat_completions_stream(
                                 break 'outer;
                             }
                         }
-                        if send_chunk(
+                        if send_chunk_or_rollback(
                             &event_tx,
                             &turn,
                             OpenAiDelta {
@@ -782,7 +799,7 @@ async fn chat_completions_stream(
                     Ok(StreamItem::ToolCalls(deltas)) => {
                         if !sent_role {
                             sent_role = true;
-                            if send_chunk(
+                            if send_chunk_or_rollback(
                                 &event_tx,
                                 &turn,
                                 OpenAiDelta {
@@ -880,9 +897,23 @@ async fn chat_completions_stream(
                 .await
             {
                 error!("failed to persist assistant tool-call message: {e}");
+                // A tool-call persistence failure must fail the turn
+                // atomically, restoring the pre-request session state
+                // (PR #480 review).
+                rollback_persisted_turn(&turn).await;
+                send_error_and_done(&event_tx).await;
+                break 'outer;
             }
 
-            execute_server_tools(&turn, &mut conversation, &server_calls).await;
+            if let Err(e) = execute_server_tools(&turn, &mut conversation, &server_calls).await {
+                error!("failed to persist server tool result: {e}");
+                // Tool results are part of the turn: if they cannot be
+                // persisted, the stream must not complete with output the
+                // session never stored (PR #480 review).
+                rollback_persisted_turn(&turn).await;
+                send_error_and_done(&event_tx).await;
+                break 'outer;
+            }
 
             if !client_calls.is_empty() {
                 // Client tool calls: stream the buffered deltas for those
@@ -890,7 +921,7 @@ async fn chat_completions_stream(
                 // emitted) and end the stream. The client's follow-up `tool`
                 // messages continue the turn.
                 if !sent_role
-                    && send_chunk(
+                    && send_chunk_or_rollback(
                         &event_tx,
                         &turn,
                         OpenAiDelta {
@@ -912,7 +943,7 @@ async fn chat_completions_stream(
                     .into_iter()
                     .filter(|delta| client_indices.contains(&delta.index))
                 {
-                    if send_chunk(
+                    if send_chunk_or_rollback(
                         &event_tx,
                         &turn,
                         OpenAiDelta {
@@ -977,6 +1008,26 @@ async fn send_chunk(
         .send(Event::default().data(json))
         .await
         .map_err(|_| ())
+}
+
+/// Send one stream chunk, rolling back the persisted turn if the SSE client
+/// has disconnected before the turn completed, so a cancelled stream leaves
+/// no orphaned user/tool messages in the session (PR #480 review).
+async fn send_chunk_or_rollback(
+    event_tx: &tokio::sync::mpsc::Sender<Event>,
+    turn: &OpenAiTurn,
+    delta: OpenAiDelta,
+    finish_reason: Option<&str>,
+) -> Result<(), ()> {
+    if send_chunk(event_tx, turn, delta, finish_reason)
+        .await
+        .is_err()
+    {
+        rollback_persisted_turn(turn).await;
+        Err(())
+    } else {
+        Ok(())
+    }
 }
 
 /// Terminate a failed SSE stream: an `error` event followed by `[DONE]`, so

@@ -1335,3 +1335,75 @@ async fn test_v1_chat_requires_auth() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn test_v1_chat_stream_client_disconnect_rolls_back_persisted_turn() {
+    // PR #480 review: if the SSE receiver closes before the turn completes,
+    // the stream task must roll back the persisted user/tool messages
+    // instead of leaving an orphaned final turn in the session.
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            // Round 1: the model calls the server-side `echo` tool, which
+            // persists an assistant tool-call message and a tool result
+            // before round 2 starts.
+            .push_stream(vec![Ok(StreamItem::ToolCalls(vec![ToolCall {
+                index: 0,
+                id: "call_echo".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "echo".to_string(),
+                    arguments: "{\"message\":\"ping\"}".to_string(),
+                },
+            }]))])
+            // Round 2: a long text stream, so the stream task is still
+            // sending chunks when the client disconnects.
+            .push_stream(
+                (0..30)
+                    .map(|_| Ok(StreamItem::Text("ping".to_string())))
+                    .collect(),
+            )
+            .build(),
+    );
+    let (state, _temp) = test_state(mock.clone()).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let body = chat_body(
+        "gpt-4o",
+        serde_json::json!([{"role": "user", "content": "echo ping"}]),
+        serde_json::json!({"user": "phone", "stream": true}),
+    );
+    let response = app
+        .oneshot(
+            authed_request()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Simulate a client that disconnects without reading the stream: the
+    // stream task's next `send_chunk` fails and it must roll the persisted
+    // turn back.
+    drop(response);
+
+    // Give the stream task time to observe the closed receiver and roll
+    // back before asserting on the session.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+    let sessions = state.context_manager.list_sessions().await.unwrap();
+    assert_eq!(sessions.len(), 1, "session created by the request");
+    let msgs = state
+        .context_manager
+        .export_conversation(sessions[0].id)
+        .await
+        .unwrap()
+        .messages;
+    assert!(
+        msgs.iter().all(|m| m.role == "system"),
+        "no user, assistant, or tool messages may remain after a cancelled stream: {msgs:?}"
+    );
+}

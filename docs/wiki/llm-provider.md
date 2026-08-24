@@ -43,7 +43,7 @@ Mimir's own tools (time, weather, knowledge-graph search, and more) are always a
 
 ## Streaming
 
-Set `"stream": true` for token-by-token responses. Add `"stream_options": {"include_usage": true}` to receive a final usage chunk before the stream ends.
+Set `"stream": true` for token-by-token responses. Add `"stream_options": {"include_usage": true}` to receive a final usage chunk before the stream ends. If the connection drops before a response finishes, Mimir cleans up the half-finished turn so it never lingers in your conversation history.
 
 ## Best Practices
 

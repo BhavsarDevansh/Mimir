@@ -33,6 +33,14 @@ pub(crate) const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// after connect, and the `LOGIN` / `AUTHENTICATE` response under one shared
 /// deadline (issue #476).
 pub(crate) const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default per-command read budget (60 s) for post-login IMAP session
+/// operations. Bounds every socket read after authentication — `EXAMINE`,
+/// `CAPABILITY`, each `UID FETCH` stream read, the `IDLE` init / `DONE`
+/// handshakes, and `LOGOUT` — so a network path that black-holes
+/// mid-session fails the cycle fast instead of wedging the runner
+/// (issue #481). Each read gets a fresh budget, so a slow-but-alive
+/// connection that delivers bytes within 60 s per read is never cut off.
+pub(crate) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(crate) const DEFAULT_SLUG: &str = "email";
 pub(crate) const DEFAULT_DISPLAY_NAME: &str = "Email";
@@ -54,6 +62,9 @@ fn default_connect_timeout_secs() -> u64 {
 }
 fn default_handshake_timeout_secs() -> u64 {
     DEFAULT_HANDSHAKE_TIMEOUT.as_secs()
+}
+fn default_read_timeout_secs() -> u64 {
+    DEFAULT_READ_TIMEOUT.as_secs()
 }
 fn default_llm_max_attempts() -> u8 {
     crate::email::llm::DEFAULT_MAX_LLM_EXTRACTION_ATTEMPTS
@@ -171,6 +182,12 @@ pub struct EmailConfigDto {
     /// enforced as one shared deadline. Defaults to 30.
     #[serde(default = "default_handshake_timeout_secs")]
     pub handshake_timeout_secs: u64,
+    /// Per-command read timeout in seconds for post-login session
+    /// operations (`EXAMINE`, `CAPABILITY`, each `UID FETCH` stream read,
+    /// the `IDLE` init / `DONE` handshakes, and `LOGOUT`). Each read gets a
+    /// fresh budget. Defaults to 60.
+    #[serde(default = "default_read_timeout_secs")]
+    pub read_timeout_secs: u64,
     /// Display name override. Defaults to "Email".
     #[serde(default)]
     pub display_name: Option<String>,

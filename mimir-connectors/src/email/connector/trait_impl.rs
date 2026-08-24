@@ -105,6 +105,9 @@ impl Connector for EmailConnector {
                 "poll_jitter_secs": { "type": "integer", "default": 30 },
                 "initial_backfill": { "type": "boolean", "default": true },
                 "idle_timeout_secs": { "type": "integer", "default": 1500 },
+                "connect_timeout_secs": { "type": "integer", "default": 10 },
+                "handshake_timeout_secs": { "type": "integer", "default": 30 },
+                "read_timeout_secs": { "type": "integer", "default": 60 },
                 "llm_extraction_max_attempts": { "type": "integer", "minimum": 1, "maximum": 255, "default": 3 },
                 "display_name": { "type": "string" }
             }

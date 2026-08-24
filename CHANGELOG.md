@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.143.1] — 2026-08-24
+
+### Fix: PR #488 review — per-sub-tool progress completion, SSE test precision
+
+- The retrieval agent now emits each sub-tool's `ToolProgress::Finished` event as soon as that sub-tool completes, instead of waiting for the slowest sub-tool in the round (`join_all` still collects results in input order for the LLM result messages). Streaming clients therefore see research steps complete in real time.
+- The streaming chat integration test now parses individual SSE frames and asserts the `tool_call` frame for `kg_query` carries its result, instead of combining independent whole-stream searches.
+- Docs: `docs/retrieval-agent.md` clarifies that progress is reported for each non-termination sub-tool call, excluding the private `finish_retrieval` tool.
+- Version bumped 0.143.0 → 0.143.1 (patch — backwards-compatible bugfix and documentation update).
+
 ## [0.143.0] — 2026-08-24
 
 ### Fix: long retrieval-heavy chat requests fail with "error decoding response body" (issue #487)

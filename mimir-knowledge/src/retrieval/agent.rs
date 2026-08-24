@@ -171,38 +171,44 @@ impl RetrievalAgent {
                         .await;
                 }
             }
+            // Each future emits its own `Finished` event as soon as that
+            // sub-tool completes, so the caller sees steps in real time
+            // instead of waiting for the slowest sub-tool (issue #487).
+            // `join_all` still collects results in input order, preserving
+            // the original call order used for the LLM result messages.
             let futures = call_infos.iter().map(|(id, name, args)| {
                 let id = id.clone();
                 let name = name.clone();
                 let args = args.clone();
+                let progress = self.progress.clone();
+                let display_name = self.display_name(&name);
                 async move {
                     let ctx = mimir_core::tools::ToolContext::new(Arc::clone(&self.llm), true);
-                    match self.private_registry.execute(&name, args, &ctx).await {
-                        Ok(output) => (id, name, Ok(output)),
+                    let result = match self.private_registry.execute(&name, args, &ctx).await {
+                        Ok(output) => Ok(output),
                         Err(e) => {
                             warn!(tool = %name, "retrieval tool failed: {}", e);
-                            (id, name, Err(format!("Tool error: {}", e)))
+                            Err(format!("Tool error: {}", e))
                         }
+                    };
+                    if let Some(ref tx) = progress {
+                        let result_text = match &result {
+                            Ok(output) => output.to_display_text(),
+                            Err(err_msg) => err_msg.clone(),
+                        };
+                        let _ = tx
+                            .send(ToolProgress::Finished {
+                                name: name.clone(),
+                                display_name,
+                                result: result_text,
+                            })
+                            .await;
                     }
+                    (id, name, result)
                 }
             });
             let results: Vec<_> = futures::future::join_all(futures).await;
 
-            if let Some(ref tx) = self.progress {
-                for ((_, name, _), (_, _, result)) in call_infos.iter().zip(results.iter()) {
-                    let result_text = match result {
-                        Ok(output) => output.to_display_text(),
-                        Err(err_msg) => err_msg.clone(),
-                    };
-                    let _ = tx
-                        .send(ToolProgress::Finished {
-                            name: name.clone(),
-                            display_name: self.display_name(name),
-                            result: result_text,
-                        })
-                        .await;
-                }
-            }
             let mut result_iter = results.into_iter();
 
             // Assemble tool result messages in original call order.

@@ -479,16 +479,45 @@ async fn test_chat_stream_emits_retrieval_sub_tool_progress() {
         .unwrap();
     let text = String::from_utf8_lossy(&bytes);
 
-    // The retrieval sub-tool start and finish events must be present.
+    // Parse the SSE stream into (event, data) frames so each assertion
+    // targets the specific frame instead of searching the whole stream.
+    let frames: Vec<(&str, &str)> = text
+        .split("\n\n")
+        .filter_map(|frame| {
+            let event = frame
+                .lines()
+                .find_map(|line| line.strip_prefix("event: "))?;
+            let data = frame.lines().find_map(|line| line.strip_prefix("data: "))?;
+            Some((event, data))
+        })
+        .collect();
+
+    // The retrieval sub-tool start event must be present.
+    let start = frames.iter().find(|(event, data)| {
+        *event == "tool_call_start"
+            && serde_json::from_str::<serde_json::Value>(data)
+                .ok()
+                .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(String::from))
+                .as_deref()
+                == Some("kg_query")
+    });
     assert!(
-        text.contains("event: tool_call_start") && text.contains("kg_query"),
+        start.is_some(),
         "expected retrieval sub-tool start event in SSE stream, got: {}",
         text
     );
-    // The finish event must be a `tool_call` event (not just the
+    // The finish event must be a `tool_call` frame (not just the
     // `tool_call_start` prefix) carrying the kg_query result.
+    let finish = frames.iter().find(|(event, data)| {
+        if *event != "tool_call" {
+            return false;
+        }
+        serde_json::from_str::<mimir_api_types::ToolCallInfo>(data)
+            .map(|info| info.name == "kg_query" && info.result.contains("Entity not found"))
+            .unwrap_or(false)
+    });
     assert!(
-        text.contains("event: tool_call\n") && text.contains("kg_query"),
+        finish.is_some(),
         "expected retrieval sub-tool finish event in SSE stream, got: {}",
         text
     );

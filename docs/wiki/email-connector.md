@@ -91,8 +91,10 @@ This is a library component today (in `mimir-connectors`); the daemon wiring tha
   "mailbox": "INBOX",
   "auth": { "kind": "app_password", "username": "you@gmail.com" },
   "mode": "auto",
+  "connect_timeout_secs": 10,
+  "handshake_timeout_secs": 30,
   "llm_extraction_max_attempts": 3
 }
 ```
 
-`mode` can be `"auto"` (default — IDLE if supported, else polling), `"idle"`, or `"poll"`. `llm_extraction_max_attempts` (default 3) bounds how many times the LLM layer retries a message before marking it permanently failed. V1 syncs a single mailbox (`INBOX` by default, configurable).
+`mode` can be `"auto"` (default — IDLE if supported, else polling), `"idle"`, or `"poll"`. `connect_timeout_secs` (default 10) bounds how long Mimir waits to establish the TCP connection, and `handshake_timeout_secs` (default 30) bounds the encrypted handshake, the server's first reply, and the login exchange as one shared deadline. If your network path stalls, the sync cycle fails cleanly, backs off, and retries later instead of getting stuck forever. `llm_extraction_max_attempts` (default 3) bounds how many times the LLM layer retries a message before marking it permanently failed. V1 syncs a single mailbox (`INBOX` by default, configurable).

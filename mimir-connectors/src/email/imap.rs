@@ -29,6 +29,7 @@
 //!
 //! This module honours the workspace `#![deny(unsafe_code)]` guarantee.
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -135,10 +136,16 @@ impl Authenticator for Xoauth2Authenticator {
 /// [`ImapSession`], choosing `LOGIN` or `AUTHENTICATE XOAUTH2` per the
 /// resolved [`ImapAuth`] kind. On failure the underlying client is returned
 /// by async-imap alongside the error; we surface the error (the client is not
-/// reusable after a broken handshake, so dropping it is correct).
+/// reusable after a broken handshake, so dropping it is correct). The
+/// greeting read and the `LOGIN` / `AUTHENTICATE` response read are both
+/// bounded by the shared handshake `deadline` created after the TCP connect
+/// (the config `handshake_timeout_secs` budget, issue #476), so a server
+/// that greets but then stalls on the auth exchange fails the cycle fast
+/// instead of wedging the runner.
 pub(crate) async fn imap_login<S: ImapStream>(
     mut client: async_imap::Client<S>,
     auth: ImapAuth,
+    deadline: tokio::time::Instant,
 ) -> Result<ImapSession<S>, ConnectorError> {
     // Drain the IMAP greeting (untagged `* OK`) before issuing LOGIN /
     // AUTHENTICATE. async-imap's `connect()` helper does this for us; with
@@ -149,17 +156,27 @@ pub(crate) async fn imap_login<S: ImapStream>(
     // consumes the server's continuation instead of replying to it. `login`
     // tolerates the stray greeting, but we drain it for both paths for
     // parity and determinism.
-    client
-        .read_response()
-        .await
-        .map_err(|e| ConnectorError::Network(format!("IMAP greeting read failed: {e}")))?
-        .ok_or_else(|| ConnectorError::Network("IMAP server closed before greeting".into()))?;
+    let greeting = with_deadline(
+        deadline,
+        "IMAP greeting read",
+        client.read_response(),
+        |e| ConnectorError::Network(format!("IMAP greeting read failed: {e}")),
+    )
+    .await?;
+    if greeting.is_none() {
+        return Err(ConnectorError::Network(
+            "IMAP server closed before greeting".into(),
+        ));
+    }
 
     let session = match auth {
-        ImapAuth::Login { username, password } => client
-            .login(&username, &password)
-            .await
-            .map_err(|(err, _client)| map_login_error(err))?,
+        ImapAuth::Login { username, password } => {
+            let login = client.login(&username, &password);
+            with_deadline(deadline, "IMAP login response", login, |(err, _client)| {
+                map_login_error(err)
+            })
+            .await?
+        }
         ImapAuth::Xoauth2 {
             username,
             access_token,
@@ -169,10 +186,14 @@ pub(crate) async fn imap_login<S: ImapStream>(
                 access_token,
                 sent_initial: false,
             };
-            client
-                .authenticate("XOAUTH2", authenticator)
-                .await
-                .map_err(|(err, _client)| map_login_error(err))?
+            let auth = client.authenticate("XOAUTH2", authenticator);
+            with_deadline(
+                deadline,
+                "IMAP AUTHENTICATE response",
+                auth,
+                |(err, _client)| map_login_error(err),
+            )
+            .await?
         }
     };
     Ok(ImapSession::new(session))
@@ -382,12 +403,47 @@ fn map_imap_error(err: async_imap::error::Error) -> ConnectorError {
 // Production TLS connect
 // ---------------------------------------------------------------------------
 
+/// Bound a fallible async I/O step (TCP connect, TLS handshake, greeting
+/// read, login/authenticate response read) by `deadline`. On expiry this
+/// returns a `ConnectorError::Network` timeout labelled `what`, so a
+/// black-holed network path fails the cycle fast and the supervisor's
+/// backoff / circuit breaker run as designed (issue #476). Inner failures
+/// are mapped by `map_err` so each call site keeps its own error text. The
+/// reported budget is the remaining time at call time, so a stage that
+/// inherits a partially consumed shared deadline reports the bound it
+/// actually ran under.
+async fn with_deadline<T, E>(
+    deadline: tokio::time::Instant,
+    what: &str,
+    fut: impl Future<Output = Result<T, E>>,
+    map_err: impl FnOnce(E) -> ConnectorError,
+) -> Result<T, ConnectorError> {
+    let budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+    match tokio::time::timeout_at(deadline, fut).await {
+        Err(_elapsed) => Err(ConnectorError::Network(format!(
+            "{what} timed out after {:.1}s",
+            budget.as_secs_f64()
+        ))),
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(err)) => Err(map_err(err)),
+    }
+}
+
 /// Open an implicit-TLS (`imaps:993`) connection to `host:port` using a rustls
 /// client configured with the system trust store (matching reqwest's
 /// `rustls-native-certs` feature) and the `aws-lc-rs` crypto provider reqwest
 /// already compiles. Returns the established `TlsStream` ready for
-/// [`async_imap::Client::new`].
-pub(crate) async fn connect_tls(host: &str, port: u16) -> Result<TlsStream, ConnectorError> {
+/// [`async_imap::Client::new`] plus the shared handshake deadline created
+/// after the TCP connect succeeds, which the caller carries through the
+/// greeting and authentication reads so the whole post-connect handshake
+/// stays within `handshake_timeout` (issue #476). The TCP connect itself is
+/// bounded by `connect_timeout`.
+pub(crate) async fn connect_tls(
+    host: &str,
+    port: u16,
+    connect_timeout: Duration,
+    handshake_timeout: Duration,
+) -> Result<(TlsStream, tokio::time::Instant), ConnectorError> {
     let mut roots = RootCertStore::empty();
     let native = rustls_native_certs::load_native_certs();
     for cert in native.certs {
@@ -412,16 +468,41 @@ pub(crate) async fn connect_tls(host: &str, port: u16) -> Result<TlsStream, Conn
         .with_root_certificates(roots)
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
-    let tcp = TcpStream::connect((host, port))
-        .await
-        .map_err(|e| ConnectorError::Network(format!("connect {host}:{port}: {e}")))?;
+    let tcp = with_deadline(
+        tokio::time::Instant::now() + connect_timeout,
+        &format!("IMAP connect {host}:{port}"),
+        TcpStream::connect((host, port)),
+        |e| ConnectorError::Network(format!("connect {host}:{port}: {e}")),
+    )
+    .await?;
+    // The shared handshake deadline starts only after the TCP connection
+    // succeeds, so a slow connect never eats into the TLS / greeting / auth
+    // budget.
+    let deadline = tokio::time::Instant::now() + handshake_timeout;
+    let stream = tls_connect(&connector, host, port, tcp, deadline).await?;
+    Ok((stream, deadline))
+}
+
+/// Complete a rustls handshake over an established TCP stream, bounded by
+/// the shared handshake `deadline` (issue #476). Split out from
+/// [`connect_tls`] so tests drive a stalled handshake against a local
+/// listener without touching the native trust store.
+pub(crate) async fn tls_connect(
+    connector: &TlsConnector,
+    host: &str,
+    port: u16,
+    tcp: TcpStream,
+    deadline: tokio::time::Instant,
+) -> Result<TlsStream, ConnectorError> {
     let server_name = ServerName::try_from(host.to_string())
         .map_err(|e| ConnectorError::Config(format!("invalid IMAP host `{host}`: {e}")))?;
-    let tls = connector
-        .connect(server_name, tcp)
-        .await
-        .map_err(|e| ConnectorError::Network(format!("TLS handshake {host}:{port}: {e}")))?;
-    Ok(tls)
+    with_deadline(
+        deadline,
+        &format!("TLS handshake {host}:{port}"),
+        connector.connect(server_name, tcp),
+        |e| ConnectorError::Network(format!("TLS handshake {host}:{port}: {e}")),
+    )
+    .await
 }
 
 /// Owned type alias for the production TLS stream: a tokio-rustls client
@@ -433,6 +514,12 @@ pub(crate) type TlsStream = tokio_rustls::client::TlsStream<TcpStream>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    /// Budget for the transport stall tests (connect / handshake /
+    /// greeting / login): short enough to keep the suite fast, long enough
+    /// to be a real bound rather than a busy loop.
+    const STALL_BUDGET: Duration = Duration::from_millis(200);
 
     #[test]
     fn xoauth2_initial_response_format() {
@@ -487,5 +574,186 @@ mod tests {
             );
             assert!(dbg.contains("<redacted>"), "ImapAuth must redact: {dbg}");
         }
+    }
+
+    #[tokio::test]
+    async fn connect_stall_times_out() {
+        // A black-holed TCP connect cannot be reproduced with a local
+        // listener (the kernel completes the handshake regardless of
+        // `accept`), so the connect bound is pinned at the shared budget
+        // helper: a never-resolving connect future must fail within the
+        // budget and surface as `ConnectorError::Network` (issue #476).
+        let start = tokio::time::Instant::now();
+        let err = with_deadline(
+            tokio::time::Instant::now() + STALL_BUDGET,
+            "IMAP connect stall-test",
+            std::future::pending::<std::io::Result<TcpStream>>(),
+            |e| ConnectorError::Network(format!("connect: {e}")),
+        )
+        .await
+        .expect_err("stalled connect must fail");
+        assert!(
+            matches!(&err, ConnectorError::Network(m) if m.contains("timed out after")),
+            "unexpected error: {err}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "stalled connect must fail within the budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn handshake_stall_times_out() {
+        // A local listener that accepts the TCP connection but never speaks
+        // TLS: the rustls handshake must fail within the handshake budget
+        // instead of hanging the runner (issue #476).
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        let stall = tokio::spawn(async move {
+            let (_conn, _socket) = listener.accept().await.expect("accept");
+            // Hold the accepted socket without ever writing a ServerHello.
+            std::future::pending::<()>().await;
+        });
+        let provider = Arc::new(tokio_rustls::rustls::crypto::aws_lc_rs::default_provider());
+        let config = tokio_rustls::rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .expect("protocol versions")
+            .with_root_certificates(RootCertStore::empty())
+            .with_no_client_auth();
+        let connector = TlsConnector::from(Arc::new(config));
+        let tcp = TcpStream::connect(addr).await.expect("tcp connect");
+        let start = tokio::time::Instant::now();
+        let err = tls_connect(
+            &connector,
+            "127.0.0.1",
+            addr.port(),
+            tcp,
+            tokio::time::Instant::now() + STALL_BUDGET,
+        )
+        .await
+        .expect_err("stalled handshake must fail");
+        assert!(
+            matches!(&err, ConnectorError::Network(m) if m.contains("timed out after")),
+            "unexpected error: {err}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "stalled handshake must fail within the budget"
+        );
+        stall.abort();
+    }
+
+    #[tokio::test]
+    async fn greeting_stall_times_out() {
+        // A server that holds the connection open but never sends the IMAP
+        // greeting: the first read must fail within the greeting budget
+        // instead of hanging the runner (issue #476).
+        let (client, _server) = tokio::io::duplex(8 * 1024);
+        let start = tokio::time::Instant::now();
+        let err = match imap_login(
+            async_imap::Client::new(client),
+            ImapAuth::Login {
+                username: "devansh@example.com".into(),
+                password: "hunter2".into(),
+            },
+            tokio::time::Instant::now() + STALL_BUDGET,
+        )
+        .await
+        {
+            Ok(_) => panic!("stalled greeting must fail"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(&err, ConnectorError::Network(m) if m.contains("timed out after")),
+            "unexpected error: {err}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "stalled greeting must fail within the budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_stall_times_out() {
+        // A server that sends the greeting but never answers LOGIN: the
+        // auth response read must fail within the handshake budget instead
+        // of hanging the runner (issue #476).
+        let (client, mut server) = tokio::io::duplex(8 * 1024);
+        let stall = tokio::spawn(async move {
+            server
+                .write_all(b"* OK fake IMAP ready\r\n")
+                .await
+                .expect("greeting");
+            // Hold the connection without ever answering the LOGIN command.
+            std::future::pending::<()>().await;
+        });
+        let start = tokio::time::Instant::now();
+        let err = match imap_login(
+            async_imap::Client::new(client),
+            ImapAuth::Login {
+                username: "devansh@example.com".into(),
+                password: "hunter2".into(),
+            },
+            tokio::time::Instant::now() + STALL_BUDGET,
+        )
+        .await
+        {
+            Ok(_) => panic!("stalled login must fail"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(&err, ConnectorError::Network(m) if m.contains("timed out after")),
+            "unexpected error: {err}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "stalled login must fail within the budget"
+        );
+        stall.abort();
+    }
+
+    #[tokio::test]
+    async fn staged_greeting_and_login_share_one_deadline() {
+        // A server that delays the greeting for most of the handshake budget
+        // and then never answers LOGIN: the login read must fail at the
+        // shared deadline instead of restarting a fresh budget. With
+        // per-stage fresh budgets the total would reach ~1.7x the budget;
+        // the shared deadline keeps it at ~1x (issue #476 review).
+        let (client, mut server) = tokio::io::duplex(8 * 1024);
+        let stall = tokio::spawn(async move {
+            tokio::time::sleep(STALL_BUDGET * 2 / 3).await;
+            server
+                .write_all(b"* OK fake IMAP ready\r\n")
+                .await
+                .expect("greeting");
+            // Hold the connection without ever answering the LOGIN command.
+            std::future::pending::<()>().await;
+        });
+        let start = tokio::time::Instant::now();
+        let err = match imap_login(
+            async_imap::Client::new(client),
+            ImapAuth::Login {
+                username: "devansh@example.com".into(),
+                password: "hunter2".into(),
+            },
+            start + STALL_BUDGET,
+        )
+        .await
+        {
+            Ok(_) => panic!("staged login must fail"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(&err, ConnectorError::Network(m) if m.contains("timed out after")),
+            "unexpected error: {err}"
+        );
+        assert!(
+            start.elapsed() < STALL_BUDGET * 3 / 2,
+            "staged stages must share one deadline (elapsed {:?})",
+            start.elapsed()
+        );
+        stall.abort();
     }
 }

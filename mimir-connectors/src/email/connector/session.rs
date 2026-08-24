@@ -23,6 +23,12 @@ impl EmailConnector {
     fn idle_timeout(&self) -> Duration {
         Duration::from_secs(self.config.idle_timeout_secs)
     }
+    pub(crate) fn connect_timeout(&self) -> Duration {
+        Duration::from_secs(self.config.connect_timeout_secs)
+    }
+    pub(crate) fn handshake_timeout(&self) -> Duration {
+        Duration::from_secs(self.config.handshake_timeout_secs)
+    }
 
     /// Decide whether this cycle uses IDLE (Push) or polling (Polling).
     /// `Ok(true)` → IDLE. Honours the explicit config mode, falling back to
@@ -59,9 +65,15 @@ impl EmailConnector {
         if let Some(b) = refreshed {
             self.persist_refreshed(&b).await?;
         }
-        let stream = connect_tls(&self.config.host, self.port()).await?;
+        let (stream, deadline) = connect_tls(
+            &self.config.host,
+            self.port(),
+            self.connect_timeout(),
+            self.handshake_timeout(),
+        )
+        .await?;
         let client = async_imap::Client::new(stream);
-        imap_login(client, auth).await
+        imap_login(client, auth, deadline).await
     }
 
     /// Run one sync cycle against an already-authenticated session. Generic
@@ -250,9 +262,15 @@ impl EmailConnector {
         if let Some(b) = refreshed {
             self.persist_refreshed(&b).await?;
         }
-        let stream = connect_tls(&self.config.host, self.port()).await?;
+        let (stream, deadline) = connect_tls(
+            &self.config.host,
+            self.port(),
+            self.connect_timeout(),
+            self.handshake_timeout(),
+        )
+        .await?;
         let client = async_imap::Client::new(stream);
-        let mut session = imap_login(client, auth).await?;
+        let mut session = imap_login(client, auth, deadline).await?;
         let supports = match session.supports_idle().await {
             Ok(supports) => supports,
             Err(e) => {

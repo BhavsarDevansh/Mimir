@@ -65,6 +65,23 @@ fn llm_extraction_max_attempts_defaults_and_overrides() {
 }
 
 #[test]
+fn connect_and_handshake_timeouts_default_and_override() {
+    // Absent → the defaults (10 s TCP connect, 30 s TLS handshake +
+    // greeting); a record persisted before the fields existed must still
+    // load (issue #476). Explicit values → honoured verbatim.
+    let connector = EmailConnector::from_config(app_config(), None, None).expect("config");
+    assert_eq!(connector.connect_timeout(), Duration::from_secs(10));
+    assert_eq!(connector.handshake_timeout(), Duration::from_secs(30));
+
+    let mut config = app_config();
+    config["connect_timeout_secs"] = serde_json::json!(5);
+    config["handshake_timeout_secs"] = serde_json::json!(60);
+    let connector = EmailConnector::from_config(config, None, None).expect("config");
+    assert_eq!(connector.connect_timeout(), Duration::from_secs(5));
+    assert_eq!(connector.handshake_timeout(), Duration::from_secs(60));
+}
+
+#[test]
 fn from_config_seeds_cursor_and_slug() {
     // The factory extracts `__cursor` from config and passes it as the
     // `cursor` param (mirroring the Calendar connector / supervisor).

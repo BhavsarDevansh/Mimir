@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mimir_core::llm::backend::LlmBackend;
-use mimir_core::tools::{Tool, ToolError, ToolOutput, ToolPermission};
+use mimir_core::tools::{Tool, ToolError, ToolOutput, ToolPermission, ToolProgress};
 use serde::Deserialize;
 use serde_json::Value;
 use tracing::info;
@@ -25,6 +25,7 @@ pub struct RetrieveContextTool {
     kg: Arc<KnowledgeGraph>,
     context_manager: Arc<mimir_core::context::ContextManager>,
     llm: Arc<dyn LlmBackend>,
+    progress: Option<tokio::sync::mpsc::Sender<ToolProgress>>,
 }
 
 impl RetrieveContextTool {
@@ -40,7 +41,15 @@ impl RetrieveContextTool {
             kg,
             context_manager,
             llm,
+            progress: None,
         }
+    }
+
+    /// Attach a progress channel so the retrieval agent's sub-tool calls can
+    /// be streamed to the caller (issue #487).
+    pub fn with_progress(mut self, progress: tokio::sync::mpsc::Sender<ToolProgress>) -> Self {
+        self.progress = Some(progress);
+        self
     }
 }
 
@@ -100,6 +109,10 @@ impl Tool for RetrieveContextTool {
             Arc::clone(&self.kg),
             Arc::clone(&self.context_manager),
         );
+        let mut agent = agent;
+        if let Some(tx) = &self.progress {
+            agent = agent.with_progress(tx.clone());
+        }
 
         let context = agent
             .retrieve(task)

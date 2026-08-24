@@ -20,6 +20,18 @@ Once the tool finishes, the result is displayed as a separate line:
 
 This appears before the assistant's text response.
 
+When Mimir researches your knowledge graph (via the `retrieve_context` tool), you'll see each research step as it happens instead of a single "working" indicator:
+
+```text
+🔧 Retrieve Context…
+🔧 Kg Query…
+🔧 Kg Query → {"entity":{"id":1,"name":"TraveLodge",...},...}
+🔧 Kg Search…
+🔧 Kg Search → {"results":[...],...}
+```
+
+This keeps long research turns (which can take a minute or more) visibly active rather than looking frozen.
+
 ## Agentic Tool Loop
 
 Mimir can now make multiple rounds of tool calls in a single conversation turn. This means it can:

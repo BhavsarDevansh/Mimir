@@ -35,14 +35,17 @@ event: tool_call_start
 {"name": "retrieve_context", "display_name": "Retrieve Context"}
 ```
 
-...followed by:
+...followed by the individual research steps as they run:
 
 ```text
+event: tool_call_start
+{"name": "kg_query", "display_name": "Kg Query"}
+
 event: tool_call
-{"name": "retrieve_context", "display_name": "Retrieve Context", "result": "Retrieved 12 facts across 3 entities and 5 conversation snippets"}
+{"name": "kg_query", "display_name": "Kg Query", "result": "{\"entity\":{\"id\":1,\"name\":\"TraveLodge\",...},...}"}
 ```
 
-This tells you Mimir is actively researching before answering.
+In the terminal this renders as `🔧 Kg Query…` / `🔧 Kg Query → …` lines, so you can see Mimir actively researching instead of a single "Retrieve Context…" indicator that looks frozen. Research turns can take a minute or more, and the streaming connection stays alive throughout (the daemon sends keep-alive comments every 10s).
 
 ## When Is It Used?
 

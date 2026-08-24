@@ -110,11 +110,15 @@ pub async fn test_state_with_config(
                 Arc::clone(&llm),
             )),
             Arc::new(move |ctx: &mimir_core::tools::ToolContext| {
-                Arc::new(mimir_knowledge::RetrieveContextTool::new(
+                let mut tool = mimir_knowledge::RetrieveContextTool::new(
                     Arc::clone(&retrieve_kg),
                     Arc::clone(&retrieve_context_manager),
                     Arc::clone(&ctx.llm),
-                ))
+                );
+                if let Some(ref tx) = ctx.progress {
+                    tool = tool.with_progress(tx.clone());
+                }
+                Arc::new(tool)
             }),
         )
         .unwrap();

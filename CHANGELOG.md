@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.143.1] — 2026-08-24
+
+### Fix: PR #488 review — per-sub-tool progress completion, SSE test precision
+
+- The retrieval agent now emits each sub-tool's `ToolProgress::Finished` event as soon as that sub-tool completes, instead of waiting for the slowest sub-tool in the round (`join_all` still collects results in input order for the LLM result messages). Streaming clients therefore see research steps complete in real time.
+- The streaming chat integration test now parses individual SSE frames and asserts the `tool_call` frame for `kg_query` carries its result, instead of combining independent whole-stream searches.
+- Docs: `docs/retrieval-agent.md` clarifies that progress is reported for each non-termination sub-tool call, excluding the private `finish_retrieval` tool.
+- Version bumped 0.143.0 → 0.143.1 (patch — backwards-compatible bugfix and documentation update).
+
+## [0.143.0] — 2026-08-24
+
+### Fix: long retrieval-heavy chat requests fail with "error decoding response body" (issue #487)
+
+- The client's default 120s total request timeout was applied to every request, including `/chat/stream`. A query that triggers `retrieve_context` spends ~60s in the retrieval agent and then streams a long final answer, so the wall-clock deadline fired mid-body; reqwest wraps the mid-body timeout as a decode error, so the CLI reported the misleading "Stream error: HTTP error: error decoding response body" while the daemon stayed healthy.
+- `POST /chat` now overrides the total timeout per request to 10 minutes (`MimirClient::CHAT_TOTAL_TIMEOUT`), and `POST /chat/stream` to a 30-minute backstop (`MimirClient::CHAT_STREAM_TOTAL_TIMEOUT`) plus a 60-second per-chunk read timeout (`MimirClient::CHAT_STREAM_READ_TIMEOUT`). The daemon already emits SSE keep-alive comments every 10s, so the read timeout only fires when the stream is genuinely wedged; a slow-but-alive stream is never cut off.
+- The client SSE parser now accepts `Result<Bytes, ClientError>` input (previously `reqwest::Error`), so the read-timeout error can be surfaced as a `ClientError::Connection` instead of being forced through the reqwest error type.
+- Streaming chat now surfaces the retrieval agent's individual sub-tool calls (`kg_query`, `kg_search`, `kg_related`, `search_conversation_history`) as `tool_call_start` / `tool_call` SSE events via a per-request progress channel (`mimir_core::tools::ToolProgress`, `ToolContext::with_progress`, `RetrievalAgent::with_progress`), so the CLI shows the research steps instead of a single "Retrieve Context…" indicator that looks frozen. Blocking paths (`/chat`, `/v1/chat/completions`) pass no channel and run silently.
+- Tests: client tests prove a response delayed beyond the default total timeout still streams (blocking and streaming), the read timeout fires on a silent stream and resets on each chunk, the retrieval agent emits Started/Finished progress for sub-tool calls, and the streaming handler forwards them as SSE events end-to-end.
+- Docs: `docs/tool-call-visibility.md`, `docs/retrieval-agent.md`, `docs/wiki/tool-calls-in-chat.md`, and `docs/wiki/retrieval-agent.md` updated.
+- Version bumped 0.142.3 → 0.143.0 (minor — bugfix plus new public progress API and client timeout constants).
+
 ## [0.142.3] — 2026-08-24
 
 ### Fix: Email connector IDLE cycles fail on providers that close idle connections (issue #485)

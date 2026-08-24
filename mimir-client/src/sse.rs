@@ -23,7 +23,7 @@ const MAX_SSE_EVENT_SIZE: usize = 1024 * 1024; // 1 MiB
 /// the parser directly.
 #[doc(hidden)]
 pub fn parse_sse_stream(
-    stream: impl Stream<Item = Result<Bytes, reqwest::Error>>,
+    stream: impl Stream<Item = Result<Bytes, ClientError>>,
 ) -> impl Stream<Item = Result<StreamItem, ClientError>> {
     let mut buf: Vec<u8> = Vec::new();
     // Index up to which `buf` has been confirmed to contain no delimiter.
@@ -76,7 +76,7 @@ pub fn parse_sse_stream(
                     }
                     futures::future::ready(Some(items))
                 }
-                Err(e) => futures::future::ready(Some(vec![Err(ClientError::Http(e))])),
+                Err(e) => futures::future::ready(Some(vec![Err(e)])),
             }
         })
         .flat_map(futures::stream::iter)
@@ -384,7 +384,7 @@ mod tests {
         // Issue #164: a stream that never emits a double-newline delimiter
         // must not grow the buffer without bound — it should produce an error.
         let big = bytes::Bytes::from(vec![b'a'; MAX_SSE_EVENT_SIZE + 1]);
-        let chunks: Vec<Result<bytes::Bytes, reqwest::Error>> = vec![Ok(big)];
+        let chunks: Vec<Result<bytes::Bytes, ClientError>> = vec![Ok(big)];
         let mut stream = parse_sse_stream(futures::stream::iter(chunks));
         use futures::StreamExt;
         let item = stream.next().await.unwrap();
@@ -401,7 +401,7 @@ mod tests {
         // still find it.
         let chunk1 = bytes::Bytes::from_static(b"data: hello\r");
         let chunk2 = bytes::Bytes::from_static(b"\n\r\ndata: world\n\n");
-        let chunks: Vec<Result<bytes::Bytes, reqwest::Error>> = vec![Ok(chunk1), Ok(chunk2)];
+        let chunks: Vec<Result<bytes::Bytes, ClientError>> = vec![Ok(chunk1), Ok(chunk2)];
         let mut stream = parse_sse_stream(futures::stream::iter(chunks));
         use futures::StreamExt;
         let mut texts = Vec::new();

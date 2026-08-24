@@ -456,6 +456,7 @@ async fn execute_server_tools(
             // Every `/v1` turn is persistent; write tools are always allowed
             // (issue #473).
             false,
+            None,
         )
         .await
         {

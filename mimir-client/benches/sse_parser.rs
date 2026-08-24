@@ -35,7 +35,7 @@ async fn drain(
 /// Legacy O(n^2) parser, mirroring the pre-fix implementation, kept here so the
 /// benchmark can compare old vs new in a single run.
 fn parse_sse_stream_legacy(
-    stream: impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>>,
+    stream: impl futures::Stream<Item = Result<bytes::Bytes, mimir_client::ClientError>>,
 ) -> impl futures::Stream<Item = Result<StreamItem, mimir_client::ClientError>> {
     use mimir_client::ClientError;
     let mut buf = Vec::new();
@@ -61,7 +61,7 @@ fn parse_sse_stream_legacy(
                 }
                 futures::future::ready(Some(items))
             }
-            Err(e) => futures::future::ready(Some(vec![Err(ClientError::Http(e))])),
+            Err(e) => futures::future::ready(Some(vec![Err(e)])),
         })
         .flat_map(futures::stream::iter)
 }
@@ -78,7 +78,9 @@ fn find_double_newline_legacy(buf: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
-fn make_result_stream(bytes: &[bytes::Bytes]) -> Vec<Result<bytes::Bytes, reqwest::Error>> {
+fn make_result_stream(
+    bytes: &[bytes::Bytes],
+) -> Vec<Result<bytes::Bytes, mimir_client::ClientError>> {
     bytes.iter().cloned().map(Ok).collect()
 }
 

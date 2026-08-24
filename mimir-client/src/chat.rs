@@ -1,7 +1,6 @@
-use futures::Stream;
+use std::time::Duration;
 
-#[cfg(test)]
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 
 use mimir_api_types::{ChatRequest, ChatResponse, StreamItem};
 
@@ -10,9 +9,36 @@ use crate::error::ClientError;
 use crate::sse::parse_sse_stream;
 
 impl MimirClient {
+    /// Total timeout for a non-streaming chat request.
+    ///
+    /// The agentic loop can run many tool rounds — each with its own LLM call
+    /// and possibly a multi-minute retrieval agent — so the client's default
+    /// 120s total timeout is too short (issue #487). Overridden per request.
+    pub const CHAT_TOTAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+    /// Total timeout backstop for a streaming chat request.
+    ///
+    /// The stream is bounded by [`Self::CHAT_STREAM_READ_TIMEOUT`]; this only
+    /// guards against a server that never stops sending (issue #487).
+    pub const CHAT_STREAM_TOTAL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+    /// Maximum silence between SSE chunks before a streaming chat response is
+    /// considered wedged.
+    ///
+    /// The daemon emits keep-alive comments every 10s, so 60s means six missed
+    /// keep-alives. A wall-clock total timeout is the wrong tool for a stream
+    /// that can legitimately run for minutes (issue #487).
+    pub const CHAT_STREAM_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
     /// Send a non-streaming chat request.
     pub async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, ClientError> {
-        self.post_json(&self.url("chat"), &req).await
+        Self::send_json(
+            self.client
+                .post(self.url("chat"))
+                .json(&req)
+                .timeout(Self::CHAT_TOTAL_TIMEOUT),
+        )
+        .await
     }
 
     /// Send a streaming chat request and return an SSE item stream.
@@ -20,10 +46,46 @@ impl MimirClient {
         &self,
         req: ChatRequest,
     ) -> Result<impl Stream<Item = Result<StreamItem, ClientError>>, ClientError> {
-        let resp =
-            Self::send_response(self.client.post(self.url("chat/stream")).json(&req)).await?;
-        Ok(parse_sse_stream(resp.bytes_stream()))
+        let resp = Self::send_response(
+            self.client
+                .post(self.url("chat/stream"))
+                .json(&req)
+                .timeout(Self::CHAT_STREAM_TOTAL_TIMEOUT),
+        )
+        .await?;
+        let byte_stream = resp
+            .bytes_stream()
+            .map(|item| item.map_err(ClientError::Http));
+        Ok(parse_sse_stream(with_read_timeout(
+            byte_stream,
+            Self::CHAT_STREAM_READ_TIMEOUT,
+        )))
     }
+}
+
+/// Wrap a byte stream with a per-chunk read timeout.
+///
+/// Each chunk resets the deadline, so a slow-but-alive stream (e.g. the
+/// daemon's keep-alive comments) is never cut off; only a stream that goes
+/// completely silent for `timeout` is reported as wedged.
+fn with_read_timeout<S>(
+    stream: S,
+    timeout: Duration,
+) -> impl Stream<Item = Result<bytes::Bytes, ClientError>>
+where
+    S: Stream<Item = Result<bytes::Bytes, ClientError>>,
+{
+    let timed = tokio_stream::StreamExt::timeout(stream, timeout);
+    let mapped = tokio_stream::StreamExt::map(timed, |item| match item {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(ClientError::Connection(
+            "timed out waiting for stream data".to_string(),
+        )),
+    });
+    // Box so the returned stream stays `Unpin` (the timeout wrapper is not),
+    // keeping `chat_stream`'s public stream usable with `StreamExt::next`.
+    Box::pin(mapped)
 }
 
 #[cfg(test)]
@@ -34,6 +96,7 @@ mod tests {
         AuditRow, BrowseEdge, ChatMessage, ChatRequest, FactRow, OptimizationStatusResponse,
         PendingFactRow, ProfileGroup, TrashRow, Usage,
     };
+    use std::time::Duration;
     #[allow(unused_imports)]
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
@@ -202,5 +265,118 @@ mod tests {
             .unwrap();
         let item = stream.next().await.unwrap();
         assert!(matches!(item, Err(ClientError::Connection(_))));
+    }
+
+    #[tokio::test]
+    async fn test_chat_stream_survives_response_slower_than_default_total_timeout() {
+        // Issue #487: the client's default 120s total request timeout killed
+        // long streaming responses (e.g. a query that runs the retrieval agent
+        // for a minute and then streams a long answer). The chat endpoints
+        // must override the total timeout per request.
+        let server = MockServer::start().await;
+        let body = "data: hello\n\n";
+        Mock::given(method("POST"))
+            .and(path("/chat/stream"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(body)
+                    .set_delay(Duration::from_secs(2)),
+            )
+            .mount(&server)
+            .await;
+
+        // A client whose default total timeout (1s) is far shorter than the
+        // server's response delay.
+        let client =
+            MimirClient::try_new(server.uri(), Duration::from_secs(1), Duration::from_secs(1))
+                .unwrap();
+        let mut stream = client
+            .chat_stream(ChatRequest {
+                session_id: None,
+                message: "hello".to_string(),
+                model: None,
+                personality_preset: None,
+                incognito: None,
+            })
+            .await
+            .unwrap();
+        let first = stream.next().await.unwrap().unwrap();
+        assert_eq!(first, StreamItem::Text("hello".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_chat_survives_response_slower_than_default_total_timeout() {
+        // Issue #487: the non-streaming chat endpoint must also override the
+        // default total timeout — the agentic loop can run the retrieval
+        // agent for a minute or more before the final response is ready.
+        let server = MockServer::start().await;
+        let resp = ChatResponse {
+            session_id: 1,
+            response: "hi".to_string(),
+            usage: Usage::default(),
+            tool_calls: vec![],
+        };
+        Mock::given(method("POST"))
+            .and(path("/chat"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(&resp)
+                    .set_delay(Duration::from_secs(2)),
+            )
+            .mount(&server)
+            .await;
+
+        let client =
+            MimirClient::try_new(server.uri(), Duration::from_secs(1), Duration::from_secs(1))
+                .unwrap();
+        let result = client
+            .chat(ChatRequest {
+                session_id: None,
+                message: "hello".to_string(),
+                model: None,
+                personality_preset: None,
+                incognito: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.response, "hi");
+    }
+
+    #[tokio::test]
+    async fn test_chat_stream_read_timeout_errors_on_silent_stream() {
+        // One chunk arrives, then the stream goes silent: the per-chunk read
+        // timeout must surface a Connection error instead of hanging forever.
+        let silent = futures::stream::iter(vec![Ok(bytes::Bytes::from_static(b"data: hello\n\n"))])
+            .chain(futures::stream::pending::<Result<bytes::Bytes, ClientError>>());
+        let mut timed = with_read_timeout(silent, Duration::from_millis(50));
+        let first = timed.next().await.unwrap().unwrap();
+        assert_eq!(first, bytes::Bytes::from_static(b"data: hello\n\n"));
+        let second = timed.next().await.unwrap();
+        assert!(
+            matches!(second, Err(ClientError::Connection(ref m)) if m.contains("timed out")),
+            "unexpected item: {second:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_chat_stream_read_timeout_resets_on_each_chunk() {
+        // Chunks arriving faster than the read timeout (like the daemon's
+        // keep-alive comments) must not trip it.
+        // Wide margin (100ms read timeout vs 20ms between chunks) so the
+        // test cannot flake on a loaded CI runtime.
+        let chunks = tokio_stream::StreamExt::throttle(
+            futures::stream::iter(vec![
+                Ok(bytes::Bytes::from_static(b"data: a\n\n")),
+                Ok(bytes::Bytes::from_static(b"data: b\n\n")),
+                Ok(bytes::Bytes::from_static(b"data: c\n\n")),
+            ]),
+            Duration::from_millis(20),
+        );
+        let mut timed = with_read_timeout(chunks, Duration::from_millis(100));
+        let mut count = 0;
+        while let Some(Ok(_)) = timed.next().await {
+            count += 1;
+        }
+        assert_eq!(count, 3);
     }
 }

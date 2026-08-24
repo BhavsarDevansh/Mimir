@@ -49,6 +49,27 @@ Tool calls are rendered in the CLI using `colored` crate with `.dimmed().italic(
 🔧 Get Current Time → 2025-05-30T12:00:00Z
 ```
 
+### Nested Tool-Call Progress (retrieval agent)
+
+`retrieve_context` spawns a multi-round retrieval agent that can run for a minute or more. To keep the client from looking frozen behind a single "Retrieve Context…" indicator, the agent's individual sub-tool calls are streamed as the same `tool_call_start` / `tool_call` events:
+
+```text
+🔧 Retrieve Context…
+🔧 Kg Query…
+🔧 Kg Query → {"entity":{"id":1,"name":"TraveLodge",...},"facts":[...],...}
+🔧 Kg Search…
+🔧 Kg Search → {"results":[...],...}
+```
+
+Mechanically, the streaming chat handler creates a `tokio::sync::mpsc` progress channel per tool call and passes the sender through `ToolContext::with_progress` into the registry factory, which rebuilds `RetrieveContextTool` with it. The retrieval agent emits `mimir_core::tools::ToolProgress::Started` before each sub-tool executes and `ToolProgress::Finished` after, and a spawned forwarding task converts those into SSE `tool_call_start` / `tool_call` events (results truncated to 80 chars via `ToolCallInfo::truncate_result`). Non-streaming paths (`/chat`, `/v1/chat/completions`) pass no channel, so the agent's progress is only surfaced on `/chat/stream`.
+
+### Streaming Timeouts
+
+The client's default 120s total request timeout is overridden per request on the chat endpoints, because a retrieval-heavy turn can legitimately run for minutes (issue #487):
+
+- `POST /chat` (blocking) — 10-minute total timeout (`MimirClient::CHAT_TOTAL_TIMEOUT`).
+- `POST /chat/stream` — 30-minute total backstop (`MimirClient::CHAT_STREAM_TOTAL_TIMEOUT`) plus a 60-second per-chunk read timeout (`MimirClient::CHAT_STREAM_READ_TIMEOUT`). The daemon emits SSE keep-alive comments every 10s, so the read timeout only fires when the stream is genuinely wedged; a wall-clock total timeout alone would kill long-but-healthy streams and surface as the misleading "error decoding response body" (reqwest wraps the mid-body timeout as a decode error).
+
 ### Error Handling
 
 When a tool execution fails during the agentic loop:

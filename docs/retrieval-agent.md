@@ -32,6 +32,7 @@ Main LLM via ToolOutput
 - **Structured output**: `RetrievedContext` contains `entities`, `relations`, `conversation_snippets`, and `finish_reason`.
 - **Deduplication**: Duplicate entities, facts, relations, and conversation snippets are deduplicated during accumulation.
 - **Error resilience**: Tool failures are reported back to the retrieval LLM as error messages, allowing it to decide whether to retry or finish.
+- **Progress events**: When the agent runs inside a streaming chat request, each sub-tool call is reported as `mimir_core::tools::ToolProgress::Started` / `Finished` on an optional `tokio::sync::mpsc` channel attached via `RetrievalAgent::with_progress`. The streaming chat handler forwards these as SSE `tool_call_start` / `tool_call` events so the CLI shows the individual research steps instead of a single "Retrieve Context…" indicator (issue #487). Blocking paths pass no channel and the agent runs silently.
 
 ## Data Types
 

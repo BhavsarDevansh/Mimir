@@ -42,10 +42,33 @@ pub(crate) async fn execute_tool_call(
     tool_arguments: &str,
     llm: Arc<dyn mimir_core::llm::LlmBackend>,
     incognito: bool,
+    progress: Option<tokio::sync::mpsc::Sender<mimir_core::tools::ToolProgress>>,
 ) -> Result<mimir_core::tools::ToolOutput, mimir_core::tools::ToolError> {
     let args = serde_json::from_str(tool_arguments).unwrap_or(serde_json::Value::Null);
-    let ctx = mimir_core::tools::ToolContext::new(llm, !incognito);
+    let mut ctx = mimir_core::tools::ToolContext::new(llm, !incognito);
+    if let Some(tx) = progress {
+        ctx = ctx.with_progress(tx);
+    }
     registry.execute(tool_name, args, &ctx).await
+}
+
+/// Build a `tool_call_start` SSE event for a tool that is about to execute.
+fn tool_call_start_event(name: &str, display_name: &str) -> Event {
+    let json = serde_json::json!({ "name": name, "display_name": display_name });
+    Event::default()
+        .event("tool_call_start")
+        .data(json.to_string())
+}
+
+/// Build a `tool_call` SSE event carrying a tool's truncated display result.
+fn tool_call_event(name: &str, display_name: &str, result: &str) -> Event {
+    let info = mimir_api_types::ToolCallInfo {
+        name: name.to_string(),
+        display_name: display_name.to_string(),
+        result: mimir_api_types::ToolCallInfo::truncate_result(result),
+    };
+    let json = serde_json::to_string(&info).unwrap_or_default();
+    Event::default().event("tool_call").data(json)
 }
 
 /// Build the memory context block injected into the system prompt: the
@@ -274,6 +297,7 @@ pub async fn chat_handler(
                         &tool_call.function.arguments,
                         Arc::clone(&llm),
                         incognito,
+                        None,
                     )
                     .await
                     {
@@ -536,18 +560,44 @@ pub async fn chat_stream_handler(
                     });
 
                 // Emit tool_call_start so the client sees Mimir is working.
-                let start_info = serde_json::json!({
-                    "name": tool_call.function.name,
-                    "display_name": display_name,
-                });
-                let start_json = serde_json::to_string(&start_info).unwrap_or_default();
                 if event_tx
-                    .send(Event::default().event("tool_call_start").data(start_json))
+                    .send(tool_call_start_event(
+                        &tool_call.function.name,
+                        &display_name,
+                    ))
                     .await
                     .is_err()
                 {
                     break 'outer;
                 }
+
+                // Stream nested tool-call progress (e.g. the retrieval
+                // agent's kg_query / kg_search steps) as tool_call_start /
+                // tool_call events so the client shows the steps instead of
+                // a single "working" indicator (issue #487).
+                let (progress_tx, mut progress_rx) =
+                    tokio::sync::mpsc::channel::<mimir_core::tools::ToolProgress>(16);
+                let progress_event_tx = event_tx.clone();
+                let progress_task = tokio::spawn(async move {
+                    while let Some(progress) = progress_rx.recv().await {
+                        match progress {
+                            mimir_core::tools::ToolProgress::Started { name, display_name } => {
+                                let _ = progress_event_tx
+                                    .send(tool_call_start_event(&name, &display_name))
+                                    .await;
+                            }
+                            mimir_core::tools::ToolProgress::Finished {
+                                name,
+                                display_name,
+                                result,
+                            } => {
+                                let _ = progress_event_tx
+                                    .send(tool_call_event(&name, &display_name, &result))
+                                    .await;
+                            }
+                        }
+                    }
+                });
 
                 let (llm_text, display_text) = match execute_tool_call(
                     &tool_registry_clone,
@@ -555,6 +605,7 @@ pub async fn chat_stream_handler(
                     &tool_call.function.arguments,
                     Arc::clone(&llm_clone),
                     incognito,
+                    Some(progress_tx),
                 )
                 .await
                 {
@@ -565,15 +616,18 @@ pub async fn chat_stream_handler(
                     }
                 };
 
+                // Flush any nested progress events before the outer tool_call
+                // event so the client always sees sub-steps in order (issue
+                // #487). The task exits once the tool drops its sender.
+                let _ = progress_task.await;
+
                 // Emit tool_call SSE event for client visibility.
-                let info = mimir_api_types::ToolCallInfo {
-                    name: tool_call.function.name.clone(),
-                    display_name,
-                    result: mimir_api_types::ToolCallInfo::truncate_result(&display_text),
-                };
-                let json = serde_json::to_string(&info).unwrap_or_default();
                 if event_tx
-                    .send(Event::default().event("tool_call").data(json))
+                    .send(tool_call_event(
+                        &tool_call.function.name,
+                        &display_name,
+                        &display_text,
+                    ))
                     .await
                     .is_err()
                 {

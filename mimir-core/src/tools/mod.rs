@@ -13,10 +13,13 @@ pub use error::ToolError;
 pub use output::ToolOutput;
 pub use output::output_to_llm_text;
 pub use permission::ToolPermission;
+pub use progress::ToolProgress;
 pub use registry::{ToolContext, ToolEntry, ToolFactory, ToolMetadata, ToolRegistry, ToolSource};
 
 use async_trait::async_trait;
 use serde_json::Value;
+
+mod progress;
 
 /// Convert a snake_case identifier to Title Case for display.
 ///

@@ -387,3 +387,115 @@ async fn test_chat_executes_retrieve_context_through_registry() {
         "a factory capturing the startup LLM would route request-path calls to the startup backend"
     );
 }
+
+#[tokio::test]
+async fn test_chat_stream_emits_retrieval_sub_tool_progress() {
+    // The streaming handler must surface the retrieval agent's individual
+    // sub-tool calls (kg_query, kg_search, ...) as tool_call_start /
+    // tool_call SSE events so the CLI can show the steps instead of a single
+    // "Retrieve Context…" indicator that looks frozen (issue #487).
+    let retrieve_call = ToolCall {
+        index: 0,
+        id: "call_retrieve".to_string(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: "retrieve_context".to_string(),
+            arguments: serde_json::json!({"task": "Find Alice"}).to_string(),
+        },
+    };
+    let query_call = ToolCall {
+        index: 0,
+        id: "call_query".to_string(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: "kg_query".to_string(),
+            arguments: serde_json::json!({"entity_name": "Alice"}).to_string(),
+        },
+    };
+    let finish_call = ToolCall {
+        index: 0,
+        id: "call_finish".to_string(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: "finish_retrieval".to_string(),
+            arguments: "{}".to_string(),
+        },
+    };
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            // Main handler stream 1: retrieve_context tool call.
+            .push_stream(vec![
+                Ok(StreamItem::ToolCalls(vec![retrieve_call])),
+                Ok(StreamItem::Usage(Usage::default())),
+            ])
+            // Retrieval agent round 0: kg_query.
+            .push_chat_message(
+                Message {
+                    role: "assistant".to_string(),
+                    content: "".to_string(),
+                    tool_calls: Some(vec![query_call]),
+                    tool_call_id: None,
+                },
+                Usage::default(),
+            )
+            // Retrieval agent round 1: finish.
+            .push_chat_message(
+                Message {
+                    role: "assistant".to_string(),
+                    content: "".to_string(),
+                    tool_calls: Some(vec![finish_call]),
+                    tool_call_id: None,
+                },
+                Usage::default(),
+            )
+            // Main handler stream 2: final answer.
+            .push_stream(vec![
+                Ok(StreamItem::Text("Found Alice's preferences.".to_string())),
+                Ok(StreamItem::Usage(Usage::default())),
+            ])
+            .build(),
+    );
+    let (state, _temp) = test_state(mock.clone()).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let body =
+        serde_json::to_string(&serde_json::json!({"message": "What do I know about Alice?"}))
+            .unwrap();
+    let response = app
+        .oneshot(
+            authed_request()
+                .method("POST")
+                .uri("/chat/stream")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+
+    // The retrieval sub-tool start and finish events must be present.
+    assert!(
+        text.contains("event: tool_call_start") && text.contains("kg_query"),
+        "expected retrieval sub-tool start event in SSE stream, got: {}",
+        text
+    );
+    // The finish event must be a `tool_call` event (not just the
+    // `tool_call_start` prefix) carrying the kg_query result.
+    assert!(
+        text.contains("event: tool_call\n") && text.contains("kg_query"),
+        "expected retrieval sub-tool finish event in SSE stream, got: {}",
+        text
+    );
+    // The final answer still streams.
+    assert!(
+        text.contains("Found Alice's preferences."),
+        "expected follow-up text in SSE stream, got: {}",
+        text
+    );
+}

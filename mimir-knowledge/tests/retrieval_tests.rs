@@ -251,3 +251,51 @@ async fn retrieve_context_tool_integration() {
     assert!(output.result.is_some());
     assert!(output.stdout.as_ref().unwrap().contains("Retrieved"));
 }
+
+// ------------------------------------------------------------------
+// Test 7: Progress events for sub-tool calls
+// ------------------------------------------------------------------
+
+#[tokio::test]
+async fn retrieval_emits_progress_for_sub_tool_calls() {
+    use mimir_core::tools::ToolProgress;
+
+    let (kg, ctx, _dir) = setup().await;
+
+    let mock = MockLlmClient::builder()
+        // Round 0: kg_query
+        .push_chat_message(
+            make_tool_call("kg_query", serde_json::json!({"entity_name": "Mary"})),
+            Usage::default(),
+        )
+        // Round 1: finish
+        .push_chat_message(
+            make_tool_call("finish_retrieval", serde_json::json!({})),
+            Usage::default(),
+        )
+        .build();
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<ToolProgress>(16);
+    let agent = RetrievalAgent::new(Arc::new(mock), kg, ctx).with_progress(tx);
+    let result = agent.retrieve("Find Mary's preferences").await.unwrap();
+    assert_eq!(result.rounds_used, 2);
+
+    // Round 0 emits Started then Finished for kg_query.
+    match rx.recv().await.unwrap() {
+        ToolProgress::Started { name, display_name } => {
+            assert_eq!(name, "kg_query");
+            assert_eq!(display_name, "Kg Query");
+        }
+        other => panic!("expected Started, got {other:?}"),
+    }
+    match rx.recv().await.unwrap() {
+        ToolProgress::Finished { name, result, .. } => {
+            assert_eq!(name, "kg_query");
+            assert!(!result.is_empty(), "finished result should be non-empty");
+        }
+        other => panic!("expected Finished, got {other:?}"),
+    }
+
+    // No further events: finish_retrieval is not reported.
+    assert!(rx.try_recv().is_err(), "unexpected extra progress event");
+}

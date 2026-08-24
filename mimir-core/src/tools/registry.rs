@@ -1,4 +1,4 @@
-use super::{CliTool, CliToolConfig, Tool, ToolError, ToolOutput, ToolPermission};
+use super::{CliTool, CliToolConfig, Tool, ToolError, ToolOutput, ToolPermission, ToolProgress};
 use crate::llm::LlmBackend;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -17,6 +17,9 @@ pub struct ToolContext {
     /// Whether write-capable tools may execute. Incognito turns pass `false`
     /// so the registry blocks write tools uniformly (issue #155).
     pub allow_write_tools: bool,
+    /// Optional channel for streaming tool-execution progress to the caller
+    /// (e.g. retrieval-agent sub-tool calls). `None` on non-streaming paths.
+    pub progress: Option<tokio::sync::mpsc::Sender<ToolProgress>>,
 }
 
 impl ToolContext {
@@ -25,7 +28,15 @@ impl ToolContext {
         Self {
             llm,
             allow_write_tools,
+            progress: None,
         }
+    }
+
+    /// Attach a progress channel so nested tool calls can stream their steps
+    /// to the caller (issue #487).
+    pub fn with_progress(mut self, progress: tokio::sync::mpsc::Sender<ToolProgress>) -> Self {
+        self.progress = Some(progress);
+        self
     }
 }
 

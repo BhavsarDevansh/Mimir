@@ -62,12 +62,15 @@ pub struct EmailConnector {
     /// reported cursor on a fully successful cycle (issue #332), so a failed
     /// cycle re-syncs from the last confirmed cursor.
     pub(crate) last_uid: Mutex<Option<(u32, u32)>>,
-    /// `true` when the last `sync()` reported a moved cursor that the
-    /// supervisor has not yet confirmed via [`Connector::on_cycle_succeeded`]
-    /// (issue #332). The next `sync()` then skips the IDLE wait and re-fetches
-    /// from the last confirmed cursor, because the IDLE notification for the
-    /// failed window will not re-fire — a failed cycle's staged mail would
-    /// otherwise sit unprocessed until the next push.
+    /// `true` when a re-fetch is pending: the next `sync()` skips the IDLE
+    /// wait and re-fetches from the last confirmed cursor. Set when a cursor
+    /// moved but the cycle has not yet been confirmed (issue #332 — a cycle
+    /// that fails after `sync` must re-fetch the failed window because the
+    /// IDLE notification will not re-fire) or when the IDLE connection was
+    /// dropped mid-window (the push for that window is lost). Cleared by the
+    /// next successful fetch inside `run_sync`, not by
+    /// [`Connector::on_cycle_succeeded`], so a dropped-IDLE cycle's re-fetch
+    /// actually runs before IDLE resumes.
     pub(crate) resync_pending: AtomicBool,
     /// Cached `IDLE` capability, set by [`authenticate`](Connector::authenticate).
     /// `None` until the first successful capability probe. A

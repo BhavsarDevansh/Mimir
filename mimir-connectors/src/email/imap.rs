@@ -249,6 +249,20 @@ pub(crate) struct FetchResult {
     pub max_uid: u32,
 }
 
+/// Outcome of an [`ImapSession::idle_wait`] call.
+pub(crate) enum IdleResult<S: ImapStream> {
+    /// The server signalled new mail (`EXISTS` / `RECENT`); the session is
+    /// alive and the caller should run an incremental fetch.
+    NewData(ImapSession<S>),
+    /// The wait timed out (or was interrupted) with no push; the session is
+    /// alive and the caller may still fetch on it.
+    Timeout(ImapSession<S>),
+    /// The server dropped the connection during the wait or the `DONE`
+    /// handshake (e.g. a provider inactivity close). The session is gone;
+    /// the caller must reconnect to fetch.
+    ConnectionLost,
+}
+
 /// [`SELECT`] response metadata the connector needs for cursor validity.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MailboxInfo {
@@ -357,22 +371,40 @@ impl<S: ImapStream> ImapSession<S> {
     }
 
     /// `IDLE` until the server signals new mail or `timeout` elapses (RFC
-    /// 2177). Consumes `self` and returns the session plus a flag: `true` if
-    /// new data arrived (run an incremental fetch), `false` on timeout / manual
-    /// interrupt (no fetch this cycle). The connector re-issues IDLE every
-    /// cycle, so a `timeout` shorter than the server's ~29 min inactivity
-    /// limit is correct and recommended.
-    pub(crate) async fn idle_wait(self, timeout: Duration) -> Result<(Self, bool), ConnectorError> {
+    /// 2177). Consumes `self` and returns an [`IdleResult`]. The connector
+    /// re-issues IDLE every cycle, so a `timeout` shorter than the server's
+    /// inactivity limit is correct and recommended.
+    ///
+    /// A connection error during the wait or the `DONE` handshake is *not* a
+    /// sync failure: providers (notably Microsoft's IMAP service) close IDLE
+    /// connections at their own inactivity limit, racing the client's
+    /// re-issue. Such a close is reported as [`IdleResult::ConnectionLost`]
+    /// (the session is gone) so the caller can report its progress and
+    /// reconnect on the next cycle instead of failing the cycle.
+    pub(crate) async fn idle_wait(
+        self,
+        timeout: Duration,
+    ) -> Result<IdleResult<S>, ConnectorError> {
         let mut handle = self.session.idle();
         handle.init().await.map_err(map_imap_error)?;
         let (fut, _stop) = handle.wait_with_timeout(timeout);
         let new_data = match fut.await {
             Ok(IdleResponse::NewData(_)) => true,
             Ok(IdleResponse::Timeout) | Ok(IdleResponse::ManualInterrupt) => false,
-            Err(err) => return Err(map_imap_error(err)),
+            // The connection died while idling (provider inactivity close or
+            // a network drop). The session is gone.
+            Err(_) => return Ok(IdleResult::ConnectionLost),
         };
-        let session = handle.done().await.map_err(map_imap_error)?;
-        Ok((ImapSession::new(session), new_data))
+        match handle.done().await {
+            Ok(session) => Ok(if new_data {
+                IdleResult::NewData(ImapSession::new(session))
+            } else {
+                IdleResult::Timeout(ImapSession::new(session))
+            }),
+            // The connection died during the DONE handshake — the server
+            // closed it while we were idling. Same as above.
+            Err(_) => Ok(IdleResult::ConnectionLost),
+        }
     }
 
     /// Log out gracefully (best-effort; errors are ignored as the connection

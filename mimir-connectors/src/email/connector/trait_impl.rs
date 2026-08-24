@@ -104,7 +104,7 @@ impl Connector for EmailConnector {
                 "poll_interval_secs": { "type": "integer", "default": 300 },
                 "poll_jitter_secs": { "type": "integer", "default": 30 },
                 "initial_backfill": { "type": "boolean", "default": true },
-                "idle_timeout_secs": { "type": "integer", "default": 1680 },
+                "idle_timeout_secs": { "type": "integer", "default": 1500 },
                 "llm_extraction_max_attempts": { "type": "integer", "minimum": 1, "maximum": 255, "default": 3 },
                 "display_name": { "type": "string" }
             }
@@ -147,7 +147,10 @@ impl Connector for EmailConnector {
         // persisted cursor is only updated on a fully successful cycle, so
         // the in-memory marker must never run ahead of it. `None` means
         // "cursor unchanged" and leaves the marker as-is.
-        self.resync_pending.store(false, Ordering::SeqCst);
+        // The pending re-sync flag is deliberately NOT cleared here: it is
+        // cleared by the next successful fetch inside `run_sync`, so a cycle
+        // that returned without fetching (an IDLE connection dropped
+        // mid-window) is followed by a re-fetch cycle before IDLE resumes.
         if let Some(cursor) = new_cursor {
             match parse_cursor(cursor) {
                 Some(parsed) => *self.last_uid.lock().await = Some(parsed),

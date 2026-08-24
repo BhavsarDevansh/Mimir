@@ -149,35 +149,59 @@ impl EmailConnector {
             let FetchResult { messages, max_uid } = session.fetch_since(None, uid_validity).await?;
             backfilled = u32::try_from(messages.len()).unwrap_or(u32::MAX);
             self.stage_messages(messages).await;
-            let (sess, new_data) = session.idle_wait(self.idle_timeout()).await?;
-            if !new_data {
-                // IDLE timed out / was interrupted with no new mail: report
-                // the backfill and its cursor so the supervisor persists it.
-                sess.logout().await;
-                return Ok(SyncOutcome {
-                    fetched: backfilled,
-                    new_cursor: Some(encode_cursor(uid_validity, max_uid)),
-                    fetched_at: Utc::now(),
-                });
+            match session.idle_wait(self.idle_timeout()).await? {
+                // NewData: fetch the pushed mail. Timeout: fetch anyway — a
+                // server that never pushes (or a notification lost in the
+                // timeout race) must not strand mail that arrived during
+                // the window. Both continue to the incremental fetch below,
+                // from the backfilled UID so the whole mailbox is never
+                // re-fetched.
+                imap::IdleResult::NewData(sess) | imap::IdleResult::Timeout(sess) => {
+                    last_uid = Some(max_uid);
+                    sess
+                }
+                // The server dropped the connection during IDLE (e.g. a
+                // provider inactivity close). The backfill already staged
+                // the existing mailbox: report its cursor so the cycle
+                // succeeds and the staged mail is extracted instead of being
+                // lost to a cycle failure, and mark a re-sync pending so the
+                // next cycle re-fetches the window immediately instead of
+                // blocking on IDLE (the push for that window will not
+                // re-fire).
+                imap::IdleResult::ConnectionLost => {
+                    debug!(
+                        "IDLE connection dropped mid-window (provider inactivity close); \
+                         reporting backfill progress and re-syncing next cycle"
+                    );
+                    self.resync_pending.store(true, Ordering::SeqCst);
+                    return Ok(SyncOutcome {
+                        fetched: backfilled,
+                        new_cursor: Some(encode_cursor(uid_validity, max_uid)),
+                        fetched_at: Utc::now(),
+                    });
+                }
             }
-            // Continue incrementally from the backfilled UID so the whole
-            // mailbox is never re-fetched.
-            last_uid = Some(max_uid);
-            sess
         } else if idle {
-            let (sess, new_data) = session.idle_wait(self.idle_timeout()).await?;
-            if !new_data {
-                // IDLE timed out / was interrupted with no new mail.
-                sess.logout().await;
-                return Ok(SyncOutcome {
-                    fetched: 0,
-                    // Persist the "start from now" seed even when no mail
-                    // arrived, so the no-backfill choice survives a restart.
-                    new_cursor: seed.map(|s| encode_cursor(uid_validity, s)),
-                    fetched_at: Utc::now(),
-                });
+            match session.idle_wait(self.idle_timeout()).await? {
+                // NewData / Timeout: continue to the incremental fetch below
+                // (see the backfill arm for why a timeout still fetches).
+                imap::IdleResult::NewData(sess) | imap::IdleResult::Timeout(sess) => sess,
+                imap::IdleResult::ConnectionLost => {
+                    debug!(
+                        "IDLE connection dropped mid-window (provider inactivity close); \
+                         re-syncing next cycle"
+                    );
+                    self.resync_pending.store(true, Ordering::SeqCst);
+                    return Ok(SyncOutcome {
+                        fetched: 0,
+                        // Persist the "start from now" seed even when no mail
+                        // arrived, so the no-backfill choice survives a
+                        // restart.
+                        new_cursor: seed.map(|s| encode_cursor(uid_validity, s)),
+                        fetched_at: Utc::now(),
+                    });
+                }
             }
-            sess
         } else {
             session
         };
@@ -211,9 +235,15 @@ impl EmailConnector {
             _ if backfilled > 0 => Some(encode_cursor(uid_validity, max_uid)),
             _ => None,
         };
-        // Track whether a moved cursor is awaiting supervisor confirmation:
-        // the next cycle then re-fetches immediately (IDLE mode) instead of
-        // waiting for a push that will not re-fire (issue #332).
+        // Track whether a re-fetch is pending: the next cycle then skips the
+        // IDLE wait and re-fetches immediately. Set when a cursor moved
+        // (issue #332: a cycle that fails after `sync` must re-fetch the
+        // failed window because the IDLE notification will not re-fire) or
+        // when the IDLE connection was dropped mid-window (the push for that
+        // window is lost). Cleared by the next successful fetch — the
+        // `on_cycle_succeeded` hook no longer clears it, so a
+        // `ConnectionLost` cycle's re-fetch actually runs before IDLE
+        // resumes.
         self.resync_pending
             .store(new_cursor.is_some(), Ordering::SeqCst);
 

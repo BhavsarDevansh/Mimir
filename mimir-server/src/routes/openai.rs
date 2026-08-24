@@ -707,7 +707,10 @@ async fn chat_completions_stream(
             // The user message was already persisted by `resolve_openai_turn`;
             // remove it so a rejected turn leaves no orphaned final message.
             rollback_persisted_turn(&turn).await;
-            return Err(error::openai_llm_error(e));
+            // A provider outage on the first attempt must surface the bounded
+            // failure detail (not a generic 500), while queue-full keeps its
+            // 503 + Retry-After response (PR #490 review).
+            return Err(error::openai_llm_error_with_detail(e));
         }
     };
 
@@ -902,7 +905,10 @@ async fn chat_completions_stream(
                 // atomically, restoring the pre-request session state
                 // (PR #480 review).
                 rollback_persisted_turn(&turn).await;
-                send_error_and_done(&event_tx, &e).await;
+                // Context failures are redacted: the detail stays in the
+                // server log, and the client gets the same sanitised message
+                // as the HTTP error mapping (PR #490 review).
+                send_error_and_done(&event_tx, "internal server error").await;
                 break 'outer;
             }
 
@@ -912,7 +918,10 @@ async fn chat_completions_stream(
                 // persisted, the stream must not complete with output the
                 // session never stored (PR #480 review).
                 rollback_persisted_turn(&turn).await;
-                send_error_and_done(&event_tx, &e).await;
+                // Context failures are redacted: the detail stays in the
+                // server log, and the client gets the same sanitised message
+                // as the HTTP error mapping (PR #490 review).
+                send_error_and_done(&event_tx, "internal server error").await;
                 break 'outer;
             }
 
@@ -1034,10 +1043,12 @@ async fn send_chunk_or_rollback(
 /// Terminate a failed SSE stream: an `error` event followed by `[DONE]`, so
 /// clients can distinguish a completed stream from a failed one instead of
 /// stalling on a silently closed body (PR #466 review). The event data
-/// carries the flattened, bounded failure message so clients see the cause.
+/// carries the flattened, bounded failure message so clients see the cause;
+/// callers pass a sanitised message for failures whose detail must not cross
+/// the redaction boundary (PR #490 review).
 async fn send_error_and_done(
     event_tx: &tokio::sync::mpsc::Sender<Event>,
-    error: &impl std::fmt::Display,
+    error: &(impl std::fmt::Display + ?Sized),
 ) {
     let _ = event_tx
         .send(

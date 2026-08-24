@@ -1,14 +1,14 @@
 # Changelog
 
-## [0.143.2] — 2026-08-24
+## [0.144.0] — 2026-08-24
 
 ### Fix: chat streams report "server error 500: internal server error" on LLM provider failures
 
 - When the upstream LLM provider failed (e.g. ollama.com returning `503` "model temporarily overloaded"), the daemon's retry loop discarded the underlying error and the SSE stream sent a generic `internal server error`, so the CLI showed only "Stream error: server error 500: internal server error" with no actionable detail.
 - `LlmError::RetryExhausted` now preserves the last failure (`last_error`), and both the native `/chat/stream` and the OpenAI-compatible `/v1/chat/completions` stream surfaces send the flattened, length-bounded failure message in the terminal `error` SSE frame, so the client reports the real cause (e.g. the overloaded model name) instead of a masked message.
-- Tests: the core retry test asserts the preserved last error, the SSE error-message helper is unit-tested for single-line flattening and length bounding, and the chat/OpenAI stream integration tests assert the error frame carries the LLM failure detail.
+- Tests: the core retry test asserts the preserved last error against a deterministic `503` server, the SSE error-message helper is unit-tested for single-line flattening and length bounding, the chat/OpenAI stream integration tests assert the error frame carries the LLM failure detail, and the OpenAI first-attempt failure test asserts the bounded detail in the pre-SSE `500` body.
 - Docs: `docs/llm-client.md`, `docs/chat-server.md`, and `docs/wiki/chat-api.md` updated.
-- Version bumped 0.143.1 → 0.143.2 (patch — backwards-compatible bugfix and documentation update).
+- Version bumped 0.143.1 → 0.144.0 (minor — bugfix plus the `LlmError::RetryExhausted` `last_error` field addition, a breaking change to an internal crate API acceptable per the project's internal-API policy; mirrors the 0.125.0 precedent).
 
 ## [0.143.1] — 2026-08-24
 

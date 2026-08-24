@@ -227,9 +227,28 @@ fn test_calculate_backoff_capped() {
 
 #[tokio::test]
 async fn test_retry_exhausted_on_persistent_failure() {
-    // Build a client pointed at a non-routable address so every request fails.
+    // A deterministic transient failure: a local server that answers every
+    // attempt with `503`, so the retry loop must run to exhaustion and the
+    // preserved last error is always the provider's `Api` failure.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        for _ in 0..=MAX_RETRIES {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _request = read_complete_request(&mut stream).await;
+            let body = r#"{"error":"model temporarily overloaded"}"#;
+            let response = format!(
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
+    });
+
     let config = LlmConfig {
-        endpoint: "http://127.0.0.1:1".to_string(),
+        endpoint: format!("http://{addr}/v1"),
         api_key: "test".to_string(),
         model: "gpt-4o".to_string(),
         max_tokens: Some(10),
@@ -240,7 +259,6 @@ async fn test_retry_exhausted_on_persistent_failure() {
         .expect("LLM client must build in tests");
 
     let result = client.chat(vec![Message::user("hi")], None).await;
-    assert!(result.is_err());
 
     match result {
         Err(LlmError::RetryExhausted {
@@ -249,16 +267,17 @@ async fn test_retry_exhausted_on_persistent_failure() {
         }) => {
             assert_eq!(attempts, MAX_RETRIES + 1);
             assert!(
-                matches!(*last_error, LlmError::Network(_)),
-                "the original failure must be preserved for the caller, got: {last_error}"
+                matches!(
+                    *last_error,
+                    LlmError::Api { status: 503, ref body } if body == "{\"error\":\"model temporarily overloaded\"}"
+                ),
+                "the original provider failure must be preserved for the caller, got: {last_error}"
             );
         }
-        Err(_other) => {
-            // It's also acceptable to get a straight network error if the OS
-            // rejects the connection immediately (connection refused).
-            // That's still correct behaviour.
-        }
-        Ok(_) => panic!("expected error"),
+        other => panic!(
+            "persistent 503s must surface RetryExhausted after {} attempts, got: {other:?}",
+            MAX_RETRIES + 1
+        ),
     }
 }
 

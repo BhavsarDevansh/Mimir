@@ -73,3 +73,5 @@ Returns the full message history from the last compaction point (or all messages
 ## OpenAI-Compatible API
 
 Mimir also speaks the OpenAI chat-completions API on `/v1/chat/completions` (with `/v1/models` for the model list), so any OpenAI-compatible app can use Mimir as its LLM provider. See [Using Mimir as Your LLM Provider](llm-provider.md).
+
+On `/v1/chat/completions` streaming, a provider failure before the stream starts returns `500` whose error message explains the cause (for example an upstream LLM provider that is temporarily overloaded); queue-full still returns `503` with `Retry-After: 5`. Failures after the stream starts are reported in the terminal `event: error` frame.

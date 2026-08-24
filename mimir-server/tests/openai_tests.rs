@@ -1275,6 +1275,74 @@ async fn test_v1_chat_stream_queue_full_returns_503_before_sse() {
 }
 
 #[tokio::test]
+async fn test_v1_chat_stream_first_attempt_failure_returns_detailed_500() {
+    // PR #490 review: a provider outage on the first stream attempt must
+    // surface the bounded failure detail in the HTTP error body instead of a
+    // generic "internal server error", while queue-full keeps its 503.
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            .push_stream_error(LlmError::RetryExhausted {
+                attempts: 4,
+                last_error: Box::new(LlmError::Api {
+                    status: 503,
+                    body: "model temporarily overloaded".to_string(),
+                }),
+            })
+            .build(),
+    );
+    let (state, _temp) = test_state(mock.clone()).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let body = chat_body(
+        "gpt-4o",
+        serde_json::json!([{"role": "user", "content": "hi"}]),
+        serde_json::json!({"user": "phone", "stream": true}),
+    );
+    let response = app
+        .oneshot(
+            authed_request()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(
+        !text.contains("event: error") && !text.contains("data: [DONE]"),
+        "a pre-SSE failure must not start an SSE stream: {text:?}"
+    );
+    let error: OpenAiErrorBody = serde_json::from_str(&text).unwrap();
+    assert_eq!(error.error.error_type, "server_error");
+    assert!(
+        error.error.message.contains("model temporarily overloaded"),
+        "the first-attempt failure must carry the bounded detail: {text:?}"
+    );
+
+    // The rejected turn must not leave the persisted user message behind.
+    let sessions = state.context_manager.list_sessions().await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    let msgs = state
+        .context_manager
+        .export_conversation(sessions[0].id)
+        .await
+        .unwrap()
+        .messages;
+    assert_eq!(
+        msgs.len(),
+        1,
+        "failed stream must roll back the request's messages: {msgs:?}"
+    );
+    assert_eq!(msgs[0].role, "system");
+}
+
+#[tokio::test]
 async fn test_v1_chat_invalid_json_returns_400_openai_shape() {
     let mock = Arc::new(MockLlmClient::builder().build());
     let (state, _temp) = test_state(mock.clone()).await;

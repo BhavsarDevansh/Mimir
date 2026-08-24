@@ -94,6 +94,20 @@ pub fn openai_json_rejection() -> Response {
     )
 }
 
+/// Render an error message for an SSE `error` event.
+///
+/// Streaming responses have no HTTP status to carry failure detail, so the
+/// event data is the only channel to the client. The message is flattened to
+/// a single line and length-bounded so provider bodies (which often embed
+/// JSON) cannot bloat or corrupt the stream.
+pub fn sse_error_message(error: &impl std::fmt::Display) -> String {
+    let mut message = error.to_string().replace(['\r', '\n'], " ");
+    if message.chars().count() > 300 {
+        message = message.chars().take(300).collect();
+    }
+    message
+}
+
 /// Convert a context error into an OpenAI-shaped HTTP response.
 pub fn openai_context_error(e: mimir_core::context::ContextError) -> Response {
     error!("context error: {e}");
@@ -406,6 +420,26 @@ mod tests {
         assert_eq!(body["error"]["type"], "invalid_request_error");
         assert_eq!(body["error"]["param"], "model");
         assert!(body["error"]["code"].is_null());
+    }
+
+    #[test]
+    fn sse_error_message_flattens_and_bounds() {
+        let err = mimir_core::llm::types::LlmError::RetryExhausted {
+            attempts: 4,
+            last_error: Box::new(mimir_core::llm::types::LlmError::Api {
+                status: 503,
+                body: "model 'gemma4:31b' is temporarily overloaded\n{\"ref\":\"abc\"}".to_string(),
+            }),
+        };
+        let message = sse_error_message(&err);
+        assert_eq!(
+            message,
+            "retry exhausted after 4 attempts: API error 503: model 'gemma4:31b' is temporarily overloaded {\"ref\":\"abc\"}"
+        );
+        assert!(!message.contains('\n'), "SSE data must stay single-line");
+
+        let long = sse_error_message(&"x".repeat(500));
+        assert!(long.chars().count() <= 300, "message must be bounded");
     }
 
     #[tokio::test]

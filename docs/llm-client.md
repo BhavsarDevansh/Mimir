@@ -66,7 +66,7 @@ Structured error enum:
 - `Network(reqwest::Error)` — timeouts, DNS, connection failures
 - `Api { status, body }` — non-success HTTP response
 - `Parse(serde_json::Error)` — malformed JSON
-- `RetryExhausted { attempts }` — all retries failed
+- `RetryExhausted { attempts, last_error }` — all retries failed; `last_error` preserves the final underlying failure (e.g. provider `503` overload) so callers can surface the actionable cause
 - `StreamError(String)` — invalid SSE event
 - `ClientBuild(String)` — the `reqwest::Client` or worker pool could not be constructed at startup
 

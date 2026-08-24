@@ -65,7 +65,7 @@ Destructive and sensitive routes are additionally loopback-only: the `require_lo
 Events streamed to the client:
 - `data: <text_chunk>` — for each content delta.
 - `event: usage\ndata: {"prompt_tokens": …}` — final usage block.
-- `event: error\ndata: …` — on mid-stream failure (terminal).
+- `event: error\ndata: …` — on mid-stream failure (terminal). The data carries the flattened, bounded failure message (e.g. an upstream LLM `503` overload) instead of a generic `internal server error`, so clients see the actionable cause.
 
 Keep-alive pings are sent every 10 seconds.
 

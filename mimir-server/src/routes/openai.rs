@@ -746,7 +746,7 @@ async fn chat_completions_stream(
                     Err(e) => {
                         error!("LLM stream error: {e}");
                         rollback_persisted_turn(&turn).await;
-                        send_error_and_done(&event_tx).await;
+                        send_error_and_done(&event_tx, &e).await;
                         break 'outer;
                     }
                 },
@@ -857,7 +857,7 @@ async fn chat_completions_stream(
                     Err(e) => {
                         error!("LLM stream error: {e}");
                         rollback_persisted_turn(&turn).await;
-                        send_error_and_done(&event_tx).await;
+                        send_error_and_done(&event_tx, &e).await;
                         break 'outer;
                     }
                 }
@@ -902,7 +902,7 @@ async fn chat_completions_stream(
                 // atomically, restoring the pre-request session state
                 // (PR #480 review).
                 rollback_persisted_turn(&turn).await;
-                send_error_and_done(&event_tx).await;
+                send_error_and_done(&event_tx, &e).await;
                 break 'outer;
             }
 
@@ -912,7 +912,7 @@ async fn chat_completions_stream(
                 // persisted, the stream must not complete with output the
                 // session never stored (PR #480 review).
                 rollback_persisted_turn(&turn).await;
-                send_error_and_done(&event_tx).await;
+                send_error_and_done(&event_tx, &e).await;
                 break 'outer;
             }
 
@@ -1033,13 +1033,17 @@ async fn send_chunk_or_rollback(
 
 /// Terminate a failed SSE stream: an `error` event followed by `[DONE]`, so
 /// clients can distinguish a completed stream from a failed one instead of
-/// stalling on a silently closed body (PR #466 review).
-async fn send_error_and_done(event_tx: &tokio::sync::mpsc::Sender<Event>) {
+/// stalling on a silently closed body (PR #466 review). The event data
+/// carries the flattened, bounded failure message so clients see the cause.
+async fn send_error_and_done(
+    event_tx: &tokio::sync::mpsc::Sender<Event>,
+    error: &impl std::fmt::Display,
+) {
     let _ = event_tx
         .send(
             Event::default()
                 .event("error")
-                .data("internal server error"),
+                .data(error::sse_error_message(error)),
         )
         .await;
     let _ = event_tx.send(Event::default().data("[DONE]")).await;

@@ -160,9 +160,14 @@ pub enum LlmError {
     #[error("parse error: {0}")]
     Parse(#[from] serde_json::Error),
 
-    /// All retry attempts were exhausted.
-    #[error("retry exhausted after {attempts} attempts")]
-    RetryExhausted { attempts: u32 },
+    /// All retry attempts were exhausted. The last failure is preserved so
+    /// callers can surface the actionable cause (e.g. provider overload)
+    /// instead of a generic message.
+    #[error("retry exhausted after {attempts} attempts: {last_error}")]
+    RetryExhausted {
+        attempts: u32,
+        last_error: Box<LlmError>,
+    },
 
     /// The SSE stream produced an invalid event.
     #[error("SSE stream error: {0}")]
@@ -425,7 +430,16 @@ mod tests {
         };
         assert_eq!(err.to_string(), "API error 429: rate limited");
 
-        let err2 = LlmError::RetryExhausted { attempts: 4 };
-        assert_eq!(err2.to_string(), "retry exhausted after 4 attempts");
+        let err2 = LlmError::RetryExhausted {
+            attempts: 4,
+            last_error: Box::new(LlmError::Api {
+                status: 503,
+                body: "overloaded".to_string(),
+            }),
+        };
+        assert_eq!(
+            err2.to_string(),
+            "retry exhausted after 4 attempts: API error 503: overloaded"
+        );
     }
 }

@@ -243,8 +243,15 @@ async fn test_retry_exhausted_on_persistent_failure() {
     assert!(result.is_err());
 
     match result {
-        Err(LlmError::RetryExhausted { attempts }) => {
+        Err(LlmError::RetryExhausted {
+            attempts,
+            last_error,
+        }) => {
             assert_eq!(attempts, MAX_RETRIES + 1);
+            assert!(
+                matches!(*last_error, LlmError::Network(_)),
+                "the original failure must be preserved for the caller, got: {last_error}"
+            );
         }
         Err(_other) => {
             // It's also acceptable to get a straight network error if the OS

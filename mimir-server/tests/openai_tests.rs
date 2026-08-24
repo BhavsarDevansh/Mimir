@@ -926,7 +926,13 @@ async fn test_v1_chat_stream_error_sends_error_event_and_done() {
         MockLlmClient::builder()
             .push_stream(vec![
                 Ok(StreamItem::Text("partial".to_string())),
-                Err(LlmError::RetryExhausted { attempts: 3 }),
+                Err(LlmError::RetryExhausted {
+                    attempts: 3,
+                    last_error: Box::new(LlmError::Api {
+                        status: 503,
+                        body: "overloaded".to_string(),
+                    }),
+                }),
             ])
             .build(),
     );
@@ -958,6 +964,10 @@ async fn test_v1_chat_stream_error_sends_error_event_and_done() {
     assert!(
         text.contains("event: error"),
         "a failed stream must emit an error event: {text:?}"
+    );
+    assert!(
+        text.contains("API error 503: overloaded"),
+        "the error event must surface the LLM failure detail: {text:?}"
     );
     assert!(
         text.trim_end().ends_with("data: [DONE]"),

@@ -13,17 +13,18 @@ use mimir_core::{
 };
 use std::hint::black_box;
 
+const MIXED_ESCAPE_INPUTS: [&str; 5] = [
+    "hello world",
+    "foo OR bar AND NOT baz",
+    "a\"b\"c*d*e",
+    "(parentheses) and -dashes-",
+    "🎉 unicode mixed with ASCII keywords",
+];
+
 fn bench_escape_fts5(c: &mut Criterion) {
-    let inputs = [
-        "hello world",
-        "foo OR bar AND NOT baz",
-        "a\"b\"c*d*e",
-        "(parentheses) and -dashes-",
-        "🎉 unicode mixed with ASCII keywords",
-    ];
     c.bench_function("fts5_escape_mixed_inputs", |b| {
         b.iter(|| {
-            for input in inputs {
+            for input in MIXED_ESCAPE_INPUTS {
                 black_box(escape_fts5(input));
             }
         })
@@ -31,16 +32,9 @@ fn bench_escape_fts5(c: &mut Criterion) {
 }
 
 fn bench_escape_fts5_tokens(c: &mut Criterion) {
-    let inputs = [
-        "hello world",
-        "foo OR bar AND NOT baz",
-        "a\"b\"c*d*e",
-        "(parentheses) and -dashes-",
-        "🎉 unicode mixed with ASCII keywords",
-    ];
     c.bench_function("fts5_escape_tokens_mixed_inputs", |b| {
         b.iter(|| {
-            for input in inputs {
+            for input in MIXED_ESCAPE_INPUTS {
                 black_box(escape_fts5_tokens(input));
             }
         })

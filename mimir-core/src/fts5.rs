@@ -30,19 +30,27 @@ pub fn escape_fts5(query: &str) -> String {
 /// "in") and joins the quoted tokens with ` AND `. Every term must be present
 /// but may appear in any order, avoiding the false negatives of whole-query
 /// phrase quoting. Each token is double-quoted so FTS5 operators cannot inject
-/// syntax. A query that is itself wrapped in double quotes keeps exact-phrase
-/// semantics via [`escape_fts5`].
+/// syntax. A query that is itself a single double-quoted phrase keeps
+/// exact-phrase semantics via [`escape_fts5`]; quoted input that contains
+/// further quotes falls through to token-level AND matching.
 ///
-/// Whitespace-only inputs are returned as empty strings to avoid overly broad
-/// matches.
+/// Whitespace-only and separator-only inputs are returned as empty strings to
+/// avoid overly broad matches.
 pub fn escape_fts5_tokens(query: &str) -> String {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return String::new();
     }
     // Whole-query phrase fallback: explicitly quoted input keeps exact-phrase
-    // semantics (e.g. `"check in time"`).
-    if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
+    // semantics (e.g. `"check in time"`). Input that merely starts and ends
+    // with quotes but contains more quotes (e.g. `"foo" OR "bar"`) is not a
+    // single phrase: fall through to token-level AND matching so operators
+    // stay neutralised instead of silently producing a never-matching phrase.
+    if trimmed.len() >= 2
+        && trimmed.starts_with('"')
+        && trimmed.ends_with('"')
+        && !trimmed[1..trimmed.len() - 1].contains('"')
+    {
         return escape_fts5(&trimmed[1..trimmed.len() - 1]);
     }
     // Tokens are alphanumeric-only by construction (the split predicate
@@ -178,6 +186,18 @@ mod tests {
     fn escape_fts5_tokens_quoted_input_falls_back_to_phrase() {
         // Explicitly quoted input keeps exact-phrase semantics.
         assert_eq!(escape_fts5_tokens("\"check in time\""), "\"check in time\"");
+    }
+
+    #[test]
+    fn escape_fts5_tokens_multiple_quoted_phrases_fall_through_to_tokens() {
+        // Input that merely starts and ends with quotes but contains more
+        // quotes is not a single phrase: tokenise it so operators stay
+        // neutralised instead of producing a never-matching phrase.
+        assert_eq!(
+            escape_fts5_tokens("\"foo\" OR \"bar\""),
+            "\"foo\" AND \"OR\" AND \"bar\""
+        );
+        assert_eq!(escape_fts5_tokens("\"foo\" \"bar\""), "\"foo\" AND \"bar\"");
     }
 
     #[test]

@@ -553,6 +553,28 @@ async fn search_messages_token_and_not_phrase() {
 }
 
 #[tokio::test]
+async fn search_messages_quoted_query_requires_exact_phrase() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    mgr.add_user_message(sid, "check in time is 3pm")
+        .await
+        .unwrap();
+    mgr.add_assistant_message(sid, "time to check in at reception")
+        .await
+        .unwrap();
+
+    // A fully quoted query keeps exact-phrase semantics: only the message
+    // containing the contiguous phrase matches, even though both messages
+    // contain all three terms.
+    let results = mgr
+        .search_messages("\"check in time\"", 10, None)
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results[0].snippet.contains("3pm"));
+}
+
+#[tokio::test]
 async fn search_messages_hyphen_and_compound_forms_surface_hotel_context() {
     let (mgr, _dir) = setup_manager().await;
     let sid = mgr.create_session("sys").await.unwrap();

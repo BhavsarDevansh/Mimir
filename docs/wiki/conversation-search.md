@@ -22,7 +22,7 @@ During a chat, if the agent needs to recall something from a prior conversation,
 - `limit` — max results (default 5, max 20).
 - `session_id` — optional; restricts search to a single conversation.
 
-If `session_id` is omitted, all conversations are searched. Multi-word queries use AND semantics: `"check in time"` matches any message containing `check`, `in`, and `time` in any order, so a message like "time to check in" is found even though the exact phrase never appears. Hyphenated words are split like the FTS5 tokenizer splits them, so `check-in` and `check in` are equivalent.
+If `session_id` is omitted, all conversations are searched. Multi-word queries use AND semantics: `check in time` matches any message containing `check`, `in`, and `time` in any order, so a message like "time to check in" is found even though the exact phrase never appears. Hyphenated words are split like the FTS5 tokenizer splits them, so `check-in` and `check in` are equivalent. Pass the whole query wrapped in double quotes (`"check in time"`) to require the exact phrase instead.
 
 ## Result Format
 

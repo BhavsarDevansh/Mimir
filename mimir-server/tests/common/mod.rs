@@ -270,3 +270,131 @@ pub async fn test_state_with_config(
 pub async fn test_state(llm: Arc<dyn LlmBackend>) -> (Arc<AppState>, tempfile::TempDir) {
     test_state_with_config(llm, Config::default()).await
 }
+
+// ---------------------------------------------------------------------------
+// Learning-hook fixtures (issue #386): shared by the native chat and
+// OpenAI-compatible provider suites. Not every test binary uses every
+// helper, so dead-code analysis is relaxed for the whole block.
+// ---------------------------------------------------------------------------
+
+/// Config with zero debounce/cooldown so the `remember.chat` hook dispatches
+/// immediately after the turn instead of waiting for the production windows.
+#[allow(dead_code)]
+pub fn fast_learning_config() -> Config {
+    let mut config = Config::default();
+    config.identity.name = "Devansh".to_string();
+    config.agent.remember_debounce_seconds = 0;
+    config.scheduler.cooldown_seconds = 0;
+    config
+}
+
+/// The extraction response the `remember.chat` hook's Librarian pipeline
+/// consumes: a `remember` tool call carrying one fact.
+#[allow(dead_code)]
+pub fn extraction_message() -> Message {
+    let remember_output = mimir_knowledge::extract::RememberOutput {
+        facts: vec![mimir_knowledge::extract::ExtractedFact {
+            classification: mimir_knowledge::extract::Classification::Explicit,
+            subject: "Devansh".to_string(),
+            subject_type: "Person".to_string(),
+            relationship_type: "favourite_colour".to_string(),
+            object: "blue".to_string(),
+            object_is_entity: false,
+            object_type: None,
+            temporal: None,
+            is_sensitive: false,
+            correction_scope: None,
+            categories: vec![],
+            recurrence: None,
+            requires_user_action: None,
+            location: None,
+        }],
+    };
+    Message {
+        role: "assistant".to_string(),
+        content: "".to_string(),
+        tool_calls: Some(vec![ToolCall {
+            index: 0,
+            id: "call_remember".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "remember".to_string(),
+                arguments: serde_json::to_string(&remember_output).unwrap(),
+            },
+        }]),
+        tool_call_id: None,
+    }
+}
+
+/// Whether the KG holds `favourite_colour=blue` for the configured user.
+/// The user entity itself is created at daemon start, so incognito
+/// persistence checks must observe the *fact*, not the entity's existence.
+#[allow(dead_code)]
+pub async fn has_favourite_colour(state: &Arc<AppState>) -> bool {
+    let search = state
+        .knowledge_graph
+        .search_entities("Devansh", 1)
+        .await
+        .unwrap();
+    let Some(result) = search.first() else {
+        return false;
+    };
+    let facts = state
+        .knowledge_graph
+        .get_facts_by_subject(result.entity.id, 100)
+        .await
+        .unwrap();
+    for fact in &facts {
+        let pred = state
+            .knowledge_graph
+            .relationship_type_name(fact.relationship_type_id)
+            .await;
+        if pred.as_deref() == Some("favourite_colour")
+            && fact.object_literal.as_deref() == Some("blue")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Poll until the KG holds `favourite_colour=blue` for the user, or return
+/// false after a timeout.
+#[allow(dead_code)]
+pub async fn wait_for_favourite_colour(state: &Arc<AppState>) -> bool {
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if has_favourite_colour(state).await {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// Wait until the `remember.chat` hook has drained its pending queue, so a
+/// negative persistence assertion observes a fully dispatched run (the hook
+/// would have written facts by then if it fired). The wait is scoped to
+/// `remember.chat` only: `running_count()` spans the whole engine, and an
+/// unrelated hook such as `memory.condensation` (debounce and cooldown are
+/// both zero under `fast_learning_config`) may legitimately be running and
+/// would otherwise make the helper flaky.
+#[allow(dead_code)]
+pub async fn wait_for_chat_hook_idle(state: &Arc<AppState>) {
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let pending = state.hook_engine.pending_depth_for("remember.chat").await;
+        if pending == 0 {
+            // Allow an already dispatched instance to finish writing facts.
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "remember.chat hook did not drain within 5s (pending={pending})"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}

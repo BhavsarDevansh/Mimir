@@ -251,6 +251,10 @@ pub struct OpenAiChatRequest {
     pub stream_options: Option<OpenAiStreamOptions>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<serde_json::Value>>,
+    /// Conversation key that resumes one persistent session in the central
+    /// profile. Absent or blank values key the fixed `default` session —
+    /// every request persists and learns, there is no incognito path on this
+    /// surface (issue #473).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
 }

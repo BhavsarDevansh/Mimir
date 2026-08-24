@@ -9,7 +9,7 @@ Point your app at `http://<mimir-host>:8080/v1` and use the daemon's API token a
 - `GET /v1/models` lists the personality presets you can use as model names.
 - `POST /v1/chat/completions` answers chat requests, with or without streaming.
 
-Conversations that carry a `user` key are stored in Mimir's central profile, so anything you say from any device under that key becomes part of the same memory — and Mimir's learning hooks pick up new facts from those conversations automatically. Requests without a `user` key are incognito: Mimir still answers with its memory context, but stores nothing and triggers no learning hooks.
+Conversations that carry a `user` key are stored in Mimir's central profile, so anything you say from any device under that key becomes part of the same memory — and Mimir's learning hooks pick up new facts from those conversations automatically. Requests without a `user` key are just as persistent: they use a shared default conversation, so Mimir remembers them and learns from them too. Nothing you send to the `/v1` endpoint is ever incognito.
 
 ## Quick Example
 
@@ -26,7 +26,7 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 ## Choosing a Conversation
 
-The `user` field is your conversation key. Use a fixed value per conversation (for example `"my-phone"` or `"work-laptop"`) and Mimir resumes that conversation on every request. Omit `user` for a one-off incognito-style question: Mimir still uses its memory to answer, but stores nothing and learns nothing from it.
+The `user` field is your conversation key. Use a fixed value per conversation (for example `"my-phone"` or `"work-laptop"`) and Mimir resumes that conversation on every request. Omit `user` (or send a blank one) and requests still persist — they share one default conversation, so Mimir remembers and learns from them. If an app cannot send the `user` field at all, its questions still land in your memory.
 
 The first request for a `user` key captures the system prompt (personality preset plus the memory block at that moment) and keeps it for the lifetime of the conversation — new core facts or a changed preset apply only to conversations started afterwards.
 
@@ -48,6 +48,7 @@ Set `"stream": true` for token-by-token responses. Add `"stream_options": {"incl
 ## Best Practices
 
 - Keep one `user` value per conversation so history and memory stay coherent.
+- Unkeyed requests all share the default conversation; use a fixed `user` value when you want separate conversations per device.
 - Use the daemon's API token as the API key; every route except `/health` requires it.
 - For remote devices, put the daemon behind a reverse proxy with TLS (Tailscale, WireGuard, or similar) — the daemon itself stays reverse-proxy-first.
 - Prefer a preset name as the model unless you specifically want a different upstream model.

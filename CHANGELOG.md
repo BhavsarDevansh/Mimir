@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.142.0] — 2026-08-24
+
+### Fix: OpenAI-compatible endpoint no longer treats missing `user` as incognito (issue #473)
+
+- `POST /v1/chat/completions` removes the implicit-incognito path entirely: a request without a `user` field (or with a blank one) now keys the fixed `default` session instead of silently skipping persistence and learning. Every `/v1` request resolves or creates a session, persists the user message and assistant response, exports write-capable tools, and fires the `remember.chat` hook on completion — a generic phone LLM app that cannot send the `user` field now feeds the same memory as every other client.
+- The OpenAI `user` field remains a conversation key only: a fixed value resumes that session exactly as before, and a blank value is treated as absent (no session keyed on `""`). An explicit incognito option on the OpenAI surface is deliberately not added; incognito stays on the native route (`incognito: true`) and the CLI (`mimir chat --incognito`).
+- The route's dead incognito machinery was removed: the `INCOGNITO_COUNTER` branch, the ephemeral trailing-segment conversation assembly (`convert_message`, `last_user_index`), the per-request `incognito` flag, and the write-tool suppression now never apply on `/v1`.
+- Tests: unkeyed blocking and streaming requests persist the default session, resume it across requests (blank `user` included), and dispatch `remember.chat` end-to-end (the fact lands in the knowledge graph); the shared learning fixtures moved from `chat_learning_tests.rs` into `mimir-server/tests/common/mod.rs` (DRY with the native chat suites).
+- Docs: `docs/chat-server.md`, `docs/llm-provider.md`, `docs/wiki/llm-provider.md`, `VISION/08-Architecture/Multi-Device.md`, `Mimir-Implementation-Context.md`, and the `OpenAiChatRequest.user` doc comment updated (default session key, no incognito path on `/v1`).
+- Version bumped 0.141.5 → 0.142.0 (minor — deliberate behaviour change on the public OpenAI-compatible surface).
+
 ## [0.141.5] — 2026-08-24
 
 ### Fix: connector sync accepts unprobed auto-mode connectors until the mode resolves (issue #475)

@@ -186,27 +186,173 @@ async fn test_v1_chat_same_user_resumes_one_session() {
 }
 
 #[tokio::test]
-async fn test_v1_chat_without_user_is_incognito() {
+async fn test_v1_chat_without_user_persists_default_session_and_learns() {
+    // Issue #473: a request without `user` is never incognito — it keys the
+    // fixed default session, persists the turn, and fires the learning hook.
     let mock = Arc::new(
         MockLlmClient::builder()
-            .push_chat("Hello!", Usage::default())
+            .push_chat("Noted.", Usage::default())
+            .push_chat_message(extraction_message(), Usage::default())
             .build(),
     );
-    let (state, _temp) = test_state(mock.clone()).await;
+    let (state, _temp) = test_state_with_config(mock, fast_learning_config()).await;
     let app = mimir_server::build_app(state.clone());
 
     let body = chat_body(
         "gpt-4o",
-        serde_json::json!([{"role": "user", "content": "hi"}]),
+        serde_json::json!([{"role": "user", "content": "My favourite colour is blue."}]),
         serde_json::json!({}),
     );
     let (status, _, _) = post_v1_chat(&app, &body).await;
     assert_eq!(status, StatusCode::OK);
 
-    let sessions = state.context_manager.list_sessions().await.unwrap();
+    let session_id = state
+        .context_manager
+        .find_session_by_user_key("default")
+        .await
+        .unwrap()
+        .expect("requests without `user` must resolve the default session");
+    let messages = state
+        .context_manager
+        .export_conversation(session_id)
+        .await
+        .unwrap()
+        .messages;
+    assert_eq!(messages[0].role, "system");
+    assert_eq!(messages[1].role, "user");
+    assert_eq!(messages[1].content, "My favourite colour is blue.");
+    assert_eq!(messages[2].role, "assistant");
+    assert_eq!(messages[2].content, "Noted.");
+
     assert!(
-        sessions.is_empty(),
-        "requests without `user` must not persist a session"
+        wait_for_favourite_colour(&state).await,
+        "the remember.chat hook must fire for unkeyed requests and persist the fact"
+    );
+}
+
+#[tokio::test]
+async fn test_v1_chat_without_user_resumes_default_session() {
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            .push_chat("first", Usage::default())
+            .push_chat("second", Usage::default())
+            .build(),
+    );
+    let (state, _temp) = test_state(mock.clone()).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let first = chat_body(
+        "gpt-4o",
+        serde_json::json!([{"role": "user", "content": "one"}]),
+        serde_json::json!({}),
+    );
+    let (status, _, _) = post_v1_chat(&app, &first).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A blank `user` is treated as absent and resumes the same default
+    // session rather than keying a session on "".
+    let second = chat_body(
+        "gpt-4o",
+        serde_json::json!([{"role": "user", "content": "two"}]),
+        serde_json::json!({"user": "   "}),
+    );
+    let (status, _, _) = post_v1_chat(&app, &second).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let sessions = state.context_manager.list_sessions().await.unwrap();
+    assert_eq!(
+        sessions.len(),
+        1,
+        "blank `user` must resume the default session"
+    );
+    assert_eq!(
+        state
+            .context_manager
+            .find_session_by_user_key("default")
+            .await
+            .unwrap(),
+        Some(sessions[0].id),
+        "the default session must be keyed `default`"
+    );
+    let calls = mock.chat_calls();
+    assert_eq!(calls.len(), 2);
+    let second_conversation = &calls[1];
+    assert!(
+        second_conversation
+            .iter()
+            .any(|m| m.role == "user" && m.content == "one"),
+        "second turn must include the first turn's history: {second_conversation:?}"
+    );
+    assert!(
+        second_conversation
+            .iter()
+            .any(|m| m.role == "user" && m.content == "two"),
+        "second turn must include its own user message"
+    );
+}
+
+#[tokio::test]
+async fn test_v1_chat_stream_without_user_persists_and_learns() {
+    // The streaming path has the same contract as blocking: no `user` means
+    // the default persistent session, not incognito (issue #473).
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            .push_stream(vec![
+                Ok(StreamItem::Text("Noted.".to_string())),
+                Ok(StreamItem::Usage(Usage::default())),
+            ])
+            .push_chat_message(extraction_message(), Usage::default())
+            .build(),
+    );
+    let (state, _temp) = test_state_with_config(mock, fast_learning_config()).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let body = chat_body(
+        "gpt-4o",
+        serde_json::json!([{"role": "user", "content": "My favourite colour is blue."}]),
+        serde_json::json!({"stream": true}),
+    );
+    let response = app
+        .oneshot(
+            authed_request()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(
+        text.contains("Noted."),
+        "stream must carry the response: {text}"
+    );
+    assert!(text.trim_end().ends_with("data: [DONE]"));
+
+    let session_id = state
+        .context_manager
+        .find_session_by_user_key("default")
+        .await
+        .unwrap()
+        .expect("unkeyed stream must resolve the default session");
+    let messages = state
+        .context_manager
+        .export_conversation(session_id)
+        .await
+        .unwrap()
+        .messages;
+    assert_eq!(messages[1].role, "user");
+    assert_eq!(messages[2].role, "assistant");
+    assert_eq!(messages[2].content, "Noted.");
+
+    assert!(
+        wait_for_favourite_colour(&state).await,
+        "unkeyed stream turns must fire the learning hook and persist the fact"
     );
 }
 
@@ -1188,4 +1334,76 @@ async fn test_v1_chat_requires_auth() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_v1_chat_stream_client_disconnect_rolls_back_persisted_turn() {
+    // PR #480 review: if the SSE receiver closes before the turn completes,
+    // the stream task must roll back the persisted user/tool messages
+    // instead of leaving an orphaned final turn in the session.
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            // Round 1: the model calls the server-side `echo` tool, which
+            // persists an assistant tool-call message and a tool result
+            // before round 2 starts.
+            .push_stream(vec![Ok(StreamItem::ToolCalls(vec![ToolCall {
+                index: 0,
+                id: "call_echo".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "echo".to_string(),
+                    arguments: "{\"message\":\"ping\"}".to_string(),
+                },
+            }]))])
+            // Round 2: a long text stream, so the stream task is still
+            // sending chunks when the client disconnects.
+            .push_stream(
+                (0..30)
+                    .map(|_| Ok(StreamItem::Text("ping".to_string())))
+                    .collect(),
+            )
+            .build(),
+    );
+    let (state, _temp) = test_state(mock.clone()).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let body = chat_body(
+        "gpt-4o",
+        serde_json::json!([{"role": "user", "content": "echo ping"}]),
+        serde_json::json!({"user": "phone", "stream": true}),
+    );
+    let response = app
+        .oneshot(
+            authed_request()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Simulate a client that disconnects without reading the stream: the
+    // stream task's next `send_chunk` fails and it must roll the persisted
+    // turn back.
+    drop(response);
+
+    // Give the stream task time to observe the closed receiver and roll
+    // back before asserting on the session.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+    let sessions = state.context_manager.list_sessions().await.unwrap();
+    assert_eq!(sessions.len(), 1, "session created by the request");
+    let msgs = state
+        .context_manager
+        .export_conversation(sessions[0].id)
+        .await
+        .unwrap()
+        .messages;
+    assert!(
+        msgs.iter().all(|m| m.role == "system"),
+        "no user, assistant, or tool messages may remain after a cancelled stream: {msgs:?}"
+    );
 }

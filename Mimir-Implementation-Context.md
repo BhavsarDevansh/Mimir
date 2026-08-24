@@ -191,7 +191,7 @@ The daemon will listen on both a Unix domain socket and a TCP socket once UDS is
 
 ## OpenAI-Compatible Provider Surface
 
-The daemon exposes `GET /v1/models` and `POST /v1/chat/completions` (blocking + streaming) so apps and devices that speak the OpenAI chat-completions API can use Mimir as their LLM provider (issue #388). Mimir is single-tenant, so the OpenAI `user` field is a conversation key backed by a nullable unique `user_key` column on the sessions table: a fixed `user` resumes one persistent session in the central profile, and requests without `user` are incognito-style (memory context injected, nothing persisted, no learning hooks). The client's `messages` array is a stateless echo — only the last user message starts a new turn and trailing `tool` messages continue an in-flight turn. Model names matching a personality preset select that preset; unknown names pass through as upstream model overrides. Client tool schemas merge with Mimir's server-side tools (server wins on name collision), and `/v1` errors use the OpenAI error JSON shape with `Retry-After` on queue-full. See `docs/llm-provider.md` (technical) and `docs/wiki/llm-provider.md` (usage).
+The daemon exposes `GET /v1/models` and `POST /v1/chat/completions` (blocking + streaming) so apps and devices that speak the OpenAI chat-completions API can use Mimir as their LLM provider (issue #388). Mimir is single-tenant, so the OpenAI `user` field is a conversation key backed by a nullable unique `user_key` column on the sessions table: a fixed `user` resumes one persistent session in the central profile, and requests without `user` (or with a blank one) key the fixed `default` session — every request is persistent and every completed turn fires the learning hooks, with no incognito path on this surface (issue #473). The client's `messages` array is a stateless echo — only the last user message starts a new turn and trailing `tool` messages continue an in-flight turn. Model names matching a personality preset select that preset; unknown names pass through as upstream model overrides. Client tool schemas merge with Mimir's server-side tools (server wins on name collision), and `/v1` errors use the OpenAI error JSON shape with `Retry-After` on queue-full. See `docs/llm-provider.md` (technical) and `docs/wiki/llm-provider.md` (usage).
 
 ## Memory System
 
@@ -203,7 +203,7 @@ The daemon exposes `GET /v1/models` and `POST /v1/chat/completions` (blocking + 
 - Composed into the system prompt as the final block, after the preset tone text and the shared operating directives, combined with an upcoming-events section rendered from the events overlay
 - Auto-managed: hook-driven chat extraction (`remember.chat`), background ingestion, and nightly optimization add, replace, remove, and re-rank facts
 - Regenerated on demand: a fact insert/update/delete that ranks in the top-N, `mimir memory --refresh`, or nightly optimization completion; the background scheduler runs condensation only during LLM downtime
-- Frozen per session: non-incognito sessions reuse the system prompt captured at session creation; incognito requests build a fresh prompt
+- Frozen per session: sessions reuse the system prompt captured at session creation; only the native route's explicit `incognito: true` turns build a fresh prompt — the OpenAI surface has no incognito path (issue #473)
 - No file: the legacy `memory.md` file-backed system was deleted in v0.37.0 (issue #111); see `docs/memory-system.md` for the full pipeline
 
 ### Context Manager

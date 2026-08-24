@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Mimir daemon exposes an OpenAI-compatible provider surface so any app or device that speaks the OpenAI chat-completions API can point at one central Mimir server instead of an upstream LLM. Requests are mapped onto Mimir's existing session, personality, and worker-pool infrastructure, so every device's keyed conversations feed one shared profile (VISION/08-Architecture/Multi-Device.md). Requests without a `user` key stay incognito: memory context is still injected, but nothing is persisted and no learning hooks fire. This is the server-side mirror of the OpenAI wire contract the `mimir` binary already consumes as a client (issue #3).
+The Mimir daemon exposes an OpenAI-compatible provider surface so any app or device that speaks the OpenAI chat-completions API can point at one central Mimir server instead of an upstream LLM. Requests are mapped onto Mimir's existing session, personality, and worker-pool infrastructure, so every device's keyed conversations feed one shared profile (VISION/08-Architecture/Multi-Device.md). Requests without a `user` key (or with a blank one) key the fixed `default` session, so every request persists and every completed turn fires the learning hooks — there is no incognito path on this surface (issue #473). This is the server-side mirror of the OpenAI wire contract the `mimir` binary already consumes as a client (issue #3).
 
 ## Endpoints
 
@@ -20,7 +20,8 @@ Mimir is single-tenant, so there is no device identity. The OpenAI `user` field 
 - A request with a fixed `user` value resumes one ongoing conversation in the central profile. The mapping is backed by a nullable unique `user_key` column on the `sessions` table; the first request for a key creates the session (race-safe via a partial unique index), and later requests resume it.
 - The system prompt is first-writer-wins: the personality preset and the memory block captured when the keyed session is created are kept for the session's lifetime, so later preset or memory changes apply only to sessions created afterwards.
 - The client-supplied `messages` array is a stateless echo of history Mimir already stores. Only the last user message is appended as the new turn, and Mimir's stored history stays authoritative — exactly like `mimir chat`. Trailing `tool` messages after the last user message are the client's tool results and continue the in-flight turn; trailing assistant messages are ignored because the server already persisted them.
-- Requests without `user` behave like incognito: they still pull the user's memory context (condensed memory, upcoming events, catalogue) into the system prompt, but persist nothing and trigger no learning hooks. The client's trailing segment (from the last user message onward) is the ephemeral conversation.
+- Requests without `user` (or with a blank one) resolve the fixed `default` session key, so all unkeyed clients share one persistent conversation in the central profile. This was a deliberate decision: inferring "no user ⇒ don't learn" turned a client limitation (a generic phone LLM app that cannot send the `user` field) into silent data loss for a single-tenant personal assistant (issue #473). Blank values map to the same key so an empty conversation key cannot silently create a session keyed on `""`.
+- The literal key `default` is reserved for unkeyed requests: a client that sends `user: "default"` joins the shared default conversation, so use any other value for a dedicated conversation.
 
 ## Model Mapping
 
@@ -37,7 +38,7 @@ Client-supplied `tools` schemas are merged with Mimir's own server-side tools:
 
 - Server tools are always available and execute server-side; on a name collision the server-side tool wins and the client's definition is silently dropped.
 - When the LLM calls a client tool, the tool call is returned to the client (`finish_reason: "tool_calls"`, `message.tool_calls` / streamed `delta.tool_calls`), the assistant tool-call message and any server tool results are persisted into the session, and the client's follow-up `tool` messages continue the turn.
-- `remember` stays a server-side hook (issue #386): it fires only when the turn actually completes, and never for incognito turns.
+- `remember` stays a server-side hook (issue #386): it fires when the turn actually completes, and every `/v1` turn is persistent so the hook always applies (issue #473).
 - Mimir's internal tool activity is invisible on the v1 surface; surfacing it in chat output is tracked separately (issue #464).
 
 ## Sampling
@@ -47,11 +48,12 @@ Client-supplied `tools` schemas are merged with Mimir's own server-side tools:
 
 ## Streaming
 
-`stream: true` returns an SSE stream of OpenAI chunks (`object: "chat.completion.chunk"`): the first chunk carries `delta.role`, content arrives as `delta.content`, tool calls as `delta.tool_calls`, the final chunk carries `finish_reason`, and the stream terminates with `data: [DONE]`. `stream_options.include_usage: true` appends a final usage chunk with empty `choices` and the accumulated `usage`. A mid-stream upstream failure emits an `event: error` frame followed by `data: [DONE]`, so clients can distinguish a failed stream from a completed one; the pre-flight queue-capacity check surfaces a full queue as `503` before the stream starts. Client-tool deltas are buffered per round and emitted in `index` order only when the round hands client tools back — server-side tool calls execute internally and never appear in the client stream.
+`stream: true` returns an SSE stream of OpenAI chunks (`object: "chat.completion.chunk"`): the first chunk carries `delta.role`, content arrives as `delta.content`, tool calls as `delta.tool_calls`, the final chunk carries `finish_reason`, and the stream terminates with `data: [DONE]`. `stream_options.include_usage: true` appends a final usage chunk with empty `choices` and the accumulated `usage`. A mid-stream upstream failure emits an `event: error` frame followed by `data: [DONE]`, so clients can distinguish a failed stream from a completed one; the pre-flight queue-capacity check surfaces a full queue as `503` before the stream starts. Client-tool deltas are buffered per round and emitted in `index` order only when the round hands client tools back — server-side tool calls execute internally and never appear in the client stream. If the client disconnects before the turn completes, the stream task rolls back the messages it persisted (user message, assistant tool-call message, server tool results) so the session never keeps an orphaned half-turn; a completed final answer is still persisted before the closing chunks are sent.
 
 ## Errors
 
 `/v1` routes return the OpenAI error JSON shape `{"error": {"message", "type", "param", "code"}}`. Malformed requests — invalid JSON, no user message, an empty user message, or a `tool` message without `tool_call_id` — map to `400 invalid_request_error`. A full worker-pool queue maps to `503 Service Unavailable` with `Retry-After: 5` and `code: "queue_full"`. The mapping is live on the hot path: model/temperature/`max_tokens` overrides keep the worker pool (issue #465), so every `/v1` turn enqueues on the user queue and a saturated queue surfaces as `503` instead of an unbounded direct call.
+Turn persistence is atomic: a failure to store the assistant tool-call message or a server tool result fails the turn (blocking) or terminates the stream with `event: error` (streaming) after rolling the session back to its pre-request state, so a response never contains tool-derived output the session did not store.
 
 ## Implementation Notes
 
@@ -62,4 +64,4 @@ Client-supplied `tools` schemas are merged with Mimir's own server-side tools:
 
 ## Testing
 
-Unit tests cover the wire-type round-trips (`mimir-api-types`), the session mapping, tool-message persistence, migration, and turn-based trimming (`mimir-core/src/context/tests.rs`), and the `max_tokens` override (`mimir-core/src/llm/client/tests.rs`). Server integration tests in `mimir-server/tests/openai_tests.rs` cover model listing, blocking and streaming shapes, session resumption, incognito behaviour, preset selection, client-tool round-trips, server-tool collision and execution, auth, and the 503 error shape.
+Unit tests cover the wire-type round-trips (`mimir-api-types`), the session mapping, tool-message persistence, migration, and turn-based trimming (`mimir-core/src/context/tests.rs`), and the `max_tokens` override (`mimir-core/src/llm/client/tests.rs`). Server integration tests in `mimir-server/tests/openai_tests.rs` cover model listing, blocking and streaming shapes, session resumption, default-session persistence and learning for unkeyed requests, preset selection, client-tool round-trips, server-tool collision and execution, a client disconnect mid-stream (asserting the persisted turn is rolled back), auth, and the 503 error shape.

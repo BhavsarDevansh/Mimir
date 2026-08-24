@@ -7,12 +7,13 @@
 //! central profile (backed by the `sessions.user_key` column). The client's
 //! `messages` array is a stateless echo: only the last user message starts a
 //! new turn, and trailing `tool` messages continue an in-flight turn.
-//! Requests without `user` are incognito-style: memory context is still
-//! injected, but nothing is persisted and no learning hooks fire.
+//! Requests without `user` (or with a blank one) key the fixed default
+//! session, so every request is persistent and every completed turn fires
+//! the learning hooks — there is no incognito path on this surface (issue
+//! #473).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use axum::{
@@ -32,14 +33,17 @@ use mimir_api_types::{
 };
 use mimir_core::conversation::ConversationTurn;
 use mimir_core::hooks::Trigger;
-use mimir_core::llm::types::{FunctionCall, Message, StreamItem, ToolCall, Usage};
+use mimir_core::llm::types::{Message, StreamItem, ToolCall, Usage};
 use tracing::error;
 
 use crate::error;
-use crate::routes::chat::{
-    INCOGNITO_COUNTER, build_memory_context, build_system_prompt, execute_tool_call,
-};
+use crate::routes::chat::{build_memory_context, build_system_prompt, execute_tool_call};
 use crate::state::AppState;
+
+/// The conversation key used when a request omits (or blanks) the OpenAI
+/// `user` field: every unkeyed request resumes one shared persistent session
+/// in the central profile (issue #473).
+const DEFAULT_OPENAI_SESSION_KEY: &str = "default";
 
 /// `GET /v1/models` — list personality presets as OpenAI models.
 ///
@@ -88,7 +92,6 @@ pub async fn chat_completions_handler(
 struct OpenAiTurn {
     state: Arc<AppState>,
     session_id: i64,
-    incognito: bool,
     /// Highest persisted message id before this request's writes; a failed
     /// turn rolls back to this baseline so no orphaned messages remain.
     baseline_message_id: i64,
@@ -101,17 +104,16 @@ struct OpenAiTurn {
     model: String,
     completion_id: String,
     created: u64,
-    /// Held until the assistant response is persisted (non-incognito only).
-    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    /// Held until the assistant response is persisted, so concurrent
+    /// requests for the same session never interleave writes.
+    permit: tokio::sync::OwnedSemaphorePermit,
 }
 
-/// The client-message analysis: the turn's user message, the trailing tool
-/// results that continue an in-flight turn, and the index of the last user
-/// message (the start of the trailing segment).
+/// The client-message analysis: the turn's user message and the trailing
+/// tool results that continue an in-flight turn.
 struct TurnInput {
     user_message: String,
     trailing_tools: Vec<(String, String)>,
-    last_user_index: usize,
 }
 
 /// A request-validation failure for the OpenAI surface.
@@ -191,31 +193,7 @@ fn extract_turn(messages: &[OpenAiChatMessage]) -> Result<TurnInput, TurnError> 
     Ok(TurnInput {
         user_message,
         trailing_tools,
-        last_user_index,
     })
-}
-
-/// Convert a client message into the internal LLM message shape.
-fn convert_message(msg: &OpenAiChatMessage) -> Message {
-    Message {
-        role: msg.role.clone(),
-        content: msg.content.clone().unwrap_or_default(),
-        tool_calls: msg.tool_calls.as_ref().map(|calls| {
-            calls
-                .iter()
-                .map(|call| ToolCall {
-                    index: 0,
-                    id: call.id.clone(),
-                    call_type: call.call_type.clone(),
-                    function: FunctionCall {
-                        name: call.function.name.clone(),
-                        arguments: call.function.arguments.clone(),
-                    },
-                })
-                .collect()
-        }),
-        tool_call_id: msg.tool_call_id.clone(),
-    }
 }
 
 /// Merge server-side tools with client-supplied tools.
@@ -349,123 +327,101 @@ async fn resolve_openai_turn(
         None => llm,
     };
 
-    // A blank `user` is treated as absent so an empty conversation key
-    // cannot silently create a session keyed on "".
-    let user_key = req.user.as_deref().filter(|key| !key.trim().is_empty());
-    let incognito = user_key.is_none();
+    // A blank `user` is treated as absent; both map to the fixed default
+    // session key so no request is ever silently incognito (issue #473).
+    let user_key = req
+        .user
+        .as_deref()
+        .filter(|key| !key.trim().is_empty())
+        .unwrap_or(DEFAULT_OPENAI_SESSION_KEY);
 
     // Validate and merge tool definitions before any session creation or
     // persistence, so a rejected request cannot leave a session or an
-    // orphaned user message behind.
+    // orphaned user message behind. Write-capable tools are always exported:
+    // the OpenAI surface has no incognito path (issue #473).
     let (merged_tools, client_tool_names) = merge_tools(
         state
             .tool_registry
-            .export_openai_tools_for_llm_with_writes(!incognito),
+            .export_openai_tools_for_llm_with_writes(true),
         req.tools.clone(),
     )
     .map_err(TurnError::into_response)?;
 
-    let session_id = if let Some(user_key) = user_key {
-        let system_prompt = build_system_prompt(state, &personality, &memory).await;
-        state
-            .context_manager
-            .resolve_openai_session(user_key, system_prompt)
-            .await
-            .map_err(error::openai_context_error)?
-    } else {
-        INCOGNITO_COUNTER.fetch_sub(1, Ordering::SeqCst)
-    };
+    let system_prompt = build_system_prompt(state, &personality, &memory).await;
+    let session_id = state
+        .context_manager
+        .resolve_openai_session(user_key, system_prompt)
+        .await
+        .map_err(error::openai_context_error)?;
+
+    // The per-session permit serialises requests for this session, so no
+    // concurrent request can interleave writes between the rollback baseline
+    // read below and this request's writes (PR #466 review).
+    let permit = state
+        .session_semaphore(session_id)
+        .acquire_owned()
+        .await
+        .map_err(|_| {
+            error!("session semaphore closed");
+            error::openai_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error",
+                "server_error",
+                None,
+                None,
+            )
+        })?;
 
     // Rollback baseline: a failed turn must not leave its just-persisted
-    // user message (or tool results) behind as an orphaned final turn. The
-    // per-session permit below guarantees no concurrent request interleaves
-    // writes for this session (PR #466 review).
-    let baseline_message_id = if incognito {
-        0
-    } else {
-        state
-            .context_manager
-            .max_message_id(session_id)
-            .await
-            .map_err(error::openai_context_error)?
-    };
+    // user message (or tool results) behind as an orphaned final turn. Read
+    // while holding the permit, so the baseline always reflects the
+    // serialised position of this request's writes (PR #480 review).
+    let baseline_message_id = state
+        .context_manager
+        .max_message_id(session_id)
+        .await
+        .map_err(error::openai_context_error)?;
 
-    let permit = if incognito {
-        None
-    } else {
-        Some(
-            state
-                .session_semaphore(session_id)
-                .acquire_owned()
-                .await
-                .map_err(|_| {
-                    error!("session semaphore closed");
-                    error::openai_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal server error",
-                        "server_error",
-                        None,
-                        None,
-                    )
-                })?,
-        )
-    };
-
-    let conversation = if incognito {
-        // No stored history: the client's trailing segment (from the last
-        // user message onward) is the conversation, prefixed with the
-        // system prompt.
-        let system_prompt = build_system_prompt(state, &personality, &memory).await;
-        let mut conversation = vec![Message::system(&system_prompt)];
-        for msg in &req.messages[input.last_user_index..] {
-            conversation.push(convert_message(msg));
-        }
-        conversation
-    } else {
-        // Stored history is authoritative: append the new user message (or
-        // the continuation's tool results), trim, and export.
-        let persist = async {
-            if input.trailing_tools.is_empty() {
-                state
-                    .context_manager
-                    .add_user_message(session_id, &input.user_message)
-                    .await?;
-            }
-            for (tool_call_id, content) in &input.trailing_tools {
-                state
-                    .context_manager
-                    .add_tool_message(session_id, tool_call_id, content)
-                    .await?;
-            }
+    // Stored history is authoritative: append the new user message (or the
+    // continuation's tool results), trim, and export.
+    let persist = async {
+        if input.trailing_tools.is_empty() {
             state
                 .context_manager
-                .trim_to_budget(session_id, cfg.context.max_tokens, cfg.context.max_turns)
+                .add_user_message(session_id, &input.user_message)
                 .await?;
-            state.context_manager.export_messages(session_id).await
-        };
-        match persist.await {
-            Ok(conversation) => conversation,
-            Err(e) => {
-                // A persistence failure must not leave the request's writes
-                // behind as an orphaned final turn (PR #466 review).
-                if let Err(rollback) = state
-                    .context_manager
-                    .delete_messages_after(session_id, baseline_message_id)
-                    .await
-                {
-                    error!(
-                        "failed to roll back persisted messages after context error: {rollback}"
-                    );
-                }
-                return Err(error::openai_context_error(e));
+        }
+        for (tool_call_id, content) in &input.trailing_tools {
+            state
+                .context_manager
+                .add_tool_message(session_id, tool_call_id, content)
+                .await?;
+        }
+        state
+            .context_manager
+            .trim_to_budget(session_id, cfg.context.max_tokens, cfg.context.max_turns)
+            .await?;
+        state.context_manager.export_messages(session_id).await
+    };
+    let conversation = match persist.await {
+        Ok(conversation) => conversation,
+        Err(e) => {
+            // A persistence failure must not leave the request's writes
+            // behind as an orphaned final turn (PR #466 review).
+            if let Err(rollback) = state
+                .context_manager
+                .delete_messages_after(session_id, baseline_message_id)
+                .await
+            {
+                error!("failed to roll back persisted messages after context error: {rollback}");
             }
+            return Err(error::openai_context_error(e));
         }
     };
 
     Ok(OpenAiTurn {
         state: Arc::clone(state),
         session_id,
-        incognito,
         baseline_message_id,
         llm,
         conversation,
@@ -480,20 +436,26 @@ async fn resolve_openai_turn(
     })
 }
 
-/// Execute server-side tool calls, persisting results for non-incognito
-/// sessions and appending them to the in-memory conversation.
+/// Execute server-side tool calls, persisting results into the session and
+/// appending them to the in-memory conversation.
+///
+/// A persistence failure is propagated so the caller can fail the turn
+/// atomically: a response must never contain tool-derived output that the
+/// session did not store (PR #480 review).
 async fn execute_server_tools(
     turn: &OpenAiTurn,
     conversation: &mut Vec<Message>,
     server_calls: &[ToolCall],
-) {
+) -> Result<(), mimir_core::context::ContextError> {
     for tool_call in server_calls {
         let llm_text = match execute_tool_call(
             &turn.state.tool_registry,
             &tool_call.function.name,
             &tool_call.function.arguments,
             Arc::clone(&turn.llm),
-            turn.incognito,
+            // Every `/v1` turn is persistent; write tools are always allowed
+            // (issue #473).
+            false,
         )
         .await
         {
@@ -504,26 +466,17 @@ async fn execute_server_tools(
             }
         };
         conversation.push(Message::tool(&tool_call.id, &llm_text));
-        if !turn.incognito {
-            if let Err(e) = turn
-                .state
-                .context_manager
-                .add_tool_message(turn.session_id, &tool_call.id, &llm_text)
-                .await
-            {
-                error!("failed to persist tool message: {e}");
-            }
-        }
+        turn.state
+            .context_manager
+            .add_tool_message(turn.session_id, &tool_call.id, &llm_text)
+            .await?;
     }
+    Ok(())
 }
 
 /// Delete every message this request persisted, restoring the session to its
-/// pre-request state when a turn fails before completion. Incognito requests
-/// persist nothing, so the rollback is a no-op (PR #466 review).
+/// pre-request state when a turn fails before completion (PR #466 review).
 async fn rollback_persisted_turn(turn: &OpenAiTurn) {
-    if turn.incognito {
-        return;
-    }
     if let Err(e) = turn
         .state
         .context_manager
@@ -551,9 +504,9 @@ fn accumulate_usage(acc: &mut Option<Usage>, usage: Usage) {
 }
 
 /// Persist the final assistant response and enqueue the completed-turn
-/// learning hook (non-incognito only).
+/// learning hook.
 async fn finish_turn(turn: &OpenAiTurn, response: &str) {
-    if turn.incognito || response.is_empty() {
+    if response.is_empty() {
         return;
     }
     if let Err(e) = turn
@@ -676,19 +629,30 @@ async fn run_blocking_turn(turn: &OpenAiTurn) -> Result<OpenAiChatResponse, Resp
                     split_tool_calls(tool_calls, &turn.client_tool_names);
                 conversation.push(assistant_msg.clone());
 
-                if !turn.incognito {
-                    turn.state
-                        .context_manager
-                        .add_assistant_tool_calls_message(
-                            turn.session_id,
-                            &assistant_msg.content,
-                            tool_calls,
-                        )
-                        .await
-                        .map_err(error::openai_context_error)?;
+                if let Err(e) = turn
+                    .state
+                    .context_manager
+                    .add_assistant_tool_calls_message(
+                        turn.session_id,
+                        &assistant_msg.content,
+                        tool_calls,
+                    )
+                    .await
+                {
+                    // A tool-call persistence failure must fail the turn
+                    // atomically, restoring the pre-request session state
+                    // (PR #480 review).
+                    rollback_persisted_turn(turn).await;
+                    return Err(error::openai_context_error(e));
                 }
 
-                execute_server_tools(turn, &mut conversation, &server_calls).await;
+                if let Err(e) = execute_server_tools(turn, &mut conversation, &server_calls).await {
+                    // Tool results are part of the turn: if they cannot be
+                    // persisted, the turn must not complete with output the
+                    // session never stored (PR #480 review).
+                    rollback_persisted_turn(turn).await;
+                    return Err(error::openai_context_error(e));
+                }
 
                 if !client_calls.is_empty() {
                     return Ok(tool_calls_response(
@@ -754,10 +718,9 @@ async fn chat_completions_stream(
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<Event>(16);
 
     tokio::spawn(async move {
-        let mut turn = turn;
         // Hold the per-session permit until the assistant response is
-        // persisted (non-incognito only).
-        let _permit = turn.permit.take();
+        // persisted.
+        let _permit = &turn.permit;
 
         let mut usage_acc: Option<Usage> = None;
         let mut sent_role = false;
@@ -801,7 +764,7 @@ async fn chat_completions_stream(
                         full_response.push_str(&text);
                         if !sent_role {
                             sent_role = true;
-                            if send_chunk(
+                            if send_chunk_or_rollback(
                                 &event_tx,
                                 &turn,
                                 OpenAiDelta {
@@ -817,7 +780,7 @@ async fn chat_completions_stream(
                                 break 'outer;
                             }
                         }
-                        if send_chunk(
+                        if send_chunk_or_rollback(
                             &event_tx,
                             &turn,
                             OpenAiDelta {
@@ -836,7 +799,7 @@ async fn chat_completions_stream(
                     Ok(StreamItem::ToolCalls(deltas)) => {
                         if !sent_role {
                             sent_role = true;
-                            if send_chunk(
+                            if send_chunk_or_rollback(
                                 &event_tx,
                                 &turn,
                                 OpenAiDelta {
@@ -927,18 +890,30 @@ async fn chat_completions_stream(
             };
             conversation.push(assistant_tool_msg);
 
-            if !turn.incognito {
-                if let Err(e) = turn
-                    .state
-                    .context_manager
-                    .add_assistant_tool_calls_message(turn.session_id, &full_response, &tool_calls)
-                    .await
-                {
-                    error!("failed to persist assistant tool-call message: {e}");
-                }
+            if let Err(e) = turn
+                .state
+                .context_manager
+                .add_assistant_tool_calls_message(turn.session_id, &full_response, &tool_calls)
+                .await
+            {
+                error!("failed to persist assistant tool-call message: {e}");
+                // A tool-call persistence failure must fail the turn
+                // atomically, restoring the pre-request session state
+                // (PR #480 review).
+                rollback_persisted_turn(&turn).await;
+                send_error_and_done(&event_tx).await;
+                break 'outer;
             }
 
-            execute_server_tools(&turn, &mut conversation, &server_calls).await;
+            if let Err(e) = execute_server_tools(&turn, &mut conversation, &server_calls).await {
+                error!("failed to persist server tool result: {e}");
+                // Tool results are part of the turn: if they cannot be
+                // persisted, the stream must not complete with output the
+                // session never stored (PR #480 review).
+                rollback_persisted_turn(&turn).await;
+                send_error_and_done(&event_tx).await;
+                break 'outer;
+            }
 
             if !client_calls.is_empty() {
                 // Client tool calls: stream the buffered deltas for those
@@ -946,7 +921,7 @@ async fn chat_completions_stream(
                 // emitted) and end the stream. The client's follow-up `tool`
                 // messages continue the turn.
                 if !sent_role
-                    && send_chunk(
+                    && send_chunk_or_rollback(
                         &event_tx,
                         &turn,
                         OpenAiDelta {
@@ -968,7 +943,7 @@ async fn chat_completions_stream(
                     .into_iter()
                     .filter(|delta| client_indices.contains(&delta.index))
                 {
-                    if send_chunk(
+                    if send_chunk_or_rollback(
                         &event_tx,
                         &turn,
                         OpenAiDelta {
@@ -1033,6 +1008,26 @@ async fn send_chunk(
         .send(Event::default().data(json))
         .await
         .map_err(|_| ())
+}
+
+/// Send one stream chunk, rolling back the persisted turn if the SSE client
+/// has disconnected before the turn completed, so a cancelled stream leaves
+/// no orphaned user/tool messages in the session (PR #480 review).
+async fn send_chunk_or_rollback(
+    event_tx: &tokio::sync::mpsc::Sender<Event>,
+    turn: &OpenAiTurn,
+    delta: OpenAiDelta,
+    finish_reason: Option<&str>,
+) -> Result<(), ()> {
+    if send_chunk(event_tx, turn, delta, finish_reason)
+        .await
+        .is_err()
+    {
+        rollback_persisted_turn(turn).await;
+        Err(())
+    } else {
+        Ok(())
+    }
 }
 
 /// Terminate a failed SSE stream: an `error` event followed by `[DONE]`, so

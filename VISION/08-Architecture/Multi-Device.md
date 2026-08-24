@@ -20,7 +20,7 @@ The agent is designed for a single user who may access it from multiple devices 
 
 ## Current Implementation (issue #388)
 
-The daemon now exposes an OpenAI-compatible provider surface — `GET /v1/models` and `POST /v1/chat/completions` (blocking + streaming) — so any app or device that speaks the OpenAI chat-completions API can point at the central Mimir server. Mimir is single-tenant, so there is no device identity: the OpenAI `user` field is a conversation key, and a fixed `user` value resumes one ongoing conversation in the central profile. Every device's conversations therefore feed the same memory and learning hooks, exactly as this vision assumes. Requests without `user` are incognito-style (memory context injected, nothing persisted). See `docs/llm-provider.md` and `docs/wiki/llm-provider.md`.
+The daemon now exposes an OpenAI-compatible provider surface — `GET /v1/models` and `POST /v1/chat/completions` (blocking + streaming) — so any app or device that speaks the OpenAI chat-completions API can point at the central Mimir server. Mimir is single-tenant, so there is no device identity: the OpenAI `user` field is a conversation key, and a fixed `user` value resumes one ongoing conversation in the central profile, while requests without `user` (or with a blank one) key the fixed `default` session. Every request is persistent and every completed turn fires the learning hooks, exactly as this vision assumes — there is no incognito path on this surface (issue #473). See `docs/llm-provider.md` and `docs/wiki/llm-provider.md`.
 
 ## Connection Methods
 

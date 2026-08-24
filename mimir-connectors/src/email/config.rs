@@ -21,6 +21,14 @@ pub(crate) const DEFAULT_POLL_JITTER: Duration = Duration::from_secs(30);
 /// Default IDLE wait (28 min). RFC 2177 recommends re-issuing IDLE at least
 /// every 29 min to avoid server inactivity logoff; 28 min leaves a margin.
 pub(crate) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(28 * 60);
+/// Default TCP connect budget (10 s) for the IMAP transport. Bounds the
+/// `TcpStream::connect` step so a black-holed network path fails the cycle
+/// instead of wedging the runner (issue #476).
+pub(crate) const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default TLS-handshake + greeting budget (30 s) for the IMAP transport.
+/// Bounds the rustls handshake and the first server response after connect
+/// (issue #476).
+pub(crate) const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) const DEFAULT_SLUG: &str = "email";
 pub(crate) const DEFAULT_DISPLAY_NAME: &str = "Email";
@@ -36,6 +44,12 @@ fn default_initial_backfill() -> bool {
 }
 fn default_idle_timeout_secs() -> u64 {
     DEFAULT_IDLE_TIMEOUT.as_secs()
+}
+fn default_connect_timeout_secs() -> u64 {
+    DEFAULT_CONNECT_TIMEOUT.as_secs()
+}
+fn default_handshake_timeout_secs() -> u64 {
+    DEFAULT_HANDSHAKE_TIMEOUT.as_secs()
 }
 fn default_llm_max_attempts() -> u8 {
     crate::email::llm::DEFAULT_MAX_LLM_EXTRACTION_ATTEMPTS
@@ -145,6 +159,12 @@ pub struct EmailConfigDto {
     /// Defaults to 1680 (28 min).
     #[serde(default = "default_idle_timeout_secs")]
     pub idle_timeout_secs: u64,
+    /// TCP connect timeout in seconds. Defaults to 10.
+    #[serde(default = "default_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
+    /// TLS handshake + IMAP greeting timeout in seconds. Defaults to 30.
+    #[serde(default = "default_handshake_timeout_secs")]
+    pub handshake_timeout_secs: u64,
     /// Display name override. Defaults to "Email".
     #[serde(default)]
     pub display_name: Option<String>,

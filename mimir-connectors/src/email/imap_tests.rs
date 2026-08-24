@@ -4,9 +4,14 @@ use crate::email::config::config_tests::app_config;
 use crate::email::imap::{ImapAuth, ImapSession, imap_login};
 use async_imap::Client;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use super::extract_tests::invite_email;
+
+/// Generous greeting budget for fake-server tests: the fake greets
+/// immediately, so this only fires if the login path regresses into a stall.
+const TEST_GREETING_BUDGET: Duration = Duration::from_secs(5);
 
 /// Configuration for the fake IMAP server.
 struct FakeCfg {
@@ -242,9 +247,13 @@ async fn harness(cfg: FakeCfg) -> (EmailConnector, ImapSession<tokio::io::Duplex
     // Poll mode so run_sync skips IDLE and fetches immediately.
     config["mode"] = serde_json::json!("poll");
     let connector = EmailConnector::from_config(config, None, None).expect("config");
-    let session = imap_login(Client::new(client), app_password_auth())
-        .await
-        .expect("login");
+    let session = imap_login(
+        Client::new(client),
+        app_password_auth(),
+        TEST_GREETING_BUDGET,
+    )
+    .await
+    .expect("login");
     (connector, session)
 }
 
@@ -264,9 +273,13 @@ async fn idle_harness(
     config["idle_timeout_secs"] = 1.into();
     let connector =
         EmailConnector::from_config(config, None, cursor.map(str::to_string)).expect("config");
-    let session = imap_login(Client::new(client), app_password_auth())
-        .await
-        .expect("login");
+    let session = imap_login(
+        Client::new(client),
+        app_password_auth(),
+        TEST_GREETING_BUDGET,
+    )
+    .await
+    .expect("login");
     (connector, session)
 }
 
@@ -598,9 +611,13 @@ async fn push_first_sync_backfills_then_fetches_only_new_mail() {
     config["mode"] = serde_json::json!("idle");
     config["idle_timeout_secs"] = 1.into();
     let connector = EmailConnector::from_config(config, None, None).expect("config");
-    let session = imap_login(Client::new(client), app_password_auth())
-        .await
-        .expect("login");
+    let session = imap_login(
+        Client::new(client),
+        app_password_auth(),
+        TEST_GREETING_BUDGET,
+    )
+    .await
+    .expect("login");
 
     let outcome = connector
         .run_sync(session, SyncOptions::default())
@@ -735,9 +752,13 @@ async fn no_backfill_harness(
     config["mode"] = serde_json::json!("poll");
     config["initial_backfill"] = serde_json::json!(false);
     let connector = EmailConnector::from_config(config, None, None).expect("config");
-    let session = imap_login(Client::new(client), app_password_auth())
-        .await
-        .expect("login");
+    let session = imap_login(
+        Client::new(client),
+        app_password_auth(),
+        TEST_GREETING_BUDGET,
+    )
+    .await
+    .expect("login");
     (connector, session)
 }
 
@@ -760,7 +781,7 @@ async fn xoauth2_login_sends_correct_sasl_response() {
         username: "devansh@example.com".into(),
         access_token: "ya29.token".into(),
     };
-    let _session = imap_login(Client::new(client), auth)
+    let _session = imap_login(Client::new(client), auth, TEST_GREETING_BUDGET)
         .await
         .expect("xoauth2 login");
     let decoded = captured.lock().unwrap().clone();
@@ -857,9 +878,13 @@ async fn imap_sync_then_extract_yields_invite_facts() {
         },
     )
     .expect("config");
-    let session = imap_login(Client::new(client), app_password_auth())
-        .await
-        .expect("login");
+    let session = imap_login(
+        Client::new(client),
+        app_password_auth(),
+        TEST_GREETING_BUDGET,
+    )
+    .await
+    .expect("login");
     let outcome = connector
         .run_sync(session, SyncOptions::default())
         .await

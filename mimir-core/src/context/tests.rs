@@ -518,6 +518,8 @@ async fn search_messages_filtered_and_unfiltered_agree() {
     );
     for (filtered_row, unfiltered_row) in filtered.iter().zip(&unfiltered) {
         assert_eq!(filtered_row.session_id, unfiltered_row.session_id);
+        assert_eq!(filtered_row.role, unfiltered_row.role);
+        assert_eq!(filtered_row.created_at, unfiltered_row.created_at);
         assert_eq!(filtered_row.snippet, unfiltered_row.snippet);
     }
 }

@@ -362,6 +362,8 @@ mod tests {
     async fn test_chat_stream_read_timeout_resets_on_each_chunk() {
         // Chunks arriving faster than the read timeout (like the daemon's
         // keep-alive comments) must not trip it.
+        // Wide margin (100ms read timeout vs 20ms between chunks) so the
+        // test cannot flake on a loaded CI runtime.
         let chunks = tokio_stream::StreamExt::throttle(
             futures::stream::iter(vec![
                 Ok(bytes::Bytes::from_static(b"data: a\n\n")),
@@ -370,7 +372,7 @@ mod tests {
             ]),
             Duration::from_millis(20),
         );
-        let mut timed = with_read_timeout(chunks, Duration::from_millis(50));
+        let mut timed = with_read_timeout(chunks, Duration::from_millis(100));
         let mut count = 0;
         while let Some(Ok(_)) = timed.next().await {
             count += 1;

@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.142.4] — 2026-08-24
+## [0.143.0] — 2026-08-24
 
 ### Fix: long retrieval-heavy chat requests fail with "error decoding response body" (issue #487)
 
@@ -10,7 +10,7 @@
 - Streaming chat now surfaces the retrieval agent's individual sub-tool calls (`kg_query`, `kg_search`, `kg_related`, `search_conversation_history`) as `tool_call_start` / `tool_call` SSE events via a per-request progress channel (`mimir_core::tools::ToolProgress`, `ToolContext::with_progress`, `RetrievalAgent::with_progress`), so the CLI shows the research steps instead of a single "Retrieve Context…" indicator that looks frozen. Blocking paths (`/chat`, `/v1/chat/completions`) pass no channel and run silently.
 - Tests: client tests prove a response delayed beyond the default total timeout still streams (blocking and streaming), the read timeout fires on a silent stream and resets on each chunk, the retrieval agent emits Started/Finished progress for sub-tool calls, and the streaming handler forwards them as SSE events end-to-end.
 - Docs: `docs/tool-call-visibility.md`, `docs/retrieval-agent.md`, `docs/wiki/tool-calls-in-chat.md`, and `docs/wiki/retrieval-agent.md` updated.
-- Version bumped 0.142.3 → 0.142.4 (patch — bugfix).
+- Version bumped 0.142.3 → 0.143.0 (minor — bugfix plus new public progress API and client timeout constants).
 
 ## [0.142.3] — 2026-08-24
 

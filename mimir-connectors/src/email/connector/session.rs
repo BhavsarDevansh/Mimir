@@ -107,8 +107,7 @@ impl EmailConnector {
             self.handshake_timeout(),
         )
         .await?;
-        let client = async_imap::Client::new(stream);
-        imap_login(client, auth, deadline, self.read_timeout()).await
+        imap_login(stream, auth, deadline, self.read_timeout()).await
     }
 
     /// Run one sync cycle against an already-authenticated session. Generic
@@ -340,8 +339,7 @@ impl EmailConnector {
             self.handshake_timeout(),
         )
         .await?;
-        let client = async_imap::Client::new(stream);
-        let mut session = imap_login(client, auth, deadline, self.read_timeout()).await?;
+        let mut session = imap_login(stream, auth, deadline, self.read_timeout()).await?;
         let supports = match session.supports_idle().await {
             Ok(supports) => supports,
             Err(e) => {

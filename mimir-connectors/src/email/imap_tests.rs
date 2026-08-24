@@ -1,8 +1,7 @@
 use super::*;
 
 use crate::email::config::config_tests::app_config;
-use crate::email::imap::{ImapAuth, ImapSession, imap_login};
-use async_imap::Client;
+use crate::email::imap::{IdleResult, ImapAuth, ImapSession, STALL_BUDGET, imap_login};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -48,6 +47,35 @@ struct FakeCfg {
     /// Omit the `UIDNEXT` response code on SELECT/EXAMINE to exercise the
     /// missing-UIDNEXT first-sync seed error path. `false` by default.
     omit_uid_next: bool,
+    /// Hold the connection open without answering `EXAMINE`, modelling a
+    /// black-holed network path mid-session (issue #481). `false` by
+    /// default.
+    stall_examine: bool,
+    /// Hold the connection open without answering `UID FETCH`, modelling a
+    /// black-holed network path mid-session (issue #481). `false` by
+    /// default.
+    stall_uid_fetch: bool,
+    /// Hold the connection open without answering `CAPABILITY`, modelling
+    /// a black-holed network path mid-session (issue #481). `false` by
+    /// default.
+    stall_capability: bool,
+    /// Hold the connection open without answering `IDLE`'s continuation,
+    /// modelling a black-holed network path mid-session (issue #481).
+    /// `false` by default.
+    stall_idle_init: bool,
+    /// Hold the connection open without answering the `DONE` handshake,
+    /// modelling a black-holed network path mid-session (issue #481).
+    /// `false` by default.
+    stall_idle_done: bool,
+    /// Hold the connection open without answering `LOGOUT`, modelling a
+    /// black-holed network path mid-session (issue #481). `false` by
+    /// default.
+    stall_logout: bool,
+    /// Deliver `UID FETCH` bodies in chunks with `fetch_chunk_gap` between
+    /// them, modelling a slow-but-alive connection (issue #481 review):
+    /// each gap is below the read budget but the total response exceeds it.
+    /// `None` by default.
+    fetch_chunk_gap: Option<Duration>,
 }
 
 impl Default for FakeCfg {
@@ -64,6 +92,13 @@ impl Default for FakeCfg {
             second_uid_validity: None,
             omit_uid_validity: false,
             omit_uid_next: false,
+            stall_examine: false,
+            stall_uid_fetch: false,
+            stall_capability: false,
+            stall_idle_init: false,
+            stall_idle_done: false,
+            stall_logout: false,
+            fetch_chunk_gap: None,
         }
     }
 }
@@ -97,6 +132,9 @@ async fn run_fake(
         let verb = parts.next().unwrap_or("").to_ascii_uppercase();
         match verb.as_str() {
             "CAPABILITY" => {
+                if cfg.stall_capability {
+                    std::future::pending::<()>().await;
+                }
                 let cap = if cfg.supports_idle {
                     "IMAP4rev1 IDLE"
                 } else {
@@ -130,6 +168,9 @@ async fn run_fake(
                     .unwrap();
             }
             "SELECT" | "EXAMINE" => {
+                if cfg.stall_examine {
+                    std::future::pending::<()>().await;
+                }
                 // Compute UIDVALIDITY (per-SELECT for the reset test) and
                 // drop the guard before awaiting so the future stays Send.
                 let uv = {
@@ -173,6 +214,9 @@ async fn run_fake(
                         .unwrap();
                     continue;
                 }
+                if cfg.stall_uid_fetch {
+                    std::future::pending::<()>().await;
+                }
                 let range = parts.next().unwrap_or("1:*");
                 if let Some(ranges) = &fetch_ranges {
                     ranges.lock().unwrap().push(range.to_string());
@@ -200,7 +244,14 @@ async fn run_fake(
                         )
                         .await
                         .unwrap();
-                    writer.write_all(body).await.unwrap();
+                    if let Some(gap) = cfg.fetch_chunk_gap {
+                        for chunk in body.chunks(16) {
+                            writer.write_all(chunk).await.unwrap();
+                            tokio::time::sleep(gap).await;
+                        }
+                    } else {
+                        writer.write_all(body).await.unwrap();
+                    }
                     writer.write_all(b")\r\n").await.unwrap();
                 }
                 writer
@@ -209,6 +260,9 @@ async fn run_fake(
                     .unwrap();
             }
             "IDLE" => {
+                if cfg.stall_idle_init {
+                    std::future::pending::<()>().await;
+                }
                 if let Some(count) = &cfg.idle_count {
                     *count.lock().unwrap() += 1;
                 }
@@ -242,12 +296,18 @@ async fn run_fake(
                     reader.read_line(&mut done).await.unwrap();
                     assert!(done.trim().eq_ignore_ascii_case("DONE"));
                 }
+                if cfg.stall_idle_done {
+                    std::future::pending::<()>().await;
+                }
                 writer
                     .write_all(format!("{tag} OK IDLE terminated\r\n").as_bytes())
                     .await
                     .unwrap();
             }
             "LOGOUT" => {
+                if cfg.stall_logout {
+                    std::future::pending::<()>().await;
+                }
                 writer
                     .write_all(format!("* BYE\r\n{tag} OK LOGOUT\r\n").as_bytes())
                     .await
@@ -276,13 +336,31 @@ async fn harness(cfg: FakeCfg) -> (EmailConnector, ImapSession<tokio::io::Duplex
     config["mode"] = serde_json::json!("poll");
     let connector = EmailConnector::from_config(config, None, None).expect("config");
     let session = imap_login(
-        Client::new(client),
+        client,
         app_password_auth(),
         tokio::time::Instant::now() + TEST_GREETING_BUDGET,
+        TEST_GREETING_BUDGET,
     )
     .await
     .expect("login");
     (connector, session)
+}
+
+/// Build a fake session wired to a fake server with `cfg`, using the short
+/// stall budget as the session's per-command read timeout so the
+/// stalled-read tests fail fast (issue #481).
+async fn stall_harness(cfg: FakeCfg) -> ImapSession<tokio::io::DuplexStream> {
+    let (client, server) = tokio::io::duplex(8 * 1024);
+    let select_count = Arc::new(Mutex::new(0u32));
+    tokio::spawn(run_fake(server, cfg, None, None, select_count));
+    imap_login(
+        client,
+        app_password_auth(),
+        tokio::time::Instant::now() + TEST_GREETING_BUDGET,
+        STALL_BUDGET,
+    )
+    .await
+    .expect("login")
 }
 
 /// Build a connector (app-password, idle mode) + a fake session wired to a
@@ -302,9 +380,10 @@ async fn idle_harness(
     let connector =
         EmailConnector::from_config(config, None, cursor.map(str::to_string)).expect("config");
     let session = imap_login(
-        Client::new(client),
+        client,
         app_password_auth(),
         tokio::time::Instant::now() + TEST_GREETING_BUDGET,
+        TEST_GREETING_BUDGET,
     )
     .await
     .expect("login");
@@ -868,9 +947,10 @@ async fn push_first_sync_backfills_then_fetches_only_new_mail() {
     config["idle_timeout_secs"] = 1.into();
     let connector = EmailConnector::from_config(config, None, None).expect("config");
     let session = imap_login(
-        Client::new(client),
+        client,
         app_password_auth(),
         tokio::time::Instant::now() + TEST_GREETING_BUDGET,
+        TEST_GREETING_BUDGET,
     )
     .await
     .expect("login");
@@ -1009,9 +1089,10 @@ async fn no_backfill_harness(
     config["initial_backfill"] = serde_json::json!(false);
     let connector = EmailConnector::from_config(config, None, None).expect("config");
     let session = imap_login(
-        Client::new(client),
+        client,
         app_password_auth(),
         tokio::time::Instant::now() + TEST_GREETING_BUDGET,
+        TEST_GREETING_BUDGET,
     )
     .await
     .expect("login");
@@ -1035,9 +1116,10 @@ async fn no_backfill_idle_harness(
     config["initial_backfill"] = serde_json::json!(false);
     let connector = EmailConnector::from_config(config, None, None).expect("config");
     let session = imap_login(
-        Client::new(client),
+        client,
         app_password_auth(),
         tokio::time::Instant::now() + TEST_GREETING_BUDGET,
+        TEST_GREETING_BUDGET,
     )
     .await
     .expect("login");
@@ -1063,9 +1145,10 @@ async fn xoauth2_login_sends_correct_sasl_response() {
         access_token: "ya29.token".into(),
     };
     let _session = imap_login(
-        Client::new(client),
+        client,
         auth,
         tokio::time::Instant::now() + TEST_GREETING_BUDGET,
+        TEST_GREETING_BUDGET,
     )
     .await
     .expect("xoauth2 login");
@@ -1164,9 +1247,10 @@ async fn imap_sync_then_extract_yields_invite_facts() {
     )
     .expect("config");
     let session = imap_login(
-        Client::new(client),
+        client,
         app_password_auth(),
         tokio::time::Instant::now() + TEST_GREETING_BUDGET,
+        TEST_GREETING_BUDGET,
     )
     .await
     .expect("login");
@@ -1200,5 +1284,180 @@ async fn imap_sync_then_extract_yields_invite_facts() {
     assert!(
         connector.buffer.lock().await.is_empty(),
         "extract drains the staged buffer"
+    );
+}
+
+#[tokio::test]
+async fn stalled_examine_fails_within_read_budget() {
+    // A server that answers LOGIN but never answers EXAMINE: the
+    // post-login read must fail within the read budget instead of wedging
+    // the runner (issue #481).
+    let mut session = stall_harness(FakeCfg {
+        stall_examine: true,
+        ..Default::default()
+    })
+    .await;
+    let start = tokio::time::Instant::now();
+    let err = session
+        .examine("INBOX")
+        .await
+        .expect_err("stalled examine must fail");
+    assert!(
+        matches!(&err, ConnectorError::Network(m) if m.contains("timed out after")),
+        "unexpected error: {err}"
+    );
+    assert!(
+        start.elapsed() < STALL_BUDGET * 3 / 2,
+        "stalled examine must fail within the budget"
+    );
+}
+
+#[tokio::test]
+async fn stalled_uid_fetch_fails_within_read_budget() {
+    // A server that answers LOGIN but never answers UID FETCH: the
+    // streamed fetch read must fail within the read budget instead of
+    // wedging the runner (issue #481).
+    let mut session = stall_harness(FakeCfg {
+        stall_uid_fetch: true,
+        ..Default::default()
+    })
+    .await;
+    let start = tokio::time::Instant::now();
+    let err = session
+        .fetch_since(None, 17)
+        .await
+        .expect_err("stalled UID FETCH must fail");
+    assert!(
+        matches!(&err, ConnectorError::Network(m) if m.contains("timed out after")),
+        "unexpected error: {err}"
+    );
+    assert!(
+        start.elapsed() < STALL_BUDGET * 3 / 2,
+        "stalled UID FETCH must fail within the budget"
+    );
+}
+
+#[tokio::test]
+async fn chunked_uid_fetch_survives_slow_but_alive_connection() {
+    // A server that delivers a `BODY.PEEK[]` response in chunks with gaps
+    // below the read budget but a total duration above it: the transport
+    // idle guard must reset on each chunk instead of cutting the response
+    // off at a per-command deadline (issue #481 review).
+    let mut session = stall_harness(FakeCfg {
+        messages: vec![(1, vec![b'x'; 128])],
+        fetch_chunk_gap: Some(STALL_BUDGET / 4),
+        ..Default::default()
+    })
+    .await;
+    let start = tokio::time::Instant::now();
+    let result = session
+        .fetch_since(None, 17)
+        .await
+        .expect("chunked fetch must succeed");
+    assert_eq!(result.messages.len(), 1);
+    assert_eq!(result.messages[0].uid, 1);
+    assert_eq!(result.messages[0].raw.len(), 128);
+    assert!(
+        start.elapsed() >= STALL_BUDGET,
+        "chunked response must span more than one read budget (elapsed {:?})",
+        start.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn stalled_capability_fails_within_read_budget() {
+    // A server that answers LOGIN but never answers CAPABILITY: the
+    // `supports_idle` probe read must fail within the read budget instead
+    // of wedging the runner (issue #481 review scope).
+    let mut session = stall_harness(FakeCfg {
+        stall_capability: true,
+        ..Default::default()
+    })
+    .await;
+    let start = tokio::time::Instant::now();
+    let err = session
+        .supports_idle()
+        .await
+        .expect_err("stalled CAPABILITY must fail");
+    assert!(
+        matches!(&err, ConnectorError::Network(m) if m.contains("timed out after")),
+        "unexpected error: {err}"
+    );
+    assert!(
+        start.elapsed() < STALL_BUDGET * 3 / 2,
+        "stalled CAPABILITY must fail within the budget"
+    );
+}
+
+#[tokio::test]
+async fn stalled_idle_init_fails_within_read_budget() {
+    // A server that answers LOGIN but never sends the `+ idling`
+    // continuation: the IDLE init read must fail within the read budget
+    // instead of wedging the runner (issue #481 — the `wait_with_timeout`
+    // bound alone does not cover `init`).
+    let session = stall_harness(FakeCfg {
+        stall_idle_init: true,
+        ..Default::default()
+    })
+    .await;
+    let start = tokio::time::Instant::now();
+    let err = match session.idle_wait(Duration::from_secs(1)).await {
+        Ok(_) => panic!("stalled IDLE init must fail"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(&err, ConnectorError::Network(m) if m.contains("timed out after")),
+        "unexpected error: {err}"
+    );
+    assert!(
+        start.elapsed() < STALL_BUDGET * 3 / 2,
+        "stalled IDLE init must fail within the budget"
+    );
+}
+
+#[tokio::test]
+async fn stalled_logout_returns_within_read_budget() {
+    // A server that answers LOGIN but never answers LOGOUT: the
+    // best-effort logout must return within the read budget instead of
+    // wedging the runner (issue #481).
+    let session = stall_harness(FakeCfg {
+        stall_logout: true,
+        ..Default::default()
+    })
+    .await;
+    let start = tokio::time::Instant::now();
+    session.logout().await;
+    assert!(
+        start.elapsed() < STALL_BUDGET * 3 / 2,
+        "stalled logout must return within the budget"
+    );
+}
+
+#[tokio::test]
+async fn stalled_idle_done_returns_connection_lost_within_read_budget() {
+    // A server that answers `+ idling` but never answers the DONE
+    // handshake: the `done()` response read must fail within the
+    // read budget and surface as `ConnectionLost` (the session is gone)
+    // instead of wedging the runner (issue #481 — the `wait_with_timeout`
+    // bound alone does not cover `done`).
+    let session = stall_harness(FakeCfg {
+        stall_idle_done: true,
+        ..Default::default()
+    })
+    .await;
+    let start = tokio::time::Instant::now();
+    let result = session
+        .idle_wait(Duration::from_secs(1))
+        .await
+        .expect("idle_wait must return a result");
+    assert!(
+        matches!(result, IdleResult::ConnectionLost),
+        "stalled DONE must surface as ConnectionLost"
+    );
+    assert!(
+        // The measured window includes the 1 s IDLE wait timeout plus the
+        // DONE-handshake read budget.
+        start.elapsed() < Duration::from_secs(1) + STALL_BUDGET * 3 / 2,
+        "stalled DONE must fail within the budget"
     );
 }

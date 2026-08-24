@@ -30,7 +30,10 @@
 //! This module honours the workspace `#![deny(unsafe_code)]` guarantee.
 
 use std::future::Future;
+use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use async_imap::Authenticator;
@@ -38,7 +41,7 @@ use async_imap::Session;
 use async_imap::extensions::idle::IdleResponse;
 use chrono::{DateTime, FixedOffset};
 use futures::StreamExt;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::RootCertStore;
@@ -54,6 +57,119 @@ pub(crate) trait ImapStream:
 {
 }
 impl<T> ImapStream for T where T: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug + Send {}
+
+/// Transport-level read guard: bounds every socket read by an idle timeout
+/// (issue #481 review). `async-imap` polls the underlying reader until it
+/// decodes one complete response, so a per-command deadline can cut off a
+/// large `BODY.PEEK[]` response even when each socket read delivers bytes
+/// within the budget. This wrapper instead bounds each *read*: the timer
+/// resets on every byte received, so a slow-but-alive connection is never
+/// cut off while a stalled one fails fast.
+///
+/// The guard is disabled by default — the handshake keeps the shared #476
+/// deadline via [`with_deadline`], and the IDLE wait phase is bounded by
+/// `wait_with_timeout` — and [`ImapSession`] arms it with the per-read
+/// budget for every post-login command.
+struct IdleTimeoutStream<S> {
+    inner: S,
+    /// Active per-read idle budget; `None` disables the guard.
+    timeout: Option<Duration>,
+    /// Armed sleep for the current read; reset on progress.
+    sleep: Option<Pin<Box<tokio::time::Sleep>>>,
+}
+
+impl<S> IdleTimeoutStream<S> {
+    fn new(inner: S) -> Self {
+        Self {
+            inner,
+            timeout: None,
+            sleep: None,
+        }
+    }
+
+    /// Set the per-read idle budget (`Some`) or disable the guard (`None`).
+    /// Dropping any armed sleep restarts the timer from the next read.
+    fn set_timeout(&mut self, timeout: Option<Duration>) {
+        self.timeout = timeout;
+        self.sleep = None;
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for IdleTimeoutStream<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.as_mut().get_mut();
+        let filled_before = buf.filled().len();
+        match Pin::new(&mut this.inner).poll_read(cx, buf) {
+            Poll::Ready(Ok(())) => {
+                if buf.filled().len() > filled_before {
+                    // Progress: the idle timer restarts for the next read.
+                    this.sleep = None;
+                }
+                return Poll::Ready(Ok(()));
+            }
+            Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+            Poll::Pending => {}
+        }
+        let Some(idle) = this.timeout else {
+            return Poll::Pending;
+        };
+        if this.sleep.is_none() {
+            this.sleep = Some(Box::pin(tokio::time::sleep(idle)));
+        }
+        match this.sleep.as_mut().expect("armed sleep").as_mut().poll(cx) {
+            Poll::Ready(()) => {
+                this.sleep = None;
+                Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("IMAP read timed out after {:.1}s", idle.as_secs_f64()),
+                )))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for IdleTimeoutStream<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
+    }
+}
+
+impl<S: std::fmt::Debug> std::fmt::Debug for IdleTimeoutStream<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdleTimeoutStream")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -132,21 +248,29 @@ impl Authenticator for Xoauth2Authenticator {
     }
 }
 
-/// Authenticate an unauthenticated [`async_imap::Client`] into an
-/// [`ImapSession`], choosing `LOGIN` or `AUTHENTICATE XOAUTH2` per the
-/// resolved [`ImapAuth`] kind. On failure the underlying client is returned
-/// by async-imap alongside the error; we surface the error (the client is not
-/// reusable after a broken handshake, so dropping it is correct). The
-/// greeting read and the `LOGIN` / `AUTHENTICATE` response read are both
-/// bounded by the shared handshake `deadline` created after the TCP connect
-/// (the config `handshake_timeout_secs` budget, issue #476), so a server
-/// that greets but then stalls on the auth exchange fails the cycle fast
-/// instead of wedging the runner.
+/// Authenticate a raw transport stream into an [`ImapSession`], choosing
+/// `LOGIN` or `AUTHENTICATE XOAUTH2` per the resolved [`ImapAuth`] kind. On
+/// failure the underlying client is returned by async-imap alongside the
+/// error; we surface the error (the client is not reusable after a broken
+/// handshake, so dropping it is correct). The greeting read and the `LOGIN`
+/// / `AUTHENTICATE` response read are both bounded by the shared handshake
+/// `deadline` created after the TCP connect (the config
+/// `handshake_timeout_secs` budget, issue #476), so a server that greets
+/// but then stalls on the auth exchange fails the cycle fast instead of
+/// wedging the runner.
+///
+/// The stream is wrapped in an [`IdleTimeoutStream`] guard that starts
+/// disabled for the handshake and is armed with `read_timeout` once
+/// authenticated (issue #481): every post-login socket read (`EXAMINE`,
+/// `CAPABILITY`, `UID FETCH` stream reads, `IDLE` init / `DONE`, `LOGOUT`)
+/// is bounded per read, resetting on progress.
 pub(crate) async fn imap_login<S: ImapStream>(
-    mut client: async_imap::Client<S>,
+    stream: S,
     auth: ImapAuth,
     deadline: tokio::time::Instant,
+    read_timeout: Duration,
 ) -> Result<ImapSession<S>, ConnectorError> {
+    let mut client = async_imap::Client::new(IdleTimeoutStream::new(stream));
     // Drain the IMAP greeting (untagged `* OK`) before issuing LOGIN /
     // AUTHENTICATE. async-imap's `connect()` helper does this for us; with
     // `Client::new` (which we use to keep a single rustls TLS stack) the
@@ -169,7 +293,7 @@ pub(crate) async fn imap_login<S: ImapStream>(
         ));
     }
 
-    let session = match auth {
+    let mut session = match auth {
         ImapAuth::Login { username, password } => {
             let login = client.login(&username, &password);
             with_deadline(deadline, "IMAP login response", login, |(err, _client)| {
@@ -196,7 +320,9 @@ pub(crate) async fn imap_login<S: ImapStream>(
             .await?
         }
     };
-    Ok(ImapSession::new(session))
+    // Arm the transport idle guard for the session's post-login reads.
+    session.get_mut().set_timeout(Some(read_timeout));
+    Ok(ImapSession::new(session, read_timeout))
 }
 
 fn map_login_error(err: async_imap::error::Error) -> ConnectorError {
@@ -279,17 +405,26 @@ pub(crate) struct MailboxInfo {
 // Session wrapper
 // ---------------------------------------------------------------------------
 
-/// A thin wrapper over an authenticated [`async_imap::Session`] generic in the
-/// underlying stream, so the same sync logic runs against a live TLS socket or
-/// a test duplex pair.
+/// A thin wrapper over an authenticated [`async_imap::Session`] generic in
+/// the underlying stream, so the same sync logic runs against a live TLS
+/// socket or a test duplex pair. The transport is wrapped in an
+/// [`IdleTimeoutStream`] guard (issue #481).
 pub(crate) struct ImapSession<S: ImapStream> {
-    session: Session<S>,
+    session: Session<IdleTimeoutStream<S>>,
+    /// Per-read idle budget applied at the transport boundary to every
+    /// post-login socket read (issue #481). The guard resets on progress,
+    /// so a slow-but-alive connection is never cut off while a stalled one
+    /// fails the cycle fast instead of wedging the runner.
+    read_timeout: Duration,
 }
 
 impl<S: ImapStream> ImapSession<S> {
     /// Wrap an authenticated session.
-    pub(crate) fn new(session: Session<S>) -> Self {
-        Self { session }
+    fn new(session: Session<IdleTimeoutStream<S>>, read_timeout: Duration) -> Self {
+        Self {
+            session,
+            read_timeout,
+        }
     }
 
     /// `EXAMINE <mailbox>` (read-only; the connector never mutates mailbox
@@ -327,6 +462,10 @@ impl<S: ImapStream> ImapSession<S> {
     /// messages are not marked `\Seen`. The `*` range-end is RFC 3501's "max
     /// UID" and may re-return the last message when `since+1` exceeds it, so
     /// returned UIDs `<= since` are filtered out (no re-fetch, per #199).
+    ///
+    /// Each socket read of the streamed response is bounded by the session's
+    /// transport idle guard (issue #481), which resets on progress, so a
+    /// large `BODY.PEEK[]` response that keeps arriving is never cut off.
     pub(crate) async fn fetch_since(
         &mut self,
         since: Option<u32>,
@@ -345,8 +484,7 @@ impl<S: ImapStream> ImapSession<S> {
         let floor = since.unwrap_or(0);
         let mut messages = Vec::new();
         let mut max_uid = floor;
-        while let Some(fetch) = stream.next().await {
-            let fetch = fetch.map_err(map_imap_error)?;
+        while let Some(fetch) = stream.next().await.transpose().map_err(map_imap_error)? {
             let Some(uid) = fetch.uid else {
                 // A FETCH without a UID (should not happen for UID FETCH) — skip.
                 debug!("IMAP FETCH row carried no UID; skipping");
@@ -381,12 +519,25 @@ impl<S: ImapStream> ImapSession<S> {
     /// re-issue. Such a close is reported as [`IdleResult::ConnectionLost`]
     /// (the session is gone) so the caller can report its progress and
     /// reconnect on the next cycle instead of failing the cycle.
+    ///
+    /// The `+ idling` continuation read and the `DONE` response read are
+    /// each bounded by the session's transport idle guard (issue #481) —
+    /// `wait_with_timeout` alone does not cover them, so a stall there would
+    /// otherwise still wedge the runner. The wait phase itself is bounded by
+    /// `wait_with_timeout` (which resets on any response, including
+    /// keepalives); the idle guard is disabled for it so a quiet-but-alive
+    /// IDLE window is not cut off by the read budget.
     pub(crate) async fn idle_wait(
         self,
         timeout: Duration,
     ) -> Result<IdleResult<S>, ConnectorError> {
+        let read_timeout = self.read_timeout;
         let mut handle = self.session.idle();
         handle.init().await.map_err(map_imap_error)?;
+        // The wait phase is bounded by `wait_with_timeout`; disable the
+        // transport idle guard so a quiet-but-alive IDLE window is not cut
+        // off by the read budget.
+        handle.as_mut().set_timeout(None);
         let (fut, _stop) = handle.wait_with_timeout(timeout);
         let new_data = match fut.await {
             Ok(IdleResponse::NewData(_)) => true,
@@ -398,11 +549,13 @@ impl<S: ImapStream> ImapSession<S> {
                 return Ok(IdleResult::ConnectionLost);
             }
         };
+        // Re-arm the transport idle guard for the DONE handshake.
+        handle.as_mut().set_timeout(Some(read_timeout));
         match handle.done().await {
             Ok(session) => Ok(if new_data {
-                IdleResult::NewData(ImapSession::new(session))
+                IdleResult::NewData(ImapSession::new(session, read_timeout))
             } else {
-                IdleResult::Timeout(ImapSession::new(session))
+                IdleResult::Timeout(ImapSession::new(session, read_timeout))
             }),
             // The connection died during the DONE handshake — the server
             // closed it while we were idling. Same as above.
@@ -414,7 +567,9 @@ impl<S: ImapStream> ImapSession<S> {
     }
 
     /// Log out gracefully (best-effort; errors are ignored as the connection
-    /// is closing anyway).
+    /// is closing anyway). The response read is bounded by the session's
+    /// transport idle guard (issue #481), so a stalled `LOGOUT` cannot wedge
+    /// the runner.
     pub(crate) async fn logout(mut self) {
         if let Err(err) = self.session.logout().await {
             debug!(error = %err, "IMAP logout failed (ignored)");
@@ -442,14 +597,15 @@ fn map_imap_error(err: async_imap::error::Error) -> ConnectorError {
 // ---------------------------------------------------------------------------
 
 /// Bound a fallible async I/O step (TCP connect, TLS handshake, greeting
-/// read, login/authenticate response read) by `deadline`. On expiry this
-/// returns a `ConnectorError::Network` timeout labelled `what`, so a
+/// read, and the login/authenticate response read) by `deadline`. On expiry
+/// this returns a `ConnectorError::Network` timeout labelled `what`, so a
 /// black-holed network path fails the cycle fast and the supervisor's
-/// backoff / circuit breaker run as designed (issue #476). Inner failures
-/// are mapped by `map_err` so each call site keeps its own error text. The
-/// reported budget is the remaining time at call time, so a stage that
-/// inherits a partially consumed shared deadline reports the bound it
-/// actually ran under.
+/// backoff / circuit breaker run as designed (issue #476). Post-login reads
+/// are bounded by the [`IdleTimeoutStream`] guard instead (issue #481).
+/// Inner failures are mapped by `map_err` so each call site keeps its own
+/// error text. The reported budget is the remaining time at call time, so a
+/// stage that inherits a partially consumed shared deadline reports the
+/// bound it actually ran under.
 async fn with_deadline<T, E>(
     deadline: tokio::time::Instant,
     what: &str,
@@ -549,15 +705,18 @@ pub(crate) async fn tls_connect(
 /// directly into [`async_imap::Client::new`].
 pub(crate) type TlsStream = tokio_rustls::client::TlsStream<TcpStream>;
 
+/// Budget for the transport and session stall tests (connect / handshake /
+/// greeting / login, and the post-login reads of issue #481): short enough
+/// to keep the suite fast, long enough to be a real bound rather than a
+/// busy loop. Shared by the `imap` unit tests and the fake-server
+/// `imap_tests` module (DRY).
+#[cfg(test)]
+pub(crate) const STALL_BUDGET: Duration = Duration::from_millis(200);
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
-
-    /// Budget for the transport stall tests (connect / handshake /
-    /// greeting / login): short enough to keep the suite fast, long enough
-    /// to be a real bound rather than a busy loop.
-    const STALL_BUDGET: Duration = Duration::from_millis(200);
 
     #[test]
     fn xoauth2_initial_response_format() {
@@ -691,12 +850,13 @@ mod tests {
         let (client, _server) = tokio::io::duplex(8 * 1024);
         let start = tokio::time::Instant::now();
         let err = match imap_login(
-            async_imap::Client::new(client),
+            client,
             ImapAuth::Login {
                 username: "devansh@example.com".into(),
                 password: "hunter2".into(),
             },
             tokio::time::Instant::now() + STALL_BUDGET,
+            STALL_BUDGET,
         )
         .await
         {
@@ -729,12 +889,13 @@ mod tests {
         });
         let start = tokio::time::Instant::now();
         let err = match imap_login(
-            async_imap::Client::new(client),
+            client,
             ImapAuth::Login {
                 username: "devansh@example.com".into(),
                 password: "hunter2".into(),
             },
             tokio::time::Instant::now() + STALL_BUDGET,
+            STALL_BUDGET,
         )
         .await
         {
@@ -771,12 +932,13 @@ mod tests {
         });
         let start = tokio::time::Instant::now();
         let err = match imap_login(
-            async_imap::Client::new(client),
+            client,
             ImapAuth::Login {
                 username: "devansh@example.com".into(),
                 password: "hunter2".into(),
             },
             start + STALL_BUDGET,
+            STALL_BUDGET,
         )
         .await
         {

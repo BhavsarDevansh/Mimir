@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.144.1] — 2026-08-24
+
+### Fix: Email IMAP post-login session reads are now bounded (issue #481)
+
+- Every socket read after authentication was unbounded, so a network path that black-holed mid-session (after the #476 connect/handshake bounds) still wedged the runner cycle indefinitely: `EXAMINE`, the `CAPABILITY` probe behind `supports_idle`, the streamed `UID FETCH` response, the `IDLE` init / `DONE` handshakes (the `wait_with_timeout` bound alone does not cover them), and the best-effort `LOGOUT` all awaited socket reads with no timeout.
+- A new `read_timeout_secs` config field (default 60) bounds every post-login socket read at the transport boundary with an idle timeout that resets on each byte received, so a slow-but-alive connection — including a large `BODY.PEEK[]` response that takes longer than 60 s in total — is never cut off while a stalled read fails fast. Expired reads surface as `ConnectorError::Network`, with two deliberate exceptions: the `IDLE` `DONE` handshake maps to `IdleResult::ConnectionLost` (the session is gone) and the best-effort `LOGOUT` ignores its error, so the supervisor's exponential backoff / circuit breaker run as designed for every failure the sync operation actually returns.
+- The config JSON schema now also advertises the #476 `connect_timeout_secs` / `handshake_timeout_secs` fields, which were missing from the schema.
+- Tests: fake-socket tests assert a stalled `EXAMINE`, `CAPABILITY`, `UID FETCH`, `IDLE` init, and `LOGOUT` each fail (or, for the best-effort logout, return) within the read budget as `ConnectorError::Network`, a stalled `IDLE` `DONE` handshake surfaces as `IdleResult::ConnectionLost`, and a chunked `UID FETCH` response with gaps below the budget but a total duration above it still succeeds; the config test pins the default and an override.
+- Docs: `docs/email-connector.md`, `docs/wiki/email-connector.md`, and `Mimir-Implementation-Context.md` updated.
+- Version bumped 0.144.0 → 0.144.1 (patch — backwards-compatible bugfix).
+
 ## [0.144.0] — 2026-08-24
 
 ### Fix: chat streams report "server error 500: internal server error" on LLM provider failures

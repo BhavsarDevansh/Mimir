@@ -18,9 +18,12 @@ pub(crate) const DEFAULT_MAILBOX: &str = "INBOX";
 pub(crate) const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// Default poll jitter (30 s).
 pub(crate) const DEFAULT_POLL_JITTER: Duration = Duration::from_secs(30);
-/// Default IDLE wait (28 min). RFC 2177 recommends re-issuing IDLE at least
-/// every 29 min to avoid server inactivity logoff; 28 min leaves a margin.
-pub(crate) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(28 * 60);
+/// Default IDLE wait (25 min). RFC 2177 recommends re-issuing IDLE at least
+/// every 29 min to avoid server inactivity logoff, but Microsoft's IMAP
+/// service (Outlook / Office 365) drops IDLE connections at ~28 min — a
+/// 28 min wait loses the `DONE` race and fails every no-mail cycle (issue
+/// #485). 25 min stays inside both limits with margin.
+pub(crate) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(25 * 60);
 /// Default TCP connect budget (10 s) for the IMAP transport. Bounds the
 /// `TcpStream::connect` step so a black-holed network path fails the cycle
 /// instead of wedging the runner (issue #476).
@@ -156,8 +159,9 @@ pub struct EmailConfigDto {
     /// full first sync.
     #[serde(default = "default_initial_backfill")]
     pub initial_backfill: bool,
-    /// IDLE wait in seconds (re-issue IDLE before the ~29 min server logoff).
-    /// Defaults to 1680 (28 min).
+    /// IDLE wait in seconds (re-issue IDLE before the ~29 min server logoff;
+    /// Microsoft's IMAP service drops IDLE connections at ~28 min, so the
+    /// default 25 min leaves a margin for both). Defaults to 1500 (25 min).
     #[serde(default = "default_idle_timeout_secs")]
     pub idle_timeout_secs: u64,
     /// TCP connect timeout in seconds. Defaults to 10.

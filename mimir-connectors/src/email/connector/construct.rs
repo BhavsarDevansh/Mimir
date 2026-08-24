@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 
 use tokio::sync::Mutex;
 
@@ -140,6 +140,7 @@ impl EmailConnector {
             oauth_http,
             last_uid: Mutex::new(cursor.as_deref().and_then(parse_cursor)),
             resync_pending: AtomicBool::new(false),
+            consecutive_connection_lost: AtomicU32::new(0),
             supports_idle: StdMutex::new(supports_idle),
             buffer: Mutex::new(buffer),
             prose_retry: Arc::new(StdMutex::new(ledger)),

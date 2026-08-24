@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.142.3] — 2026-08-24
+
+### Fix: Email connector IDLE cycles fail on providers that close idle connections (issue #485)
+
+- The Email connector's default IDLE wait (28 min) raced the ~28-minute inactivity close of Microsoft's IMAP service: when no mail arrived during a window, the server dropped the connection just as the client's `DONE` handshake ran, so every no-mail cycle failed with `Connection reset by peer`. A fresh connector's first cycle failed this way before its backfill could be extracted, so the connector stayed authenticated with no errors while never ingesting any mail — the reported Outlook symptom. The default `idle_timeout_secs` is now 1500 (25 min), safely inside both Microsoft's ~28-minute close and RFC 2177's 29-minute re-issue guidance.
+- An IDLE window that ends without a push is now always followed by an incremental `UID FETCH` on the same connection, so mail that arrived during the window is never stranded even if the server never pushed a notification (or the notification lost the timeout race).
+- A server that drops the IDLE connection mid-window (provider inactivity close or a network drop) is no longer a cycle failure: the cycle reports its progress (the first-sync backfill cursor is persisted and the staged mail is extracted) and marks a re-sync pending, so the next cycle re-fetches the window immediately before re-entering IDLE. The pending re-sync is cleared by the next successful fetch rather than by `on_cycle_succeeded`, so a dropped-IDLE cycle is always followed by a re-fetch.
+- A provider that keeps dropping IDLE connections (an inactivity limit shorter than the configured timeout, or a flaky path) can no longer drive an unbounded immediate-reconnect loop: the first two consecutive `ConnectionLost` outcomes still report progress, but the third fails the cycle so the supervisor's exponential backoff applies, and the pending re-sync survives the failure so the post-backoff cycle still re-fetches the window before re-entering IDLE (PR #486 review).
+- Tests: the fake IMAP server can now drop the connection during IDLE and append mail without an `EXISTS` push; new tests cover the timeout-fetch, the dropped-IDLE backfill cursor, the dropped-IDLE zero-fetch cycle, and the re-fetch-before-IDLE sequence. All 23 transport tests and the full `mimir-connectors` suite pass.
+- Review fixes (PR #486): the dropped-IDLE seeded first-sync cursor (`UIDNEXT − 1`) is now pinned by a test, both IDLE error arms log the underlying `async_imap` error at `debug` level before reporting `ConnectionLost`, and the docs' stale "~30 minutes" provider-close figure is corrected to ~28 minutes.
+- Docs: `docs/email-connector.md` and `docs/wiki/email-connector.md` updated (25-minute default, timeout-fetch, dropped-IDLE handling).
+- Version bumped 0.142.2 → 0.142.3 (patch — bugfix).
+
 ## [0.142.2] — 2026-08-24
 
 ### Fix: unused `FunctionCall`/`ToolCall` imports removed from context trim-fallback test (issue #478)

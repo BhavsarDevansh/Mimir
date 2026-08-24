@@ -3,6 +3,7 @@ use super::*;
 use crate::email::config::config_tests::app_config;
 use crate::email::imap::{ImapAuth, ImapSession, imap_login};
 use async_imap::Client;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -26,6 +27,18 @@ struct FakeCfg {
     /// mail that arrives while the connector is blocked on IDLE. `empty` →
     /// no new messages.
     idle_push_messages: Vec<(u32, Vec<u8>)>,
+    /// Messages appended to the mailbox during IDLE *without* an `EXISTS`
+    /// push, modelling a server that accepts IDLE but never signals new
+    /// mail. The connector's timeout-fetch must pick them up after `DONE`.
+    idle_silent_append: Vec<(u32, Vec<u8>)>,
+    /// Drop the connection during IDLE (after the continuation, before the
+    /// client's `DONE`), modelling a provider inactivity close. The
+    /// connector must treat this as "no new data" rather than a cycle
+    /// failure.
+    idle_drop_connection: bool,
+    /// Shared counter incremented on every `IDLE` command, so tests can
+    /// assert that a cycle skipped the IDLE wait (pending re-sync).
+    idle_count: Option<Arc<Mutex<u32>>>,
     /// Second UIDVALIDITY returned on a *second* `SELECT` (UIDVALIDITY
     /// reset test). `None` → always returns `uid_validity`.
     second_uid_validity: Option<u32>,
@@ -45,6 +58,9 @@ impl Default for FakeCfg {
             messages: Vec::new(),
             idle_push_exists: None,
             idle_push_messages: Vec::new(),
+            idle_silent_append: Vec::new(),
+            idle_drop_connection: false,
+            idle_count: None,
             second_uid_validity: None,
             omit_uid_validity: false,
             omit_uid_next: false,
@@ -193,7 +209,15 @@ async fn run_fake(
                     .unwrap();
             }
             "IDLE" => {
+                if let Some(count) = &cfg.idle_count {
+                    *count.lock().unwrap() += 1;
+                }
                 writer.write_all(b"+ idling\r\n").await.unwrap();
+                if cfg.idle_drop_connection {
+                    // Close the connection mid-IDLE: the client's wait sees
+                    // EOF and its `DONE` write fails.
+                    break;
+                }
                 if let Some(exists) = cfg.idle_push_exists {
                     // Deliver the newly-arrived mail, then push the EXISTS
                     // signal and await the client's DONE.
@@ -209,7 +233,11 @@ async fn run_fake(
                     assert!(done.trim().eq_ignore_ascii_case("DONE"));
                 } else {
                     // No push: the client's `idle_wait` times out on its
-                    // own; when it does `done()` it sends DONE.
+                    // own; when it does `done()` it sends DONE. Mail that
+                    // "arrived" silently is appended so the timeout-fetch
+                    // after DONE can pick it up.
+                    cfg.messages
+                        .extend(std::mem::take(&mut cfg.idle_silent_append));
                     let mut done = String::new();
                     reader.read_line(&mut done).await.unwrap();
                     assert!(done.trim().eq_ignore_ascii_case("DONE"));
@@ -559,6 +587,234 @@ async fn idle_timeout_no_new_mail_returns_zero() {
 }
 
 #[tokio::test]
+async fn idle_timeout_fetches_mail_that_arrived_without_push() {
+    // A server that accepts IDLE but never signals new mail must not strand
+    // mail that arrived during the window: the connector's timeout-fetch
+    // (after `DONE`) picks it up incrementally.
+    let cfg = FakeCfg {
+        messages: vec![(5u32, b"x".to_vec())],
+        idle_silent_append: vec![(8u32, b"silent-new".to_vec())],
+        ..Default::default()
+    };
+    let (connector, session) = idle_harness(cfg, Some("17:5")).await;
+    let outcome = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("sync ok");
+    assert_eq!(
+        outcome.fetched, 1,
+        "mail that arrived during IDLE without a push must be fetched on timeout"
+    );
+    assert_eq!(outcome.new_cursor.as_deref(), Some("17:8"));
+    let staged = connector.buffer.lock().await;
+    assert_eq!(staged.len(), 1);
+    assert_eq!(staged[0].raw, b"silent-new");
+}
+
+#[tokio::test]
+async fn idle_connection_lost_during_wait_returns_backfill_cursor() {
+    // A provider inactivity close during the first IDLE (no cursor yet) must
+    // not fail the cycle: the backfill is reported with its cursor so the
+    // staged mail is extracted, and a re-sync is marked pending so the next
+    // cycle re-fetches the window instead of blocking on IDLE.
+    let cfg = FakeCfg {
+        messages: vec![
+            (5u32, b"existing-1".to_vec()),
+            (7u32, b"existing-2".to_vec()),
+        ],
+        idle_drop_connection: true,
+        ..Default::default()
+    };
+    let (connector, session) = idle_harness(cfg, None).await;
+    let outcome = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("a dropped IDLE connection must not fail the cycle");
+    assert_eq!(outcome.fetched, 2, "the backfill must be reported");
+    assert_eq!(outcome.new_cursor.as_deref(), Some("17:7"));
+    assert_eq!(
+        connector.buffer.lock().await.len(),
+        2,
+        "the backfilled mail must stay staged for extraction"
+    );
+    assert!(
+        connector.resync_pending.load(Ordering::SeqCst),
+        "a dropped IDLE connection must mark a re-sync pending"
+    );
+}
+
+#[tokio::test]
+async fn idle_connection_lost_after_timeout_returns_zero_without_error() {
+    // A provider inactivity close on a later cycle (cursor already seeded)
+    // must return "no new data" rather than failing the cycle; the pending
+    // re-sync makes the next cycle re-fetch immediately.
+    let cfg = FakeCfg {
+        messages: vec![(5u32, b"x".to_vec())],
+        idle_drop_connection: true,
+        ..Default::default()
+    };
+    let (connector, session) = idle_harness(cfg, Some("17:5")).await;
+    let outcome = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("a dropped IDLE connection must not fail the cycle");
+    assert_eq!(outcome.fetched, 0);
+    assert!(outcome.new_cursor.is_none());
+    assert!(
+        connector.resync_pending.load(Ordering::SeqCst),
+        "a dropped IDLE connection must mark a re-sync pending"
+    );
+}
+
+#[tokio::test]
+async fn idle_connection_lost_on_seeded_first_sync_persists_seed_cursor() {
+    // Issue #397 seed + a dropped IDLE: with `initial_backfill: false` and
+    // no cursor, the first cycle seeds the cursor to `UIDNEXT − 1`; a
+    // provider inactivity close during that first IDLE must persist the seed
+    // (not `None`), so the "only new content" choice survives a restart —
+    // the seed-arm of the `ConnectionLost` branch is otherwise untested.
+    let cfg = FakeCfg {
+        messages: vec![(5u32, b"existing".to_vec())],
+        idle_drop_connection: true,
+        ..Default::default()
+    };
+    let (connector, session) = no_backfill_idle_harness(cfg).await;
+    let outcome = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("a dropped IDLE connection must not fail the cycle");
+    assert_eq!(outcome.fetched, 0);
+    assert_eq!(
+        outcome.new_cursor.as_deref(),
+        Some("17:5"),
+        "the seeded first sync must report UIDNEXT − 1 (5) as its cursor"
+    );
+    assert!(
+        connector.resync_pending.load(Ordering::SeqCst),
+        "a dropped IDLE connection must mark a re-sync pending"
+    );
+}
+
+#[tokio::test]
+async fn repeated_connection_lost_escalates_to_cycle_failure() {
+    // A provider that keeps dropping IDLE connections (an inactivity limit
+    // shorter than the configured timeout, or a flaky path) must not trigger
+    // an unbounded immediate-reconnect loop: after a run of consecutive
+    // `ConnectionLost` outcomes the cycle fails so the supervisor's
+    // exponential backoff applies. The re-sync marker stays set so the
+    // post-backoff cycle re-fetches the window before re-entering IDLE
+    // (issue #485 review).
+    let drop_cfg = || FakeCfg {
+        messages: vec![(5u32, b"existing".to_vec())],
+        idle_drop_connection: true,
+        ..Default::default()
+    };
+    let (connector, session) = no_backfill_idle_harness(drop_cfg()).await;
+    let first = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("the first dropped-IDLE cycle must succeed");
+    assert_eq!(first.fetched, 0);
+    assert_eq!(first.new_cursor.as_deref(), Some("17:5"));
+    connector.resync_pending.store(false, Ordering::SeqCst);
+
+    let (_, session) = no_backfill_idle_harness(drop_cfg()).await;
+    connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("the second dropped-IDLE cycle must still succeed");
+    connector.resync_pending.store(false, Ordering::SeqCst);
+
+    let (_, session) = no_backfill_idle_harness(drop_cfg()).await;
+    let err = connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect_err(
+            "the third consecutive dropped-IDLE cycle must fail so the supervisor backs off",
+        );
+    assert!(
+        matches!(err, ConnectorError::Network(_)),
+        "expected a Network error, got {err:?}"
+    );
+    assert!(
+        connector.resync_pending.load(Ordering::SeqCst),
+        "the escalated cycle must keep the re-sync marker for the next cycle"
+    );
+}
+
+#[tokio::test]
+async fn idle_connection_lost_triggers_refetch_on_next_cycle() {
+    // After a dropped IDLE connection, the next cycle must skip the IDLE
+    // wait and re-fetch the window immediately — the push for that window
+    // will not re-fire, so mail that arrived before the drop would
+    // otherwise be stranded.
+    let cfg = FakeCfg {
+        messages: vec![(5u32, b"x".to_vec())],
+        idle_drop_connection: true,
+        ..Default::default()
+    };
+    let (connector, session) = idle_harness(cfg, Some("17:5")).await;
+    connector
+        .run_sync(session, SyncOptions::default())
+        .await
+        .expect("cycle with dropped IDLE must succeed");
+    assert!(connector.resync_pending.load(Ordering::SeqCst));
+
+    // Cycle 2: new mail arrived before the drop; the connector must fetch it
+    // without entering IDLE.
+    let idle_count = Arc::new(Mutex::new(0u32));
+    let cfg2 = FakeCfg {
+        messages: vec![(8u32, b"new-mail".to_vec())],
+        idle_count: Some(Arc::clone(&idle_count)),
+        ..Default::default()
+    };
+    let (_, session2) = idle_harness(cfg2, Some("17:5")).await;
+    let second = connector
+        .run_sync(session2, SyncOptions::default())
+        .await
+        .expect("re-fetch cycle must succeed");
+    assert_eq!(
+        second.fetched, 1,
+        "the window after a dropped IDLE must be re-fetched"
+    );
+    assert_eq!(second.new_cursor.as_deref(), Some("17:8"));
+    assert_eq!(
+        *idle_count.lock().unwrap(),
+        0,
+        "the re-fetch cycle must skip the IDLE wait"
+    );
+    // The supervisor adopts the reported cursor after the cycle succeeds.
+    connector
+        .on_cycle_succeeded(second.new_cursor.as_deref())
+        .await;
+
+    // The re-fetch moved the cursor, so one more verify cycle runs before
+    // IDLE resumes; it finds nothing and clears the pending re-sync.
+    let idle_count2 = Arc::new(Mutex::new(0u32));
+    let cfg3 = FakeCfg {
+        messages: vec![(8u32, b"new-mail".to_vec())],
+        idle_count: Some(Arc::clone(&idle_count2)),
+        ..Default::default()
+    };
+    let (_, session3) = idle_harness(cfg3, Some("17:8")).await;
+    let third = connector
+        .run_sync(session3, SyncOptions::default())
+        .await
+        .expect("verify cycle must succeed");
+    assert_eq!(third.fetched, 0);
+    assert!(third.new_cursor.is_none());
+    assert_eq!(
+        *idle_count2.lock().unwrap(),
+        0,
+        "the verify cycle must also skip the IDLE wait"
+    );
+    assert!(
+        !connector.resync_pending.load(Ordering::SeqCst),
+        "a verify cycle that finds nothing must clear the pending re-sync"
+    );
+}
+
+#[tokio::test]
 async fn push_first_sync_backfills_existing_mail_before_idle() {
     // Issue #397: a fresh push-mode connector (no cursor) must import the
     // existing mailbox before blocking on IDLE — otherwise the first cycle
@@ -762,6 +1018,31 @@ async fn no_backfill_harness(
     (connector, session)
 }
 
+/// Build a connector (app-password, idle mode, `initial_backfill: false`)
+/// + a fake session wired to a fake server with `cfg`.
+///
+/// Mirrors [`idle_harness`] with the "only new content" first-sync config
+/// (issue #397).
+async fn no_backfill_idle_harness(
+    cfg: FakeCfg,
+) -> (EmailConnector, ImapSession<tokio::io::DuplexStream>) {
+    let (client, server) = tokio::io::duplex(8 * 1024);
+    let select_count = Arc::new(Mutex::new(0u32));
+    tokio::spawn(run_fake(server, cfg, None, None, Arc::clone(&select_count)));
+    let mut config = app_config();
+    config["mode"] = serde_json::json!("idle");
+    config["idle_timeout_secs"] = 1.into();
+    config["initial_backfill"] = serde_json::json!(false);
+    let connector = EmailConnector::from_config(config, None, None).expect("config");
+    let session = imap_login(
+        Client::new(client),
+        app_password_auth(),
+        tokio::time::Instant::now() + TEST_GREETING_BUDGET,
+    )
+    .await
+    .expect("login");
+    (connector, session)
+}
 #[tokio::test]
 async fn xoauth2_login_sends_correct_sasl_response() {
     // Verify the XOAUTH2 SASL initial response the connector would send to

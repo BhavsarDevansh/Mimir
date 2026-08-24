@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.144.4] — 2026-08-24
+
+### Refactor: search_messages builds one query instead of two duplicated SQL blocks (issue #500)
+
+- `ContextManager::search_messages` previously kept two nearly identical `sqlx::query` blocks — one filtering by `m.session_id = ?2` with `LIMIT ?3`, one searching all sessions with `LIMIT ?2` — so every change to the query shape (SELECT list, snippet call, join, ordering, snippet window) had to be applied twice. The query is now assembled once via `sqlx::QueryBuilder`: the shared SELECT/join/order exists in a single place and the session clause and LIMIT are appended conditionally, so the two paths cannot drift.
+- A drift-guard integration test (`search_messages_filtered_and_unfiltered_agree`) asserts the session-filtered and unfiltered paths return identical rows and snippets for the same content.
+- Docs: `docs/context-manager.md` updated. No behaviour change.
+- Version bumped 0.144.3 → 0.144.4 (patch — backwards-compatible refactor).
+
 ## [0.144.3] — 2026-08-24
 
 ### Fix: FTS5 conversation search matches all terms in any order instead of requiring an exact phrase (issue #493)

@@ -495,6 +495,34 @@ async fn search_messages_session_filter() {
 }
 
 #[tokio::test]
+async fn search_messages_filtered_and_unfiltered_agree() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    mgr.add_user_message(sid, "the quick brown fox jumps over the lazy dog")
+        .await
+        .unwrap();
+    mgr.add_assistant_message(sid, "and then the fox rests")
+        .await
+        .unwrap();
+
+    let unfiltered = mgr.search_messages("fox", 10, None).await.unwrap();
+    let filtered = mgr.search_messages("fox", 10, Some(sid)).await.unwrap();
+
+    // The session-filtered and unfiltered paths share one query shape; any
+    // drift between them must fail here rather than only in review.
+    assert!(!unfiltered.is_empty());
+    assert_eq!(
+        filtered.len(),
+        unfiltered.len(),
+        "session-filtered and unfiltered searches must return the same rows"
+    );
+    for (filtered_row, unfiltered_row) in filtered.iter().zip(&unfiltered) {
+        assert_eq!(filtered_row.session_id, unfiltered_row.session_id);
+        assert_eq!(filtered_row.snippet, unfiltered_row.snippet);
+    }
+}
+
+#[tokio::test]
 async fn search_messages_no_results() {
     let (mgr, _dir) = setup_manager().await;
     let sid = mgr.create_session("sys").await.unwrap();

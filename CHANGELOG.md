@@ -5,6 +5,7 @@
 ### Fix: connector sync accepts unprobed auto-mode connectors until the mode resolves (issue #475)
 
 - The manual-sync push gate now consults the *resolved* mode (`Connector::mode_if_resolved`) instead of the optimistic `mode()`: an `auto`-mode email connector whose IMAP `IDLE` capability probe has not completed yet (`mode_if_resolved()` is `None`) accepts `mimir connector sync` as the force-retry, matching the `-` the list already shows. Only a connector whose mode is *proven* push keeps rejecting manual sync with `CONNECTOR_PUSH_UNSUPPORTED`; config-pinned `poll` / `idle` modes resolve deterministically and behave as before.
+- The runner's push-success loop now drains the trigger channel: a trigger accepted while the mode was unprobed is never stranded if the capability probe resolves to push after the gate check but before the runner reads the channel (the awaiting `sync` caller would otherwise hang forever).
 - The `MockConnector` gains a runtime mode-resolution override (`with_mode_resolution_override`) mirroring the existing `with_mode_override`, so supervisor tests can flip a connector between unprobed, resolved-push, and resolved-polling states; the new control test covers all three transitions.
 - Docs: `docs/cli.md`, `docs/connectors-framework.md`, `docs/connector-management.md`, `docs/wiki/cli-commands.md`, `docs/wiki/connectors.md`, and `docs/wiki/what-works-now.md` updated (manual sync is rejected only once the mode has resolved to push).
 - Version bumped 0.141.4 → 0.141.5 (patch — bugfix).

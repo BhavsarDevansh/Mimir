@@ -34,8 +34,10 @@
 //! The mock simulates this by sleeping the configured `interval_ms` at the
 //! start of every `sync()` (the "schedule"), then staging the canned facts.
 //! The supervisor aborts the runner task on shutdown, cancelling the in-flight
-//! sleep; F9 manual triggers are rejected for push connectors, so no trigger
-//! path is needed.
+//! sleep. Manual triggers are rejected only for connectors whose mode is
+//! *resolved* to push; an unprobed `auto` connector's trigger is delivered to
+//! the runner, which runs the cycle (the mock's `sync` sleeps the interval
+//! first, then stages the facts) — the mock needs no trigger path of its own.
 
 mod config;
 mod connector;

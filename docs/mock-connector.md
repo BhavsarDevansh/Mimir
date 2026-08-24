@@ -65,7 +65,7 @@ It lives in `mimir-connectors/src/mock/` and is test-only: the module and its re
 
 ## Push mode
 
-Push connectors block inside `sync()` waiting for service events. The mock simulates this by sleeping `interval_ms` at the start of every `sync()` (the "schedule"), then staging the canned facts. The supervisor aborts the runner task on shutdown, cancelling the in-flight sleep. F9 manual triggers are rejected for push connectors (`TriggerError::PushUnsupported`), so the push mock needs no trigger path.
+Push connectors block inside `sync()` waiting for service events. The mock simulates this by sleeping `interval_ms` at the start of every `sync()` (the "schedule"), then staging the canned facts. The supervisor aborts the runner task on shutdown, cancelling the in-flight sleep. Manual triggers are rejected only for connectors whose mode is *resolved* to push (`TriggerError::PushUnsupported`); an unprobed `auto` connector's trigger is delivered to the runner, which runs the cycle (the mock's `sync` sleeps the interval first, then stages the facts) — the push mock needs no trigger path of its own (issue #475).
 
 ## Instance identity
 

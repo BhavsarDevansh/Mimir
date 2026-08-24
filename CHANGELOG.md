@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.144.2] — 2026-08-24
+
+### Fix: docs/llm-provider.md hard-wrapped Errors paragraph (issue #483)
+
+- `scripts/tests/md-reflow_test.sh` — the AGENTS.md single-line-prose regression guard from issue #294, enforced per `docs/workspace.md` — failed at HEAD because commit 51a9587 (PR #480 review) appended the "Turn persistence is atomic" sentence to the `## Errors` paragraph of `docs/llm-provider.md` without a blank line, so the paragraph was hard-wrapped across two source lines and `scripts/md-reflow --check` reported the file would reflow.
+- The two source lines are joined back into the single flowing paragraph, exactly what `scripts/md-reflow --reflow` emits, with no content change; `scripts/md-reflow --check` and `scripts/tests/md-reflow_test.sh` are green again.
+- Version bumped 0.144.1 → 0.144.2 (patch — docs-only bugfix).
+
 ## [0.144.1] — 2026-08-24
 
 ### Fix: Email IMAP post-login session reads are now bounded (issue #481)

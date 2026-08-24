@@ -52,8 +52,7 @@ Client-supplied `tools` schemas are merged with Mimir's own server-side tools:
 
 ## Errors
 
-`/v1` routes return the OpenAI error JSON shape `{"error": {"message", "type", "param", "code"}}`. Malformed requests — invalid JSON, no user message, an empty user message, or a `tool` message without `tool_call_id` — map to `400 invalid_request_error`. A full worker-pool queue maps to `503 Service Unavailable` with `Retry-After: 5` and `code: "queue_full"`. The mapping is live on the hot path: model/temperature/`max_tokens` overrides keep the worker pool (issue #465), so every `/v1` turn enqueues on the user queue and a saturated queue surfaces as `503` instead of an unbounded direct call.
-Turn persistence is atomic: a failure to store the assistant tool-call message or a server tool result fails the turn (blocking) or terminates the stream with `event: error` (streaming) after rolling the session back to its pre-request state, so a response never contains tool-derived output the session did not store.
+`/v1` routes return the OpenAI error JSON shape `{"error": {"message", "type", "param", "code"}}`. Malformed requests — invalid JSON, no user message, an empty user message, or a `tool` message without `tool_call_id` — map to `400 invalid_request_error`. A full worker-pool queue maps to `503 Service Unavailable` with `Retry-After: 5` and `code: "queue_full"`. The mapping is live on the hot path: model/temperature/`max_tokens` overrides keep the worker pool (issue #465), so every `/v1` turn enqueues on the user queue and a saturated queue surfaces as `503` instead of an unbounded direct call. Turn persistence is atomic: a failure to store the assistant tool-call message or a server tool result fails the turn (blocking) or terminates the stream with `event: error` (streaming) after rolling the session back to its pre-request state, so a response never contains tool-derived output the session did not store.
 
 ## Implementation Notes
 

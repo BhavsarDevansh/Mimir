@@ -4,8 +4,8 @@
 
 ### Fix: bounded IMAP connect / TLS-handshake / greeting timeouts (issue #476)
 
-- The Email IMAP transport now applies configurable network budgets to every step of the connection path: `connect_timeout_secs` (default 10) bounds the TCP connect and `handshake_timeout_secs` (default 30) bounds the rustls handshake plus the first server response (the IMAP greeting), so a black-holed network path fails the cycle fast as `ConnectorError::Network` and the supervisor backoff / circuit breaker run as designed instead of wedging the runner indefinitely. Existing stored configs load unchanged (serde defaults).
-- Tests: a never-resolving TCP connect, a real rustls handshake against a local listener that accepts but never speaks TLS, and a greeting that never arrives each fail within their budget; config parse tests pin the defaults and explicit overrides. The CalDAV, OAuth-refresh, and geocoder HTTP clients were audited in the same pass and already carry reqwest-level timeouts.
+- The Email IMAP transport now applies configurable network budgets to every step of the connection path: `connect_timeout_secs` (default 10) bounds the TCP connect and `handshake_timeout_secs` (default 30) bounds the rustls handshake, the first server response (the IMAP greeting), and the `LOGIN` / `AUTHENTICATE` response, so a black-holed network path fails the cycle fast as `ConnectorError::Network` and the supervisor backoff / circuit breaker run as designed instead of wedging the runner indefinitely. Existing stored configs load unchanged (serde defaults).
+- Tests: a never-resolving TCP connect, a real rustls handshake against a local listener that accepts but never speaks TLS, a greeting that never arrives, and a `LOGIN` that is never answered each fail within their budget; config parse tests pin the defaults and explicit overrides. The CalDAV, OAuth-refresh, and geocoder HTTP clients were audited in the same pass and already carry reqwest-level timeouts.
 - Docs: `docs/email-connector.md`, `docs/wiki/email-connector.md`, and `Mimir-Implementation-Context.md` updated.
 - Version bumped 0.142.0 → 0.142.1 (patch — bugfix).
 

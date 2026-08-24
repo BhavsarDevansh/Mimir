@@ -136,11 +136,15 @@ impl Authenticator for Xoauth2Authenticator {
 /// [`ImapSession`], choosing `LOGIN` or `AUTHENTICATE XOAUTH2` per the
 /// resolved [`ImapAuth`] kind. On failure the underlying client is returned
 /// by async-imap alongside the error; we surface the error (the client is not
-/// reusable after a broken handshake, so dropping it is correct).
+/// reusable after a broken handshake, so dropping it is correct). The
+/// greeting read and the `LOGIN` / `AUTHENTICATE` response read are both
+/// bounded by `handshake_timeout` (the config `handshake_timeout_secs`
+/// budget, issue #476), so a server that greets but then stalls on the auth
+/// exchange fails the cycle fast instead of wedging the runner.
 pub(crate) async fn imap_login<S: ImapStream>(
     mut client: async_imap::Client<S>,
     auth: ImapAuth,
-    greeting_timeout: Duration,
+    handshake_timeout: Duration,
 ) -> Result<ImapSession<S>, ConnectorError> {
     // Drain the IMAP greeting (untagged `* OK`) before issuing LOGIN /
     // AUTHENTICATE. async-imap's `connect()` helper does this for us; with
@@ -152,7 +156,7 @@ pub(crate) async fn imap_login<S: ImapStream>(
     // tolerates the stray greeting, but we drain it for both paths for
     // parity and determinism.
     let greeting = with_budget(
-        greeting_timeout,
+        handshake_timeout,
         "IMAP greeting read",
         client.read_response(),
         |e| ConnectorError::Network(format!("IMAP greeting read failed: {e}")),
@@ -165,10 +169,16 @@ pub(crate) async fn imap_login<S: ImapStream>(
     }
 
     let session = match auth {
-        ImapAuth::Login { username, password } => client
-            .login(&username, &password)
-            .await
-            .map_err(|(err, _client)| map_login_error(err))?,
+        ImapAuth::Login { username, password } => {
+            let login = client.login(&username, &password);
+            with_budget(
+                handshake_timeout,
+                "IMAP login response",
+                login,
+                |(err, _client)| map_login_error(err),
+            )
+            .await?
+        }
         ImapAuth::Xoauth2 {
             username,
             access_token,
@@ -178,10 +188,14 @@ pub(crate) async fn imap_login<S: ImapStream>(
                 access_token,
                 sent_initial: false,
             };
-            client
-                .authenticate("XOAUTH2", authenticator)
-                .await
-                .map_err(|(err, _client)| map_login_error(err))?
+            let auth = client.authenticate("XOAUTH2", authenticator);
+            with_budget(
+                handshake_timeout,
+                "IMAP AUTHENTICATE response",
+                auth,
+                |(err, _client)| map_login_error(err),
+            )
+            .await?
         }
     };
     Ok(ImapSession::new(session))
@@ -490,6 +504,7 @@ pub(crate) type TlsStream = tokio_rustls::client::TlsStream<TcpStream>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
 
     /// Budget for the transport stall tests (connect / handshake /
     /// greeting): short enough to keep the suite fast, long enough to be a
@@ -642,5 +657,44 @@ mod tests {
             start.elapsed() < Duration::from_secs(5),
             "stalled greeting must fail within the budget"
         );
+    }
+
+    #[tokio::test]
+    async fn login_stall_times_out() {
+        // A server that sends the greeting but never answers LOGIN: the
+        // auth response read must fail within the handshake budget instead
+        // of hanging the runner (issue #476).
+        let (client, mut server) = tokio::io::duplex(8 * 1024);
+        let stall = tokio::spawn(async move {
+            server
+                .write_all(b"* OK fake IMAP ready\r\n")
+                .await
+                .expect("greeting");
+            // Hold the connection without ever answering the LOGIN command.
+            std::future::pending::<()>().await;
+        });
+        let start = tokio::time::Instant::now();
+        let err = match imap_login(
+            async_imap::Client::new(client),
+            ImapAuth::Login {
+                username: "devansh@example.com".into(),
+                password: "hunter2".into(),
+            },
+            STALL_BUDGET,
+        )
+        .await
+        {
+            Ok(_) => panic!("stalled login must fail"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(&err, ConnectorError::Network(m) if m.contains("timed out after")),
+            "unexpected error: {err}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "stalled login must fail within the budget"
+        );
+        stall.abort();
     }
 }

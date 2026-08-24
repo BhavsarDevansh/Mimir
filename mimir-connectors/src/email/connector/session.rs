@@ -65,7 +65,7 @@ impl EmailConnector {
         if let Some(b) = refreshed {
             self.persist_refreshed(&b).await?;
         }
-        let stream = connect_tls(
+        let (stream, deadline) = connect_tls(
             &self.config.host,
             self.port(),
             self.connect_timeout(),
@@ -73,7 +73,7 @@ impl EmailConnector {
         )
         .await?;
         let client = async_imap::Client::new(stream);
-        imap_login(client, auth, self.handshake_timeout()).await
+        imap_login(client, auth, deadline).await
     }
 
     /// Run one sync cycle against an already-authenticated session. Generic
@@ -262,7 +262,7 @@ impl EmailConnector {
         if let Some(b) = refreshed {
             self.persist_refreshed(&b).await?;
         }
-        let stream = connect_tls(
+        let (stream, deadline) = connect_tls(
             &self.config.host,
             self.port(),
             self.connect_timeout(),
@@ -270,7 +270,7 @@ impl EmailConnector {
         )
         .await?;
         let client = async_imap::Client::new(stream);
-        let mut session = imap_login(client, auth, self.handshake_timeout()).await?;
+        let mut session = imap_login(client, auth, deadline).await?;
         let supports = match session.supports_idle().await {
             Ok(supports) => supports,
             Err(e) => {

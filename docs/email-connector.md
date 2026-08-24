@@ -145,7 +145,7 @@ The deterministic cascade layers are unaffected: an LLM failure never blocks iMI
 
 `llm_extraction_max_attempts` bounds the LLM prose-extraction retry budget per message (default 3; see [Failure and retry policy](#failure-and-retry-policy-262)). The budget is carried in each `connector_item.remember` hook payload and enforced by the hook handler.
 
-`connect_timeout_secs` (default 10) bounds the TCP connect and `handshake_timeout_secs` (default 30) bounds the TLS handshake, the first server response (the IMAP greeting), and the `LOGIN` / `AUTHENTICATE` response. Each bound surfaces as `ConnectorError::Network`, so a black-holed network path fails the cycle fast and the supervisor's exponential backoff / circuit breaker run as designed instead of wedging the runner (issue #476).
+`connect_timeout_secs` (default 10) bounds the TCP connect and `handshake_timeout_secs` (default 30) bounds the TLS handshake, the first server response (the IMAP greeting), and the `LOGIN` / `AUTHENTICATE` response as one shared deadline. Each bound surfaces as `ConnectorError::Network`, so a black-holed network path fails the cycle fast and the supervisor's exponential backoff / circuit breaker run as designed instead of wedging the runner (issue #476).
 
 OAuth auth block: `{ "kind": "oauth", "username": "you@gmail.com", "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth", "token_endpoint": "https://oauth2.googleapis.com/token", "client_id": "…", "client_secret": "…" (optional — omit for public clients), "scopes": ["https://mail.google.com/"] }`.
 

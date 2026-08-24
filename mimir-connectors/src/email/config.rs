@@ -27,7 +27,8 @@ pub(crate) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(28 * 60);
 pub(crate) const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default TLS-handshake + greeting + login-response budget (30 s) for the
 /// IMAP transport. Bounds the rustls handshake, the first server response
-/// after connect, and the `LOGIN` / `AUTHENTICATE` response (issue #476).
+/// after connect, and the `LOGIN` / `AUTHENTICATE` response under one shared
+/// deadline (issue #476).
 pub(crate) const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) const DEFAULT_SLUG: &str = "email";
@@ -162,8 +163,8 @@ pub struct EmailConfigDto {
     /// TCP connect timeout in seconds. Defaults to 10.
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
-    /// TLS handshake + IMAP greeting + login-response timeout in seconds.
-    /// Defaults to 30.
+    /// TLS handshake + IMAP greeting + login-response timeout in seconds,
+    /// enforced as one shared deadline. Defaults to 30.
     #[serde(default = "default_handshake_timeout_secs")]
     pub handshake_timeout_secs: u64,
     /// Display name override. Defaults to "Email".

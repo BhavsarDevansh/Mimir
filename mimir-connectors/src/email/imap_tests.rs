@@ -250,7 +250,7 @@ async fn harness(cfg: FakeCfg) -> (EmailConnector, ImapSession<tokio::io::Duplex
     let session = imap_login(
         Client::new(client),
         app_password_auth(),
-        TEST_GREETING_BUDGET,
+        tokio::time::Instant::now() + TEST_GREETING_BUDGET,
     )
     .await
     .expect("login");
@@ -276,7 +276,7 @@ async fn idle_harness(
     let session = imap_login(
         Client::new(client),
         app_password_auth(),
-        TEST_GREETING_BUDGET,
+        tokio::time::Instant::now() + TEST_GREETING_BUDGET,
     )
     .await
     .expect("login");
@@ -614,7 +614,7 @@ async fn push_first_sync_backfills_then_fetches_only_new_mail() {
     let session = imap_login(
         Client::new(client),
         app_password_auth(),
-        TEST_GREETING_BUDGET,
+        tokio::time::Instant::now() + TEST_GREETING_BUDGET,
     )
     .await
     .expect("login");
@@ -755,7 +755,7 @@ async fn no_backfill_harness(
     let session = imap_login(
         Client::new(client),
         app_password_auth(),
-        TEST_GREETING_BUDGET,
+        tokio::time::Instant::now() + TEST_GREETING_BUDGET,
     )
     .await
     .expect("login");
@@ -781,9 +781,13 @@ async fn xoauth2_login_sends_correct_sasl_response() {
         username: "devansh@example.com".into(),
         access_token: "ya29.token".into(),
     };
-    let _session = imap_login(Client::new(client), auth, TEST_GREETING_BUDGET)
-        .await
-        .expect("xoauth2 login");
+    let _session = imap_login(
+        Client::new(client),
+        auth,
+        tokio::time::Instant::now() + TEST_GREETING_BUDGET,
+    )
+    .await
+    .expect("xoauth2 login");
     let decoded = captured.lock().unwrap().clone();
     assert_eq!(
         decoded,
@@ -881,7 +885,7 @@ async fn imap_sync_then_extract_yields_invite_facts() {
     let session = imap_login(
         Client::new(client),
         app_password_auth(),
-        TEST_GREETING_BUDGET,
+        tokio::time::Instant::now() + TEST_GREETING_BUDGET,
     )
     .await
     .expect("login");

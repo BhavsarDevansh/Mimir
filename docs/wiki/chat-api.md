@@ -68,7 +68,10 @@ Returns the full message history from the last compaction point (or all messages
 - **400** — Invalid JSON body.
 - **404** — Unknown `session_id`.
 - **503** — Server is busy. Retry after 5 seconds.
+- Streaming failures emit a terminal `event: error` frame whose data explains the cause — for example an upstream LLM provider that is temporarily overloaded (`503`). The message tells you which model or provider to check; a provider overload usually clears by itself, or you can switch models with `/model` in the CLI or the `model` key in `config.toml`.
 
 ## OpenAI-Compatible API
 
 Mimir also speaks the OpenAI chat-completions API on `/v1/chat/completions` (with `/v1/models` for the model list), so any OpenAI-compatible app can use Mimir as its LLM provider. See [Using Mimir as Your LLM Provider](llm-provider.md).
+
+On `/v1/chat/completions` streaming, a provider failure before the stream starts returns `500` whose error message explains the cause (for example an upstream LLM provider that is temporarily overloaded); queue-full still returns `503` with `Retry-After: 5`. Failures after the stream starts are reported in the terminal `event: error` frame.

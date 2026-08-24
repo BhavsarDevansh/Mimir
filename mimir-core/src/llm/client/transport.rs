@@ -180,7 +180,10 @@ impl LlmClient {
 
                     if attempt > MAX_RETRIES {
                         error!(attempts = attempt, "retry exhausted");
-                        return Err(LlmError::RetryExhausted { attempts: attempt });
+                        return Err(LlmError::RetryExhausted {
+                            attempts: attempt,
+                            last_error: Box::new(e),
+                        });
                     }
 
                     if !Self::is_transient(&e) {

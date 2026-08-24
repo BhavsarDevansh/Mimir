@@ -94,6 +94,20 @@ pub fn openai_json_rejection() -> Response {
     )
 }
 
+/// Render an error message for an SSE `error` event.
+///
+/// Streaming responses have no HTTP status to carry failure detail, so the
+/// event data is the only channel to the client. The message is flattened to
+/// a single line and length-bounded so provider bodies (which often embed
+/// JSON) cannot bloat or corrupt the stream.
+pub fn sse_error_message(error: &(impl std::fmt::Display + ?Sized)) -> String {
+    let mut message = error.to_string().replace(['\r', '\n'], " ");
+    if message.chars().count() > 300 {
+        message = message.chars().take(300).collect();
+    }
+    message
+}
+
 /// Convert a context error into an OpenAI-shaped HTTP response.
 pub fn openai_context_error(e: mimir_core::context::ContextError) -> Response {
     error!("context error: {e}");
@@ -133,6 +147,29 @@ pub fn openai_llm_error(e: mimir_core::llm::types::LlmError) -> Response {
             openai_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal server error",
+                "server_error",
+                None,
+                None,
+            )
+        }
+    }
+}
+
+/// Convert an LLM error into an OpenAI-shaped HTTP response, carrying the
+/// bounded failure detail so a provider outage on the first stream attempt
+/// surfaces the actionable cause instead of a generic message (PR #490
+/// review).
+///
+/// Queue-full errors return `503 Service Unavailable` with a `Retry-After: 5`
+/// header, mirroring `openai_llm_error`.
+pub fn openai_llm_error_with_detail(e: mimir_core::llm::types::LlmError) -> Response {
+    match &e {
+        mimir_core::llm::types::LlmError::QueueFull => openai_llm_error(e),
+        _ => {
+            error!("LLM error: {e}");
+            openai_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                sse_error_message(&e),
                 "server_error",
                 None,
                 None,
@@ -408,6 +445,26 @@ mod tests {
         assert!(body["error"]["code"].is_null());
     }
 
+    #[test]
+    fn sse_error_message_flattens_and_bounds() {
+        let err = mimir_core::llm::types::LlmError::RetryExhausted {
+            attempts: 4,
+            last_error: Box::new(mimir_core::llm::types::LlmError::Api {
+                status: 503,
+                body: "model 'gemma4:31b' is temporarily overloaded\n{\"ref\":\"abc\"}".to_string(),
+            }),
+        };
+        let message = sse_error_message(&err);
+        assert_eq!(
+            message,
+            "retry exhausted after 4 attempts: API error 503: model 'gemma4:31b' is temporarily overloaded {\"ref\":\"abc\"}"
+        );
+        assert!(!message.contains('\n'), "SSE data must stay single-line");
+
+        let long = sse_error_message(&"x".repeat(500));
+        assert!(long.chars().count() <= 300, "message must be bounded");
+    }
+
     #[tokio::test]
     async fn openai_json_rejection_returns_400_openai_shape() {
         let resp = openai_json_rejection();
@@ -439,6 +496,37 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("upstream detail")
+        );
+    }
+
+    #[tokio::test]
+    async fn openai_llm_error_with_detail_queue_full_keeps_503() {
+        let resp = openai_llm_error_with_detail(mimir_core::llm::types::LlmError::QueueFull);
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(resp.headers().get("retry-after").unwrap(), "5");
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["type"], "server_error");
+        assert_eq!(body["error"]["code"], "queue_full");
+    }
+
+    #[tokio::test]
+    async fn openai_llm_error_with_detail_carries_bounded_message() {
+        let resp = openai_llm_error_with_detail(mimir_core::llm::types::LlmError::RetryExhausted {
+            attempts: 4,
+            last_error: Box::new(mimir_core::llm::types::LlmError::Api {
+                status: 503,
+                body: "model temporarily overloaded".to_string(),
+            }),
+        });
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["type"], "server_error");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("model temporarily overloaded"),
+            "the first-attempt failure must carry the bounded detail"
         );
     }
 

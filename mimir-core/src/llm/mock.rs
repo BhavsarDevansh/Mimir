@@ -17,6 +17,18 @@ struct CallRecord {
 /// stream items.
 type StreamResponse = Result<Vec<Result<StreamItem, LlmError>>, LlmError>;
 
+/// The error a mock returns when its response queue is empty: retries are
+/// exhausted and the cause is reported like a provider `503` overload.
+fn queue_empty_error() -> LlmError {
+    LlmError::RetryExhausted {
+        attempts: 1,
+        last_error: Box::new(LlmError::Api {
+            status: 503,
+            body: "mock response queue empty".to_string(),
+        }),
+    }
+}
+
 /// A programmable mock LLM backend for deterministic, fast tests.
 ///
 /// Responses are queued in FIFO order. Callers can assert on the messages
@@ -248,7 +260,7 @@ impl LlmBackend for MockLlmClient {
             .push(CallRecord { messages, tools });
         match self.chat_responses.lock().unwrap().pop_front() {
             Some(result) => result,
-            None => Err(LlmError::RetryExhausted { attempts: 1 }),
+            None => Err(queue_empty_error()),
         }
     }
 
@@ -266,7 +278,7 @@ impl LlmBackend for MockLlmClient {
         // caller targets.
         match self.chat_responses.lock().unwrap().pop_front() {
             Some(result) => result,
-            None => Err(LlmError::RetryExhausted { attempts: 1 }),
+            None => Err(queue_empty_error()),
         }
     }
 
@@ -285,7 +297,7 @@ impl LlmBackend for MockLlmClient {
                 Ok(Box::pin(stream))
             }
             Some(Err(e)) => Err(e),
-            None => Err(LlmError::RetryExhausted { attempts: 1 }),
+            None => Err(queue_empty_error()),
         }
     }
 

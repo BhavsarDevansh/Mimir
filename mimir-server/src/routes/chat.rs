@@ -440,7 +440,7 @@ pub async fn chat_stream_handler(
                         .send(
                             Event::default()
                                 .event("error")
-                                .data("internal server error"),
+                                .data(error::sse_error_message(&e)),
                         )
                         .await;
                     break 'outer;
@@ -493,7 +493,7 @@ pub async fn chat_stream_handler(
                             .send(
                                 Event::default()
                                     .event("error")
-                                    .data("internal server error"),
+                                    .data(error::sse_error_message(&e)),
                             )
                             .await;
                         break 'outer;

@@ -157,7 +157,14 @@ async fn test_chat_stream_llm_error_sends_error_event() {
         .unwrap();
     let text = String::from_utf8(bytes.to_vec()).unwrap();
     assert!(text.contains("partial"));
-    assert!(text.contains("error"));
+    assert!(
+        text.contains("event: error"),
+        "a failed stream must emit an error event: {text:?}"
+    );
+    assert!(
+        text.contains("API error 500: boom"),
+        "the error event must surface the LLM failure detail: {text:?}"
+    );
 }
 #[tokio::test]
 async fn test_chat_queue_full_returns_503() {

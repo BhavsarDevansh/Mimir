@@ -33,6 +33,13 @@ impl Connector for MockConnector {
             .unwrap_or(self.mode)
     }
 
+    fn mode_if_resolved(&self) -> Option<ConnectorMode> {
+        self.mode_resolution_override
+            .as_ref()
+            .map(|mode| *mode.lock().unwrap())
+            .unwrap_or_else(|| Some(self.mode()))
+    }
+
     fn config_schema(&self) -> serde_json::Value {
         Self::config_schema_value()
     }

@@ -432,9 +432,12 @@ pub(super) async fn record_failure(
 /// backoff (still preemptable by a trigger) instead of the polling interval.
 ///
 /// Push-mode connectors loop immediately on success (they block inside `sync`
-/// waiting for service events, so there is no polling interval to wait on);
-/// manual triggers are rejected upstream for push connectors, so the trigger
-/// channel is never selected in the push success arm.
+/// waiting for service events, so there is no polling interval to wait on).
+/// The trigger channel is still drained in the push success arm: the
+/// manual-sync gate accepts triggers for an `auto` connector whose capability
+/// probe has not completed (issue #475), and the probe can resolve to push
+/// after the gate check but before the runner reads the channel — a queued
+/// trigger must run its cycle, not strand the awaiting caller.
 pub(super) async fn wait_next(
     mode: &ConnectorMode,
     signals: &mut RunnerSignals,
@@ -448,8 +451,19 @@ pub(super) async fn wait_next(
     } else if let ConnectorMode::Polling { interval, jitter } = *mode {
         interval + jitter
     } else {
-        // Push mode, successful last cycle: loop immediately.
-        return NextEvent::Proceed;
+        // Push mode, successful last cycle: loop immediately — but drain any
+        // trigger queued while the mode was unprobed (issue #475). The gate
+        // accepts triggers for an `auto` connector whose capability probe has
+        // not completed, and the probe can resolve to push after the gate
+        // check but before the runner reads the channel; a queued trigger must
+        // run its cycle, not strand the awaiting caller. `try_recv` is
+        // non-blocking, so the busy loop is unchanged when the channel is
+        // empty.
+        return match trigger_rx.try_recv() {
+            Ok(req) => NextEvent::Trigger(req),
+            Err(mpsc::error::TryRecvError::Empty) => NextEvent::Proceed,
+            Err(mpsc::error::TryRecvError::Disconnected) => NextEvent::Shutdown,
+        };
     };
 
     tokio::select! {

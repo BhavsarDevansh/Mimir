@@ -112,8 +112,10 @@ mimir connector add
 # Flag form for scripts: the connector is created in Setup; activate it with
 # `resume`. Set `mode=poll` (with an optional `poll_interval_secs`, default
 # 300s) so manual `sync` works — the omitted mode defaults to `auto`, which
-# selects IMAP IDLE when the server advertises it and then rejects manual
-# sync with `CONNECTOR_PUSH_UNSUPPORTED`. Push delivery (`mode=auto` or
+# selects IMAP IDLE when the server advertises it; manual sync is rejected
+# with `CONNECTOR_PUSH_UNSUPPORTED` only once the mode has resolved to push —
+# before the first successful probe (the list shows `-`) manual sync is
+# accepted as the force-retry (issue #475). Push delivery (`mode=auto` or
 # `mode=idle`) is the alternative for scripts that let new mail arrive
 # automatically.
 mimir connector add email --backend imap host=imap.gmail.com auth.kind=app_password auth.username=me@gmail.com mode=poll poll_interval_secs=300

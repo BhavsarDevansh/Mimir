@@ -73,9 +73,11 @@ pub enum TriggerError {
         /// Persisted lifecycle status, if the row could be loaded.
         status: Option<ConnectorStatus>,
     },
-    /// The connector runs in push mode. Manual sync triggers preempt the
-    /// polling interval, which push-mode connectors do not have; push-mode
-    /// manual sync is deferred to a later Phase 3 issue.
+    /// The connector's mode is *resolved* to push. Manual sync triggers
+    /// preempt the polling interval, which push-mode connectors do not have;
+    /// push-mode manual sync is deferred to a later Phase 3 issue. An `auto`
+    /// connector whose capability probe has not completed yet is not rejected
+    /// (issue #475).
     #[error(
         "connector {id} runs in push mode; manual sync trigger is not supported for push connectors"
     )]

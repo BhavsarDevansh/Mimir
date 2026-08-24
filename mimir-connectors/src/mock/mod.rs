@@ -34,8 +34,10 @@
 //! The mock simulates this by sleeping the configured `interval_ms` at the
 //! start of every `sync()` (the "schedule"), then staging the canned facts.
 //! The supervisor aborts the runner task on shutdown, cancelling the in-flight
-//! sleep; F9 manual triggers are rejected for push connectors, so no trigger
-//! path is needed.
+//! sleep. Manual triggers are rejected only for connectors whose mode is
+//! *resolved* to push; an unprobed `auto` connector's trigger is delivered to
+//! the runner, which runs the cycle (the mock's `sync` sleeps the interval
+//! first, then stages the facts) — the mock needs no trigger path of its own.
 
 mod config;
 mod connector;
@@ -75,6 +77,15 @@ pub struct MockConnector {
     /// spawn-time snapshot. Shared via `Arc` so the test and the supervisor's
     /// cloned instance observe the same value.
     mode_override: Option<Arc<StdMutex<Option<ConnectorMode>>>>,
+    /// Runtime override consulted by
+    /// [`Connector::mode_if_resolved`](crate::connector::Connector::mode_if_resolved)
+    /// before the default `Some(self.mode())` (issue #475): while present,
+    /// the trait method reports the wrapped value verbatim — `None`
+    /// simulates an unprobed `auto` connector whose capability probe has not
+    /// completed yet, `Some(mode)` pins the resolved mode. Shared via `Arc`
+    /// so the test and the supervisor's cloned instance observe the same
+    /// value.
+    mode_resolution_override: Option<Arc<StdMutex<Option<ConnectorMode>>>>,
     facts: Vec<MockFactConfig>,
     batch_size: Option<u32>,
     health: HealthStatus,
@@ -116,6 +127,7 @@ impl Default for MockConnector {
                 jitter: Duration::from_millis(DEFAULT_JITTER_MS),
             },
             mode_override: None,
+            mode_resolution_override: None,
             facts: Vec::new(),
             batch_size: None,
             health: HealthStatus::Online,

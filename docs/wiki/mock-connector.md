@@ -26,7 +26,7 @@ It is also the vehicle for the end-to-end "sync → extract → insert → query
 ### Two modes
 
 - **Polling** — the supervisor waits `interval_ms + jitter_ms` between syncs.
-- **Push** — the mock sleeps `interval_ms` inside `sync()` to self-pace, then emits. The supervisor cancels it on shutdown. Manual triggers are not supported for push connectors (the framework rejects them).
+- **Push** — the mock sleeps `interval_ms` inside `sync()` to self-pace, then emits. The supervisor cancels it on shutdown. Manual triggers are rejected only once the mode is *resolved* to push; an unprobed `auto` connector keeps manual sync as the force-retry until its capability probe proves push (issue #475).
 
 ## Use cases
 

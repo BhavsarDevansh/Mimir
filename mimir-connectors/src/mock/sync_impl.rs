@@ -69,6 +69,7 @@ impl MockConnector {
             ctype,
             mode,
             mode_override: None,
+            mode_resolution_override: None,
             facts: parsed.facts,
             batch_size: parsed.batch_size,
             health: parsed.health,
@@ -106,6 +107,20 @@ impl MockConnector {
     /// the value is visible to `trigger_sync` without re-instantiating.
     pub fn with_mode_override(mut self, mode: Arc<StdMutex<Option<ConnectorMode>>>) -> Self {
         self.mode_override = Some(mode);
+        self
+    }
+
+    /// Attach a shared runtime mode-resolution override (issue #475): while
+    /// present, [`Connector::mode_if_resolved`](crate::connector::Connector::mode_if_resolved)
+    /// reports its value instead of the default `Some(self.mode())`. `None`
+    /// simulates an unprobed `auto` connector whose capability probe has not
+    /// run yet; `Some(mode)` pins the resolved mode. Consumes and returns
+    /// `self` for chaining; not exposed through the factory/config path.
+    pub fn with_mode_resolution_override(
+        mut self,
+        mode: Arc<StdMutex<Option<ConnectorMode>>>,
+    ) -> Self {
+        self.mode_resolution_override = Some(mode);
         self
     }
 

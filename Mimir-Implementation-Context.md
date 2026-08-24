@@ -203,7 +203,7 @@ The daemon exposes `GET /v1/models` and `POST /v1/chat/completions` (blocking + 
 - Composed into the system prompt as the final block, after the preset tone text and the shared operating directives, combined with an upcoming-events section rendered from the events overlay
 - Auto-managed: hook-driven chat extraction (`remember.chat`), background ingestion, and nightly optimization add, replace, remove, and re-rank facts
 - Regenerated on demand: a fact insert/update/delete that ranks in the top-N, `mimir memory --refresh`, or nightly optimization completion; the background scheduler runs condensation only during LLM downtime
-- Frozen per session: non-incognito sessions reuse the system prompt captured at session creation; incognito requests build a fresh prompt
+- Frozen per session: sessions reuse the system prompt captured at session creation; only the native route's explicit `incognito: true` turns build a fresh prompt — the OpenAI surface has no incognito path (issue #473)
 - No file: the legacy `memory.md` file-backed system was deleted in v0.37.0 (issue #111); see `docs/memory-system.md` for the full pipeline
 
 ### Context Manager

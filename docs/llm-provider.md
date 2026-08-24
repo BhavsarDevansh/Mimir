@@ -21,6 +21,7 @@ Mimir is single-tenant, so there is no device identity. The OpenAI `user` field 
 - The system prompt is first-writer-wins: the personality preset and the memory block captured when the keyed session is created are kept for the session's lifetime, so later preset or memory changes apply only to sessions created afterwards.
 - The client-supplied `messages` array is a stateless echo of history Mimir already stores. Only the last user message is appended as the new turn, and Mimir's stored history stays authoritative — exactly like `mimir chat`. Trailing `tool` messages after the last user message are the client's tool results and continue the in-flight turn; trailing assistant messages are ignored because the server already persisted them.
 - Requests without `user` (or with a blank one) resolve the fixed `default` session key, so all unkeyed clients share one persistent conversation in the central profile. This was a deliberate decision: inferring "no user ⇒ don't learn" turned a client limitation (a generic phone LLM app that cannot send the `user` field) into silent data loss for a single-tenant personal assistant (issue #473). Blank values map to the same key so an empty conversation key cannot silently create a session keyed on `""`.
+- The literal key `default` is reserved for unkeyed requests: a client that sends `user: "default"` joins the shared default conversation, so use any other value for a dedicated conversation.
 
 ## Model Mapping
 

@@ -49,6 +49,7 @@ Set `"stream": true` for token-by-token responses. Add `"stream_options": {"incl
 
 - Keep one `user` value per conversation so history and memory stay coherent.
 - Unkeyed requests all share the default conversation; use a fixed `user` value when you want separate conversations per device.
+- The literal key `default` is reserved for unkeyed requests — use any other value for your own conversation keys.
 - Use the daemon's API token as the API key; every route except `/health` requires it.
 - For remote devices, put the daemon behind a reverse proxy with TLS (Tailscale, WireGuard, or similar) — the daemon itself stays reverse-proxy-first.
 - Prefer a preset name as the model unless you specifically want a different upstream model.

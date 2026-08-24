@@ -327,8 +327,8 @@ pub fn extraction_message() -> Message {
 }
 
 /// Whether the KG holds `favourite_colour=blue` for the configured user.
-/// The user entity itself is created at daemon start, so incognito
-/// persistence checks must observe the *fact*, not the entity's existence.
+/// The user entity itself is created at daemon start, so persistence
+/// checks must observe the *fact*, not the entity's existence.
 #[allow(dead_code)]
 pub async fn has_favourite_colour(state: &Arc<AppState>) -> bool {
     let search = state

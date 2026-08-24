@@ -63,6 +63,6 @@ Each result includes:
 ## Technical Notes
 
 - Uses SQLite FTS5 virtual table (`messages_fts`) indexing `role` and `content`.
-- Snippets are generated with `snippet(messages_fts, -1, '\u003c\u003c\u003c', '\u003e\u003e\u003e', '...', 30)` — a 30-token window on each side of the hit so matches inside long messages surface the surrounding answer.
+- Snippets are generated with `snippet(messages_fts, -1, '\u003c\u003c\u003c', '\u003e\u003e\u003e', '...', 1000)` and trimmed in Rust to a 30-token window on each side of the hit, so matches inside long messages surface the surrounding answer.
 - The FTS5 index is kept in sync via triggers on insert, update, and delete.
 - Queries are tokenised and each token is quoted before building the FTS5 `MATCH` expression, so FTS5 operators (`AND`, `OR`, `NOT`, `*`, `-`, parentheses) cannot inject syntax; a query that is itself wrapped in double quotes keeps exact-phrase semantics.

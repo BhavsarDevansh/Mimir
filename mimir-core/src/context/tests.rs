@@ -614,10 +614,12 @@ async fn search_messages_hyphen_and_compound_forms_surface_hotel_context() {
 async fn search_messages_snippet_window_surfaces_context_around_hit() {
     let (mgr, _dir) = setup_manager().await;
     let sid = mgr.create_session("sys").await.unwrap();
-    // 60 distinct words before the hit; the snippet window must include
-    // context far enough back to surface the answer, not just the hit.
-    let words: Vec<String> = (1..=60).map(|i| format!("word{i:02}")).collect();
-    let long = format!("{} needle", words.join(" "));
+    // 60 distinct words before and after the hit; the snippet window must
+    // include up to 30 tokens of context on each side of the hit, not a
+    // 30-token total fragment.
+    let before: Vec<String> = (1..=60).map(|i| format!("word{i:02}")).collect();
+    let after: Vec<String> = (1..=60).map(|i| format!("post{i:02}")).collect();
+    let long = format!("{} needle {}", before.join(" "), after.join(" "));
     mgr.add_user_message(sid, &long).await.unwrap();
 
     let results = mgr.search_messages("needle", 10, None).await.unwrap();
@@ -626,6 +628,14 @@ async fn search_messages_snippet_window_surfaces_context_around_hit() {
     // word35 sits 25 tokens before the hit: visible with a 30-token window,
     // cut off by the old 10-token window.
     assert!(results[0].snippet.contains("word35"));
+    // word31 sits exactly 30 tokens before the hit and post30 exactly 30
+    // tokens after: both must be visible with a per-side window, but a
+    // 30-token total fragment cuts them off.
+    assert!(results[0].snippet.contains("word31"));
+    assert!(results[0].snippet.contains("post30"));
+    // Context beyond the per-side window is trimmed.
+    assert!(!results[0].snippet.contains("word01"));
+    assert!(!results[0].snippet.contains("post31"));
 }
 
 #[tokio::test]

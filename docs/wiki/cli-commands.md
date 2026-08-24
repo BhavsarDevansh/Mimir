@@ -476,6 +476,8 @@ mimir connector sync photos --full --json
 
 A connector that is not running (e.g. freshly added, still `Setup`) reports a 409 with a hint to run `mimir connector resume <slug>` first.
 
+A connector whose sync mode has resolved to push (IMAP IDLE or a file watcher) reports a `CONNECTOR_PUSH_UNSUPPORTED` 409 — it syncs automatically, so manual sync is deferred. An `auto`-mode email connector whose mode has not resolved yet (its row shows `-` in `mimir connector list`) keeps manual sync as the force-retry until a cycle proves the mode (issue #475).
+
 ### `mimir connector auth`
 
 Ingest credentials for an existing connector — completes an instance that was registered without credentials (a non-interactive `add`, or a credential the daemon later rejected) and re-auths after expiry, without `remove` + re-`add`:

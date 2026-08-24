@@ -262,7 +262,7 @@ The supervisor is a library component in `mimir-connectors` with unit/integratio
 - `TriggerOutcome::Failed(msg)` — a recoverable cycle error (panic, offline, parse failure, shutdown mid-cycle).
 - `TriggerError::NotFound` / `NotFoundSlug` — no connector row with that key.
 - `TriggerError::NotRunning` — the connector is `Paused` / `Error` / `Setup` or its runner has exited (resume it first).
-- `TriggerError::PushUnsupported` — push-mode connectors have no polling interval to preempt; push manual sync is deferred to a later Phase 3 issue.
+- `TriggerError::PushUnsupported` — connectors whose mode is *resolved* to push have no polling interval to preempt; push manual sync is deferred. An `auto`-mode connector whose capability probe has not completed yet (`mode_if_resolved()` returns `None`) keeps manual sync as the force-retry until the mode is proven (issue #475).
 - `TriggerError::RunnerDropped` — the runner stopped mid-sync before reporting.
 
 The issue spec described the mechanism as a per-connector `tokio::sync::Notify` plus a serialisation semaphore. The implementation uses a small request channel (carrying the `SyncOptions` and returning the outcome) instead of a bare `Notify`, because `--full` / `--since` must reach the cycle and the HTTP route needs the sync result — but the one-permit semaphore is kept as the explicit serialisation gate, matching the spec's intent ("no concurrent sync on the same connector").

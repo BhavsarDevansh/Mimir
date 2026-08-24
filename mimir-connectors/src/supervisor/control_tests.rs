@@ -8,7 +8,9 @@ use tokio::sync::watch;
 use crate::connector::{
     ConnectorAction, ConnectorError, ConnectorMode, HealthStatus, SyncOptions, SyncOutcome,
 };
-use crate::{ActError, FnConnectorFactory, MockSyncRecorder, TriggerError, TriggerOutcome};
+use crate::{
+    ActError, FnConnectorFactory, MockConnector, MockSyncRecorder, TriggerError, TriggerOutcome,
+};
 use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::enums::ConnectorAuthState;
 
@@ -281,6 +283,108 @@ async fn trigger_sync_consults_live_mode_not_spawn_snapshot() {
         TriggerOutcome::Ok { fetched, .. } => assert_eq!(fetched, 0),
         other => panic!("expected a successful trigger outcome, got {other:?}"),
     }
+    supervisor.stop(row.id).await;
+}
+
+#[tokio::test]
+async fn trigger_sync_allows_unprobed_auto_until_the_mode_resolves() {
+    // Issue #475: the manual-sync push gate must consult the *resolved*
+    // mode — an `auto`-mode connector whose capability probe has never
+    // completed (or whose cycles keep failing before the probe persists)
+    // reports no mode, so the manual trigger is the force-retry and must be
+    // allowed. Only a connector whose mode is *proven* push rejects;
+    // polling — probed or config-pinned — keeps manual sync.
+    //
+    // The mock is configured push with failing cycles so the runner sits in
+    // failure backoff — the real unprobed-connector shape from the issue
+    // (every cycle fails at auth, so the IDLE capability never resolves).
+    // A push-mode runner with *successful* cycles busy-loops and never reads
+    // the trigger channel; that is the proven-push case the guard rejects.
+    let dir = tempfile::tempdir().unwrap();
+    let kg = Arc::new(
+        KnowledgeGraph::init(&dir.path().join("kg.db"))
+            .await
+            .unwrap(),
+    );
+    let registry = ConnectorRegistry::new();
+    // The connector reports push via `mode()` (an unprobed `auto` email
+    // connector is optimistically push) but `mode_if_resolved()` returns the
+    // shared override: `None` until the probe flips it.
+    let resolution = Arc::new(StdMutex::new(None));
+    let resolution_handle = Arc::clone(&resolution);
+    registry
+        .register(
+            ConnectorType::Email,
+            "test".to_string(),
+            FnConnectorFactory::new(move |config, _ctx| {
+                let connector = MockConnector::from_config(config)?
+                    .with_mode_resolution_override(Arc::clone(&resolution_handle));
+                Ok(Arc::new(connector) as Arc<dyn Connector>)
+            }),
+        )
+        .unwrap();
+    let (_tx, rx) = watch::channel(false);
+    let supervisor = Arc::new(ConnectorSupervisor::new(
+        Arc::new(registry),
+        Arc::clone(&kg),
+        SupervisorConfig::default(),
+        rx,
+    ));
+    let row = kg
+        .create_connector(UpsertConnectorInput {
+            connector_type: ConnectorType::Email,
+            slug: "outlook-test".to_string(),
+            backend: "test".to_string(),
+            display_name: "Outlook Test".to_string(),
+            // `interval_ms` keeps the mock's push-mode sync sleep short so
+            // failing cycles reach the backoff window quickly.
+            config_json: r#"{"mode":"push","always_fail":true,"interval_ms":50}"#.to_string(),
+            status: None,
+            auth_state: None,
+        })
+        .await
+        .unwrap();
+    supervisor.start(row.id).await.unwrap();
+    wait_for_status(&kg, row.id, ConnectorStatus::Active).await;
+
+    // Unprobed (`mode_if_resolved()` is `None`): manual sync is accepted —
+    // there is no live push loop to preempt while the capability is unknown.
+    // The trigger is *delivered* (the guard lets it through) and the cycle
+    // runs — it fails at the injected sync error, which is exactly what the
+    // manual retry reports while auth is broken.
+    let outcome = supervisor
+        .trigger_sync(row.id, SyncOptions::default())
+        .await
+        .expect("an unprobed auto connector must accept a manual trigger");
+    assert!(
+        matches!(outcome, TriggerOutcome::Failed(_)),
+        "expected the delivered trigger to fail its cycle, got {outcome:?}"
+    );
+
+    // The probe resolves to push: manual sync now rejects.
+    *resolution.lock().unwrap() = Some(ConnectorMode::Push);
+    let err = supervisor
+        .trigger_sync(row.id, SyncOptions::default())
+        .await
+        .expect_err("a resolved push connector must reject manual sync");
+    assert!(
+        matches!(err, TriggerError::PushUnsupported { .. }),
+        "expected PushUnsupported, got {err:?}"
+    );
+
+    // The probe resolves to polling: manual sync is accepted again.
+    *resolution.lock().unwrap() = Some(ConnectorMode::Polling {
+        interval: Duration::from_secs(300),
+        jitter: Duration::from_secs(30),
+    });
+    let outcome = supervisor
+        .trigger_sync(row.id, SyncOptions::default())
+        .await
+        .expect("a resolved polling connector keeps manual sync");
+    assert!(
+        matches!(outcome, TriggerOutcome::Failed(_)),
+        "expected the delivered trigger to fail its cycle, got {outcome:?}"
+    );
     supervisor.stop(row.id).await;
 }
 

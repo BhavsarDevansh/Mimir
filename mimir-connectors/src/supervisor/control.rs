@@ -31,8 +31,13 @@ impl ConnectorSupervisor {
     /// - [`TriggerError::NotFound`] — no connector row with `id`.
     /// - [`TriggerError::NotRunning`] — the connector is `Paused` / `Error` /
     ///   `Setup`, or its runner has exited (resume it first).
-    /// - [`TriggerError::PushUnsupported`] — push-mode connectors have no
-    ///   polling interval to preempt; push manual sync is deferred.
+    /// - [`TriggerError::PushUnsupported`] — connectors whose mode is
+    ///   *resolved* to push have no polling interval to preempt; push manual
+    ///   sync is deferred. An `auto`-mode connector whose capability probe
+    ///   has not completed yet
+    ///   ([`Connector::mode_if_resolved`](crate::connector::Connector::mode_if_resolved)
+    ///   returns `None`) keeps manual sync until the mode is proven
+    ///   (issue #475).
     /// - [`TriggerError::RunnerDropped`] — the runner stopped mid-sync
     ///   (shutdown / breaker / auth-expiry) before reporting an outcome.
     pub async fn trigger_sync(
@@ -42,10 +47,10 @@ impl ConnectorSupervisor {
     ) -> Result<TriggerOutcome, TriggerError> {
         // Clone the sendable parts out of the lock before awaiting so the
         // mutex is never held across an await. The live connector (shared
-        // with the runner) is consulted for the mode — not a spawn-time
-        // snapshot — so an `auto`-mode connector that probed `IDLE`
-        // unsupported resolves to polling and keeps manual sync (issue #397
-        // review).
+        // with the runner) is consulted for the resolved mode — not a
+        // spawn-time snapshot — so an `auto`-mode connector that probed
+        // `IDLE` unsupported resolves to polling and keeps manual sync
+        // (issue #397 review).
         let (trigger_tx, semaphore, connector, finished) = {
             let guard = self.handles.lock().await;
             match guard.get(&id) {
@@ -75,7 +80,14 @@ impl ConnectorSupervisor {
             let status = row.and_then(|r| r.status());
             return Err(TriggerError::NotRunning { id, status });
         }
-        if connector.mode() == ConnectorMode::Push {
+        // Reject only a *proven* push connector. An unprobed `auto`-mode
+        // connector reports `None` from `mode_if_resolved()` — there is no
+        // live push loop to preempt while the capability is unknown, and the
+        // manual trigger is the force-retry while the connector sits in
+        // failure backoff or has never completed a probe (issue #475).
+        // Config-pinned `idle` / `poll` modes resolve deterministically, so
+        // their behaviour is unchanged.
+        if connector.mode_if_resolved() == Some(ConnectorMode::Push) {
             return Err(TriggerError::PushUnsupported { id });
         }
         // Serialise concurrent triggers: only one caller holds the permit at a

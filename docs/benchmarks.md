@@ -100,6 +100,7 @@ Indicative results: 1024 chunks 31.5 ms → 542 µs (~58×); 4096 chunks 494.9 m
 | Benchmark | What it measures |
 |-----------|------------------|
 | `fts5_escape_mixed_inputs` | `escape_fts5` over boolean-operator/quote/unicode inputs |
+| `fts5_escape_tokens_mixed_inputs` | `escape_fts5_tokens` token-AND escaping over the same inputs |
 | `daily_schedule_next_after` | `DailySchedule::next_after` UTC arithmetic |
 | `daily_schedule_parse` | `DailySchedule::parse("HH:MM")` × 5 |
 | `job_run_status_serde_roundtrip` / `job_priority_serde_roundtrip` | Enum serde roundtrips |

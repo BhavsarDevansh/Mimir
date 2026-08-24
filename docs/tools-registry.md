@@ -114,7 +114,7 @@ Centralised error enum covering permission, timeout, invalid arguments, missing 
 ### `SearchConversationHistoryTool`
 - Name: `search_conversation_history`
 - Parameters:
-  - `query` (string, required): keyword or phrase to search for
+  - `query` (string, required): terms to search for; all terms must match in any order, or wrap the whole query in double quotes for an exact phrase
   - `limit` (integer, optional): max results, default 5, max 20
   - `session_id` (integer, optional): restrict search to a single conversation
 - Searches past conversation history via SQLite FTS5 and returns BM25-ranked contextual snippets

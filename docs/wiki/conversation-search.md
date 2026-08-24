@@ -18,11 +18,11 @@ During a chat, if the agent needs to recall something from a prior conversation,
 }
 ```
 
-- `query` — the keyword or phrase to search for.
+- `query` — the terms to search for; every term must match, in any order (wrap the whole query in double quotes to require an exact phrase).
 - `limit` — max results (default 5, max 20).
 - `session_id` — optional; restricts search to a single conversation.
 
-If `session_id` is omitted, all conversations are searched.
+If `session_id` is omitted, all conversations are searched. Multi-word queries use AND semantics: `check in time` matches any message containing `check`, `in`, and `time` in any order, so a message like "time to check in" is found even though the exact phrase never appears. Hyphenated words are split like the FTS5 tokenizer splits them, so `check-in` and `check in` are equivalent. Pass the whole query wrapped in double quotes (`"check in time"`) to require the exact phrase instead.
 
 ## Result Format
 
@@ -63,6 +63,6 @@ Each result includes:
 ## Technical Notes
 
 - Uses SQLite FTS5 virtual table (`messages_fts`) indexing `role` and `content`.
-- Snippets are generated with `snippet(messages_fts, -1, '\u003c\u003c\u003c', '\u003e\u003e\u003e', '...', 10)`.
+- Snippets are generated with `snippet(messages_fts, -1, '\u003c\u003c\u003c', '\u003e\u003e\u003e', '...', 1000)` and trimmed in Rust to a 30-token window on each side of the hit, so matches inside long messages surface the surrounding answer.
 - The FTS5 index is kept in sync via triggers on insert, update, and delete.
-- Search queries are escaped to prevent FTS5 syntax errors.
+- Queries are tokenised and each token is quoted before building the FTS5 `MATCH` expression, so FTS5 operators (`AND`, `OR`, `NOT`, `*`, `-`, parentheses) cannot inject syntax; a query that is itself wrapped in double quotes keeps exact-phrase semantics.

@@ -7,24 +7,35 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use mimir_core::{
     config::Config,
-    fts5::escape_fts5,
+    fts5::{escape_fts5, escape_fts5_tokens},
     job_queue::{DailySchedule, JobPriority, JobRunStatus},
     tools::{ToolOutput, output_to_llm_text},
 };
 use std::hint::black_box;
 
+const MIXED_ESCAPE_INPUTS: [&str; 5] = [
+    "hello world",
+    "foo OR bar AND NOT baz",
+    "a\"b\"c*d*e",
+    "(parentheses) and -dashes-",
+    "🎉 unicode mixed with ASCII keywords",
+];
+
 fn bench_escape_fts5(c: &mut Criterion) {
-    let inputs = [
-        "hello world",
-        "foo OR bar AND NOT baz",
-        "a\"b\"c*d*e",
-        "(parentheses) and -dashes-",
-        "🎉 unicode mixed with ASCII keywords",
-    ];
     c.bench_function("fts5_escape_mixed_inputs", |b| {
         b.iter(|| {
-            for input in inputs {
+            for input in MIXED_ESCAPE_INPUTS {
                 black_box(escape_fts5(input));
+            }
+        })
+    });
+}
+
+fn bench_escape_fts5_tokens(c: &mut Criterion) {
+    c.bench_function("fts5_escape_tokens_mixed_inputs", |b| {
+        b.iter(|| {
+            for input in MIXED_ESCAPE_INPUTS {
+                black_box(escape_fts5_tokens(input));
             }
         })
     });
@@ -146,6 +157,7 @@ cooldown_seconds = 30
 criterion_group!(
     pure_helpers,
     bench_escape_fts5,
+    bench_escape_fts5_tokens,
     bench_daily_schedule_next_after,
     bench_daily_schedule_parse,
     bench_job_queue_serde,

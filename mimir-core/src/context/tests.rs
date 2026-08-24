@@ -508,6 +508,137 @@ async fn search_messages_no_results() {
 }
 
 #[tokio::test]
+async fn search_messages_matches_terms_in_any_order() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    mgr.add_user_message(sid, "the quick brown fox and a lazy dog")
+        .await
+        .unwrap();
+    mgr.add_assistant_message(sid, "dog jumps over the fox")
+        .await
+        .unwrap();
+    mgr.add_user_message(sid, "fox only").await.unwrap();
+
+    // "fox dog" must match messages containing both terms in any order; the
+    // "fox only" message lacks "dog" and must not match.
+    let results = mgr.search_messages("fox dog", 10, None).await.unwrap();
+    assert!(results.iter().any(|r| r.snippet.contains("quick brown")));
+    assert!(results.iter().any(|r| r.snippet.contains("jumps over")));
+    assert!(results.iter().all(|r| !r.snippet.contains("fox only")));
+}
+
+#[tokio::test]
+async fn search_messages_token_and_not_phrase() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    mgr.add_user_message(sid, "check in time is 3pm")
+        .await
+        .unwrap();
+    mgr.add_assistant_message(sid, "time to check in at reception")
+        .await
+        .unwrap();
+    mgr.add_user_message(sid, "check out time is 11am")
+        .await
+        .unwrap();
+
+    // Issue #493: "check in time" must match both messages that contain all
+    // three terms in any order, and must not match the message missing "in".
+    let results = mgr
+        .search_messages("check in time", 10, None)
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    assert!(results.iter().any(|r| r.snippet.contains("3pm")));
+    assert!(results.iter().any(|r| r.snippet.contains("reception")));
+}
+
+#[tokio::test]
+async fn search_messages_quoted_query_requires_exact_phrase() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    mgr.add_user_message(sid, "check in time is 3pm")
+        .await
+        .unwrap();
+    mgr.add_assistant_message(sid, "time to check in at reception")
+        .await
+        .unwrap();
+
+    // A fully quoted query keeps exact-phrase semantics: only the message
+    // containing the contiguous phrase matches, even though both messages
+    // contain all three terms.
+    let results = mgr
+        .search_messages("\"check in time\"", 10, None)
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results[0].snippet.contains("3pm"));
+}
+
+#[tokio::test]
+async fn search_messages_hyphen_and_compound_forms_surface_hotel_context() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    mgr.add_user_message(sid, "The hotel check-in time is 3pm; checkin at reception.")
+        .await
+        .unwrap();
+    mgr.add_assistant_message(sid, "Landlord Inventory and Check-In")
+        .await
+        .unwrap();
+
+    // "check in", "check-in" and "checkin" must all surface the hotel booking
+    // context (the FTS5 tokenizer indexes "check-in" as "check" + "in").
+    for query in ["check in", "check-in", "checkin"] {
+        let results = mgr.search_messages(query, 10, None).await.unwrap();
+        assert!(
+            results.iter().any(|r| r.snippet.contains("hotel")),
+            "query {query:?} should surface the hotel context"
+        );
+    }
+
+    // The compound form "checkin" is a single token, so it cannot match the
+    // housing heading at all — the false positive from issue #493.
+    let results = mgr.search_messages("checkin", 10, None).await.unwrap();
+    assert!(results.iter().all(|r| !r.snippet.contains("Landlord")));
+
+    // The full query distinguishes the hotel booking from the housing heading:
+    // the heading lacks "time", so AND semantics exclude it.
+    let results = mgr
+        .search_messages("check in time", 10, None)
+        .await
+        .unwrap();
+    assert!(results.iter().any(|r| r.snippet.contains("hotel")));
+    assert!(results.iter().all(|r| !r.snippet.contains("Landlord")));
+}
+
+#[tokio::test]
+async fn search_messages_snippet_window_surfaces_context_around_hit() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    // 60 distinct words before and after the hit; the snippet window must
+    // include up to 30 tokens of context on each side of the hit, not a
+    // 30-token total fragment.
+    let before: Vec<String> = (1..=60).map(|i| format!("word{i:02}")).collect();
+    let after: Vec<String> = (1..=60).map(|i| format!("post{i:02}")).collect();
+    let long = format!("{} needle {}", before.join(" "), after.join(" "));
+    mgr.add_user_message(sid, &long).await.unwrap();
+
+    let results = mgr.search_messages("needle", 10, None).await.unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results[0].snippet.contains("<<<needle>>>"));
+    // word35 sits 25 tokens before the hit: visible with a 30-token window,
+    // cut off by the old 10-token window.
+    assert!(results[0].snippet.contains("word35"));
+    // word31 sits exactly 30 tokens before the hit and post30 exactly 30
+    // tokens after: both must be visible with a per-side window, but a
+    // 30-token total fragment cuts them off.
+    assert!(results[0].snippet.contains("word31"));
+    assert!(results[0].snippet.contains("post30"));
+    // Context beyond the per-side window is trimmed.
+    assert!(!results[0].snippet.contains("word01"));
+    assert!(!results[0].snippet.contains("post31"));
+}
+
+#[tokio::test]
 async fn test_context_manager_close() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("close_test.db");

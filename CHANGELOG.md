@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.144.3] — 2026-08-24
+
+### Fix: FTS5 conversation search matches all terms in any order instead of requiring an exact phrase (issue #493)
+
+- `escape_fts5` wrapped the whole query in double quotes, so every multi-word `search_conversation_history` query became an exact phrase: in the 2026-08-24 Travelodge ask, "check in time" / "checkin" mostly returned `[]` (the phrase never appears verbatim), and the one repeated hit was the `/memory` dump's housing heading "Landlord Inventory and Check-In" — a false positive the model could not distinguish from "no results", so it kept searching for ~100 calls.
+- A new `escape_fts5_tokens` helper (`mimir-core/src/fts5.rs`) splits the query into tokens on any run of non-alphanumeric characters — mirroring the FTS5 unicode61 tokenizer, so `check-in` becomes `check` + `in` — and AND-combines the double-quoted tokens, so every term must match in any order while FTS5 operators (`AND`, `OR`, `NOT`, `*`, `-`, parentheses) stay fully neutralised. A query that is itself wrapped in double quotes keeps exact-phrase semantics via the existing `escape_fts5`. `search_messages` now uses the token helper; entity search keeps phrase semantics.
+- The snippet window grew from 10 to 30 tokens on each side of the hit, so a match inside a long message surfaces the surrounding answer instead of a bare marker.
+- Tests: `escape_fts5_tokens` unit tests (AND joining, hyphen splitting, operator neutralisation, separators, quoted-phrase fallback, unicode, whitespace) and `search_messages` integration tests (terms in any order, AND-not-phrase, `check in` / `check-in` / `checkin` surfacing the hotel context while the housing "Check-In" heading is excluded, and the snippet window surfacing context 25 tokens before the hit). The snippet-window test fails against the old 10-token window.
+- Docs: `docs/wiki/conversation-search.md`, `docs/context-manager.md`, `docs/tools-registry.md`, and `docs/benchmarks.md` updated; the `search_conversation_history` tool schema now tells the model that all terms must match in any order.
+- Version bumped 0.144.2 → 0.144.3 (patch — backwards-compatible bugfix).
+
 ## [0.144.2] — 2026-08-24
 
 ### Fix: docs/llm-provider.md hard-wrapped Errors paragraph (issue #483)

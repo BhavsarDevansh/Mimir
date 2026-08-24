@@ -3,6 +3,7 @@
 use crate::context::ContextManager;
 use crate::context::{ContextError, MessageSearchResult};
 use crate::fts5::escape_fts5_tokens;
+use sqlx::QueryBuilder;
 use sqlx::Row;
 
 /// Tokens of context to show on each side of a match in a search snippet.
@@ -25,40 +26,23 @@ impl ContextManager {
         // `snippet()` centres the fragment on the first match, so fetching
         // 1000 tokens guarantees at least `SNIPPET_SIDE_TOKENS` of context on
         // each side after `trim_snippet_window` cuts the window down.
-        let rows = if let Some(sid) = session_id {
-            sqlx::query(
-                r#"
-                SELECT m.session_id, m.role, m.created_at,
-                       snippet(messages_fts, -1, '<<<', '>>>', '...', 1000) as snippet
-                FROM messages_fts
-                JOIN messages m ON m.id = messages_fts.rowid
-                WHERE messages_fts MATCH ?1 AND m.session_id = ?2
-                ORDER BY messages_fts.rank
-                LIMIT ?3
-                "#,
-            )
-            .bind(&safe_query)
-            .bind(sid)
-            .bind(limit)
-            .fetch_all(self.pool.as_ref())
-            .await?
-        } else {
-            sqlx::query(
-                r#"
-                SELECT m.session_id, m.role, m.created_at,
-                       snippet(messages_fts, -1, '<<<', '>>>', '...', 1000) as snippet
-                FROM messages_fts
-                JOIN messages m ON m.id = messages_fts.rowid
-                WHERE messages_fts MATCH ?1
-                ORDER BY messages_fts.rank
-                LIMIT ?2
-                "#,
-            )
-            .bind(&safe_query)
-            .bind(limit)
-            .fetch_all(self.pool.as_ref())
-            .await?
-        };
+        let mut qb = QueryBuilder::new(
+            r#"
+            SELECT m.session_id, m.role, m.created_at,
+                   snippet(messages_fts, -1, '<<<', '>>>', '...', 1000) as snippet
+            FROM messages_fts
+            JOIN messages m ON m.id = messages_fts.rowid
+            WHERE messages_fts MATCH
+            "#,
+        );
+        qb.push_bind(&safe_query);
+        if let Some(sid) = session_id {
+            qb.push(" AND m.session_id = ");
+            qb.push_bind(sid);
+        }
+        qb.push(" ORDER BY messages_fts.rank LIMIT ");
+        qb.push_bind(limit);
+        let rows = qb.build().fetch_all(self.pool.as_ref()).await?;
 
         let mut results = Vec::with_capacity(rows.len());
         for row in rows {

@@ -22,9 +22,12 @@ use super::wizard::{
 use super::*;
 
 /// Scripted [`PromptDriver`] for wizard tests: each prompt consumes the next
-/// canned answer, so the whole interactive flow runs without a TTY.
+/// canned answer, so the whole interactive flow runs without a TTY. Every
+/// prompt message is recorded too, so tests can pin guidance text (issue
+/// #467 pins the Microsoft account-type and client-ID help this way).
 struct ScriptedPrompt {
     answers: std::cell::RefCell<Vec<ScriptedAnswer>>,
+    messages: std::cell::RefCell<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -38,7 +41,17 @@ impl ScriptedPrompt {
     fn new(answers: Vec<ScriptedAnswer>) -> Self {
         Self {
             answers: std::cell::RefCell::new(answers),
+            messages: std::cell::RefCell::new(Vec::new()),
         }
+    }
+
+    /// The prompt messages asked so far, in order.
+    fn messages(&self) -> Vec<String> {
+        self.messages.borrow().clone()
+    }
+
+    fn record(&self, message: &str) {
+        self.messages.borrow_mut().push(message.to_string());
     }
 
     fn take(&self) -> ScriptedAnswer {
@@ -51,14 +64,16 @@ impl ScriptedPrompt {
 }
 
 impl PromptDriver for ScriptedPrompt {
-    fn select(&self, _message: &str, _options: &[String]) -> Result<usize, String> {
+    fn select(&self, message: &str, _options: &[String]) -> Result<usize, String> {
+        self.record(message);
         match self.take() {
             ScriptedAnswer::Select(index) => Ok(index),
             other => panic!("expected a Select answer, got {other:?}"),
         }
     }
 
-    fn input(&self, _message: &str, default: Option<&str>) -> Result<String, String> {
+    fn input(&self, message: &str, default: Option<&str>) -> Result<String, String> {
+        self.record(message);
         match self.take() {
             ScriptedAnswer::Input(value) => {
                 if value.is_empty() {
@@ -75,7 +90,8 @@ impl PromptDriver for ScriptedPrompt {
         }
     }
 
-    fn password(&self, _message: &str) -> Result<String, String> {
+    fn password(&self, message: &str) -> Result<String, String> {
+        self.record(message);
         match self.take() {
             ScriptedAnswer::Password(value) => Ok(value),
             other => panic!("expected a Password answer, got {other:?}"),
@@ -1474,9 +1490,12 @@ fn wizard_email_outlook_preset_is_oauth_only() {
     // Microsoft retired basic-auth app passwords for Outlook.com and
     // Exchange Online IMAP, so the preset must go straight to the OAuth
     // prompts — there is no Authentication select and no app-password path.
+    // The account-type question (issue #467) is asked right after the
+    // provider pick; here the third choice keeps the `/common/` endpoints.
     let entry = email_catalog_entry();
     let prompts = ScriptedPrompt::new(vec![
         ScriptedAnswer::Select(1),            // Outlook / Office 365
+        ScriptedAnswer::Select(2),            // Account type — any (common)
         ScriptedAnswer::Input(String::new()), // host → default
         ScriptedAnswer::Input(String::new()), // port → default
         ScriptedAnswer::Input(String::new()), // mailbox → default
@@ -1522,10 +1541,15 @@ fn wizard_email_outlook_preset_is_oauth_only() {
 }
 
 #[test]
-fn wizard_email_outlook_preset_oauth_uses_microsoft_endpoints() {
+fn wizard_email_outlook_personal_account_preselects_consumers_endpoints() {
+    // Issue #467: a personal-only app registration (Supported account
+    // types = "Personal Microsoft accounts only") fails the `/common/`
+    // authorize request, so the preset must pre-fill `/consumers/` when the
+    // user connects a personal Outlook.com / Hotmail account.
     let entry = email_catalog_entry();
     let prompts = ScriptedPrompt::new(vec![
         ScriptedAnswer::Select(1),            // Outlook / Office 365
+        ScriptedAnswer::Select(0),            // Microsoft account type — personal
         ScriptedAnswer::Input(String::new()), // host → default
         ScriptedAnswer::Input(String::new()), // port → default
         ScriptedAnswer::Input(String::new()), // mailbox → default
@@ -1548,11 +1572,11 @@ fn wizard_email_outlook_preset_oauth_uses_microsoft_endpoints() {
     assert_eq!(config["auth"]["kind"], "oauth");
     assert_eq!(
         config["auth"]["auth_uri"],
-        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+        "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize"
     );
     assert_eq!(
         config["auth"]["token_endpoint"],
-        "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+        "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
     );
     assert_eq!(config["auth"]["client_id"], "client-ms-123");
     assert_eq!(
@@ -1561,6 +1585,96 @@ fn wizard_email_outlook_preset_oauth_uses_microsoft_endpoints() {
             "https://outlook.office.com/IMAP.AccessAsUser.All",
             "offline_access"
         ])
+    );
+}
+
+#[test]
+fn wizard_email_outlook_work_account_preselects_organizations_endpoints() {
+    // Issue #467: an org-only registration ("My organization only") must use
+    // the `/organizations/` tenant — `/common/` fails for it too.
+    let entry = email_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(1),            // Outlook / Office 365
+        ScriptedAnswer::Select(1),            // Microsoft account type — work or school
+        ScriptedAnswer::Input(String::new()), // host → default
+        ScriptedAnswer::Input(String::new()), // port → default
+        ScriptedAnswer::Input(String::new()), // mailbox → default
+        ScriptedAnswer::Input("me@contoso.com".to_string()),
+        ScriptedAnswer::Select(0),            // Sync mode — push
+        ScriptedAnswer::Select(0),            // Existing mailbox content — import
+        ScriptedAnswer::Input(String::new()), // auth_uri → default
+        ScriptedAnswer::Input(String::new()), // token endpoint → default
+        ScriptedAnswer::Input("client-ms-123".to_string()),
+        ScriptedAnswer::Password(String::new()), // client secret → none
+        ScriptedAnswer::Input(String::new()),    // scopes → default
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "work-outlook", &prompts).unwrap();
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::OAuth {
+            client_secret: None
+        }
+    ));
+    assert_eq!(config["auth"]["kind"], "oauth");
+    assert_eq!(
+        config["auth"]["auth_uri"],
+        "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize"
+    );
+    assert_eq!(
+        config["auth"]["token_endpoint"],
+        "https://login.microsoftonline.com/organizations/oauth2/v2.0/token"
+    );
+    assert_eq!(config["auth"]["client_id"], "client-ms-123");
+    assert_eq!(
+        config["auth"]["scopes"],
+        serde_json::json!([
+            "https://outlook.office.com/IMAP.AccessAsUser.All",
+            "offline_access"
+        ])
+    );
+}
+
+#[test]
+fn wizard_email_outlook_account_type_prompt_and_client_id_help_are_pinned() {
+    // Issue #467: the Outlook preset must ask which Microsoft account type
+    // applies, and the client-ID guidance must state the audience
+    // requirement plus the loopback redirect URI that must be registered.
+    let entry = email_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(1),            // Outlook / Office 365
+        ScriptedAnswer::Select(0),            // Microsoft account type — personal
+        ScriptedAnswer::Input(String::new()), // host → default
+        ScriptedAnswer::Input(String::new()), // port → default
+        ScriptedAnswer::Input(String::new()), // mailbox → default
+        ScriptedAnswer::Input("me@outlook.com".to_string()),
+        ScriptedAnswer::Select(0),            // Sync mode — push
+        ScriptedAnswer::Select(0),            // Existing mailbox content — import
+        ScriptedAnswer::Input(String::new()), // auth_uri → default
+        ScriptedAnswer::Input(String::new()), // token endpoint → default
+        ScriptedAnswer::Input("client-ms-123".to_string()),
+        ScriptedAnswer::Password(String::new()), // client secret → none
+        ScriptedAnswer::Input(String::new()),    // scopes → default
+    ]);
+    build_wizard_config(&entry, "personal-outlook", &prompts).unwrap();
+
+    let messages = prompts.messages();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message == "Microsoft account type"),
+        "the wizard must ask the Microsoft account type, got: {messages:?}"
+    );
+    let client_id_prompt = messages
+        .iter()
+        .find(|message| message.starts_with("OAuth client ID"))
+        .unwrap_or_else(|| panic!("no client-ID prompt in: {messages:?}"));
+    assert!(
+        client_id_prompt.contains("Supported account types"),
+        "client-ID help must state the audience requirement: {client_id_prompt}"
+    );
+    assert!(
+        client_id_prompt.contains("http://localhost/callback"),
+        "client-ID help must mention the loopback redirect URI: {client_id_prompt}"
     );
 }
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.145.0] — 2026-08-25
+
+### Feature: Outlook wizard preset picks the Microsoft login endpoint by account type (issue #467)
+
+- The Outlook / Office 365 email preset previously hardcoded the Microsoft identity platform endpoints to the `/common/` tenant, which only works for app registrations with the "All" supported-account audience — a personal-only (Consumer) or org-only registration failed the authorize request with an opaque `userAudience` error. The wizard now asks which Microsoft account type you connect (personal → `/consumers/`, work or school → `/organizations/`, either → `/common/`), pre-fills the matching authorize/token endpoints, and keeps them editable like every other endpoint prompt.
+- The Outlook preset's OAuth client ID help text now states that the registration's "Supported account types" must match the picked audience and that the loopback redirect URI `http://localhost/callback` must be registered.
+- Tests: `wizard_email_outlook_personal_account_preselects_consumers_endpoints`, `wizard_email_outlook_work_account_preselects_organizations_endpoints`, the updated oauth-only / common-default paths, and a pinned-prompt test asserting the account-type question is asked and the client-ID guidance states the audience requirement plus the redirect URI. The scripted prompt driver now records prompt messages so guidance text is pin-able.
+- Docs: `docs/cli.md`, `docs/email-connector.md`, `docs/wiki/cli-commands.md`, `docs/wiki/connectors.md`, `docs/wiki/email-connector.md`, and `Mimir-Implementation-Context.md` updated; the roadmap checklist in `VISION/09-Roadmap/Phase-3-Connectors.md` notes the account-type-aware endpoints.
+- Version bumped 0.144.4 → 0.145.0 (minor — new interactive wizard feature).
+
 ## [0.144.4] — 2026-08-24
 
 ### Refactor: search_messages builds one query instead of two duplicated SQL blocks (issue #500)

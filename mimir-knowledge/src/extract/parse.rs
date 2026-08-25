@@ -179,6 +179,7 @@ pub(super) fn parse_extracted_fact(
         });
 
     Ok(NormalizedFact {
+        confidence: None,
         source_type: source_type_for(extracted.classification),
         subject: extracted.subject.clone(),
         subject_type,
@@ -224,14 +225,7 @@ pub fn parse_temporal_bound(s: Option<&str>) -> Option<DateTime<Utc>> {
 
 /// Map an LLM-emitted recurrence string to a `RecurrenceType`.
 pub fn parse_recurrence(value: &str) -> Option<RecurrenceType> {
-    match value.to_ascii_lowercase().as_str() {
-        "none" => Some(RecurrenceType::None),
-        "daily" => Some(RecurrenceType::Daily),
-        "weekly" => Some(RecurrenceType::Weekly),
-        "monthly" => Some(RecurrenceType::Monthly),
-        "yearly" => Some(RecurrenceType::Yearly),
-        _ => None,
-    }
+    value.parse().ok()
 }
 
 /// Map an LLM-emitted event-type string to an [`EventType`].
@@ -241,15 +235,7 @@ pub fn parse_recurrence(value: &str) -> Option<RecurrenceType> {
 /// than trusting the raw string, returning `None` for an unrecognised
 /// value so the events-subsystem overlay falls back to derivation.
 pub fn parse_event_type(value: &str) -> Option<EventType> {
-    match value.trim() {
-        "Birthday" => Some(EventType::Birthday),
-        "Appointment" => Some(EventType::Appointment),
-        "Deadline" => Some(EventType::Deadline),
-        "Task" => Some(EventType::Task),
-        "Reminder" => Some(EventType::Reminder),
-        "Custom" => Some(EventType::Custom),
-        _ => None,
-    }
+    value.parse().ok()
 }
 
 /// Map an LLM-emitted location-type string to a [`LocationType`].

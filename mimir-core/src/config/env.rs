@@ -82,6 +82,9 @@ impl Config {
         if let Some(v) = getenv("MIMIR_KNOWLEDGE_DB_PATH") {
             self.knowledge.db_path = Some(PathBuf::from(v));
         }
+        if let Some(v) = getenv("MIMIR_KNOWLEDGE_EXPORT_DIR") {
+            self.knowledge.export_dir = Some(PathBuf::from(v));
+        }
         if let Some(v) = getenv("MIMIR_JOBS_DB_PATH") {
             self.scheduler.db_path = Some(PathBuf::from(v));
         }

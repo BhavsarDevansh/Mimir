@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.148.0] — 2026-08-25
+
+### Feature: Obsidian export/import — Markdown + YAML frontmatter + wiki-links (issue #62)
+
+- `mimir kb export` renders the whole knowledge graph as Obsidian-compatible Markdown: one `.md` file per entity with YAML frontmatter (`entity_id`, `type`, `aliases`, timestamps), wiki-links (`[[Name]]`) for entity-object facts, and the four-section grammar (`Dates` for event-overlay facts, `Relationships`, `Preferences`, `Facts`). The bundle comes from the daemon's `GET /kb/export` and is written to `--dir`, else `knowledge.export_dir` (env `MIMIR_KNOWLEDGE_EXPORT_DIR`), else `~/AgentKnowledge`; `--stdout` prints the files with `<!-- mimir: {name} -->` separators and `--json` dumps the raw `ExportResponse`.
+- `mimir kb import <path>` parses a vault directory (daemon `POST /kb/import`, loopback-gated) back into the graph through the shared `normalize_and_insert` pipeline: `entity_id` anchors re-imports to existing entities (otherwise the canonical name-resolution chain, issue #182), name/type/alias changes are applied, exact existing triples are skipped, imported facts default to `source_type=Import` confidence 0.80 (a `confidence: N` attribute overrides, clamped to `[0, 1]`), event facts recreate the events overlay, and sensitive facts still land in `pending_confirmation`. `--dry-run` plans and reports without writing.
+- New shared grammar in `mimir-knowledge/src/obsidian/` (render and parse share one grammar so the two directions cannot drift), `NormalizedFact.confidence` per-fact override, `EventType`/`RecurrenceType`/`PreferenceCategory` wire-name `as_str`/`FromStr` pairs (reused by LLM extraction parsing, DRY), and entity/preference/event query helpers for rendering and existence checks.
+- Docs: `docs/obsidian-export-import.md` (format spec + architecture), `docs/wiki/obsidian-export-import.md` (user guide), CLI command docs updated, roadmap 2.16/2.17 and success criteria marked delivered, `Mimir-Implementation-Context.md` updated.
+- Version bumped 0.147.2 → 0.148.0 (minor — new feature subsystem).
+
 ## [0.147.2] — 2026-08-25
 
 ### Fix: Windows-safe TOML paths in the CLI integration-test fixture (PR #503)

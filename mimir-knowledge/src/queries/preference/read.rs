@@ -112,6 +112,29 @@ pub async fn get_preference_by_id(
     Ok(pref)
 }
 
+/// Every preference scoped to one entity, ordered by key.
+///
+/// Backs the Obsidian export's `Preferences` section (issue #62), which
+/// renders entity-scoped preferences only; user-global preferences
+/// (`entity_id IS NULL`) have no home in per-entity documents and are not
+/// exported.
+pub async fn get_preferences_for_entity(
+    pool: &SqlitePool,
+    entity_id: i32,
+) -> Result<Vec<Preference>, KnowledgeError> {
+    sqlx::query_as::<_, Preference>(
+        "SELECT id, entity_id, category_id, key, value, confidence, \
+         overridden_by_user, source_fact_id, created_at, updated_at \
+         FROM preferences \
+         WHERE entity_id = ? \
+         ORDER BY key",
+    )
+    .bind(entity_id)
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
+}
+
 // ---------------------------------------------------------------------------
 // Get contexts
 // ---------------------------------------------------------------------------

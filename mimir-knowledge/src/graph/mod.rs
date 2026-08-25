@@ -23,6 +23,7 @@ mod heatmap;
 mod lifecycle;
 mod locations;
 mod memory;
+mod obsidian;
 mod predicates;
 mod preferences;
 mod relationships;

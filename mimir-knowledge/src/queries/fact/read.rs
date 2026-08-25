@@ -79,6 +79,35 @@ pub async fn get_by_object(
     Ok(facts)
 }
 
+/// Whether a fact with exactly this subject + predicate + object exists.
+///
+/// Trashed (Forgotten) facts are excluded so a re-import after a forget
+/// re-creates the fact instead of reporting it as an existing triple. Backs
+/// the Obsidian import planner's "existing (skipped)" accounting (issue #62);
+/// the null-safe `IS ?` comparisons handle literal and entity objects alike.
+pub async fn exists_triple(
+    pool: &SqlitePool,
+    subject_id: i32,
+    relationship_type_id: i16,
+    object_id: Option<i32>,
+    object_literal: Option<&str>,
+) -> Result<bool, KnowledgeError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM facts \
+         WHERE subject_id = ? AND relationship_type_id = ? \
+           AND object_id IS ? AND object_literal IS ? AND fact_status_id != ? \
+         LIMIT 1",
+    )
+    .bind(subject_id)
+    .bind(relationship_type_id)
+    .bind(object_id)
+    .bind(object_literal)
+    .bind(FactStatus::Forgotten as i16)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
+}
+
 /// Return facts active at a specific point in time.
 pub async fn get_active_facts_at(
     pool: &SqlitePool,

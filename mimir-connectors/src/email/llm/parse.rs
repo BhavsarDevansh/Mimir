@@ -92,6 +92,7 @@ pub(super) fn build_fact(
         });
 
     Ok(NormalizedFact {
+        confidence: None,
         source_type: SourceType::Connector,
         subject: canonicalise_subject(&fact.subject, user_identity),
         subject_type,

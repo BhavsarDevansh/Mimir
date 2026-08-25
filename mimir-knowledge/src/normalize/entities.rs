@@ -25,7 +25,7 @@ const FUZZY_RESOLVE_THRESHOLD: f32 = 0.9;
 /// / [`queries::entity::get_by_name_typed`] guarantee. Because the sort is
 /// stable and exact-name is pushed before fuzzy at equal score, an exact name
 /// always wins over a fuzzy hit scored 1.0.
-pub(super) fn pick_resolution(results: &[AliasSearchResult]) -> Option<&Entity> {
+pub(crate) fn pick_resolution(results: &[AliasSearchResult]) -> Option<&Entity> {
     // Results are sorted by score descending: exact alias (1.1) > exact name
     // (1.0) ≥ fuzzy (≤ 1.0), with a stable sort keeping exact name ahead of a
     // 1.0 fuzzy. The first element is therefore always the best candidate, so
@@ -45,6 +45,25 @@ pub(super) fn pick_resolution(results: &[AliasSearchResult]) -> Option<&Entity> 
     }
 }
 
+/// Same resolution policy as [`resolve_entity`], additionally reporting
+/// whether a new entity was created.
+///
+/// The Obsidian import planner (issue #62) uses this so dry-run and apply
+/// modes share the exact conversational/connector resolution chain and the
+/// entity-creation accounting cannot drift from what the pipeline does.
+pub(crate) async fn resolve_or_create(
+    kg: &KnowledgeGraph,
+    name: &str,
+    entity_type: EntityType,
+) -> Result<(Entity, bool), KnowledgeError> {
+    let results = queries::entity::get_by_name_typed(kg.pool(), name, entity_type).await?;
+    if let Some(entity) = pick_resolution(&results) {
+        return Ok((entity.clone(), false));
+    }
+    let entity = queries::entity::create_entity(kg.pool(), name, entity_type, &[]).await?;
+    Ok((entity, true))
+}
+
 /// Resolve a name to an entity via the full chain — exact name → alias → FTS5
 /// fuzzy (score ≥ [`FUZZY_RESOLVE_THRESHOLD`]) → create new — restricted to
 /// entities of the requested type (Phase 3 F5 / issue #182). Shared by chat
@@ -60,11 +79,7 @@ pub(super) async fn resolve_entity(
     name: &str,
     entity_type: EntityType,
 ) -> Result<Entity, KnowledgeError> {
-    let results = queries::entity::get_by_name_typed(kg.pool(), name, entity_type).await?;
-    if let Some(entity) = pick_resolution(&results) {
-        return Ok(entity.clone());
-    }
-    queries::entity::create_entity(kg.pool(), name, entity_type, &[]).await
+    Ok(resolve_or_create(kg, name, entity_type).await?.0)
 }
 
 // ---------------------------------------------------------------------------

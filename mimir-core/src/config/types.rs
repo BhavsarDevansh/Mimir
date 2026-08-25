@@ -161,6 +161,11 @@ pub struct KnowledgeConfig {
     /// and multi-instance setups can isolate the knowledge DB from the
     /// shared data directory (issue #233).
     pub db_path: Option<PathBuf>,
+    /// Optional override for the Obsidian export directory (issue #62).
+    ///
+    /// When unset, `mimir kb export` writes to `~/AgentKnowledge`. Mirrors
+    /// the `MIMIR_KNOWLEDGE_EXPORT_DIR` environment variable.
+    pub export_dir: Option<PathBuf>,
 }
 
 /// Knowledge graph nightly optimization settings.

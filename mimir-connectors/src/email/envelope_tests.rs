@@ -29,6 +29,7 @@ fn utc(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> DateTime<Utc> {
 /// A bare fact with the connector defaults, for binding tests.
 fn prose_fact(requires_user_action: bool) -> NormalizedFact {
     NormalizedFact {
+        confidence: None,
         source_type: SourceType::Connector,
         subject: "Devansh".to_string(),
         subject_type: EntityType::Person,

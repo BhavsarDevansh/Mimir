@@ -53,6 +53,7 @@ fn home_fact(
     valid_from: Option<DateTime<Utc>>,
 ) -> NormalizedFact {
     NormalizedFact {
+        confidence: None,
         source_type: SourceType::UserEdit,
         subject: "Devansh".to_string(),
         subject_type: EntityType::Person,

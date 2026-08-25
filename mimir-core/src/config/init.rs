@@ -140,6 +140,7 @@ max_turns = 20
 [knowledge]
 # db_path is resolved automatically; override only if needed.
 # db_path = "${USER_DATA_DIR}/mimir/knowledge.db"
+# export_dir = "~/AgentKnowledge"  # Obsidian export destination (mimir kb export)
 
 [geocoder]
 enabled = true

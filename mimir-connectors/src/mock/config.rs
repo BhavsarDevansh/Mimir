@@ -119,6 +119,7 @@ impl MockFactConfig {
             .clone()
             .unwrap_or_else(|| format!("mock-{slug}-{index}"));
         NormalizedFact {
+            confidence: None,
             source_type: SourceType::Connector,
             subject: self.subject.clone(),
             subject_type: self.subject_type,

@@ -312,3 +312,88 @@ async fn reset_confirmed_phrase_wipes_and_reports_backup() {
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[1].url.path(), "/kb/facts/forget");
 }
+
+// ------------------------------------------------------------------
+// kb Obsidian export/import (issue #62)
+// ------------------------------------------------------------------
+
+use super::obsidian::{run_kb_export, run_kb_import};
+use mimir_api_types::{ExportFile, ExportResponse, ImportResponse};
+
+fn export_fixture() -> ExportResponse {
+    ExportResponse {
+        files: vec![ExportFile {
+            relative_path: "Devansh.md".to_string(),
+            content: "# Devansh\n\n## Facts\n- allergic_to → peanuts (confidence: 1.00)\n"
+                .to_string(),
+        }],
+        entity_count: 1,
+        fact_count: 1,
+        preference_count: 0,
+        event_count: 0,
+    }
+}
+
+async fn mount_export(server: &MockServer, resp: &ExportResponse) {
+    Mock::given(method("GET"))
+        .and(path("/kb/export"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(resp))
+        .mount(server)
+        .await;
+}
+
+async fn mount_import(server: &MockServer, resp: ImportResponse) {
+    Mock::given(method("POST"))
+        .and(path("/kb/import"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(resp))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn export_writes_bundle_files_to_target_dir() {
+    let server = MockServer::start().await;
+    mount_export(&server, &export_fixture()).await;
+
+    let client = MimirClient::new(server.uri());
+    let target = tempfile::tempdir().unwrap();
+    run_kb_export(&client, Some(target.path().to_path_buf()), false, false)
+        .await
+        .unwrap();
+
+    let written = std::fs::read_to_string(target.path().join("Devansh.md")).unwrap();
+    assert!(written.starts_with("# Devansh\n"));
+
+    let hits = server.received_requests().await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].url.path(), "/kb/export");
+}
+
+#[tokio::test]
+async fn import_dry_run_reports_without_client_errors() {
+    let server = MockServer::start().await;
+    mount_import(
+        &server,
+        ImportResponse {
+            dry_run: true,
+            entities_new: 2,
+            entities_updated: 0,
+            facts_new: 1,
+            facts_existing: 0,
+            preferences_new: 0,
+            preferences_updated: 0,
+            dates_new: 0,
+            errors: Vec::new(),
+        },
+    )
+    .await;
+
+    let client = MimirClient::new(server.uri());
+    run_kb_import(&client, std::path::PathBuf::from("/tmp/vault"), true, false)
+        .await
+        .unwrap();
+
+    let hits = server.received_requests().await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].url.path(), "/kb/import");
+}

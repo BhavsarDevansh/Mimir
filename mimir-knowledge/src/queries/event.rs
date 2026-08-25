@@ -78,6 +78,28 @@ pub async fn get_by_fact(pool: &SqlitePool, fact_id: i32) -> Result<Option<Event
     Ok(row)
 }
 
+/// Every event overlay attached to one entity, regardless of status or date.
+///
+/// Backs the Obsidian export's `Dates` section (issue #62), which renders the
+/// full lifecycle picture of an entity's time-bound facts — past, active, and
+/// retired overlays alike.
+pub async fn get_events_by_entity(
+    pool: &SqlitePool,
+    entity_id: i32,
+) -> Result<Vec<Event>, KnowledgeError> {
+    let rows = sqlx::query_as::<_, Event>(
+        "SELECT id, fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, \
+                status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at \
+         FROM events \
+         WHERE entity_id = ? \
+         ORDER BY trigger_date",
+    )
+    .bind(entity_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Transition an event to a new lifecycle status, recording `addressed_at`
 /// when the status is terminal (Completed/Dismissed).
 pub async fn update_status(

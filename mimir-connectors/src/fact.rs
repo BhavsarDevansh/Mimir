@@ -46,6 +46,7 @@ pub(crate) fn connector_fact(
     location: Option<NormalizedLocation>,
 ) -> NormalizedFact {
     NormalizedFact {
+        confidence: None,
         source_type: SourceType::Connector,
         subject,
         subject_type,

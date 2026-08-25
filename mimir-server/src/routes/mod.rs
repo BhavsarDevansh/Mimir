@@ -17,10 +17,10 @@ pub use connectors::{
 };
 pub use kb::{
     kb_audit_handler, kb_browse_handler, kb_confirm_fact_handler, kb_edit_handler,
-    kb_forget_handler, kb_heatmap_handler, kb_optimization_run_now_handler,
-    kb_optimization_status_handler, kb_pending_handler, kb_profile_handler, kb_query_handler,
-    kb_reject_fact_handler, kb_show_handler, kb_trash_empty_handler, kb_trash_list_handler,
-    kb_trash_restore_handler,
+    kb_export_handler, kb_forget_handler, kb_heatmap_handler, kb_import_handler,
+    kb_optimization_run_now_handler, kb_optimization_status_handler, kb_pending_handler,
+    kb_profile_handler, kb_query_handler, kb_reject_fact_handler, kb_show_handler,
+    kb_trash_empty_handler, kb_trash_list_handler, kb_trash_restore_handler,
 };
 pub use kb_categories::{create_category, delete_category, list_categories, show_category};
 pub use memory::{memory_handler, memory_refresh_handler};

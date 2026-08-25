@@ -44,6 +44,7 @@ mod process;
 mod sensitive;
 mod types;
 
+pub(crate) use entities::{pick_resolution, resolve_or_create};
 pub(crate) use overlay::{
     LocationOverlayApply, OverlayJob, apply_location_overlay, start_location_overlay_worker,
 };

@@ -186,6 +186,7 @@ mod tests {
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-02T00:00:00Z".to_string(),
             preview: Some("hello".to_string()),
+            summary: Some("earlier turns summarised".to_string()),
         }];
         Mock::given(method("GET"))
             .and(path("/sessions"))
@@ -198,6 +199,10 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].session_id, 1);
         assert_eq!(result[0].preview, Some("hello".to_string()));
+        assert_eq!(
+            result[0].summary.as_deref(),
+            Some("earlier turns summarised")
+        );
     }
 
     #[tokio::test]
@@ -205,6 +210,7 @@ mod tests {
         let server = MockServer::start().await;
         let payload = SessionMessagesResponse {
             session_id: 1,
+            summary: Some("earlier turns summarised".to_string()),
             messages: vec![mimir_api_types::ChatMessage {
                 role: "user".to_string(),
                 content: "hi".to_string(),
@@ -220,6 +226,7 @@ mod tests {
         let client = MimirClient::new(server.uri());
         let result = client.session_messages(1).await.unwrap();
         assert_eq!(result.session_id, 1);
+        assert_eq!(result.summary.as_deref(), Some("earlier turns summarised"));
         assert_eq!(result.messages.len(), 1);
         assert_eq!(result.messages[0].role, "user");
     }
@@ -372,6 +379,7 @@ mod tests {
             created_at: "2020-01-01T00:00:00Z".to_string(),
             updated_at: "2020-01-01T00:00:00Z".to_string(),
             preview: Some("hello".to_string()),
+            summary: None,
         }];
         Mock::given(method("GET"))
             .and(path("/sessions"))
@@ -404,6 +412,7 @@ mod tests {
         let server = MockServer::start().await;
         let payload = SessionMessagesResponse {
             session_id: 5,
+            summary: None,
             messages: vec![ChatMessage {
                 role: "user".to_string(),
                 content: "hi".to_string(),

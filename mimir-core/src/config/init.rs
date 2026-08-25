@@ -137,6 +137,10 @@ max_turns = 20
 # db_path = "${USER_DATA_DIR}/mimir/context.db"
 # max_tokens = 4096  # Optional: token budget for conversation history
 
+[context.compaction]
+enabled = true
+max_turns = 15  # Older complete turns are LLM-summarised and removed
+
 [knowledge]
 # db_path is resolved automatically; override only if needed.
 # db_path = "${USER_DATA_DIR}/mimir/knowledge.db"

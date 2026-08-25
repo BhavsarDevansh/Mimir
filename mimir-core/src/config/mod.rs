@@ -22,8 +22,8 @@ pub use base_url::{
 pub use reload::{ConfigReloadError, ReloadableConfig};
 pub use socket::{configured_socket_path, effective_socket_path, socket_is_live};
 pub use types::{
-    AgentConfig, Config, ConfigError, ContextConfig, EventsConfig, GeocoderConfig, IdentityConfig,
-    InitResult, KnowledgeConfig, KnowledgeOptimizationConfig, LlmConfig, MemoryConfig,
-    PendingCleanupConfig, PersonalityConfig, Proactivity, SchedulerConfig, SecretsBackend,
-    SecretsConfig, ServerConfig,
+    AgentConfig, Config, ConfigError, ContextCompactionConfig, ContextConfig, EventsConfig,
+    GeocoderConfig, IdentityConfig, InitResult, KnowledgeConfig, KnowledgeOptimizationConfig,
+    LlmConfig, MemoryConfig, PendingCleanupConfig, PersonalityConfig, Proactivity, SchedulerConfig,
+    SecretsBackend, SecretsConfig, ServerConfig,
 };

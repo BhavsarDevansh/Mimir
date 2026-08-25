@@ -76,6 +76,16 @@ impl Config {
             Some
         );
         set_from_env!("MIMIR_CONTEXT_MAX_TURNS", self.context.max_turns, u16);
+        set_from_env!(
+            "MIMIR_CONTEXT_COMPACTION_ENABLED",
+            self.context.compaction.enabled,
+            bool
+        );
+        set_from_env!(
+            "MIMIR_CONTEXT_COMPACTION_MAX_TURNS",
+            self.context.compaction.max_turns,
+            u16
+        );
         if let Some(v) = getenv("MIMIR_CONTEXT_DB_PATH") {
             self.context.db_path = Some(PathBuf::from(v));
         }

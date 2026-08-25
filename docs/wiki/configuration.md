@@ -115,6 +115,8 @@ mimir ask "Hello"
 | `MIMIR_KNOWLEDGE_EVENTS_SCHEDULE_TIMES` | Comma-separated daily scan times (HH:MM) for the events job | `07:30,19:45` |
 | `MIMIR_KNOWLEDGE_EVENTS_HORIZON_DAYS` | How many days ahead the events scan looks for upcoming facts | `30` |
 | `MIMIR_CONTEXT_DB_PATH` | Override the conversation-history database path | `/tmp/mimir/context.db` |
+| `MIMIR_CONTEXT_COMPACTION_ENABLED` | Enable background session compaction (LLM summarisation of old turns) | `true` or `false` |
+| `MIMIR_CONTEXT_COMPACTION_MAX_TURNS` | Older complete turns beyond this many are summarised and removed | `15` |
 | `MIMIR_KNOWLEDGE_DB_PATH` | Override the knowledge-graph database path | `/tmp/mimir/knowledge.db` |
 | `MIMIR_JOBS_DB_PATH` | Override the job-queue database path | `/tmp/mimir/jobs.db` |
 | `MIMIR_GEOCODER_ENABLED` | Enable or disable geocoding entirely | `true` or `false` |
@@ -189,6 +191,7 @@ These settings are **not reloaded** (they require a restart):
 
 - LLM endpoint (`llm.endpoint`), API key (`llm.api_key`), model (`llm.model`)
 - Server bind address (`server.bind_addr`), socket path (`server.socket_path`)
+- Context compaction (`context.compaction.enabled`, `context.compaction.max_turns`) — the compaction hook is registered at daemon startup
 
 If you change a sensitive setting and trigger a reload, Mimir logs a warning and keeps the old value. No restart is forced.
 

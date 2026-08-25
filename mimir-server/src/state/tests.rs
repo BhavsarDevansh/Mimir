@@ -8,6 +8,7 @@ use mimir_core::config::Config;
 use mimir_core::conversation::ConversationTurn;
 use mimir_core::hooks::{HookContext, HookHandler, HookOutcome};
 use mimir_core::llm::MockLlmClient;
+use mimir_core::llm::types::Usage;
 use mimir_core::tools::ToolRegistry;
 use std::sync::Arc;
 
@@ -222,10 +223,21 @@ async fn init_scheduler_registers_system_jobs() {
     let knowledge_graph = test_kg(&temp).await;
     let llm = test_llm();
     let activity = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let (hook_engine, _hook_shutdown_rx) =
-        init_hook_engine(&config, &job_queue, &llm, &knowledge_graph, Some(1))
+    let context_manager = Arc::new(
+        mimir_core::context::ContextManager::new(&temp.path().join("context.db"))
             .await
-            .unwrap();
+            .unwrap(),
+    );
+    let (hook_engine, _hook_shutdown_rx) = init_hook_engine(
+        &config,
+        &job_queue,
+        &llm,
+        &context_manager,
+        &knowledge_graph,
+        Some(1),
+    )
+    .await
+    .unwrap();
 
     let (_scheduler, _shutdown_rx) = init_scheduler(
         &config,
@@ -289,10 +301,21 @@ async fn init_connector_framework_registers_mock_backend() {
             .await
             .unwrap(),
     );
-    let (hook_engine, _hook_shutdown_rx) =
-        init_hook_engine(&config, &job_queue, &llm, &knowledge_graph, Some(1))
+    let context_manager = Arc::new(
+        mimir_core::context::ContextManager::new(&temp.path().join("context.db"))
             .await
-            .unwrap();
+            .unwrap(),
+    );
+    let (hook_engine, _hook_shutdown_rx) = init_hook_engine(
+        &config,
+        &job_queue,
+        &llm,
+        &context_manager,
+        &knowledge_graph,
+        Some(1),
+    )
+    .await
+    .unwrap();
 
     let (registry, _supervisor) = init_connector_framework(
         &config,
@@ -346,5 +369,116 @@ async fn init_knowledge_graph_enables_geocoder_by_default() {
             .geocoder()
             .is_some_and(|kg_geocoder| Arc::ptr_eq(&geocoder, kg_geocoder)),
         "geocoder shared with knowledge graph"
+    );
+}
+
+#[tokio::test]
+async fn session_compaction_handler_summarises_and_compacts_session() {
+    // Issue #279: the hook handler drives the SessionCompactor end-to-end —
+    // LLM summary stored on the session, compacted_at advanced, old turns
+    // deleted.
+    let temp = tempfile::tempdir().unwrap();
+    let context = Arc::new(
+        mimir_core::context::ContextManager::new(&temp.path().join("context.db"))
+            .await
+            .unwrap(),
+    );
+    let sid = context.create_session("sys").await.unwrap();
+    for i in 0..25 {
+        context
+            .add_user_message(sid, format!("u{i}"))
+            .await
+            .unwrap();
+        context
+            .add_assistant_message(sid, format!("a{i}"))
+            .await
+            .unwrap();
+    }
+
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            .push_chat("Summarised earlier turns", Usage::default())
+            .build(),
+    );
+    let llm: Arc<dyn mimir_core::llm::LlmBackend> = mock.clone();
+    let handler = super::hooks::SessionCompactionHandler::new(Arc::clone(&context), llm, 15);
+
+    let outcome = handler
+        .run(
+            Arc::new(vec![ConversationTurn::new(sid, "hi", "hi")]),
+            HookContext {
+                attempt: 1,
+                max_attempts: 1,
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
+            },
+        )
+        .await;
+
+    assert_eq!(outcome, HookOutcome::Success);
+    let session = context.load_session(sid).await.unwrap();
+    assert_eq!(session.summary.as_deref(), Some("Summarised earlier turns"));
+    assert!(session.compacted_at.is_some());
+    let msgs = context.get_messages_after_compaction(sid).await.unwrap();
+    assert_eq!(msgs.len(), 30, "15 retained turns remain");
+    assert_eq!(msgs[0].content, "u10");
+}
+
+#[tokio::test]
+async fn init_hook_engine_registers_session_compaction_when_enabled() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = test_config(&temp);
+    let job_queue = Arc::new(
+        mimir_core::job_queue::JobQueue::init(&temp.path().join("jobs.db"))
+            .await
+            .unwrap(),
+    );
+    let (tool_registry, context_manager, llm) = kg_init_inputs(&temp).await;
+    let kg = test_kg(&temp).await;
+    let (engine, _shutdown_rx) =
+        init_hook_engine(&config, &job_queue, &llm, &context_manager, &kg, None)
+            .await
+            .unwrap();
+
+    engine
+        .trigger(mimir_core::hooks::Trigger::TurnCompleted {
+            session_id: 1,
+            payload: Arc::new(vec![ConversationTurn::new(1, "hi", "hi")]),
+        })
+        .await;
+    assert_eq!(
+        engine.pending_depth_for("session.compaction").await,
+        1,
+        "compaction is enabled by default, so the hook must be registered"
+    );
+    let _ = tool_registry;
+}
+
+#[tokio::test]
+async fn init_hook_engine_skips_session_compaction_when_disabled() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = test_config(&temp);
+    config.context.compaction.enabled = false;
+    let job_queue = Arc::new(
+        mimir_core::job_queue::JobQueue::init(&temp.path().join("jobs.db"))
+            .await
+            .unwrap(),
+    );
+    let (_tool_registry, context_manager, llm) = kg_init_inputs(&temp).await;
+    let kg = test_kg(&temp).await;
+    let (engine, _shutdown_rx) =
+        init_hook_engine(&config, &job_queue, &llm, &context_manager, &kg, None)
+            .await
+            .unwrap();
+
+    engine
+        .trigger(mimir_core::hooks::Trigger::TurnCompleted {
+            session_id: 1,
+            payload: Arc::new(vec![ConversationTurn::new(1, "hi", "hi")]),
+        })
+        .await;
+    assert_eq!(
+        engine.pending_depth_for("session.compaction").await,
+        0,
+        "a disabled compaction must not register the hook"
     );
 }

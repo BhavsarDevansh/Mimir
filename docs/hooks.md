@@ -66,6 +66,15 @@ Each hook has a `RetryPolicy { max_attempts, backoff }`. A handler returns `Hook
 - Gate: `Ungated` — queues through `LlmWorkerPool` like connector extraction did before.
 - Handler: `EmailExtractionHook` (`mimir-connectors/src/email/llm/hook.rs`) parses the RFC 822 payload, runs `extract_prose_facts`, and inserts through `normalize_and_insert` with connector provenance. Per-item retry / terminal-failure semantics moved from the connector cycle (issue #262) into the hook runner: the payload carries the per-connector `llm_extraction_max_attempts` budget, and the final failed attempt records a durable terminal failure in the shared `ProseRetryLedger` so the message is never re-processed and the failure surfaces via `Degraded` health.
 
+### `session.compaction`
+
+- Trigger: `TurnCompleted`, same firing points as `remember.chat` (blocking and streaming chat paths, non-incognito sessions only — incognito persists nothing, so there is nothing to summarise).
+- Key: `session_id`. Policy: `SingularLastWins` with the scheduler's debounce.
+- Gate: `IdleGated` with the scheduler's cooldown.
+- Handler: `SessionCompactionHandler` (`mimir-server/src/state/hooks.rs`) drives `SessionCompactor` (`mimir-core/src/context/compactor.rs`): it snapshots the oldest complete turns beyond `context.compaction.max_turns`, summarises them via the LLM (folding in any previous summary), writes `sessions.summary`, advances `compacted_at`, and deletes the summarised messages. On LLM failure the compacted transcript is stored verbatim (character-capped) so the turns are never silently discarded.
+- Config: registered only when `context.compaction.enabled` (default true); `context.compaction.max_turns` (default 15) must stay below `context.max_turns` so the summarisation runs ahead of the synchronous trim.
+- Retry: transient DB failures re-enqueue with backoff (3 attempts, 30s base); a deleted session is terminal.
+
 ### `memory.condensation`
 
 - Trigger: `FactInserted`, fired by the KG dirty notify path (and the knowledge-optimization job) instead of the old dirty-signal `Notify` listener submission.

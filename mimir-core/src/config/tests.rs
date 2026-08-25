@@ -136,6 +136,10 @@ fn test_save_and_load() {
             max_tokens: Some(2048),
             max_turns: 10,
             db_path: Some(PathBuf::from("~/.local/share/mimir/context.db")),
+            compaction: ContextCompactionConfig {
+                enabled: true,
+                max_turns: 8,
+            },
         },
         personality: PersonalityConfig {
             preset: "transparent".to_string(),

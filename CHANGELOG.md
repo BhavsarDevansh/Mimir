@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.149.0] — 2026-08-25
+
+### Feature: Chat session compaction actually runs (issue #279)
+
+- The `sessions.summary` / `compacted_at` columns were schema-only: nothing ever wrote them, so `trim_to_budget` silently discarded old context. A new idle-gated `session.compaction` hook now summarises the oldest complete turns via the LLM, stores the summary on the session, advances `compacted_at`, and deletes the summarised messages (same turn-boundary and in-flight-final-turn rules as trimming, shared via `split_complete_turns`).
+- The summary is folded into the LLM conversation context on export, exposed on `GET /sessions` and `GET /sessions/{id}/messages`, and printed by the REPL `/history` resume flow as "Earlier context: …".
+- New `[context.compaction]` config (`enabled` default true, `max_turns` default 15, env `MIMIR_CONTEXT_COMPACTION_ENABLED` / `MIMIR_CONTEXT_COMPACTION_MAX_TURNS`); the window sits below `context.max_turns` so compaction summarises turns before the synchronous trim, which remains the hard safety ceiling. Incognito sessions never compact (nothing is persisted). If the LLM summarisation fails, the compacted transcript is stored verbatim (capped at 2000 characters) so the turns are never silently discarded.
+- Docs: `docs/context-manager.md` (pipeline + API), `docs/hooks.md` (hook), `docs/chat-server.md` / `docs/wiki/chat-api.md` (summary fields), `docs/wiki/context-manager.md` (user guide), `docs/wiki/configuration.md`, `docs/config-system.md`, `docs/wiki/what-works-now.md`, `Mimir-Implementation-Context.md` updated.
+- Version bumped 0.148.1 → 0.149.0 (minor — new feature subsystem).
+
 ## [0.148.1] — 2026-08-25
 
 ### Fix: Obsidian export/import review fixes (PR #504)

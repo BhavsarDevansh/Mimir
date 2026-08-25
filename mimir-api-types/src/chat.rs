@@ -7,6 +7,8 @@ pub struct SessionSummary {
     pub created_at: String,
     pub updated_at: String,
     pub preview: Option<String>,
+    /// LLM summary of compacted turns, when the session was compacted.
+    pub summary: Option<String>,
 }
 
 /// A single message in a session history response.
@@ -21,6 +23,8 @@ pub struct ChatMessage {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct SessionMessagesResponse {
     pub session_id: i64,
+    /// LLM summary of the compacted turns, when the session was compacted.
+    pub summary: Option<String>,
     pub messages: Vec<ChatMessage>,
 }
 

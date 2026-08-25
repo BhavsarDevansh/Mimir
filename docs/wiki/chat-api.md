@@ -53,7 +53,7 @@ The server returns `text/event-stream`. Each line of output is a token chunk. Th
 curl http://127.0.0.1:8080/sessions
 ```
 
-Returns a JSON array of session summaries ordered by most-recently updated.
+Returns a JSON array of session summaries ordered by most-recently updated. Each entry includes a `summary` field with the compaction summary of old turns when the session has been compacted (issue #279).
 
 ## Resuming a Session
 
@@ -61,7 +61,7 @@ Returns a JSON array of session summaries ordered by most-recently updated.
 curl http://127.0.0.1:8080/sessions/<session-id>/messages
 ```
 
-Returns the full message history from the last compaction point (or all messages if never compacted).
+Returns the message history from the last compaction point (or all messages if never compacted) plus the `summary` of the compacted turns, so a client can show "Earlier context: …" before the retained messages.
 
 ## Error Handling
 

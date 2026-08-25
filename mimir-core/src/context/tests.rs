@@ -1086,3 +1086,175 @@ async fn schema_migration_adds_user_key_and_tool_columns() {
 }
 
 use super::path::expand_tilde_with_home;
+
+// ---- Session compaction (issue #279) ----
+
+/// Seed a session with `turns` completed exchanges.
+async fn seed_turns(mgr: &ContextManager, sid: i64, turns: u32) {
+    for i in 0..turns {
+        mgr.add_user_message(sid, format!("u{i}")).await.unwrap();
+        mgr.add_assistant_message(sid, format!("a{i}"))
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn compaction_candidates_none_below_window() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    seed_turns(&mgr, sid, 10).await;
+
+    let candidates = mgr.compaction_candidates(sid, 15).await.unwrap();
+    assert!(
+        candidates.is_none(),
+        "a session below the compaction window has nothing to compact"
+    );
+}
+
+#[tokio::test]
+async fn compaction_candidates_selects_oldest_complete_turns() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    seed_turns(&mgr, sid, 25).await;
+
+    let candidates = mgr.compaction_candidates(sid, 15).await.unwrap().unwrap();
+    // 10 oldest turns × (user + assistant) = 20 messages; system excluded.
+    assert_eq!(candidates.turn_messages.len(), 20);
+    assert_eq!(candidates.delete_ids.len(), 20);
+    assert_eq!(candidates.turn_messages[0].role, "user");
+    assert_eq!(candidates.turn_messages[0].content, "u0");
+    assert_eq!(candidates.turn_messages[19].content, "a9");
+    assert!(candidates.existing_summary.is_none());
+}
+
+#[tokio::test]
+async fn compaction_candidates_protects_in_flight_final_turn() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    seed_turns(&mgr, sid, 25).await;
+    // The final turn is in-flight: its user message has no assistant reply.
+    mgr.add_user_message(sid, "in-flight").await.unwrap();
+
+    let candidates = mgr.compaction_candidates(sid, 15).await.unwrap().unwrap();
+    assert_eq!(
+        candidates.turn_messages.len(),
+        20,
+        "the in-flight final turn must never be compacted (issue #388)"
+    );
+    assert!(
+        candidates
+            .turn_messages
+            .iter()
+            .all(|m| m.content != "in-flight"),
+        "the in-flight user message must not be part of the compaction batch"
+    );
+}
+
+#[tokio::test]
+async fn apply_compaction_writes_summary_and_compacted_at_and_deletes() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    seed_turns(&mgr, sid, 25).await;
+
+    let candidates = mgr.compaction_candidates(sid, 15).await.unwrap().unwrap();
+    let compacted_at = candidates.turn_messages.last().unwrap().created_at;
+    mgr.apply_compaction(sid, "test summary", compacted_at, &candidates.delete_ids)
+        .await
+        .unwrap();
+
+    let session = mgr.load_session(sid).await.unwrap();
+    assert_eq!(session.summary.as_deref(), Some("test summary"));
+    assert_eq!(session.compacted_at, Some(compacted_at));
+
+    let msgs = mgr.get_messages_after_compaction(sid).await.unwrap();
+    assert_eq!(msgs.len(), 30, "15 retained turns remain");
+    assert_eq!(msgs[0].content, "u10");
+    assert_eq!(msgs[29].content, "a24");
+}
+
+#[tokio::test]
+async fn apply_compaction_is_idempotent_for_already_deleted_ids() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    seed_turns(&mgr, sid, 25).await;
+
+    let candidates = mgr.compaction_candidates(sid, 15).await.unwrap().unwrap();
+    let compacted_at = candidates.turn_messages.last().unwrap().created_at;
+    mgr.apply_compaction(sid, "first", compacted_at, &candidates.delete_ids)
+        .await
+        .unwrap();
+    // Re-applying the same batch (e.g. after a concurrent trim removed the
+    // rows) must not fail or touch the retained messages.
+    mgr.apply_compaction(sid, "first", compacted_at, &candidates.delete_ids)
+        .await
+        .unwrap();
+
+    let msgs = mgr.get_messages_after_compaction(sid).await.unwrap();
+    assert_eq!(msgs.len(), 30);
+}
+
+#[tokio::test]
+async fn export_messages_injects_compaction_summary() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    seed_turns(&mgr, sid, 25).await;
+
+    let candidates = mgr.compaction_candidates(sid, 15).await.unwrap().unwrap();
+    let compacted_at = candidates.turn_messages.last().unwrap().created_at;
+    mgr.apply_compaction(
+        sid,
+        "Earlier: holiday plans",
+        compacted_at,
+        &candidates.delete_ids,
+    )
+    .await
+    .unwrap();
+
+    let msgs = mgr.export_messages(sid).await.unwrap();
+    assert_eq!(msgs[0].role, "system", "system prompt stays first");
+    assert_eq!(msgs[1].role, "system", "summary is injected as context");
+    assert!(msgs[1].content.contains("Earlier conversation summary"));
+    assert!(msgs[1].content.contains("Earlier: holiday plans"));
+    assert_eq!(msgs[2].role, "user");
+    assert_eq!(msgs[2].content, "u10");
+}
+
+#[tokio::test]
+async fn list_sessions_and_load_session_include_summary() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    seed_turns(&mgr, sid, 25).await;
+
+    let candidates = mgr.compaction_candidates(sid, 15).await.unwrap().unwrap();
+    let compacted_at = candidates.turn_messages.last().unwrap().created_at;
+    mgr.apply_compaction(sid, "summarised", compacted_at, &candidates.delete_ids)
+        .await
+        .unwrap();
+
+    let list = mgr.list_sessions().await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].summary.as_deref(), Some("summarised"));
+
+    let session = mgr.load_session(sid).await.unwrap();
+    assert_eq!(session.summary.as_deref(), Some("summarised"));
+}
+
+#[tokio::test]
+async fn trim_still_protects_compacted_sessions() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    seed_turns(&mgr, sid, 25).await;
+
+    let candidates = mgr.compaction_candidates(sid, 15).await.unwrap().unwrap();
+    let compacted_at = candidates.turn_messages.last().unwrap().created_at;
+    mgr.apply_compaction(sid, "summarised", compacted_at, &candidates.delete_ids)
+        .await
+        .unwrap();
+
+    // The retained 15 turns still respect the hard trim ceiling.
+    mgr.trim_to_budget(sid, None, 10).await.unwrap();
+    let msgs = mgr.get_messages_after_compaction(sid).await.unwrap();
+    assert_eq!(msgs.len(), 20, "10 retained turns survive the trim");
+    assert_eq!(msgs[0].content, "u15");
+}

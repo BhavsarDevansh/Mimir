@@ -97,12 +97,13 @@ Keep-alive pings are sent every 10 seconds.
     "session_id": 42,
     "created_at": "2024-01-01T00:00:00Z",
     "updated_at": "2024-01-02T00:00:00Z",
-    "preview": "Hello, Mimir!"
+    "preview": "Hello, Mimir!",
+    "summary": "Earlier: holiday plans in Rome"
   }
 ]
 ```
 
-Sessions are ordered by `updated_at` descending. `preview` is the most recent user message.
+Sessions are ordered by `updated_at` descending. `preview` is the most recent user message; `summary` is the compaction summary of old turns, when the session was compacted (issue #279).
 
 #### `GET /sessions/{id}/messages`
 
@@ -111,6 +112,7 @@ Sessions are ordered by `updated_at` descending. `preview` is the most recent us
 ```json
 {
   "session_id": 42,
+  "summary": "Earlier: holiday plans in Rome",
   "messages": [
     { "role": "system", "content": "...", "created_at": "2024-01-01T00:00:00Z" },
     { "role": "user", "content": "Hello", "created_at": "2024-01-01T00:00:01Z" },
@@ -119,7 +121,7 @@ Sessions are ordered by `updated_at` descending. `preview` is the most recent us
 }
 ```
 
-If `compacted_at` is set on the session, only messages with `created_at >= compacted_at` are returned. Otherwise all messages are returned.
+If `compacted_at` is set on the session, only messages with `created_at >= compacted_at` are returned (the summarised ones were deleted). Otherwise all messages are returned. `summary` is the compaction summary of the deleted turns, when present.
 
 **Errors:**
 - `404` — Session not found.

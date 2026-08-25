@@ -6,6 +6,8 @@
 //! - `sessions` — session lifecycle (create / delete / list / load).
 //! - `messages` — message append, usage attribution, export, compaction reads.
 //! - `trim` — context-budget trimming (turn/token caps).
+//! - `compaction` — compaction primitives (candidates + commit).
+//! - `compactor` — LLM summarisation orchestrator for compaction.
 //! - `search` — full-text search over conversation messages.
 //! - `schema` — schema initialisation and migrations.
 //! - `path` — tilde-expansion helpers.
@@ -18,6 +20,10 @@ use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 use thiserror::Error;
 
+mod compaction;
+mod compactor;
+pub use compaction::CompactionCandidates;
+pub use compactor::{CompactionOutcome, SessionCompactor};
 mod core;
 mod messages;
 mod path;
@@ -81,6 +87,9 @@ pub struct Session {
     pub cumulative_completion_tokens: u64,
     /// If set, messages before this timestamp were compacted/summarised.
     pub compacted_at: Option<DateTime<Utc>>,
+    /// LLM summary of the compacted turns (issue #279); injected into the
+    /// exported conversation and surfaced by the session list / resume flow.
+    pub summary: Option<String>,
 }
 
 /// Full conversation export for audit or logging.
@@ -101,6 +110,8 @@ pub struct SessionSummary {
     pub updated_at: DateTime<Utc>,
     /// Preview of the most recent user message.
     pub preview: Option<String>,
+    /// LLM summary of the compacted turns, when the session was compacted.
+    pub summary: Option<String>,
 }
 
 /// Result of a full-text search over conversation messages.

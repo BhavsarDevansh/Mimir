@@ -130,6 +130,20 @@ async fn main() {
                 kb::handle_kb_audit(entity, predicate, from, to, change_type, json, &transport)
                     .await;
             }
+            cli::KbCommands::Merges { command } => {
+                ensure_daemon(&transport, &mut daemon_started).await;
+                match command {
+                    cli::MergeCommands::List { json } => {
+                        kb::handle_kb_merges(json, &transport).await
+                    }
+                    cli::MergeCommands::Apply { id } => {
+                        kb::handle_kb_merge_apply(id, &transport).await
+                    }
+                    cli::MergeCommands::Keep { id } => {
+                        kb::handle_kb_merge_keep(id, &transport).await
+                    }
+                }
+            }
             cli::KbCommands::Forget {
                 fact_id,
                 predicate,

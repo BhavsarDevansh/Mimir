@@ -17,6 +17,7 @@ pub mod chat;
 pub mod connectors;
 pub mod kb;
 pub mod kb_maintenance;
+pub mod kb_merges;
 
 pub use chat::{
     ChatMessage, ChatRequest, ChatResponse, OpenAiChatMessage, OpenAiChatRequest,
@@ -43,3 +44,4 @@ pub use kb_maintenance::{
     ConfirmFactResponse, ForgetRequest, ForgetResponse, PendingFactRow, PendingListResponse,
     RejectFactRequest, RestoreRequest, RestoreResponse, TrashListResponse, TrashRow,
 };
+pub use kb_merges::{EntityMergeQueueRow, MergeApplyResponse, MergeQueueListResponse};

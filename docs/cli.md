@@ -115,6 +115,10 @@ mimir kb heatmap
 mimir kb heatmap --json
 ```
 
+### `mimir kb merges`
+
+Review surface for the nightly entity semantic-dedup pass (issue #282): `mimir kb merges list [--json]` shows pending `entity_merge_queue` rows (primary/duplicate names and types, the LLM's `suggested_action` and `llm_confidence`, queued time) from the daemon's loopback-gated `GET /kb/merges`; `mimir kb merges apply <id>` runs the existing entity-merge logic (repoint facts, move aliases/overlays/locations, delete the merged entity) via `POST /kb/merges/{id}/apply` and prints the actual survivor/merged ids; `mimir kb merges keep <id>` marks the pair `KeptSeparate` via `POST /kb/merges/{id}/keep`. Entities are never merged automatically — the nightly pass only queues suggestions.
+
 ### `mimir kb reset`
 
 Dedicated full-wipe flow (issue #69): prints live entity/fact counts, requires the exact phrase `DELETE EVERYTHING` (case-sensitive) interactively, runs a 5-second countdown, then dispatches the shared `kb forget --all` path — the daemon re-validates the phrase, creates a timestamped backup under `~/.local/share/mimir/backups/`, and hard-deletes the graph. Requires a terminal; the non-interactive equivalent is `mimir kb forget --all --confirmation-phrase "DELETE EVERYTHING"`. See `docs/kb-heatmap-reset.md`.

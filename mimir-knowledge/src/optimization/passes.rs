@@ -6,7 +6,6 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
-use mimir_core::llm::types::Message;
 use serde::Deserialize;
 use sqlx::{Row, Sqlite, Transaction};
 
@@ -16,6 +15,7 @@ use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::enums::RelationType;
 use crate::models::fact::{FactStatus, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
+use crate::queries::entity::ordered_pair;
 
 use crate::KnowledgeGraph;
 
@@ -111,44 +111,13 @@ impl<'a> OptimizationRunner<'a> {
             })
             .collect();
 
-        let tool = dedup_tool_schema();
-        let messages = vec![
-            Message {
-                role: "system".to_string(),
-                content: "Use the evaluate_dedup_candidates tool to return your evaluation."
-                    .to_string(),
-                tool_calls: None,
-                tool_call_id: None,
-            },
-            Message {
-                role: "user".to_string(),
-                content: serde_json::to_string(&candidate_json)
-                    .map_err(|e| crate::KnowledgeError::Validation(e.to_string()))?,
-                tool_calls: None,
-                tool_call_id: None,
-            },
-        ];
-        let (assistant_msg, _) =
-            llm.chat_message(messages, Some(vec![tool]))
-                .await
-                .map_err(|e| {
-                    crate::KnowledgeError::Validation(format!("semantic dedup LLM error: {e}"))
-                })?;
-
-        let tool_calls = assistant_msg.tool_calls.as_ref().ok_or_else(|| {
-            crate::KnowledgeError::Validation(
-                "semantic dedup: no tool calls in LLM response".to_string(),
-            )
-        })?;
-        let first = tool_calls.first().ok_or_else(|| {
-            crate::KnowledgeError::Validation(
-                "semantic dedup: empty tool calls in LLM response".to_string(),
-            )
-        })?;
-        let response: SemanticDedupResponse = serde_json::from_str(&first.function.arguments)
-            .map_err(|e| {
-                crate::KnowledgeError::Validation(format!("semantic dedup JSON error: {e}"))
-            })?;
+        let response: SemanticDedupResponse = crate::llm_tool::call_dedup_tool(
+            llm,
+            dedup_tool_schema(),
+            &candidate_json,
+            "semantic dedup",
+        )
+        .await?;
 
         let valid_pairs: HashSet<(i32, i32)> = candidates
             .iter()
@@ -196,6 +165,48 @@ impl<'a> OptimizationRunner<'a> {
     pub(super) async fn contradiction(&self) -> Result<PassSummary, crate::KnowledgeError> {
         ContradictionRule::evaluate_batch(self.kg).await?;
         Ok(PassSummary::default())
+    }
+
+    /// LLM-assisted semantic dedup of entity pairs (issue #282).
+    ///
+    /// Candidate generation is a deterministic, capped pre-filter (shared
+    /// alias or equal/contained names, same entity type, not yet evaluated
+    /// or human-resolved); the LLM evaluates each pair under a strict tool
+    /// schema and every validated result lands in `entity_merge_queue` for
+    /// human review — entities are never auto-merged by this pass.
+    pub(super) async fn entity_semantic_dedup(&self) -> Result<PassSummary, crate::KnowledgeError> {
+        let Some(llm) = &self.llm else {
+            tracing::warn!("entity semantic dedup skipped: no LLM backend configured");
+            return Ok(PassSummary::default());
+        };
+
+        // Bound the LLM call per nightly run (same scale as the fact-level
+        // semantic-dedup pass).
+        const CANDIDATE_CAP: i64 = 50;
+        let candidates =
+            crate::queries::entity::find_semantic_candidates(self.kg.pool(), CANDIDATE_CAP).await?;
+        if candidates.is_empty() {
+            return Ok(PassSummary::default());
+        }
+
+        // Contain LLM failures inside this pass: an unreliable LLM response
+        // (backend error, no tool call, malformed arguments) must not break
+        // the whole nightly run — later passes still need to execute. The
+        // DB pre-filter errors keep propagating as real failures.
+        let queued =
+            match crate::queries::entity::enqueue_semantic_dedup(self.kg.pool(), candidates, llm)
+                .await
+            {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::warn!("entity semantic dedup skipped: {e}");
+                    return Ok(PassSummary::default());
+                }
+            };
+        Ok(PassSummary {
+            entity_merges_queued: queued,
+            ..PassSummary::default()
+        })
     }
 
     pub(super) async fn inference_chain(&self) -> Result<PassSummary, crate::KnowledgeError> {
@@ -382,10 +393,6 @@ struct SemanticDedupCandidate {
     fact_b_id: i32,
     suggested_action: String,
     llm_confidence: f32,
-}
-
-fn ordered_pair(a: i32, b: i32) -> (i32, i32) {
-    if a <= b { (a, b) } else { (b, a) }
 }
 
 async fn merge_fact_pair(

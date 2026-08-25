@@ -488,3 +488,84 @@ async fn test_kb_reject_error() {
         matches!(err, ClientError::Server { status: 404, message } if message == "no such fact")
     );
 }
+
+#[tokio::test]
+async fn test_kb_merges_list() {
+    let server = MockServer::start().await;
+    let payload = MergeQueueListResponse {
+        total: 1,
+        items: vec![EntityMergeQueueRow {
+            id: 7,
+            primary_entity_id: 1,
+            primary_name: "Jane Smith".to_string(),
+            primary_type: "Person".to_string(),
+            duplicate_entity_id: 2,
+            duplicate_name: "Jane Smith-Jones".to_string(),
+            duplicate_type: "Person".to_string(),
+            suggested_action: Some("merge".to_string()),
+            llm_confidence: Some(0.85),
+            queued_at: "2026-08-25T12:00:00Z".to_string(),
+        }],
+    };
+    Mock::given(method("GET"))
+        .and(path("/kb/merges"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+        .mount(&server)
+        .await;
+
+    let client = MimirClient::new(server.uri());
+    let result = client.kb_merges().await.unwrap();
+    assert_eq!(result.total, 1);
+    assert_eq!(result.items[0].id, 7);
+    assert_eq!(result.items[0].suggested_action.as_deref(), Some("merge"));
+}
+
+#[tokio::test]
+async fn test_kb_merge_apply() {
+    let server = MockServer::start().await;
+    let payload = MergeApplyResponse {
+        survivor_id: 1,
+        merged_id: 2,
+    };
+    Mock::given(method("POST"))
+        .and(path("/kb/merges/7/apply"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
+        .mount(&server)
+        .await;
+
+    let client = MimirClient::new(server.uri());
+    let result = client.kb_merge_apply(7).await.unwrap();
+    assert_eq!(result.survivor_id, 1);
+    assert_eq!(result.merged_id, 2);
+}
+
+#[tokio::test]
+async fn test_kb_merge_keep() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/kb/merges/7/keep"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client = MimirClient::new(server.uri());
+    client.kb_merge_keep(7).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_kb_merge_apply_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/kb/merges/7/apply"))
+        .respond_with(
+            ResponseTemplate::new(400).set_body_string("merge queue entry 7 is not pending"),
+        )
+        .mount(&server)
+        .await;
+
+    let client = MimirClient::new(server.uri());
+    let err = client.kb_merge_apply(7).await.unwrap_err();
+    assert!(
+        matches!(err, ClientError::Server { status: 400, message } if message == "merge queue entry 7 is not pending")
+    );
+}

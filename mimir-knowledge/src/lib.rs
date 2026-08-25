@@ -14,6 +14,7 @@ pub mod forget;
 pub mod geo;
 pub mod inference;
 pub mod librarian;
+mod llm_tool;
 pub mod models;
 pub mod normalize;
 pub mod obsidian;

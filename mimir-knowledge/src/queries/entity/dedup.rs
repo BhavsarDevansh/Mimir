@@ -1,10 +1,15 @@
 //! Duplicate detection and merging: exact duplicates, overlapping aliases,
 //! semantic-dedup queue.
 
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use mimir_core::llm::LlmBackend;
+use serde::Deserialize;
 use sqlx::SqlitePool;
 
 use crate::KnowledgeError;
-use crate::models::entity::Entity;
+use crate::models::entity::{Entity, EntityType};
 use crate::models::enums::MergeWorkflowStatus;
 use crate::queries::entity::crud::get_by_id;
 
@@ -200,11 +205,278 @@ pub async fn flag_overlapping_aliases(pool: &SqlitePool) -> Result<(), Knowledge
     Ok(())
 }
 
+/// Deterministic pre-filter for the LLM semantic-dedup pass (issue #282):
+/// same-type entity pairs that share an alias string or whose names are
+/// equal / one contained in the other (plain substring via `INSTR` — no
+/// wildcard semantics), excluding pairs that are already LLM-evaluated or
+/// human-resolved in the queue. The result is capped so a single pass sends
+/// a bounded number of candidates to the LLM.
+///
+/// The equal-name and shared-alias branches are index-servable
+/// (`idx_entities_name_lower`, `idx_entity_aliases_alias`); the `INSTR`
+/// substring branch is self-joined and bounded by the same per-branch cap so
+/// a large entity table cannot force an unbounded quadratic scan of every
+/// pair. Branch results are merged, deduplicated, and re-capped in id order
+/// for deterministic output.
+pub async fn find_semantic_candidates(
+    pool: &SqlitePool,
+    cap: i64,
+) -> Result<Vec<(Entity, Entity)>, KnowledgeError> {
+    let mut ids = fetch_semantic_candidate_ids(
+        pool,
+        "SELECT e1.id, e2.id \
+         FROM entities e1 \
+         JOIN entities e2 ON e2.id > e1.id AND e1.entity_type_id = e2.entity_type_id \
+         WHERE LOWER(e1.name) = LOWER(e2.name) \
+           AND NOT EXISTS ( \
+               SELECT 1 FROM entity_merge_queue q \
+               WHERE q.primary_entity_id = e1.id AND q.duplicate_entity_id = e2.id \
+                 AND (q.status_id != ? OR q.llm_confidence IS NOT NULL) \
+           ) \
+         ORDER BY e1.id, e2.id \
+         LIMIT ?",
+        cap,
+    )
+    .await?;
+    ids.extend(
+        fetch_semantic_candidate_ids(
+            pool,
+            "SELECT DISTINCT e1.id, e2.id \
+             FROM entity_aliases a1 \
+             JOIN entity_aliases a2 ON LOWER(a2.alias) = LOWER(a1.alias) \
+              AND a2.entity_id > a1.entity_id \
+             JOIN entities e1 ON e1.id = a1.entity_id \
+             JOIN entities e2 ON e2.id = a2.entity_id AND e2.entity_type_id = e1.entity_type_id \
+             WHERE NOT EXISTS ( \
+                 SELECT 1 FROM entity_merge_queue q \
+                 WHERE q.primary_entity_id = e1.id AND q.duplicate_entity_id = e2.id \
+                   AND (q.status_id != ? OR q.llm_confidence IS NOT NULL) \
+             ) \
+             ORDER BY e1.id, e2.id \
+             LIMIT ?",
+            cap,
+        )
+        .await?,
+    );
+    ids.extend(
+        fetch_semantic_candidate_ids(
+            pool,
+            "SELECT e1.id, e2.id \
+             FROM entities e1 \
+             JOIN entities e2 ON e2.id > e1.id AND e1.entity_type_id = e2.entity_type_id \
+             WHERE ( \
+                 (LENGTH(e1.name) >= 3 AND INSTR(LOWER(e2.name), LOWER(e1.name)) > 0) \
+                 OR (LENGTH(e2.name) >= 3 AND INSTR(LOWER(e1.name), LOWER(e2.name)) > 0) \
+             ) \
+             AND NOT EXISTS ( \
+                 SELECT 1 FROM entity_merge_queue q \
+                 WHERE q.primary_entity_id = e1.id AND q.duplicate_entity_id = e2.id \
+                   AND (q.status_id != ? OR q.llm_confidence IS NOT NULL) \
+             ) \
+             ORDER BY e1.id, e2.id \
+             LIMIT ?",
+            cap,
+        )
+        .await?,
+    );
+
+    let mut seen: HashSet<(i32, i32)> = HashSet::new();
+    let mut ordered = Vec::new();
+    for (id_a, id_b) in ids {
+        if seen.insert((id_a, id_b)) {
+            ordered.push((id_a, id_b));
+        }
+    }
+    ordered.sort_unstable();
+    ordered.truncate(cap as usize);
+
+    let mut pairs = Vec::new();
+    for (id_a, id_b) in ordered {
+        if let (Some(a), Some(b)) = (get_by_id(pool, id_a).await?, get_by_id(pool, id_b).await?) {
+            pairs.push((a, b));
+        }
+    }
+    Ok(pairs)
+}
+
+/// Run one bounded candidate branch; returns at most `cap` id-ordered pairs.
+async fn fetch_semantic_candidate_ids(
+    pool: &SqlitePool,
+    sql: &'static str,
+    cap: i64,
+) -> Result<Vec<(i32, i32)>, KnowledgeError> {
+    sqlx::query_as::<_, (i32, i32)>(sql)
+        .bind(MergeWorkflowStatus::Pending as i16)
+        .bind(cap)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Evaluate candidate entity pairs with the LLM under a strict tool schema
+/// and write the results into `entity_merge_queue` for human review.
+///
+/// Rust-side validation (per the "logic in Rust" rule): only pairs that were
+/// actually in `candidate_pairs` are accepted, the suggested action must be
+/// one of the schema's enum values, and the confidence must be a finite
+/// number in `[0, 1]`. Pairs are stored id-ordered so the
+/// `UNIQUE(primary_entity_id, duplicate_entity_id)` constraint can never be
+/// bypassed with a mirrored row; re-evaluation of an existing pending row
+/// updates its LLM fields instead of duplicating it.
+///
+/// Returns the number of queue rows written or enriched.
 pub async fn enqueue_semantic_dedup(
-    _pool: &SqlitePool,
-    _candidate_pairs: Vec<(Entity, Entity)>,
-) -> Result<(), KnowledgeError> {
-    // TODO(#50): Build structured prompt, call LlmWorkerPool, parse JSON response,
-    // insert into entity_merge_queue with llm_confidence and suggested_action.
-    Err(KnowledgeError::NotYetImplemented)
+    pool: &SqlitePool,
+    candidate_pairs: Vec<(Entity, Entity)>,
+    llm: &Arc<dyn LlmBackend>,
+) -> Result<u32, KnowledgeError> {
+    if candidate_pairs.is_empty() {
+        return Ok(0);
+    }
+
+    let candidate_json: Vec<serde_json::Value> = candidate_pairs
+        .iter()
+        .map(|(a, b)| {
+            serde_json::json!({
+                "entity_a_id": a.id,
+                "entity_b_id": b.id,
+                "name_a": a.name,
+                "name_b": b.name,
+                "type_a": EntityType::try_from(a.entity_type_id).map(EntityType::as_str).unwrap_or("Unknown"),
+                "type_b": EntityType::try_from(b.entity_type_id).map(EntityType::as_str).unwrap_or("Unknown"),
+            })
+        })
+        .collect();
+
+    let response: EntitySemanticDedupResponse = crate::llm_tool::call_dedup_tool(
+        llm,
+        entity_dedup_tool_schema(),
+        &candidate_json,
+        "entity semantic dedup",
+    )
+    .await?;
+
+    let valid_pairs: HashSet<(i32, i32)> = candidate_pairs
+        .iter()
+        .map(|(a, b)| ordered_pair(a.id, b.id))
+        .collect();
+
+    let mut queued = 0;
+    let mut written_pairs: HashSet<(i32, i32)> = HashSet::new();
+    for candidate in response.candidates {
+        let pair = ordered_pair(candidate.entity_a_id, candidate.entity_b_id);
+        if !valid_pairs.contains(&pair) {
+            tracing::warn!(
+                "entity semantic dedup: skipping pair {:?} not in candidate set",
+                pair
+            );
+            continue;
+        }
+        let valid_action = match candidate.suggested_action.as_str() {
+            "merge" | "keep_separate" => true,
+            _ => {
+                tracing::warn!(
+                    "entity semantic dedup: skipping pair {:?} with invalid action `{}`",
+                    pair,
+                    candidate.suggested_action
+                );
+                false
+            }
+        };
+        if !valid_action {
+            continue;
+        }
+        if !candidate.llm_confidence.is_finite() || !(0.0..=1.0).contains(&candidate.llm_confidence)
+        {
+            tracing::warn!(
+                "entity semantic dedup: skipping pair {:?} with out-of-range confidence {}",
+                pair,
+                candidate.llm_confidence
+            );
+            continue;
+        }
+        if written_pairs.contains(&pair) {
+            continue;
+        }
+
+        let written = sqlx::query(
+            "INSERT INTO entity_merge_queue \
+             (primary_entity_id, duplicate_entity_id, status_id, suggested_action, llm_confidence) \
+             VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT(primary_entity_id, duplicate_entity_id) DO UPDATE SET \
+                suggested_action = excluded.suggested_action, \
+                llm_confidence = excluded.llm_confidence \
+             WHERE entity_merge_queue.status_id = ?",
+        )
+        .bind(pair.0)
+        .bind(pair.1)
+        .bind(MergeWorkflowStatus::Pending as i16)
+        .bind(candidate.suggested_action)
+        .bind(candidate.llm_confidence)
+        .bind(MergeWorkflowStatus::Pending as i16)
+        .execute(pool)
+        .await?;
+        if written.rows_affected() > 0 {
+            written_pairs.insert(pair);
+            queued += 1;
+        } else {
+            tracing::debug!(
+                "entity semantic dedup: pair {:?} already resolved; suggestion not stored",
+                pair
+            );
+        }
+    }
+    Ok(queued)
+}
+
+fn entity_dedup_tool_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "evaluate_entity_dedup_candidates",
+            "description": "Evaluate candidate entity pairs for semantic deduplication and return structured results.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "candidates": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "entity_a_id": { "type": "integer" },
+                                "entity_b_id": { "type": "integer" },
+                                "suggested_action": {
+                                    "type": "string",
+                                    "enum": ["merge", "keep_separate"]
+                                },
+                                "llm_confidence": { "type": "number" }
+                            },
+                            "required": ["entity_a_id", "entity_b_id", "suggested_action", "llm_confidence"]
+                        }
+                    }
+                },
+                "required": ["candidates"]
+            }
+        }
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct EntitySemanticDedupResponse {
+    candidates: Vec<EntitySemanticDedupCandidate>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EntitySemanticDedupCandidate {
+    entity_a_id: i32,
+    entity_b_id: i32,
+    suggested_action: String,
+    llm_confidence: f32,
+}
+
+/// Normalize a candidate pair to ascending id order so the
+/// `UNIQUE(primary_entity_id, duplicate_entity_id)` constraint cannot be
+/// bypassed by mirrored rows.
+pub(crate) fn ordered_pair(a: i32, b: i32) -> (i32, i32) {
+    if a <= b { (a, b) } else { (b, a) }
 }

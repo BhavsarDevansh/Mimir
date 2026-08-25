@@ -7,7 +7,7 @@
 //! orchestrator); this module stays deterministic and DB-only so the read
 //! path can be unit-tested without an LLM.
 
-use crate::context::trim::{TurnRow, split_complete_turns};
+use crate::context::trim::{TurnRow, delete_message_ids, split_complete_turns};
 use crate::context::{ContextError, ContextManager, ContextMessage};
 use chrono::{DateTime, Utc};
 use tracing::info;
@@ -96,7 +96,9 @@ impl ContextManager {
     /// [`get_messages_after_compaction`](Self::get_messages_after_compaction)
     /// keeps exactly the retained window. Re-applying an already-deleted
     /// batch (e.g. a concurrent trim removed the rows while the LLM ran) is
-    /// a no-op for the deletes and safe for the summary write.
+    /// a no-op for the deletes and safe for the summary write. Deletes are
+    /// scoped to `session_id`, so a stale batch can never touch another
+    /// session's rows.
     pub async fn apply_compaction(
         &self,
         session_id: i64,
@@ -120,12 +122,7 @@ impl ContextManager {
         .execute(self.pool.as_ref())
         .await?;
 
-        for id in delete_ids {
-            sqlx::query("DELETE FROM messages WHERE id = ?1")
-                .bind(id)
-                .execute(self.pool.as_ref())
-                .await?;
-        }
+        delete_message_ids(self, session_id, delete_ids).await?;
 
         info!(
             session_id,

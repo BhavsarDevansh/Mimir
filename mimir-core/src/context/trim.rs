@@ -198,14 +198,30 @@ impl ContextManager {
         let to_delete: Vec<&TurnRow> = turns.iter().take(n as usize).flatten().copied().collect();
         let turns_removed = to_delete.iter().filter(|row| row.role == "user").count();
 
-        for row in &to_delete {
-            sqlx::query("DELETE FROM messages WHERE id = ?1")
-                .bind(row.id)
-                .execute(self.pool.as_ref())
-                .await?;
-        }
+        let ids: Vec<i64> = to_delete.iter().map(|row| row.id).collect();
+        delete_message_ids(self, session_id, &ids).await?;
 
         debug!(session_id = %session_id, turns_removed, "deleted oldest turns");
         Ok(())
     }
+}
+
+/// Delete message rows by id, scoped to the owning session.
+///
+/// Ids that no longer exist (already removed by a concurrent compaction or
+/// trim) are no-ops, so re-applying a stale batch is safe. The `session_id`
+/// guard means a stale batch can never delete rows from a different session.
+pub(super) async fn delete_message_ids(
+    context: &ContextManager,
+    session_id: i64,
+    ids: &[i64],
+) -> Result<(), ContextError> {
+    for id in ids {
+        sqlx::query("DELETE FROM messages WHERE id = ?1 AND session_id = ?2")
+            .bind(id)
+            .bind(session_id)
+            .execute(context.pool.as_ref())
+            .await?;
+    }
+    Ok(())
 }

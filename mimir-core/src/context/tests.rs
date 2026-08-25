@@ -1258,3 +1258,34 @@ async fn trim_still_protects_compacted_sessions() {
     assert_eq!(msgs.len(), 20, "10 retained turns survive the trim");
     assert_eq!(msgs[0].content, "u15");
 }
+
+#[tokio::test]
+async fn apply_compaction_never_deletes_other_sessions_messages() {
+    let (mgr, _dir) = setup_manager().await;
+    let sid_a = mgr.create_session("sys a").await.unwrap();
+    let sid_b = mgr.create_session("sys b").await.unwrap();
+    seed_turns(&mgr, sid_a, 3).await;
+    seed_turns(&mgr, sid_b, 3).await;
+
+    let candidates_b = mgr.compaction_candidates(sid_b, 2).await.unwrap().unwrap();
+    // Applying session B's batch to session A (e.g. a stale caller) must
+    // never delete A's rows, and must not delete B's either: the batch ids
+    // are scoped to the session they are applied to.
+    mgr.apply_compaction(
+        sid_a,
+        "cross-session summary",
+        candidates_b.turn_messages.last().unwrap().created_at,
+        &candidates_b.delete_ids,
+    )
+    .await
+    .unwrap();
+
+    let msgs_a = mgr.export_messages(sid_a).await.unwrap();
+    assert_eq!(
+        msgs_a.len(),
+        8,
+        "session A's system + injected summary + 3 turns survive"
+    );
+    let msgs_b = mgr.export_messages(sid_b).await.unwrap();
+    assert_eq!(msgs_b.len(), 7, "session B's messages survive too");
+}

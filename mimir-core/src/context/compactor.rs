@@ -135,21 +135,14 @@ impl SessionCompactor {
 
         let mut prompt = String::new();
         if let Some(previous) = &candidates.existing_summary {
-            prompt.push_str(
-                "Previous summary (already compacted earlier):
-",
-            );
+            prompt.push_str("Previous summary (already compacted earlier):\n");
             prompt.push_str(previous);
             prompt.push('\n');
         }
-        prompt.push_str(
-            "Transcript of the older turns:
-",
-        );
+        prompt.push_str("Transcript of the older turns:\n");
         prompt.push_str(transcript);
         prompt.push_str(&format!(
-            "
-Write one concise summary of the transcript that also carries forward anything still relevant from the previous summary. Max {} characters.",
+            "\nWrite one concise summary of the transcript that also carries forward anything still relevant from the previous summary. Max {} characters.",
             MAX_COMPACTION_SUMMARY_CHARS
         ));
 
@@ -166,8 +159,9 @@ Write one concise summary of the transcript that also carries forward anything s
 }
 
 /// Render the compacted messages as a labelled transcript for the LLM.
-/// Assistant tool-call JSON is machine-oriented and skipped; tool results
-/// are kept with their role label.
+/// Only non-empty message content is rendered, labelled by role. The
+/// machine-oriented tool-call JSON stored on assistant messages is never
+/// rendered; tool results are kept with their `tool` role label.
 fn render_transcript(messages: &[ContextMessage]) -> String {
     let mut out = String::new();
     for message in messages {
@@ -191,8 +185,10 @@ fn truncate(text: &str, max_chars: usize) -> String {
     if count <= max_chars {
         return text.to_string();
     }
-    let mut out: String = text.chars().take(max_chars).collect();
-    out.push('…');
+    let mut out: String = text.chars().take(max_chars.saturating_sub(1)).collect();
+    if max_chars > 0 {
+        out.push('…');
+    }
     out
 }
 
@@ -324,5 +320,21 @@ mod tests {
             second_prompt.contains("u10"),
             "the second batch compacts the oldest retained turns"
         );
+    }
+
+    #[test]
+    fn truncate_keeps_text_at_or_below_limit() {
+        assert_eq!(truncate("hello", 2000), "hello");
+        assert_eq!(truncate("hello", 5), "hello");
+        assert_eq!(truncate("", 2000), "");
+    }
+
+    #[test]
+    fn truncate_caps_at_limit_with_ellipsis() {
+        let cut = truncate("abcdef", 5);
+        assert_eq!(cut.chars().count(), 5, "cap includes the ellipsis");
+        assert!(cut.starts_with("abcd"));
+        assert!(cut.ends_with('…'));
+        assert_eq!(truncate("abc", 0), "", "zero limit truncates to empty");
     }
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.149.2] — 2026-08-25
+
+### Docs: Compaction window invariant documented on the config field (PR #505)
+
+- `ContextCompactionConfig::max_turns` now documents that `Config::normalise` clamps it strictly below `context.max_turns` after TOML and environment overrides are applied, making the PR #505 review fix traceable at the field definition.
+- Version bumped 0.149.1 → 0.149.2 (patch — documentation update).
+
 ## [0.149.1] — 2026-08-25
 
 ### Fix: Session compaction review fixes (PR #505)

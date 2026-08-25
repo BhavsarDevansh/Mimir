@@ -109,7 +109,10 @@ pub struct ContextCompactionConfig {
     /// Master switch for the background compaction hook.
     pub enabled: bool,
     /// Number of most recent complete turns to keep; older complete turns
-    /// are summarised and removed.
+    /// are summarised and removed. `Config::normalise` clamps this strictly
+    /// below `context.max_turns` after TOML and environment overrides are
+    /// applied, so the compaction window can never equal or exceed the trim
+    /// window (PR #505 review).
     pub max_turns: u16,
 }
 

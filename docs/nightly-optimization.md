@@ -2,20 +2,21 @@
 
 ## Overview
 
-The nightly optimization pipeline maintains graph health by running a fixed sequence of 10 passes over the knowledge graph (seven core optimization passes plus three cleanup steps). It is implemented in `mimir-knowledge/src/optimization/mod.rs` and orchestrated by `OptimizationRunner`.
+The nightly optimization pipeline maintains graph health by running a fixed sequence of 11 passes over the knowledge graph (eight core optimization passes plus three cleanup steps). It is implemented in `mimir-knowledge/src/optimization/mod.rs` and orchestrated by `OptimizationRunner`.
 
 ## Passes
 
 1. **Deterministic Deduplication** – merges facts with identical subject-predicate-object triples, boosting confidence and preserving sources.
 2. **Semantic Deduplication** – sends near-match candidates to the LLM with a strict JSON schema. Auto-merges pairs with confidence >= 0.9; queues uncertain pairs in `dedup_queue`.
-3. **Contradiction Resolution** – evaluates explicit vs inferred facts using `ContradictionRule`.
-4. **Inference Chain Re-evaluation** – runs the rule engine (`TransitivityRule`, `ContradictionRule`) and inserts newly inferred facts. Includes `ThresholdRule` nightly re-count.
-5. **Confidence Recalculation** – for each stale fact (`stale_confidence = TRUE`), runs a root-aware recalculation (`confidence::recalculate_stale_fact`): it recalculates the stale row itself from its parents (inferred) or just clears the flag (non-inferred), writes a `ConfidenceChange` audit entry only when confidence actually changes, and cascades the result to inferred descendants within the same transaction. This prevents the pass from leaving the selected stale rows unrecalculated while only updating their children.
-6. **Dormant Cleanup** – forgets old disputed non-user facts that have a higher-confidence counterpart.
-7. **Pattern Consolidation** – currently a stub; will group repeated fact patterns in a future release.
-8. **Pending Confirmation Cleanup** – hard-deletes pending-confirmation facts older than 7 days.
-9. **Trash Cleanup** – permanently removes expired trash rows.
-10. **Compaction** – rebuilds FTS5 index, runs `ANALYZE`, and `VACUUM`s the database.
+3. **Entity Semantic Deduplication** – a capped, deterministic pre-filter (same-type entities sharing an alias or equal/contained names, excluding pairs the LLM already evaluated or a human already resolved) feeds a strict tool-schema LLM evaluation; every validated result lands in `entity_merge_queue` for human review (issue #282). Entities are never auto-merged by this pass — `mimir kb merges apply` resolves them.
+4. **Contradiction Resolution** – evaluates explicit vs inferred facts using `ContradictionRule`.
+5. **Inference Chain Re-evaluation** – runs the rule engine (`TransitivityRule`, `ContradictionRule`) and inserts newly inferred facts. Includes `ThresholdRule` nightly re-count.
+6. **Confidence Recalculation** – for each stale fact (`stale_confidence = TRUE`), runs a root-aware recalculation (`confidence::recalculate_stale_fact`): it recalculates the stale row itself from its parents (inferred) or just clears the flag (non-inferred), writes a `ConfidenceChange` audit entry only when confidence actually changes, and cascades the result to inferred descendants within the same transaction. This prevents the pass from leaving the selected stale rows unrecalculated while only updating their children.
+7. **Dormant Cleanup** – forgets old disputed non-user facts that have a higher-confidence counterpart.
+8. **Pattern Consolidation** – currently a stub; will group repeated fact patterns in a future release.
+9. **Pending Confirmation Cleanup** – hard-deletes pending-confirmation facts older than 7 days.
+10. **Trash Cleanup** – permanently removes expired trash rows.
+11. **Compaction** – rebuilds FTS5 index, runs `ANALYZE`, and `VACUUM`s the database.
 
 ## Transaction Model
 

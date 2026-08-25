@@ -10,6 +10,7 @@ use mimir_knowledge::clock::MockClock;
 use mimir_knowledge::extract::{
     Classification, ExtractedFact, RememberOutput, process_remember_output,
 };
+use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::fact::FactStatus;
 use mimir_knowledge::models::source::SourceType;
 use mimir_knowledge::optimization::{OptimizationConfig, OptimizationRunner, PassName};
@@ -641,4 +642,166 @@ async fn dedup_retires_duplicate_fact_event_overlay() {
             .is_none(),
         "duplicate fact's pending_event_meta was not removed by dedup"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Entity semantic dedup (issue #282)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn entity_semantic_dedup_pass_queues_llm_candidate() {
+    let graph = TestGraph::new().await;
+    let a = graph
+        .kg
+        .create_entity("Jane Smith", EntityType::Person, &["J. Smith"])
+        .await
+        .unwrap();
+    let b = graph
+        .kg
+        .create_entity("Jane Smith-Jones", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let args = format!(
+        r#"{{"candidates":[{{"entity_a_id":{},"entity_b_id":{},"suggested_action":"merge","llm_confidence":0.85}}]}}"#,
+        a.id, b.id
+    );
+    let llm: Arc<dyn LlmBackend> = Arc::new(
+        MockLlmClient::builder()
+            .push_chat_message(
+                Message {
+                    role: "assistant".to_string(),
+                    content: String::new(),
+                    tool_calls: Some(vec![ToolCall {
+                        index: 0,
+                        id: "call_1".to_string(),
+                        call_type: "function".to_string(),
+                        function: FunctionCall {
+                            name: "evaluate_entity_dedup_candidates".to_string(),
+                            arguments: args,
+                        },
+                    }]),
+                    tool_call_id: None,
+                },
+                Usage::default(),
+            )
+            .build(),
+    );
+    let runner = OptimizationRunner::new(
+        &graph.kg,
+        OptimizationConfig::for_test(graph.backup_dir()),
+        Some(llm),
+    );
+
+    let summary = runner
+        .run_pass(PassName::EntitySemanticDeduplication)
+        .await
+        .unwrap();
+
+    assert_eq!(summary.entity_merges_queued, 1);
+    let queued: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM entity_merge_queue \
+         WHERE suggested_action = 'merge' AND status_id = 1",
+    )
+    .fetch_one(graph.kg.pool())
+    .await
+    .unwrap();
+    assert_eq!(queued, 1);
+    let confidence: f32 = sqlx::query_scalar("SELECT llm_confidence FROM entity_merge_queue")
+        .fetch_one(graph.kg.pool())
+        .await
+        .unwrap();
+    assert!((confidence - 0.85).abs() < 1e-4);
+}
+
+#[tokio::test]
+async fn entity_semantic_dedup_pass_skips_without_llm() {
+    let graph = TestGraph::new().await;
+    let _a = graph
+        .kg
+        .create_entity("Jane Smith", EntityType::Person, &[])
+        .await
+        .unwrap();
+    let _b = graph
+        .kg
+        .create_entity("Jane Smith-Jones", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let runner = OptimizationRunner::new(
+        &graph.kg,
+        OptimizationConfig::for_test(graph.backup_dir()),
+        None,
+    );
+
+    let summary = runner
+        .run_pass(PassName::EntitySemanticDeduplication)
+        .await
+        .unwrap();
+    assert_eq!(summary.entity_merges_queued, 0);
+    let queued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entity_merge_queue")
+        .fetch_one(graph.kg.pool())
+        .await
+        .unwrap();
+    assert_eq!(queued, 0);
+}
+
+#[tokio::test]
+async fn entity_semantic_dedup_pass_respects_candidate_cap() {
+    let graph = TestGraph::new().await;
+    // 51 entities sharing one alias produce 1275 candidate pairs; the pass
+    // must send at most the cap (50) to the LLM.
+    for i in 0..51 {
+        graph
+            .kg
+            .create_entity(
+                &format!("Entity {i}"),
+                EntityType::Person,
+                &["shared-alias"],
+            )
+            .await
+            .unwrap();
+    }
+
+    let mock = Arc::new(
+        MockLlmClient::builder()
+            .push_chat_message(
+                Message {
+                    role: "assistant".to_string(),
+                    content: String::new(),
+                    tool_calls: Some(vec![ToolCall {
+                        index: 0,
+                        id: "call_1".to_string(),
+                        call_type: "function".to_string(),
+                        function: FunctionCall {
+                            name: "evaluate_entity_dedup_candidates".to_string(),
+                            arguments: r#"{"candidates":[]}"#.to_string(),
+                        },
+                    }]),
+                    tool_call_id: None,
+                },
+                Usage::default(),
+            )
+            .build(),
+    );
+    let llm: Arc<dyn LlmBackend> = mock.clone();
+    let runner = OptimizationRunner::new(
+        &graph.kg,
+        OptimizationConfig::for_test(graph.backup_dir()),
+        Some(llm),
+    );
+
+    runner
+        .run_pass(PassName::EntitySemanticDeduplication)
+        .await
+        .unwrap();
+
+    let calls = mock.chat_calls();
+    assert_eq!(calls.len(), 1);
+    let user_message = calls[0]
+        .iter()
+        .find(|m| m.role == "user")
+        .expect("entity dedup prompt must carry a user message");
+    let sent: Vec<serde_json::Value> = serde_json::from_str(&user_message.content).unwrap();
+    assert_eq!(sent.len(), 50, "candidate cap must bound LLM input");
 }

@@ -16,6 +16,7 @@ use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::enums::RelationType;
 use crate::models::fact::{FactStatus, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
+use crate::queries::entity::ordered_pair;
 
 use crate::KnowledgeGraph;
 
@@ -196,6 +197,36 @@ impl<'a> OptimizationRunner<'a> {
     pub(super) async fn contradiction(&self) -> Result<PassSummary, crate::KnowledgeError> {
         ContradictionRule::evaluate_batch(self.kg).await?;
         Ok(PassSummary::default())
+    }
+
+    /// LLM-assisted semantic dedup of entity pairs (issue #282).
+    ///
+    /// Candidate generation is a deterministic, capped pre-filter (shared
+    /// alias or equal/contained names, same entity type, not yet evaluated
+    /// or human-resolved); the LLM evaluates each pair under a strict tool
+    /// schema and every validated result lands in `entity_merge_queue` for
+    /// human review — entities are never auto-merged by this pass.
+    pub(super) async fn entity_semantic_dedup(&self) -> Result<PassSummary, crate::KnowledgeError> {
+        let Some(llm) = &self.llm else {
+            tracing::warn!("entity semantic dedup skipped: no LLM backend configured");
+            return Ok(PassSummary::default());
+        };
+
+        // Bound the LLM call per nightly run (same scale as the fact-level
+        // semantic-dedup pass).
+        const CANDIDATE_CAP: i64 = 50;
+        let candidates =
+            crate::queries::entity::find_semantic_candidates(self.kg.pool(), CANDIDATE_CAP).await?;
+        if candidates.is_empty() {
+            return Ok(PassSummary::default());
+        }
+
+        let queued =
+            crate::queries::entity::enqueue_semantic_dedup(self.kg.pool(), candidates, llm).await?;
+        Ok(PassSummary {
+            entity_merges_queued: queued,
+            ..PassSummary::default()
+        })
     }
 
     pub(super) async fn inference_chain(&self) -> Result<PassSummary, crate::KnowledgeError> {
@@ -382,10 +413,6 @@ struct SemanticDedupCandidate {
     fact_b_id: i32,
     suggested_action: String,
     llm_confidence: f32,
-}
-
-fn ordered_pair(a: i32, b: i32) -> (i32, i32) {
-    if a <= b { (a, b) } else { (b, a) }
 }
 
 async fn merge_fact_pair(

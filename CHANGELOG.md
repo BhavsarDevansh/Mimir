@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.150.0] — 2026-08-25
+
+### Feature: LLM semantic entity dedup + merge-queue review (issue #282)
+
+- `enqueue_semantic_dedup` is implemented: candidate entity pairs are evaluated under a strict `evaluate_entity_dedup_candidates` tool schema, with Rust-side validation (pair membership in the candidate set, `merge`/`keep_separate` action enum, finite confidence in `[0,1]`), and every validated result is upserted id-ordered into `entity_merge_queue` with `suggested_action` + `llm_confidence` (new migration `055`), so the `UNIQUE(primary, duplicate)` constraint can never be bypassed and re-evaluation enriches pending rows instead of duplicating them.
+- The nightly optimization pipeline gained the `entity_semantic_dedup` pass (11 passes total): a capped (50) deterministic pre-filter — same-type entities sharing an alias or with equal/contained names, excluding pairs the LLM already evaluated — feeds the LLM, and results land in the review queue only; entities are never auto-merged (migration `056` adds the `entity_merges_queued` pass-run counter).
+- New review surface: `mimir kb merges list [--json]` shows pending suggestions (loopback-gated `GET /kb/merges`), `mimir kb merges apply <id>` runs the existing `auto_merge_pair` entity-merge logic (`POST /kb/merges/{id}/apply`, returns the actual survivor/merged ids), and `mimir kb merges keep <id>` marks a pair `KeptSeparate` (`POST /kb/merges/{id}/keep`).
+- Tests cover LLM output validation, queue writes, no-duplicate/enrichment guarantees, pair-order normalisation, merge application, keep resolution, the nightly pass, and the candidate cap; docs updated (`docs/nightly-optimization.md`, `docs/knowledge-graph-schema.md`, `docs/cli.md`, `docs/inference-engine.md`, wiki, `Mimir-Implementation-Context.md`).
+- Version bumped 0.149.3 → 0.150.0 (minor — new feature).
+
 ## [0.149.3] — 2026-08-25
 
 ### Docs: Align compaction reload contract and scope summary guarantees (PR #505)

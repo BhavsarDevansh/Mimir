@@ -249,6 +249,11 @@ pub enum KbCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Review and resolve LLM-flagged entity merges (issue #282).
+    Merges {
+        #[command(subcommand)]
+        command: MergeCommands,
+    },
     /// Forget facts (single, bulk, or full reset).
     Forget {
         /// Single fact ID.
@@ -333,6 +338,27 @@ pub enum KbCommands {
         /// Optional reason recorded in the audit log.
         #[arg(long)]
         reason: Option<String>,
+    },
+}
+
+/// Subcommands for the `kb merge` review queue.
+#[derive(Subcommand)]
+pub enum MergeCommands {
+    /// List pending entity-merge suggestions.
+    List {
+        /// Output raw JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Apply a suggestion: merge the duplicate entity into the primary.
+    Apply {
+        /// Merge queue entry ID.
+        id: i64,
+    },
+    /// Keep the two entities separate without merging.
+    Keep {
+        /// Merge queue entry ID.
+        id: i64,
     },
 }
 

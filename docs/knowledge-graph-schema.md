@@ -75,7 +75,7 @@ Lookup tables are seeded across migrations `001`, `012`, `013`, `020`, `022`, `0
 | `system_state` | Key–value store for daemon state (e.g. condensed memory) |
 | `fact_audit_log` | Immutable history with typed `change_type_id` and `changed_by_id`; column-only JSON snapshots |
 | `dedup_queue` | Pending duplicate-fact resolutions |
-| `entity_merge_queue` | Pending entity deduplication tasks |
+| `entity_merge_queue` | Pending entity deduplication tasks; `suggested_action` + `llm_confidence` carry the LLM evaluation (migration `055`, issue #282) |
 | `trash` | Soft-deleted rows with full payload JSON |
 | `pending_event_meta` | Fact-keyed cache of the extracted event shape for pending sensitive facts; consumed on confirm, cascade-deleted on reject (migration 041) |
 | `pending_location_meta` | Fact-keyed cache of the extracted `NormalizedLocation` shape for pending sensitive "where" facts; consumed on confirm, cascade-deleted on reject (migration 048) |
@@ -183,6 +183,8 @@ Migrations are strictly ordered by foreign-key dependencies:
 43. `050` — Seed remaining canonical predicates (`skill`, `has_appointment`, sensitive set) via name-keyed UPSERT + reconcile auto-created types (#401)
 44. `051` — Consolidate redundant predicates (`based_in`/`lived_in` → `resides_in`, `is_in` → `located_in`, name-keyed) + seed abstract DAG parents (`residence`, `employment`, `education`, `containment`) (#403)
 45. `052` — `memory_buckets` lookup + `categories.memory_bucket_id` backfilled from the taxonomy, making memory bucket classification data-driven instead of hard-coded ID ranges (#407)
+46. `055` — `entity_merge_queue.suggested_action` / `llm_confidence` columns for the LLM semantic entity-dedup pass (#282)
+47. `056` — `optimization_pass_runs.entity_merges_queued` counter for the entity semantic-dedup pass (#282)
 46. `053` — Seed connector-emitted predicates (`has_event`, `attending`, photos/JSON-LD travel-commerce verbs) as canonical with constraints + reconcile auto-created types (#412)
 
 ---
@@ -220,11 +222,11 @@ Cross-type matches are dropped, so "Apple" resolved as a `Concept` never merges 
 
 ## Entity Deduplication
 
-Two-phase dedup implemented in Rust:
+Entity dedup implemented in Rust:
 
 1. **Exact-match auto-merge** — case-insensitive name match; survivor is the entity with more facts. Merged aliases are preserved; facts are repointed via FK update.
 2. **Overlapping-alias flagging** — shared alias strings across different entities insert rows into `entity_merge_queue` with `Pending` status for human review.
-3. **LLM semantic dedup** — stubbed in #49; full implementation deferred to Phase 2 optimization (#50+).
+3. **LLM semantic dedup** (issue #282) — the nightly `entity_semantic_dedup` pass applies a capped, deterministic pre-filter (same-type entities sharing an alias or equal/contained names, excluding pairs the LLM already evaluated), evaluates each candidate under a strict tool schema (`evaluate_entity_dedup_candidates`), and upserts every validated result into `entity_merge_queue` — ordered `(primary, duplicate)` ids so the `UNIQUE` constraint cannot be bypassed — with `suggested_action` (`merge` / `keep_separate`) and `llm_confidence`. Entities are never auto-merged by the pass: `mimir kb merges list` surfaces pending rows and `mimir kb merges apply` / `keep` resolve them via `auto_merge_pair` / a `KeptSeparate` resolution.
 
 ---
 

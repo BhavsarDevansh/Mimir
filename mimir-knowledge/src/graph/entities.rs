@@ -78,6 +78,30 @@ impl KnowledgeGraph {
         queries::entity::add_alias(&self.pool, entity_id, alias).await
     }
 
+    /// List pending entity-merge suggestions awaiting human review.
+    ///
+    /// Backs `GET /kb/merges` (issue #282).
+    pub async fn list_entity_merges(
+        &self,
+    ) -> Result<Vec<queries::entity::EntityMergeQueueItem>, KnowledgeError> {
+        queries::entity::list_pending_merges(&self.pool).await
+    }
+
+    /// Apply a pending entity-merge suggestion, returning the actual
+    /// `(survivor_id, merged_id)` chosen by the merge logic.
+    ///
+    /// Backs `POST /kb/merges/{id}/apply` (issue #282).
+    pub async fn apply_entity_merge(&self, queue_id: i64) -> Result<(i32, i32), KnowledgeError> {
+        queries::entity::apply_merge(&self.pool, queue_id).await
+    }
+
+    /// Mark a pending entity-merge suggestion as kept separate.
+    ///
+    /// Backs `POST /kb/merges/{id}/keep` (issue #282).
+    pub async fn keep_entity_merge(&self, queue_id: i64) -> Result<(), KnowledgeError> {
+        queries::entity::keep_merge(&self.pool, queue_id).await
+    }
+
     /// Remove an alias from an entity.
     pub async fn remove_alias(&self, entity_id: i32, alias: &str) -> Result<(), KnowledgeError> {
         queries::entity::remove_alias(&self.pool, entity_id, alias).await

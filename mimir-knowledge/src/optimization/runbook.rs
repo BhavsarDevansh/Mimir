@@ -62,6 +62,7 @@ impl<'a> OptimizationRunner<'a> {
         let all_passes = vec![
             PassName::Deduplication,
             PassName::SemanticDeduplication,
+            PassName::EntitySemanticDeduplication,
             PassName::Contradiction,
             PassName::InferenceChain,
             PassName::ConfidenceRecalc,
@@ -92,6 +93,7 @@ impl<'a> OptimizationRunner<'a> {
         let result = match pass {
             PassName::Deduplication => self.deterministic_dedup().await,
             PassName::SemanticDeduplication => self.semantic_dedup().await,
+            PassName::EntitySemanticDeduplication => self.entity_semantic_dedup().await,
             PassName::Contradiction => self.contradiction().await,
             PassName::InferenceChain => self.inference_chain().await,
             PassName::ConfidenceRecalc => self.confidence_recalc().await,
@@ -133,8 +135,8 @@ impl<'a> OptimizationRunner<'a> {
     ) -> Result<(), crate::KnowledgeError> {
         sqlx::query(
             "INSERT INTO optimization_pass_runs \
-             (run_id, pass_name, status, started_at, finished_at, facts_merged, dedup_candidates_queued, facts_forgotten, error) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             (run_id, pass_name, status, started_at, finished_at, facts_merged, dedup_candidates_queued, entity_merges_queued, facts_forgotten, error) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(run_id)
         .bind(pass.as_str())
@@ -143,6 +145,7 @@ impl<'a> OptimizationRunner<'a> {
         .bind(self.kg.now())
         .bind(summary.facts_merged as i64)
         .bind(summary.dedup_candidates_queued as i64)
+        .bind(summary.entity_merges_queued as i64)
         .bind(summary.facts_forgotten as i64)
         .bind(error)
         .execute(self.kg.pool())

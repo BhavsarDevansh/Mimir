@@ -24,6 +24,7 @@ pub use nightly::run_nightly_optimization;
 pub enum PassName {
     Deduplication,
     SemanticDeduplication,
+    EntitySemanticDeduplication,
     Contradiction,
     InferenceChain,
     ConfidenceRecalc,
@@ -39,6 +40,7 @@ impl PassName {
         match self {
             Self::Deduplication => "deduplication",
             Self::SemanticDeduplication => "semantic_deduplication",
+            Self::EntitySemanticDeduplication => "entity_semantic_dedup",
             Self::Contradiction => "contradiction",
             Self::InferenceChain => "inference_chain",
             Self::ConfidenceRecalc => "confidence_recalc",
@@ -81,6 +83,7 @@ pub struct PassSummary {
     pub pass: Option<PassName>,
     pub facts_merged: u32,
     pub dedup_candidates_queued: u32,
+    pub entity_merges_queued: u32,
     pub facts_forgotten: u32,
 }
 
@@ -108,6 +111,7 @@ impl<'a> OptimizationRunner<'a> {
         let result = match pass {
             PassName::Deduplication => self.deterministic_dedup().await,
             PassName::SemanticDeduplication => self.semantic_dedup().await,
+            PassName::EntitySemanticDeduplication => self.entity_semantic_dedup().await,
             PassName::Contradiction => self.contradiction().await,
             PassName::InferenceChain => self.inference_chain().await,
             PassName::ConfidenceRecalc => self.confidence_recalc().await,
@@ -188,6 +192,7 @@ impl<'a> OptimizationRunner<'a> {
                     vec![
                         PassName::Deduplication,
                         PassName::SemanticDeduplication,
+                        PassName::EntitySemanticDeduplication,
                         PassName::Contradiction,
                         PassName::InferenceChain,
                         PassName::ConfidenceRecalc,

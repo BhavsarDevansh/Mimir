@@ -73,7 +73,7 @@ Inferred facts write `InferredFrom` edges in `fact_dependencies` for each parent
 
 ## Nightly Optimization
 
-The inference engine participates in the nightly optimization run, which executes a fixed sequence of 10 passes (dedup, semantic dedup, contradiction resolution, inference re-evaluation, confidence recalculation, dormant cleanup, pattern consolidation, pending-confirmation cleanup, trash cleanup, and compaction). The inference-relevant passes are:
+The inference engine participates in the nightly optimization run, which executes a fixed sequence of 11 passes (dedup, fact semantic dedup, entity semantic dedup, contradiction resolution, inference re-evaluation, confidence recalculation, dormant cleanup, pattern consolidation, pending-confirmation cleanup, trash cleanup, and compaction). The inference-relevant passes are:
 
 1. **Contradiction auto-resolution** — `ContradictionRule::evaluate_batch` resolves explicit-over-inferred disputes (explicit > inferred).
 2. **Confidence recalculation** — root-aware `confidence::recalculate_stale_fact` for every `stale_confidence = true` fact, cascading to inferred descendants in one transaction.

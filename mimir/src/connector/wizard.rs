@@ -39,12 +39,119 @@ const GMAIL_SCOPE: &str = "https://mail.google.com/";
 /// always carries a `scope` parameter.
 const CALDAV_SCOPE: &str = "https://www.googleapis.com/auth/calendar";
 
-/// Microsoft identity platform authorize endpoint, pre-filled for the
-/// Outlook / Office 365 IMAP OAuth path (issue #400). The user still brings
-/// their own app registration: Mimir has no public client ID.
-const MICROSOFT_AUTH_URI: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
-/// Microsoft identity platform token endpoint.
-const MICROSOFT_TOKEN_ENDPOINT: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+/// Microsoft identity platform authorize endpoints by account audience
+/// (issue #467): `/common/` only works for app registrations whose
+/// "Supported account types" is "Accounts in any organizational directory
+/// and personal Microsoft accounts" (the "All" audience); personal-only
+/// registrations must use `/consumers/`, multitenant org-only ones
+/// `/organizations/`, and single-tenant ("this organizational directory
+/// only") ones embed the tenant ID or domain in the path. The Outlook
+/// preset asks which audience applies and pre-fills the matching endpoints
+/// (the user still brings their own app registration: Mimir has no public
+/// client ID).
+const MICROSOFT_AUTH_URI_COMMON: &str =
+    "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
+const MICROSOFT_AUTH_URI_CONSUMERS: &str =
+    "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize";
+const MICROSOFT_AUTH_URI_ORGANIZATIONS: &str =
+    "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize";
+/// Microsoft identity platform token endpoints, matching the authorize
+/// endpoints above per audience.
+const MICROSOFT_TOKEN_ENDPOINT_COMMON: &str =
+    "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+const MICROSOFT_TOKEN_ENDPOINT_CONSUMERS: &str =
+    "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
+const MICROSOFT_TOKEN_ENDPOINT_ORGANIZATIONS: &str =
+    "https://login.microsoftonline.com/organizations/oauth2/v2.0/token";
+/// Microsoft identity platform account audiences offered by the Outlook
+/// / Office 365 preset (issue #467): the authorize/token endpoints differ
+/// per audience, and a mismatch with the app registration's "Supported
+/// account types" fails the authorize request, so the wizard asks which
+/// applies and pre-fills the matching tenant.
+#[derive(Clone, Copy)]
+enum MicrosoftAccountType {
+    /// Personal Microsoft accounts (Outlook.com / Hotmail) — `/consumers/`.
+    Consumers,
+    /// Work or school accounts (Entra ID / Office 365) — `/organizations/`.
+    Organizations,
+    /// Any Microsoft account ("All" audience) — `/common/`.
+    Common,
+    /// Work or school accounts in this organizational directory only
+    /// (single-tenant app registration): the endpoints embed the tenant ID
+    /// or domain, so the wizard asks for it and builds both endpoints from
+    /// it.
+    SingleTenant,
+}
+
+/// Wizard choices for [`MicrosoftAccountType`] (issue #467), in the order
+/// offered by the prompt: the picked index reads straight out of this
+/// array (via [`MicrosoftAccountType::from_index`]) and the labels live on
+/// the variants themselves, so the option order and the endpoint mapping
+/// cannot drift.
+const MICROSOFT_ACCOUNT_TYPE_OPTIONS: [MicrosoftAccountType; 4] = [
+    MicrosoftAccountType::Consumers,
+    MicrosoftAccountType::Organizations,
+    MicrosoftAccountType::Common,
+    MicrosoftAccountType::SingleTenant,
+];
+
+impl MicrosoftAccountType {
+    /// Prompt label for this audience.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Consumers => "Personal Microsoft account (Outlook.com / Hotmail)",
+            Self::Organizations => {
+                "Work or school account (any organizational directory — multitenant)"
+            }
+            Self::Common => "Any Microsoft account — app registration allows both (All audience)",
+            Self::SingleTenant => {
+                "Work or school account (this organizational directory only — single-tenant)"
+            }
+        }
+    }
+
+    /// Map the picked wizard option index onto the audience via
+    /// [`MICROSOFT_ACCOUNT_TYPE_OPTIONS`]; indices outside the list fall
+    /// back to [`Self::Common`] so a driver can never produce an unknown
+    /// tenant.
+    fn from_index(index: usize) -> Self {
+        MICROSOFT_ACCOUNT_TYPE_OPTIONS
+            .get(index)
+            .copied()
+            .unwrap_or(Self::Common)
+    }
+
+    /// The fixed authorize/token endpoint pair for this audience; `None`
+    /// for [`Self::SingleTenant`], whose endpoints embed the tenant ID or
+    /// domain and must be built from it (see
+    /// [`microsoft_tenant_endpoints`]).
+    fn fixed_endpoints(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::Consumers => Some((
+                MICROSOFT_AUTH_URI_CONSUMERS,
+                MICROSOFT_TOKEN_ENDPOINT_CONSUMERS,
+            )),
+            Self::Organizations => Some((
+                MICROSOFT_AUTH_URI_ORGANIZATIONS,
+                MICROSOFT_TOKEN_ENDPOINT_ORGANIZATIONS,
+            )),
+            Self::Common => Some((MICROSOFT_AUTH_URI_COMMON, MICROSOFT_TOKEN_ENDPOINT_COMMON)),
+            Self::SingleTenant => None,
+        }
+    }
+}
+
+/// Authorize + token endpoints for a single-tenant Microsoft app
+/// registration ("Accounts in this organizational directory only"): the
+/// tenant segment is the directory's tenant ID (GUID) or verified domain
+/// (e.g. `contoso.com`) — `/organizations/` is invalid for this audience.
+fn microsoft_tenant_endpoints(tenant: &str) -> (String, String) {
+    (
+        format!("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"),
+        format!("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"),
+    )
+}
+
 /// IMAP XOAUTH2 scope for Outlook / Office 365 plus `offline_access` for
 /// refresh tokens (Microsoft's "authenticate an IMAP application by using
 /// OAuth" docs; the connector keeps a refresh token with skew).
@@ -362,7 +469,46 @@ pub(crate) fn build_wizard_config(
 fn email_imap_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredential), String> {
     let options = EMAIL_PROVIDER_OPTIONS.map(str::to_string).to_vec();
     let provider = prompts.select("Email provider", &options)?;
-    let preset = email_preset(provider);
+    let mut preset = email_preset(provider);
+
+    // Issue #467: the Outlook / Office 365 preset asks which Microsoft
+    // account type the app registration targets — the identity-platform
+    // endpoints differ per audience (`/consumers/`, `/organizations/`,
+    // `/common/`, or the tenant ID/domain for single-tenant apps) and a
+    // mismatch fails the authorize request, so the matching endpoints are
+    // pre-filled before the endpoint prompts run.
+    if let Some(oauth) = preset
+        .oauth
+        .as_mut()
+        .filter(|oauth| oauth.microsoft_account_type_prompt)
+    {
+        let options = MICROSOFT_ACCOUNT_TYPE_OPTIONS
+            .map(|account_type| account_type.label().to_string())
+            .to_vec();
+        let account_type =
+            MicrosoftAccountType::from_index(prompts.select("Microsoft account type", &options)?);
+        match account_type.fixed_endpoints() {
+            Some((auth_uri, token_endpoint)) => {
+                oauth.auth_uri = Some(auth_uri.to_string());
+                oauth.token_endpoint = Some(token_endpoint.to_string());
+            }
+            None => {
+                // Single-tenant app registration: both endpoints embed the
+                // tenant ID or domain, so collect it before the endpoint
+                // prompts run.
+                let tenant = required(
+                    prompts.input(
+                        "Tenant ID or domain (the app registration's Entra directory, e.g. contoso.com or a tenant GUID)",
+                        None,
+                    ),
+                    "tenant ID or domain",
+                )?;
+                let (auth_uri, token_endpoint) = microsoft_tenant_endpoints(&tenant);
+                oauth.auth_uri = Some(auth_uri);
+                oauth.token_endpoint = Some(token_endpoint);
+            }
+        }
+    }
 
     let host_message = if preset.host_help.is_empty() {
         "IMAP server host".to_string()
@@ -444,11 +590,11 @@ fn email_oauth_questions(
     username: &str,
 ) -> Result<(Value, WizardCredential), String> {
     let auth_uri = required(
-        prompts.input("Authorization endpoint URL", preset.auth_uri),
+        prompts.input("Authorization endpoint URL", preset.auth_uri.as_deref()),
         "Authorization endpoint URL",
     )?;
     let token_endpoint = required(
-        prompts.input("Token endpoint URL", preset.token_endpoint),
+        prompts.input("Token endpoint URL", preset.token_endpoint.as_deref()),
         "Token endpoint URL",
     )?;
     let client_id = required(
@@ -566,14 +712,22 @@ struct EmailPreset {
 
 /// OAuth endpoint/scope defaults for one email provider (issue #400).
 struct EmailOAuthPreset {
-    /// Authorization endpoint; `None` for the free-form custom flow.
-    auth_uri: Option<&'static str>,
-    /// Token endpoint; `None` for the free-form custom flow.
-    token_endpoint: Option<&'static str>,
+    /// Default authorization endpoint; `None` for the free-form custom
+    /// flow. Owned so the Microsoft preset can pre-fill tenant-specific
+    /// (single-tenant) endpoints built from the collected tenant.
+    auth_uri: Option<String>,
+    /// Default token endpoint; `None` for the free-form custom flow.
+    token_endpoint: Option<String>,
     /// Default scope string; `None` for the free-form custom flow.
     default_scopes: Option<&'static str>,
     /// Where the user obtains the OAuth client ID.
     client_id_help: &'static str,
+    /// `true` for Microsoft presets (issue #467): the wizard asks which
+    /// account audience the app registration targets and re-targets the
+    /// endpoint defaults to `/consumers/`, `/organizations/`, or
+    /// `/common/` (or builds tenant-specific ones for single-tenant apps)
+    /// accordingly.
+    microsoft_account_type_prompt: bool,
 }
 
 /// Provider → defaults table for the email wizard (issue #400). The index
@@ -590,27 +744,32 @@ fn email_preset(provider: usize) -> EmailPreset {
                 "App password (Google Account → Security → 2-Step Verification → App passwords)",
             ),
             oauth: Some(EmailOAuthPreset {
-                auth_uri: Some(GOOGLE_AUTH_URI),
-                token_endpoint: Some(GOOGLE_TOKEN_ENDPOINT),
+                auth_uri: Some(GOOGLE_AUTH_URI.to_string()),
+                token_endpoint: Some(GOOGLE_TOKEN_ENDPOINT.to_string()),
                 default_scopes: Some(GMAIL_SCOPE),
                 client_id_help: "OAuth client ID (Google Cloud Console → Credentials → OAuth client)",
+                microsoft_account_type_prompt: false,
             }),
             app_password_first: false,
         },
         // Outlook / Office 365: Microsoft identity platform endpoints
         // pre-filled; OAuth 2.0 only — Microsoft retired basic-auth app
         // passwords for Outlook.com and Exchange Online IMAP, so no
-        // app-password path is offered.
+        // app-password path is offered. The account-type question (issue
+        // #467) re-targets the endpoints to the audience the app
+        // registration allows; single-tenant registrations get
+        // tenant-specific endpoints built from the collected tenant.
         1 => EmailPreset {
             host_default: Some("outlook.office365.com"),
             host_help: "",
             port_default: 993,
             app_password_hint: None,
             oauth: Some(EmailOAuthPreset {
-                auth_uri: Some(MICROSOFT_AUTH_URI),
-                token_endpoint: Some(MICROSOFT_TOKEN_ENDPOINT),
+                auth_uri: Some(MICROSOFT_AUTH_URI_COMMON.to_string()),
+                token_endpoint: Some(MICROSOFT_TOKEN_ENDPOINT_COMMON.to_string()),
                 default_scopes: Some(MICROSOFT_IMAP_SCOPE),
-                client_id_help: "OAuth client ID (Entra ID app registration; register the loopback redirect URI http://localhost/callback)",
+                client_id_help: "OAuth client ID (Entra ID app registration; 'Supported account types' must match the Microsoft account type chosen in this wizard — single-tenant 'this organizational directory only' apps need the tenant ID or domain too; register the loopback redirect URI http://localhost/callback)",
+                microsoft_account_type_prompt: true,
             }),
             app_password_first: false,
         },
@@ -660,6 +819,7 @@ fn email_preset(provider: usize) -> EmailPreset {
                 token_endpoint: None,
                 default_scopes: None,
                 client_id_help: "OAuth client ID",
+                microsoft_account_type_prompt: false,
             }),
             app_password_first: true,
         },

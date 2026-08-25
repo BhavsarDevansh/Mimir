@@ -32,7 +32,7 @@ mimir kb import ~/MyVault
 
 The daemon scans the folder for `.md` files (recursively), parses each one, and adds the facts and preferences to the knowledge graph. Imported facts are marked as coming from the import and start at 0.80 confidence unless the file says otherwise. Things to know:
 
-- **Idempotent:** importing the same files twice skips facts that already exist — nothing is duplicated.
+- **Idempotent:** importing the same files twice skips facts that already exist, and unchanged preferences are left alone too — nothing is duplicated. Preferences only change when the graph's existing preference is inferred with lower confidence than the import's 0.80; user-set or equal/higher-confidence preferences win and are skipped.
 - **Try first:** `mimir kb import ~/MyVault --dry-run` reports exactly what would change (new/updated entities, new/existing facts, preferences, dates, errors) and writes nothing. Run without `--dry-run` to apply.
 - **Editing entities:** change the `type`, `aliases`, or the `# Name` heading in a file and re-import to rename/retype the entity and sync aliases.
 - **Dates and events:** facts with a date and a recurrence (e.g. `- birthday → 1995-08-20 (1995-08-20, Birthday, yearly)`) recreate the events overlay, so they show up in upcoming events as usual.

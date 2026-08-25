@@ -10,6 +10,7 @@
 //! Dry-run mode plans everything (entity resolution, existence checks) but
 //! never writes: the reported counts are exactly what an apply would change.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::models::audit_log::ChangedBy;
@@ -63,11 +64,20 @@ pub struct ObsidianImportOutcome {
 
 /// Collect every `.md` file under `dir` (recursive, deterministic order).
 ///
-/// Hidden entries are skipped; non-markdown files are ignored.
+/// Hidden entries are skipped; non-markdown files are ignored; symlinked
+/// directories are followed but already-visited directories are pruned so a
+/// cycle (e.g. `vault/loop -> vault`) terminates instead of recursing forever.
 pub fn scan_markdown_files(dir: &Path) -> Result<Vec<PathBuf>, KnowledgeError> {
     let mut out = Vec::new();
+    // Canonicalised visited directories: a symlinked subdirectory that points
+    // at an ancestor (e.g. `vault/loop -> vault`) must not recurse forever.
+    let mut visited_dirs: HashSet<PathBuf> = HashSet::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(current) = stack.pop() {
+        let canonical = std::fs::canonicalize(&current).unwrap_or_else(|_| current.clone());
+        if !visited_dirs.insert(canonical) {
+            continue;
+        }
         let entries = std::fs::read_dir(&current).map_err(KnowledgeError::Io)?;
         let mut dirs = Vec::new();
         for entry in entries {
@@ -101,6 +111,9 @@ pub(crate) async fn import_all(
         counts: ObsidianImportCounts::default(),
         errors: Vec::new(),
     };
+    // Entity names planned to be created, so a name referenced from several
+    // files/lines is counted once — the exact set an apply would create.
+    let mut planned_new_entities: HashSet<String> = HashSet::new();
 
     for file in files {
         let document = match parse_document(file) {
@@ -113,7 +126,16 @@ pub(crate) async fn import_all(
             }
         };
 
-        if let Err(error) = import_document(kg, file, document, dry_run, &mut outcome).await {
+        if let Err(error) = import_document(
+            kg,
+            file,
+            document,
+            dry_run,
+            &mut outcome,
+            &mut planned_new_entities,
+        )
+        .await
+        {
             outcome
                 .errors
                 .push(format!("{}: {error}", file.relative_path));
@@ -245,6 +267,7 @@ async fn import_document(
     document: ParsedDocument,
     dry_run: bool,
     outcome: &mut ObsidianImportOutcome,
+    planned_new_entities: &mut HashSet<String>,
 ) -> Result<(), KnowledgeError> {
     // ------------------------------------------------------------------
     // Subject entity: an anchored entity_id wins; otherwise resolve the name
@@ -261,7 +284,9 @@ async fn import_document(
                 Some(entity)
             }
             None => {
-                outcome.counts.entities_new += 1;
+                if planned_new_entities.insert(document.name.to_lowercase()) {
+                    outcome.counts.entities_new += 1;
+                }
                 if dry_run {
                     None
                 } else {
@@ -285,7 +310,9 @@ async fn import_document(
         let (resolved, created) =
             resolve_subject(kg, &document.name, document.entity_type, dry_run).await?;
         if created {
-            outcome.counts.entities_new += 1;
+            if planned_new_entities.insert(document.name.to_lowercase()) {
+                outcome.counts.entities_new += 1;
+            }
             resolved
         } else if let Some(entity) = resolved {
             let (entity, changed) = apply_entity_updates(kg, &entity, &document, dry_run).await?;
@@ -315,8 +342,14 @@ async fn import_document(
         .chain(document.facts.iter().map(|line| (SECTION_FACTS, line)));
 
     for (section, line) in all_lines {
-        let (object_name, object_id) =
-            plan_object(kg, &line.object, dry_run, &mut outcome.counts).await?;
+        let (object_name, object_id) = plan_object(
+            kg,
+            &line.object,
+            dry_run,
+            &mut outcome.counts,
+            planned_new_entities,
+        )
+        .await?;
         let existing = if let Some(subject) = &subject {
             let predicate_id = kg.relationship_type_id(&line.predicate).await;
             let literal = object_literal_of(line);
@@ -391,24 +424,38 @@ async fn import_document(
     // Preferences
     // ------------------------------------------------------------------
     for preference in &document.preferences {
-        let existing = match &subject {
-            Some(entity) => {
-                kg.get_preference(Some(entity.id), &preference.key, &[])
-                    .await?
-            }
-            None => None,
-        };
-        if existing.is_some() {
-            outcome.counts.preferences_updated += 1;
-        } else {
+        let Some(entity) = &subject else {
+            // A brand-new subject has no preferences to compare against.
             outcome.counts.preferences_new += 1;
+            continue;
+        };
+        let existing = kg
+            .get_preference(Some(entity.id), &preference.key, &[])
+            .await?;
+        match existing {
+            None => outcome.counts.preferences_new += 1,
+            Some(existing) => {
+                // The upsert matches on an identical (empty) context set, so a
+                // context-scoped existing preference is no conflict — the
+                // import inserts a new default row.
+                let contexts =
+                    queries::preference::get_contexts_for_preference(kg.pool(), existing.id)
+                        .await?;
+                if !contexts.is_empty() {
+                    outcome.counts.preferences_new += 1;
+                } else if existing.overridden_by_user || existing.confidence >= 0.80 {
+                    // Upsert rules 1/3/4: a user-set or equal/higher-confidence
+                    // preference wins — the import changes nothing, so it is
+                    // skipped (idempotent re-import, no audit-log churn).
+                    continue;
+                } else {
+                    outcome.counts.preferences_updated += 1;
+                }
+            }
         }
         if dry_run {
             continue;
         }
-        let Some(entity) = &subject else {
-            continue; // apply mode always has the subject entity
-        };
         kg.upsert_preference(UpsertPreferenceInput {
             preference: NewPreference {
                 entity_id: Some(entity.id),
@@ -441,6 +488,7 @@ async fn plan_object(
     object: &ObsidianObject,
     dry_run: bool,
     counts: &mut ObsidianImportCounts,
+    planned_new_entities: &mut HashSet<String>,
 ) -> Result<(String, Option<i32>), KnowledgeError> {
     match object {
         ObsidianObject::Literal(value) => Ok((value.clone(), None)),
@@ -458,7 +506,9 @@ async fn plan_object(
             if let Some(entity) = queries::entity::get_exact_name(kg.pool(), name).await? {
                 return Ok((entity.name.clone(), Some(entity.id)));
             }
-            counts.entities_new += 1;
+            if planned_new_entities.insert(name.to_lowercase()) {
+                counts.entities_new += 1;
+            }
             if dry_run {
                 Ok((name.clone(), None))
             } else {

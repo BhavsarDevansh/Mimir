@@ -217,7 +217,7 @@ All client commands talk to the daemon over HTTP except `mimir personality list`
 | Category aliases + subtree retrieval | ✅ Works | `category_aliases` + `get_facts_in_category_subtree` ([#135](https://github.com/BhavsarDevansh/Mimir/issues/135)). |
 | Semantic entity dedup (LLM) | ❌ Not implemented | `enqueue_semantic_dedup` is a stub returning `NotYetImplemented`; the `entity_merge_queue` table and alias-overlap flagging exist ([#282](https://github.com/BhavsarDevansh/Mimir/issues/282)). |
 | Pattern consolidation (nightly pass 6) | ❌ Not implemented | Pass logs "not yet implemented" and succeeds ([#67](https://github.com/BhavsarDevansh/Mimir/issues/67)). |
-| kb import / export | ❌ Not implemented | Obsidian / Markdown / CSV import-export ([#120](https://github.com/BhavsarDevansh/Mimir/issues/120), [#62](https://github.com/BhavsarDevansh/Mimir/issues/62)); bidirectional Obsidian watcher ([#66](https://github.com/BhavsarDevansh/Mimir/issues/66)). |
+| kb import / export | 🟡 Partial | Obsidian Markdown v1 delivered in v0.148.0 ([#62](https://github.com/BhavsarDevansh/Mimir/issues/62)): `mimir kb export` renders one `.md` file per entity (YAML frontmatter + wiki-links + `Dates`/`Relationships`/`Preferences`/`Facts` sections) and `mimir kb import <path>` parses a vault back through the shared `normalize_and_insert` pipeline with `--dry-run` planning; CSV import/export ([#120](https://github.com/BhavsarDevansh/Mimir/issues/120)) and the bidirectional Obsidian watcher ([#66](https://github.com/BhavsarDevansh/Mimir/issues/66)) remain. |
 | kb heatmap / reset polish | ✅ Works | `mimir kb heatmap` renders totals, top entities/predicates, monthly fact distribution, and confidence bands (`--json` for raw data); `mimir kb reset` wipes the graph behind an exact-phrase confirmation, 5-second countdown, and automatic backup ([#69](https://github.com/BhavsarDevansh/Mimir/issues/69)). |
 | Entity locations | 🟡 Partial | Write path, geocoding, proximity queries work; sensitive location facts get their overlay when confirmed ([#226](https://github.com/BhavsarDevansh/Mimir/issues/226)); overlapping same-place re-statements are deduplicated instead of duplicating rows ([#228](https://github.com/BhavsarDevansh/Mimir/issues/228)). Geocoder is configurable via the `[geocoder]` section — disable toggle, self-hosted endpoint, contact email ([#227](https://github.com/BhavsarDevansh/Mimir/issues/227)); a flaky batch test is tracked ([#230](https://github.com/BhavsarDevansh/Mimir/issues/230)). |
 
@@ -340,7 +340,7 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 |-----------|-------|
 | LLM-based semantic entity dedup | [#282](https://github.com/BhavsarDevansh/Mimir/issues/282) |
 | Pattern consolidation (nightly pass 6) | [#67](https://github.com/BhavsarDevansh/Mimir/issues/67) |
-| kb import / export (Obsidian, Markdown, CSV) | [#120](https://github.com/BhavsarDevansh/Mimir/issues/120), [#62](https://github.com/BhavsarDevansh/Mimir/issues/62) |
+| kb import / export (CSV; Obsidian Markdown delivered in v0.148.0 via [#62](https://github.com/BhavsarDevansh/Mimir/issues/62)) | [#120](https://github.com/BhavsarDevansh/Mimir/issues/120) |
 | Bidirectional Obsidian file watcher | [#66](https://github.com/BhavsarDevansh/Mimir/issues/66) |
 | Geocoder configuration (disable, self-hosted, contact email) | [#227](https://github.com/BhavsarDevansh/Mimir/issues/227) |
 | Flaky tests: location batch, pending TTL, e2e migration | [#230](https://github.com/BhavsarDevansh/Mimir/issues/230), [#241](https://github.com/BhavsarDevansh/Mimir/issues/241), [#243](https://github.com/BhavsarDevansh/Mimir/issues/243) |
@@ -381,7 +381,7 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | [#156](https://github.com/BhavsarDevansh/Mimir/issues/156) — no Librarian fallback | Superseded by hook-driven learning ([#386](https://github.com/BhavsarDevansh/Mimir/issues/386)) | None needed |
 | [#20](https://github.com/BhavsarDevansh/Mimir/issues/20) — no generated skills | Skills are built-in or hand-written only | Write your own skill files |
 | [#143](https://github.com/BhavsarDevansh/Mimir/issues/143) — no proactive notifications | Events surface only in the "Upcoming" memory section | Check `mimir memory` / the Upcoming section |
-| [#120](https://github.com/BhavsarDevansh/Mimir/issues/120) — no kb import/export | Knowledge graph is not portable to Obsidian/CSV | Use the daemon API or CLI CRUD |
+| [#120](https://github.com/BhavsarDevansh/Mimir/issues/120) — no CSV import/export | Knowledge graph portability covers Obsidian Markdown only (`mimir kb export` / `mimir kb import`, issue #62) | Use `mimir kb export` / `mimir kb import` or the daemon API / CLI CRUD |
 | [#270](https://github.com/BhavsarDevansh/Mimir/issues/270) — secret flags leak | `--password`/`--token` appear in the process list and shell history | Use `--password-stdin`/`--token-stdin` (piped) or `MIMIR_CONNECTOR_PASSWORD`/`MIMIR_CONNECTOR_TOKEN` (env) instead |
 
 ---

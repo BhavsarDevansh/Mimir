@@ -8,8 +8,12 @@
 use chrono::{DateTime, Utc};
 
 use mimir_knowledge::KnowledgeGraph;
+use mimir_knowledge::models::audit_log::ChangedBy;
 use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::enums::{EventType, RecurrenceType};
+use mimir_knowledge::models::preference::{
+    NewPreference, PreferenceSourceType, UpsertPreferenceInput,
+};
 use mimir_knowledge::models::source::{ExtractionMethod, SourceType};
 use mimir_knowledge::normalize::{NormalizedFact, Provenance, normalize_and_insert};
 use mimir_knowledge::obsidian::{ObsidianFile, scan_markdown_files};
@@ -608,4 +612,176 @@ type: Person
     assert_eq!(second.counts.entities_new, 0, "{:?}", second.counts);
     assert_eq!(second.counts.facts_new, 0);
     assert_eq!(second.counts.facts_existing, 1);
+}
+
+#[tokio::test]
+async fn import_dry_run_counts_each_new_entity_once() {
+    let (kg, _dir) = fresh_kg().await;
+    // The same new subject spans two files and the same new object is
+    // referenced from two lines: dry-run must report each distinct new
+    // entity exactly once, matching what an apply would create.
+    let first = ObsidianFile {
+        relative_path: "Devansh.md".to_string(),
+        content: r#"---
+type: Person
+---
+
+# Devansh
+
+## Relationships
+- married_to → [[Alice]] (since 2022-01-01)
+- knows → [[Alice]]
+"#
+        .to_string(),
+    };
+    let second = ObsidianFile {
+        relative_path: "sub/Devansh.md".to_string(),
+        content: "---\ntype: Person\n---\n\n# Devansh\n".to_string(),
+    };
+
+    let dry = kg
+        .import_obsidian(&[first.clone(), second.clone()], true)
+        .await
+        .unwrap();
+    assert_eq!(
+        dry.counts.entities_new, 2,
+        "Devansh + Alice once each: {:?}",
+        dry.counts
+    );
+    assert_eq!(dry.counts.facts_new, 2, "{:?}", dry.counts);
+
+    let applied = kg.import_obsidian(&[first, second], false).await.unwrap();
+    assert_eq!(
+        applied.counts.entities_new, 2,
+        "apply agrees: {:?}",
+        applied.counts
+    );
+    assert_eq!(applied.counts.facts_new, 2, "{:?}", applied.counts);
+}
+
+#[tokio::test]
+async fn import_reimport_unchanged_preferences_is_idempotent() {
+    let (kg, _dir) = fresh_kg().await;
+    let file = ObsidianFile {
+        relative_path: "Devansh.md".to_string(),
+        content: r#"---
+type: Person
+---
+
+# Devansh
+
+## Preferences
+- FoodPreference: favourite = Italian
+"#
+        .to_string(),
+    };
+
+    let first = kg
+        .import_obsidian(std::slice::from_ref(&file), false)
+        .await
+        .unwrap();
+    assert_eq!(first.counts.preferences_new, 1, "{:?}", first.counts);
+
+    // Re-importing the untouched file changes nothing: no phantom "updated",
+    // no duplicate row, no audit-log churn.
+    let second = kg.import_obsidian(&[file], false).await.unwrap();
+    assert_eq!(second.counts.preferences_new, 0, "{:?}", second.counts);
+    assert_eq!(second.counts.preferences_updated, 0, "{:?}", second.counts);
+
+    let devansh = kg
+        .search_entities("Devansh", 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .entity;
+    let prefs =
+        mimir_knowledge::queries::preference::get_preferences_for_entity(kg.pool(), devansh.id)
+            .await
+            .unwrap();
+    assert_eq!(prefs.len(), 1, "no duplicate preference rows");
+    assert_eq!(prefs[0].value, "Italian");
+}
+
+#[tokio::test]
+async fn import_updates_preference_when_import_confidence_wins() {
+    let (kg, _dir) = fresh_kg().await;
+    let file = ObsidianFile {
+        relative_path: "Devansh.md".to_string(),
+        content: r#"---
+type: Person
+---
+
+# Devansh
+
+## Preferences
+- FoodPreference: favourite = Italian
+"#
+        .to_string(),
+    };
+    // Seed Devansh with a lower-confidence preference so the import's 0.80
+    // overwrites it (upsert rule 3).
+    kg.import_obsidian(
+        &[ObsidianFile {
+            relative_path: "Devansh.md".to_string(),
+            content: "---\ntype: Person\n---\n\n# Devansh\n".to_string(),
+        }],
+        false,
+    )
+    .await
+    .unwrap();
+    let devansh = kg
+        .search_entities("Devansh", 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .entity;
+    kg.upsert_preference(UpsertPreferenceInput {
+        preference: NewPreference {
+            entity_id: Some(devansh.id),
+            category: mimir_knowledge::models::preference::PreferenceCategory::FoodPreference,
+            key: "favourite".to_string(),
+            value: "French".to_string(),
+            confidence: 0.50,
+            overridden_by_user: false,
+            source_fact_id: None,
+        },
+        changed_by: ChangedBy::User,
+        contexts: Vec::new(),
+        sources: vec![(PreferenceSourceType::UserEdit, "seed".to_string())],
+    })
+    .await
+    .unwrap();
+
+    let outcome = kg.import_obsidian(&[file], false).await.unwrap();
+    assert_eq!(outcome.counts.preferences_new, 0, "{:?}", outcome.counts);
+    assert_eq!(
+        outcome.counts.preferences_updated, 1,
+        "{:?}",
+        outcome.counts
+    );
+    let prefs =
+        mimir_knowledge::queries::preference::get_preferences_for_entity(kg.pool(), devansh.id)
+            .await
+            .unwrap();
+    assert_eq!(prefs.len(), 1, "updated in place, no duplicate row");
+    assert_eq!(prefs[0].value, "Italian");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn scan_markdown_files_avoids_symlink_cycles() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.md"), "# A").unwrap();
+    std::os::unix::fs::symlink(dir.path(), dir.path().join("loop")).unwrap();
+
+    let files = scan_markdown_files(dir.path()).unwrap();
+    let names: Vec<String> = files
+        .iter()
+        .map(|p| p.strip_prefix(dir.path()).unwrap().display().to_string())
+        .collect();
+    assert_eq!(names, vec!["a.md".to_string()], "cycle must terminate");
 }

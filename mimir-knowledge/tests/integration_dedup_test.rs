@@ -725,4 +725,8 @@ async fn test_merge_queue_actions_reject_non_pending_entry() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("not pending"));
+    let err = mimir_knowledge::queries::entity::apply_merge(kg.pool(), queue_id)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("not pending"));
 }

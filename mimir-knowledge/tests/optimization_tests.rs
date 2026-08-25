@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use mimir_core::llm::types::{FunctionCall, Message, ToolCall, Usage};
-use mimir_core::llm::{LlmBackend, MockLlmClient};
+use mimir_core::llm::{LlmBackend, LlmError, MockLlmClient};
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::clock::MockClock;
 use mimir_knowledge::extract::{
@@ -732,6 +732,48 @@ async fn entity_semantic_dedup_pass_skips_without_llm() {
         &graph.kg,
         OptimizationConfig::for_test(graph.backup_dir()),
         None,
+    );
+
+    let summary = runner
+        .run_pass(PassName::EntitySemanticDeduplication)
+        .await
+        .unwrap();
+    assert_eq!(summary.entity_merges_queued, 0);
+    let queued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entity_merge_queue")
+        .fetch_one(graph.kg.pool())
+        .await
+        .unwrap();
+    assert_eq!(queued, 0);
+}
+
+#[tokio::test]
+async fn entity_semantic_dedup_pass_contains_llm_failure() {
+    let graph = TestGraph::new().await;
+    let _a = graph
+        .kg
+        .create_entity("Jane Smith", EntityType::Person, &["J. Smith"])
+        .await
+        .unwrap();
+    let _b = graph
+        .kg
+        .create_entity("Jane Smith-Jones", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    // An unreliable LLM backend must not fail the pass: the run continues
+    // with the later passes and records a skipped, empty summary instead.
+    let llm: Arc<dyn LlmBackend> = Arc::new(
+        MockLlmClient::builder()
+            .push_chat_error(LlmError::Api {
+                status: 503,
+                body: "model temporarily overloaded".to_string(),
+            })
+            .build(),
+    );
+    let runner = OptimizationRunner::new(
+        &graph.kg,
+        OptimizationConfig::for_test(graph.backup_dir()),
+        Some(llm),
     );
 
     let summary = runner

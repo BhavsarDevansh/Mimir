@@ -5,7 +5,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use mimir_core::llm::LlmBackend;
-use mimir_core::llm::types::Message;
 use serde::Deserialize;
 use sqlx::SqlitePool;
 
@@ -212,45 +211,106 @@ pub async fn flag_overlapping_aliases(pool: &SqlitePool) -> Result<(), Knowledge
 /// wildcard semantics), excluding pairs that are already LLM-evaluated or
 /// human-resolved in the queue. The result is capped so a single pass sends
 /// a bounded number of candidates to the LLM.
+///
+/// The equal-name and shared-alias branches are index-servable
+/// (`idx_entities_name_lower`, `idx_entity_aliases_alias`); the `INSTR`
+/// substring branch is self-joined and bounded by the same per-branch cap so
+/// a large entity table cannot force an unbounded quadratic scan of every
+/// pair. Branch results are merged, deduplicated, and re-capped in id order
+/// for deterministic output.
 pub async fn find_semantic_candidates(
     pool: &SqlitePool,
     cap: i64,
 ) -> Result<Vec<(Entity, Entity)>, KnowledgeError> {
-    let rows: Vec<(i32, i32)> = sqlx::query_as(
+    let mut ids = fetch_semantic_candidate_ids(
+        pool,
         "SELECT e1.id, e2.id \
          FROM entities e1 \
-         JOIN entities e2 ON e2.id > e1.id \
-          AND e1.entity_type_id = e2.entity_type_id \
-         WHERE ( \
-            LOWER(e1.name) = LOWER(e2.name) \
-            OR (LENGTH(e1.name) >= 3 AND INSTR(LOWER(e2.name), LOWER(e1.name)) > 0) \
-            OR (LENGTH(e2.name) >= 3 AND INSTR(LOWER(e1.name), LOWER(e2.name)) > 0) \
-            OR EXISTS ( \
-                SELECT 1 FROM entity_aliases a1 \
-                JOIN entity_aliases a2 ON LOWER(a2.alias) = LOWER(a1.alias) \
-                WHERE a1.entity_id = e1.id AND a2.entity_id = e2.id \
-            ) \
-         ) \
-         AND NOT EXISTS ( \
-            SELECT 1 FROM entity_merge_queue q \
-            WHERE q.primary_entity_id = e1.id AND q.duplicate_entity_id = e2.id \
-              AND (q.status_id != ? OR q.llm_confidence IS NOT NULL) \
-         ) \
+         JOIN entities e2 ON e2.id > e1.id AND e1.entity_type_id = e2.entity_type_id \
+         WHERE LOWER(e1.name) = LOWER(e2.name) \
+           AND NOT EXISTS ( \
+               SELECT 1 FROM entity_merge_queue q \
+               WHERE q.primary_entity_id = e1.id AND q.duplicate_entity_id = e2.id \
+                 AND (q.status_id != ? OR q.llm_confidence IS NOT NULL) \
+           ) \
          ORDER BY e1.id, e2.id \
          LIMIT ?",
+        cap,
     )
-    .bind(MergeWorkflowStatus::Pending as i16)
-    .bind(cap)
-    .fetch_all(pool)
     .await?;
+    ids.extend(
+        fetch_semantic_candidate_ids(
+            pool,
+            "SELECT DISTINCT e1.id, e2.id \
+             FROM entity_aliases a1 \
+             JOIN entity_aliases a2 ON LOWER(a2.alias) = LOWER(a1.alias) \
+              AND a2.entity_id > a1.entity_id \
+             JOIN entities e1 ON e1.id = a1.entity_id \
+             JOIN entities e2 ON e2.id = a2.entity_id AND e2.entity_type_id = e1.entity_type_id \
+             WHERE NOT EXISTS ( \
+                 SELECT 1 FROM entity_merge_queue q \
+                 WHERE q.primary_entity_id = e1.id AND q.duplicate_entity_id = e2.id \
+                   AND (q.status_id != ? OR q.llm_confidence IS NOT NULL) \
+             ) \
+             ORDER BY e1.id, e2.id \
+             LIMIT ?",
+            cap,
+        )
+        .await?,
+    );
+    ids.extend(
+        fetch_semantic_candidate_ids(
+            pool,
+            "SELECT e1.id, e2.id \
+             FROM entities e1 \
+             JOIN entities e2 ON e2.id > e1.id AND e1.entity_type_id = e2.entity_type_id \
+             WHERE ( \
+                 (LENGTH(e1.name) >= 3 AND INSTR(LOWER(e2.name), LOWER(e1.name)) > 0) \
+                 OR (LENGTH(e2.name) >= 3 AND INSTR(LOWER(e1.name), LOWER(e2.name)) > 0) \
+             ) \
+             AND NOT EXISTS ( \
+                 SELECT 1 FROM entity_merge_queue q \
+                 WHERE q.primary_entity_id = e1.id AND q.duplicate_entity_id = e2.id \
+                   AND (q.status_id != ? OR q.llm_confidence IS NOT NULL) \
+             ) \
+             ORDER BY e1.id, e2.id \
+             LIMIT ?",
+            cap,
+        )
+        .await?,
+    );
+
+    let mut seen: HashSet<(i32, i32)> = HashSet::new();
+    let mut ordered = Vec::new();
+    for (id_a, id_b) in ids {
+        if seen.insert((id_a, id_b)) {
+            ordered.push((id_a, id_b));
+        }
+    }
+    ordered.sort_unstable();
+    ordered.truncate(cap as usize);
 
     let mut pairs = Vec::new();
-    for (id_a, id_b) in rows {
+    for (id_a, id_b) in ordered {
         if let (Some(a), Some(b)) = (get_by_id(pool, id_a).await?, get_by_id(pool, id_b).await?) {
             pairs.push((a, b));
         }
     }
     Ok(pairs)
+}
+
+/// Run one bounded candidate branch; returns at most `cap` id-ordered pairs.
+async fn fetch_semantic_candidate_ids(
+    pool: &SqlitePool,
+    sql: &'static str,
+    cap: i64,
+) -> Result<Vec<(i32, i32)>, KnowledgeError> {
+    sqlx::query_as::<_, (i32, i32)>(sql)
+        .bind(MergeWorkflowStatus::Pending as i16)
+        .bind(cap)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
 }
 
 /// Evaluate candidate entity pairs with the LLM under a strict tool schema
@@ -288,44 +348,13 @@ pub async fn enqueue_semantic_dedup(
         })
         .collect();
 
-    let tool = entity_dedup_tool_schema();
-    let messages = vec![
-        Message {
-            role: "system".to_string(),
-            content: "Use the evaluate_entity_dedup_candidates tool to return your evaluation."
-                .to_string(),
-            tool_calls: None,
-            tool_call_id: None,
-        },
-        Message {
-            role: "user".to_string(),
-            content: serde_json::to_string(&candidate_json)
-                .map_err(|e| crate::KnowledgeError::Validation(e.to_string()))?,
-            tool_calls: None,
-            tool_call_id: None,
-        },
-    ];
-    let (assistant_msg, _) = llm
-        .chat_message(messages, Some(vec![tool]))
-        .await
-        .map_err(|e| {
-            crate::KnowledgeError::Validation(format!("entity semantic dedup LLM error: {e}"))
-        })?;
-
-    let tool_calls = assistant_msg.tool_calls.as_ref().ok_or_else(|| {
-        crate::KnowledgeError::Validation(
-            "entity semantic dedup: no tool calls in LLM response".to_string(),
-        )
-    })?;
-    let first = tool_calls.first().ok_or_else(|| {
-        crate::KnowledgeError::Validation(
-            "entity semantic dedup: empty tool calls in LLM response".to_string(),
-        )
-    })?;
-    let response: EntitySemanticDedupResponse = serde_json::from_str(&first.function.arguments)
-        .map_err(|e| {
-            crate::KnowledgeError::Validation(format!("entity semantic dedup JSON error: {e}"))
-        })?;
+    let response: EntitySemanticDedupResponse = crate::llm_tool::call_dedup_tool(
+        llm,
+        entity_dedup_tool_schema(),
+        &candidate_json,
+        "entity semantic dedup",
+    )
+    .await?;
 
     let valid_pairs: HashSet<(i32, i32)> = candidate_pairs
         .iter()
@@ -390,6 +419,11 @@ pub async fn enqueue_semantic_dedup(
         if written.rows_affected() > 0 {
             written_pairs.insert(pair);
             queued += 1;
+        } else {
+            tracing::debug!(
+                "entity semantic dedup: pair {:?} already resolved; suggestion not stored",
+                pair
+            );
         }
     }
     Ok(queued)

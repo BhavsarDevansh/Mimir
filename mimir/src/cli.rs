@@ -350,7 +350,8 @@ pub enum MergeCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Apply a suggestion: merge the duplicate entity into the primary.
+    /// Apply a suggestion with the existing merge logic.
+    /// The merge logic selects the survivor by fact count.
     Apply {
         /// Merge queue entry ID.
         id: i64,

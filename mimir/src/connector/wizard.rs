@@ -76,24 +76,36 @@ enum MicrosoftAccountType {
     Common,
 }
 
-/// Wizard choices for [`MicrosoftAccountType`] (issue #467); the picked
-/// index maps 1:1 onto the enum variants.
-const MICROSOFT_ACCOUNT_TYPE_OPTIONS: [&str; 3] = [
-    "Personal Microsoft account (Outlook.com / Hotmail)",
-    "Work or school account",
-    "Any Microsoft account — app registration allows both (All audience)",
+/// Wizard choices for [`MicrosoftAccountType`] (issue #467), in the order
+/// offered by the prompt: the picked index reads straight out of this
+/// array (via [`MicrosoftAccountType::from_index`]) and the labels live on
+/// the variants themselves, so the option order and the endpoint mapping
+/// cannot drift.
+const MICROSOFT_ACCOUNT_TYPE_OPTIONS: [MicrosoftAccountType; 3] = [
+    MicrosoftAccountType::Consumers,
+    MicrosoftAccountType::Organizations,
+    MicrosoftAccountType::Common,
 ];
 
 impl MicrosoftAccountType {
-    /// Map the picked wizard option index onto the audience; indices
-    /// outside the options list fall back to [`Self::Common`] so a driver
-    /// can never produce an unknown tenant.
-    fn from_index(index: usize) -> Self {
-        match index {
-            0 => Self::Consumers,
-            1 => Self::Organizations,
-            _ => Self::Common,
+    /// Prompt label for this audience.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Consumers => "Personal Microsoft account (Outlook.com / Hotmail)",
+            Self::Organizations => "Work or school account",
+            Self::Common => "Any Microsoft account — app registration allows both (All audience)",
         }
+    }
+
+    /// Map the picked wizard option index onto the audience via
+    /// [`MICROSOFT_ACCOUNT_TYPE_OPTIONS`]; indices outside the list fall
+    /// back to [`Self::Common`] so a driver can never produce an unknown
+    /// tenant.
+    fn from_index(index: usize) -> Self {
+        MICROSOFT_ACCOUNT_TYPE_OPTIONS
+            .get(index)
+            .copied()
+            .unwrap_or(Self::Common)
     }
 
     /// Authorization endpoint for this audience.
@@ -444,7 +456,9 @@ fn email_imap_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredent
         .as_mut()
         .filter(|oauth| oauth.microsoft_account_type_prompt)
     {
-        let options = MICROSOFT_ACCOUNT_TYPE_OPTIONS.map(str::to_string).to_vec();
+        let options = MICROSOFT_ACCOUNT_TYPE_OPTIONS
+            .map(|account_type| account_type.label().to_string())
+            .to_vec();
         let account_type =
             MicrosoftAccountType::from_index(prompts.select("Microsoft account type", &options)?);
         oauth.auth_uri = Some(account_type.auth_uri());

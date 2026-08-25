@@ -558,7 +558,7 @@ async fn test_kb_merge_apply_error() {
     Mock::given(method("POST"))
         .and(path("/kb/merges/7/apply"))
         .respond_with(
-            ResponseTemplate::new(409).set_body_string("merge queue entry 7 is not pending"),
+            ResponseTemplate::new(400).set_body_string("merge queue entry 7 is not pending"),
         )
         .mount(&server)
         .await;
@@ -566,6 +566,6 @@ async fn test_kb_merge_apply_error() {
     let client = MimirClient::new(server.uri());
     let err = client.kb_merge_apply(7).await.unwrap_err();
     assert!(
-        matches!(err, ClientError::Server { status: 409, message } if message == "merge queue entry 7 is not pending")
+        matches!(err, ClientError::Server { status: 400, message } if message == "merge queue entry 7 is not pending")
     );
 }

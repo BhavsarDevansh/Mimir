@@ -333,6 +333,7 @@ pub async fn enqueue_semantic_dedup(
         .collect();
 
     let mut queued = 0;
+    let mut written_pairs: HashSet<(i32, i32)> = HashSet::new();
     for candidate in response.candidates {
         let pair = ordered_pair(candidate.entity_a_id, candidate.entity_b_id);
         if !valid_pairs.contains(&pair) {
@@ -365,6 +366,9 @@ pub async fn enqueue_semantic_dedup(
             );
             continue;
         }
+        if written_pairs.contains(&pair) {
+            continue;
+        }
 
         let written = sqlx::query(
             "INSERT INTO entity_merge_queue \
@@ -384,6 +388,7 @@ pub async fn enqueue_semantic_dedup(
         .execute(pool)
         .await?;
         if written.rows_affected() > 0 {
+            written_pairs.insert(pair);
             queued += 1;
         }
     }

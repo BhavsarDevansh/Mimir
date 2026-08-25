@@ -110,14 +110,14 @@ All commands resolve slugs client-side against `GET /connectors` (there is no by
 
 Renders a knowledge-density snapshot of the knowledge graph as terminal bar charts: totals (facts, entities, average confidence), top entities and predicates by fact count, facts per month, and the confidence distribution (explicit / connector / inference / casual bands). Trashed facts are excluded. `--json` prints the raw `HeatmapResponse` for scripting (issue #69). Backed by the daemon's read-only `GET /kb/heatmap` aggregate; see `docs/kb-heatmap-reset.md` for the query semantics.
 
-### `mimir kb merges`
-
-Review surface for the nightly entity semantic-dedup pass (issue #282): `mimir kb merges list [--json]` shows pending `entity_merge_queue` rows (primary/duplicate names and types, the LLM's `suggested_action` and `llm_confidence`, queued time) from the daemon's loopback-gated `GET /kb/merges`; `mimir kb merges apply <id>` runs the existing entity-merge logic (repoint facts, move aliases/overlays/locations, delete the merged entity) via `POST /kb/merges/{id}/apply` and prints the actual survivor/merged ids; `mimir kb merges keep <id>` marks the pair `KeptSeparate` via `POST /kb/merges/{id}/keep`. Entities are never merged automatically — the nightly pass only queues suggestions.
-
 ```bash
 mimir kb heatmap
 mimir kb heatmap --json
 ```
+
+### `mimir kb merges`
+
+Review surface for the nightly entity semantic-dedup pass (issue #282): `mimir kb merges list [--json]` shows pending `entity_merge_queue` rows (primary/duplicate names and types, the LLM's `suggested_action` and `llm_confidence`, queued time) from the daemon's loopback-gated `GET /kb/merges`; `mimir kb merges apply <id>` runs the existing entity-merge logic (repoint facts, move aliases/overlays/locations, delete the merged entity) via `POST /kb/merges/{id}/apply` and prints the actual survivor/merged ids; `mimir kb merges keep <id>` marks the pair `KeptSeparate` via `POST /kb/merges/{id}/keep`. Entities are never merged automatically — the nightly pass only queues suggestions.
 
 ### `mimir kb reset`
 

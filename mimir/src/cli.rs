@@ -341,7 +341,7 @@ pub enum KbCommands {
     },
 }
 
-/// Subcommands for the `kb merge` review queue.
+/// Subcommands for the `kb merges` review queue.
 #[derive(Subcommand)]
 pub enum MergeCommands {
     /// List pending entity-merge suggestions.

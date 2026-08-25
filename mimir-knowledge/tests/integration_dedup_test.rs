@@ -551,6 +551,45 @@ async fn test_enqueue_semantic_dedup_normalizes_pair_order() {
 }
 
 #[tokio::test]
+async fn test_enqueue_semantic_dedup_counts_mirrored_pairs_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let a = kg
+        .create_entity("Jane Smith", EntityType::Person, &[])
+        .await
+        .unwrap();
+    let b = kg
+        .create_entity("Jane Smith-Jones", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    // The LLM returns the same pair in both orders; the queue must store one
+    // row and count it once.
+    let args = format!(
+        r#"{{"candidates":[
+            {{"entity_a_id":{},"entity_b_id":{},"suggested_action":"merge","llm_confidence":0.8}},
+            {{"entity_a_id":{},"entity_b_id":{},"suggested_action":"merge","llm_confidence":0.8}}
+        ]}}"#,
+        a.id, b.id, b.id, a.id
+    );
+    let llm = mock_entity_dedup_llm(args);
+
+    let queued =
+        mimir_knowledge::queries::entity::enqueue_semantic_dedup(kg.pool(), vec![(a, b)], &llm)
+            .await
+            .unwrap();
+    assert_eq!(queued, 1);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entity_merge_queue")
+        .fetch_one(kg.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
 async fn test_merge_queue_apply_merges_entities() {
     let dir = tempfile::tempdir().unwrap();
     let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))

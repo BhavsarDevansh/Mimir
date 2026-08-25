@@ -118,6 +118,93 @@ async fn test_connector_add_list_show_remove_round_trip() {
 }
 
 #[tokio::test]
+async fn test_connector_response_exposes_sanitized_auth_config() {
+    // Issue #507: the wire response surfaces the stored non-secret auth
+    // config (so `mimir connector auth` can re-run the PKCE flow) but must
+    // never echo `client_secret` or other secret material.
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let resp = connector_post(
+        app.clone(),
+        serde_json::json!({
+            "connector_type": "email",
+            "backend": "test",
+            "slug": "oauth-conn",
+            "display_name": "OAuth Conn",
+            "config_json": {
+                "host": "imap.example.com",
+                "auth": {
+                    "kind": "oauth",
+                    "username": "devansh@example.com",
+                    "auth_uri": "https://oauth.example.com/authorize",
+                    "token_endpoint": "https://oauth.example.com/token",
+                    "client_id": "cid",
+                    "client_secret": "super-secret-client-secret",
+                    "scopes": ["read", "write"],
+                },
+            },
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: mimir_api_types::ConnectorResponse = serde_json::from_slice(&bytes).unwrap();
+    let auth = created
+        .auth
+        .clone()
+        .expect("stored oauth config must be exposed");
+    assert_eq!(auth.kind, "oauth");
+    assert_eq!(auth.username.as_deref(), Some("devansh@example.com"));
+    assert_eq!(
+        auth.auth_uri.as_deref(),
+        Some("https://oauth.example.com/authorize")
+    );
+    assert_eq!(
+        auth.token_endpoint.as_deref(),
+        Some("https://oauth.example.com/token")
+    );
+    assert_eq!(auth.client_id.as_deref(), Some("cid"));
+    assert_eq!(
+        auth.scopes.as_deref(),
+        Some(&["read".to_string(), "write".to_string()][..])
+    );
+    let raw = serde_json::to_string(&created).unwrap();
+    assert!(
+        !raw.contains("super-secret-client-secret"),
+        "client_secret must never appear in the wire response: {raw}"
+    );
+    assert!(
+        !raw.contains("client_secret"),
+        "the client_secret key must be stripped from the wire response: {raw}"
+    );
+
+    // The list route must expose the same sanitized slice.
+    let resp = app
+        .oneshot(
+            authed_request()
+                .uri("/connectors")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let list: mimir_api_types::ConnectorListResponse = serde_json::from_slice(&bytes).unwrap();
+    let listed = list
+        .connectors
+        .iter()
+        .find(|c| c.slug == "oauth-conn")
+        .unwrap();
+    assert_eq!(listed.auth.as_ref().map(|a| a.kind.as_str()), Some("oauth"));
+}
+
+#[tokio::test]
 async fn test_connector_catalog_lists_registered_backend_pairs() {
     let mock = Arc::new(MockLlmClient::builder().build());
     let (state, _temp) = test_state(mock).await;

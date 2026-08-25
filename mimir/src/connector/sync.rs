@@ -59,12 +59,14 @@ pub async fn handle_connector_sync(
                 println!("New sync cursor: {cursor}");
             }
         }
-        SyncConnectorResponse::AuthExpired => {
+        SyncConnectorResponse::AuthExpired { message } => {
             if json {
-                print_json(&SyncConnectorResponse::AuthExpired);
+                print_json(&SyncConnectorResponse::AuthExpired {
+                    message: message.clone(),
+                });
             }
             exit_with_error(format!(
-                "connector '{slug}' reported expired auth and has been paused by the daemon"
+                "connector '{slug}' reported expired auth and has been paused by the daemon: {message}"
             ));
         }
         SyncConnectorResponse::Failed { message } => {

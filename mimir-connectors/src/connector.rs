@@ -33,13 +33,14 @@
 //! (`error[E0038]`), so [`macro@async_trait`] is used with the default `Send` bound
 //! so `dyn Connector` is usable across multi-threaded tasks.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::secrets::SecretStore;
+use crate::secrets::{SecretBundle, SecretStore};
 use mimir_core::geocoder::Geocoder;
 use mimir_core::hooks::HookEngine;
 use mimir_core::llm::LlmBackend;
@@ -365,7 +366,7 @@ pub struct SyncOutcome {
 /// [`HealthStatus::AuthExpired`](Self::AuthExpired) prompts the supervisor to
 /// set `auth_state = Expired` and `status = Paused`. Variant names are
 /// intentionally distinct from the persisted-enum variants to avoid confusion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HealthStatus {
     /// Service is reachable and credentials are valid.
@@ -374,8 +375,12 @@ pub enum HealthStatus {
     Offline,
     /// Reachable but returning partial / repeated failures.
     Degraded,
-    /// Auth token expired or revoked; re-authentication required.
-    AuthExpired,
+    /// Auth token expired, revoked, or rejected; re-authentication required.
+    /// Carries the underlying auth rejection message (e.g. the IMAP `BAD` /
+    /// `NO` text or the OAuth `invalid_grant` description) so the supervisor
+    /// can log it and persist it as `last_error` instead of the generic
+    /// "auth expired" (issue #507).
+    AuthExpired(String),
     /// Connector has not been configured / authenticated yet.
     NotConfigured,
 }
@@ -472,6 +477,18 @@ pub trait Connector: Send + Sync {
     /// Returns a transient [`HealthStatus`]; the supervisor maps it onto the
     /// persisted lifecycle columns. Must not perform a full data sync.
     async fn health(&self) -> Result<HealthStatus, ConnectorError>;
+
+    /// Force a credential refresh (OAuth connectors), used by the supervisor
+    /// as a single retry before pausing on [`HealthStatus::AuthExpired`]
+    /// (issue #507): a stale or transiently rejected access token is
+    /// refreshed and the cycle re-probed instead of being declared terminal.
+    /// Connectors that cannot refresh their credentials (app passwords, API
+    /// tokens, local backends) leave the default, which reports the auth
+    /// state as unchanged so the supervisor pauses with the probe's original
+    /// rejection message.
+    async fn force_refresh(&self) -> Result<ConnectorAuthState, ConnectorError> {
+        Ok(ConnectorAuthState::Expired)
+    }
 
     /// Fetch raw items from the service into the connector's internal buffer.
     ///
@@ -587,6 +604,56 @@ pub trait Connector: Send + Sync {
     /// facts with this `connector_instance_id` via the existing trash
     /// machinery; this method handles the connector-local cleanup.
     async fn forget(&self) -> Result<(), ConnectorError>;
+}
+
+/// Crate-internal extension for connectors with refreshable stored
+/// credentials (issue #507): the shared forced-refresh path the email and
+/// calendar backends use from [`Connector::force_refresh`] — load the stored
+/// bundle, refresh an OAuth token unconditionally (bypassing the skew
+/// window), persist the refreshed bundle, and report the resulting auth
+/// state. Non-OAuth bundles report [`ConnectorAuthState::Expired`] so the
+/// supervisor pauses with the probe's rejection message; a missing store or
+/// bundle reports [`ConnectorAuthState::Unauthenticated`].
+#[async_trait]
+pub(crate) trait CredentialRefresh {
+    /// The connector's secret store, or `None` when the instance runs
+    /// without one.
+    fn secret_store(&self) -> Option<Arc<dyn SecretStore>>;
+
+    /// Instance slug used as the secret-store key.
+    fn connector_slug(&self) -> &str;
+
+    /// Resolve the bundle with `force = true`, returning the refreshed
+    /// bundle when one must be persisted.
+    async fn forced_refresh(
+        &self,
+        bundle: &SecretBundle,
+    ) -> Result<Option<SecretBundle>, ConnectorError>;
+
+    /// Persist a refreshed bundle back to the secret store.
+    async fn persist_refreshed_bundle(&self, bundle: &SecretBundle) -> Result<(), ConnectorError>;
+
+    /// Shared [`Connector::force_refresh`] implementation (issue #507).
+    async fn force_refresh_credentials(&self) -> Result<ConnectorAuthState, ConnectorError> {
+        let store = self
+            .secret_store()
+            .ok_or(ConnectorError::NotAuthenticated)?;
+        let Some(bundle) = store
+            .load(self.connector_slug())
+            .await
+            .map_err(|e| ConnectorError::Authentication(format!("secret load failed: {e}")))?
+        else {
+            return Ok(ConnectorAuthState::Unauthenticated);
+        };
+        if !matches!(bundle, SecretBundle::OAuth { .. }) {
+            return Ok(ConnectorAuthState::Expired);
+        }
+        let refreshed = self.forced_refresh(&bundle).await?;
+        if let Some(refreshed) = refreshed {
+            self.persist_refreshed_bundle(&refreshed).await?;
+        }
+        Ok(ConnectorAuthState::Authenticated)
+    }
 }
 
 // ---------------------------------------------------------------------------

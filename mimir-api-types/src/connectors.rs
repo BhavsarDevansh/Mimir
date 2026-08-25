@@ -56,6 +56,39 @@ pub struct ConnectorResponse {
     /// Number of `sources` rows attributed to this instance — the derived
     /// "items ingested" metric computed from the knowledge graph on demand.
     pub item_count: i64,
+    /// Non-secret auth configuration from the stored config (issue #507):
+    /// surfaced so `mimir connector auth` can re-run the PKCE flow for an
+    /// OAuth connector without the user re-supplying the endpoints. Secret
+    /// material (`client_secret`, passwords, tokens) is always stripped by
+    /// the daemon. Omitted when the config declares no `auth` object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<ConnectorAuthConfig>,
+}
+
+/// The non-secret slice of a connector's stored `auth` config, mirrored by
+/// the daemon from `config_json` (issue #507). Only whitelisted fields are
+/// ever surfaced — the daemon never echoes `client_secret`, passwords, or
+/// tokens, which live in the secret store instead.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConnectorAuthConfig {
+    /// Wire auth kind (`oauth` / `app_password` / `api_token`).
+    pub kind: String,
+    /// Account username/email the backend authenticates as, when the
+    /// backend config carries one (email IMAP / CalDAV basic auth).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// OAuth authorize endpoint (`auth.auth_uri`), non-secret config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_uri: Option<String>,
+    /// OAuth token endpoint, non-secret config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_endpoint: Option<String>,
+    /// OAuth client id, non-secret config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    /// OAuth scopes requested at authorize time, non-secret config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<String>>,
 }
 
 /// `GET /connectors` response — every registered instance, oldest first.
@@ -108,8 +141,8 @@ pub struct SyncConnectorRequest {
 /// Response for `POST /connectors/{id}/sync` — mirrors the supervisor's
 /// `TriggerOutcome`. A successful cycle reports the item count and updated
 /// cursor; `auth_expired` means the service rejected the connector's
-/// credentials (the supervisor has already paused it); `failed` carries a
-/// recoverable cycle error message.
+/// credentials (the supervisor has already paused it) and carries the
+/// rejection message; `failed` carries a recoverable cycle error message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum SyncConnectorResponse {
@@ -121,8 +154,10 @@ pub enum SyncConnectorResponse {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         new_cursor: Option<String>,
     },
-    /// The service reported expired auth; the connector has been paused.
-    AuthExpired,
+    /// The service reported expired, revoked, or rejected auth; the connector
+    /// has been paused. Carries the underlying auth rejection message so the
+    /// CLI can surface the actual cause (issue #507).
+    AuthExpired { message: String },
     /// The cycle failed with a recoverable error.
     Failed { message: String },
 }
@@ -320,10 +355,13 @@ mod tests {
 
     #[test]
     fn sync_connector_response_auth_expired_roundtrip() {
-        let resp = SyncConnectorResponse::AuthExpired;
+        let resp = SyncConnectorResponse::AuthExpired {
+            message: "IMAP auth rejected (BAD): invalid token".to_string(),
+        };
         assert_eq!(roundtrip(&resp), resp);
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["status"], "auth_expired");
+        assert_eq!(json["message"], "IMAP auth rejected (BAD): invalid token");
     }
 
     #[test]
@@ -335,6 +373,50 @@ mod tests {
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["status"], "failed");
         assert_eq!(json["message"], "boom");
+    }
+
+    #[test]
+    fn connector_auth_config_roundtrip_and_secret_fields_absent() {
+        let auth = ConnectorAuthConfig {
+            kind: "oauth".to_string(),
+            username: Some("devansh@example.com".to_string()),
+            auth_uri: Some("https://oauth.example.com/authorize".to_string()),
+            token_endpoint: Some("https://oauth.example.com/token".to_string()),
+            client_id: Some("cid".to_string()),
+            scopes: Some(vec!["read".to_string(), "write".to_string()]),
+        };
+        assert_eq!(roundtrip(&auth), auth);
+        let json = serde_json::to_value(&auth).unwrap();
+        assert_eq!(json["kind"], "oauth");
+        assert_eq!(json["username"], "devansh@example.com");
+        assert_eq!(json["scopes"], serde_json::json!(["read", "write"]));
+        assert!(!json.as_object().unwrap().contains_key("client_secret"));
+        assert!(!json.as_object().unwrap().contains_key("password"));
+        assert!(!json.as_object().unwrap().contains_key("token"));
+    }
+
+    #[test]
+    fn connector_response_omits_auth_when_unset() {
+        let resp = ConnectorResponse {
+            id: 1,
+            connector_type: "email".to_string(),
+            slug: "mail".to_string(),
+            backend: "imap".to_string(),
+            display_name: "Mail".to_string(),
+            status: "active".to_string(),
+            auth_state: "authenticated".to_string(),
+            mode: None,
+            sync_cursor: None,
+            last_sync_at: None,
+            last_error: None,
+            created_at: "2026-08-11T00:00:00Z".to_string(),
+            updated_at: "2026-08-11T00:00:00Z".to_string(),
+            item_count: 0,
+            auth: None,
+        };
+        assert_eq!(roundtrip(&resp), resp);
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("auth"));
     }
 
     #[test]

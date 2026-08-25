@@ -496,10 +496,8 @@ mod tests {
             health_with_terminal(HealthStatus::Offline, 1),
             HealthStatus::Offline
         );
-        assert_eq!(
-            health_with_terminal(HealthStatus::AuthExpired, 2),
-            HealthStatus::AuthExpired
-        );
+        let auth_expired = HealthStatus::AuthExpired("mock auth rejection".to_string());
+        assert_eq!(health_with_terminal(auth_expired.clone(), 2), auth_expired);
         assert_eq!(
             health_with_terminal(HealthStatus::NotConfigured, 1),
             HealthStatus::NotConfigured

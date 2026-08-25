@@ -1,5 +1,6 @@
 //! [`Connector`] trait implementation for the CalDAV backend.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -9,11 +10,36 @@ use crate::calendar::CalendarConnector;
 use crate::calendar::caldav::{CalDavClient, RawCalDavEvent};
 use crate::calendar::payload::{DeleteEventPayload, WriteEventPayload, build_vevent};
 use crate::connector::{
-    ActionResult, Connector, ConnectorAction, ConnectorError, ConnectorMode, HealthStatus,
-    SyncOptions, SyncOutcome,
+    ActionResult, Connector, ConnectorAction, ConnectorError, ConnectorMode, CredentialRefresh,
+    HealthStatus, SyncOptions, SyncOutcome,
 };
+use crate::secrets::SecretBundle;
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType};
 use mimir_knowledge::normalize::NormalizedFact;
+
+#[async_trait]
+impl CredentialRefresh for CalendarConnector {
+    fn secret_store(&self) -> Option<Arc<dyn crate::secrets::SecretStore>> {
+        self.secret_store.clone()
+    }
+
+    fn connector_slug(&self) -> &str {
+        &self.slug
+    }
+
+    async fn forced_refresh(
+        &self,
+        bundle: &SecretBundle,
+    ) -> Result<Option<SecretBundle>, ConnectorError> {
+        self.resolve_auth(bundle, true)
+            .await
+            .map(|(_, refreshed)| refreshed)
+    }
+
+    async fn persist_refreshed_bundle(&self, bundle: &SecretBundle) -> Result<(), ConnectorError> {
+        self.persist_refreshed(bundle).await
+    }
+}
 
 #[async_trait]
 impl Connector for CalendarConnector {
@@ -85,7 +111,7 @@ impl Connector for CalendarConnector {
         let Some(bundle) = bundle else {
             return Ok(ConnectorAuthState::Unauthenticated);
         };
-        let (auth, refreshed) = self.resolve_auth(&bundle).await?;
+        let (auth, refreshed) = self.resolve_auth(&bundle, false).await?;
         if let Some(refreshed) = refreshed {
             self.persist_refreshed(&refreshed).await?;
         }
@@ -108,7 +134,9 @@ impl Connector for CalendarConnector {
         let (client, refreshed) = match self.client_from_credentials().await {
             Ok(pair) => pair,
             Err(ConnectorError::NotAuthenticated) => return Ok(HealthStatus::NotConfigured),
-            Err(ConnectorError::Authentication(_)) => return Ok(HealthStatus::AuthExpired),
+            Err(ConnectorError::Authentication(message)) => {
+                return Ok(HealthStatus::AuthExpired(message));
+            }
             Err(e) => return Err(e),
         };
         if let Some(b) = refreshed {
@@ -117,10 +145,16 @@ impl Connector for CalendarConnector {
         match client.is_calendar(&self.config.calendar_url).await {
             Ok(true) => Ok(HealthStatus::Online),
             Ok(false) => Ok(HealthStatus::Degraded),
-            Err(ConnectorError::NotAuthenticated) => Ok(HealthStatus::AuthExpired),
+            Err(ConnectorError::NotAuthenticated) => Ok(HealthStatus::AuthExpired(
+                "CalDAV server rejected the credentials (HTTP 401)".to_string(),
+            )),
             Err(ConnectorError::Network(_)) => Ok(HealthStatus::Offline),
             Err(e) => Err(e),
         }
+    }
+
+    async fn force_refresh(&self) -> Result<ConnectorAuthState, ConnectorError> {
+        self.force_refresh_credentials().await
     }
 
     async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {

@@ -30,8 +30,8 @@ use axum::{
 };
 
 use mimir_api_types::{
-    AddConnectorRequest, ConnectorCatalogEntry, ConnectorCatalogResponse, ConnectorListResponse,
-    ConnectorResponse,
+    AddConnectorRequest, ConnectorAuthConfig, ConnectorCatalogEntry, ConnectorCatalogResponse,
+    ConnectorListResponse, ConnectorResponse,
 };
 use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::enums::ConnectorType;
@@ -63,6 +63,41 @@ fn auth_state_string(row: &mimir_knowledge::models::connector::Connector) -> Str
     row.auth_state()
         .map(|s| s.as_str().to_string())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Derive the non-secret `auth` slice of a connector's stored config for the
+/// wire response (issue #507). Only whitelisted fields are ever surfaced —
+/// `client_secret`, passwords, and tokens stay in the secret store and are
+/// never echoed, so a future config field cannot leak by omission. `None`
+/// when the config has no `auth` object or its `kind` is not a string.
+fn sanitized_auth_config(config_json: &str) -> Option<ConnectorAuthConfig> {
+    let config: serde_json::Value = serde_json::from_str(config_json).ok()?;
+    let auth = config.get("auth")?.as_object()?;
+    let kind = auth.get("kind")?.as_str()?.to_string();
+    Some(ConnectorAuthConfig {
+        kind,
+        username: auth
+            .get("username")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        auth_uri: auth
+            .get("auth_uri")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        token_endpoint: auth
+            .get("token_endpoint")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        client_id: auth
+            .get("client_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        scopes: auth.get("scopes").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        }),
+    })
 }
 
 fn connector_type_string(row: &mimir_knowledge::models::connector::Connector) -> String {
@@ -101,6 +136,7 @@ async fn to_response(
     let status = status_string(&row);
     let auth_state = auth_state_string(&row);
     let mode = resolved_mode_string(state, &row);
+    let auth = sanitized_auth_config(&row.config_json);
     Ok(ConnectorResponse {
         id: row.id,
         connector_type,
@@ -116,6 +152,7 @@ async fn to_response(
         created_at: row.created_at.to_rfc3339(),
         updated_at: row.updated_at.to_rfc3339(),
         item_count,
+        auth,
     })
 }
 
@@ -129,6 +166,7 @@ fn to_response_with_count(
     let connector_type = connector_type_string(&row);
     let status = status_string(&row);
     let auth_state = auth_state_string(&row);
+    let auth = sanitized_auth_config(&row.config_json);
     ConnectorResponse {
         id: row.id,
         connector_type,
@@ -144,6 +182,7 @@ fn to_response_with_count(
         created_at: row.created_at.to_rfc3339(),
         updated_at: row.updated_at.to_rfc3339(),
         item_count,
+        auth,
     }
 }
 
@@ -385,8 +424,8 @@ pub async fn connector_sync_handler(
             fetched,
             new_cursor,
         },
-        mimir_connectors::TriggerOutcome::AuthExpired => {
-            mimir_api_types::SyncConnectorResponse::AuthExpired
+        mimir_connectors::TriggerOutcome::AuthExpired(message) => {
+            mimir_api_types::SyncConnectorResponse::AuthExpired { message }
         }
         mimir_connectors::TriggerOutcome::Failed(message) => {
             mimir_api_types::SyncConnectorResponse::Failed { message }

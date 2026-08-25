@@ -1,8 +1,8 @@
 //! Unit + wiremock-backed tests for the connector CLI module.
 
 use mimir_api_types::{
-    ActionResultResponse, ConnectorCatalogEntry, ConnectorCatalogResponse, ConnectorListResponse,
-    ConnectorResponse, ForgetConnectorResponse, SyncConnectorResponse,
+    ActionResultResponse, ConnectorAuthConfig, ConnectorCatalogEntry, ConnectorCatalogResponse,
+    ConnectorListResponse, ConnectorResponse, ForgetConnectorResponse, SyncConnectorResponse,
 };
 use mimir_client::MimirClient;
 use mimir_connectors::SecretBundle;
@@ -140,6 +140,7 @@ fn connector_fixture(id: i32, slug: &str) -> ConnectorResponse {
         created_at: "2026-08-11T00:00:00Z".to_string(),
         updated_at: "2026-08-11T00:00:00Z".to_string(),
         item_count: 0,
+        auth: None,
     }
 }
 
@@ -759,6 +760,60 @@ async fn auth_with_password_flag_ingests_app_password() {
     .await;
 
     let token_requests = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .count();
+    assert_eq!(token_requests, 1);
+}
+
+#[tokio::test]
+async fn auth_with_stored_oauth_config_runs_pkce_flow_without_resupplied_config() {
+    // Issue #507: the daemon surfaces the stored non-secret auth config, so
+    // `mimir connector auth <slug>` re-runs the PKCE flow from it — no
+    // `auth.kind=oauth auth.auth_uri=...` re-supply needed.
+    let daemon = MockServer::start().await;
+    let token_server = MockServer::start().await;
+    let mut conn = connector_fixture(1, "calendar");
+    conn.auth = Some(ConnectorAuthConfig {
+        kind: "oauth".to_string(),
+        username: Some("devansh@example.com".to_string()),
+        auth_uri: Some("https://oauth.example.com/authorize".to_string()),
+        token_endpoint: Some(format!("{}/token", token_server.uri())),
+        client_id: Some("test-client".to_string()),
+        scopes: Some(vec!["read".to_string()]),
+    });
+    mount_list(&daemon, vec![conn.clone()]).await;
+    let mut authenticated = conn;
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_partial_json(serde_json::json!({
+            "kind": "oauth",
+            "access_token": "ya29.access",
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&daemon)
+        .await;
+    mount_token_endpoint(&token_server, 1).await;
+
+    handle_connector_auth_with_opener(
+        "calendar".to_string(),
+        vec![],
+        None,
+        None,
+        false,
+        None,
+        false,
+        true,
+        &DaemonTransport::Tcp(daemon.uri()),
+        &self_callback_opener("auth-code"),
+    )
+    .await;
+
+    let token_requests = daemon
         .received_requests()
         .await
         .unwrap()

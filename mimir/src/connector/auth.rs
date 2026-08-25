@@ -1,9 +1,11 @@
 //! `mimir connector auth` — credential ingest for an existing instance.
 
 use is_terminal::IsTerminal;
-use mimir_api_types::IngestTokenRequest;
+use mimir_api_types::{ConnectorAuthConfig, IngestTokenRequest};
 
-use super::oauth::{ingest_oauth_bundle, open_in_browser, run_oauth_flow_with_opener};
+use super::oauth::{
+    ingest_oauth_bundle, oauth_flow_config_with_secret, open_in_browser, run_oauth_flow_with_opener,
+};
 use super::{
     CredentialKind, ENV_PASSWORD, ENV_TOKEN, any_secret_channel, credential_kind_for, env_secret,
     exit_with_error, make_client, merge_config, print_json, render_client_error, resolve_connector,
@@ -15,13 +17,15 @@ use super::{
 /// Re-runnable: completes an instance that was registered without
 /// credentials (a non-interactive `add`, or a credential the daemon later
 /// rejected), and re-auths after expiry — without `remove` + re-`add`.
-/// The daemon's stored config is not exposed on the wire, so the credential
-/// kind comes from `--password` / `--token` / `--password-stdin` /
-/// `--token-stdin`, the `MIMIR_CONNECTOR_PASSWORD` / `MIMIR_CONNECTOR_TOKEN`
-/// env vars (exactly one set), an interactive selection when none is given,
-/// or the `auth.kind` of a re-supplied config (`--config-json` / `key=value`
-/// pairs). An `auth.kind=oauth` config runs the interactive PKCE loopback
-/// flow (A4 / #205) instead of prompting.
+/// The credential kind comes from `--password` / `--token` /
+/// `--password-stdin` / `--token-stdin`, the `MIMIR_CONNECTOR_PASSWORD` /
+/// `MIMIR_CONNECTOR_TOKEN` env vars (exactly one set), an interactive
+/// selection when none is given, or the `auth.kind` of a re-supplied config
+/// (`--config-json` / `key=value` pairs). An `auth.kind=oauth` config runs
+/// the interactive PKCE loopback flow (A4 / #205) instead of prompting; when
+/// no kind is re-supplied, a connector whose stored config uses OAuth re-runs
+/// the PKCE flow from the daemon-exposed non-secret auth config, so re-auth
+/// after expiry works without re-supplying the endpoints (issue #507).
 #[allow(clippy::too_many_arguments)] // mirrors the clap field count (kb style)
 pub async fn handle_connector_auth(
     slug: String,
@@ -68,32 +72,48 @@ pub(crate) async fn handle_connector_auth_with_opener(
     let conn = resolve_connector(&client, &slug).await;
     let merged =
         merge_config(&config, config_json.as_deref()).unwrap_or_else(|e| exit_with_error(e));
-    let kind = credential_kind_for(&merged);
+    let mut kind = credential_kind_for(&merged);
+
+    // Stored-config fallback (issue #507): the daemon surfaces the stored
+    // non-secret auth config, so an OAuth connector can re-auth without the
+    // user re-supplying `auth.kind=oauth auth.auth_uri=...` — the PKCE flow
+    // runs from the stored endpoints instead. A re-supplied `auth.kind` (any
+    // kind) keeps precedence: it is the user's explicit intent.
+    let stored_oauth = if matches!(kind, CredentialKind::None) {
+        conn.auth
+            .as_ref()
+            .filter(|auth| auth.kind == "oauth")
+            .map(stored_oauth_config)
+    } else {
+        None
+    };
+    if stored_oauth.is_some() {
+        kind = CredentialKind::OAuth;
+    }
 
     // OAuth: the interactive PKCE flow replaces the credential prompt. The
-    // re-supplied config only drives the flow; the daemon's stored config
-    // remains authoritative for the connector's runtime.
+    // driving config is the re-supplied one when it declares OAuth, else the
+    // stored non-secret config, else (interactive "OAuth 2.0" selection) the
+    // re-supplied config which must then carry the endpoints.
+    let oauth_config = if credential_kind_for(&merged) == CredentialKind::OAuth {
+        merged.clone()
+    } else {
+        stored_oauth.clone().unwrap_or_else(|| merged.clone())
+    };
     if matches!(kind, CredentialKind::OAuth) {
-        if any_secret_channel(
+        reauth_oauth(
+            &slug,
+            conn.id,
+            &oauth_config,
             password.as_deref(),
             token.as_deref(),
             password_stdin,
             token_stdin,
-        ) {
-            eprintln!(
-                "Warning: --password/--token (or --password-stdin/--token-stdin/MIMIR_CONNECTOR_*) are ignored for OAuth connectors (the PKCE flow obtains the token)"
-            );
-        }
-        let bundle = run_oauth_flow_with_opener(&merged, opener).await;
-        let updated = ingest_oauth_bundle(&client, conn.id, &bundle).await;
-        if json {
-            print_json(&updated);
-            return;
-        }
-        println!(
-            "OAuth login complete — credentials stored for connector '{slug}' (auth state: {}). Run `mimir connector resume {slug}` if it is not running.",
-            updated.auth_state
-        );
+            json,
+            &client,
+            opener,
+        )
+        .await;
         return;
     }
 
@@ -126,6 +146,27 @@ pub(crate) async fn handle_connector_auth_with_opener(
         }
         kind => kind,
     };
+    // The interactive "OAuth 2.0" selection routes back into the shared PKCE
+    // flow. The driving config is the re-supplied one (which must carry the
+    // endpoints — the stored config did not declare OAuth, or the flow above
+    // would already have run); the guidance error names the missing fields.
+    if matches!(kind, CredentialKind::OAuth) {
+        reauth_oauth(
+            &slug,
+            conn.id,
+            &oauth_config,
+            password.as_deref(),
+            token.as_deref(),
+            password_stdin,
+            token_stdin,
+            json,
+            &client,
+            opener,
+        )
+        .await;
+        return;
+    }
+
     let secret = resolve_kind_secret(kind, password, token, password_stdin, token_stdin)
     .unwrap_or_else(|| {
         if !std::io::stdin().is_terminal() {
@@ -148,7 +189,7 @@ pub(crate) async fn handle_connector_auth_with_opener(
             .connector_tokens(conn.id, IngestTokenRequest::ApiToken { token: secret })
             .await
             .unwrap_or_else(|e| exit_with_error(render_client_error(e))),
-        CredentialKind::OAuth => unreachable!("handled above"),
+        CredentialKind::OAuth => unreachable!("routed into the PKCE flow above"),
         CredentialKind::None => unreachable!("resolved above"),
     };
 
@@ -162,6 +203,75 @@ pub(crate) async fn handle_connector_auth_with_opener(
     );
 }
 
+/// Run the shared interactive PKCE flow for a re-auth and ingest the
+/// resulting bundle. `oauth_config` carries the OAuth endpoints (re-supplied
+/// config, the stored non-secret config, or the interactive fallback);
+/// missing fields exit with the exact config keys to supply (issue #507).
+#[allow(clippy::too_many_arguments)] // mirrors the caller's clap field count
+async fn reauth_oauth(
+    slug: &str,
+    connector_id: i32,
+    oauth_config: &serde_json::Value,
+    password: Option<&str>,
+    token: Option<&str>,
+    password_stdin: bool,
+    token_stdin: bool,
+    json: bool,
+    client: &mimir_client::MimirClient,
+    opener: &(dyn Fn(&str) + Send + Sync),
+) {
+    if any_secret_channel(password, token, password_stdin, token_stdin) {
+        eprintln!(
+            "Warning: --password/--token (or --password-stdin/--token-stdin/MIMIR_CONNECTOR_*) are ignored for OAuth connectors (the PKCE flow obtains the token)"
+        );
+    }
+    if let Err(reason) = oauth_flow_config_with_secret(oauth_config, None) {
+        exit_with_error(format!(
+            "cannot run the OAuth login for connector '{slug}': {reason} — re-run supplying the OAuth fields, e.g. `mimir connector auth {slug} auth.kind=oauth auth.auth_uri=... auth.token_endpoint=... auth.client_id=...`"
+        ));
+    }
+    let bundle = run_oauth_flow_with_opener(oauth_config, opener).await;
+    let updated = ingest_oauth_bundle(client, connector_id, &bundle).await;
+    if json {
+        print_json(&updated);
+        return;
+    }
+    println!(
+        "OAuth login complete — credentials stored for connector '{slug}' (auth state: {}). Run `mimir connector resume {slug}` if it is not running.",
+        updated.auth_state
+    );
+}
+
+/// Rebuild a `{"auth": {...}}` config value from the daemon's non-secret auth
+/// slice so the shared PKCE flow helpers read the stored OAuth endpoints
+/// without the user re-supplying them (issue #507). `client_secret` is never
+/// on the wire (it lives in the credential bundle), so the rebuilt config
+/// omits it — the flow still works for the PKCE public clients Mimir targets,
+/// and the stored bundle's secret continues to serve refreshes.
+fn stored_oauth_config(auth: &ConnectorAuthConfig) -> serde_json::Value {
+    let mut oauth = serde_json::Map::new();
+    oauth.insert("kind".to_string(), serde_json::json!("oauth"));
+    if let Some(username) = &auth.username {
+        oauth.insert("username".to_string(), serde_json::json!(username));
+    }
+    if let Some(auth_uri) = &auth.auth_uri {
+        oauth.insert("auth_uri".to_string(), serde_json::json!(auth_uri));
+    }
+    if let Some(token_endpoint) = &auth.token_endpoint {
+        oauth.insert(
+            "token_endpoint".to_string(),
+            serde_json::json!(token_endpoint),
+        );
+    }
+    if let Some(client_id) = &auth.client_id {
+        oauth.insert("client_id".to_string(), serde_json::json!(client_id));
+    }
+    if let Some(scopes) = &auth.scopes {
+        oauth.insert("scopes".to_string(), serde_json::json!(scopes));
+    }
+    serde_json::json!({ "auth": oauth })
+}
+
 /// Ask which credential kind the connector uses. Non-terminal stdin aborts
 /// with a message pointing at the non-visible channels.
 fn prompt_credential_kind(slug: &str) -> CredentialKind {
@@ -172,13 +282,14 @@ fn prompt_credential_kind(slug: &str) -> CredentialKind {
     }
     match inquire::Select::new(
         "Which credential kind does this connector use?",
-        vec!["App password", "API token"],
+        vec!["App password", "API token", "OAuth 2.0"],
     )
     .prompt()
     {
         Ok("App password") => CredentialKind::AppPassword,
         Ok("API token") => CredentialKind::ApiToken,
-        Ok(_) => unreachable!("select prompt only offers two options"),
+        Ok("OAuth 2.0") => CredentialKind::OAuth,
+        Ok(_) => unreachable!("select prompt only offers three options"),
         Err(e) => exit_with_error(format!("credential kind prompt failed: {e}")),
     }
 }

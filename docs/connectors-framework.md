@@ -105,13 +105,13 @@ pub trait Connector: Send + Sync {
 | `ConnectorMode` | `Polling { interval, jitter }` (supervisor-polled) or `Push` (IMAP IDLE / file watcher). |
 | `SyncOptions` | `full: bool` (ignore cursor) + optional `since: Option<Duration>` time-window hint. The opaque incremental cursor lives in `connectors.sync_cursor`, not here. |
 | `SyncOutcome` | `fetched: u32`, `new_cursor: Option<String>` (`Some` advances/clears the cursor, `None` = unchanged), `fetched_at: DateTime<Utc>`. |
-| `HealthStatus` | Transient probe: `Online` / `Offline` / `Degraded` / `AuthExpired` / `NotConfigured`. |
+| `HealthStatus` | Transient probe: `Online` / `Offline` / `Degraded` / `AuthExpired(message)` / `NotConfigured`. Since issue #507 the `AuthExpired` variant carries the underlying auth rejection message (e.g. IMAP `BAD`/`NO` text or `invalid_grant`), so the supervisor logs it and persists it as `last_error`. |
 | `ConnectorAction` / `ActionResult` | Write-back request (`kind` + JSON `payload`) and outcome (`success`, `native_id`, `message`). |
 | `ConnectorError` | `thiserror` enum: `Authentication`, `NotAuthenticated`, `Network`, `Config`, `Parse`, `UnsupportedAction`, `Io`, `BackendNotFound`, `BackendAlreadyRegistered`, `Other`. Does not wrap `KnowledgeError` (the connector does not insert). |
 
 ### `HealthStatus` vs persisted lifecycle
 
-`HealthStatus` is a **transient runtime probe** (is the service reachable and authenticated *right now*), deliberately renamed to disambiguate from the persisted enums `ConnectorStatus` (`Setup`/`Active`/`Paused`/`Error`) and `ConnectorAuthState` (`Unauthenticated`/`Authenticated`/`Expired`). The supervisor calls `health()` and maps the probe onto the persisted columns — e.g. `AuthExpired` → `auth_state = Expired`, `status = Paused`; `Offline` → `status = Error`.
+`HealthStatus` is a **transient runtime probe** (is the service reachable and authenticated *right now*), deliberately renamed to disambiguate from the persisted enums `ConnectorStatus` (`Setup`/`Active`/`Paused`/`Error`) and `ConnectorAuthState` (`Unauthenticated`/`Authenticated`/`Expired`). The supervisor calls `health()` and maps the probe onto the persisted columns — e.g. `AuthExpired` → `auth_state = Expired`, `status = Paused`; `Offline` → `status = Error`. Since issue #507 the cycle probes at most twice: a first `AuthExpired` runs one `Connector::force_refresh()` (OAuth connectors refresh unconditionally; other backends report nothing to refresh) and re-probes with the fresh credential, so a stale or transiently rejected access token is retried instead of pausing; only a second rejection or a refresh failure pauses, and the `AuthExpired` message (or the refresh error) becomes the persisted `last_error`.
 
 ## Multi-backend registry + factory dispatch (F7 / #184)
 
@@ -211,7 +211,7 @@ Each runner performs an initial `authenticate()` handshake (a failed handshake p
 3. Classify the cycle result and act:
    - **Ok** — reset the failure count, persist sync progress, then clear `last_error` (`set_connector_status(Active, Some(None))`). The cursor and connector-side durable state (`Connector::durable_state`, issue #262) are persisted **atomically** in one transaction via `update_sync_progress_and_durable_state`, so a crash between the two writes cannot advance the cursor without its retry ledger (PR #318 review). When `new_cursor` is `Some`, the cursor is advanced/cleared; when `None` (unchanged), only `last_sync_at` is stamped, preserving the existing progress token. The connector acknowledges the persist (`durable_state_persisted`) only after the combined commit succeeds, and adopts the persisted cursor via `Connector::on_cycle_succeeded` (issue #314) — never inside `sync` — so a failed cycle re-syncs from the last confirmed cursor on the next in-process cycle.
    - **Err / Panic** — increment failures, write `last_error` (status stays `Active`), exponential backoff; once failures reach `max_failures`, move to `Error` and stop auto-restarting (manual `resume` required).
-   - **AuthExpired** (from `health`) — `set_auth_state(Expired)` + `set_connector_status(Paused, ...)`, then exit (not auto-restarted).
+   - **AuthExpired** (from `health`, after the one forced-refresh retry of issue #507) — `set_auth_state(Expired)` + `set_connector_status(Paused, <rejection message>)`, then exit (not auto-restarted). The rejection message (IMAP `BAD`/`NO` text, `invalid_grant` description, or the CalDAV 401) is logged and persisted as `last_error` instead of the generic "auth expired".
 4. For `Polling` connectors, sleep the declared `interval + jitter` (cancellable by shutdown) before the next cycle. `Push` connectors block inside `sync` and loop immediately.
 
 ### Graceful shutdown + cursor persistence
@@ -258,7 +258,7 @@ The supervisor is a library component in `mimir-connectors` with unit/integratio
 `trigger_sync` returns `Result<TriggerOutcome, TriggerError>`:
 
 - `TriggerOutcome::Ok { fetched, new_cursor }` — the cycle succeeded.
-- `TriggerOutcome::AuthExpired` — the service rejected credentials; the supervisor has already paused the connector.
+- `TriggerOutcome::AuthExpired(message)` — the service rejected credentials; the supervisor has already paused the connector, and `message` is the underlying rejection detail (issue #507).
 - `TriggerOutcome::Failed(msg)` — a recoverable cycle error (panic, offline, parse failure, shutdown mid-cycle).
 - `TriggerError::NotFound` / `NotFoundSlug` — no connector row with that key.
 - `TriggerError::NotRunning` — the connector is `Paused` / `Error` / `Setup` or its runner has exited (resume it first).

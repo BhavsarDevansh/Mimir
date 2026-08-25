@@ -15,6 +15,7 @@ impl CalendarConnector {
     pub(super) async fn resolve_auth(
         &self,
         bundle: &SecretBundle,
+        force_refresh: bool,
     ) -> Result<(CalDavAuth, Option<SecretBundle>), ConnectorError> {
         match (&self.config.auth, bundle) {
             (
@@ -53,6 +54,7 @@ impl CalendarConnector {
                     client_secret.as_deref(),
                     scopes.as_deref(),
                     bundle,
+                    force_refresh,
                 )
                 .await?;
                 Ok((CalDavAuth::Bearer { token }, refreshed))

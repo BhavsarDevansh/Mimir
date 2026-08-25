@@ -352,8 +352,13 @@ async fn sensitive_fact_flag_is_carried_through() {
 
 #[tokio::test]
 async fn health_is_configurable() {
-    let mock = MockConnector::from_config(json!({ "health": "auth_expired" })).unwrap();
-    assert_eq!(mock.health().await.unwrap(), HealthStatus::AuthExpired);
+    let mock =
+        MockConnector::from_config(json!({ "health": { "auth_expired": "mock auth rejection" } }))
+            .unwrap();
+    assert_eq!(
+        mock.health().await.unwrap(),
+        HealthStatus::AuthExpired("mock auth rejection".to_string())
+    );
 }
 
 #[tokio::test]

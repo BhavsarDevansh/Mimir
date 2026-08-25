@@ -52,7 +52,7 @@ impl Connector for MockConnector {
     }
 
     async fn health(&self) -> Result<HealthStatus, ConnectorError> {
-        Ok(self.health)
+        Ok(self.health.clone())
     }
 
     async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {

@@ -10,7 +10,8 @@ use mail_parser::MessageParser;
 use tracing::{debug, warn};
 
 use crate::connector::{
-    Connector, ConnectorError, ConnectorMode, HealthStatus, SyncOptions, SyncOutcome,
+    Connector, ConnectorError, ConnectorMode, CredentialRefresh, HealthStatus, SyncOptions,
+    SyncOutcome,
 };
 use crate::email::config::{EmailSyncMode, parse_cursor};
 use crate::email::connector::EmailConnector;
@@ -18,8 +19,33 @@ use crate::email::envelope::EmailEnvelope;
 use crate::email::imap;
 use crate::email::jsonld;
 use crate::email::llm::{EmailExtractionPayload, health_with_terminal};
+use crate::secrets::SecretBundle;
 use mimir_core::hooks::{Trigger, TriggerStatus};
 use mimir_knowledge::models::enums::{ConnectorAuthState, ConnectorType};
+
+#[async_trait]
+impl CredentialRefresh for EmailConnector {
+    fn secret_store(&self) -> Option<Arc<dyn crate::secrets::SecretStore>> {
+        self.secret_store.clone()
+    }
+
+    fn connector_slug(&self) -> &str {
+        &self.slug
+    }
+
+    async fn forced_refresh(
+        &self,
+        bundle: &SecretBundle,
+    ) -> Result<Option<SecretBundle>, ConnectorError> {
+        self.resolve_auth(bundle, true)
+            .await
+            .map(|(_, refreshed)| refreshed)
+    }
+
+    async fn persist_refreshed_bundle(&self, bundle: &SecretBundle) -> Result<(), ConnectorError> {
+        self.persist_refreshed(bundle).await
+    }
+}
 
 #[async_trait]
 impl Connector for EmailConnector {
@@ -127,7 +153,7 @@ impl Connector for EmailConnector {
         let probe = match self.probe_capability().await {
             Ok(_) => HealthStatus::Online,
             Err(ConnectorError::NotAuthenticated) => HealthStatus::NotConfigured,
-            Err(ConnectorError::Authentication(_)) => HealthStatus::AuthExpired,
+            Err(ConnectorError::Authentication(message)) => HealthStatus::AuthExpired(message),
             Err(ConnectorError::Network(_)) => HealthStatus::Offline,
             Err(e) => return Err(e),
         };
@@ -135,6 +161,10 @@ impl Connector for EmailConnector {
             probe,
             self.prose_retry.lock().unwrap().terminal_count(),
         ))
+    }
+
+    async fn force_refresh(&self) -> Result<ConnectorAuthState, ConnectorError> {
+        self.force_refresh_credentials().await
     }
 
     async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {

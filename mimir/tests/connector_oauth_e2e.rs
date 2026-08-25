@@ -85,6 +85,35 @@ fn oauth_add_runs_pkce_flow_against_mock_server_and_ingests_tokens() {
     let tokens = rt.block_on(oauth.token_requests());
     assert_eq!(tokens.len(), 1, "exactly one token exchange");
 
+    // Issue #507: re-authing an expired OAuth connector must not require the
+    // user to re-supply the OAuth endpoints — the daemon surfaces the stored
+    // non-secret auth config, so `mimir connector auth` re-runs the PKCE flow
+    // from it and ingests a fresh bundle.
+    let (stdout, stderr, status) = daemon.run_cli_with_env(
+        &["connector", "auth", "oauth-demo", "--json"],
+        &[("BROWSER", browser.to_str().expect("browser path"))],
+    );
+    assert!(
+        status.success(),
+        "connector auth without re-supplied config failed.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let reauthed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(reauthed["slug"], "oauth-demo");
+    assert_eq!(
+        reauthed["auth_state"], "authenticated",
+        "the re-auth PKCE flow must exchange tokens and ingest them"
+    );
+    assert_eq!(
+        rt.block_on(oauth.authorize_requests()).len(),
+        2,
+        "the re-auth must run a second authorize round"
+    );
+    assert_eq!(
+        rt.block_on(oauth.token_requests()).len(),
+        2,
+        "the re-auth must run a second token exchange"
+    );
+
     // The authenticated instance can be resumed and synced.
     let resumed = daemon.run_cli_json(&["connector", "resume", "oauth-demo", "--json"]);
     assert_eq!(resumed["status"], "active");

@@ -215,7 +215,7 @@ fn set_dotted_path(target: &mut serde_json::Value, key: &str, value: serde_json:
 /// derived deterministically from the config's `auth.kind` tag — the same
 /// tag the backends' auth-method DTOs use. OAuth is A4 (#205): the
 /// interactive PKCE flow replaces the credential prompt.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum CredentialKind {
     AppPassword,
     ApiToken,

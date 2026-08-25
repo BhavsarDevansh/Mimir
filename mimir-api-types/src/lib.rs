@@ -29,9 +29,9 @@ pub use chat::{
     ToolCallStartInfo, Usage,
 };
 pub use connectors::{
-    ActionResultResponse, AddConnectorRequest, ConnectorActionRequest, ConnectorCatalogEntry,
-    ConnectorCatalogResponse, ConnectorListResponse, ConnectorResponse, ForgetConnectorResponse,
-    IngestTokenRequest, SyncConnectorRequest, SyncConnectorResponse,
+    ActionResultResponse, AddConnectorRequest, ConnectorActionRequest, ConnectorAuthConfig,
+    ConnectorCatalogEntry, ConnectorCatalogResponse, ConnectorListResponse, ConnectorResponse,
+    ForgetConnectorResponse, IngestTokenRequest, SyncConnectorRequest, SyncConnectorResponse,
 };
 pub use kb::{
     AuditQueryRequest, AuditQueryResponse, AuditRow, BrowseEdge, BrowseRequest, BrowseResponse,

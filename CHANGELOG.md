@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.150.1] — 2026-08-25
+
+### Fix: OAuth connector re-auth and auth-expiry retry (issue #507)
+
+- `mimir connector auth <slug>` can now re-auth an OAuth connector without re-supplying the OAuth fields: the daemon exposes the stored non-secret auth config (`ConnectorResponse.auth` — kind, `username`, `auth_uri`, `token_endpoint`, `client_id`, `scopes`, with `client_secret`/passwords/tokens always stripped), and the CLI re-runs the PKCE flow from the stored endpoints when the stored kind is `oauth`; the interactive credential-kind prompt also offers an "OAuth 2.0" fallback that guides the user to the required config pairs when the stored config has no endpoints.
+- A single auth rejection no longer pauses an OAuth connector outright: the supervisor runs one forced refresh (`Connector::force_refresh`, bypassing the 60 s refresh-skew window via `resolve_access_token(..., force = true)`) and re-probes with the fresh credential; only a second rejection or a refresh failure pauses, and the pause now persists and logs the actual rejection message (IMAP `BAD`/`NO` text, `invalid_grant` description, or the CalDAV 401) as `last_error` instead of the generic "auth expired" — `HealthStatus::AuthExpired` carries the message end-to-end through `TriggerOutcome` and the `SyncConnectorResponse::AuthExpired { message }` wire shape, so `mimir connector sync` reports it too.
+- Tests cover the forced-refresh unit path (email + calendar + shared OAuth helper), the supervisor retry-once/pause-with-detail cycle outcomes, the daemon's sanitized auth-config exposure (list + show, secret-strip assertions), the CLI stored-config PKCE re-auth against a mocked daemon, and the real daemon E2E re-auth round trip against the mock OAuth server; docs updated (`docs/cli.md`, `docs/connector-management.md`, `docs/connectors-framework.md`, `docs/oauth-client.md`, `docs/email-connector.md`, `docs/wiki/cli-commands.md`, `docs/wiki/connectors.md`, `Mimir-Implementation-Context.md`).
+- Version bumped 0.150.0 → 0.150.1 (patch — bug fix).
+
 ## [0.150.0] — 2026-08-25
 
 ### Feature: LLM semantic entity dedup + merge-queue review (issue #282)

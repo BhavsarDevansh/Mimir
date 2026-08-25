@@ -290,8 +290,7 @@ impl MockConnector {
                     "description": "Emit at most N facts per sync (incremental). Omit to emit all."
                 },
                 "health": {
-                    "type": "string",
-                    "enum": ["online", "offline", "degraded", "auth_expired", "not_configured"],
+                    "description": "Health probe outcome: a string (`online` / `offline` / `degraded` / `not_configured`) or an object `{ \"auth_expired\": \"<message>\" }` carrying the rejection message surfaced in `last_error` (issue #507).",
                     "default": "online"
                 },
                 "auth_state": {

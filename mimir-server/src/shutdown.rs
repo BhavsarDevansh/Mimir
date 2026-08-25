@@ -400,6 +400,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_server_serves_over_unix_socket_and_removes_socket_on_shutdown() {
         let temp = tempfile::tempdir().unwrap();
@@ -480,6 +481,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_server_removes_stale_socket_before_binding() {
         let temp = tempfile::tempdir().unwrap();
@@ -533,6 +535,36 @@ mod tests {
         let result =
             tokio::time::timeout(std::time::Duration::from_secs(5), handle.into_inner()).await;
         assert!(result.is_ok(), "server did not exit within 5 seconds");
+    }
+
+    /// A second daemon must not unlink and steal a live socket from a running
+    /// daemon: startup fails with a descriptive "already in use" error and the
+    /// original listener keeps the pathname (PR #503 review).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_server_refuses_to_steal_live_socket() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket_path = temp.path().join("live.sock");
+        let live = tokio::net::UnixListener::bind(&socket_path).unwrap();
+
+        let (config, _addr) = test_config(&temp, Some(socket_path.clone())).await;
+        let (handle, _api_token) = spawn_test_server(config, "test-api-token");
+
+        // The daemon must fail startup instead of unlinking the live listener.
+        let joined = tokio::time::timeout(std::time::Duration::from_secs(5), handle.into_inner())
+            .await
+            .expect("server must exit within 5 seconds")
+            .expect("server task must not panic");
+        let error = joined.expect_err("server must refuse to start over a live socket");
+        assert!(
+            error.to_string().contains("already in use"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            tokio::net::UnixStream::connect(&socket_path).await.is_ok(),
+            "live socket must still be connectable after the failed startup"
+        );
+        drop(live);
     }
 
     /// Regression: a shutdown trigger fired *before* a receiver subscribes

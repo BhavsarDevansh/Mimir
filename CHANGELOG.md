@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.147.1] — 2026-08-25
+
+### Fix: Unix socket transport review fixes (PR #503)
+
+- The daemon no longer unlinks a socket pathname before proving it is stale: startup attempts a bounded 500 ms connection first, fails with an "already in use" error when another daemon holds the path, and removes the file only after a confirmed stale-listener failure. Shutdown cleanup is owned by the listener task, and the post-abort cleanup verifies no replacement daemon took the pathname over.
+- `mimir-client::build_client` keeps a consistent `unix_socket` parameter on every platform, fixing non-Unix (Windows) builds, and both Unix-socket integration tests in `mimir-server` are gated with `#[cfg(unix)]` so the Windows test build compiles.
+- The bounded 500 ms socket liveness probe is shared via `mimir_core::config::socket_is_live` (used by the CLI daemon guard and the daemon's pre-bind stale-socket check) so liveness semantics cannot drift.
+- CLI integration coverage: a `TestDaemon` helper runs the CLI without `MIMIR_BASE_URL`, plus an end-to-end test proving `mimir status` reaches the daemon over the Unix socket.
+- Docs: transport precedence (`MIMIR_BASE_URL` → Unix socket → TCP) is stated explicitly in `docs/cli.md`, `docs/uds-transport.md`, and the VISION design docs; `docs/daemon-guard.md` and `docs/wiki/daemon-auto-start.md` describe the transport-aware probe; the generated config comment documents the platform-derived `<data_dir>/mimir.sock` default.
+- Version bumped 0.147.0 → 0.147.1 (patch — backwards-compatible fixes and documentation).
+
 ## [0.147.0] — 2026-08-25
 
 ### Feature: Unix domain socket transport for local CLI↔daemon communication (issue #25)

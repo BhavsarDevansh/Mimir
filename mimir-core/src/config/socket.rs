@@ -27,6 +27,31 @@ pub fn effective_socket_path(_configured: Option<&str>) -> Option<PathBuf> {
     None
 }
 
+/// Return `true` when a live daemon is accepting connections on the Unix
+/// socket at `path`.
+///
+/// A connect attempt — not file existence — distinguishes a live listener
+/// from a stale socket file left by a crashed daemon, so the CLI daemon
+/// guard and the daemon's pre-bind stale-socket probe share this one
+/// implementation (bounded at 500 ms; a local syscall with no HTTP round
+/// trip) and liveness semantics cannot drift (PR #503 review).
+#[cfg(unix)]
+pub async fn socket_is_live(path: &std::path::Path) -> bool {
+    tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        tokio::net::UnixStream::connect(path),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok())
+}
+
+/// No Unix sockets on non-Unix platforms; nothing can be live (Windows falls
+/// back to TCP).
+#[cfg(not(unix))]
+pub async fn socket_is_live(_path: &std::path::Path) -> bool {
+    false
+}
+
 /// Resolve the socket path the local CLI should connect to.
 ///
 /// Precedence (each tier falls through on a missing/blank value):
@@ -112,6 +137,32 @@ mod tests {
         assert_eq!(
             socket_path_from_sources(Some(String::new()), Some("")),
             None
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_listener_is_detected_by_connection() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket_path = temp.path().join("live.sock");
+        let _listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+        assert!(
+            socket_is_live(&socket_path).await,
+            "a listening daemon must be detected as live"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stale_socket_file_is_detected_as_down() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket_path = temp.path().join("stale.sock");
+        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+        drop(listener);
+        assert!(socket_path.exists(), "stale socket file must exist");
+        assert!(
+            !socket_is_live(&socket_path).await,
+            "a stale socket file must be detected as down"
         );
     }
 }

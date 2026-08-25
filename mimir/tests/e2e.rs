@@ -50,6 +50,25 @@ fn e2e_api_rejects_unauthenticated_requests() {
     daemon.stop();
 }
 
+/// The CLI must reach the daemon over the Unix domain socket when
+/// `MIMIR_BASE_URL` is unset: `DaemonTransport::resolve` prefers the socket
+/// over TCP (issue #25, PR #503 review). Every other `TestDaemon` CLI call
+/// pins `MIMIR_BASE_URL`, so this is the only case that exercises the UDS
+/// transport end to end.
+#[cfg(unix)]
+#[test]
+fn e2e_cli_reaches_daemon_over_unix_socket() {
+    let daemon = TestDaemon::start();
+
+    let (stdout, stderr, status) = daemon.run_cli_uds(&["status"]);
+    assert!(
+        status.success(),
+        "mimir status over the Unix socket failed.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    daemon.stop();
+}
+
 /// Smoke test for the SIGTERM shutdown path.
 ///
 /// systemd stops `mimir.service` with SIGTERM. The daemon must exit promptly

@@ -236,6 +236,34 @@ db_path = "{jobs_db}"
         self.run_cli_with_env(args, &[])
     }
 
+    /// Run the CLI without `MIMIR_BASE_URL` so transport resolution follows
+    /// the daemon's socket: `MIMIR_SERVER_SOCKET_PATH` → `server.socket_path`
+    /// → default `<data_dir>/mimir.sock` (the UDS case, issue #25). Every
+    /// other fixture call pins `MIMIR_BASE_URL`, so this is the only way the
+    /// integration tests exercise the Unix-socket path end to end (PR #503
+    /// review). Shared fixture: not every test binary uses this helper, so
+    /// dead-code analysis is relaxed.
+    #[allow(dead_code)]
+    pub fn run_cli_uds(&self, args: &[&str]) -> (String, String, ExitStatus) {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mimir"));
+        command
+            .args(args)
+            .env("NO_COLOR", "1")
+            .env_remove("MIMIR_BASE_URL")
+            .env("XDG_CONFIG_HOME", &self.config_dir)
+            .env("XDG_DATA_HOME", &self.data_dir)
+            .env("HOME", &self.home_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = command.output().expect("spawn mimir");
+        (
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+            output.status,
+        )
+    }
+
     /// Like [`run_cli`](Self::run_cli) but with extra environment variables
     /// (e.g. `BROWSER` for the OAuth PKCE E2E, which drives the flow through
     /// a fake browser).

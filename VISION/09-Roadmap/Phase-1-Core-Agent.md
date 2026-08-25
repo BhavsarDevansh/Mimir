@@ -113,7 +113,7 @@ Library crates provide code organisation:
 ### Transport
 - **Unix domain socket** (`~/.local/share/mimir/mimir.sock`) — preferred local transport (issue #25); instant daemon detection via a local socket connection
 - **TCP** (`127.0.0.1:8080`) — fallback for remote clients (`MIMIR_BASE_URL`) and Windows
-- Daemon detection: socket-file existence on Unix, TCP health probe (`GET /health`) otherwise, with fallback auto-start prompt
+- Daemon detection: a bounded 500 ms connection probe on the Unix socket (a stale socket file from a crash is detected as down), TCP health probe (`GET /health`) otherwise, with fallback auto-start prompt
 
 ## Success Criteria
 - [x] `cargo build --workspace` succeeds

@@ -182,7 +182,7 @@ impl MimirClient {
         connect_timeout: std::time::Duration,
         timeout: std::time::Duration,
         auth_token: Option<&str>,
-        #[cfg(unix)] unix_socket: Option<&std::path::Path>,
+        unix_socket: Option<&std::path::Path>,
     ) -> Result<reqwest::Client, ClientError> {
         let mut builder = reqwest::Client::builder()
             .connect_timeout(connect_timeout)
@@ -191,6 +191,8 @@ impl MimirClient {
         if let Some(path) = unix_socket {
             builder = builder.unix_socket(path);
         }
+        #[cfg(not(unix))]
+        let _ = unix_socket;
         if let Some(token) = auth_token {
             let value = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
                 .map_err(|e| ClientError::Connection(format!("invalid API token: {e}")))?;

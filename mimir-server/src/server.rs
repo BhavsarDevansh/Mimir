@@ -165,7 +165,16 @@ pub async fn start_server_with_llm_and_listener(
                 );
             }
         }
-        let _ = tokio::fs::remove_file(&socket_path).await;
+        // The Unix task removes the socket file itself while it still owns the
+        // listener (graceful path). After an abort the file may remain, but a
+        // replacement daemon may also have bound the pathname in the meantime;
+        // only remove it when no live listener holds it (PR #503 review).
+        #[cfg(unix)]
+        if !mimir_core::config::socket_is_live(&socket_path).await {
+            let _ = tokio::fs::remove_file(&socket_path).await;
+        }
+        #[cfg(not(unix))]
+        let _ = socket_path;
     }
 
     // Broadcast the shutdown watch so every background task spawned from
@@ -188,9 +197,10 @@ pub async fn start_server_with_llm_and_listener(
     Ok(())
 }
 
-/// Bind the Unix domain socket listener, removing any stale socket file left
-/// by a crashed daemon, and spawn the task that serves the shared router on
-/// it.
+/// Bind the Unix domain socket listener, after probing that any existing
+/// socket file is stale (a live daemon holding the path aborts startup with
+/// an "already in use" error), and spawn the task that serves the shared
+/// router on it.
 ///
 /// Returns `Ok(None)` when no Unix socket applies (non-Unix platforms);
 /// otherwise the socket path plus the spawned task so the caller can join it
@@ -214,6 +224,16 @@ async fn bind_and_serve_unix_socket(
         })?;
     }
     if socket_path.exists() {
+        // A pathname socket may belong to a *live* daemon rather than a
+        // crashed one. Unlinking it would steal the local transport from the
+        // running process, so prove staleness with a bounded connect attempt
+        // before removing anything (PR #503 review).
+        if mimir_core::config::socket_is_live(&socket_path).await {
+            anyhow::bail!(
+                "Unix socket {} is already in use by a running daemon",
+                socket_path.display()
+            );
+        }
         tracing::warn!(
             "removing stale Unix socket {} before binding",
             socket_path.display()
@@ -232,14 +252,20 @@ async fn bind_and_serve_unix_socket(
     })?;
 
     let shutdown_rx = state.shutdown_tx.subscribe();
+    let cleanup_path = socket_path.clone();
     let task = tokio::spawn(async move {
-        axum::serve(
+        let result = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<LocalPeer>(),
         )
         .with_graceful_shutdown(crate::shutdown::watch_shutdown(shutdown_rx))
         .await
-        .map_err(anyhow::Error::from)
+        .map_err(anyhow::Error::from);
+        // Remove the socket file while this task still owns the listener, so
+        // shutdown cleanup can never unlink a replacement daemon's socket
+        // (PR #503 review).
+        let _ = tokio::fs::remove_file(&cleanup_path).await;
+        result
     });
     info!(
         "Mimir daemon listening on Unix socket {}",

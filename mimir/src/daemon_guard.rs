@@ -102,13 +102,10 @@ impl Probe for TransportProbe {
                 DaemonTransport::Unix(path) => {
                     // A connect attempt — not file existence — distinguishes a
                     // live daemon from a stale socket file left by a crashed
-                    // one; the local syscall needs no HTTP round trip.
-                    tokio::time::timeout(
-                        Duration::from_millis(500),
-                        tokio::net::UnixStream::connect(path),
-                    )
-                    .await
-                    .is_ok_and(|result| result.is_ok())
+                    // one; the local syscall needs no HTTP round trip. Shares
+                    // the bounded probe with the daemon's pre-bind
+                    // stale-socket check (PR #503 review).
+                    mimir_core::config::socket_is_live(path).await
                 }
                 DaemonTransport::Tcp(base_url) => {
                     let url = format!("{base_url}/health");

@@ -115,6 +115,8 @@ mimir ask "Hello"
 | `MIMIR_KNOWLEDGE_EVENTS_SCHEDULE_TIMES` | Comma-separated daily scan times (HH:MM) for the events job | `07:30,19:45` |
 | `MIMIR_KNOWLEDGE_EVENTS_HORIZON_DAYS` | How many days ahead the events scan looks for upcoming facts | `30` |
 | `MIMIR_CONTEXT_DB_PATH` | Override the conversation-history database path | `/tmp/mimir/context.db` |
+| `MIMIR_CONTEXT_COMPACTION_ENABLED` | Enable background session compaction (LLM summarisation of old turns) | `true` or `false` |
+| `MIMIR_CONTEXT_COMPACTION_MAX_TURNS` | Older complete turns beyond this many are summarised and removed (clamped to one below `MIMIR_CONTEXT_MAX_TURNS` if set equal or higher) | `15` |
 | `MIMIR_KNOWLEDGE_DB_PATH` | Override the knowledge-graph database path | `/tmp/mimir/knowledge.db` |
 | `MIMIR_JOBS_DB_PATH` | Override the job-queue database path | `/tmp/mimir/jobs.db` |
 | `MIMIR_GEOCODER_ENABLED` | Enable or disable geocoding entirely | `true` or `false` |
@@ -184,6 +186,7 @@ These settings are reloaded when the config file changes or a `SIGHUP` signal is
 - Context max tokens (`context.max_tokens`), max turns (`context.max_turns`)
 - Agent name (`agent.name`), proactivity (`agent.proactivity`), verbose reasoning (`agent.verbose_reasoning`)
 - LLM max tokens (`llm.max_tokens`), temperature (`llm.temperature`)
+- Context compaction (`context.compaction.enabled`, `context.compaction.max_turns`) — the synchronous compact-before-trim path reads the live values; the background `session.compaction` hook is registered at daemon startup, so its window and enablement change only after a restart
 
 These settings are **not reloaded** (they require a restart):
 

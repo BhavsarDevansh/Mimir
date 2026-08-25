@@ -225,6 +225,21 @@ async fn resolve_chat_state(
             .await
             .map_err(error::context_error)?;
 
+        // PR #505 review: the compaction hook is idle-gated, so a burst of
+        // turns can reach the hard ceiling before it runs; compact
+        // synchronously so the turns the trim is about to delete are
+        // summarised into sessions.summary first.
+        if cfg.context.compaction.enabled {
+            state
+                .compact_before_hard_trim(
+                    session_id,
+                    cfg.context.max_turns,
+                    cfg.context.compaction.max_turns,
+                )
+                .await
+                .map_err(error::context_error)?;
+        }
+
         state
             .context_manager
             .trim_to_budget(session_id, cfg.context.max_tokens, cfg.context.max_turns)

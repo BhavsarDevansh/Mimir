@@ -412,6 +412,10 @@ async fn handle_history(
 
     *session_id = Some(sid);
 
+    if let Some(summary) = &resp.summary {
+        println!("\nEarlier context: {}", summary);
+    }
+
     for msg in resp.messages {
         if msg.role == "system" {
             continue;

@@ -93,6 +93,27 @@ pub struct ContextConfig {
     pub max_tokens: Option<u32>,
     pub max_turns: u16,
     pub db_path: Option<PathBuf>,
+    pub compaction: ContextCompactionConfig,
+}
+
+/// Background session-compaction settings (issue #279).
+///
+/// When enabled, the `session.compaction` hook summarises the oldest
+/// complete turns beyond `max_turns` via the LLM, stores the summary on the
+/// session, and deletes the summarised messages — so trimming never silently
+/// discards context. Keep `max_turns` below [`ContextConfig::max_turns`] so
+/// compaction summarises turns before the synchronous trim removes them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ContextCompactionConfig {
+    /// Master switch for the background compaction hook.
+    pub enabled: bool,
+    /// Number of most recent complete turns to keep; older complete turns
+    /// are summarised and removed. `Config::normalise` clamps this strictly
+    /// below `context.max_turns` after TOML and environment overrides are
+    /// applied, so the compaction window can never equal or exceed the trim
+    /// window (PR #505 review).
+    pub max_turns: u16,
 }
 
 /// Personality subsystem settings.
@@ -361,6 +382,18 @@ impl Default for ContextConfig {
             max_tokens: None,
             max_turns: 20,
             db_path: paths::default_db_path().ok(),
+            compaction: ContextCompactionConfig::default(),
+        }
+    }
+}
+
+impl Default for ContextCompactionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            // Below the default `context.max_turns` (20) so compaction runs
+            // ahead of the synchronous trim (issue #279).
+            max_turns: 15,
         }
     }
 }
@@ -452,6 +485,8 @@ mod tests {
         assert_eq!(config.context.max_tokens, None);
         assert_eq!(config.context.max_turns, 20);
         assert_eq!(config.context.db_path, paths::default_db_path().ok());
+        assert!(config.context.compaction.enabled);
+        assert_eq!(config.context.compaction.max_turns, 15);
         assert_eq!(config.server.bind_addr, "127.0.0.1:8080");
         assert_eq!(config.server.socket_path, None);
     }

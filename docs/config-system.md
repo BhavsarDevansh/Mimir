@@ -174,6 +174,10 @@ The daemon opens three SQLite databases. Each path defaults to the shared Mimir 
 
 When a path is unset the daemon falls back to the corresponding `paths::*_db_path()` resolver. Knowledge-graph backups (`<knowledge_db_path parent>/backups`) are written alongside the knowledge DB so an overridden `knowledge.db_path` keeps backups in the same isolated directory.
 
+## Conversation Context
+
+The `[context]` section controls conversation windowing: `max_turns` is the synchronous hard ceiling on retained turns and `max_tokens` the optional token budget (both enforced by `ContextManager::trim_to_budget`). The nested `[context.compaction]` section (`enabled`, `max_turns`, env `MIMIR_CONTEXT_COMPACTION_ENABLED` / `MIMIR_CONTEXT_COMPACTION_MAX_TURNS`) drives the idle-gated `session.compaction` hook, which summarises the oldest complete turns into `sessions.summary` and advances `compacted_at` before they are removed — see `docs/context-manager.md` (issue #279). `Config::normalise` clamps `compaction.max_turns` to one below `context.max_turns` when it equals or exceeds the hard ceiling (after TOML and environment overrides, on load and reload), and the chat request paths compact synchronously before the hard turn-cap trim deletes turns, so the hard `max_turns` trim never drops turns without a summary (PR #505 review). Reload applies the normalised compaction settings to the live config — the synchronous compact-before-trim path reads them per request — but the background `session.compaction` hook is registered at daemon startup, so its window and enablement change only after a restart.
+
 ## Extending the Configuration
 
 1. Add the new field to the appropriate struct (`LlmConfig`, `AgentConfig`, or `MemoryConfig`).

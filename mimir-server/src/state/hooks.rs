@@ -157,3 +157,59 @@ impl HookHandler for ChatLearningHandler {
         }
     }
 }
+
+/// Handler for the `session.compaction` hook (issue #279): summarises the
+/// oldest complete turns beyond the configured window, stores the summary on
+/// the session, and deletes the summarised messages.
+pub struct SessionCompactionHandler {
+    context: Arc<mimir_core::context::ContextManager>,
+    llm: Arc<dyn LlmBackend>,
+    max_turns: u16,
+}
+
+impl SessionCompactionHandler {
+    pub fn new(
+        context: Arc<mimir_core::context::ContextManager>,
+        llm: Arc<dyn LlmBackend>,
+        max_turns: u16,
+    ) -> Self {
+        Self {
+            context,
+            llm,
+            max_turns,
+        }
+    }
+}
+
+#[async_trait]
+impl HookHandler for SessionCompactionHandler {
+    async fn run(&self, payload: Arc<dyn Any + Send + Sync>, _ctx: HookContext) -> HookOutcome {
+        let Ok(turns) = payload.downcast::<Vec<ConversationTurn>>() else {
+            warn!("session.compaction hook: unexpected payload type; dropping instance");
+            return HookOutcome::TerminalFailure;
+        };
+        let Some(session_id) = turns.first().map(|turn| turn.session_id) else {
+            warn!("session.compaction hook: empty turn payload; dropping instance");
+            return HookOutcome::TerminalFailure;
+        };
+        let compactor = mimir_core::context::SessionCompactor::new(
+            Arc::clone(&self.context),
+            Arc::clone(&self.llm),
+            self.max_turns,
+        );
+        match compactor.compact_session(session_id).await {
+            Ok(_) => HookOutcome::Success,
+            Err(mimir_core::context::ContextError::SessionNotFound(_)) => {
+                // The session was deleted between the trigger and the run;
+                // retrying cannot succeed.
+                HookOutcome::TerminalFailure
+            }
+            Err(error) => {
+                warn!("session.compaction hook failed: {error}");
+                // Transient DB failures are re-enqueued with backoff so a
+                // burst of turns is not left unsummarised.
+                HookOutcome::RetryableFailure
+            }
+        }
+    }
+}

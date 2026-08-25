@@ -26,6 +26,7 @@ pub async fn sessions_handler(
             created_at: s.created_at.to_rfc3339(),
             updated_at: s.updated_at.to_rfc3339(),
             preview: s.preview,
+            summary: s.summary,
         })
         .collect();
 
@@ -46,8 +47,19 @@ pub async fn session_messages_handler(
             _ => error::context_error(e),
         })?;
 
+    let summary = state
+        .context_manager
+        .load_session(session_id)
+        .await
+        .map_err(|e| match e {
+            mimir_core::context::ContextError::SessionNotFound(_) => error::session_not_found(),
+            _ => error::context_error(e),
+        })?
+        .summary;
+
     let result = SessionMessagesResponse {
         session_id,
+        summary,
         messages: messages
             .into_iter()
             .map(|m| ChatMessage {

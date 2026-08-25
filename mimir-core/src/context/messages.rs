@@ -128,7 +128,12 @@ impl ContextManager {
 
     /// Export messages as OpenAI-compatible `Vec<Message>`.
     ///
-    /// The earliest system message (if any) is placed first; all remaining
+    /// The earliest system message (if any) is placed first; the session's
+    /// compaction summary (issue #279), if any, follows as a clearly labelled
+    /// user-role context block so the model still sees the gist of compacted
+    /// turns without promoting potentially user-influenced text to
+    /// system-authority context (PR #505 review); all remaining messages
+    /// follow.
     pub async fn export_messages(&self, session_id: i64) -> Result<Vec<Message>, ContextError> {
         self.ensure_session_exists(session_id).await?;
 
@@ -162,6 +167,19 @@ impl ContextManager {
             result.push(Message {
                 role: sys.role.clone(),
                 content: sys.content.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+        let summary: Option<String> =
+            sqlx::query_scalar("SELECT summary FROM sessions WHERE id = ?1")
+                .bind(session_id)
+                .fetch_one(self.pool.as_ref())
+                .await?;
+        if let Some(summary) = summary.filter(|s| !s.trim().is_empty()) {
+            result.push(Message {
+                role: "user".to_string(),
+                content: format!("Earlier conversation summary:\n{summary}"),
                 tool_calls: None,
                 tool_call_id: None,
             });

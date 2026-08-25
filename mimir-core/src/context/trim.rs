@@ -2,7 +2,52 @@
 
 use crate::context::ContextError;
 use crate::context::ContextManager;
+use chrono::{DateTime, Utc};
 use tracing::{debug, warn};
+
+/// A non-system conversation message row used by the turn-boundary helpers.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(super) struct TurnRow {
+    pub id: i64,
+    pub role: String,
+    pub content: String,
+    pub tool_calls: Option<String>,
+    pub tool_call_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub token_count: Option<i64>,
+}
+
+/// Split non-system rows into complete turns.
+///
+/// A turn spans from a user message up to (but excluding) the next user
+/// message, so assistant tool-call messages and tool results belong to their
+/// turn (issue #388). Rows before the first user message cannot be
+/// attributed and are skipped. The final turn is excluded as in-flight when
+/// the last row is not a plain assistant message (no reply yet, or an
+/// assistant tool-call message still awaiting the client's tool results) —
+/// it must never be trimmed or compacted before the LLM call (issue #388,
+/// PR #466 review). The system prompt is filtered out by callers.
+pub(super) fn split_complete_turns(rows: &[TurnRow]) -> Vec<Vec<&TurnRow>> {
+    let mut turns: Vec<Vec<&TurnRow>> = Vec::new();
+    let mut current: Vec<&TurnRow> = Vec::new();
+    for row in rows {
+        if row.role == "user" {
+            if !current.is_empty() {
+                turns.push(std::mem::take(&mut current));
+            }
+            current.push(row);
+        } else if !current.is_empty() {
+            current.push(row);
+        }
+    }
+    let final_turn_complete = rows
+        .last()
+        .is_some_and(|row| row.role == "assistant" && row.tool_calls.is_none());
+    if final_turn_complete && !current.is_empty() {
+        turns.push(current);
+    }
+    turns
+}
 
 impl ContextManager {
     pub async fn trim_to_budget(
@@ -16,12 +61,7 @@ impl ContextManager {
         // ---- Hard turn cap ----
         // A turn is delimited by user messages, so the user-message count is
         // the turn count even when tool messages are interleaved (issue #388).
-        let turn_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND role = 'user'",
-        )
-        .bind(session_id)
-        .fetch_one(self.pool.as_ref())
-        .await?;
+        let turn_count = self.user_turn_count(session_id).await?;
 
         if turn_count > (max_turns as i64) {
             let excess = turn_count - (max_turns as i64);
@@ -84,19 +124,35 @@ impl ContextManager {
         Ok(())
     }
 
+    /// Count the session's user messages.
+    ///
+    /// A turn is delimited by user messages, so this is the turn count even
+    /// when tool messages are interleaved (issue #388). The in-flight final
+    /// turn's user message is included, matching the hard-turn-cap check in
+    /// [`Self::trim_to_budget`].
+    pub async fn user_turn_count(&self, session_id: i64) -> Result<i64, ContextError> {
+        self.ensure_session_exists(session_id).await?;
+        sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND role = 'user'")
+            .bind(session_id)
+            .fetch_one(self.pool.as_ref())
+            .await
+            .map_err(ContextError::from)
+    }
+
     /// Count how many oldest turns must be removed to fit `max_tokens`.
     ///
-    /// A turn is every message from a user message up to (but excluding) the
-    /// next user message, so assistant tool-call messages and tool results
-    /// are attributed to their turn (issue #388).
+    /// Turn boundaries and the in-flight final-turn rule come from
+    /// [`split_complete_turns`]; only the per-turn token sums are computed
+    /// here (issue #388).
     async fn count_turns_to_remove_by_tokens(
         &self,
         session_id: i64,
         max_tokens: u32,
     ) -> Result<i64, ContextError> {
-        let rows: Vec<(i64, String, Option<String>, Option<i64>)> = sqlx::query_as(
+        let rows: Vec<TurnRow> = sqlx::query_as(
             r#"
-            SELECT id, role, tool_calls, token_count FROM messages
+            SELECT id, role, content, tool_calls, tool_call_id, created_at, token_count
+            FROM messages
             WHERE session_id = ?1 AND role != 'system'
             ORDER BY created_at ASC
             "#,
@@ -105,42 +161,15 @@ impl ContextManager {
         .fetch_all(self.pool.as_ref())
         .await?;
 
-        let total: i64 = rows.iter().filter_map(|(_, _, _, t)| *t).sum();
+        let total: i64 = rows.iter().filter_map(|row| row.token_count).sum();
         if total <= (max_tokens as i64) {
             return Ok(0);
         }
 
-        let mut turn_tokens: Vec<i64> = Vec::new();
-        let mut current = 0i64;
-        let mut in_turn = false;
-        for (_id, role, _tool_calls, tokens) in &rows {
-            if role == "user" {
-                if in_turn {
-                    turn_tokens.push(current);
-                }
-                current = 0;
-                in_turn = true;
-            }
-            if in_turn {
-                current += tokens.unwrap_or(0);
-            }
-        }
-        if in_turn {
-            turn_tokens.push(current);
-        }
-
-        // The final turn is the one being answered right now: its user
-        // message (or trailing tool results) was just persisted and must
-        // never be trimmed away before the LLM call. A turn is complete only
-        // when the final row is a plain assistant message — an assistant
-        // tool-call message still awaits the client's tool results, so it is
-        // in-flight too (issue #388, PR #466 review).
-        let final_turn_complete = rows
-            .last()
-            .is_some_and(|(_, role, tool_calls, _)| role == "assistant" && tool_calls.is_none());
-        if !final_turn_complete {
-            turn_tokens.pop();
-        }
+        let turn_tokens: Vec<i64> = split_complete_turns(&rows)
+            .iter()
+            .map(|turn| turn.iter().filter_map(|row| row.token_count).sum())
+            .collect();
 
         let mut running = 0i64;
         for (index, tokens) in turn_tokens.iter().enumerate() {
@@ -163,9 +192,10 @@ impl ContextManager {
             return Ok(());
         }
 
-        let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+        let rows: Vec<TurnRow> = sqlx::query_as(
             r#"
-            SELECT id, role, tool_calls FROM messages
+            SELECT id, role, content, tool_calls, tool_call_id, created_at, token_count
+            FROM messages
             WHERE session_id = ?1 AND role != 'system'
             ORDER BY created_at ASC
             "#,
@@ -174,53 +204,45 @@ impl ContextManager {
         .fetch_all(self.pool.as_ref())
         .await?;
 
-        let mut ids_to_delete = Vec::new();
-        let mut turns_found = 0i64;
-        let mut turns_removed = 0i64;
-        let mut in_turn = false;
-        // Index of the final turn's user message in `rows`; the final turn
-        // is in-flight when the session's last message is not a plain
-        // assistant reply (no reply yet, or an assistant tool-call message
-        // still awaiting the client's tool results).
-        let final_turn_start = rows
-            .iter()
-            .rposition(|(_, role, _)| role == "user")
-            .unwrap_or(usize::MAX);
-        let protect_final_turn = rows
-            .last()
-            .is_some_and(|(_, role, tool_calls)| role != "assistant" || tool_calls.is_some());
+        let turns = split_complete_turns(&rows);
+        let to_delete: Vec<&TurnRow> = turns.iter().take(n as usize).flatten().copied().collect();
+        let turns_removed = to_delete.iter().filter(|row| row.role == "user").count();
 
-        for (index, (id, role, _)) in rows.iter().enumerate() {
-            if role == "user" {
-                if turns_found >= n {
-                    break;
-                }
-                turns_found += 1;
-                in_turn = true;
-            }
-            if in_turn {
-                // The final turn is the in-flight turn being answered right
-                // now (its user message or tool results were just persisted);
-                // it has no assistant reply yet, so it must never be deleted
-                // mid-request (issue #388).
-                if protect_final_turn && index >= final_turn_start {
-                    break;
-                }
-                ids_to_delete.push(*id);
-                if role == "user" {
-                    turns_removed += 1;
-                }
-            }
-        }
-
-        for id in ids_to_delete {
-            sqlx::query("DELETE FROM messages WHERE id = ?1")
-                .bind(id)
-                .execute(self.pool.as_ref())
-                .await?;
-        }
+        let ids: Vec<i64> = to_delete.iter().map(|row| row.id).collect();
+        delete_message_ids(&*self.pool, session_id, &ids).await?;
 
         debug!(session_id = %session_id, turns_removed, "deleted oldest turns");
         Ok(())
     }
+}
+
+/// Delete message rows by id, scoped to the owning session.
+///
+/// Ids that no longer exist (already removed by a concurrent compaction or
+/// trim) are no-ops, so re-applying a stale batch is safe. The `session_id`
+/// guard means a stale batch can never delete rows from a different session.
+/// The delete is a single session-scoped `DELETE ... WHERE id IN (...)` so a
+/// compaction batch commits atomically with the summary write when the
+/// caller passes a transaction executor (PR #505 review).
+pub(super) async fn delete_message_ids<'e, E>(
+    executor: E,
+    session_id: i64,
+    ids: &[i64],
+) -> Result<(), ContextError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut builder = sqlx::QueryBuilder::new("DELETE FROM messages WHERE session_id = ");
+    builder.push_bind(session_id);
+    builder.push(" AND id IN (");
+    let mut separated = builder.separated(", ");
+    for id in ids {
+        separated.push_bind(id);
+    }
+    separated.push_unseparated(")");
+    builder.build().execute(executor).await?;
+    Ok(())
 }

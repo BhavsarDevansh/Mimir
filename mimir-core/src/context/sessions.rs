@@ -169,7 +169,8 @@ impl ContextManager {
                     WHERE session_id = s.id AND role = 'user'
                     ORDER BY created_at DESC
                     LIMIT 1
-                ) as preview
+                ) as preview,
+                s.summary
             FROM sessions s
             ORDER BY s.updated_at DESC
             "#,
@@ -184,18 +185,19 @@ impl ContextManager {
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
                 preview: row.try_get("preview").ok(),
+                summary: row.try_get::<Option<String>, _>("summary").ok().flatten(),
             });
         }
         Ok(result)
     }
 
-    /// Return all messages for a session from the last compaction point (or all
-    pub(super) async fn load_session(&self, session_id: i64) -> Result<Session, ContextError> {
+    /// Load a session's metadata, including its compaction summary.
+    pub async fn load_session(&self, session_id: i64) -> Result<Session, ContextError> {
         let row = sqlx::query(
             r#"
             SELECT id, system_prompt, created_at, updated_at,
                    cumulative_prompt_tokens, cumulative_completion_tokens,
-                   compacted_at
+                   compacted_at, summary
             FROM sessions
             WHERE id = ?1
             "#,
@@ -213,6 +215,10 @@ impl ContextManager {
             cumulative_completion_tokens: row.try_get::<i64, _>("cumulative_completion_tokens")?
                 as u64,
             compacted_at: row.try_get("compacted_at").ok(),
+            // Explicit `Option<String>`: an inferred `String` decode would
+            // turn a NULL summary into `Some("")` (SQLite decodes a NULL
+            // text value as an empty string).
+            summary: row.try_get::<Option<String>, _>("summary").ok().flatten(),
         })
     }
 }

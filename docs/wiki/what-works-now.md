@@ -131,7 +131,7 @@ All client commands talk to the daemon over HTTP except `mimir personality list`
 | Session persistence | ✅ Works | Native sessions use numeric `session_id` values (the OpenAI-compatible surface uses a string `user` key as its conversation key instead); history is SQLite-backed and survives restarts. |
 | Session resume | ✅ Works | `/history` in `mimir chat` lists sessions and replays messages from the last compaction point. No auto-resume or `--session` flag ([#280](https://github.com/BhavsarDevansh/Mimir/issues/280)). |
 | Context trimming | ✅ Works | Drops oldest complete turns (including their tool messages) to `max_tokens` / `max_turns` config limits; system prompt preserved, and the in-flight turn being answered is never trimmed away. |
-| Session compaction | ❌ Not implemented | The `sessions.summary` / `compacted_at` columns and the read path exist, but nothing ever writes them — long sessions are trimmed, never summarised ([#279](https://github.com/BhavsarDevansh/Mimir/issues/279)). |
+| Session compaction | ✅ Works | The `session.compaction` hook summarises old turns via the LLM, stores the summary on the session, and deletes the summarised messages; a burst that reaches the hard `max_turns` ceiling is compacted synchronously before trimming, so the hard turn-cap trim never drops turns without a summary (token-budget trimming is not preceded by compaction), and the summary is shown on `/history` resume and fed back into the model's context ([#279](https://github.com/BhavsarDevansh/Mimir/issues/279), [PR #505](https://github.com/BhavsarDevansh/Mimir/pull/505)). |
 | Conversation history search (FTS5) | ✅ Works | `search_conversation_history` built-in tool with BM25 ranking and snippet extraction. |
 | Incognito mode | ✅ Works | `--incognito` skips all persistence; write-capable tools are blocked so no facts are stored ([#155](https://github.com/BhavsarDevansh/Mimir/issues/155)). |
 | Model override | ✅ Works | `-m gpt-4o-mini` creates a per-request cached override client. |
@@ -328,7 +328,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 
 | Work item | Issue |
 |-----------|-------|
-| Session compaction (LLM summarisation of old turns) | [#279](https://github.com/BhavsarDevansh/Mimir/issues/279) |
 | `mimir chat` session persistence / auto-resume | [#280](https://github.com/BhavsarDevansh/Mimir/issues/280) |
 | Automatic Librarian fallback when `remember` is not called | [#156](https://github.com/BhavsarDevansh/Mimir/issues/156) — superseded by the hooks engine ([#386](https://github.com/BhavsarDevansh/Mimir/issues/386)) |
 | Generated skills: reflection loop, utility scoring, pruning | [#20](https://github.com/BhavsarDevansh/Mimir/issues/20) |
@@ -376,7 +375,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 
 | Issue | Impact | Workaround |
 |-------|--------|------------|
-| [#279](https://github.com/BhavsarDevansh/Mimir/issues/279) — no session compaction | Very long conversations are trimmed, not summarised | Keep `max_turns` modest (10–30) |
 | [#280](https://github.com/BhavsarDevansh/Mimir/issues/280) — chat session not persisted | Restarting `mimir chat` starts a new session | Use `/history` to resume |
 | [#156](https://github.com/BhavsarDevansh/Mimir/issues/156) — no Librarian fallback | Superseded by hook-driven learning ([#386](https://github.com/BhavsarDevansh/Mimir/issues/386)) | None needed |
 | [#20](https://github.com/BhavsarDevansh/Mimir/issues/20) — no generated skills | Skills are built-in or hand-written only | Write your own skill files |

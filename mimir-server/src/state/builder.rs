@@ -19,7 +19,9 @@ use mimir_core::{
     tools::ToolRegistry,
 };
 
-use super::hooks::{ChatLearningHandler, CondensationHandler, merge_chat_turns};
+use super::hooks::{
+    ChatLearningHandler, CondensationHandler, SessionCompactionHandler, merge_chat_turns,
+};
 use super::identity::seed_identity_facts;
 use super::{AppState, warn_err};
 
@@ -476,13 +478,15 @@ pub(super) fn optimization_resource_limits(
 }
 
 /// Initialise the hooks engine (issue #386) and register the daemon's hooks:
-/// `remember.chat` (debounced per-session turn extraction), `memory.condensation`
+/// `remember.chat` (debounced per-session turn extraction), `session.compaction`
+/// (per-session old-turn summarisation, issue #279), `memory.condensation`
 /// (global last-wins fact-dirty condensation), and `connector_item.remember`
 /// (per-item FIFO connector extraction).
 pub(super) async fn init_hook_engine(
     cfg: &Config,
     job_queue: &Arc<JobQueue>,
     llm: &Arc<dyn LlmBackend>,
+    context_manager: &Arc<ContextManager>,
     kg: &Arc<mimir_knowledge::KnowledgeGraph>,
     user_entity_id: Option<i32>,
 ) -> anyhow::Result<(Arc<HookEngine>, tokio::sync::watch::Receiver<bool>)> {
@@ -540,6 +544,38 @@ pub(super) async fn init_hook_engine(
             )),
         })
         .await?;
+
+    // session.compaction (issue #279): per-session last-wins, idle-gated
+    // like the other LLM hooks. The handler re-reads the session from the
+    // context DB, so the trigger payload is only used to identify the
+    // session. Retries cover transient DB failures; a permanently missing
+    // session is terminal.
+    if cfg.context.compaction.enabled {
+        engine
+            .register(Hook {
+                id: "session.compaction".to_string(),
+                trigger: TriggerKind::TurnCompleted,
+                key_scope: KeyScope::PerKey,
+                policy: QueuePolicy::SingularLastWins {
+                    debounce: std::time::Duration::from_secs(cfg.scheduler.debounce_seconds as u64),
+                },
+                gate: Gate::IdleGated {
+                    cooldown: std::time::Duration::from_secs(cfg.scheduler.cooldown_seconds as u64),
+                },
+                retry: RetryPolicy {
+                    max_attempts: 3,
+                    backoff: std::time::Duration::from_secs(30),
+                },
+                max_pending: None,
+                merge: None,
+                handler: Arc::new(SessionCompactionHandler::new(
+                    Arc::clone(context_manager),
+                    Arc::clone(llm),
+                    cfg.context.compaction.max_turns,
+                )),
+            })
+            .await?;
+    }
 
     // connector_item.remember: every staged item enqueues individually
     // (FIFO), ungated — LLM calls route through the shared worker pool's
@@ -807,6 +843,7 @@ impl AppState {
             &cfg,
             &job_queue,
             &llm_client,
+            &context_manager,
             &kg_init.knowledge_graph,
             kg_init.user_entity_id,
         )

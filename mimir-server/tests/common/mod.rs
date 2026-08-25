@@ -277,6 +277,10 @@ pub async fn test_state_with_config(
 
     (state, temp)
 }
+
+// Shared fixture: not every test binary uses this helper, so dead-code
+// analysis is relaxed.
+#[allow(dead_code)]
 pub async fn test_state(llm: Arc<dyn LlmBackend>) -> (Arc<AppState>, tempfile::TempDir) {
     test_state_with_config(llm, Config::default()).await
 }

@@ -89,6 +89,16 @@ async fn test_incognito_turn_enqueues_no_hook_and_writes_no_facts() {
         0,
         "incognito turns must never enqueue the chat hook"
     );
+    // Issue #279: incognito must also never enqueue session compaction — the
+    // turn is not persisted, so there is nothing to summarise.
+    assert_eq!(
+        state
+            .hook_engine
+            .pending_depth_for("session.compaction")
+            .await,
+        0,
+        "incognito turns must never enqueue the compaction hook"
+    );
     // Give any (incorrect) hook dispatch time to run to completion: the mock
     // is configured with an extraction response, so a fired hook would have
     // persisted the `Devansh` fact by the time the queue drains.
@@ -96,6 +106,11 @@ async fn test_incognito_turn_enqueues_no_hook_and_writes_no_facts() {
     assert!(
         !has_favourite_colour(&state).await,
         "incognito turn must not persist facts (the user entity itself is created at daemon start)"
+    );
+    let sessions = state.context_manager.list_sessions().await.unwrap();
+    assert!(
+        sessions.is_empty(),
+        "incognito turns must not create or compact any session"
     );
 }
 

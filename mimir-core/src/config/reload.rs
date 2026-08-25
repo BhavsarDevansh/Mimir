@@ -71,6 +71,7 @@ impl ReloadableConfig {
 
         // Apply environment overrides to the new config before comparing sensitive fields.
         new_config.apply_env_overrides();
+        new_config.normalise();
 
         let current = self.inner.read().await.clone();
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.149.1] — 2026-08-25
+
+### Fix: Session compaction review fixes (PR #505)
+
+- The hard `max_turns` trim is now compaction-aware: both chat request paths run the compaction synchronously before `trim_to_budget` deletes turns, so a burst that outruns the idle-gated `session.compaction` hook still writes the removed turns to `sessions.summary` (no silent drops at the ceiling). The compaction window is also validated after TOML/environment overrides — an equal or inverted `context.compaction.max_turns` is clamped to one below `context.max_turns` on load and reload.
+- The compaction summary is exported as a clearly labelled `user`-role context block instead of a `system`-role one, so potentially user-influenced summary text can never override the trusted system prompt. Transcript rendering escapes carriage returns and newlines in message content so an embedded line break cannot forge a false `role:` entry for the summarisation model.
+- `apply_compaction` now deletes the summarised messages and writes the summary in one transaction (a single session-scoped `DELETE ... WHERE id IN (...)`, built with `QueryBuilder`), so a failure part-way can no longer leave a new summary alongside summarised messages that still exist.
+- Added compaction tests covering turns with assistant tool calls plus tool results (preserved in the batch) and sessions ending on an in-flight assistant tool-call turn (kept out of the batch), plus an integration test that sends 25 turns during the idle cooldown and asserts the trimmed turns appear in `sessions.summary`.
+- Docs updated: `docs/context-manager.md`, `docs/hooks.md`, `docs/config-system.md`, `docs/wiki/context-manager.md`, `docs/wiki/configuration.md`, `docs/wiki/what-works-now.md`, `Mimir-Implementation-Context.md`.
+- Version bumped 0.149.0 → 0.149.1 (patch — review fixes).
+
 ## [0.149.0] — 2026-08-25
 
 ### Feature: Chat session compaction actually runs (issue #279)

@@ -32,20 +32,20 @@ If token usage is known and the total exceeds `max_tokens`, Mimir drops oldest c
 
 ## Compaction: Summarise Instead of Silently Dropping
 
-Before old turns are dropped, a background `session.compaction` job summarises them with the LLM, stores the summary on the session, and only then deletes the messages.  The summary is:
+A background `session.compaction` job summarises old turns with the LLM, stores the summary on the session, and only then deletes the messages.  The job runs while you are idle, so a long uninterrupted burst of messages can still reach the hard `max_turns` ceiling before the job runs; in that case the request path compacts the excess turns synchronously before dropping them, so the oldest turns are still summarised into the session (your reply simply waits for that one extra summarisation call).  The summary is:
 
 - Shown when you resume the conversation (`/history` in `mimir chat` prints `Earlier context: …`).
 - Included in the session list API response.
 - Fed back into the conversation context for future turns, so the model still knows the gist of what was discussed.
 
-Compaction runs while you are idle (it never steals LLM capacity from your chat) and only when a session grows beyond the compaction window:
+Compaction normally runs while you are idle (it never steals LLM capacity from your chat) and only when a session grows beyond the compaction window; the synchronous run at the hard ceiling is the one exception, because dropping turns without a summary would lose context:
 
 | Setting | Default | What it does |
 |---------|---------|-------------|
 | `context.compaction.enabled` | `true` | Master switch for background compaction. |
 | `context.compaction.max_turns` | 15 | Keep the most recent this-many complete turns; older complete turns are summarised and removed. |
 
-Keep `compaction.max_turns` below `context.max_turns` so compaction summarises turns before the hard trim would drop them. If the LLM call fails, the raw transcript of the compacted turns is kept instead (capped at 2000 characters), so a provider hiccup degrades the summary to a verbatim transcript rather than silently dropping the turns. Incognito sessions are never compacted because nothing is persisted.
+Keep `compaction.max_turns` below `context.max_turns` so compaction summarises turns before the hard trim would drop them; if the two are equal or inverted, Mimir clamps the compaction window to one turn below the hard ceiling at startup (and on config reload), so the guarantee holds even with custom settings. If the LLM call fails, the raw transcript of the compacted turns is kept instead (capped at 2000 characters), so a provider hiccup degrades the summary to a verbatim transcript rather than silently dropping the turns. Incognito sessions are never compacted because nothing is persisted.
 
 ## Configuring Limits
 

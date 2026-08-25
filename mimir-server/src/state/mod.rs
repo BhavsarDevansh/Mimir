@@ -14,9 +14,15 @@ use dashmap::DashMap;
 
 use mimir_connectors::{ConnectorRegistry, ConnectorSupervisor};
 use mimir_core::{
-    agents::AgentRuntime, config::ReloadableConfig, context::ContextManager, hooks::HookEngine,
-    job_queue::JobQueue, llm::LlmBackend, personality::PersonalityCache,
-    scheduler::BackgroundScheduler, tools::ToolRegistry,
+    agents::AgentRuntime,
+    config::ReloadableConfig,
+    context::{ContextError, ContextManager, SessionCompactor},
+    hooks::HookEngine,
+    job_queue::JobQueue,
+    llm::LlmBackend,
+    personality::PersonalityCache,
+    scheduler::BackgroundScheduler,
+    tools::ToolRegistry,
 };
 
 mod builder;
@@ -108,6 +114,36 @@ impl AppState {
             .store(Utc::now().timestamp() as u64, Ordering::Relaxed);
         self.scheduler.notify_user_activity();
         self.hook_engine.notify_user_activity();
+    }
+
+    /// Compact synchronously before the hard trim deletes turns (PR #505
+    /// review).
+    ///
+    /// The `session.compaction` hook is debounced and idle-gated, so a long
+    /// uninterrupted burst of messages can reach the `context.max_turns`
+    /// ceiling before the hook ever runs. When compaction is enabled and the
+    /// session is already over the hard ceiling, run the compaction inline so
+    /// the turns the trim is about to delete are summarised into
+    /// `sessions.summary` first. Below the ceiling this is a no-op (no LLM
+    /// call), leaving the idle-gated hook to handle the window between
+    /// `compaction.max_turns` and `max_turns`.
+    pub async fn compact_before_hard_trim(
+        &self,
+        session_id: i64,
+        max_turns: u16,
+        compaction_max_turns: u16,
+    ) -> Result<(), ContextError> {
+        if self.context_manager.user_turn_count(session_id).await? <= max_turns as i64 {
+            return Ok(());
+        }
+        SessionCompactor::new(
+            Arc::clone(&self.context_manager),
+            Arc::clone(&self.llm_client),
+            compaction_max_turns,
+        )
+        .compact_session(session_id)
+        .await?;
+        Ok(())
     }
 
     /// Return (or create) the semaphore for a given session id.

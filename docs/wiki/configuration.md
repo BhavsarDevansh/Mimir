@@ -116,7 +116,7 @@ mimir ask "Hello"
 | `MIMIR_KNOWLEDGE_EVENTS_HORIZON_DAYS` | How many days ahead the events scan looks for upcoming facts | `30` |
 | `MIMIR_CONTEXT_DB_PATH` | Override the conversation-history database path | `/tmp/mimir/context.db` |
 | `MIMIR_CONTEXT_COMPACTION_ENABLED` | Enable background session compaction (LLM summarisation of old turns) | `true` or `false` |
-| `MIMIR_CONTEXT_COMPACTION_MAX_TURNS` | Older complete turns beyond this many are summarised and removed | `15` |
+| `MIMIR_CONTEXT_COMPACTION_MAX_TURNS` | Older complete turns beyond this many are summarised and removed (clamped to one below `MIMIR_CONTEXT_MAX_TURNS` if set equal or higher) | `15` |
 | `MIMIR_KNOWLEDGE_DB_PATH` | Override the knowledge-graph database path | `/tmp/mimir/knowledge.db` |
 | `MIMIR_JOBS_DB_PATH` | Override the job-queue database path | `/tmp/mimir/jobs.db` |
 | `MIMIR_GEOCODER_ENABLED` | Enable or disable geocoding entirely | `true` or `false` |

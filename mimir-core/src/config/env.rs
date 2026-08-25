@@ -153,4 +153,27 @@ impl Config {
     pub(crate) fn apply_env_overrides(&mut self) {
         self.apply_env_overrides_with(|key| std::env::var(key).ok());
     }
+
+    /// Normalise cross-field invariants after file and environment overrides
+    /// are applied (PR #505 review).
+    ///
+    /// When compaction is enabled, `context.compaction.max_turns` must stay
+    /// strictly below `context.max_turns`; otherwise the synchronous trim can
+    /// delete turns that the compaction window never summarised. Invalid
+    /// values are clamped to `context.max_turns - 1` (saturating) so startup
+    /// keeps working while the documented invariant holds.
+    pub(super) fn normalise(&mut self) {
+        if !self.context.compaction.enabled {
+            return;
+        }
+        if self.context.compaction.max_turns >= self.context.max_turns {
+            let clamped = self.context.max_turns.saturating_sub(1);
+            tracing::warn!(
+                from = self.context.compaction.max_turns,
+                to = clamped,
+                "context.compaction.max_turns must stay below context.max_turns; clamping so compaction summarises turns before the hard trim"
+            );
+            self.context.compaction.max_turns = clamped;
+        }
+    }
 }

@@ -397,6 +397,19 @@ async fn resolve_openai_turn(
                 .add_tool_message(session_id, tool_call_id, content)
                 .await?;
         }
+        // PR #505 review: the compaction hook is idle-gated, so a burst of
+        // turns can reach the hard ceiling before it runs; compact
+        // synchronously so the turns the trim is about to delete are
+        // summarised into sessions.summary first.
+        if cfg.context.compaction.enabled {
+            state
+                .compact_before_hard_trim(
+                    session_id,
+                    cfg.context.max_turns,
+                    cfg.context.compaction.max_turns,
+                )
+                .await?;
+        }
         state
             .context_manager
             .trim_to_budget(session_id, cfg.context.max_tokens, cfg.context.max_turns)

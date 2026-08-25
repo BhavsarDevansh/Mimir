@@ -751,3 +751,56 @@ fn test_env_override_secrets_backend_invalid_ignored() {
     });
     assert_eq!(config.secrets.backend, SecretsBackend::File);
 }
+
+#[test]
+fn test_normalise_clamps_compaction_window_at_or_above_trim_window() {
+    // PR #505 review: compaction.max_turns must stay strictly below
+    // context.max_turns or the synchronous trim can delete turns the
+    // compaction window never summarised.
+    let mut config = Config::default();
+    config.context.max_turns = 20;
+    config.context.compaction.enabled = true;
+    config.context.compaction.max_turns = 20;
+    config.normalise();
+    assert_eq!(config.context.compaction.max_turns, 19);
+
+    config.context.compaction.max_turns = 25;
+    config.normalise();
+    assert_eq!(config.context.compaction.max_turns, 19);
+}
+
+#[test]
+fn test_normalise_keeps_valid_compaction_window() {
+    let mut config = Config::default();
+    config.context.max_turns = 20;
+    config.context.compaction.enabled = true;
+    config.context.compaction.max_turns = 15;
+    config.normalise();
+    assert_eq!(config.context.compaction.max_turns, 15);
+}
+
+#[test]
+fn test_normalise_ignores_disabled_compaction() {
+    let mut config = Config::default();
+    config.context.max_turns = 20;
+    config.context.compaction.enabled = false;
+    config.context.compaction.max_turns = 30;
+    config.normalise();
+    assert_eq!(config.context.compaction.max_turns, 30);
+}
+
+#[test]
+fn test_normalise_runs_after_env_overrides() {
+    // Env overrides are applied before normalisation, so a burst of turns
+    // set via MIMIR_CONTEXT_COMPACTION_MAX_TURNS still cannot equal or exceed
+    // the trim window.
+    let mut config = Config::default();
+    config.apply_env_overrides_with(|key| match key {
+        "MIMIR_CONTEXT_MAX_TURNS" => Some("20".to_string()),
+        "MIMIR_CONTEXT_COMPACTION_MAX_TURNS" => Some("20".to_string()),
+        _ => None,
+    });
+    config.normalise();
+    assert_eq!(config.context.max_turns, 20);
+    assert_eq!(config.context.compaction.max_turns, 19);
+}

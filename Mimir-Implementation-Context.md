@@ -209,7 +209,7 @@ The daemon exposes `GET /v1/models` and `POST /v1/chat/completions` (blocking + 
 ### Context Manager
 - SQLite-backed session and message storage
 - Sliding window of recent conversation
-- Token-aware trimming (removes oldest complete turns first) and background session compaction (issue #279): the idle-gated `session.compaction` hook summarises the oldest complete turns beyond `context.compaction.max_turns` via the LLM, stores the summary in `sessions.summary`, advances `compacted_at`, deletes the summarised messages, and the summary is re-injected into the conversation context and the `/history` resume flow.
+- Token-aware trimming (removes oldest complete turns first) and background session compaction (issue #279): the idle-gated `session.compaction` hook summarises the oldest complete turns beyond `context.compaction.max_turns` via the LLM, stores the summary in `sessions.summary`, advances `compacted_at`, and deletes the summarised messages atomically with the summary write; the chat request paths also compact synchronously before the hard `max_turns` trim drops turns (PR #505 review), and the summary is re-injected into the conversation context as clearly labelled non-system context and surfaced by the `/history` resume flow.
 - Cumulative token usage tracking per session
 
 ---

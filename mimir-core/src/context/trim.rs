@@ -61,12 +61,7 @@ impl ContextManager {
         // ---- Hard turn cap ----
         // A turn is delimited by user messages, so the user-message count is
         // the turn count even when tool messages are interleaved (issue #388).
-        let turn_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND role = 'user'",
-        )
-        .bind(session_id)
-        .fetch_one(self.pool.as_ref())
-        .await?;
+        let turn_count = self.user_turn_count(session_id).await?;
 
         if turn_count > (max_turns as i64) {
             let excess = turn_count - (max_turns as i64);
@@ -127,6 +122,21 @@ impl ContextManager {
         }
 
         Ok(())
+    }
+
+    /// Count the session's user messages.
+    ///
+    /// A turn is delimited by user messages, so this is the turn count even
+    /// when tool messages are interleaved (issue #388). The in-flight final
+    /// turn's user message is included, matching the hard-turn-cap check in
+    /// [`Self::trim_to_budget`].
+    pub async fn user_turn_count(&self, session_id: i64) -> Result<i64, ContextError> {
+        self.ensure_session_exists(session_id).await?;
+        sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND role = 'user'")
+            .bind(session_id)
+            .fetch_one(self.pool.as_ref())
+            .await
+            .map_err(ContextError::from)
     }
 
     /// Count how many oldest turns must be removed to fit `max_tokens`.
@@ -199,7 +209,7 @@ impl ContextManager {
         let turns_removed = to_delete.iter().filter(|row| row.role == "user").count();
 
         let ids: Vec<i64> = to_delete.iter().map(|row| row.id).collect();
-        delete_message_ids(self, session_id, &ids).await?;
+        delete_message_ids(&*self.pool, session_id, &ids).await?;
 
         debug!(session_id = %session_id, turns_removed, "deleted oldest turns");
         Ok(())
@@ -211,17 +221,28 @@ impl ContextManager {
 /// Ids that no longer exist (already removed by a concurrent compaction or
 /// trim) are no-ops, so re-applying a stale batch is safe. The `session_id`
 /// guard means a stale batch can never delete rows from a different session.
-pub(super) async fn delete_message_ids(
-    context: &ContextManager,
+/// The delete is a single session-scoped `DELETE ... WHERE id IN (...)` so a
+/// compaction batch commits atomically with the summary write when the
+/// caller passes a transaction executor (PR #505 review).
+pub(super) async fn delete_message_ids<'e, E>(
+    executor: E,
     session_id: i64,
     ids: &[i64],
-) -> Result<(), ContextError> {
-    for id in ids {
-        sqlx::query("DELETE FROM messages WHERE id = ?1 AND session_id = ?2")
-            .bind(id)
-            .bind(session_id)
-            .execute(context.pool.as_ref())
-            .await?;
+) -> Result<(), ContextError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    if ids.is_empty() {
+        return Ok(());
     }
+    let mut builder = sqlx::QueryBuilder::new("DELETE FROM messages WHERE session_id = ");
+    builder.push_bind(session_id);
+    builder.push(" AND id IN (");
+    let mut separated = builder.separated(", ");
+    for id in ids {
+        separated.push_bind(id);
+    }
+    separated.push_unseparated(")");
+    builder.build().execute(executor).await?;
     Ok(())
 }

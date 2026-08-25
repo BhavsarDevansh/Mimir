@@ -108,6 +108,12 @@ impl ContextManager {
     ) -> Result<(), ContextError> {
         self.ensure_session_exists(session_id).await?;
 
+        // The summary write and the message deletes commit atomically: a
+        // failure part-way can never leave a new `summary`/`compacted_at`
+        // alongside some summarised messages that still exist (PR #505
+        // review).
+        let mut tx = self.pool.begin().await?;
+
         sqlx::query(
             r#"
             UPDATE sessions
@@ -119,10 +125,11 @@ impl ContextManager {
         .bind(compacted_at)
         .bind(Utc::now())
         .bind(session_id)
-        .execute(self.pool.as_ref())
+        .execute(&mut *tx)
         .await?;
 
-        delete_message_ids(self, session_id, delete_ids).await?;
+        delete_message_ids(&mut *tx, session_id, delete_ids).await?;
+        tx.commit().await?;
 
         info!(
             session_id,

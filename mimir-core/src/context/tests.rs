@@ -1152,6 +1152,101 @@ async fn compaction_candidates_protects_in_flight_final_turn() {
 }
 
 #[tokio::test]
+async fn compaction_candidates_preserves_tool_round_trip_in_selected_turn() {
+    // PR #505 review: a compacted turn that contains an assistant tool-call
+    // message plus its tool result must travel with `tool_calls` and
+    // `tool_call_id` intact, mirroring the trim-path shape in
+    // `trim_removes_whole_turns_including_tool_messages`.
+    use crate::llm::types::{FunctionCall, ToolCall};
+
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+
+    // Turn 1: user -> assistant(tool_calls) -> tool -> assistant.
+    mgr.add_user_message(sid, "u0").await.unwrap();
+    let calls = vec![ToolCall {
+        index: 0,
+        id: "c1".to_string(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: "t".to_string(),
+            arguments: "{}".to_string(),
+        },
+    }];
+    mgr.add_assistant_tool_calls_message(sid, "", &calls)
+        .await
+        .unwrap();
+    mgr.add_tool_message(sid, "c1", "r1").await.unwrap();
+    mgr.add_assistant_message(sid, "a0").await.unwrap();
+    // Turns 2..17: plain user -> assistant.
+    for i in 1..=16 {
+        mgr.add_user_message(sid, format!("u{i}")).await.unwrap();
+        mgr.add_assistant_message(sid, format!("a{i}"))
+            .await
+            .unwrap();
+    }
+
+    let candidates = mgr.compaction_candidates(sid, 15).await.unwrap().unwrap();
+    assert_eq!(candidates.compacted_turns, 2);
+    assert_eq!(candidates.turn_messages.len(), 6);
+    assert_eq!(candidates.delete_ids.len(), 6);
+
+    let round_trip: Vec<crate::llm::types::ToolCall> =
+        serde_json::from_str(candidates.turn_messages[1].tool_calls.as_deref().unwrap()).unwrap();
+    assert_eq!(round_trip, calls, "tool_calls must survive into the batch");
+    assert_eq!(
+        candidates.turn_messages[2].tool_call_id.as_deref(),
+        Some("c1"),
+        "the tool result must stay attached to its turn"
+    );
+    assert_eq!(candidates.turn_messages[0].role, "user");
+    assert_eq!(candidates.turn_messages[0].content, "u0");
+    assert_eq!(candidates.turn_messages[5].role, "assistant");
+    assert_eq!(candidates.turn_messages[5].content, "a1");
+}
+
+#[tokio::test]
+async fn compaction_candidates_excludes_final_tool_call_turn() {
+    // PR #505 review: a session ending on an assistant tool-call message
+    // is still in flight (awaiting the client's tool results) and must stay
+    // out of the compaction batch.
+    use crate::llm::types::{FunctionCall, ToolCall};
+
+    let (mgr, _dir) = setup_manager().await;
+    let sid = mgr.create_session("sys").await.unwrap();
+    seed_turns(&mgr, sid, 16).await;
+    mgr.add_user_message(sid, "u16").await.unwrap();
+    mgr.add_assistant_tool_calls_message(
+        sid,
+        "",
+        &[ToolCall {
+            index: 0,
+            id: "c1".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "t".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }],
+    )
+    .await
+    .unwrap();
+
+    let candidates = mgr.compaction_candidates(sid, 15).await.unwrap().unwrap();
+    assert_eq!(candidates.compacted_turns, 1);
+    assert_eq!(candidates.turn_messages.len(), 2);
+    assert_eq!(candidates.turn_messages[0].content, "u0");
+    assert_eq!(candidates.turn_messages[1].content, "a0");
+    assert!(
+        candidates
+            .turn_messages
+            .iter()
+            .all(|m| m.content != "u16" && m.tool_call_id.is_none()),
+        "the in-flight tool-call turn must not be compacted"
+    );
+}
+
+#[tokio::test]
 async fn apply_compaction_writes_summary_and_compacted_at_and_deletes() {
     let (mgr, _dir) = setup_manager().await;
     let sid = mgr.create_session("sys").await.unwrap();
@@ -1213,7 +1308,10 @@ async fn export_messages_injects_compaction_summary() {
 
     let msgs = mgr.export_messages(sid).await.unwrap();
     assert_eq!(msgs[0].role, "system", "system prompt stays first");
-    assert_eq!(msgs[1].role, "system", "summary is injected as context");
+    assert_eq!(
+        msgs[1].role, "user",
+        "summary is injected as clearly labelled non-system context (PR #505 review)"
+    );
     assert!(msgs[1].content.contains("Earlier conversation summary"));
     assert!(msgs[1].content.contains("Earlier: holiday plans"));
     assert_eq!(msgs[2].role, "user");

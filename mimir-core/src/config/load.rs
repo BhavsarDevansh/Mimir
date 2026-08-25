@@ -34,6 +34,7 @@ impl Config {
         }
 
         config.apply_env_overrides();
+        config.normalise();
         Ok(config)
     }
 

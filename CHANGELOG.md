@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.146.0] — 2026-08-25
+
+### Feature: Outlook wizard supports single-tenant Microsoft app registrations (issue #467)
+
+- The Microsoft account-type question now offers a fourth option — work or school accounts in this organisational directory only — for single-tenant Entra app registrations ("Accounts in this organizational directory only"). `/organizations/` is only valid for multitenant organisational apps, so the wizard collects the tenant ID or domain and builds tenant-specific authorize/token endpoints (`https://login.microsoftonline.com/<tenant>/oauth2/v2.0/authorize` and `/token`).
+- The Outlook preset's OAuth client-ID help and the connector docs now describe the tenant-specific authority, and the docs consistently state the registration requirements: the Supported account types must match the picked audience and the loopback redirect URI `http://localhost/callback` must be registered.
+- Tests: `wizard_email_outlook_single_tenant_uses_tenant_specific_endpoints` added, and `wizard_email_outlook_work_account_preselects_organizations_endpoints` clarified as the multitenant organisational path.
+- Docs: `docs/cli.md`, `docs/email-connector.md`, `docs/wiki/cli-commands.md`, `docs/wiki/connectors.md`, and `docs/wiki/email-connector.md` updated for the single-tenant option and consistent registration guidance.
+- Version bumped 0.145.0 → 0.146.0 (minor — new single-tenant wizard option).
+
 ## [0.145.0] — 2026-08-25
 
 ### Feature: Outlook wizard preset picks the Microsoft login endpoint by account type (issue #467)

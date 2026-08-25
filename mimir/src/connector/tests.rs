@@ -1590,8 +1590,9 @@ fn wizard_email_outlook_personal_account_preselects_consumers_endpoints() {
 
 #[test]
 fn wizard_email_outlook_work_account_preselects_organizations_endpoints() {
-    // Issue #467: an org-only registration ("My organization only") must use
-    // the `/organizations/` tenant — `/common/` fails for it too.
+    // Issue #467: a multitenant org registration ("Accounts in any
+    // organizational directory") must use the `/organizations/` tenant —
+    // `/common/` fails for it too.
     let entry = email_catalog_entry();
     let prompts = ScriptedPrompt::new(vec![
         ScriptedAnswer::Select(1),            // Outlook / Office 365
@@ -1623,6 +1624,56 @@ fn wizard_email_outlook_work_account_preselects_organizations_endpoints() {
     assert_eq!(
         config["auth"]["token_endpoint"],
         "https://login.microsoftonline.com/organizations/oauth2/v2.0/token"
+    );
+    assert_eq!(config["auth"]["client_id"], "client-ms-123");
+    assert_eq!(
+        config["auth"]["scopes"],
+        serde_json::json!([
+            "https://outlook.office.com/IMAP.AccessAsUser.All",
+            "offline_access"
+        ])
+    );
+}
+
+#[test]
+fn wizard_email_outlook_single_tenant_uses_tenant_specific_endpoints() {
+    // Issue #467: a single-tenant registration ("Accounts in this
+    // organizational directory only") cannot use `/organizations/` — the
+    // wizard collects the tenant ID or domain and builds both endpoints
+    // from it.
+    let entry = email_catalog_entry();
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(1),                        // Outlook / Office 365
+        ScriptedAnswer::Select(3),                        // Microsoft account type — single-tenant
+        ScriptedAnswer::Input("contoso.com".to_string()), // tenant ID or domain
+        ScriptedAnswer::Input(String::new()),             // host → default
+        ScriptedAnswer::Input(String::new()),             // port → default
+        ScriptedAnswer::Input(String::new()),             // mailbox → default
+        ScriptedAnswer::Input("me@contoso.com".to_string()),
+        ScriptedAnswer::Select(0),            // Sync mode — push
+        ScriptedAnswer::Select(0),            // Existing mailbox content — import
+        ScriptedAnswer::Input(String::new()), // auth_uri → default
+        ScriptedAnswer::Input(String::new()), // token endpoint → default
+        ScriptedAnswer::Input("client-ms-123".to_string()),
+        ScriptedAnswer::Password(String::new()), // client secret → none
+        ScriptedAnswer::Input(String::new()),    // scopes → default
+    ]);
+    let (config, credential) =
+        build_wizard_config(&entry, "single-tenant-outlook", &prompts).unwrap();
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::OAuth {
+            client_secret: None
+        }
+    ));
+    assert_eq!(config["auth"]["kind"], "oauth");
+    assert_eq!(
+        config["auth"]["auth_uri"],
+        "https://login.microsoftonline.com/contoso.com/oauth2/v2.0/authorize"
+    );
+    assert_eq!(
+        config["auth"]["token_endpoint"],
+        "https://login.microsoftonline.com/contoso.com/oauth2/v2.0/token"
     );
     assert_eq!(config["auth"]["client_id"], "client-ms-123");
     assert_eq!(

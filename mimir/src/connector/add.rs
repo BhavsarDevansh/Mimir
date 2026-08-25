@@ -37,7 +37,7 @@ pub async fn handle_connector_add(
     token: Option<String>,
     token_stdin: bool,
     json: bool,
-    base_url: &str,
+    transport: &crate::transport::DaemonTransport,
 ) {
     handle_connector_add_with_opener(
         connector_type,
@@ -51,7 +51,7 @@ pub async fn handle_connector_add(
         token,
         token_stdin,
         json,
-        base_url,
+        transport,
         &open_in_browser,
     )
     .await;
@@ -73,10 +73,10 @@ pub(crate) async fn handle_connector_add_with_opener(
     token: Option<String>,
     token_stdin: bool,
     json: bool,
-    base_url: &str,
+    transport: &crate::transport::DaemonTransport,
     opener: &(dyn Fn(&str) + Send + Sync),
 ) {
-    let client = make_client(base_url);
+    let client = make_client(transport);
     // Legacy alias (issue #400): the IMAP mail type is the generic `email`
     // type; `gmail` still registers the same connector for pre-rename
     // scripts, and the default slug/display name follow the normalized type.

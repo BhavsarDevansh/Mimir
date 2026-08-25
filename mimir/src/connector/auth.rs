@@ -32,7 +32,7 @@ pub async fn handle_connector_auth(
     token: Option<String>,
     token_stdin: bool,
     json: bool,
-    base_url: &str,
+    transport: &crate::transport::DaemonTransport,
 ) {
     handle_connector_auth_with_opener(
         slug,
@@ -43,7 +43,7 @@ pub async fn handle_connector_auth(
         token,
         token_stdin,
         json,
-        base_url,
+        transport,
         &open_in_browser,
     )
     .await;
@@ -61,10 +61,10 @@ pub(crate) async fn handle_connector_auth_with_opener(
     token: Option<String>,
     token_stdin: bool,
     json: bool,
-    base_url: &str,
+    transport: &crate::transport::DaemonTransport,
     opener: &(dyn Fn(&str) + Send + Sync),
 ) {
-    let client = make_client(base_url);
+    let client = make_client(transport);
     let conn = resolve_connector(&client, &slug).await;
     let merged =
         merge_config(&config, config_json.as_deref()).unwrap_or_else(|e| exit_with_error(e));

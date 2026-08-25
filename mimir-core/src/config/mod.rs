@@ -11,6 +11,7 @@ mod env;
 mod init;
 mod load;
 mod reload;
+mod socket;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -19,6 +20,7 @@ pub use base_url::{
     DEFAULT_CLI_BASE_URL, base_url_from_bind_addr, configured_bind_addr, resolve_base_url,
 };
 pub use reload::{ConfigReloadError, ReloadableConfig};
+pub use socket::{configured_socket_path, effective_socket_path};
 pub use types::{
     AgentConfig, Config, ConfigError, ContextConfig, EventsConfig, GeocoderConfig, IdentityConfig,
     InitResult, KnowledgeConfig, KnowledgeOptimizationConfig, LlmConfig, MemoryConfig,

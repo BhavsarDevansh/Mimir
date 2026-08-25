@@ -15,9 +15,9 @@ pub async fn handle_connector_act(
     payload: Option<String>,
     json_file: Option<std::path::PathBuf>,
     json: bool,
-    base_url: &str,
+    transport: &crate::transport::DaemonTransport,
 ) {
-    let client = make_client(base_url);
+    let client = make_client(transport);
     let conn = resolve_connector(&client, &slug).await;
     let payload = parse_action_payload(payload, json_file);
 

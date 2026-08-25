@@ -18,9 +18,9 @@ pub async fn handle_connector_sync(
     full: bool,
     since: Option<String>,
     json: bool,
-    base_url: &str,
+    transport: &crate::transport::DaemonTransport,
 ) {
-    let client = make_client(base_url);
+    let client = make_client(transport);
     let conn = resolve_connector(&client, &slug).await;
     let since_secs = since.map(|raw| parse_duration(&raw).unwrap_or_else(|e| exit_with_error(e)));
     let request = mimir_api_types::SyncConnectorRequest {

@@ -69,7 +69,7 @@ mimir (single binary)
 ### Transport
 
 The daemon exposes its API over two transports simultaneously:
-1. **Unix domain socket** (`~/.local/share/mimir/mimir.sock`) — planned for local CLI (see #25; not yet implemented)
+1. **Unix domain socket** (`~/.local/share/mimir/mimir.sock`) — primary transport for local CLI (issue #25)
 2. **TCP** (`127.0.0.1:8080`) — fallback for remote clients, web UI, and Windows
 
 ### API Authentication
@@ -168,11 +168,11 @@ All state lives in the daemon process. CLI commands are thin HTTP clients:
 - `mimir chat` → interactive SSE client
 - `mimir status` → `GET /status`
 - `mimir memory` → `GET /memory`
-- `mimir stop` → `POST /shutdown` (or SIGTERM via systemd)
+- `mimir stop` → `POST /stop` (or SIGTERM via systemd)
 
 ### Unix Domain Socket Transport
 
-The daemon will listen on both a Unix domain socket and a TCP socket once UDS is implemented (see #25). Currently, only TCP localhost (`127.0.0.1:8080`) is active. The CLI will prefer the Unix socket (faster, more secure, instant daemon detection) and fall back to TCP (for remote clients, web UI, Windows) when UDS is available.
+Implemented in issue #25: the daemon serves the same Axum router on both a Unix domain socket and a TCP socket. On Unix the socket is enabled by default at `<data_dir>/mimir.sock` (override with `server.socket_path` or `MIMIR_SERVER_SOCKET_PATH`; `~` is expanded); the socket file is chmod'ed `0600`, a stale file from a crashed daemon is removed before binding, and the file is removed on graceful shutdown. Both listeners share one `LocalPeer` connect-info type so the loopback guard and `/stop` attribution work identically on either transport (Unix peers are always local; TCP peers must be loopback). The CLI resolves its transport per invocation: `MIMIR_BASE_URL` wins (remote daemon), then the Unix socket (env → config → default), then TCP. Daemon detection is instant on Unix — a connection attempt on the socket succeeds only while the daemon is listening, so a stale file left by a crash is detected as down. The `mimir-client` UDS constructors use reqwest 0.13's native `unix_socket` connector (no `hyperlocal` dependency). Windows is TCP-only. See `docs/uds-transport.md`.
 
 ### systemd Integration
 

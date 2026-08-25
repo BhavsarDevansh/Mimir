@@ -12,10 +12,9 @@ async fn test_stop_returns_ok() {
             authed_request()
                 .method("POST")
                 .uri("/stop")
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(
+                    std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                )))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -35,10 +34,9 @@ async fn test_stop_rejects_non_loopback() {
             authed_request()
                 .method("POST")
                 .uri("/stop")
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [192, 168, 1, 1],
-                    0,
-                ))))
+                .extension(axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(
+                    std::net::SocketAddr::from(([192, 168, 1, 1], 0)),
+                )))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -67,10 +65,9 @@ async fn test_stop_handler_fires_shutdown_trigger() {
             authed_request()
                 .method("POST")
                 .uri("/stop")
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(
+                    std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                )))
                 .body(Body::empty())
                 .unwrap(),
         )

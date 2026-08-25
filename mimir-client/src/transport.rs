@@ -1,6 +1,14 @@
 use crate::MimirClient;
 use crate::error::ClientError;
 
+/// Base URL used by Unix-socket clients.
+///
+/// The host is never contacted: with `unix_socket` set, reqwest connects to
+/// the socket path directly and skips DNS entirely, so the URL only needs to
+/// be a valid hierarchical `http://` URL for request-path building.
+#[cfg(unix)]
+const UDS_BASE_URL: &str = "http://localhost";
+
 impl MimirClient {
     /// Default connect timeout (10s) used by [`Self::new`] and [`Self::with_token`].
     pub const DEFAULT_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -41,8 +49,40 @@ impl MimirClient {
         timeout: std::time::Duration,
     ) -> Result<Self, ClientError> {
         let base_url = Self::normalize_base_url(base_url.into())?;
-        let client = Self::build_client(connect_timeout, timeout, None)?;
+        let client = Self::build_client(connect_timeout, timeout, None, None)?;
         Ok(Self { base_url, client })
+    }
+
+    /// Create a new client that talks to the daemon over a Unix domain
+    /// socket (issue #25) using the default connect (10s) and total (120s)
+    /// timeouts. A failure to build the underlying `reqwest::Client` panics,
+    /// mirroring [`Self::new`].
+    #[cfg(unix)]
+    pub fn new_uds(socket_path: impl AsRef<std::path::Path>) -> Self {
+        Self::try_new_uds(
+            socket_path,
+            Self::DEFAULT_CONNECT_TIMEOUT,
+            Self::DEFAULT_TOTAL_TIMEOUT,
+        )
+        .expect("default reqwest client must build")
+    }
+
+    /// Create a new Unix-socket client with explicit timeouts, returning a
+    /// [`ClientError`] instead of panicking when the HTTP client cannot be
+    /// built. `connect_timeout` bounds the connection-establishment phase and
+    /// `timeout` bounds an entire request.
+    #[cfg(unix)]
+    pub fn try_new_uds(
+        socket_path: impl AsRef<std::path::Path>,
+        connect_timeout: std::time::Duration,
+        timeout: std::time::Duration,
+    ) -> Result<Self, ClientError> {
+        let client =
+            Self::build_client(connect_timeout, timeout, None, Some(socket_path.as_ref()))?;
+        Ok(Self {
+            base_url: UDS_BASE_URL.to_string(),
+            client,
+        })
     }
 
     /// Create a new client that authenticates every request with a bearer
@@ -74,8 +114,50 @@ impl MimirClient {
         timeout: std::time::Duration,
     ) -> Result<Self, ClientError> {
         let base_url = Self::normalize_base_url(base_url.into())?;
-        let client = Self::build_client(connect_timeout, timeout, Some(token.into().as_str()))?;
+        let client =
+            Self::build_client(connect_timeout, timeout, Some(token.into().as_str()), None)?;
         Ok(Self { base_url, client })
+    }
+
+    /// Create a new client that authenticates every request with a bearer
+    /// token and connects over a Unix domain socket (issue #25). Uses the
+    /// default connect (10s) and total (120s) timeouts; panics on client
+    /// build failure, mirroring [`Self::with_token`].
+    #[cfg(unix)]
+    pub fn with_token_uds(
+        socket_path: impl AsRef<std::path::Path>,
+        token: impl Into<String>,
+    ) -> Self {
+        Self::try_new_with_token_uds(
+            socket_path,
+            token,
+            Self::DEFAULT_CONNECT_TIMEOUT,
+            Self::DEFAULT_TOTAL_TIMEOUT,
+        )
+        .expect("default reqwest client must build")
+    }
+
+    /// Create a new token-bearing Unix-socket client with explicit timeouts,
+    /// returning a [`ClientError`] instead of panicking when the HTTP client
+    /// cannot be built. The token is attached as a default header so every
+    /// request — including SSE streams — carries it.
+    #[cfg(unix)]
+    pub fn try_new_with_token_uds(
+        socket_path: impl AsRef<std::path::Path>,
+        token: impl Into<String>,
+        connect_timeout: std::time::Duration,
+        timeout: std::time::Duration,
+    ) -> Result<Self, ClientError> {
+        let client = Self::build_client(
+            connect_timeout,
+            timeout,
+            Some(token.into().as_str()),
+            Some(socket_path.as_ref()),
+        )?;
+        Ok(Self {
+            base_url: UDS_BASE_URL.to_string(),
+            client,
+        })
     }
 
     /// Validate and normalise `base_url`: it must parse as a hierarchical base
@@ -100,10 +182,15 @@ impl MimirClient {
         connect_timeout: std::time::Duration,
         timeout: std::time::Duration,
         auth_token: Option<&str>,
+        #[cfg(unix)] unix_socket: Option<&std::path::Path>,
     ) -> Result<reqwest::Client, ClientError> {
         let mut builder = reqwest::Client::builder()
             .connect_timeout(connect_timeout)
             .timeout(timeout);
+        #[cfg(unix)]
+        if let Some(path) = unix_socket {
+            builder = builder.unix_socket(path);
+        }
         if let Some(token) = auth_token {
             let value = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
                 .map_err(|e| ClientError::Connection(format!("invalid API token: {e}")))?;
@@ -340,5 +427,33 @@ mod tests {
             client.url("chat/stream"),
             "http://127.0.0.1:8080/chat/stream"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn try_new_with_token_uds_builds_socket_client() {
+        // Issue #25: the Unix-socket constructor must build a client whose
+        // request paths resolve against the UDS base URL (the host is never
+        // contacted — the socket path replaces the connection entirely).
+        let client = MimirClient::try_new_with_token_uds(
+            "/tmp/mimir-test.sock",
+            "secret-token",
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30),
+        )
+        .expect("UDS client should build");
+        assert_eq!(client.base_url, UDS_BASE_URL);
+        assert_eq!(client.url("health"), "http://localhost/health");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn try_new_uds_builds_tokenless_client() {
+        let client = MimirClient::try_new_uds(
+            "/tmp/mimir-test.sock",
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30),
+        );
+        assert!(client.is_ok());
     }
 }

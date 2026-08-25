@@ -1,11 +1,12 @@
 //! Shutdown coordination: trigger sources, OS signals, and bounded graceful drain.
 #![deny(unsafe_code)]
 
-use std::net::SocketAddr;
 use std::time::Duration;
 
 use axum::Router;
 use tracing::{info, warn};
+
+use crate::LocalPeer;
 
 /// The origin of a daemon shutdown request.
 ///
@@ -18,7 +19,7 @@ use tracing::{info, warn};
 #[derive(Debug)]
 pub enum ShutdownSource {
     /// The `/stop` HTTP endpoint, invoked by a loopback peer (e.g. `mimir stop`).
-    StopEndpoint(SocketAddr),
+    StopEndpoint(LocalPeer),
     /// A `SIGTERM` delivered by the OS (e.g. `systemctl stop`, `kill`).
     Terminate,
     /// An interrupt signal (`Ctrl-C` / `SIGINT`).
@@ -154,7 +155,7 @@ pub async fn serve_with_bounded_drain(
     let server_fut = async move {
         axum::serve(
             listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
+            app.into_make_service_with_connect_info::<LocalPeer>(),
         )
         .with_graceful_shutdown(watch_shutdown(graceful_rx))
         .await
@@ -241,9 +242,10 @@ mod tests {
     /// refactor cannot silently drop attribution.
     #[test]
     fn test_shutdown_source_attribution_messages() {
-        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
-        let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+        let peer = crate::LocalPeer::Tcp(std::net::SocketAddr::new(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            8080,
+        ));
         let stop = ShutdownSource::StopEndpoint(peer).attribution();
         assert!(stop.contains("/stop endpoint"), "got: {stop}");
         assert!(stop.contains("127.0.0.1:8080"), "got: {stop}");
@@ -271,12 +273,18 @@ mod tests {
             "got: {untriggered}"
         );
     }
-    #[tokio::test]
-    async fn test_server_exits_after_stop() {
-        use mimir_core::config::ReloadableConfig;
-        use mimir_core::llm::{LlmBackend, MockLlmClient};
 
-        let temp = tempfile::tempdir().unwrap();
+    /// Build a server config pointing every database at `temp` (so tests
+    /// never touch the real `~/.local/share/mimir`), with an optional Unix
+    /// socket path. Returns the config and a free TCP address for the
+    /// listener.
+    async fn test_config(
+        temp: &tempfile::TempDir,
+        socket_path: Option<std::path::PathBuf>,
+    ) -> (
+        Arc<mimir_core::config::ReloadableConfig>,
+        std::net::SocketAddr,
+    ) {
         let db_path = temp.path().join("context.db");
         let kg_db_path = temp.path().join("knowledge.db");
         let jobs_db_path = temp.path().join("jobs.db");
@@ -293,15 +301,40 @@ mod tests {
         config.llm.max_tokens = Some(10);
         config.llm.temperature = 0.0;
         config.server.bind_addr = addr.to_string();
+        config.server.socket_path = socket_path.map(|p| p.display().to_string());
         config.memory.char_limit = 10_000;
         config.context.db_path = Some(db_path);
         config.knowledge.db_path = Some(kg_db_path);
         config.scheduler.db_path = Some(jobs_db_path);
 
-        let config = Arc::new(ReloadableConfig::new(
+        let config = Arc::new(mimir_core::config::ReloadableConfig::new(
             config,
             temp.path().join("config.toml"),
         ));
+        (config, addr)
+    }
+
+    /// Spawn the daemon with `config`, a known token, and a mock LLM, wrapped
+    /// in a [`ServerGuard`] so a panicking assertion aborts the server.
+    fn spawn_test_server(
+        config: Arc<mimir_core::config::ReloadableConfig>,
+        api_token: &str,
+    ) -> (ServerGuard, Arc<str>) {
+        use mimir_core::llm::{LlmBackend, MockLlmClient};
+
+        let api_token: Arc<str> = Arc::from(api_token);
+        let llm: Arc<dyn LlmBackend> = Arc::new(MockLlmClient::builder().build());
+        let token_for_server = api_token.clone();
+        let handle = ServerGuard::new(tokio::spawn(async move {
+            crate::server::start_server_with_llm(config, llm, token_for_server).await
+        }));
+        (handle, api_token)
+    }
+
+    #[tokio::test]
+    async fn test_server_exits_after_stop() {
+        let temp = tempfile::tempdir().unwrap();
+        let (config, addr) = test_config(&temp, Some(temp.path().join("mimir.sock"))).await;
 
         // Inject a known token and mock LLM so the test never reads or writes
         // the real `~/.local/share/mimir` token file or DBs: the daemon API is
@@ -309,12 +342,7 @@ mod tests {
         // unset knowledge/scheduler db paths to the real data dir, which a
         // leftover test daemon could then lock and hang parallel suites with
         // (issue #384).
-        let api_token: Arc<str> = Arc::from("test-api-token");
-        let llm: Arc<dyn LlmBackend> = Arc::new(MockLlmClient::builder().build());
-        let token_for_server = api_token.clone();
-        let handle = ServerGuard::new(tokio::spawn(async move {
-            crate::server::start_server_with_llm(config, llm, token_for_server).await
-        }));
+        let (handle, api_token) = spawn_test_server(config, "test-api-token");
 
         // Poll until the server accepts a TCP connection (up to 5 s).
         let poll_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -371,6 +399,142 @@ mod tests {
             "server task panicked or returned error"
         );
     }
+
+    #[tokio::test]
+    async fn test_server_serves_over_unix_socket_and_removes_socket_on_shutdown() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket_path = temp.path().join("mimir.sock");
+        let (config, _addr) = test_config(&temp, Some(socket_path.clone())).await;
+        let (handle, api_token) = spawn_test_server(config, "test-api-token");
+
+        let client = reqwest::Client::builder()
+            .unix_socket(socket_path.as_path())
+            .build()
+            .unwrap();
+
+        // Poll until the socket file exists and serves /health (up to 5 s).
+        let poll_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut ready = false;
+        while tokio::time::Instant::now() < poll_deadline {
+            if handle.is_finished() {
+                let result = handle.into_inner().await.unwrap();
+                panic!("server exited early: {:?}", result);
+            }
+            if socket_path.exists()
+                && client
+                    .get("http://localhost/health")
+                    .send()
+                    .await
+                    .is_ok_and(|r| r.status().is_success())
+            {
+                ready = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            ready,
+            "daemon did not serve over the Unix socket within 5 seconds"
+        );
+
+        // `/stop` over the socket must be accepted (loopback guard treats
+        // Unix peers as local) and trigger a graceful shutdown.
+        let res = client
+            .post("http://localhost/stop")
+            .bearer_auth(api_token.as_ref())
+            .send()
+            .await;
+        match res {
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                assert_eq!(
+                    status,
+                    reqwest::StatusCode::OK,
+                    "unexpected status: {} body: {}",
+                    status,
+                    body
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "Stop request got connection error (server shutting down): {}",
+                    e
+                );
+            }
+        }
+
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(5), handle.into_inner()).await;
+        assert!(
+            result.is_ok(),
+            "server did not exit within 5 seconds after /stop over the Unix socket"
+        );
+        assert!(
+            result.unwrap().is_ok(),
+            "server task panicked or returned error"
+        );
+        assert!(
+            !socket_path.exists(),
+            "socket file must be removed on graceful shutdown"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_server_removes_stale_socket_before_binding() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket_path = temp.path().join("stale.sock");
+        // Leave a stale socket file behind, as a crashed daemon would: a bound
+        // listener whose owner exited without removing the file.
+        let stale = tokio::net::UnixListener::bind(&socket_path).unwrap();
+        drop(stale);
+        assert!(socket_path.exists(), "stale socket file must exist");
+
+        let (config, _addr) = test_config(&temp, Some(socket_path.clone())).await;
+        let (handle, api_token) = spawn_test_server(config, "test-api-token");
+
+        let client = reqwest::Client::builder()
+            .unix_socket(socket_path.as_path())
+            .build()
+            .unwrap();
+        let poll_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut ready = false;
+        while tokio::time::Instant::now() < poll_deadline {
+            if handle.is_finished() {
+                let result = handle.into_inner().await.unwrap();
+                panic!("server exited early: {:?}", result);
+            }
+            if client
+                .get("http://localhost/health")
+                .send()
+                .await
+                .is_ok_and(|r| r.status().is_success())
+            {
+                ready = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            ready,
+            "daemon did not recover the stale socket and serve within 5 seconds"
+        );
+
+        // Tear the daemon down so the temp dir can be removed.
+        let res = client
+            .post("http://localhost/stop")
+            .bearer_auth(api_token.as_ref())
+            .send()
+            .await;
+        assert!(
+            res.is_ok() || handle.is_finished(),
+            "stop over the recovered socket should reach the daemon"
+        );
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(5), handle.into_inner()).await;
+        assert!(result.is_ok(), "server did not exit within 5 seconds");
+    }
+
     /// Regression: a shutdown trigger fired *before* a receiver subscribes
     /// (e.g. SIGTERM arriving in the gap between `spawn_os_signal_shutdown`
     /// and `shutdown_tx.subscribe()`) must not be missed. `changed()` only

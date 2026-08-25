@@ -36,8 +36,8 @@ fn strip_command_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
     }
 }
 
-pub async fn handle_chat(base_url: &str, opts: ChatOptions) {
-    let client = crate::cli_util::make_client(base_url);
+pub async fn handle_chat(transport: &crate::transport::DaemonTransport, opts: ChatOptions) {
+    let client = crate::cli_util::make_client(transport);
     let mut session_id: Option<i64> = None;
     let mut session = SessionState {
         model: opts.model,

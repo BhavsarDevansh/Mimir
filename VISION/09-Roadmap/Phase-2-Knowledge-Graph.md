@@ -163,7 +163,7 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 - Note: the originally planned one-time seed (parse legacy file → LLM classify → seed KG → rename `.bak`) and the `MemoryManager` thin-facade refactor never shipped — v0.37.0 deleted the file system outright instead, because memory already flowed through the KG. Those steps are obsolete rather than pending.
 
 ### 2.16 CLI Commands (`mimir kb ...`)
-- [ ] Commands talk to daemon via Unix socket/TCP (same pattern as `mimir ask`)
+- [x] Commands talk to daemon via Unix socket/TCP (same pattern as `mimir ask` — the transport layer from issue #25 covers every CLI command, `kb` included)
 - [ ] Daemon exposes new Axum routes for KG operations
 - [ ] Phase 2 commands:
   - `kb query "<entity>"` — all facts, colorized table, `--json`

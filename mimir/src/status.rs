@@ -1,7 +1,7 @@
 //! System status reporter. Displays config, LLM connectivity, and memory stats.
 
-pub async fn handle_status(base_url: &str) {
-    let client = crate::cli_util::make_client(base_url);
+pub async fn handle_status(transport: &crate::transport::DaemonTransport) {
+    let client = crate::cli_util::make_client(transport);
 
     match client.status().await {
         Ok(status) => {

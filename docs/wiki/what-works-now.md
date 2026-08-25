@@ -360,7 +360,7 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 | Work item | Issue |
 |-----------|-------|
 | HTTP API authentication / authorization | [#281](https://github.com/BhavsarDevansh/Mimir/issues/281) |
-| Unix domain socket transport | [#25](https://github.com/BhavsarDevansh/Mimir/issues/25) |
+| Unix domain socket transport (local CLI prefers the socket, TCP fallback) | [#25](https://github.com/BhavsarDevansh/Mimir/issues/25) |
 | macOS launchd auto-start | [#285](https://github.com/BhavsarDevansh/Mimir/issues/285) |
 
 ### Proactive Agent (Phase 5)
@@ -376,7 +376,6 @@ The phase-level roadmap lives in `VISION/09-Roadmap/`; this is the per-feature b
 
 | Issue | Impact | Workaround |
 |-------|--------|------------|
-| [#25](https://github.com/BhavsarDevansh/Mimir/issues/25) — Unix socket transport | TCP is the only transport | TCP on `127.0.0.1:8080` is secure for local use |
 | [#279](https://github.com/BhavsarDevansh/Mimir/issues/279) — no session compaction | Very long conversations are trimmed, not summarised | Keep `max_turns` modest (10–30) |
 | [#280](https://github.com/BhavsarDevansh/Mimir/issues/280) — chat session not persisted | Restarting `mimir chat` starts a new session | Use `/history` to resume |
 | [#156](https://github.com/BhavsarDevansh/Mimir/issues/156) — no Librarian fallback | Superseded by hook-driven learning ([#386](https://github.com/BhavsarDevansh/Mimir/issues/386)) | None needed |

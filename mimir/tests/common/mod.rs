@@ -119,6 +119,7 @@ impl TestDaemon {
         let context_db = data_dir.join("mimir").join("context.db");
         let kg_db = data_dir.join("mimir").join("knowledge.db");
         let jobs_db = data_dir.join("mimir").join("jobs.db");
+        let socket_path = data_dir.join("mimir").join("mimir.sock");
         let config_toml = format!(
             r#"
 [llm]
@@ -130,6 +131,7 @@ temperature = 0.0
 
 [server]
 bind_addr = "127.0.0.1:0"
+socket_path = "{socket_path}"
 
 [memory]
 char_limit = 10000
@@ -146,6 +148,7 @@ db_path = "{jobs_db}"
             context_db = context_db.display(),
             kg_db = kg_db.display(),
             jobs_db = jobs_db.display(),
+            socket_path = socket_path.display(),
         );
         std::fs::write(config_dir.join("mimir").join("config.toml"), config_toml).unwrap();
 
@@ -170,6 +173,7 @@ db_path = "{jobs_db}"
         config.llm.max_tokens = Some(10);
         config.llm.temperature = 0.0;
         config.server.bind_addr = format!("127.0.0.1:{port}");
+        config.server.socket_path = Some(socket_path.display().to_string());
         config.context.db_path = Some(context_db.clone());
         config.knowledge.db_path = Some(kg_db.clone());
         config.scheduler.db_path = Some(jobs_db.clone());

@@ -26,8 +26,8 @@ pub struct KbForgetInput {
     pub confirmation_phrase: Option<String>,
 }
 
-pub async fn handle_kb_forget(input: KbForgetInput, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_kb_forget(input: KbForgetInput, transport: &crate::transport::DaemonTransport) {
+    let client = make_client(transport);
     let req = ForgetRequest {
         fact_id: input.fact_id,
         predicate: input.predicate,
@@ -61,8 +61,12 @@ pub async fn handle_kb_forget(input: KbForgetInput, base_url: &str) {
 // kb restore
 // ------------------------------------------------------------------
 
-pub async fn handle_kb_restore(trash_id: Option<i32>, all: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_kb_restore(
+    trash_id: Option<i32>,
+    all: bool,
+    transport: &crate::transport::DaemonTransport,
+) {
+    let client = make_client(transport);
     let req = RestoreRequest { trash_id, all };
     match client.kb_restore(req).await {
         Ok(resp) => {
@@ -76,8 +80,14 @@ pub async fn handle_kb_restore(trash_id: Option<i32>, all: bool, base_url: &str)
 // kb trash
 // ------------------------------------------------------------------
 
-pub async fn handle_kb_trash(empty: bool, limit: u32, offset: u32, json: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_kb_trash(
+    empty: bool,
+    limit: u32,
+    offset: u32,
+    json: bool,
+    transport: &crate::transport::DaemonTransport,
+) {
+    let client = make_client(transport);
     if empty {
         match client.kb_trash_empty().await {
             Ok(()) => {
@@ -132,8 +142,13 @@ pub async fn handle_kb_trash(empty: bool, limit: u32, offset: u32, json: bool, b
 // kb optimization
 // ------------------------------------------------------------------
 
-pub async fn handle_kb_optimization(status: bool, run_now: bool, json: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_kb_optimization(
+    status: bool,
+    run_now: bool,
+    json: bool,
+    transport: &crate::transport::DaemonTransport,
+) {
+    let client = make_client(transport);
     if status {
         match client.kb_optimization_status().await {
             Ok(resp) => {
@@ -181,10 +196,13 @@ pub async fn handle_kb_optimization(status: bool, run_now: bool, json: bool, bas
 // kb category
 // ------------------------------------------------------------------
 
-pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url: &str) {
+pub async fn handle_kb_category(
+    command: crate::cli::CategoryCommands,
+    transport: &crate::transport::DaemonTransport,
+) {
     match command {
         crate::cli::CategoryCommands::List { parent } => {
-            let client = make_client(base_url);
+            let client = make_client(transport);
             match client.kb_categories(parent).await {
                 Ok(cats) => {
                     if cats.is_empty() {
@@ -219,7 +237,7 @@ pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url:
             }
         }
         crate::cli::CategoryCommands::Show { id } => {
-            let client = make_client(base_url);
+            let client = make_client(transport);
             match client.kb_category_show(id).await {
                 Ok(cat) => {
                     println!("ID:          {}", cat.id);
@@ -247,7 +265,7 @@ pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url:
             memory_weight,
             memory_bucket_id,
         } => {
-            let client = make_client(base_url);
+            let client = make_client(transport);
             match client
                 .kb_category_create(
                     id,
@@ -266,7 +284,7 @@ pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url:
             }
         }
         crate::cli::CategoryCommands::Delete { id } => {
-            let client = make_client(base_url);
+            let client = make_client(transport);
             match client.kb_category_delete(id).await {
                 Ok(()) => println!("Deleted category {}", id),
                 Err(e) => exit_with_error(format!("failed to delete category: {e}")),
@@ -280,8 +298,8 @@ pub async fn handle_kb_category(command: crate::cli::CategoryCommands, base_url:
 // ------------------------------------------------------------------
 
 /// List sensitive facts awaiting confirmation.
-pub async fn handle_kb_pending(json: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_kb_pending(json: bool, transport: &crate::transport::DaemonTransport) {
+    let client = make_client(transport);
     match client.kb_pending().await {
         Ok(resp) => {
             if json {
@@ -313,8 +331,12 @@ pub async fn handle_kb_pending(json: bool, base_url: &str) {
 }
 
 /// Confirm a pending sensitive fact.
-pub async fn handle_kb_confirm(fact_id: i32, json: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_kb_confirm(
+    fact_id: i32,
+    json: bool,
+    transport: &crate::transport::DaemonTransport,
+) {
+    let client = make_client(transport);
     match client.kb_confirm(fact_id).await {
         Ok(resp) => {
             if json {
@@ -341,8 +363,12 @@ pub async fn handle_kb_confirm(fact_id: i32, json: bool, base_url: &str) {
 }
 
 /// Reject a pending sensitive fact.
-pub async fn handle_kb_reject(fact_id: i32, reason: Option<String>, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_kb_reject(
+    fact_id: i32,
+    reason: Option<String>,
+    transport: &crate::transport::DaemonTransport,
+) {
+    let client = make_client(transport);
     match client.kb_reject(fact_id, reason.as_deref()).await {
         Ok(()) => println!("Rejected and deleted fact {}.", fact_id),
         Err(e) => exit_with_error(e),
@@ -374,14 +400,14 @@ pub(crate) struct ResetFlowDeps<'a> {
 /// Safety lives in the CLI (live counts, exact-phrase prompt, countdown);
 /// the daemon still enforces the phrase and creates a backup before the
 /// hard delete via the shared `kb forget --all` machinery (issue #69).
-pub async fn handle_kb_reset(base_url: &str) {
+pub async fn handle_kb_reset(transport: &crate::transport::DaemonTransport) {
     if !std::io::stdin().is_terminal() {
         exit_with_error(
             "kb reset needs an interactive terminal for its safety confirmation. \
              For a non-interactive full wipe use: mimir kb forget --all --confirmation-phrase \"DELETE EVERYTHING\"",
         );
     }
-    let client = make_client(base_url);
+    let client = make_client(transport);
     let deps = ResetFlowDeps {
         prompt: &InquirePrompt,
         countdown_seconds: 5,

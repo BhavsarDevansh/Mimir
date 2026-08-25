@@ -10,9 +10,9 @@ pub async fn handle_kb_query(
     predicate: Option<String>,
     min_confidence: Option<f32>,
     json: bool,
-    base_url: &str,
+    transport: &crate::transport::DaemonTransport,
 ) {
-    let client = make_client(base_url);
+    let client = make_client(transport);
     let req = FactQueryParams {
         entity,
         predicate,
@@ -64,8 +64,12 @@ pub async fn handle_kb_query(
 // kb show
 // ------------------------------------------------------------------
 
-pub async fn handle_kb_show(fact_id: i32, json: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_kb_show(
+    fact_id: i32,
+    json: bool,
+    transport: &crate::transport::DaemonTransport,
+) {
+    let client = make_client(transport);
     match client.kb_show(fact_id).await {
         Ok(resp) => {
             if json {
@@ -140,9 +144,9 @@ pub async fn handle_kb_edit(
     object: Option<String>,
     status: Option<String>,
     json: bool,
-    base_url: &str,
+    transport: &crate::transport::DaemonTransport,
 ) {
-    let client = make_client(base_url);
+    let client = make_client(transport);
     let req = FactEditRequest {
         confidence,
         valid_from,
@@ -181,9 +185,9 @@ pub async fn handle_kb_browse(
     limit: u32,
     offset: u32,
     json: bool,
-    base_url: &str,
+    transport: &crate::transport::DaemonTransport,
 ) {
-    let client = make_client(base_url);
+    let client = make_client(transport);
     let req = BrowseRequest {
         entity,
         depth: depth.unwrap_or(2).min(5),

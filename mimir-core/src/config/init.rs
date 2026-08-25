@@ -153,7 +153,7 @@ preset = "transparent"
 
 [server]
 bind_addr = "127.0.0.1:8080"
-# socket_path = "~/.local/share/mimir/mimir.sock"  # Optional: Unix domain socket for local CLI
+# socket_path = "~/.local/share/mimir/mimir.sock"  # Optional override; defaults to ~/.local/share/mimir/mimir.sock
 
 [identity]
 # Set during init; the daemon uses this to identify the user entity in the knowledge graph.

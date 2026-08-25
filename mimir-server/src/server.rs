@@ -2,12 +2,15 @@
 #![deny(unsafe_code)]
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use anyhow::Context;
 use mimir_core::config::ReloadableConfig;
 use mimir_core::llm::{LlmBackend, LlmClient};
 use tracing::info;
 
+use crate::LocalPeer;
 use crate::app::build_app;
 use crate::shutdown::{GRACEFUL_DRAIN_TIMEOUT, serve_with_bounded_drain};
 use crate::state::AppState;
@@ -111,6 +114,13 @@ pub async fn start_server_with_llm_and_listener(
 
     info!("Mimir daemon listening on {}", listener.local_addr()?);
 
+    // ---- Unix domain socket transport (issue #25) ----
+    // Bind the local CLI socket (configured path, or the platform default
+    // `<data_dir>/mimir.sock` on Unix) and serve the same router on it. The
+    // CLI prefers the socket for local commands; TCP remains for remote or
+    // non-Unix clients.
+    let unix_task = bind_and_serve_unix_socket(&config, app.clone(), &state).await?;
+
     // Serve until a shutdown trigger fires (Ctrl-C, SIGTERM, or `/stop`),
     // then drain in-flight connections for at most `GRACEFUL_DRAIN_TIMEOUT`.
     // Only the drain phase is bounded — the serving lifetime is unbounded.
@@ -121,6 +131,40 @@ pub async fn start_server_with_llm_and_listener(
         GRACEFUL_DRAIN_TIMEOUT,
     )
     .await;
+
+    // Join the Unix-socket server. It observes the same shutdown trigger, so
+    // it stops accepting at the same time as the TCP listener; bound its
+    // drain so a wedged local stream cannot extend shutdown past the TCP
+    // bound. On a fatal TCP serve error no trigger ever fires, so abort the
+    // task rather than waiting for the timeout.
+    if let Some((socket_path, task)) = unix_task {
+        if server_result.is_err() {
+            task.abort();
+        }
+        match tokio::time::timeout(GRACEFUL_DRAIN_TIMEOUT, task).await {
+            // The Unix server joined cleanly alongside the TCP server.
+            Ok(Ok(Ok(()))) => {}
+            // The Unix listener failed on its own while TCP is healthy;
+            // report the socket loss instead of dropping it silently.
+            Ok(Ok(Err(error))) => {
+                tracing::warn!("Unix socket server exited with an error: {error:#}");
+            }
+            // Aborted because the TCP server failed; `serve_with_bounded_drain`
+            // already reported that failure.
+            Ok(Err(error)) if error.is_cancelled() => {}
+            // Panic inside the Unix server task.
+            Ok(Err(error)) => {
+                tracing::warn!("Unix socket server task failed: {error}");
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "Unix socket drain timed out after {}s; forcing exit.",
+                    GRACEFUL_DRAIN_TIMEOUT.as_secs()
+                );
+            }
+        }
+        let _ = tokio::fs::remove_file(&socket_path).await;
+    }
 
     // Broadcast the shutdown watch so every background task spawned from
     // `start_server_with_llm_and_listener` (file watcher, SIGHUP handler,
@@ -140,6 +184,84 @@ pub async fn start_server_with_llm_and_listener(
     state.shutdown().await;
     server_result?;
     Ok(())
+}
+
+/// Bind the Unix domain socket listener, removing any stale socket file left
+/// by a crashed daemon, and spawn the task that serves the shared router on
+/// it.
+///
+/// Returns `Ok(None)` when no Unix socket applies (non-Unix platforms);
+/// otherwise the socket path plus the spawned task so the caller can join it
+/// and remove the socket file on shutdown.
+#[cfg(unix)]
+async fn bind_and_serve_unix_socket(
+    config: &ReloadableConfig,
+    app: axum::Router,
+    state: &Arc<AppState>,
+) -> anyhow::Result<Option<(PathBuf, tokio::task::JoinHandle<anyhow::Result<()>>)>> {
+    let configured = config.snapshot().await.server.socket_path.clone();
+    let Some(socket_path) = mimir_core::config::effective_socket_path(configured.as_deref()) else {
+        return Ok(None);
+    };
+    if let Some(parent) = socket_path.parent() {
+        tokio::fs::create_dir_all(parent).await.with_context(|| {
+            format!(
+                "creating parent directory for Unix socket {}",
+                socket_path.display()
+            )
+        })?;
+    }
+    if socket_path.exists() {
+        tracing::warn!(
+            "removing stale Unix socket {} before binding",
+            socket_path.display()
+        );
+        tokio::fs::remove_file(&socket_path)
+            .await
+            .with_context(|| format!("removing stale Unix socket {}", socket_path.display()))?;
+    }
+    let listener = tokio::net::UnixListener::bind(&socket_path)
+        .with_context(|| format!("binding Unix socket {}", socket_path.display()))?;
+    restrict_socket_permissions(&socket_path).with_context(|| {
+        format!(
+            "setting permissions on Unix socket {}",
+            socket_path.display()
+        )
+    })?;
+
+    let shutdown_rx = state.shutdown_tx.subscribe();
+    let task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<LocalPeer>(),
+        )
+        .with_graceful_shutdown(crate::shutdown::watch_shutdown(shutdown_rx))
+        .await
+        .map_err(anyhow::Error::from)
+    });
+    info!(
+        "Mimir daemon listening on Unix socket {}",
+        socket_path.display()
+    );
+    Ok(Some((socket_path, task)))
+}
+
+/// Restrict the socket file to the owning user (mode 0600) so filesystem
+/// permissions, not just the API token, gate local access.
+#[cfg(unix)]
+fn restrict_socket_permissions(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+}
+
+/// No Unix socket on non-Unix platforms (Windows falls back to TCP).
+#[cfg(not(unix))]
+async fn bind_and_serve_unix_socket(
+    _config: &ReloadableConfig,
+    _app: axum::Router,
+    _state: &Arc<AppState>,
+) -> anyhow::Result<Option<(PathBuf, tokio::task::JoinHandle<anyhow::Result<()>>)>> {
+    Ok(None)
 }
 
 /// Spawn the config hot-reload file watcher.

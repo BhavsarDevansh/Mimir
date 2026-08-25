@@ -23,7 +23,7 @@ The bearer token closes that gap: without the token, the knowledge graph is unre
 - `mimir-server/src/app.rs` assembles the router as a protected sub-router (every route except `GET /health`) wrapped in `require_auth` via `axum::middleware::from_fn_with_state`, merged with the unauthenticated `/health` route.
 - `require_auth` extracts the `Authorization` header, strips the `Bearer` prefix, and compares the presented token against `AppState::api_token` in constant time (`mimir_core::auth::verify_api_token`, backed by the `subtle` crate), so comparison time does not depend on the matching prefix. RFC 7235 separates the scheme from the credentials with one or more SP characters; accepting a single tab (HTAB) as well is an interoperability extension of this implementation.
 - `GET /health` stays unauthenticated on purpose: it is the daemon-guard liveness probe and reveals nothing beyond "a daemon is listening". A token-bearing probe would make a daemon with a different token look "down" and trigger a second daemon start.
-- The loopback guard is unchanged and runs inside the auth layer, so a non-loopback caller without the token gets `401` and a non-loopback caller with the token gets `403` on loopback-gated routes.
+- The loopback guard runs inside the auth layer, so a non-loopback caller without the token gets `401` and a non-loopback caller with the token gets `403` on loopback-gated routes. Since issue #25 the guard's peer type covers both transports: Unix-socket peers are always treated as local (the socket file's mode `0600` filesystem permission gates access), while TCP peers must still be loopback addresses.
 
 ## Client Behaviour
 

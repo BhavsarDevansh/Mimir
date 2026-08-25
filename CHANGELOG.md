@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.147.0] — 2026-08-25
+
+### Feature: Unix domain socket transport for local CLI↔daemon communication (issue #25)
+
+- The daemon now serves the same Axum router on a Unix domain socket alongside the TCP listener. On Unix the socket is enabled by default at `<data_dir>/mimir.sock` (override with `server.socket_path` or `MIMIR_SERVER_SOCKET_PATH`; `~` is expanded), the parent directory is created, a stale socket file left by a crashed daemon is removed before binding, the file is chmod'ed `0600`, and it is removed on graceful shutdown (or aborted shutdown after a fatal TCP error). A socket that cannot be bound fails daemon startup with a descriptive error instead of silently continuing TCP-only.
+- The CLI resolves its transport per invocation in `mimir/src/transport.rs`: `MIMIR_BASE_URL` wins (remote daemon), then the Unix socket (env → config → default), then TCP (`server.bind_addr` → `http://127.0.0.1:8080`). Daemon detection over the socket is a 500 ms connection attempt — a local syscall with no HTTP round trip — so a stale socket file left by a crash is detected as down and the daemon guard auto-starts it. Windows is TCP-only.
+- The server's loopback guard and `/stop` attribution now use a transport-independent `LocalPeer` connect-info type: Unix peers are always local (filesystem permissions gate access), TCP peers must still be loopback addresses.
+- `mimir-client` gained UDS constructors (`new_uds`, `try_new_uds`, `with_token_uds`, `try_new_with_token_uds`) built on reqwest 0.13's native `unix_socket` connector — no `hyperlocal` dependency.
+- Config resolution is DRY: the CLI reads the `[server]` section (bind address and socket path) through one shared parser, and the env-over-config precedence for the socket path is unit-tested without environment mutation.
+- Tests: socket-path resolution and precedence in `mimir-core`; full-daemon integration tests in `mimir-server` covering `/health` and `/stop` over the socket, socket cleanup on shutdown, and stale-socket recovery; CLI transport precedence and the connect-based daemon probe in `mimir`.
+- Docs: new `docs/uds-transport.md` and `docs/wiki/unix-socket-transport.md`; updated `docs/config-system.md`, `docs/cli.md`, `docs/daemon-guard.md`, `docs/chat-server.md`, `docs/api-authentication.md`, `docs/wiki/configuration.md`, `docs/wiki/what-works-now.md`, `Mimir-Implementation-Context.md`, and the Phase 1 / Phase 2 roadmap and VISION design docs.
+- Version bumped 0.146.0 → 0.147.0 (minor — new transport feature).
+
 ## [0.146.0] — 2026-08-25
 
 ### Feature: Outlook wizard supports single-tenant Microsoft app registrations (issue #467)

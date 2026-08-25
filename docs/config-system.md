@@ -151,7 +151,7 @@ Controls the daemon's HTTP and Unix socket listeners.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `bind_addr` | `String` | `"127.0.0.1:8080"` | TCP bind address for the HTTP server |
-| `socket_path` | `Option<String>` | `None` | Path to Unix domain socket for local CLI (disabled by default) |
+| `socket_path` | `Option<String>` | `None` | Path to Unix domain socket for local CLI; when unset, defaults to `<data_dir>/mimir.sock` on Unix (see `docs/uds-transport.md`) |
 
 ### Environment Variables
 
@@ -160,7 +160,7 @@ Controls the daemon's HTTP and Unix socket listeners.
 | `MIMIR_SERVER_BIND_ADDR` | `server.bind_addr` | `String` |
 | `MIMIR_SERVER_SOCKET_PATH` | `server.socket_path` | `String` |
 
-When `socket_path` is `None` (default), only the TCP listener is active. On Unix platforms, the recommended default is `~/.local/share/mimir/mimir.sock`, which provides instant daemon detection and filesystem-level access control. See issue #25 for full Unix socket implementation details.
+On Unix platforms the daemon and CLI default to the socket at `<data_dir>/mimir.sock` (instant daemon detection and filesystem-level access control) alongside the TCP listener; `socket_path` overrides the location. On Windows no Unix socket is created and only the TCP listener is active. See `docs/uds-transport.md` for implementation details (issue #25).
 
 ## Database Paths
 

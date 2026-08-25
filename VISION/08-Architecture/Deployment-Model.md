@@ -37,9 +37,9 @@ Library crates provide code organisation but produce one binary:
 - `mimir` — binary crate (dispatches daemon vs client)
 
 **Transport:**
-- **Active:** TCP localhost (`127.0.0.1:8080`) — used for all clients (local and remote)
-- **Planned (#25):** Unix domain socket (`~/.local/share/mimir/mimir.sock`) — will offer faster local IPC, instant daemon detection, and filesystem-level access control
-- Planned: Daemon detection — check socket file existence (instant, no network; not yet implemented, tracked as `#25`)
+- **Unix domain socket (`~/.local/share/mimir/mimir.sock`)** — preferred local transport (issue #25): faster local IPC, instant daemon detection, and filesystem-level access control (mode `0600`)
+- **TCP localhost (`127.0.0.1:8080`)** — fallback for remote clients and Windows
+- Daemon detection — the CLI attempts a connection on the Unix socket (instant, no HTTP round trip; issue #25), with the TCP `/health` probe as the fallback probe
 
 **API authentication (issue #281):** every route except `GET /health` requires a bearer token auto-generated at `~/.local/share/mimir/api_token` (mode `0600`); the CLI attaches it automatically. A non-loopback bind (e.g. `0.0.0.0:8080`) relies on the token for authentication while the loopback guard keeps destructive routes local-only — treat the token file like a password and prefer a reverse proxy with TLS and its own authentication for LAN exposure.
 

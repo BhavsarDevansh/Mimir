@@ -7,17 +7,21 @@ use mimir_core::config;
 
 /// Default URL for the local Mimir daemon HTTP API.
 ///
-/// Only used when neither the `MIMIR_BASE_URL` environment variable nor a
-/// configured `server.bind_addr` is available. See [`base_url`].
+/// Only used as the TCP fallback when neither a Unix socket applies nor the
+/// `MIMIR_BASE_URL` environment variable / configured `server.bind_addr` is
+/// available. See [`base_url`] and `crate::transport::DaemonTransport::resolve`.
 pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8080";
 
-/// Return the base URL of the local Mimir daemon HTTP API.
+/// Return the TCP fallback base URL of the local Mimir daemon HTTP API.
 ///
 /// Resolution order (first non-blank value wins):
 /// 1. `MIMIR_BASE_URL` environment variable.
 /// 2. `server.bind_addr` from the Mimir config file (wildcard bind hosts such
 ///    as `0.0.0.0` are normalised to loopback for the local client).
 /// 3. [`DEFAULT_BASE_URL`].
+///
+/// Used only when no Unix domain socket applies (non-Unix platforms or a
+/// remote `MIMIR_BASE_URL`); see `crate::transport::DaemonTransport::resolve`.
 ///
 /// The result is cached via [`LazyLock`] so the environment and config file
 /// are read at most once per process. Uses [`Cow`] to avoid allocating on the

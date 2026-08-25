@@ -1,9 +1,10 @@
 //! Shared helper to ensure the Mimir daemon is running before client commands.
 //!
 //! Provides [`ensure_daemon_running`] which probes the daemon via the lightweight
-//! `GET /health` endpoint (kept separate from the heavyweight `/status`).
-//! If the daemon is unreachable, it prompts the user to auto-start it,
-//! spawns `mimir start`, and polls with exponential backoff.
+//! transport check (the `GET /health` endpoint over TCP, or a connection
+//! attempt on the Unix socket — kept separate from the heavyweight
+//! `/status`). If the daemon is unreachable, it prompts the user to auto-start
+//! it, spawns `mimir start`, and polls with exponential backoff.
 
 use std::future::Future;
 use std::io::{BufRead, Write};
@@ -13,6 +14,8 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
+
+use crate::transport::DaemonTransport;
 
 /// Errors that can occur during daemon guard checks.
 #[derive(Debug, Error)]
@@ -42,16 +45,16 @@ pub enum DaemonGuardError {
 /// 5. `already_tried` prevents more than one auto-start attempt per CLI
 ///    invocation.
 pub async fn ensure_daemon_running(
-    base_url: &str,
+    transport: &DaemonTransport,
     already_tried: &mut bool,
 ) -> Result<(), DaemonGuardError> {
     let guard = DaemonGuard::default();
-    guard.ensure_running(base_url, already_tried).await
+    guard.ensure_running(transport, already_tried).await
 }
 
 /// Non-interactive reachability check for the daemon.
-pub async fn check_daemon_reachable(base_url: &str) -> bool {
-    HttpProbe.check(base_url).await
+pub async fn check_daemon_reachable(transport: &DaemonTransport) -> bool {
+    TransportProbe.check(transport).await
 }
 
 // ---------------------------------------------------------------------------
@@ -60,7 +63,10 @@ pub async fn check_daemon_reachable(base_url: &str) -> bool {
 
 /// Trait for probing the daemon health endpoint.
 trait Probe: Send + Sync {
-    fn check<'a>(&'a self, base_url: &'a str) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
+    fn check<'a>(
+        &'a self,
+        transport: &'a DaemonTransport,
+    ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
 }
 
 /// Trait for reading a line of user input.
@@ -80,25 +86,44 @@ trait ProcessSpawner: Send + Sync {
 static PROBE_CLIENT: LazyLock<Result<reqwest::Client, reqwest::Error>> =
     LazyLock::new(|| reqwest::Client::builder().build());
 
-struct HttpProbe;
+struct TransportProbe;
 
-impl Probe for HttpProbe {
-    fn check<'a>(&'a self, base_url: &'a str) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+impl Probe for TransportProbe {
+    fn check<'a>(
+        &'a self,
+        transport: &'a DaemonTransport,
+    ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
         Box::pin(async move {
-            let url = format!("{}/health", base_url);
-            match PROBE_CLIENT.as_ref() {
-                Ok(client) => {
-                    match client
-                        .get(&url)
-                        .timeout(Duration::from_millis(500))
-                        .send()
-                        .await
-                    {
-                        Ok(resp) => resp.status().is_success(),
+            match transport {
+                #[cfg(unix)]
+                DaemonTransport::Unix(path) => {
+                    // A connect attempt — not file existence — distinguishes a
+                    // live daemon from a stale socket file left by a crashed
+                    // one; the local syscall needs no HTTP round trip.
+                    tokio::time::timeout(
+                        Duration::from_millis(500),
+                        tokio::net::UnixStream::connect(path),
+                    )
+                    .await
+                    .is_ok_and(|result| result.is_ok())
+                }
+                DaemonTransport::Tcp(base_url) => {
+                    let url = format!("{base_url}/health");
+                    match PROBE_CLIENT.as_ref() {
+                        Ok(client) => {
+                            match client
+                                .get(&url)
+                                .timeout(Duration::from_millis(500))
+                                .send()
+                                .await
+                            {
+                                Ok(resp) => resp.status().is_success(),
+                                Err(_) => false,
+                            }
+                        }
                         Err(_) => false,
                     }
                 }
-                Err(_) => false,
             }
         })
     }
@@ -165,7 +190,7 @@ struct DaemonGuard {
 impl Default for DaemonGuard {
     fn default() -> Self {
         Self {
-            probe: Box::new(HttpProbe),
+            probe: Box::new(TransportProbe),
             prompt_reader: Box::new(RealPromptReader),
             process_spawner: Box::new(RealProcessSpawner),
         }
@@ -175,11 +200,11 @@ impl Default for DaemonGuard {
 impl DaemonGuard {
     async fn ensure_running(
         &self,
-        base_url: &str,
+        transport: &DaemonTransport,
         already_tried: &mut bool,
     ) -> Result<(), DaemonGuardError> {
         // 1. Fast probe.
-        if self.probe.check(base_url).await {
+        if self.probe.check(transport).await {
             return Ok(());
         }
 
@@ -209,7 +234,7 @@ impl DaemonGuard {
         let timeout = Duration::from_secs(10);
 
         while start.elapsed() < timeout {
-            if self.probe.check(base_url).await {
+            if self.probe.check(transport).await {
                 return Ok(());
             }
             tokio::time::sleep(delay).await;
@@ -247,7 +272,7 @@ mod tests {
     impl Probe for MockProbe {
         fn check<'a>(
             &'a self,
-            _base_url: &'a str,
+            _transport: &'a DaemonTransport,
         ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
             let next = {
                 let mut results = self.results.lock().unwrap();
@@ -331,7 +356,8 @@ mod tests {
     async fn test_already_running() {
         let guard = mock_guard(vec![true], "", true);
         let mut tried = false;
-        let result = guard.ensure_running("http://127.0.0.1:1", &mut tried).await;
+        let transport = DaemonTransport::Tcp("http://127.0.0.1:1".to_string());
+        let result = guard.ensure_running(&transport, &mut tried).await;
         assert!(result.is_ok());
         assert!(!tried);
     }
@@ -341,7 +367,8 @@ mod tests {
         // Daemon down, user approves, spawn succeeds, poll eventually succeeds.
         let guard = mock_guard(vec![false, false, true], "y\n", true);
         let mut tried = false;
-        let result = guard.ensure_running("http://127.0.0.1:1", &mut tried).await;
+        let transport = DaemonTransport::Tcp("http://127.0.0.1:1".to_string());
+        let result = guard.ensure_running(&transport, &mut tried).await;
         assert!(result.is_ok(), "expected Ok, got {:?}", result);
         assert!(tried);
     }
@@ -349,8 +376,9 @@ mod tests {
     #[tokio::test]
     async fn test_http_probe_success() {
         let (handle, base_url) = spawn_test_server(Duration::ZERO).await;
-        let probe = HttpProbe;
-        assert!(probe.check(&base_url).await);
+        let probe = TransportProbe;
+        let transport = DaemonTransport::Tcp(base_url);
+        assert!(probe.check(&transport).await);
         handle.abort();
         let _ = handle.await;
     }
@@ -358,15 +386,40 @@ mod tests {
     #[tokio::test]
     async fn test_http_probe_failure() {
         // No server running on this port.
-        let probe = HttpProbe;
-        assert!(!probe.check("http://127.0.0.1:1").await);
+        let probe = TransportProbe;
+        let transport = DaemonTransport::Tcp("http://127.0.0.1:1".to_string());
+        assert!(!probe.check(&transport).await);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_unix_probe_connects_to_live_socket_and_rejects_stale() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket_path = temp.path().join("mimir.sock");
+        let probe = TransportProbe;
+
+        // A missing socket file means the daemon is not running.
+        let missing = DaemonTransport::Unix(socket_path.clone());
+        assert!(!probe.check(&missing).await);
+
+        // A live listener is reachable (instant detection — issue #25).
+        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+        assert!(probe.check(&missing).await);
+
+        // A stale socket file (crashed daemon, listener gone) must be
+        // detected as down so the guard auto-starts the daemon instead of
+        // letting commands fail with connection errors.
+        drop(listener);
+        assert!(socket_path.exists(), "stale socket file must remain");
+        assert!(!probe.check(&missing).await);
     }
 
     #[tokio::test]
     async fn test_prompt_no() {
         let guard = mock_guard(vec![false], "n\n", true);
         let mut tried = false;
-        let result = guard.ensure_running("http://127.0.0.1:1", &mut tried).await;
+        let transport = DaemonTransport::Tcp("http://127.0.0.1:1".to_string());
+        let result = guard.ensure_running(&transport, &mut tried).await;
         assert!(matches!(result, Err(DaemonGuardError::Prompt(_))));
         assert!(tried);
     }
@@ -375,7 +428,8 @@ mod tests {
     async fn test_prompt_eof() {
         let guard = mock_guard(vec![false], "", true);
         let mut tried = false;
-        let result = guard.ensure_running("http://127.0.0.1:1", &mut tried).await;
+        let transport = DaemonTransport::Tcp("http://127.0.0.1:1".to_string());
+        let result = guard.ensure_running(&transport, &mut tried).await;
         assert!(matches!(result, Err(DaemonGuardError::Prompt(_))));
         assert!(tried);
     }
@@ -384,7 +438,8 @@ mod tests {
     async fn test_spawn_failure() {
         let guard = mock_guard(vec![false], "y\n", false);
         let mut tried = false;
-        let result = guard.ensure_running("http://127.0.0.1:1", &mut tried).await;
+        let transport = DaemonTransport::Tcp("http://127.0.0.1:1".to_string());
+        let result = guard.ensure_running(&transport, &mut tried).await;
         assert!(matches!(result, Err(DaemonGuardError::Spawn(_))));
         assert!(tried);
     }
@@ -393,7 +448,8 @@ mod tests {
     async fn test_start_timeout() {
         let guard = mock_guard(vec![false], "y\n", true);
         let mut tried = false;
-        let result = guard.ensure_running("http://127.0.0.1:1", &mut tried).await;
+        let transport = DaemonTransport::Tcp("http://127.0.0.1:1".to_string());
+        let result = guard.ensure_running(&transport, &mut tried).await;
         assert!(matches!(result, Err(DaemonGuardError::StartTimeout)));
         assert!(tried);
     }
@@ -402,7 +458,8 @@ mod tests {
     async fn test_already_tried_skips_prompt() {
         let guard = mock_guard(vec![false], "y\n", true);
         let mut tried = true;
-        let result = guard.ensure_running("http://127.0.0.1:1", &mut tried).await;
+        let transport = DaemonTransport::Tcp("http://127.0.0.1:1".to_string());
+        let result = guard.ensure_running(&transport, &mut tried).await;
         assert!(matches!(result, Err(DaemonGuardError::StartTimeout)));
     }
 }

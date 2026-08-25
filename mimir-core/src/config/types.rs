@@ -109,8 +109,9 @@ pub struct ServerConfig {
     /// TCP bind address for the HTTP server (e.g. "127.0.0.1:8080").
     pub bind_addr: String,
     /// Path to the Unix domain socket for local CLI communication.
-    /// Set to None to disable Unix socket.
-    /// Defaults to None (auto-detected from data dir on Unix platforms).
+    /// When unset, the default `<data_dir>/mimir.sock` is used on Unix
+    /// platforms (see [`crate::config::effective_socket_path`]); Unix sockets
+    /// are unavailable on Windows.
     pub socket_path: Option<String>,
 }
 

@@ -106,8 +106,8 @@ pub(crate) fn render_heatmap(resp: &HeatmapResponse) -> String {
 }
 
 /// `mimir kb heatmap [--json]` — fetch and render the density snapshot.
-pub async fn handle_kb_heatmap(json: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_kb_heatmap(json: bool, transport: &crate::transport::DaemonTransport) {
+    let client = make_client(transport);
     match client.kb_heatmap().await {
         Ok(resp) => {
             if json {

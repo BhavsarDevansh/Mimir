@@ -11,8 +11,8 @@ use super::{exit_with_error, make_client, print_json, render_client_error};
 /// The daemon's registry is populated at startup from its cargo features, so
 /// this is the authoritative discovery surface for `mimir connector add`:
 /// users see exactly the backends that would be accepted.
-pub async fn handle_connector_catalog(json: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_connector_catalog(json: bool, transport: &crate::transport::DaemonTransport) {
+    let client = make_client(transport);
     let resp = client
         .connector_catalog()
         .await

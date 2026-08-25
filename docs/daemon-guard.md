@@ -56,7 +56,7 @@ pub async fn ensure_daemon_running(
 
 ## CLI base URL
 
-The daemon guard's `base_url` is resolved in `mimir/src/constants.rs` (precedence: `MIMIR_BASE_URL` env var → `server.bind_addr` from the config file, with wildcard hosts like `0.0.0.0` normalised to loopback → compiled default `http://127.0.0.1:8080`). This means the CLI automatically targets whichever port the daemon is configured to listen on, so a non-default `server.bind_addr` no longer causes the guard to probe the wrong port and spuriously prompt to start an already-running daemon.
+The daemon guard's transport is resolved per invocation in `mimir/src/transport.rs` (issue #25): an explicit `MIMIR_BASE_URL` wins, then the Unix domain socket (`MIMIR_SERVER_SOCKET_PATH` → `server.socket_path` → `<data_dir>/mimir.sock`), then TCP via `mimir/src/constants.rs` (`MIMIR_BASE_URL` → `server.bind_addr`, with wildcard hosts like `0.0.0.0` normalised to loopback → compiled default `http://127.0.0.1:8080`). On Unix the probe is a 500 ms connect attempt on the socket — a local syscall with no HTTP round trip that succeeds only while the daemon is listening, so a stale socket file left by a crashed daemon is detected as down and the guard auto-starts it; on TCP it is the `GET /health` probe. This means the CLI automatically targets whichever transport the daemon listens on, so a non-default `server.bind_addr` no longer causes the guard to probe the wrong port and spuriously prompt to start an already-running daemon.
 
 ## Test Coverage
 

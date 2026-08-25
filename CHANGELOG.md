@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.147.2] — 2026-08-25
+
+### Fix: Windows-safe TOML paths in the CLI integration-test fixture (PR #503)
+
+- The shared `TestDaemon` fixture now escapes backslashes when interpolating `socket_path`, `context_db`, `kg_db`, and `jobs_db` into the generated `config.toml` template, so Windows temp paths (e.g. `C:\Users\...`) produce valid TOML instead of invalid escapes like `\U`.
+- A unit test pins the escaping behaviour (Windows backslashes doubled, Unix paths unchanged).
+- Version bumped 0.147.1 → 0.147.2 (patch — test-fixture bugfix).
+
 ## [0.147.1] — 2026-08-25
 
 ### Fix: Unix socket transport review fixes (PR #503)

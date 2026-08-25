@@ -14,6 +14,16 @@ use std::time::Duration;
 use mimir_core::config::{Config, ReloadableConfig};
 use mimir_core::llm::MockLlmClient;
 
+/// Render a filesystem path for interpolation into a TOML basic string.
+///
+/// Windows paths contain backslashes, which TOML treats as escape
+/// introducers (e.g. `\U` is an invalid escape), so they must be doubled
+/// before the path is embedded in the quoted `config.toml` template
+/// (PR #503 review).
+fn toml_escape_path(path: &std::path::Path) -> String {
+    path.display().to_string().replace('\\', "\\\\")
+}
+
 /// Base URL of a deterministically unreachable daemon endpoint.
 ///
 /// TCP port 0 can never be a listening port: binding port 0 asks the kernel
@@ -145,10 +155,10 @@ db_path = "{kg_db}"
 [scheduler]
 db_path = "{jobs_db}"
 "#,
-            context_db = context_db.display(),
-            kg_db = kg_db.display(),
-            jobs_db = jobs_db.display(),
-            socket_path = socket_path.display(),
+            context_db = toml_escape_path(&context_db),
+            kg_db = toml_escape_path(&kg_db),
+            jobs_db = toml_escape_path(&jobs_db),
+            socket_path = toml_escape_path(&socket_path),
         );
         std::fs::write(config_dir.join("mimir").join("config.toml"), config_toml).unwrap();
 
@@ -329,6 +339,28 @@ db_path = "{jobs_db}"
         assert!(
             result.unwrap().is_ok(),
             "server task panicked or returned error"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::toml_escape_path;
+    use std::path::Path;
+
+    #[test]
+    fn toml_escape_path_doubles_windows_backslashes() {
+        assert_eq!(
+            toml_escape_path(Path::new(r"C:\Users\dev\Mimir\mimir.sock")),
+            r"C:\\Users\\dev\\Mimir\\mimir.sock"
+        );
+    }
+
+    #[test]
+    fn toml_escape_path_leaves_unix_paths_unchanged() {
+        assert_eq!(
+            toml_escape_path(Path::new("/home/dev/.local/share/mimir/mimir.sock")),
+            "/home/dev/.local/share/mimir/mimir.sock"
         );
     }
 }

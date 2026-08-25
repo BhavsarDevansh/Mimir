@@ -5,8 +5,12 @@ use mimir_api_types::{AuditQueryRequest, ProfileRequest};
 
 use super::{confidence_color, exit_with_error, make_client};
 
-pub async fn handle_kb_profile(entity: Option<String>, json: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_kb_profile(
+    entity: Option<String>,
+    json: bool,
+    transport: &crate::transport::DaemonTransport,
+) {
+    let client = make_client(transport);
     let req = ProfileRequest { entity };
     match client.kb_profile(req).await {
         Ok(resp) => {
@@ -46,9 +50,9 @@ pub async fn handle_kb_audit(
     to: Option<String>,
     change_type: Option<String>,
     json: bool,
-    base_url: &str,
+    transport: &crate::transport::DaemonTransport,
 ) {
-    let client = make_client(base_url);
+    let client = make_client(transport);
     let req = AuditQueryRequest {
         entity,
         predicate,

@@ -82,10 +82,9 @@ async fn test_kb_optimization_run_now_triggers_job() {
             authed_request()
                 .method("POST")
                 .uri("/kb/optimization/run-now")
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(
+                    std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                )))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -130,10 +129,9 @@ async fn test_kb_optimization_run_now_cancelled_returns_409() {
             authed_request()
                 .method("POST")
                 .uri("/kb/optimization/run-now")
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(
+                    std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                )))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -178,10 +176,9 @@ async fn test_kb_optimization_run_now_timed_out_returns_504() {
             authed_request()
                 .method("POST")
                 .uri("/kb/optimization/run-now")
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(
+                    std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                )))
                 .body(Body::empty())
                 .unwrap(),
         )

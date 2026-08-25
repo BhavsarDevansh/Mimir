@@ -8,9 +8,11 @@
 //!   serving.
 //! - [`routes`], [`state`], [`types`], [`error`] — route handlers, shared
 //!   application state, wire-type re-exports, and error helpers.
+//! - [`peer`] — transport-independent peer identification (TCP / Unix socket).
 
 pub mod app;
 pub mod error;
+pub mod peer;
 pub mod routes;
 pub mod server;
 pub mod shutdown;
@@ -21,5 +23,6 @@ pub mod types;
 mod test_utils;
 
 pub use app::build_app;
+pub use peer::LocalPeer;
 pub use server::{start_server, start_server_with_llm, start_server_with_llm_and_listener};
 pub(crate) use shutdown::ShutdownSource;

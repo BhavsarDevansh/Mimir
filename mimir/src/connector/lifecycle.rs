@@ -6,8 +6,12 @@ use super::{
 };
 
 /// Pause a connector: stop its runner and flip its status to `Paused`.
-pub async fn handle_connector_pause(slug: String, json: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_connector_pause(
+    slug: String,
+    json: bool,
+    transport: &crate::transport::DaemonTransport,
+) {
+    let client = make_client(transport);
     let conn = resolve_connector(&client, &slug).await;
     let updated = client
         .connector_pause(conn.id)
@@ -21,8 +25,12 @@ pub async fn handle_connector_pause(slug: String, json: bool, base_url: &str) {
 }
 
 /// Resume a connector: re-spawn its runner and flip its status to `Active`.
-pub async fn handle_connector_resume(slug: String, json: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_connector_resume(
+    slug: String,
+    json: bool,
+    transport: &crate::transport::DaemonTransport,
+) {
+    let client = make_client(transport);
     let conn = resolve_connector(&client, &slug).await;
     let updated = client
         .connector_resume(conn.id)
@@ -37,8 +45,12 @@ pub async fn handle_connector_resume(slug: String, json: bool, base_url: &str) {
 
 /// Remove a connector: stop its runner, delete its credentials, and delete
 /// the row, detaching provenance so ingested facts survive.
-pub async fn handle_connector_remove(slug: String, yes: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_connector_remove(
+    slug: String,
+    yes: bool,
+    transport: &crate::transport::DaemonTransport,
+) {
+    let client = make_client(transport);
     let conn = resolve_connector(&client, &slug).await;
     if !yes
         && !confirm(format!(
@@ -57,8 +69,13 @@ pub async fn handle_connector_remove(slug: String, yes: bool, base_url: &str) {
 
 /// Forget a connector: trash every fact it sourced (recoverable from trash
 /// for 30 days), then delete its credentials and row.
-pub async fn handle_connector_forget(slug: String, yes: bool, json: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_connector_forget(
+    slug: String,
+    yes: bool,
+    json: bool,
+    transport: &crate::transport::DaemonTransport,
+) {
+    let client = make_client(transport);
     let conn = resolve_connector(&client, &slug).await;
     if !yes
         && !confirm(format!(

@@ -57,23 +57,36 @@ pub fn resolve_base_url(env_override: Option<&str>, configured_bind_addr: Option
 /// files, so it is safe to call from every CLI command (even before
 /// `mimir init`).
 pub fn configured_bind_addr() -> Option<String> {
-    bind_addr_from_path(&paths::config_path().ok()?)
+    server_settings_from_file(&paths::config_path().ok()?)
+        .and_then(|settings| settings.bind_addr)
+        .filter(|s| !s.trim().is_empty())
 }
 
-fn bind_addr_from_path(path: &Path) -> Option<String> {
-    #[derive(Deserialize, Default)]
-    #[serde(default)]
-    struct ServerOnly {
-        bind_addr: Option<String>,
-    }
+/// The `[server]` fields the CLI needs for transport resolution.
+#[derive(Deserialize, Default, Debug, PartialEq)]
+#[serde(default)]
+pub(crate) struct ServerSettings {
+    pub(crate) bind_addr: Option<String>,
+    pub(crate) socket_path: Option<String>,
+}
+
+/// Read the `[server]` section from a config file.
+///
+/// Best-effort: returns `None` if the file is absent, unreadable,
+/// unparseable, or omits the section. Never creates directories or writes
+/// files, so it is safe to call from every CLI command (even before
+/// `mimir init`). Shared by [`configured_bind_addr`] and
+/// `crate::config::socket::configured_socket_path` so both transports read
+/// the config file once, through one parser.
+pub(crate) fn server_settings_from_file(path: &Path) -> Option<ServerSettings> {
     #[derive(Deserialize, Default)]
     #[serde(default)]
     struct ConfigOnly {
-        server: ServerOnly,
+        server: ServerSettings,
     }
     let contents = std::fs::read_to_string(path).ok()?;
     let cfg: ConfigOnly = toml::from_str(&contents).ok()?;
-    cfg.server.bind_addr.filter(|s| !s.trim().is_empty())
+    Some(cfg.server)
 }
 
 #[cfg(test)]
@@ -144,38 +157,42 @@ mod tests {
         }
 
         #[test]
-        fn test_bind_addr_from_path_reads_file() {
+        fn test_server_settings_from_file_reads_both_fields() {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("config.toml");
             std::fs::write(
                 &path,
-                "[server]\nbind_addr = \"0.0.0.0:8008\"\n[llm]\nmodel = \"gpt-4o\"\n",
+                "[server]\nbind_addr = \"0.0.0.0:8008\"\nsocket_path = \"~/mimir.sock\"\n[llm]\nmodel = \"gpt-4o\"\n",
             )
             .unwrap();
-            assert_eq!(bind_addr_from_path(&path), Some("0.0.0.0:8008".to_string()));
+            let settings = server_settings_from_file(&path).unwrap();
+            assert_eq!(settings.bind_addr.as_deref(), Some("0.0.0.0:8008"));
+            assert_eq!(settings.socket_path.as_deref(), Some("~/mimir.sock"));
         }
 
         #[test]
-        fn test_bind_addr_from_path_missing_field() {
+        fn test_server_settings_from_file_missing_field() {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("config.toml");
             std::fs::write(&path, "[llm]\nmodel = \"gpt-4o\"\n").unwrap();
-            assert_eq!(bind_addr_from_path(&path), None);
+            let settings = server_settings_from_file(&path).unwrap();
+            assert_eq!(settings.bind_addr, None);
+            assert_eq!(settings.socket_path, None);
         }
 
         #[test]
-        fn test_bind_addr_from_path_missing_file() {
+        fn test_server_settings_from_file_missing_file() {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("absent.toml");
-            assert_eq!(bind_addr_from_path(&path), None);
+            assert_eq!(server_settings_from_file(&path), None);
         }
 
         #[test]
-        fn test_bind_addr_from_path_unparseable() {
+        fn test_server_settings_from_file_unparseable() {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("config.toml");
             std::fs::write(&path, "not valid toml [[").unwrap();
-            assert_eq!(bind_addr_from_path(&path), None);
+            assert_eq!(server_settings_from_file(&path), None);
         }
     }
 }

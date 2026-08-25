@@ -20,8 +20,8 @@ pub struct AskOptions {
     pub piped_input: Option<String>,
 }
 
-pub async fn handle_ask(base_url: &str, opts: AskOptions) {
-    let client = crate::cli_util::make_client(base_url);
+pub async fn handle_ask(transport: &crate::transport::DaemonTransport, opts: AskOptions) {
+    let client = crate::cli_util::make_client(transport);
 
     let mut message = String::new();
     if let Some(ref piped) = opts.piped_input {

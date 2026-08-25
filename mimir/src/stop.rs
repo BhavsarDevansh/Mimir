@@ -6,15 +6,15 @@ use std::time::Duration;
 ///
 /// After sending the stop signal, waits two seconds and then probes the
 /// daemon to verify it has actually exited.
-pub async fn handle_stop(base_url: &str) {
-    let client = crate::cli_util::make_client(base_url);
+pub async fn handle_stop(transport: &crate::transport::DaemonTransport) {
+    let client = crate::cli_util::make_client(transport);
 
     match client.stop().await {
         Ok(()) => {
             println!("Waiting for daemon to stop...");
             tokio::time::sleep(Duration::from_secs(2)).await;
 
-            if crate::daemon_guard::check_daemon_reachable(base_url).await {
+            if crate::daemon_guard::check_daemon_reachable(transport).await {
                 eprintln!("Warning: daemon is still reachable after stop signal.");
                 std::process::exit(1);
             }

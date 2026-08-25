@@ -265,7 +265,11 @@ async fn test_connector_round_trip_via_mimir_client() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
+        let _ = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<mimir_server::LocalPeer>(),
+        )
+        .await;
     });
 
     let client =
@@ -412,10 +416,9 @@ async fn connector_sub_post(
         authed_request()
             .method("POST")
             .uri(uri)
-            .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                [127, 0, 0, 1],
-                0,
-            ))));
+            .extension(axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(
+                std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            )));
     let req = match body {
         Some(value) => {
             let payload = serde_json::to_string(&value).unwrap();
@@ -779,10 +782,9 @@ async fn test_connector_tokens_and_forget_reject_non_loopback() {
                 authed_request()
                     .method("POST")
                     .uri(format!("/connectors/{}/{}", created.id, action))
-                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                        [192, 168, 1, 1],
-                        0,
-                    ))))
+                    .extension(axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(
+                        std::net::SocketAddr::from(([192, 168, 1, 1], 0)),
+                    )))
                     .body(Body::empty())
                     .unwrap(),
             )

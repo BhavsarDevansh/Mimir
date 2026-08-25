@@ -9,7 +9,7 @@ The primary interface for power users. The agent runs as a persistent background
 # Start the daemon (runs in foreground; systemd manages backgrounding)
 $ mimir start
 
-# Ask a question (talks to daemon via TCP (Unix socket planned — see #25))
+# Ask a question (talks to daemon via the Unix socket, TCP fallback — see #25)
 $ mimir ask "When was I last in Rome?"
 
 # Chat mode (interactive, talks to daemon)
@@ -53,7 +53,7 @@ verbose_reasoning = false
 
 [server]
 bind_addr = "127.0.0.1:8080"                    # TCP listener (remote clients, web UI)
-# socket_path = "~/.local/share/mimir/mimir.sock"  # Unix socket (local CLI, preferred)
+# socket_path = "~/.local/share/mimir/mimir.sock"  # Optional override; defaults to ~/.local/share/mimir/mimir.sock
 ```
 
 ## Personality

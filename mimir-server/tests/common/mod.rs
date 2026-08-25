@@ -39,14 +39,20 @@ pub fn authed_request() -> axum::http::request::Builder {
 /// Shared fixture: not every test binary uses every helper, so dead-code
 /// analysis is relaxed for these two.
 #[allow(dead_code)]
-pub fn loopback_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
-    axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+pub fn loopback_connect_info() -> axum::extract::ConnectInfo<mimir_server::LocalPeer> {
+    axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(std::net::SocketAddr::from((
+        [127, 0, 0, 1],
+        0,
+    ))))
 }
 
 /// A non-loopback `ConnectInfo` extension for loopback-rejection tests.
 #[allow(dead_code)]
-pub fn non_loopback_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
-    axum::extract::ConnectInfo(std::net::SocketAddr::from(([192, 168, 1, 1], 0)))
+pub fn non_loopback_connect_info() -> axum::extract::ConnectInfo<mimir_server::LocalPeer> {
+    axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(std::net::SocketAddr::from((
+        [192, 168, 1, 1],
+        0,
+    ))))
 }
 
 /// Build an `AppState` suitable for tests, using a temporary directory

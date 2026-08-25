@@ -31,7 +31,7 @@ Build the foundational interaction layer: CLI, chat interface, LLM orchestration
 ### 1.3 Chat Interface
 - [x] Local HTTP server (Axum)
 - [x] SSE for streaming responses
-- [ ] Unix domain socket transport (deferred to Phase 2; see #25)
+- [x] Unix domain socket transport (issue #25): the daemon serves the same router on a Unix socket alongside TCP; the local CLI prefers the socket
 - [x] Conversation history display
 - [x] Markdown rendering for responses
 
@@ -86,7 +86,7 @@ Build the foundational interaction layer: CLI, chat interface, LLM orchestration
 - [x] Mock LLM client for testing
 - [x] Integration tests for config and memory
 - [x] End-to-end test: CLI → daemon → response round-trip
-- [ ] Unix socket transport tests (deferred to Phase 2; see #25)
+- [x] Unix socket transport tests (issue #25): full-daemon `/health` and `/stop` round trips over the socket, socket cleanup on shutdown, stale-socket recovery
 
 ## Architecture (Updated)
 
@@ -111,9 +111,9 @@ Library crates provide code organisation:
 - `mimir` — binary crate (dispatches daemon vs client)
 
 ### Transport
-- **Current:** TCP localhost (`127.0.0.1:8080`) — for all clients, including local CLI
-- **Future:** Unix domain socket (`~/.local/share/mimir/mimir.sock`) — planned for Phase 2 (see #25)
-- Daemon detection: TCP health probe (`GET /status`) with fallback auto-start prompt
+- **Unix domain socket** (`~/.local/share/mimir/mimir.sock`) — preferred local transport (issue #25); instant daemon detection via a local socket connection
+- **TCP** (`127.0.0.1:8080`) — fallback for remote clients (`MIMIR_BASE_URL`) and Windows
+- Daemon detection: a bounded 500 ms connection probe on the Unix socket (a stale socket file from a crash is detected as down), TCP health probe (`GET /health`) otherwise, with fallback auto-start prompt
 
 ## Success Criteria
 - [x] `cargo build --workspace` succeeds
@@ -139,7 +139,7 @@ Library crates provide code organisation:
 - LLM API latency may make local testing slow
 - Streaming SSE parsing edge cases
 - Cross-platform config path differences
-- Unix domain socket availability on Windows (graceful fallback to TCP)
+- Unix domain socket availability on Windows (graceful fallback to TCP) — resolved: non-Unix platforms use TCP only
 
 ## Related Issues
 - #30 — Create `mimir-client` crate and migrate CLI to HTTP client mode
@@ -150,4 +150,4 @@ Library crates provide code organisation:
 - #35 — End-to-end CLI → daemon → response round-trip test
 - #36 — Conversation history display and markdown rendering in chat
 - #12 — Phase 1 Finalize Workspace (parent tracking issue)
-- #25 — Unix domain socket transport for local CLI↔daemon communication (deferred)
+- #25 — Unix domain socket transport for local CLI↔daemon communication (implemented)

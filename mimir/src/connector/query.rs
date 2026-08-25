@@ -8,8 +8,8 @@ use super::{
 };
 
 /// List every registered connector instance as a table (or raw JSON).
-pub async fn handle_connector_list(json: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_connector_list(json: bool, transport: &crate::transport::DaemonTransport) {
+    let client = make_client(transport);
     let resp = client
         .connectors()
         .await
@@ -24,8 +24,12 @@ pub async fn handle_connector_list(json: bool, base_url: &str) {
 /// Show connector status: a detailed view for one slug, or the overview
 /// table when no slug is given (matching the vision's "Checking Status"
 /// UX).
-pub async fn handle_connector_status(slug: Option<String>, json: bool, base_url: &str) {
-    let client = make_client(base_url);
+pub async fn handle_connector_status(
+    slug: Option<String>,
+    json: bool,
+    transport: &crate::transport::DaemonTransport,
+) {
+    let client = make_client(transport);
     match slug {
         Some(slug) => {
             let conn = resolve_connector(&client, &slug).await;

@@ -30,10 +30,10 @@ Library crates provide code organisation without separate binaries:
 
 The daemon exposes its API over two transports simultaneously:
 
-1. **TCP** (`127.0.0.1:8080`) — active transport for all clients (local and remote)
-2. **Unix domain socket** (`~/.local/share/mimir/mimir.sock`) — planned for local CLI (see #25); will offer instant daemon detection, filesystem permissions, and lower latency
+1. **TCP** (`127.0.0.1:8080`) — fallback transport for remote clients (`MIMIR_BASE_URL`) and non-Unix platforms
+2. **Unix domain socket** (`~/.local/share/mimir/mimir.sock`) — implemented (issue #25); the primary local-CLI transport, offering instant daemon detection (a connection attempt on the socket, so a stale file from a crash is detected as down), filesystem permissions (mode 0600), and lower latency
 
-The CLI will prefer the Unix socket and fall back to TCP if the socket file is not present (planned, see #25).
+An explicit `MIMIR_BASE_URL` wins over the socket; otherwise the local CLI prefers the Unix socket and falls back to TCP for remote daemons and Windows (implemented, see #25).
 
 ### Daemon-down Handling
 

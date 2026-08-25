@@ -1,7 +1,6 @@
 //! HTTP app assembly: the axum router, middleware, and loopback guard.
 #![deny(unsafe_code)]
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
@@ -16,6 +15,7 @@ use axum::{
 use tower::ServiceBuilder;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
+use crate::LocalPeer;
 use crate::routes::{
     chat_completions_handler, chat_handler, chat_stream_handler, connector_actions_handler,
     connector_add_handler, connector_catalog_handler, connector_forget_handler,
@@ -32,11 +32,11 @@ use crate::routes::{
 use crate::state::AppState;
 
 async fn require_loopback(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<LocalPeer>,
     req: Request,
     next: Next,
 ) -> Response {
-    if !addr.ip().is_loopback() {
+    if !peer.is_loopback() {
         return StatusCode::FORBIDDEN.into_response();
     }
     next.run(req).await

@@ -275,13 +275,16 @@ pub(crate) enum WizardCredential {
 /// Requires a TTY: with piped stdin there is no prompt channel, so the flag
 /// form is the non-interactive path (a clear message points there instead of
 /// failing mid-prompt).
-pub async fn handle_connector_add_wizard(json: bool, base_url: &str) {
+pub async fn handle_connector_add_wizard(
+    json: bool,
+    transport: &crate::transport::DaemonTransport,
+) {
     if !std::io::stdin().is_terminal() {
         exit_with_error(
             "interactive mode requires a terminal — pass the connector type and options as arguments instead (see `mimir connector add --help`)",
         );
     }
-    handle_connector_add_wizard_with_deps(json, base_url, &InquirePrompt, &open_in_browser).await;
+    handle_connector_add_wizard_with_deps(json, transport, &InquirePrompt, &open_in_browser).await;
 }
 
 /// Testable core of [`handle_connector_add_wizard`]: `prompts` replaces the
@@ -289,11 +292,11 @@ pub async fn handle_connector_add_wizard(json: bool, base_url: &str) {
 /// flow's `_with_opener` split).
 pub(crate) async fn handle_connector_add_wizard_with_deps(
     json: bool,
-    base_url: &str,
+    transport: &crate::transport::DaemonTransport,
     prompts: &dyn PromptDriver,
     opener: &(dyn Fn(&str) + Send + Sync),
 ) {
-    let client = make_client(base_url);
+    let client = make_client(transport);
     let catalog = client
         .connector_catalog()
         .await

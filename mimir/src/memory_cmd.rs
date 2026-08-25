@@ -1,7 +1,7 @@
 //! Memory viewer. Loads and prints the live condensed memory block to stdout.
 
-pub async fn handle_memory(base_url: &str, refresh: bool) {
-    let client = crate::cli_util::make_client(base_url);
+pub async fn handle_memory(transport: &crate::transport::DaemonTransport, refresh: bool) {
+    let client = crate::cli_util::make_client(transport);
     if refresh {
         match client.memory_refresh().await {
             Ok(resp) => {

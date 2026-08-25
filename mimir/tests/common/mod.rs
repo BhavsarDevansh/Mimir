@@ -14,6 +14,16 @@ use std::time::Duration;
 use mimir_core::config::{Config, ReloadableConfig};
 use mimir_core::llm::MockLlmClient;
 
+/// Render a filesystem path for interpolation into a TOML basic string.
+///
+/// Windows paths contain backslashes, which TOML treats as escape
+/// introducers (e.g. `\U` is an invalid escape), so they must be doubled
+/// before the path is embedded in the quoted `config.toml` template
+/// (PR #503 review).
+fn toml_escape_path(path: &std::path::Path) -> String {
+    path.display().to_string().replace('\\', "\\\\")
+}
+
 /// Base URL of a deterministically unreachable daemon endpoint.
 ///
 /// TCP port 0 can never be a listening port: binding port 0 asks the kernel
@@ -119,6 +129,7 @@ impl TestDaemon {
         let context_db = data_dir.join("mimir").join("context.db");
         let kg_db = data_dir.join("mimir").join("knowledge.db");
         let jobs_db = data_dir.join("mimir").join("jobs.db");
+        let socket_path = data_dir.join("mimir").join("mimir.sock");
         let config_toml = format!(
             r#"
 [llm]
@@ -130,6 +141,7 @@ temperature = 0.0
 
 [server]
 bind_addr = "127.0.0.1:0"
+socket_path = "{socket_path}"
 
 [memory]
 char_limit = 10000
@@ -143,9 +155,10 @@ db_path = "{kg_db}"
 [scheduler]
 db_path = "{jobs_db}"
 "#,
-            context_db = context_db.display(),
-            kg_db = kg_db.display(),
-            jobs_db = jobs_db.display(),
+            context_db = toml_escape_path(&context_db),
+            kg_db = toml_escape_path(&kg_db),
+            jobs_db = toml_escape_path(&jobs_db),
+            socket_path = toml_escape_path(&socket_path),
         );
         std::fs::write(config_dir.join("mimir").join("config.toml"), config_toml).unwrap();
 
@@ -170,6 +183,7 @@ db_path = "{jobs_db}"
         config.llm.max_tokens = Some(10);
         config.llm.temperature = 0.0;
         config.server.bind_addr = format!("127.0.0.1:{port}");
+        config.server.socket_path = Some(socket_path.display().to_string());
         config.context.db_path = Some(context_db.clone());
         config.knowledge.db_path = Some(kg_db.clone());
         config.scheduler.db_path = Some(jobs_db.clone());
@@ -230,6 +244,34 @@ db_path = "{jobs_db}"
     /// environment, returning (stdout, stderr, status).
     pub fn run_cli(&self, args: &[&str]) -> (String, String, ExitStatus) {
         self.run_cli_with_env(args, &[])
+    }
+
+    /// Run the CLI without `MIMIR_BASE_URL` so transport resolution follows
+    /// the daemon's socket: `MIMIR_SERVER_SOCKET_PATH` → `server.socket_path`
+    /// → default `<data_dir>/mimir.sock` (the UDS case, issue #25). Every
+    /// other fixture call pins `MIMIR_BASE_URL`, so this is the only way the
+    /// integration tests exercise the Unix-socket path end to end (PR #503
+    /// review). Shared fixture: not every test binary uses this helper, so
+    /// dead-code analysis is relaxed.
+    #[allow(dead_code)]
+    pub fn run_cli_uds(&self, args: &[&str]) -> (String, String, ExitStatus) {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mimir"));
+        command
+            .args(args)
+            .env("NO_COLOR", "1")
+            .env_remove("MIMIR_BASE_URL")
+            .env("XDG_CONFIG_HOME", &self.config_dir)
+            .env("XDG_DATA_HOME", &self.data_dir)
+            .env("HOME", &self.home_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = command.output().expect("spawn mimir");
+        (
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+            output.status,
+        )
     }
 
     /// Like [`run_cli`](Self::run_cli) but with extra environment variables
@@ -297,6 +339,28 @@ db_path = "{jobs_db}"
         assert!(
             result.unwrap().is_ok(),
             "server task panicked or returned error"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::toml_escape_path;
+    use std::path::Path;
+
+    #[test]
+    fn toml_escape_path_doubles_windows_backslashes() {
+        assert_eq!(
+            toml_escape_path(Path::new(r"C:\Users\dev\Mimir\mimir.sock")),
+            r"C:\\Users\\dev\\Mimir\\mimir.sock"
+        );
+    }
+
+    #[test]
+    fn toml_escape_path_leaves_unix_paths_unchanged() {
+        assert_eq!(
+            toml_escape_path(Path::new("/home/dev/.local/share/mimir/mimir.sock")),
+            "/home/dev/.local/share/mimir/mimir.sock"
         );
     }
 }

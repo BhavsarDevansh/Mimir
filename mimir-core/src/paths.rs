@@ -88,6 +88,33 @@ pub fn jobs_db_path() -> Result<PathBuf, PathsError> {
     data_dir().map(|p| p.join("jobs.db"))
 }
 
+/// Returns the default Unix domain socket path inside the data directory
+/// (`~/.local/share/mimir/mimir.sock` on Linux). Unix sockets are unavailable
+/// on Windows, where callers must fall back to the TCP transport.
+#[cfg(unix)]
+pub fn socket_path() -> Result<PathBuf, PathsError> {
+    data_dir().map(|p| p.join("mimir.sock"))
+}
+
+/// Expand a leading `~` to the user's home directory.
+///
+/// `"~"` expands to the home directory itself and `"~/x"` to `<home>/x`;
+/// any other value (absolute or relative) is returned unchanged. When the
+/// home directory cannot be resolved the input is returned unchanged so the
+/// caller surfaces the resulting path error.
+pub fn expand_home(path: &str) -> PathBuf {
+    let Some(home) = dirs::home_dir() else {
+        return PathBuf::from(path);
+    };
+    if path == "~" {
+        return home;
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        return home.join(rest);
+    }
+    PathBuf::from(path)
+}
+
 /// Resolve a database path from an optional config override, falling back to
 /// a default resolver when unset. Used by `AppState` to honour the
 /// `context.db_path` / `knowledge.db_path` / `scheduler.db_path` overrides
@@ -257,5 +284,36 @@ mod tests {
     fn test_secrets_file_is_secrets_dir_plus_slug_json() {
         let path = secrets_file("gmail-personal").unwrap();
         assert!(path.ends_with("mimir/secrets/gmail-personal.json"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_socket_path_is_data_dir_plus_mimir_sock() {
+        let path = socket_path().unwrap();
+        assert!(path.ends_with("mimir.sock"));
+        assert_eq!(path, data_dir().unwrap().join("mimir.sock"));
+    }
+
+    #[test]
+    fn test_expand_home_expands_leading_tilde() {
+        let home = dirs::home_dir().expect("home dir must resolve in tests");
+        assert_eq!(expand_home("~/mimir.sock"), home.join("mimir.sock"));
+        assert_eq!(expand_home("~"), home);
+        assert_eq!(
+            expand_home("~/sub/dir.sock"),
+            home.join("sub").join("dir.sock")
+        );
+    }
+
+    #[test]
+    fn test_expand_home_leaves_non_tilde_paths_unchanged() {
+        assert_eq!(
+            expand_home("/absolute/path.sock"),
+            PathBuf::from("/absolute/path.sock")
+        );
+        assert_eq!(
+            expand_home("relative/path.sock"),
+            PathBuf::from("relative/path.sock")
+        );
     }
 }

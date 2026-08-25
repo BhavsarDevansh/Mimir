@@ -7,6 +7,8 @@ use mimir_api_types::{
 use mimir_client::MimirClient;
 use mimir_connectors::SecretBundle;
 use mimir_connectors::test_utils::{mount_token_endpoint, self_callback_opener};
+
+use crate::transport::DaemonTransport;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_json, body_partial_json, method, path},
@@ -514,7 +516,7 @@ async fn add_with_app_password_ingests_credentials() {
         None,
         false,
         true,
-        &server.uri(),
+        &DaemonTransport::Tcp(server.uri()),
     )
     .await;
 
@@ -578,7 +580,7 @@ async fn add_with_oauth_config_runs_pkce_flow_and_ingests_tokens() {
         None,
         false,
         true,
-        &daemon.uri(),
+        &DaemonTransport::Tcp(daemon.uri()),
         &self_callback_opener("auth-code"),
     )
     .await;
@@ -710,7 +712,7 @@ async fn auth_with_oauth_config_runs_pkce_flow_and_ingests_tokens() {
         None,
         false,
         true,
-        &daemon.uri(),
+        &DaemonTransport::Tcp(daemon.uri()),
         &self_callback_opener("auth-code"),
     )
     .await;
@@ -751,7 +753,7 @@ async fn auth_with_password_flag_ingests_app_password() {
         None,
         false,
         true,
-        &server.uri(),
+        &DaemonTransport::Tcp(server.uri()),
         &|_url: &str| {},
     )
     .await;
@@ -794,7 +796,7 @@ async fn sync_sends_human_duration_as_seconds() {
         false,
         Some("7d".to_string()),
         true,
-        &server.uri(),
+        &DaemonTransport::Tcp(server.uri()),
     )
     .await;
 }
@@ -816,7 +818,14 @@ async fn sync_full_omits_since() {
         .mount(&server)
         .await;
 
-    handle_connector_sync("demo".to_string(), true, None, true, &server.uri()).await;
+    handle_connector_sync(
+        "demo".to_string(),
+        true,
+        None,
+        true,
+        &DaemonTransport::Tcp(server.uri()),
+    )
+    .await;
 }
 
 // ---------------------------------------------------------------------------
@@ -844,8 +853,18 @@ async fn pause_and_resume_round_trip() {
         .mount(&server)
         .await;
 
-    handle_connector_pause("demo".to_string(), true, &server.uri()).await;
-    handle_connector_resume("demo".to_string(), true, &server.uri()).await;
+    handle_connector_pause(
+        "demo".to_string(),
+        true,
+        &DaemonTransport::Tcp(server.uri()),
+    )
+    .await;
+    handle_connector_resume(
+        "demo".to_string(),
+        true,
+        &DaemonTransport::Tcp(server.uri()),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -859,7 +878,12 @@ async fn remove_deletes_instance() {
         .mount(&server)
         .await;
 
-    handle_connector_remove("demo".to_string(), true, &server.uri()).await;
+    handle_connector_remove(
+        "demo".to_string(),
+        true,
+        &DaemonTransport::Tcp(server.uri()),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -877,7 +901,13 @@ async fn forget_trashes_facts_and_reports_count() {
         .mount(&server)
         .await;
 
-    handle_connector_forget("demo".to_string(), true, true, &server.uri()).await;
+    handle_connector_forget(
+        "demo".to_string(),
+        true,
+        true,
+        &DaemonTransport::Tcp(server.uri()),
+    )
+    .await;
 }
 
 // ---------------------------------------------------------------------------
@@ -911,7 +941,7 @@ async fn act_dispatches_inline_payload() {
         Some(r#"{"summary": "Lunch", "start": "2026-08-12T12:00:00Z"}"#.to_string()),
         None,
         true,
-        &server.uri(),
+        &DaemonTransport::Tcp(server.uri()),
     )
     .await;
 }
@@ -947,7 +977,7 @@ async fn act_reads_payload_from_json_file() {
         None,
         Some(path),
         true,
-        &server.uri(),
+        &DaemonTransport::Tcp(server.uri()),
     )
     .await;
 }
@@ -980,7 +1010,7 @@ async fn auth_with_token_ingests_api_token() {
         Some("tok-123".to_string()),
         false,
         true,
-        &server.uri(),
+        &DaemonTransport::Tcp(server.uri()),
     )
     .await;
 
@@ -1020,7 +1050,7 @@ async fn auth_with_password_ingests_app_password() {
         None,
         false,
         true,
-        &server.uri(),
+        &DaemonTransport::Tcp(server.uri()),
     )
     .await;
 }
@@ -1307,7 +1337,13 @@ async fn wizard_gmail_app_password_registers_end_to_end() {
         ScriptedAnswer::Select(1), // App password
         ScriptedAnswer::Password("abcd efgh ijkl mnop".to_string()),
     ]);
-    handle_connector_add_wizard_with_deps(false, &daemon.uri(), &prompts, &|_| {}).await;
+    handle_connector_add_wizard_with_deps(
+        false,
+        &DaemonTransport::Tcp(daemon.uri()),
+        &prompts,
+        &|_| {},
+    )
+    .await;
 
     let requests = daemon.received_requests().await.unwrap();
     let add = requests
@@ -1377,7 +1413,7 @@ async fn wizard_oauth_with_client_secret_keeps_it_out_of_config_json() {
     ]);
     handle_connector_add_wizard_with_deps(
         false,
-        &daemon.uri(),
+        &DaemonTransport::Tcp(daemon.uri()),
         &prompts,
         &self_callback_opener("auth-code"),
     )
@@ -1418,7 +1454,13 @@ async fn wizard_photos_creates_without_credentials() {
         ScriptedAnswer::Input("/tmp/photos".to_string()), // watch dir
         ScriptedAnswer::Input(String::new()), // owner → slug
     ]);
-    handle_connector_add_wizard_with_deps(false, &daemon.uri(), &prompts, &|_| {}).await;
+    handle_connector_add_wizard_with_deps(
+        false,
+        &DaemonTransport::Tcp(daemon.uri()),
+        &prompts,
+        &|_| {},
+    )
+    .await;
 
     let requests = daemon.received_requests().await.unwrap();
     let add = requests

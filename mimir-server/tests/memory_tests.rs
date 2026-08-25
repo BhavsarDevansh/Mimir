@@ -75,10 +75,9 @@ async fn test_memory_refresh_non_loopback_rejected() {
             authed_request()
                 .method("POST")
                 .uri("/memory/refresh")
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [192, 168, 1, 1],
-                    0,
-                ))))
+                .extension(axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(
+                    std::net::SocketAddr::from(([192, 168, 1, 1], 0)),
+                )))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -98,10 +97,9 @@ async fn test_memory_refresh_not_registered_returns_404() {
             authed_request()
                 .method("POST")
                 .uri("/memory/refresh")
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(
+                    std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                )))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -134,10 +132,9 @@ async fn test_memory_refresh_already_running_returns_409() {
             authed_request()
                 .method("POST")
                 .uri("/memory/refresh")
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(
+                    std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                )))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -163,10 +160,9 @@ async fn test_memory_refresh_cancelled_returns_409() {
             authed_request()
                 .method("POST")
                 .uri("/memory/refresh")
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(
+                    std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                )))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -199,10 +195,9 @@ async fn test_memory_refresh_timed_out_returns_504() {
             authed_request()
                 .method("POST")
                 .uri("/memory/refresh")
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(axum::extract::ConnectInfo(mimir_server::LocalPeer::Tcp(
+                    std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                )))
                 .body(Body::empty())
                 .unwrap(),
         )

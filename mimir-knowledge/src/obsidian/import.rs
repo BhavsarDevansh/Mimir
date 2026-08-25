@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 use crate::models::audit_log::ChangedBy;
 use crate::models::entity::{Entity, EntityType};
 use crate::models::enums::EventType;
-use crate::models::preference::{NewPreference, PreferenceSourceType, UpsertPreferenceInput};
+use crate::models::preference::{
+    NewPreference, PreferenceSourceType, UpsertAction, UpsertPreferenceInput,
+};
 use crate::models::source::{ExtractionMethod, SourceType};
 use crate::normalize::{NormalizedFact, Provenance, normalize_and_insert};
 use crate::normalize::{pick_resolution, resolve_or_create};
@@ -149,7 +151,13 @@ pub(crate) async fn import_all(
 struct ParsedDocument {
     frontmatter: Frontmatter,
     name: String,
-    entity_type: EntityType,
+    /// `Some` only when the document has an explicit `# heading`; a
+    /// heading-less note falls back to the file stem for resolution/creation
+    /// but never renames an existing entity.
+    heading: Option<String>,
+    /// `None` when the frontmatter omitted `type` — only an explicitly
+    /// declared type is applied to an existing entity.
+    entity_type: Option<EntityType>,
     dates: Vec<ParsedFactLine>,
     relationships: Vec<ParsedFactLine>,
     preferences: Vec<ParsedPreference>,
@@ -184,10 +192,9 @@ fn parse_document(file: &ObsidianFile) -> Result<ParsedDocument, String> {
             raw.parse::<EntityType>()
                 .map_err(|_| format!("unknown entity type {raw:?}"))
         })
-        .transpose()?
-        .unwrap_or(EntityType::Concept);
+        .transpose()?;
 
-    let mut name: Option<String> = None;
+    let mut heading: Option<String> = None;
     let mut section: Option<&'static str> = None;
     let mut dates = Vec::new();
     let mut relationships = Vec::new();
@@ -199,9 +206,12 @@ fn parse_document(file: &ObsidianFile) -> Result<ParsedDocument, String> {
         if trimmed.is_empty() {
             continue;
         }
-        if let Some(heading) = trimmed.strip_prefix("# ") {
-            if !heading.starts_with('#') && name.is_none() {
-                name = Some(heading.trim().to_string());
+        if let Some(raw_heading) = trimmed.strip_prefix("# ") {
+            if !raw_heading.starts_with('#') {
+                let trimmed_heading = raw_heading.trim();
+                if !trimmed_heading.is_empty() {
+                    heading = Some(trimmed_heading.to_string());
+                }
             }
             continue;
         }
@@ -235,13 +245,14 @@ fn parse_document(file: &ObsidianFile) -> Result<ParsedDocument, String> {
         }
     }
 
-    let name = name
-        .filter(|n| !n.is_empty())
+    let name = heading
+        .clone()
         .unwrap_or_else(|| entity_name_from_path(&file.relative_path));
 
     Ok(ParsedDocument {
         frontmatter,
         name,
+        heading,
         entity_type,
         dates,
         relationships,
@@ -293,7 +304,7 @@ async fn import_document(
                     Some(
                         kg.create_entity(
                             &document.name,
-                            document.entity_type,
+                            document.entity_type.unwrap_or(EntityType::Concept),
                             &document
                                 .frontmatter
                                 .aliases
@@ -307,8 +318,13 @@ async fn import_document(
             }
         }
     } else {
-        let (resolved, created) =
-            resolve_subject(kg, &document.name, document.entity_type, dry_run).await?;
+        let (resolved, created) = resolve_subject(
+            kg,
+            &document.name,
+            document.entity_type.unwrap_or(EntityType::Concept),
+            dry_run,
+        )
+        .await?;
         if created {
             if planned_new_entities.insert(document.name.to_lowercase()) {
                 outcome.counts.entities_new += 1;
@@ -432,8 +448,13 @@ async fn import_document(
         let existing = kg
             .get_preference(Some(entity.id), &preference.key, &[])
             .await?;
+        let mut upsert = true;
+        let mut pre_counted = false;
         match existing {
-            None => outcome.counts.preferences_new += 1,
+            None => {
+                outcome.counts.preferences_new += 1;
+                pre_counted = true;
+            }
             Some(existing) => {
                 // The upsert matches on an identical (empty) context set, so a
                 // context-scoped existing preference is no conflict — the
@@ -443,37 +464,65 @@ async fn import_document(
                         .await?;
                 if !contexts.is_empty() {
                     outcome.counts.preferences_new += 1;
-                } else if existing.overridden_by_user || existing.confidence >= 0.80 {
-                    // Upsert rules 1/3/4: a user-set or equal/higher-confidence
-                    // preference wins — the import changes nothing, so it is
-                    // skipped (idempotent re-import, no audit-log churn).
-                    continue;
-                } else {
-                    outcome.counts.preferences_updated += 1;
+                    pre_counted = true;
+                } else if existing.value == preference.value {
+                    // Unchanged value: idempotent re-import — nothing to
+                    // overwrite, no audit-log churn.
+                    upsert = false;
+                } else if dry_run {
+                    // Mirror the upsert conflict rules (1/3/4) so dry-run
+                    // counts and reports match what an apply would do: a
+                    // user-set or equal/higher-confidence preference keeps
+                    // its value, and the changed vault value is reported.
+                    if existing.overridden_by_user || existing.confidence >= 0.80 {
+                        outcome.errors.push(format!(
+                            "{}: preference {} not applied — kept existing value {:?}",
+                            file.relative_path, preference.key, existing.value
+                        ));
+                    } else {
+                        outcome.counts.preferences_updated += 1;
+                    }
+                    upsert = false;
                 }
+                // Apply mode with a changed value falls through to the upsert,
+                // which reports the real outcome below.
             }
         }
-        if dry_run {
+        if dry_run || !upsert {
             continue;
         }
-        kg.upsert_preference(UpsertPreferenceInput {
-            preference: NewPreference {
-                entity_id: Some(entity.id),
-                category: preference.category,
-                key: preference.key.clone(),
-                value: preference.value.clone(),
-                confidence: 0.80,
-                overridden_by_user: false,
-                source_fact_id: None,
-            },
-            changed_by: ChangedBy::User,
-            contexts: Vec::new(),
-            sources: vec![(
-                PreferenceSourceType::UserEdit,
-                format!("obsidian:{}", file.relative_path),
-            )],
-        })
-        .await?;
+        let (_, action) = kg
+            .upsert_preference(UpsertPreferenceInput {
+                preference: NewPreference {
+                    entity_id: Some(entity.id),
+                    category: preference.category,
+                    key: preference.key.clone(),
+                    value: preference.value.clone(),
+                    confidence: 0.80,
+                    overridden_by_user: false,
+                    source_fact_id: None,
+                },
+                changed_by: ChangedBy::User,
+                contexts: Vec::new(),
+                sources: vec![(
+                    PreferenceSourceType::UserEdit,
+                    format!("obsidian:{}", file.relative_path),
+                )],
+            })
+            .await?;
+        match action {
+            UpsertAction::Overwritten => outcome.counts.preferences_updated += 1,
+            UpsertAction::Created if !pre_counted => outcome.counts.preferences_new += 1,
+            UpsertAction::Created => {}
+            UpsertAction::Rejected | UpsertAction::KeptAsPrimary => {
+                // The conflict policy kept the stored value; surface the
+                // changed vault value instead of skipping it silently.
+                outcome.errors.push(format!(
+                    "{}: preference {} not applied — kept existing value (upsert {action:?})",
+                    file.relative_path, preference.key
+                ));
+            }
+        }
     }
 
     Ok(())
@@ -554,9 +603,17 @@ async fn apply_entity_updates(
     document: &ParsedDocument,
     dry_run: bool,
 ) -> Result<(Entity, bool), KnowledgeError> {
-    let type_changed =
-        EntityType::try_from(entity.entity_type_id).ok() != Some(document.entity_type);
-    let name_changed = entity.name != document.name;
+    // Only an explicitly declared frontmatter `type` is an instruction:
+    // a note without `type:` retains the stored entity type.
+    let type_changed = document
+        .entity_type
+        .is_some_and(|declared| EntityType::try_from(entity.entity_type_id).ok() != Some(declared));
+    // Only an explicit `# heading` renames: a heading-less note (file-stem
+    // fallback) never renames the stored entity.
+    let name_changed = document
+        .heading
+        .as_ref()
+        .is_some_and(|heading| entity.name != *heading);
     let known_aliases: Vec<String> = entity
         .aliases
         .as_deref()
@@ -571,8 +628,11 @@ async fn apply_entity_updates(
 
     if !dry_run {
         if name_changed || type_changed {
-            kg.update_entity(entity.id, &document.name, document.entity_type)
-                .await?;
+            let name = document.heading.as_deref().unwrap_or(&entity.name);
+            let entity_type = document.entity_type.unwrap_or_else(|| {
+                EntityType::try_from(entity.entity_type_id).unwrap_or(EntityType::Concept)
+            });
+            kg.update_entity(entity.id, name, entity_type).await?;
         }
         for alias in &aliases_missing {
             kg.add_alias(entity.id, alias).await?;

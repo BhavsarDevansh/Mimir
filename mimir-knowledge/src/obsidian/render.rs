@@ -25,6 +25,15 @@ pub struct ObsidianExport {
     pub event_count: usize,
 }
 
+/// One rendered document plus its per-section counts.
+struct RenderedDocument {
+    relative_path: String,
+    content: String,
+    facts: usize,
+    preferences: usize,
+    events: usize,
+}
+
 /// Sanitise an entity name into a safe file stem: Obsidian-incompatible
 /// characters (`/\:*?"<>|#^[]`) and control characters become `-`, trailing
 /// dots/spaces are trimmed, and the stem is capped at 200 chars.
@@ -65,17 +74,20 @@ pub(crate) async fn render_all(
     let mut event_count = 0;
 
     for entity in entities {
-        let (path, content, facts_rendered, prefs_rendered, events_rendered) =
-            render_document(kg, &entity, &predicate_names, &mut used_stems).await?;
+        let rendered = render_document(kg, &entity, &predicate_names, &mut used_stems).await?;
         entity_count += 1;
-        fact_count += facts_rendered;
-        preference_count += prefs_rendered;
-        event_count += events_rendered;
+        fact_count += rendered.facts;
+        preference_count += rendered.preferences;
+        event_count += rendered.events;
         files.push(super::ObsidianFile {
-            relative_path: path,
-            content,
+            relative_path: rendered.relative_path,
+            content: rendered.content,
         });
     }
+
+    // The doc comment promises relative-path order; entity-list order (name,
+    // id) does not match it once stems are sanitised and collisions suffixed.
+    files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
 
     Ok(ObsidianExport {
         files,
@@ -91,13 +103,12 @@ pub(crate) async fn render_all(
 /// Section split: facts with an event overlay → `Dates`; entity-object facts
 /// → `Relationships`; literal-object facts → `Facts`; entity-scoped
 /// preferences → `Preferences`.
-#[allow(clippy::type_complexity)]
 async fn render_document(
     kg: &KnowledgeGraph,
     entity: &Entity,
     predicate_names: &HashMap<i16, String>,
     used_stems: &mut HashSet<String>,
-) -> Result<(String, String, usize, usize, usize), crate::KnowledgeError> {
+) -> Result<RenderedDocument, crate::KnowledgeError> {
     let entity_type = EntityType::try_from(entity.entity_type_id)
         .map(|t| t.as_str().to_string())
         .unwrap_or_else(|_| "Concept".to_string());
@@ -212,13 +223,13 @@ async fn render_document(
         content.push_str(&format!("## {SECTION_FACTS}\n{fact_lines}\n"));
     }
 
-    Ok((
+    Ok(RenderedDocument {
         relative_path,
         content,
-        dates_rendered + relationships_rendered + facts_rendered,
-        prefs.len(),
-        dates_rendered,
-    ))
+        facts: dates_rendered + relationships_rendered + facts_rendered,
+        preferences: prefs.len(),
+        events: dates_rendered,
+    })
 }
 
 /// Relationship-type id → canonical name map for one export run.

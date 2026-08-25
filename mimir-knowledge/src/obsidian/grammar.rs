@@ -364,10 +364,12 @@ fn month_number(raw: &str) -> Option<u32> {
     const MONTHS: [&str; 12] = [
         "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
     ];
-    let abbr = &raw.to_ascii_lowercase()[..raw.len().min(3)];
+    // Take at most the first three *characters*: slicing the lowercased input
+    // by byte offset would panic on non-ASCII month tokens (e.g. `éé 2025`).
+    let abbr = raw.chars().take(3).collect::<String>().to_ascii_lowercase();
     MONTHS
         .iter()
-        .position(|month| *month == abbr)
+        .position(|month| *month == abbr.as_str())
         .map(|index| index as u32 + 1)
 }
 
@@ -459,6 +461,12 @@ mod tests {
             parse_date("2022-06"),
             Some(Utc.with_ymd_and_hms(2022, 6, 1, 0, 0, 0).unwrap())
         );
+    }
+
+    #[test]
+    fn non_ascii_month_token_returns_none_without_panicking() {
+        assert_eq!(parse_date("éé 2025"), None);
+        assert_eq!(parse_date("月 2025"), None);
     }
 
     #[test]

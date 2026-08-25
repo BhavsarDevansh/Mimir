@@ -785,3 +785,333 @@ async fn scan_markdown_files_avoids_symlink_cycles() {
         .collect();
     assert_eq!(names, vec!["a.md".to_string()], "cycle must terminate");
 }
+
+#[tokio::test]
+async fn export_files_are_ordered_by_relative_path() {
+    let (kg, _dir) = fresh_kg().await;
+    // `a#` sanitises to `a-` and then trims to `a`, colliding with the plain
+    // `a`; name order (`a`, `a#`) differs from path order (`a-<id>.md`, `a.md`).
+    let facts = vec![
+        seed_fact(
+            "a",
+            "has_name",
+            "x",
+            false,
+            EntityType::Concept,
+            RecurrenceType::None,
+            None,
+            None,
+            SourceType::UserEdit,
+        ),
+        seed_fact(
+            "a#",
+            "has_name",
+            "y",
+            false,
+            EntityType::Concept,
+            RecurrenceType::None,
+            None,
+            None,
+            SourceType::UserEdit,
+        ),
+    ];
+    let _ = normalize_and_insert(&kg, facts, Provenance::chat(ExtractionMethod::UserInput))
+        .await
+        .unwrap();
+
+    let export = kg.export_obsidian().await.unwrap();
+    let names: Vec<String> = export
+        .files
+        .iter()
+        .map(|f| f.relative_path.clone())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted, "files must be ordered by relative path");
+}
+
+#[tokio::test]
+async fn import_without_frontmatter_type_keeps_existing_entity_type() {
+    let (kg, _dir) = fresh_kg().await;
+    let first = ObsidianFile {
+        relative_path: "Devansh.md".to_string(),
+        content: "---\ntype: Person\n---\n\n# Devansh\n".to_string(),
+    };
+    kg.import_obsidian(&[first], false).await.unwrap();
+
+    // A hand-written note with no frontmatter `type` must not retype the
+    // stored Person to the Concept default.
+    let second = ObsidianFile {
+        relative_path: "Devansh.md".to_string(),
+        content: "# Devansh\n\n## Facts\n- likes → coffee\n".to_string(),
+    };
+    let outcome = kg.import_obsidian(&[second], false).await.unwrap();
+    assert_eq!(outcome.counts.entities_updated, 0, "{:?}", outcome.counts);
+    let devansh = kg
+        .search_entities("Devansh", 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .entity;
+    assert_eq!(
+        EntityType::try_from(devansh.entity_type_id).unwrap(),
+        EntityType::Person,
+        "absent frontmatter type must not retype the entity"
+    );
+}
+
+#[tokio::test]
+async fn import_without_heading_does_not_rename_existing_entity() {
+    let (kg, _dir) = fresh_kg().await;
+    let first = ObsidianFile {
+        relative_path: "Alice.md".to_string(),
+        content: "---\ntype: Person\n---\n\n# Alice\n".to_string(),
+    };
+    kg.import_obsidian(&[first], false).await.unwrap();
+    let alice = kg
+        .search_entities("Alice", 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .entity;
+
+    // The heading is removed; the file stem (`alice`) must not rename the
+    // stored `Alice` entity.
+    let second = ObsidianFile {
+        relative_path: "alice.md".to_string(),
+        content: "---\ntype: Person\n---\n\n## Facts\n- likes → coffee\n".to_string(),
+    };
+    let outcome = kg.import_obsidian(&[second], false).await.unwrap();
+    assert_eq!(outcome.counts.entities_updated, 0, "{:?}", outcome.counts);
+    let after = kg.get_entity(alice.id).await.unwrap().unwrap();
+    assert_eq!(after.name, "Alice");
+}
+
+#[tokio::test]
+async fn import_reports_conflict_when_changed_value_loses_to_stored_preference() {
+    let (kg, _dir) = fresh_kg().await;
+    kg.import_obsidian(
+        &[ObsidianFile {
+            relative_path: "Devansh.md".to_string(),
+            content: "---\ntype: Person\n---\n\n# Devansh\n".to_string(),
+        }],
+        false,
+    )
+    .await
+    .unwrap();
+    let devansh = kg
+        .search_entities("Devansh", 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .entity;
+    kg.upsert_preference(UpsertPreferenceInput {
+        preference: NewPreference {
+            entity_id: Some(devansh.id),
+            category: mimir_knowledge::models::preference::PreferenceCategory::FoodPreference,
+            key: "favourite".to_string(),
+            value: "French".to_string(),
+            confidence: 0.90,
+            overridden_by_user: false,
+            source_fact_id: None,
+        },
+        changed_by: ChangedBy::User,
+        contexts: Vec::new(),
+        sources: vec![(PreferenceSourceType::UserEdit, "seed".to_string())],
+    })
+    .await
+    .unwrap();
+
+    // The vault value changed to Italian, but the stored 0.90 preference
+    // wins: the conflict must be reported, not silently skipped.
+    let file = ObsidianFile {
+        relative_path: "Devansh.md".to_string(),
+        content: r#"---
+type: Person
+---
+
+# Devansh
+
+## Preferences
+- FoodPreference: favourite = Italian
+"#
+        .to_string(),
+    };
+    let applied = kg
+        .import_obsidian(std::slice::from_ref(&file), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        applied.counts.preferences_updated, 0,
+        "{:?}",
+        applied.counts
+    );
+    assert!(
+        applied
+            .errors
+            .iter()
+            .any(|e| e.contains("favourite") && e.contains("not applied")),
+        "conflict surfaced: {:?}",
+        applied.errors
+    );
+
+    let dry = kg.import_obsidian(&[file], true).await.unwrap();
+    assert_eq!(dry.counts.preferences_updated, 0, "{:?}", dry.counts);
+    assert!(
+        dry.errors
+            .iter()
+            .any(|e| e.contains("favourite") && e.contains("not applied")),
+        "dry-run must predict the conflict: {:?}",
+        dry.errors
+    );
+
+    let prefs =
+        mimir_knowledge::queries::preference::get_preferences_for_entity(kg.pool(), devansh.id)
+            .await
+            .unwrap();
+    assert_eq!(prefs[0].value, "French", "stored value kept");
+}
+
+#[tokio::test]
+async fn import_reports_rejection_when_user_owns_the_preference() {
+    let (kg, _dir) = fresh_kg().await;
+    kg.import_obsidian(
+        &[ObsidianFile {
+            relative_path: "Devansh.md".to_string(),
+            content: "---\ntype: Person\n---\n\n# Devansh\n".to_string(),
+        }],
+        false,
+    )
+    .await
+    .unwrap();
+    let devansh = kg
+        .search_entities("Devansh", 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .entity;
+    kg.upsert_preference(UpsertPreferenceInput {
+        preference: NewPreference {
+            entity_id: Some(devansh.id),
+            category: mimir_knowledge::models::preference::PreferenceCategory::FoodPreference,
+            key: "favourite".to_string(),
+            value: "French".to_string(),
+            confidence: 1.0,
+            overridden_by_user: true,
+            source_fact_id: None,
+        },
+        changed_by: ChangedBy::User,
+        contexts: Vec::new(),
+        sources: vec![(PreferenceSourceType::UserEdit, "seed".to_string())],
+    })
+    .await
+    .unwrap();
+
+    let file = ObsidianFile {
+        relative_path: "Devansh.md".to_string(),
+        content: r#"---
+type: Person
+---
+
+# Devansh
+
+## Preferences
+- FoodPreference: favourite = Italian
+"#
+        .to_string(),
+    };
+    let outcome = kg.import_obsidian(&[file], false).await.unwrap();
+    assert_eq!(
+        outcome.counts.preferences_updated, 0,
+        "{:?}",
+        outcome.counts
+    );
+    assert!(
+        outcome
+            .errors
+            .iter()
+            .any(|e| e.contains("favourite") && e.contains("not applied")),
+        "rejection surfaced: {:?}",
+        outcome.errors
+    );
+    let prefs =
+        mimir_knowledge::queries::preference::get_preferences_for_entity(kg.pool(), devansh.id)
+            .await
+            .unwrap();
+    assert_eq!(prefs[0].value, "French", "user-set value kept");
+}
+
+#[tokio::test]
+async fn import_unchanged_low_confidence_preference_is_idempotent() {
+    let (kg, _dir) = fresh_kg().await;
+    kg.import_obsidian(
+        &[ObsidianFile {
+            relative_path: "Devansh.md".to_string(),
+            content: "---\ntype: Person\n---\n\n# Devansh\n".to_string(),
+        }],
+        false,
+    )
+    .await
+    .unwrap();
+    let devansh = kg
+        .search_entities("Devansh", 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .entity;
+    kg.upsert_preference(UpsertPreferenceInput {
+        preference: NewPreference {
+            entity_id: Some(devansh.id),
+            category: mimir_knowledge::models::preference::PreferenceCategory::FoodPreference,
+            key: "favourite".to_string(),
+            value: "Italian".to_string(),
+            confidence: 0.50,
+            overridden_by_user: false,
+            source_fact_id: None,
+        },
+        changed_by: ChangedBy::User,
+        contexts: Vec::new(),
+        sources: vec![(PreferenceSourceType::UserEdit, "seed".to_string())],
+    })
+    .await
+    .unwrap();
+
+    // Same value, even though the import's 0.80 would win: idempotent skip.
+    let file = ObsidianFile {
+        relative_path: "Devansh.md".to_string(),
+        content: r#"---
+type: Person
+---
+
+# Devansh
+
+## Preferences
+- FoodPreference: favourite = Italian
+"#
+        .to_string(),
+    };
+    let outcome = kg.import_obsidian(&[file], false).await.unwrap();
+    assert_eq!(outcome.counts.preferences_new, 0, "{:?}", outcome.counts);
+    assert_eq!(
+        outcome.counts.preferences_updated, 0,
+        "{:?}",
+        outcome.counts
+    );
+    assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+    let prefs =
+        mimir_knowledge::queries::preference::get_preferences_for_entity(kg.pool(), devansh.id)
+            .await
+            .unwrap();
+    assert_eq!(prefs.len(), 1, "no duplicate preference rows");
+    assert_eq!(prefs[0].value, "Italian");
+}

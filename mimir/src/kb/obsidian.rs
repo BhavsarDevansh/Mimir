@@ -6,7 +6,7 @@
 //! vault directory to the daemon (`POST /kb/import`), which parses, plans,
 //! and applies (or dry-runs) the import.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use mimir_api_types::ExportResponse;
 use mimir_client::{ClientError, MimirClient};
@@ -46,6 +46,26 @@ fn render_bundle(resp: &ExportResponse) -> String {
     out
 }
 
+/// Write every rendered document under `target`, creating parent directories
+/// so nested `relative_path` values (`sub/Alice.md`) never fail the export.
+fn write_export_files(
+    target: &Path,
+    files: &[mimir_api_types::ExportFile],
+) -> Result<usize, String> {
+    let mut written = 0usize;
+    for file in files {
+        let destination = target.join(&file.relative_path);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+        }
+        std::fs::write(&destination, &file.content)
+            .map_err(|e| format!("cannot write {}: {e}", destination.display()))?;
+        written += 1;
+    }
+    Ok(written)
+}
+
 /// Fetch and render (or write) an export bundle. Pure client-facing logic so
 /// tests can drive it against a mock daemon.
 pub(crate) async fn run_kb_export(
@@ -71,14 +91,10 @@ pub(crate) async fn run_kb_export(
             target.display()
         ));
     }
-    let mut written = 0usize;
-    for file in &resp.files {
-        let destination = target.join(&file.relative_path);
-        if let Err(e) = std::fs::write(&destination, &file.content) {
-            exit_with_error(format!("cannot write {}: {e}", destination.display()));
-        }
-        written += 1;
-    }
+    let written = match write_export_files(&target, &resp.files) {
+        Ok(written) => written,
+        Err(e) => exit_with_error(e),
+    };
     println!("Exported {written} files to {}:", target.display());
     println!("  Entities: {}", resp.entity_count);
     println!("  Facts: {}", resp.fact_count);
@@ -192,5 +208,20 @@ mod tests {
             event_count: 0,
         };
         assert_eq!(render_bundle(&resp), "<!-- mimir: Alice.md -->\n# Alice\n");
+    }
+
+    #[test]
+    fn write_export_files_creates_parent_directories_for_nested_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![mimir_api_types::ExportFile {
+            relative_path: "sub/Alice.md".to_string(),
+            content: "# Alice\n".to_string(),
+        }];
+        let written = write_export_files(dir.path(), &files).unwrap();
+        assert_eq!(written, 1);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("sub/Alice.md")).unwrap(),
+            "# Alice\n"
+        );
     }
 }

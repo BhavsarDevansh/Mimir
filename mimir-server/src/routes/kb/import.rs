@@ -27,25 +27,33 @@ pub async fn kb_import_handler(
         )));
     }
 
-    let mut files = Vec::new();
-    let mut errors = Vec::new();
-    for path in scan_markdown_files(&dir).map_err(error::knowledge_error)? {
-        let relative_path = path
-            .strip_prefix(&dir)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .into_owned();
-        match std::fs::read_to_string(&path) {
-            Ok(content) => files.push(ObsidianFile {
-                relative_path,
-                content,
-            }),
-            Err(e) => {
-                // One unreadable file never aborts the rest of the vault.
-                errors.push(format!("{relative_path}: {e}"));
+    // Vault traversal and file reads are blocking filesystem work: run them
+    // on a blocking task so a large vault never stalls the async worker.
+    let (files, errors) = tokio::task::spawn_blocking(move || {
+        let mut files = Vec::new();
+        let mut errors = Vec::new();
+        for path in scan_markdown_files(&dir)? {
+            let relative_path = path
+                .strip_prefix(&dir)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .into_owned();
+            match std::fs::read_to_string(&path) {
+                Ok(content) => files.push(ObsidianFile {
+                    relative_path,
+                    content,
+                }),
+                Err(e) => {
+                    // One unreadable file never aborts the rest of the vault.
+                    errors.push(format!("{relative_path}: {e}"));
+                }
             }
         }
-    }
+        Ok::<_, mimir_knowledge::KnowledgeError>((files, errors))
+    })
+    .await
+    .map_err(|e| error::internal(format!("import task failed: {e}")))?
+    .map_err(error::knowledge_error)?;
 
     let outcome = state
         .knowledge_graph

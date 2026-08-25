@@ -32,9 +32,9 @@ mimir kb import ~/MyVault
 
 The daemon scans the folder for `.md` files (recursively), parses each one, and adds the facts and preferences to the knowledge graph. Imported facts are marked as coming from the import and start at 0.80 confidence unless the file says otherwise. Things to know:
 
-- **Idempotent:** importing the same files twice skips facts that already exist, and unchanged preferences are left alone too — nothing is duplicated. Preferences only change when the graph's existing preference is inferred with lower confidence than the import's 0.80; user-set or equal/higher-confidence preferences win and are skipped.
+- **Idempotent:** importing the same files twice skips facts that already exist, and unchanged preferences are left alone too — nothing is duplicated. Preferences only change when the graph's existing preference is inferred with lower confidence than the import's 0.80; when a user-set or equal/higher-confidence preference keeps its value, the changed vault value is reported as a conflict instead of being silently skipped.
 - **Try first:** `mimir kb import ~/MyVault --dry-run` reports exactly what would change (new/updated entities, new/existing facts, preferences, dates, errors) and writes nothing. Run without `--dry-run` to apply.
-- **Editing entities:** change the `type`, `aliases`, or the `# Name` heading in a file and re-import to rename/retype the entity and sync aliases.
+- **Editing entities:** change the `type`, `aliases`, or the `# Name` heading in a file and re-import to rename/retype the entity and sync aliases. Only explicit values count: a note without a frontmatter `type` or without a `#` heading never renames or retypes an existing entity.
 - **Dates and events:** facts with a date and a recurrence (e.g. `- birthday → 1995-08-20 (1995-08-20, Birthday, yearly)`) recreate the events overlay, so they show up in upcoming events as usual.
 - **Sensitive content:** anything the graph treats as sensitive (e.g. health facts) still lands in the confirmation queue instead of being applied silently.
 
@@ -67,11 +67,11 @@ Sections are optional — a file can be just a heading, or a heading plus facts.
 
 - Keep one entity per file and keep the `# Heading` matching the entity name; the heading wins over the file name on import.
 - Use `--dry-run` before a big import, especially when importing a folder you did not export yourself.
-- Export regularly as a human-readable backup; the files are the graph, rendered for you.
+- Export regularly to a human-readable working copy; the vault mirrors your graph but is not a complete backup — global preferences stay outside the exported vault and are not restored by import.
 - Don't move or edit the `entity_id` line in the frontmatter unless you mean to link to a specific existing entity — without it, import matches by name instead.
 
 ## Limitations
 
 - Export is one-way (graph → files). Mimir does not watch the folder for changes yet; run `mimir kb import` after editing. Bidirectional sync is planned for a later phase.
 - The `Dates` section covers facts with event overlays (birthdays, appointments, deadlines, tasks, reminders); plain old dates without events stay in `Facts`.
-- Only entity-scoped preferences are exported; global preferences are a v1 limitation.
+- Only entity-scoped preferences are exported; global preferences remain outside the exported vault and are not restored by import (v1 limitation).

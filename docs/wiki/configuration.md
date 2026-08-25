@@ -186,12 +186,12 @@ These settings are reloaded when the config file changes or a `SIGHUP` signal is
 - Context max tokens (`context.max_tokens`), max turns (`context.max_turns`)
 - Agent name (`agent.name`), proactivity (`agent.proactivity`), verbose reasoning (`agent.verbose_reasoning`)
 - LLM max tokens (`llm.max_tokens`), temperature (`llm.temperature`)
+- Context compaction (`context.compaction.enabled`, `context.compaction.max_turns`) — the synchronous compact-before-trim path reads the live values; the background `session.compaction` hook is registered at daemon startup, so its window and enablement change only after a restart
 
 These settings are **not reloaded** (they require a restart):
 
 - LLM endpoint (`llm.endpoint`), API key (`llm.api_key`), model (`llm.model`)
 - Server bind address (`server.bind_addr`), socket path (`server.socket_path`)
-- Context compaction (`context.compaction.enabled`, `context.compaction.max_turns`) — the compaction hook is registered at daemon startup
 
 If you change a sensitive setting and trigger a reload, Mimir logs a warning and keeps the old value. No restart is forced.
 

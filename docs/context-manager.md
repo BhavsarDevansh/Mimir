@@ -93,7 +93,7 @@ A turn spans from a user message up to (but excluding) the next user message, so
 
 ## Compaction
 
-`trim_to_budget` alone silently discards context, so a background compaction pass summarises the oldest complete turns before trimming would drop them (issue #279). Because the background hook is debounced and idle-gated, the request paths also compact synchronously when a burst reaches the hard `max_turns` ceiling, so the turns the trim is about to delete are always summarised first (PR #505 review).
+`trim_to_budget` alone silently discards context, so a background compaction pass summarises the oldest complete turns before trimming would drop them (issue #279). Because the background hook is debounced and idle-gated, the request paths also compact synchronously when a burst reaches the hard `max_turns` ceiling, so the turns the hard turn-cap trim is about to delete are summarised first (PR #505 review). Token-budget trimming is not preceded by compaction: when a session is under `max_turns` but over `max_tokens`, `trim_to_budget` deletes the oldest complete turns without a summary.
 
 ### Pipeline
 

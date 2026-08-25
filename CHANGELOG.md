@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.149.3] — 2026-08-25
+
+### Docs: Align compaction reload contract and scope summary guarantees (PR #505)
+
+- `docs/config-system.md`, `docs/wiki/context-manager.md`, and `docs/wiki/configuration.md` now state one reload contract: `Config::normalise` clamps the compaction window on load and reload, the synchronous compact-before-trim path reads the live (reloaded) values, and the background `session.compaction` hook is registered at daemon startup so its window and enablement change only after a restart.
+- `docs/context-manager.md`, `docs/wiki/context-manager.md`, and `docs/wiki/what-works-now.md` now scope the "never dropped without a summary" guarantee to the hard `max_turns` trim: token-budget (`max_tokens`) trimming is not preceded by compaction and can drop the oldest turns without a summary.
+- Version bumped 0.149.2 → 0.149.3 (patch — documentation update).
+
 ## [0.149.2] — 2026-08-25
 
 ### Docs: Compaction window invariant documented on the config field (PR #505)

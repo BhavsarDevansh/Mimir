@@ -15,14 +15,14 @@ All data lives in a single SQLite file on your device (`~/.local/share/mimir/con
 
 ## How Window Sizing Works
 
-To keep LLM requests fast and within token limits, Mimir keeps a bounded window of conversation history and summarises what falls out of it.  Two knobs control the window:
+To keep LLM requests fast and within token limits, Mimir keeps a bounded window of conversation history; the oldest turns that fall out of it are summarised before deletion when compaction runs, and otherwise dropped.  Two knobs control the window:
 
 | Setting | Default | What it does |
 |---------|---------|-------------|
 | `max_turns` | 20 | Hard ceiling on the number of back-and-forth exchanges kept. |
 | `max_tokens` | unset | Optional soft cap on the total token count of the conversation. |
 
-When either limit is exceeded, Mimir **drops the oldest complete turns**.  A turn is every message from a user message up to the next user message, so assistant tool-call messages and tool results are removed with their turn.  The system prompt is never removed, and the in-flight turn being answered is never trimmed away.
+When either limit is exceeded, Mimir **drops the oldest complete turns**.  A turn is every message from a user message up to the next user message, so assistant tool-call messages and tool results are removed with their turn.  The system prompt is never removed, and the in-flight turn being answered is never trimmed away.  Compaction summarises turns before deletion only in two cases: the background job runs while you are idle and the session is beyond the compaction window, and the request path compacts synchronously when a burst reaches the hard `max_turns` ceiling.  Token-budget (`max_tokens`) trimming is never preceded by compaction and drops the oldest turns without a summary.
 
 ### Example
 
@@ -45,7 +45,7 @@ Compaction normally runs while you are idle (it never steals LLM capacity from y
 | `context.compaction.enabled` | `true` | Master switch for background compaction. |
 | `context.compaction.max_turns` | 15 | Keep the most recent this-many complete turns; older complete turns are summarised and removed. |
 
-Keep `compaction.max_turns` below `context.max_turns` so compaction summarises turns before the hard trim would drop them; if the two are equal or inverted, Mimir clamps the compaction window to one turn below the hard ceiling at startup (and on config reload), so the guarantee holds even with custom settings. If the LLM call fails, the raw transcript of the compacted turns is kept instead (capped at 2000 characters), so a provider hiccup degrades the summary to a verbatim transcript rather than silently dropping the turns. Incognito sessions are never compacted because nothing is persisted.
+Keep `compaction.max_turns` below `context.max_turns` so compaction summarises turns before the hard trim would drop them; if the two are equal or inverted, Mimir clamps the compaction window to one turn below the hard ceiling at startup and on config reload, so the guarantee holds even with custom settings. The clamp and the synchronous compact-before-trim path use the live (reloaded) values, but the background job's window and enablement are fixed at daemon startup, so changing them takes effect for the background job only after a restart. If the LLM call fails, the raw transcript of the compacted turns is kept instead (capped at 2000 characters), so a provider hiccup degrades the summary to a verbatim transcript rather than silently dropping the turns. Incognito sessions are never compacted because nothing is persisted.
 
 ## Configuring Limits
 

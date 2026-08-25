@@ -62,6 +62,18 @@ async fn main() {
                 ensure_daemon(&transport, &mut daemon_started).await;
                 kb::handle_kb_heatmap(json, &transport).await;
             }
+            cli::KbCommands::Export { dir, stdout, json } => {
+                ensure_daemon(&transport, &mut daemon_started).await;
+                kb::handle_kb_export(dir, stdout, json, &transport).await;
+            }
+            cli::KbCommands::Import {
+                path,
+                dry_run,
+                json,
+            } => {
+                ensure_daemon(&transport, &mut daemon_started).await;
+                kb::handle_kb_import(path, dry_run, json, &transport).await;
+            }
             cli::KbCommands::Reset => {
                 ensure_daemon(&transport, &mut daemon_started).await;
                 kb::handle_kb_reset(&transport).await;

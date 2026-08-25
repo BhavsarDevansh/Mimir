@@ -404,6 +404,17 @@ Wipe the entire knowledge graph with an explicit confirmation flow: live entity/
 mimir kb reset
 ```
 
+### `mimir kb export` / `mimir kb import`
+
+Obsidian-compatible export and import (issue #62). `mimir kb export` writes one Markdown file per entity — YAML frontmatter, wiki-links, and sections for dates, relationships, preferences, and facts — to `--dir`, else `knowledge.export_dir`, else `~/AgentKnowledge`, and prints a summary (`--stdout` prints the files, `--json` dumps the raw bundle). `mimir kb import <path>` reads a vault folder back into the graph: `--dry-run` reports what would change without writing, re-imports skip facts that already exist, and imported facts start at 0.80 confidence unless the file says otherwise. See `docs/wiki/obsidian-export-import.md` for the format and workflow.
+
+```bash
+mimir kb export
+mimir kb export --dir ~/MyVault
+mimir kb import ~/MyVault --dry-run
+mimir kb import ~/MyVault
+```
+
 ## `mimir connector` — Connector Commands
 
 Manage connector instances (email, calendar, photos) through the daemon over HTTP. Every command supports `--json` for structured, scriptable output, and slug-based commands resolve slugs against the daemon's instance list.

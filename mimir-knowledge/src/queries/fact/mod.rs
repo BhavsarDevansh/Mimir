@@ -31,6 +31,8 @@ pub use browse::{
 };
 pub use insert::{insert_fact, insert_fact_in_tx};
 pub use pending::{PendingFactRow, list_pending};
-pub use read::{get_active_facts_at, get_by_id, get_by_object, get_by_predicate, get_by_subject};
+pub use read::{
+    exists_triple, get_active_facts_at, get_by_id, get_by_object, get_by_predicate, get_by_subject,
+};
 pub use status::{ranges_overlap, set_status, set_status_tx, update_valid_until};
 pub use update::update_fact;

@@ -18,6 +18,61 @@ pub enum PreferenceCategory {
     General = 7,
 }
 
+/// Every [`PreferenceCategory`] variant in discriminant order.
+///
+/// Single source of truth for callers that must enumerate the variants (for
+/// example, the Obsidian format's category wire names, issue #62).
+pub const PREFERENCE_CATEGORIES: [PreferenceCategory; 7] = [
+    PreferenceCategory::CalendarBehavior,
+    PreferenceCategory::NotificationStyle,
+    PreferenceCategory::FoodPreference,
+    PreferenceCategory::TravelPreference,
+    PreferenceCategory::WorkStyle,
+    PreferenceCategory::CommunicationPreference,
+    PreferenceCategory::General,
+];
+
+impl PreferenceCategory {
+    /// Wire representation of the preference category.
+    ///
+    /// Used by the Obsidian export/import format (issue #62) so the rendered
+    /// `Category:` prefix and the parsed value share one string table.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CalendarBehavior => "CalendarBehavior",
+            Self::NotificationStyle => "NotificationStyle",
+            Self::FoodPreference => "FoodPreference",
+            Self::TravelPreference => "TravelPreference",
+            Self::WorkStyle => "WorkStyle",
+            Self::CommunicationPreference => "CommunicationPreference",
+            Self::General => "General",
+        }
+    }
+}
+
+impl std::str::FromStr for PreferenceCategory {
+    type Err = ();
+
+    /// Parse a category wire string back into the enum, case-insensitive.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        PREFERENCE_CATEGORIES
+            .into_iter()
+            .find(|c| c.as_str().eq_ignore_ascii_case(s.trim()))
+            .ok_or(())
+    }
+}
+
+impl TryFrom<i16> for PreferenceCategory {
+    type Error = ();
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        PREFERENCE_CATEGORIES
+            .into_iter()
+            .find(|c| *c as i16 == value)
+            .ok_or(())
+    }
+}
+
 /// How a preference value was determined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Type, Serialize, Deserialize)]
 #[repr(i16)]

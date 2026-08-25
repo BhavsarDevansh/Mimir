@@ -174,6 +174,14 @@ pub struct NormalizedFact {
     /// batches distinguishable in the provenance chain and the confidence
     /// model without requiring one connector instance per method.
     pub extraction_method: Option<ExtractionMethod>,
+    /// Per-fact confidence override (#62).
+    ///
+    /// `None` (the default for every existing producer) keeps the structural
+    /// confidence model: the source-type initial (chat/connector). The
+    /// Obsidian import sets this from a rendered `confidence: N` attribute so
+    /// an export → re-import round trip preserves non-explicit scores;
+    /// values are clamped to `[0.0, 1.0]` by the pipeline.
+    pub confidence: Option<f32>,
     /// Optional event-type hint for the events-subsystem overlay (#74).
     ///
     /// `None` (the default for conversational facts) lets

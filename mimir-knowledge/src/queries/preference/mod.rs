@@ -8,6 +8,6 @@ mod write;
 
 pub use read::{
     get_contexts_for_preference, get_preference, get_preference_audit_log, get_preference_by_id,
-    get_sources_for_preference,
+    get_preferences_for_entity, get_sources_for_preference,
 };
 pub use write::{insert_preference, upsert_preference};

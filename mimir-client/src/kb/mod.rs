@@ -4,9 +4,11 @@
 //! - [`query`] — fact query / show / edit / browse / profile / audit.
 //! - [`lifecycle`] — forget / restore / trash / pending / confirm / reject.
 //! - [`categories`] — category list / show / create / delete.
+//! - [`obsidian`] — Obsidian export and import (issue #62).
 
 mod categories;
 mod lifecycle;
+mod obsidian;
 mod optimization;
 mod query;
 #[cfg(test)]

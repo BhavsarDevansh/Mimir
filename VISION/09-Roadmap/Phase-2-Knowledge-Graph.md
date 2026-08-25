@@ -174,17 +174,17 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
   - `kb trash` — list, restore, empty
   - `kb profile [--entity "<name>"]` — Rust-generated bio from top-20 facts, `--json`
   - `kb audit --entity ... --predicate ...` — disputed facts, pending confirmations, dedup queue
-  - `kb import <path>` — Obsidian/Markdown/CSV, `--dry-run`
-  - `kb export [--format obsidian|json|csv]` — to `~/AgentKnowledge/` or stdout
+  - `kb import <path>` — Obsidian Markdown v1 (issue #62), `--dry-run`; CSV deferred
+  - `kb export [--dir <path>] [--stdout] [--json]` — Obsidian Markdown v1 to `~/AgentKnowledge/` (issue #62)
   - `kb optimization --status` / `--run-now`
 - [ ] Output format: default colorized terminal (`tabled` crate), `--json` on every command
 - [ ] Confidence color coding: green >0.9, yellow 0.7–0.9, red <0.7
 - [x] Phase 3+ deferred: `kb heatmap`, `kb reset` — delivered in v0.135.0 (issue #69): `mimir kb heatmap` renders totals, top entities/predicates, monthly fact distribution, and confidence bands (`--json` supported); `mimir kb reset` wipes the graph behind an exact-phrase confirmation, 5-second countdown, and automatic backup. See `docs/kb-heatmap-reset.md`.
 
 ### 2.17 Obsidian Export & Import
-- [ ] Export: entities → `.md` files with YAML frontmatter + wiki-links → `~/AgentKnowledge/`
-- [ ] Import: parse `.md` files → resolve wiki-links → upsert facts (source_type=Import, confidence=0.80)
-- [ ] `entity_id` in YAML frontmatter links back to KG for re-import
+- [x] Export: entities → `.md` files with YAML frontmatter + wiki-links → `~/AgentKnowledge/` — v0.148.0 (issue #62), see `docs/obsidian-export-import.md`
+- [x] Import: parse `.md` files → resolve wiki-links → upsert facts (source_type=Import, confidence=0.80) — v0.148.0 (issue #62)
+- [x] `entity_id` in YAML frontmatter links back to KG for re-import — v0.148.0 (issue #62)
 - [ ] File watcher (bidirectional sync) deferred to Phase 3
 
 ### 2.18 Testing
@@ -212,7 +212,7 @@ Build the persistent memory system: entities, facts, temporal reasoning, structu
 - [ ] Nightly optimization runs automatically via JobQueue
 - [ ] `mimir memory` produces concise, ranked condensation
 - [x] Legacy file-backed `memory.md` system removed — v0.37.0 (issue #111) deleted it outright and the Knowledge Graph became the sole memory store; no data migration ran and memory renders from the graph
-- [ ] Obsidian export functional
+- [x] Obsidian export functional — v0.148.0 (issue #62); import is the manual counterpart (`mimir kb import <path>`)
 - [ ] All tests pass, benchmarks show acceptable performance with 10k+ facts
 
 ## Dependencies

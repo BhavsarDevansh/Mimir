@@ -35,6 +35,7 @@ fn parse_dt(s: &str) -> DateTime<Utc> {
 
 fn rome_event(raw_ref: &str, valid_until: Option<DateTime<Utc>>) -> NormalizedFact {
     NormalizedFact {
+        confidence: None,
         source_type: SourceType::Connector,
         subject: "Devansh".to_string(),
         subject_type: EntityType::Person,
@@ -250,6 +251,7 @@ async fn chat_provenance_inserts_with_interaction_confidence() {
     let (kg, _dir) = fresh_kg().await;
 
     let fact = NormalizedFact {
+        confidence: None,
         source_type: SourceType::Interaction,
         subject: "Devansh".to_string(),
         subject_type: EntityType::Person,
@@ -336,6 +338,7 @@ async fn sensitive_fact_persists_its_catalogue_categories() {
     // category links must be persisted exactly like the normal insert path so
     // category-based reads and downstream sensitivity logic see them.
     let fact = NormalizedFact {
+        confidence: None,
         source_type: SourceType::Connector,
         subject: "Devansh".to_string(),
         subject_type: EntityType::Person,
@@ -398,6 +401,7 @@ async fn sensitive_fact_persists_its_catalogue_categories() {
 /// is resolved. `favourite_colour` is seeded and stays non-sensitive.
 fn subject_fact(subject: &str, subject_type: EntityType, object: &str) -> NormalizedFact {
     NormalizedFact {
+        confidence: None,
         source_type: SourceType::Interaction,
         subject: subject.to_string(),
         subject_type,
@@ -573,6 +577,7 @@ async fn cross_type_fuzzy_match_creates_new_entity() {
 /// object entity.
 fn took_photo_at_fact(raw_ref: &str, place: &str, lat: f64, lng: f64) -> NormalizedFact {
     NormalizedFact {
+        confidence: None,
         source_type: SourceType::Connector,
         subject: "Devansh".to_string(),
         subject_type: EntityType::Person,

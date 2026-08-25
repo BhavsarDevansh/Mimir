@@ -22,12 +22,13 @@ use crate::routes::{
     connector_pause_handler, connector_remove_handler, connector_resume_handler,
     connector_show_handler, connector_sync_handler, connector_tokens_handler,
     connectors_list_handler, create_category, delete_category, kb_audit_handler, kb_browse_handler,
-    kb_confirm_fact_handler, kb_edit_handler, kb_forget_handler, kb_heatmap_handler,
-    kb_optimization_run_now_handler, kb_optimization_status_handler, kb_pending_handler,
-    kb_profile_handler, kb_query_handler, kb_reject_fact_handler, kb_show_handler,
-    kb_trash_empty_handler, kb_trash_list_handler, kb_trash_restore_handler, list_categories,
-    memory_handler, memory_refresh_handler, models_handler, session_messages_handler,
-    sessions_handler, show_category, status_handler, stop_handler,
+    kb_confirm_fact_handler, kb_edit_handler, kb_export_handler, kb_forget_handler,
+    kb_heatmap_handler, kb_import_handler, kb_optimization_run_now_handler,
+    kb_optimization_status_handler, kb_pending_handler, kb_profile_handler, kb_query_handler,
+    kb_reject_fact_handler, kb_show_handler, kb_trash_empty_handler, kb_trash_list_handler,
+    kb_trash_restore_handler, list_categories, memory_handler, memory_refresh_handler,
+    models_handler, session_messages_handler, sessions_handler, show_category, status_handler,
+    stop_handler,
 };
 use crate::state::AppState;
 
@@ -127,6 +128,11 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         )
         .route("/kb/query", get(kb_query_handler))
         .route("/kb/heatmap", get(kb_heatmap_handler))
+        .route("/kb/export", get(kb_export_handler))
+        .route(
+            "/kb/import",
+            post(kb_import_handler).layer(from_fn(require_loopback)),
+        )
         .route(
             "/kb/facts/{id}",
             get(kb_show_handler).patch(kb_edit_handler),

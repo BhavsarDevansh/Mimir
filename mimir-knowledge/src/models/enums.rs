@@ -41,6 +41,43 @@ impl TryFrom<i16> for EventType {
     }
 }
 
+impl EventType {
+    /// Wire representation of the event kind.
+    ///
+    /// Used by the Obsidian format (issue #62) and the LLM extraction
+    /// validation surface, mirroring the `EntityType::as_str` pattern so
+    /// render and parse share one string table.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Birthday => "Birthday",
+            Self::Appointment => "Appointment",
+            Self::Deadline => "Deadline",
+            Self::Task => "Task",
+            Self::Reminder => "Reminder",
+            Self::Custom => "Custom",
+        }
+    }
+}
+
+impl std::str::FromStr for EventType {
+    type Err = ();
+
+    /// Parse an event-type wire string back into the enum, case-insensitively.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        [
+            Self::Birthday,
+            Self::Appointment,
+            Self::Deadline,
+            Self::Task,
+            Self::Reminder,
+            Self::Custom,
+        ]
+        .into_iter()
+        .find(|t| t.as_str().eq_ignore_ascii_case(s.trim()))
+        .ok_or(())
+    }
+}
+
 /// Lifecycle status of an event overlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Type, serde::Serialize, serde::Deserialize)]
 #[repr(i16)]
@@ -129,6 +166,34 @@ impl TryFrom<i16> for RecurrenceType {
             x if x == Self::Yearly as i16 => Ok(Self::Yearly),
             _ => Err(()),
         }
+    }
+}
+
+impl RecurrenceType {
+    /// Wire representation of the recurrence kind (lowercase).
+    ///
+    /// Mirrors the `parse_recurrence` string table in `extract/parse.rs` and
+    /// powers the Obsidian format render/parse pair (issue #62).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Daily => "daily",
+            Self::Weekly => "weekly",
+            Self::Monthly => "monthly",
+            Self::Yearly => "yearly",
+        }
+    }
+}
+
+impl std::str::FromStr for RecurrenceType {
+    type Err = ();
+
+    /// Parse a recurrence wire string into the enum, case-insensitive.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        RECURRENCE_TYPES
+            .into_iter()
+            .find(|r| r.as_str().eq_ignore_ascii_case(s.trim()))
+            .ok_or(())
     }
 }
 

@@ -22,7 +22,7 @@ mod predicates;
 
 pub use crud::{
     AliasSearchResult, MatchKind, add_alias, create_entity, delete_entity, get_by_id, get_by_name,
-    get_by_name_typed, remove_alias, search, update_entity,
+    get_by_name_typed, get_exact_name, list_all, remove_alias, search, update_entity,
 };
 pub use dedup::{
     auto_merge_pair, enqueue_semantic_dedup, find_exact_duplicates, find_overlapping_aliases,

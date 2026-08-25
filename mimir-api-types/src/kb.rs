@@ -82,6 +82,55 @@ pub struct HeatmapResponse {
     pub confidence_bands: Vec<HeatmapBandRow>,
 }
 
+/// One rendered Markdown document in an export bundle (issue #62).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExportFile {
+    /// Vault-relative path (e.g. `Devansh.md` or `sub/Alice.md`).
+    pub relative_path: String,
+    /// Full Markdown document content.
+    pub content: String,
+}
+
+/// Response for `GET /kb/export` (issue #62): the rendered Obsidian bundle
+/// plus the graph totals it was built from.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExportResponse {
+    /// Rendered documents, ordered by relative path.
+    pub files: Vec<ExportFile>,
+    pub entity_count: usize,
+    pub fact_count: usize,
+    pub preference_count: usize,
+    /// Facts with an event overlay (rendered into the `Dates` section).
+    pub event_count: usize,
+}
+
+/// Request for `POST /kb/import` (issue #62).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ImportRequest {
+    /// Vault directory to scan for Markdown files.
+    pub path: String,
+    /// Plan only; write nothing.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// Response for `POST /kb/import` (issue #62): planned or applied counts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ImportResponse {
+    pub dry_run: bool,
+    pub entities_new: usize,
+    pub entities_updated: usize,
+    pub facts_new: usize,
+    /// Exact triples already present; skipped.
+    pub facts_existing: usize,
+    pub preferences_new: usize,
+    pub preferences_updated: usize,
+    /// Facts parsed from the `Dates` section (also counted in `facts_new`).
+    pub dates_new: usize,
+    /// Per-file parse failures and per-fact pipeline errors.
+    pub errors: Vec<String>,
+}
+
 /// Source attached to a fact (detail view).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SourceRow {

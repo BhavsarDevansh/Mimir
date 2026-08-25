@@ -119,6 +119,10 @@ mimir kb heatmap --json
 
 Dedicated full-wipe flow (issue #69): prints live entity/fact counts, requires the exact phrase `DELETE EVERYTHING` (case-sensitive) interactively, runs a 5-second countdown, then dispatches the shared `kb forget --all` path — the daemon re-validates the phrase, creates a timestamped backup under `~/.local/share/mimir/backups/`, and hard-deletes the graph. Requires a terminal; the non-interactive equivalent is `mimir kb forget --all --confirmation-phrase "DELETE EVERYTHING"`. See `docs/kb-heatmap-reset.md`.
 
+### `mimir kb export` / `mimir kb import`
+
+Obsidian-compatible Markdown exchange (issue #62): `mimir kb export` renders the knowledge graph as one `.md` file per entity (YAML frontmatter, wiki-links, `Dates`/`Relationships`/`Preferences`/`Facts` sections) to `--dir`, else `knowledge.export_dir`, else `~/AgentKnowledge`, and prints a summary; `--stdout` prints the files with `<!-- mimir: {name} -->` separators; `--json` dumps the raw bundle. `mimir kb import <path>` sends a vault directory to the daemon (`POST /kb/import`, loopback-gated), which parses, plans, and applies — `--dry-run` reports exactly what would change and writes nothing; re-importing skips exact existing triples. Imported facts use `source_type=Import` (0.80 confidence unless the file carries a `confidence: N` attribute) and flow through the shared pipeline (canonicalisation, corroboration, sensitivity gate, events overlay). See `docs/obsidian-export-import.md`.
+
 ### `mimir kb` date filters
 
 KB audit and forget commands accept `--from`/`--to` date filters via `mimir/src/kb/mod.rs::parse_datetime`. Strings with an explicit timezone offset (RFC3339, e.g. `2020-06-15T10:30:00Z` or `...+02:00`) are preserved as UTC. Offsetless datetimes (`2020-06-15T10:30:00`, `2020-06-15 10:30:00`) and date-only inputs (`2020-06-15`) are interpreted in the CLI/daemon **local timezone** (sharing `DailySchedule::naive_to_utc_local`), so user-authored local times behave intuitively rather than being silently shifted to UTC (issue #168).

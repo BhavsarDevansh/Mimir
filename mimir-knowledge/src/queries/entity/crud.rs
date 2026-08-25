@@ -117,6 +117,41 @@ pub async fn get_by_name_typed(
     search_by_name(pool, name, Some(entity_type as i16)).await
 }
 
+/// Exact case-insensitive name lookup across all entity types.
+///
+/// Mirrors the `ON CONFLICT DO NOTHING` upsert in [`create_entity`]: a
+/// same-name entity of a different type is reused, not duplicated. The
+/// Obsidian import planner (issue #62) uses this as the truthful dry-run
+/// counterpart of the typed chain — after a type-filtered miss, an exact
+/// same-name entity is the entity `create_entity` would return.
+pub async fn get_exact_name(
+    pool: &SqlitePool,
+    name: &str,
+) -> Result<Option<Entity>, KnowledgeError> {
+    sqlx::query_as::<_, Entity>(
+        "SELECT id, name, entity_type_id, aliases, created_at, updated_at \
+         FROM entities WHERE name = ? COLLATE NOCASE LIMIT 1",
+    )
+    .bind(name)
+    .fetch_optional(pool)
+    .await
+    .map_err(Into::into)
+}
+
+/// List every entity in the graph, ordered by name.
+///
+/// Backs the Obsidian export snapshot (issue #62) which renders one document
+/// per entity.
+pub async fn list_all(pool: &SqlitePool) -> Result<Vec<Entity>, KnowledgeError> {
+    sqlx::query_as::<_, Entity>(
+        "SELECT id, name, entity_type_id, aliases, created_at, updated_at \
+         FROM entities ORDER BY name, id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
+}
+
 /// Core exact-name → exact-alias → FTS5-fuzzy search, optionally restricted to
 /// one entity type. When `type_filter` is set, cross-type candidates are
 /// dropped after fetch (entity counts are small and personal-scale, so this

@@ -9,14 +9,17 @@
 //! - `forget` — fact forgetting (soft delete).
 //! - `trash` — trash list / restore / empty.
 //! - `pending` — pending-confirmation list / confirm / reject.
+//! - `export` / `import` — Obsidian export and import (issue #62).
 //! - `params` — query-string parameter structs.
 //! - `helpers` — shared parsing and name-resolution helpers.
 
 mod browse;
 mod detail;
+mod export;
 mod forget;
 mod heatmap;
 mod helpers;
+mod import;
 mod optimization;
 mod params;
 mod pending;
@@ -25,8 +28,10 @@ mod trash;
 
 pub use browse::{kb_audit_handler, kb_browse_handler, kb_profile_handler};
 pub use detail::{kb_edit_handler, kb_show_handler};
+pub use export::kb_export_handler;
 pub use forget::kb_forget_handler;
 pub use heatmap::kb_heatmap_handler;
+pub use import::kb_import_handler;
 pub use optimization::{kb_optimization_run_now_handler, kb_optimization_status_handler};
 pub use params::{
     AuditQueryParams, BrowseQueryParams, ProfileQueryParams, QueryParams, TrashQueryParams,

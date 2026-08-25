@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{ArgGroup, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -138,6 +140,31 @@ pub enum KbCommands {
     /// Show a knowledge-density heatmap of the knowledge graph.
     Heatmap {
         /// Output raw JSON instead of a rendered heatmap.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export the knowledge graph as Obsidian Markdown files (issue #62).
+    Export {
+        /// Destination directory; overrides `knowledge.export_dir`
+        /// (default `~/AgentKnowledge`).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Print the rendered files to stdout with `<!-- mimir: name -->`
+        /// separators instead of writing them.
+        #[arg(long)]
+        stdout: bool,
+        /// Output raw JSON instead of a summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Import an Obsidian vault directory into the knowledge graph (issue #62).
+    Import {
+        /// Vault directory containing Markdown files.
+        path: PathBuf,
+        /// Plan the import and report what would change; write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Output raw JSON instead of a summary.
         #[arg(long)]
         json: bool,
     },

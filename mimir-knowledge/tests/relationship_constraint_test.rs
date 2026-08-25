@@ -41,6 +41,7 @@ fn normalized_fact(
     is_sensitive: bool,
 ) -> NormalizedFact {
     NormalizedFact {
+        confidence: None,
         source_type: SourceType::Interaction,
         subject: subject.to_string(),
         subject_type,

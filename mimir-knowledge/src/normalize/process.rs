@@ -148,6 +148,7 @@ async fn process_normalized_fact(
         requires_user_action,
         ref raw_reference,
         extraction_method,
+        confidence,
         event_type,
         location,
     } = extracted;
@@ -231,12 +232,16 @@ async fn process_normalized_fact(
         }
     }
 
-    // Confidence: reliability score for the source type / connector kind, with
-    // NO extraction-method discount. Connector facts use the
+    // Confidence: a per-fact override (Obsidian import, #62) wins; otherwise
+    // the reliability score for the source type / connector kind, with NO
+    // extraction-method discount. Connector facts use the
     // `connector_reliability` table score resolved once per batch (issue
     // #292); other source types keep the `confidence::initial` defaults.
-    let confidence =
-        crate::confidence::resolve_initial_confidence(None, source_type, connector_confidence);
+    let confidence = confidence
+        .unwrap_or_else(|| {
+            crate::confidence::resolve_initial_confidence(None, source_type, connector_confidence)
+        })
+        .clamp(0.0, 1.0);
 
     // Validate and collect category IDs.
     let mut valid_category_ids = Vec::new();

@@ -4,7 +4,7 @@ pub mod auth;
 pub mod config;
 pub mod context;
 pub mod conversation;
-pub(crate) mod frontmatter;
+pub mod frontmatter;
 pub mod fts5;
 pub mod geocoder;
 pub mod hooks;

@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.148.1] — 2026-08-25
+
+### Fix: Obsidian export/import review fixes (PR #504)
+
+- `month_number` no longer panics on non-ASCII month tokens (e.g. `éé 2025`): it derives at most the first three characters and returns `None` for unsupported month names.
+- Preference import is value-aware: a changed vault value that loses to a user-set or equal/higher-confidence stored preference is reported in the outcome instead of silently skipped (dry-run predicts the conflict), unchanged values stay idempotent with no audit-log churn, and `preferences_updated` is only counted when the upsert actually overwrites.
+- A note without a frontmatter `type` or without a `#` heading no longer retypes or renames an existing entity — only explicitly supplied metadata is applied, so hand-written or heading-stripped notes stop silently changing stored entities.
+- `render_all` sorts exported documents by relative path (the documented ordering contract) and `render_document` returns a named `RenderedDocument` struct instead of a positional five-element tuple.
+- The daemon's `POST /kb/import` runs vault traversal and file reads on a blocking task so a large vault never stalls the async worker.
+- `mimir kb export` creates parent directories for nested relative paths before writing each file.
+- Docs: the wiki guide describes the export as a human-readable working copy rather than a complete graph backup and states that global preferences remain outside the exported vault and are not restored by import.
+- Version bumped 0.148.0 → 0.148.1 (patch — bugfixes and documentation).
+
+## [0.148.0] — 2026-08-25
+
+### Feature: Obsidian export/import — Markdown + YAML frontmatter + wiki-links (issue #62)
+
+- `mimir kb export` renders the whole knowledge graph as Obsidian-compatible Markdown: one `.md` file per entity with YAML frontmatter (`entity_id`, `type`, `aliases`, timestamps), wiki-links (`[[Name]]`) for entity-object facts, and the four-section grammar (`Dates` for event-overlay facts, `Relationships`, `Preferences`, `Facts`). The bundle comes from the daemon's `GET /kb/export` and is written to `--dir`, else `knowledge.export_dir` (env `MIMIR_KNOWLEDGE_EXPORT_DIR`), else `~/AgentKnowledge`; `--stdout` prints the files with `<!-- mimir: {name} -->` separators and `--json` dumps the raw `ExportResponse`.
+- `mimir kb import <path>` parses a vault directory (daemon `POST /kb/import`, loopback-gated) back into the graph through the shared `normalize_and_insert` pipeline: `entity_id` anchors re-imports to existing entities (otherwise the canonical name-resolution chain, issue #182), name/type/alias changes are applied, exact existing triples are skipped, imported facts default to `source_type=Import` confidence 0.80 (a `confidence: N` attribute overrides, clamped to `[0, 1]`), event facts recreate the events overlay, and sensitive facts still land in `pending_confirmation`. `--dry-run` plans and reports without writing.
+- New shared grammar in `mimir-knowledge/src/obsidian/` (render and parse share one grammar so the two directions cannot drift), `NormalizedFact.confidence` per-fact override, `EventType`/`RecurrenceType`/`PreferenceCategory` wire-name `as_str`/`FromStr` pairs (reused by LLM extraction parsing, DRY), and entity/preference/event query helpers for rendering and existence checks.
+- Docs: `docs/obsidian-export-import.md` (format spec + architecture), `docs/wiki/obsidian-export-import.md` (user guide), CLI command docs updated, roadmap 2.16/2.17 and success criteria marked delivered, `Mimir-Implementation-Context.md` updated.
+- Version bumped 0.147.2 → 0.148.0 (minor — new feature subsystem).
+
 ## [0.147.2] — 2026-08-25
 
 ### Fix: Windows-safe TOML paths in the CLI integration-test fixture (PR #503)

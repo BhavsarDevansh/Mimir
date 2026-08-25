@@ -36,7 +36,7 @@ If the socket cannot be bound (a bad configured path, missing permissions), the 
 
 - `mimir-core`: socket-path resolution (configured value, tilde expansion, default fallback) and env-over-config precedence.
 - `mimir-server`: full-daemon integration tests over a Unix socket — `/health` round trip, `/stop` over the socket (loopback guard accepts Unix peers), socket file removal on graceful shutdown, and stale-socket recovery before binding. Test daemons isolate the socket inside their temp dir so parallel suites never fight over the default path.
-- `mimir` (CLI): transport precedence (`MIMIR_BASE_URL` wins; configured path; default socket), daemon-guard probe for socket-file existence, and token-bearing UDS client construction.
+- `mimir` (CLI): transport precedence (`MIMIR_BASE_URL` wins; configured path; default socket), daemon-guard connect-based probe (live / missing / stale socket files), and token-bearing UDS client construction.
 
 ## Configuration reference
 

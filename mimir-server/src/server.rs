@@ -18,7 +18,9 @@ use crate::state::AppState;
 ///
 /// Loads shared state from `config`, binds to `config.server.bind_addr`,
 /// and runs until the process is terminated or a graceful shutdown is
-/// triggered via the `/stop` endpoint, Ctrl-C, or SIGTERM.
+/// triggered via the `/stop` endpoint, Ctrl-C, or SIGTERM. On Unix the same
+/// router is also served on a Unix domain socket (issue #25) alongside the
+/// TCP listener, so the local CLI can prefer the socket.
 ///
 /// If the server does not shut down gracefully within 30 seconds, it is
 /// forcefully aborted so that resource cleanup can still run.

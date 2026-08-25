@@ -37,11 +37,13 @@ pub enum DaemonGuardError {
 
 /// Ensure the Mimir daemon is running.
 ///
-/// 1. Fast-probe `GET /health` with a 500 ms timeout.
+/// 1. Fast-probe the resolved transport with a 500 ms timeout (a connect
+///    attempt on the Unix socket, or `GET /health` over TCP).
 /// 2. If the daemon is reachable, return `Ok(())` immediately.
 /// 3. If not, print an error and prompt the user to start it.
-/// 4. On approval, spawn `mimir start` and poll `/health` with exponential
-///    backoff until it comes up or a 10 s wall-clock timeout expires.
+/// 4. On approval, spawn `mimir start` and poll the same transport probe with
+///    exponential backoff until it comes up or a 10 s wall-clock timeout
+///    expires.
 /// 5. `already_tried` prevents more than one auto-start attempt per CLI
 ///    invocation.
 pub async fn ensure_daemon_running(
@@ -61,7 +63,8 @@ pub async fn check_daemon_reachable(transport: &DaemonTransport) -> bool {
 // Internal abstractions (trait-based so unit tests can inject mocks).
 // ---------------------------------------------------------------------------
 
-/// Trait for probing the daemon health endpoint.
+/// Trait for probing the daemon over the resolved transport (a connect
+/// attempt on the Unix socket, or the TCP `GET /health` endpoint).
 trait Probe: Send + Sync {
     fn check<'a>(
         &'a self,

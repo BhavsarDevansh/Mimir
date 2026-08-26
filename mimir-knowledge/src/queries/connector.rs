@@ -404,7 +404,9 @@ pub async fn update_connector_config(
 /// validation (non-canonical predicates, invalid entity types). The counts
 /// accumulate across backfill and incremental runs so `mimir connector list`
 /// / `status` can surface the acceptance rate. Returns
-/// [`KnowledgeError::ConnectorNotFound`] when no row matches `id`.
+/// [`KnowledgeError::ConnectorNotFound`] when no row matches `id`, and
+/// [`KnowledgeError::Validation`] when a delta is negative (cumulative
+/// counters must never decrease).
 pub async fn record_connector_fact_counts(
     pool: &SqlitePool,
     id: i32,
@@ -412,6 +414,11 @@ pub async fn record_connector_fact_counts(
     dropped: i64,
     now: DateTime<Utc>,
 ) -> Result<(), KnowledgeError> {
+    if accepted < 0 || dropped < 0 {
+        return Err(KnowledgeError::Validation(format!(
+            "connector fact counters must be non-negative (accepted: {accepted}, dropped: {dropped})"
+        )));
+    }
     let result = sqlx::query(
         "UPDATE connectors SET facts_accepted = facts_accepted + ?, \
          facts_dropped = facts_dropped + ?, updated_at = ? WHERE id = ?",

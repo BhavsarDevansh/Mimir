@@ -661,3 +661,32 @@ async fn record_fact_counts_unknown_connector_errors() {
         mimir_knowledge::KnowledgeError::ConnectorNotFound(_)
     ));
 }
+
+#[tokio::test]
+async fn record_fact_counts_rejects_negative_deltas() {
+    let (kg, _dir) = init_kg().await;
+    let c = kg.upsert_connector(gmail_input("personal")).await.unwrap();
+
+    let err = kg
+        .record_connector_fact_counts(c.id, -1, 0)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        mimir_knowledge::KnowledgeError::Validation(_)
+    ));
+
+    let err = kg
+        .record_connector_fact_counts(c.id, 0, -1)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        mimir_knowledge::KnowledgeError::Validation(_)
+    ));
+
+    // Rejected updates leave the cumulative counters untouched.
+    let after = kg.get_connector(c.id).await.unwrap().unwrap();
+    assert_eq!(after.facts_accepted, 0);
+    assert_eq!(after.facts_dropped, 0);
+}

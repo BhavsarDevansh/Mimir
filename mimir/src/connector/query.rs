@@ -114,7 +114,7 @@ fn print_connector_detail(conn: &ConnectorResponse) {
         conn.auth.as_ref().map(|a| a.kind.as_str()).unwrap_or("-")
     );
     println!("Items:         {}", conn.item_count);
-    println!("Facts accepted:{}", conn.facts_accepted);
+    println!("Facts accepted: {}", conn.facts_accepted);
     println!("Facts dropped: {}", conn.facts_dropped);
     if let Some(cursor) = &conn.sync_cursor {
         println!("Sync cursor:   {cursor}");

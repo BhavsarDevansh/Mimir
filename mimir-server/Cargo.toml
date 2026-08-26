@@ -53,6 +53,7 @@ mock-connector = ["mimir-connectors/test-mock-connector"]
 secrets-keyring = ["mimir-connectors/secrets-keyring"]
 
 [dev-dependencies]
+criterion = { version = "0.8.2", features = ["async_tokio"] }
 mimir-client = { path = "../mimir-client" }
 mimir-core = { path = "../mimir-core", features = ["mock-llm"] }
 # The configurable mock connector test harness (F13 / #190) for the connector
@@ -65,3 +66,7 @@ tempfile = "3"
 # directly because shutdown.rs calls nix::unistd::getpid().
 nix = { version = "0.31", features = ["process", "signal"] }
 tokio-util = "0.7"
+
+[[bench]]
+name = "state_build"
+harness = false

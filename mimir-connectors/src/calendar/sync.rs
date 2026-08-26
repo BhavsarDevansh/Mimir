@@ -24,7 +24,7 @@ impl CalendarConnector {
     /// reconciliation is deliberately not attempted: a deleted resource
     /// carries no UID (only its href), and recurring events can share a UID
     /// across resources, so trashing by UID can remove facts that will not be
-    /// re-inserted. See `docs/calendar-connector.md` and the CHANGELOG.
+    /// re-inserted. See `docs/calendar-connector.md` and the release notes.
     pub(super) async fn stage(&self, result: SyncCollectionResult) -> Result<u32, ConnectorError> {
         let mut count = 0u32;
         for res in result.changed {
@@ -91,7 +91,7 @@ impl CalendarConnector {
         // Compatibility boundary: facts authored before 0.103.0 used the
         // VEVENT UID as their raw_reference, so href tombstones cannot match
         // them; the required cleanup (connector-forget + full re-sync) is
-        // documented in `docs/calendar-connector.md` and the CHANGELOG.
+        // documented in `docs/calendar-connector.md` and the release notes.
         let raw_ref = event.href.clone();
         crate::ical::vevent_to_facts(self.user_identity.as_deref(), &event.vevent, &raw_ref)
     }

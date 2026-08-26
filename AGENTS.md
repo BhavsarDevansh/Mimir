@@ -68,7 +68,7 @@ After implementation is complete and all tests pass:
 5. Create a Pull Request (PR) that links back to the original issue.
    - The PR description should contain a closing statement such as: `Closes #2` or `Fixes #5`
    - Summarise the key changes and reference any updated documentation.
-   - **Markdown prose formatting (all repo `.md` files AND PR/commit messages):** write prose as flowing single-line paragraphs and single-line list items. Do **not** hard-wrap lines with manual newlines inside a paragraph or list item — single newlines render as soft breaks and make the raw text and diffs hard to read. Keep blank lines only between blocks (headers, paragraphs, list items). Applies to `README.md`, `CHANGELOG.md`, `docs/`, `docs/wiki/`, `Mimir-Implementation-Context.md`, and every other `.md` file in the repo.
+   - **Markdown prose formatting (all repo `.md` files AND PR/commit messages):** write prose as flowing single-line paragraphs and single-line list items. Do **not** hard-wrap lines with manual newlines inside a paragraph or list item — single newlines render as soft breaks and make the raw text and diffs hard to read. Keep blank lines only between blocks (headers, paragraphs, list items). Applies to `README.md`, `docs/`, `docs/wiki/`, `Mimir-Implementation-Context.md`, and every other `.md` file in the repo.
 6. Do not merge the PR yourself unless explicitly asked.
 
 ## Issue Hygiene
@@ -84,7 +84,7 @@ After implementation is complete and all tests pass:
   - **MINOR** (`0.1.0` → `0.2.0`) for backwards-compatible new features, refactors, or subsystem additions.
   - **MAJOR** (`0.1.0` → `1.0.0`) for breaking changes to public APIs, configuration formats, or data models.
 - Keep all crate versions in the workspace in sync unless there is an explicit, documented reason to diverge.
-- Update `CHANGELOG.md` (or create it at the workspace root if absent) with a brief entry summarising the change for the new version.
+- Publish the release notes for the new version on GitHub Releases via `scripts/new-release.sh`; the repository keeps no changelog file.
 - If the change set includes multiple logical changes (e.g., a feature plus a bugfix), bump the highest applicable version component once for the entire change set.
 
 ## Breaking Changes

@@ -1,6 +1,6 @@
 # Changelog Archive
 
-Archived changelog entries for Mimir versions before 0.152.2. Newer entries live in `CHANGELOG.md`, and the full release history is published on [GitHub Releases](https://github.com/BhavsarDevansh/Mimir/releases).
+Frozen release notes for Mimir versions before 0.152.2, which predate the GitHub-release workflow. Notes for 0.152.2 and later live on [GitHub Releases](https://github.com/BhavsarDevansh/Mimir/releases); the repository keeps no active changelog.
 
 ## [0.152.1] — 2026-08-26
 

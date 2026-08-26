@@ -158,6 +158,14 @@ impl Connector for GraphCalendarConnector {
         // `on_cycle_succeeded` once the whole cycle succeeded (issue #314).
         let new_cursor = result.new_delta_link.clone();
         let fetched = self.stage(result).await?;
+        // A delta response without a final deltaLink (rare) means the server
+        // wants the next cycle to start from scratch; the supervisor's
+        // cursor contract treats `new_cursor: None` as "unchanged", so clear
+        // the in-memory marker here to force a full re-sync on the next
+        // in-process cycle (the persisted cursor self-heals on that cycle).
+        if new_cursor.is_none() {
+            *self.delta_link.lock().await = None;
+        }
         Ok(SyncOutcome {
             fetched,
             new_cursor,

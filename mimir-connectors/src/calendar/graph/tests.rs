@@ -112,6 +112,96 @@ async fn sync_events_incremental_requests_stored_delta_link() {
 }
 
 #[tokio::test]
+async fn sync_events_gone_resets_to_full_sync() {
+    // A stored delta token can expire or be invalidated by a server-side
+    // reset; the Graph delta contract answers `410 Gone` and the client
+    // must restart with a full synchronization (so a stale cursor
+    // self-heals instead of failing every cycle).
+    let server = MockServer::start().await;
+    let base = format!("{}/v1.0", server.uri());
+    let expired = format!("{base}/me/events/delta?$deltatoken=expired");
+    let fresh = format!("{base}/me/events/delta?$deltatoken=fresh");
+    Mock::given(method("GET"))
+        .and(path("/v1.0/me/events/delta"))
+        .and(query_param("$deltatoken", "expired"))
+        .respond_with(ResponseTemplate::new(410))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1.0/me/events/delta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(delta_body(
+            &[event_json("evt-1", "Trip to Rome")],
+            Some(&fresh),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = GraphClient::new(http_client(), base, "t0ken".into());
+    let res = client.sync_events(Some(&expired)).await.unwrap();
+    // The full re-sync must re-fetch the whole event set and yield the
+    // fresh cursor.
+    assert_eq!(res.events.len(), 1);
+    assert_eq!(res.events[0].id, "evt-1");
+    assert_eq!(res.new_delta_link.as_deref(), Some(fresh.as_str()));
+}
+
+#[tokio::test]
+async fn sync_events_sync_state_not_found_resets_to_full_sync() {
+    // Some services surface an expired delta token as a `400` whose body
+    // carries the `syncStateNotFound` error code — the same reset contract
+    // as `410 Gone`.
+    let server = MockServer::start().await;
+    let base = format!("{}/v1.0", server.uri());
+    let expired = format!("{base}/me/events/delta?$deltatoken=expired");
+    let fresh = format!("{base}/me/events/delta?$deltatoken=fresh");
+    Mock::given(method("GET"))
+        .and(path("/v1.0/me/events/delta"))
+        .and(query_param("$deltatoken", "expired"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": {"code": "syncStateNotFound", "message": "Token is not valid."}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1.0/me/events/delta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(delta_body(
+            &[event_json("evt-1", "Trip to Rome")],
+            Some(&fresh),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = GraphClient::new(http_client(), base, "t0ken".into());
+    let res = client.sync_events(Some(&expired)).await.unwrap();
+    assert_eq!(res.events.len(), 1);
+    assert_eq!(res.new_delta_link.as_deref(), Some(fresh.as_str()));
+}
+
+#[tokio::test]
+async fn sync_events_plain_400_is_not_silently_reset() {
+    // Only the documented reset signals (`410`, or `400` with the
+    // `syncStateNotFound` code) restart the sync; any other failure still
+    // surfaces as an error so a real server problem is not masked.
+    let server = MockServer::start().await;
+    let base = format!("{}/v1.0", server.uri());
+    let expired = format!("{base}/me/events/delta?$deltatoken=expired");
+    Mock::given(method("GET"))
+        .and(path("/v1.0/me/events/delta"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": {"code": "invalidRequest", "message": "nope"}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = GraphClient::new(http_client(), base, "t0ken".into());
+    let err = client.sync_events(Some(&expired)).await.unwrap_err();
+    assert!(
+        matches!(err, ConnectorError::Other(_)),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
 async fn sync_events_pages_through_next_link() {
     let server = MockServer::start().await;
     let base = format!("{}/v1.0", server.uri());
@@ -376,6 +466,63 @@ async fn on_cycle_succeeded_adopts_cursor_for_next_incremental_sync() {
     // Now the incremental sync must request the stored delta link.
     let second = connector.sync(SyncOptions::default()).await.unwrap();
     assert_eq!(second.fetched, 0);
+}
+
+#[tokio::test]
+async fn missing_delta_link_clears_marker_for_next_full_sync() {
+    // A delta response without a final deltaLink tells the client to start
+    // from scratch; the supervisor treats `new_cursor: None` as "unchanged",
+    // so the connector must clear its in-memory marker itself to make the
+    // next in-process cycle a full re-sync (self-healing, never skipping).
+    let server = MockServer::start().await;
+    let base = format!("{}/v1.0", server.uri());
+    let delta_link = format!("{base}/me/events/delta?$deltatoken=token-2");
+    // Incremental requests with the adopted marker answer an empty delta
+    // with NO deltaLink.
+    Mock::given(method("GET"))
+        .and(path("/v1.0/me/events/delta"))
+        .and(query_param("$deltatoken", "token-2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(delta_body(&[], None)))
+        .mount(&server)
+        .await;
+    // Full-sync requests (no delta token) answer the initial delta link.
+    Mock::given(method("GET"))
+        .and(path("/v1.0/me/events/delta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(delta_body(
+            &[event_json("evt-1", "Trip to Rome")],
+            Some(&delta_link),
+        )))
+        .up_to_n_times(2)
+        .mount(&server)
+        .await;
+
+    let store: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
+    store
+        .store("calendar", &oauth_bundle("t0ken", None))
+        .await
+        .unwrap();
+    let connector = GraphCalendarConnector::from_config_with_http(
+        oauth_config(&base, "https://oauth.example.com/token"),
+        Some(store),
+        None,
+        None,
+        Some(http_client()),
+    )
+    .unwrap();
+
+    // Cycle 1: full sync, adopt the cursor.
+    let first = connector.sync(SyncOptions::default()).await.unwrap();
+    connector
+        .on_cycle_succeeded(first.new_cursor.as_deref())
+        .await;
+    // Cycle 2: incremental, server returns no deltaLink → marker cleared.
+    let second = connector.sync(SyncOptions::default()).await.unwrap();
+    assert!(second.new_cursor.is_none());
+    // Cycle 3: the marker must be gone, so this is a full sync again (the
+    // no-token mock answers it with the event set).
+    let third = connector.sync(SyncOptions::default()).await.unwrap();
+    assert_eq!(third.fetched, 1);
+    assert_eq!(third.new_cursor.as_deref(), Some(delta_link.as_str()));
 }
 
 #[tokio::test]

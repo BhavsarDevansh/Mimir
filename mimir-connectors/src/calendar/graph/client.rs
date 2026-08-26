@@ -144,8 +144,9 @@ pub struct GraphDeltaResult {
     /// trashes via `extract_deletions` (issue #247).
     pub deleted: Vec<String>,
     /// The final `@odata.deltaLink` to persist as the incremental cursor.
-    /// `None` when the server returned none (treat the next cycle as a full
-    /// re-sync).
+    /// `None` when the server returned none (the connector clears its
+    /// in-memory marker so the next cycle runs a full re-sync — the
+    /// supervisor treats `None` as "cursor unchanged").
     pub new_delta_link: Option<String>,
 }
 
@@ -239,11 +240,42 @@ impl GraphClient {
         Ok(())
     }
 
+    /// The initial (full-sync) delta query URL.
+    fn delta_query_url(&self) -> String {
+        format!(
+            "{}/me/events/delta?$select=id,subject,start,end,location,attendees,recurrence,isCancelled",
+            self.base_url.trim_end_matches('/')
+        )
+    }
+
+    /// Whether a failed delta request signals a delta-token reset the
+    /// client must recover from with a full synchronization (per the
+    /// Microsoft Graph delta-query contract: a delta token can expire from
+    /// the service's token cache or be invalidated by a server-side reset,
+    /// in which case the service returns `410 Gone`, or a `400` whose body
+    /// carries the `syncStateNotFound` error code, and the client must
+    /// restart with a full sync).
+    fn is_delta_reset(status: reqwest::StatusCode, body: &[u8]) -> bool {
+        if status == reqwest::StatusCode::GONE {
+            return true;
+        }
+        if status != reqwest::StatusCode::BAD_REQUEST {
+            return false;
+        }
+        let Ok(payload) = serde_json::from_slice::<serde_json::Value>(body) else {
+            return false;
+        };
+        payload.pointer("/error/code").and_then(|c| c.as_str()) == Some("syncStateNotFound")
+    }
+
     /// Run one delta sync. `delta_link = None` performs a full sync and
     /// yields the initial deltaLink; `Some(link)` performs an incremental
     /// sync by requesting the stored deltaLink verbatim (it carries the
     /// `$deltatoken`). Pages through `@odata.nextLink` until the final
-    /// `@odata.deltaLink` is reached.
+    /// `@odata.deltaLink` is reached. An expired or reset delta token (a
+    /// `410 Gone`, or a `400 syncStateNotFound` response) restarts the sync
+    /// from a full sync once — the Graph contract for a reset token — so a
+    /// stale cursor self-heals instead of failing every cycle.
     pub async fn sync_events(
         &self,
         delta_link: Option<&str>,
@@ -255,11 +287,15 @@ impl GraphClient {
                 self.ensure_same_origin(link)?;
                 link.to_string()
             }
-            None => format!(
-                "{}/me/events/delta?$select=id,subject,start,end,location,attendees,recurrence,isCancelled",
-                self.base_url.trim_end_matches('/')
-            ),
+            None => self.delta_query_url(),
         };
+        // A delta token can expire between cycles (the service's delta-token
+        // cache evicts old tokens) or be invalidated by a server-side reset;
+        // the Graph contract then answers `410 Gone` (or `400` with
+        // `syncStateNotFound`) and the client must restart with a full
+        // synchronization. Exactly one restart: a full sync cannot hit the
+        // reset path again, so any further reset is a genuine server error.
+        let mut restarting = delta_link.is_some();
         let new_delta_link = loop {
             let resp = self
                 .authed(self.http.get(&url))
@@ -275,6 +311,27 @@ impl GraphClient {
                 return Err(ConnectorError::NotAuthenticated);
             }
             if !status.is_success() {
+                // Only the reset-check statuses need the response body; any
+                // other failure returns without buffering a (potentially
+                // large) error payload.
+                if restarting
+                    && (status == reqwest::StatusCode::GONE
+                        || status == reqwest::StatusCode::BAD_REQUEST)
+                {
+                    let body = resp
+                        .bytes()
+                        .await
+                        .map_err(|e| ConnectorError::Network(e.to_string()))?;
+                    if Self::is_delta_reset(status, &body) {
+                        // Restart from a full sync: re-fetch everything and
+                        // discard the partial page (if any) collected so far.
+                        events.clear();
+                        deleted.clear();
+                        url = self.delta_query_url();
+                        restarting = false;
+                        continue;
+                    }
+                }
                 return Err(ConnectorError::Other(format!(
                     "Microsoft Graph events delta failed: HTTP {status}"
                 )));

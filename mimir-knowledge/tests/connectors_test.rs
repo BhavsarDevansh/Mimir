@@ -629,3 +629,35 @@ async fn forget_connector_facts_trashes_multi_source_facts() {
     assert!(kg.get_fact(fact_id).await.unwrap().is_none());
     assert_eq!(kg.list_trash(100, 0).await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn record_fact_counts_increments_cumulative_counters() {
+    let (kg, _dir) = init_kg().await;
+    let c = kg.upsert_connector(gmail_input("personal")).await.unwrap();
+    assert_eq!(c.facts_accepted, 0);
+    assert_eq!(c.facts_dropped, 0);
+
+    kg.record_connector_fact_counts(c.id, 2, 1).await.unwrap();
+    let after_first = kg.get_connector(c.id).await.unwrap().unwrap();
+    assert_eq!(after_first.facts_accepted, 2);
+    assert_eq!(after_first.facts_dropped, 1);
+
+    // Counters accumulate across extraction runs (backfill + incremental).
+    kg.record_connector_fact_counts(c.id, 1, 0).await.unwrap();
+    let after_second = kg.get_connector(c.id).await.unwrap().unwrap();
+    assert_eq!(after_second.facts_accepted, 3);
+    assert_eq!(after_second.facts_dropped, 1);
+}
+
+#[tokio::test]
+async fn record_fact_counts_unknown_connector_errors() {
+    let (kg, _dir) = init_kg().await;
+    let err = kg
+        .record_connector_fact_counts(i32::MAX, 1, 0)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        mimir_knowledge::KnowledgeError::ConnectorNotFound(_)
+    ));
+}

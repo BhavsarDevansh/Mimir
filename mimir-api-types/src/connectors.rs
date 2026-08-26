@@ -56,6 +56,15 @@ pub struct ConnectorResponse {
     /// Number of `sources` rows attributed to this instance — the derived
     /// "items ingested" metric computed from the knowledge graph on demand.
     pub item_count: i64,
+    /// Cumulative validated LLM-extracted facts handed to the knowledge
+    /// graph (issue #508). Written by the email prose-extraction hook;
+    /// other connectors report 0.
+    pub facts_accepted: i64,
+    /// Cumulative LLM-emitted facts rejected by Rust-side validation
+    /// (non-canonical predicates, invalid entity types) (issue #508).
+    /// Surfaced next to `facts_accepted` so silent vocabulary drops are
+    /// visible instead of hiding behind `item_count`.
+    pub facts_dropped: i64,
     /// Non-secret auth configuration from the stored config (issue #507):
     /// surfaced so `mimir connector auth` can re-run the PKCE flow for an
     /// OAuth connector without the user re-supplying the endpoints. Secret
@@ -426,6 +435,8 @@ mod tests {
             created_at: "2026-08-11T00:00:00Z".to_string(),
             updated_at: "2026-08-11T00:00:00Z".to_string(),
             item_count: 0,
+            facts_accepted: 0,
+            facts_dropped: 0,
             auth: None,
         };
         assert_eq!(roundtrip(&resp), resp);

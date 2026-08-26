@@ -28,6 +28,15 @@ pub struct Connector {
     /// after each successful extraction cycle and re-injected at
     /// construction. `None` when the connector keeps no durable state.
     pub durable_state: Option<String>,
+    /// Cumulative validated LLM-extracted facts handed to the knowledge
+    /// graph (issue #508). Written by the email prose-extraction hook; other
+    /// backends leave it at 0.
+    pub facts_accepted: i64,
+    /// Cumulative LLM-emitted facts rejected by Rust-side validation
+    /// (non-canonical predicates, invalid entity types) (issue #508).
+    /// Surfaced next to [`Self::facts_accepted`] so silent vocabulary drops
+    /// are visible in `mimir connector list` / `status`.
+    pub facts_dropped: i64,
     pub last_sync_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
     pub created_at: DateTime<Utc>,

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.151.2] — 2026-08-26
+
+### Fix: Email LLM extraction no longer drops facts invisibly (issue #508)
+
+- The email prose-extraction system prompt now lists the full canonical predicate vocabulary — rendered from the same `mimir_knowledge::CANONICAL_PREDICATES` const the Rust validator checks, plus the open `favourite_<thing>` family — and the tool schema's `relationship_type` description states that any other predicate is dropped, so the model sees the exact words it may emit instead of inventing near-miss predicates that are then discarded. The rendered vocabulary is a `LazyLock` static (one allocation per process), and a test pins the prompt to the validator in both directions.
+- LLM-layer drops are now counted, not just logged: `extract_prose_facts` returns a `ProseExtractionOutcome` carrying the validated facts plus the drop count, the `connector_item.remember` hook logs a per-email `LLM email extraction dropped N of M facts` warning, and migration `057` adds cumulative `facts_accepted` / `facts_dropped` columns to `connectors`, updated after each successful extraction via `KnowledgeGraph::record_connector_fact_counts`.
+- `mimir connector list` / `status` now surface the counters (`accepted` / `dropped` columns and `Facts accepted:` / `Facts dropped:` detail lines), so a vocabulary regression like the 2026-08-24 outlook backfill — 247 dropped facts hidden behind `items: 14` — is visible instead of silent. Connectors that do not run the LLM layer report 0.
+- Tests cover the prompt/validator vocabulary pinning, the dropped-fact count on `extract_prose_facts`, the hook's counter writes (accepted and dropped) on a mixed extraction, and the `record_connector_fact_counts` increment/not-found semantics; docs updated (`docs/email-connector.md`, `docs/connector-management.md`, `docs/wiki/connectors.md`, `docs/wiki/email-connector.md`).
+- The alias-mapping direction (mapping invented predicates onto canonical ones) is deliberately left to the open redesign issue #468, which absorbs the full relation-tree + approval-flow design; this change stops the silent loss and gives the model the vocabulary, without pre-empting that design.
+- Version bumped 0.151.1 → 0.151.2 (patch — backwards-compatible bugfixes).
+
 ## [0.151.1] — 2026-08-26
 
 ### Fix: PR #511 review — OAuth ingest validation and confidential-client re-auth

@@ -90,6 +90,8 @@ The daemon owns the connector framework and exposes the connector management (A1
 
 Status responses carry a derived `item_count`: the number of `sources` rows attributed to the instance, computed on demand via `KnowledgeGraph::count_sources_for_connector`. The `connectors` table itself stores no count column.
 
+Connector status also surfaces the email LLM extraction layer's **acceptance counters** (`facts_accepted` / `facts_dropped`, issue #508): after each prose email is extracted, the connector row accumulates how many facts were validated and stored versus how many the LLM suggested in a form Mimir could not store (a relationship type outside the canonical vocabulary, an invalid entity type). `mimir connector list` shows them as `accepted` and `dropped` columns next to `items`, and `mimir connector status <slug>` prints `Facts accepted:` and `Facts dropped:` lines. Connectors that do not run the LLM layer (photos, calendar) report `0` for both.
+
 `POST /connectors/{id}/forget` is the full cascade: it marks the instance `Paused` (so an aborted cascade leaves a state a retry can reason about), stops the runner and runs the connector's local `forget()` cleanup, deletes the slug-keyed secret, trashes every fact the connector sourced (recoverable from trash for 30 days), and deletes the row. The cascade is serialised per connector and loopback-only, and the secret is deleted before the irreversible fact trash so a credential-deletion failure aborts with nothing destroyed.
 
 ## Managing connectors from the CLI

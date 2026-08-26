@@ -115,19 +115,49 @@ impl HookHandler for EmailExtractionHook {
         )
         .await
         {
-            Ok(facts) => {
+            Ok(outcome) => {
+                let accepted = outcome.facts.len() as i64;
+                let dropped = outcome.dropped as i64;
                 let provenance = Provenance::connector(
                     payload.instance_id,
                     payload.connector_type,
                     ExtractionMethod::LlmExtraction,
                 );
-                match normalize_and_insert(&payload.kg, facts, provenance).await {
-                    Ok(outcome) => {
+                match normalize_and_insert(&payload.kg, outcome.facts, provenance).await {
+                    Ok(insert_outcome) => {
+                        if dropped > 0 {
+                            let total = accepted + dropped;
+                            warn!(
+                                raw_ref = %payload.raw_ref,
+                                accepted,
+                                dropped,
+                                total,
+                                "LLM email extraction dropped {dropped} of {total} facts",
+                            );
+                        }
                         debug!(
                             raw_ref = %payload.raw_ref,
-                            inserted = outcome.inserted.len(),
+                            inserted = insert_outcome.inserted.len(),
                             "connector_item.remember hook inserted facts"
                         );
+                        // Cumulative acceptance counters (issue #508) so
+                        // `mimir connector list` / `status` surfaces the
+                        // drop rate instead of hiding it behind `items`.
+                        if accepted + dropped > 0
+                            && let Err(error) = payload
+                                .kg
+                                .record_connector_fact_counts(
+                                    payload.instance_id,
+                                    accepted,
+                                    dropped,
+                                )
+                                .await
+                        {
+                            warn!(
+                                raw_ref = %payload.raw_ref,
+                                "recording connector fact acceptance counters failed: {error}"
+                            );
+                        }
                         HookOutcome::Success
                     }
                     Err(error) => {

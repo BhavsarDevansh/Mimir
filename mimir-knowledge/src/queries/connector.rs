@@ -15,7 +15,7 @@ use crate::models::enums::{ConnectorAuthState, ConnectorStatus};
 pub async fn list_connectors(pool: &SqlitePool) -> Result<Vec<Connector>, KnowledgeError> {
     let rows = sqlx::query_as::<_, Connector>(
         "SELECT id, connector_type_id, slug, backend, display_name, config_json, \
-         status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, created_at, updated_at \
+         status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, last_sync_at, last_error, created_at, updated_at \
          FROM connectors ORDER BY id",
     )
     .fetch_all(pool)
@@ -30,7 +30,7 @@ pub async fn get_connector_by_slug(
 ) -> Result<Option<Connector>, KnowledgeError> {
     let row = sqlx::query_as::<_, Connector>(
         "SELECT id, connector_type_id, slug, backend, display_name, config_json, \
-         status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, created_at, updated_at \
+         status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, last_sync_at, last_error, created_at, updated_at \
          FROM connectors WHERE slug = ?",
     )
     .bind(slug)
@@ -46,7 +46,7 @@ pub async fn get_connector(
 ) -> Result<Option<Connector>, KnowledgeError> {
     let row = sqlx::query_as::<_, Connector>(
         "SELECT id, connector_type_id, slug, backend, display_name, config_json, \
-         status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, created_at, updated_at \
+         status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, last_sync_at, last_error, created_at, updated_at \
          FROM connectors WHERE id = ?",
     )
     .bind(id)
@@ -101,7 +101,7 @@ pub async fn upsert_connector(
             updated_at = excluded.updated_at \
          WHERE connectors.connector_type_id = excluded.connector_type_id \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(connector_type_id)
@@ -150,7 +150,7 @@ pub async fn create_connector(
           created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(connector_type_id)
@@ -190,7 +190,7 @@ pub async fn update_sync_cursor(
         "UPDATE connectors SET sync_cursor = ?, last_sync_at = ?, updated_at = ? \
          WHERE id = ? \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(cursor)
@@ -218,7 +218,7 @@ pub async fn update_durable_state(
     let row = sqlx::query_as::<_, Connector>(
         "UPDATE connectors SET durable_state = ?, updated_at = ? WHERE id = ? \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(state)
@@ -258,7 +258,7 @@ pub async fn update_sync_progress_and_durable_state(
              last_sync_at = ?, updated_at = ? \
          WHERE id = ? \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(cursor)
@@ -288,7 +288,7 @@ pub async fn touch_last_sync(
         "UPDATE connectors SET last_sync_at = ?, updated_at = ? \
          WHERE id = ? \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(now)
@@ -336,7 +336,7 @@ pub async fn set_connector_status(
            updated_at = ? \
          WHERE id = ? \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(status as i16)
@@ -361,7 +361,7 @@ pub async fn set_auth_state(
     let row = sqlx::query_as::<_, Connector>(
         "UPDATE connectors SET auth_state_id = ?, updated_at = ? WHERE id = ? \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(auth_state as i16)
@@ -384,7 +384,7 @@ pub async fn update_connector_config(
     let row = sqlx::query_as::<_, Connector>(
         "UPDATE connectors SET config_json = ?, updated_at = ? WHERE id = ? \
          RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
-                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
+                   status_id, auth_state_id, sync_cursor, durable_state, facts_accepted, facts_dropped, last_sync_at, last_error, \
                    created_at, updated_at",
     )
     .bind(config_json)
@@ -394,6 +394,38 @@ pub async fn update_connector_config(
     .await?
     .ok_or(KnowledgeError::ConnectorNotFound(id))?;
     Ok(row)
+}
+
+/// Increment a connector's cumulative fact-acceptance counters (issue #508).
+///
+/// Written by the email LLM prose-extraction hook after each successful
+/// extraction run: `accepted` counts validated facts handed to the knowledge
+/// graph, `dropped` counts LLM-emitted facts rejected by Rust-side
+/// validation (non-canonical predicates, invalid entity types). The counts
+/// accumulate across backfill and incremental runs so `mimir connector list`
+/// / `status` can surface the acceptance rate. Returns
+/// [`KnowledgeError::ConnectorNotFound`] when no row matches `id`.
+pub async fn record_connector_fact_counts(
+    pool: &SqlitePool,
+    id: i32,
+    accepted: i64,
+    dropped: i64,
+    now: DateTime<Utc>,
+) -> Result<(), KnowledgeError> {
+    let result = sqlx::query(
+        "UPDATE connectors SET facts_accepted = facts_accepted + ?, \
+         facts_dropped = facts_dropped + ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(accepted)
+    .bind(dropped)
+    .bind(now)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(KnowledgeError::ConnectorNotFound(id));
+    }
+    Ok(())
 }
 
 /// Number of `sources` rows attributed to a connector instance.

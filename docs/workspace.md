@@ -48,7 +48,7 @@ cargo fmt -- --check
 
 ## Regression Guards
 
-Issue-specific regression guards live in `scripts/tests/` and are run at review time so newly-introduced violations fail before merge: `md-reflow_test.sh` (issue #294) re-checks every repo-authored `.md` file (skipping the third-party `vendor/` tree) against the AGENTS.md single-line prose standard via `scripts/md-reflow`'s `--check` mode, `rustdoc_test.sh` (issues #276, #310, #337, #348, #443) builds the `mimir-connectors`, `mimir-knowledge`, `mimir-core` and `mimir-server` docs with `-D warnings`, `no-default-features_test.sh` (issues #277, #342, #351, #374) compiles the whole `mimir-connectors` feature matrix under `--no-default-features --all-targets` with `RUSTFLAGS="-D warnings"` so no supported combination can regress to dead-code or unused-import warnings, and `future-incompat_test.sh` (issue #446) fails the canonical `cargo clippy --workspace --all-targets --all-features` command whenever any dependency emits a rustc future-incompat warning (code a future toolchain will reject), guarding the vendored `proc-macro-error2` patch in `vendor/`. The guard compiles in a fresh target directory and also inspects `cargo report future-incompatibilities` in addition to the clippy output, so warm caches or skipped rebuilds cannot hide the diagnostic.
+Issue-specific regression guards live in `scripts/tests/` and are run at review time so newly-introduced violations fail before merge: `md-reflow_test.sh` (issue #294) re-checks every repo-authored `.md` file (skipping the third-party `vendor/` tree) against the AGENTS.md single-line prose standard via `scripts/md-reflow`'s `--check` mode, `rustdoc_test.sh` (issues #276, #310, #337, #348, #443) builds the `mimir-connectors`, `mimir-knowledge`, `mimir-core` and `mimir-server` docs with `-D warnings`, `no-default-features_test.sh` (issues #277, #342, #351, #374) compiles the whole `mimir-connectors` feature matrix under `--no-default-features --all-targets` with `RUSTFLAGS="-D warnings"` so no supported combination can regress to dead-code or unused-import warnings, and `future-incompat_test.sh` (issue #446) fails the canonical `cargo clippy --workspace --all-targets --all-features` command whenever any dependency emits a rustc future-incompat warning (code a future toolchain will reject), guarding the vendored `proc-macro-error2` patch in `vendor/`, and `new-release_test.sh` unit-tests the release helper (`scripts/new-release.sh`): version detection, changelog section extraction, tag-existence checks, and the dry-run validation paths. The guard compiles in a fresh target directory and also inspects `cargo report future-incompatibilities` in addition to the clippy output, so warm caches or skipped rebuilds cannot hide the diagnostic.
 
 ## Version Policy
 
@@ -57,6 +57,8 @@ All workspace members stay in sync on the same semver version unless there is an
 - **PATCH** — backwards-compatible bug fixes, documentation updates
 - **MINOR** — backwards-compatible new features, refactors, subsystem additions
 - **MAJOR** — breaking changes to public APIs, configuration formats, or data models
+
+Releases are published locally, never by CI: after the version bump and changelog entry, `scripts/new-release.sh` creates the annotated tag `vX.Y.Z`, pushes it to `origin`, and publishes a GitHub release whose body is the matching `CHANGELOG.md` section (full walkthrough in [release-process.md](release-process.md)).
 
 ## Module Layout
 

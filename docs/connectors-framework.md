@@ -62,6 +62,13 @@ pub trait Connector: Send + Sync {
 
     async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError>;
     async fn health(&self) -> Result<HealthStatus, ConnectorError>;
+    async fn force_refresh(&self) -> Result<ConnectorAuthState, ConnectorError> {
+        // default: reports the auth state as unchanged, so the supervisor
+        // pauses with the probe's original rejection message (connectors
+        // that cannot refresh their credentials — app passwords, API
+        // tokens, local backends)
+        Ok(ConnectorAuthState::Expired)
+    }
     async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError>;
     async fn extract(&self) -> Result<Vec<NormalizedFact>, ConnectorError>;
     fn durable_state(&self) -> Option<String> {

@@ -40,7 +40,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::secrets::{SecretBundle, SecretStore};
+use crate::secrets::{SecretBundle, SecretError, SecretStore};
 use mimir_core::geocoder::Geocoder;
 use mimir_core::hooks::HookEngine;
 use mimir_core::llm::LlmBackend;
@@ -641,7 +641,7 @@ pub(crate) trait CredentialRefresh {
         let Some(bundle) = store
             .load(self.connector_slug())
             .await
-            .map_err(|e| ConnectorError::Authentication(format!("secret load failed: {e}")))?
+            .map_err(map_secret_load_error)?
         else {
             return Ok(ConnectorAuthState::Unauthenticated);
         };
@@ -653,6 +653,27 @@ pub(crate) trait CredentialRefresh {
             self.persist_refreshed_bundle(&refreshed).await?;
         }
         Ok(ConnectorAuthState::Authenticated)
+    }
+}
+
+/// Map a [`SecretStore::load`] failure onto a [`ConnectorError`] at the
+/// forced-refresh boundary. Storage-availability failures (local I/O, an
+/// unavailable OS keychain) are transient — they surface as a recoverable
+/// cycle error so the supervisor backs off and retries instead of pausing
+/// the connector like a genuine auth rejection; every other failure (a
+/// corrupt or mis-permissioned secret file) is an auth-level problem that
+/// pauses with the underlying detail.
+fn map_secret_load_error(error: SecretError) -> ConnectorError {
+    let recoverable = match &error {
+        SecretError::Io(_) => true,
+        #[cfg(feature = "secrets-keyring")]
+        SecretError::Keyring(_) | SecretError::KeyringTask(_) => true,
+        _ => false,
+    };
+    if recoverable {
+        ConnectorError::Network(format!("secret store unavailable: {error}"))
+    } else {
+        ConnectorError::Authentication(format!("secret load failed: {error}"))
     }
 }
 
@@ -708,6 +729,37 @@ mod tests {
     use super::*;
     use crate::secrets::{InMemorySecretStore, SecretBundle};
     use std::sync::Arc;
+
+    #[test]
+    fn secret_store_io_failure_maps_to_recoverable_network_error() {
+        // Issue #507 review: a transiently unavailable secret store (local
+        // I/O or OS keychain) must not pause the connector as an auth
+        // rejection — the supervisor treats `Network` as a recoverable cycle
+        // error that backs off and retries.
+        let error = map_secret_load_error(SecretError::Io(std::io::Error::other("disk hiccup")));
+        let ConnectorError::Network(message) = error else {
+            panic!("expected a recoverable Network error, got {error:?}");
+        };
+        assert!(
+            message.contains("secret store unavailable"),
+            "message must name the storage boundary, got: {message}"
+        );
+    }
+
+    #[test]
+    fn corrupt_secret_file_maps_to_authentication_error() {
+        let error = map_secret_load_error(SecretError::Corrupt {
+            slug: "calendar".to_string(),
+            source: serde_json::from_str::<serde_json::Value>("{").unwrap_err(),
+        });
+        let ConnectorError::Authentication(message) = error else {
+            panic!("expected an Authentication error, got {error:?}");
+        };
+        assert!(
+            message.contains("secret load failed"),
+            "message must name the load boundary, got: {message}"
+        );
+    }
 
     #[test]
     fn context_with_secret_store_carries_store() {

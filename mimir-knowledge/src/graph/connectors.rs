@@ -165,6 +165,18 @@ impl KnowledgeGraph {
         queries::connector::set_auth_state(&self.pool, id, auth_state, self.now()).await
     }
 
+    /// Replace a connector's persisted `config_json` (the token-ingest route
+    /// uses this to persist the non-secret OAuth config alongside a
+    /// re-authed credential bundle, issue #507 review). Sync-progress
+    /// columns are untouched; only `config_json` and `updated_at` change.
+    pub async fn update_connector_config(
+        &self,
+        id: i32,
+        config_json: &str,
+    ) -> Result<models::connector::Connector, KnowledgeError> {
+        queries::connector::update_connector_config(&self.pool, id, config_json, self.now()).await
+    }
+
     /// Number of `sources` rows attributed to a connector instance — the
     /// derived "items ingested" metric for the connector status endpoint
     /// (issue #202 / Phase 3 A1).

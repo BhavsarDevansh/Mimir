@@ -190,6 +190,15 @@ pub enum IngestTokenRequest {
         /// public clients and for requests from pre-bundle clients.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         client_secret: Option<String>,
+        /// Non-secret OAuth client configuration to persist into the
+        /// connector's `config_json` alongside the bundle (issue #507
+        /// review). `mimir connector auth` sends the driving config slice
+        /// (kind, username, endpoints, client id, scopes — never the
+        /// `client_secret`), so a connector re-authed through the
+        /// interactive fallback declares OAuth before its next
+        /// construction; absent for plain token refreshes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config: Box<Option<ConnectorAuthConfig>>,
     },
     /// Static API token (e.g. a PAT).
     #[serde(rename = "api_token")]
@@ -211,6 +220,7 @@ impl std::fmt::Debug for IngestTokenRequest {
                 refresh_token,
                 expires_at,
                 client_secret,
+                config,
                 ..
             } => f
                 .debug_struct("IngestTokenRequest::OAuth")
@@ -224,6 +234,7 @@ impl std::fmt::Debug for IngestTokenRequest {
                     &client_secret.as_ref().map(|_| "<redacted>"),
                 )
                 .field("expires_at", expires_at)
+                .field("config", config)
                 .finish(),
             Self::ApiToken { .. } => f
                 .debug_struct("IngestTokenRequest::ApiToken")
@@ -426,6 +437,7 @@ mod tests {
             refresh_token: Some("rt".to_string()),
             expires_at: Some("2026-01-01T00:00:00Z".to_string()),
             client_secret: Some("secret".to_string()),
+            config: Box::new(None),
         };
         assert_eq!(roundtrip(&req), req);
         let json = serde_json::to_value(&req).unwrap();
@@ -460,11 +472,35 @@ mod tests {
             refresh_token: None,
             expires_at: None,
             client_secret: None,
+            config: Box::new(None),
         };
         let json = serde_json::to_value(&req).unwrap();
         assert!(!json.as_object().unwrap().contains_key("refresh_token"));
         assert!(!json.as_object().unwrap().contains_key("expires_at"));
         assert!(!json.as_object().unwrap().contains_key("client_secret"));
+        assert!(!json.as_object().unwrap().contains_key("config"));
+    }
+
+    #[test]
+    fn ingest_token_oauth_roundtrips_non_secret_config_slice() {
+        let req = IngestTokenRequest::OAuth {
+            access_token: "at".to_string(),
+            refresh_token: Some("rt".to_string()),
+            expires_at: None,
+            client_secret: None,
+            config: Box::new(Some(ConnectorAuthConfig {
+                kind: "oauth".to_string(),
+                username: None,
+                auth_uri: Some("https://oauth.example.com/authorize".to_string()),
+                token_endpoint: Some("https://oauth.example.com/token".to_string()),
+                client_id: Some("cid".to_string()),
+                scopes: Some(vec!["read".to_string()]),
+            })),
+        };
+        assert_eq!(roundtrip(&req), req);
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["config"]["kind"], "oauth");
+        assert_eq!(json["config"]["client_id"], "cid");
     }
 
     /// The redacting `Debug` impl must never print a secret value verbatim,
@@ -476,6 +512,7 @@ mod tests {
             refresh_token: Some("super-secret-rt".to_string()),
             expires_at: Some("2026-01-01T00:00:00Z".to_string()),
             client_secret: Some("super-secret-cs".to_string()),
+            config: Box::new(None),
         };
         let debug = format!("{req:?}");
         assert!(!debug.contains("super-secret-at"));

@@ -706,6 +706,93 @@ async fn test_connector_tokens_oauth_ingest_stores_client_secret_in_bundle() {
 }
 
 #[tokio::test]
+async fn test_connector_tokens_oauth_ingest_persists_non_secret_config() {
+    // Issue #507 review: re-authing a connector whose stored config does not
+    // declare OAuth (the interactive fallback) must persist the driving
+    // non-secret OAuth slice into config_json alongside the bundle, or the
+    // next construction rejects the OAuth bundle as a credential-kind
+    // mismatch. Secrets never reach config_json.
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock).await;
+    let app = mimir_server::build_app(state.clone());
+    let created = create_test_connector(
+        &app,
+        "oauth-config",
+        serde_json::json!({
+            "host": "imap.example.com",
+            "auth": {"kind": "app_password", "username": "old@example.com"},
+        }),
+    )
+    .await;
+
+    let resp = connector_sub_post(
+        app.clone(),
+        created.id,
+        "tokens",
+        Some(serde_json::json!({
+            "kind": "oauth",
+            "access_token": "at",
+            "refresh_token": "rt",
+            "client_secret": "s3cret",
+            "config": {
+                "kind": "oauth",
+                "username": "devansh@example.com",
+                "auth_uri": "https://oauth.example.com/authorize",
+                "token_endpoint": "https://oauth.example.com/token",
+                "client_id": "cid",
+                "scopes": ["read"],
+            },
+        })),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let stored = state
+        .knowledge_graph
+        .get_connector(created.id)
+        .await
+        .unwrap()
+        .expect("connector row exists");
+    let config: serde_json::Value = serde_json::from_str(&stored.config_json).unwrap();
+    assert_eq!(config["host"], "imap.example.com", "other keys preserved");
+    assert_eq!(config["auth"]["kind"], "oauth");
+    assert_eq!(config["auth"]["username"], "devansh@example.com");
+    assert_eq!(
+        config["auth"]["token_endpoint"],
+        "https://oauth.example.com/token"
+    );
+    assert_eq!(config["auth"]["client_id"], "cid");
+    assert_eq!(config["auth"]["scopes"][0], "read");
+    assert!(
+        config["auth"].get("client_secret").is_none(),
+        "client_secret must never be persisted into config_json: {config}"
+    );
+
+    // The wire response also surfaces the now-declared OAuth slice.
+    let resp = app
+        .oneshot(
+            authed_request()
+                .uri(format!("/connectors/{}", created.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let shown: mimir_api_types::ConnectorResponse = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(shown.auth.as_ref().map(|a| a.kind.as_str()), Some("oauth"));
+    assert_eq!(
+        shown
+            .auth
+            .as_ref()
+            .and_then(|a| a.token_endpoint.as_deref()),
+        Some("https://oauth.example.com/token")
+    );
+}
+
+#[tokio::test]
 async fn test_connector_actions_dispatch() {
     let mock = Arc::new(MockLlmClient::builder().build());
     let (state, _temp) = test_state(mock).await;

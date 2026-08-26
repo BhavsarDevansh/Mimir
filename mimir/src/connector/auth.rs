@@ -4,7 +4,8 @@ use is_terminal::IsTerminal;
 use mimir_api_types::{ConnectorAuthConfig, IngestTokenRequest};
 
 use super::oauth::{
-    ingest_oauth_bundle, oauth_flow_config_with_secret, open_in_browser, run_oauth_flow_with_opener,
+    ingest_oauth_bundle, oauth_config_slice, oauth_flow_config_with_secret, open_in_browser,
+    run_oauth_flow_with_opener,
 };
 use super::{
     CredentialKind, ENV_PASSWORD, ENV_TOKEN, any_secret_channel, credential_kind_for, env_secret,
@@ -227,11 +228,17 @@ async fn reauth_oauth(
     }
     if let Err(reason) = oauth_flow_config_with_secret(oauth_config, None) {
         exit_with_error(format!(
-            "cannot run the OAuth login for connector '{slug}': {reason} — re-run supplying the OAuth fields, e.g. `mimir connector auth {slug} auth.kind=oauth auth.auth_uri=... auth.token_endpoint=... auth.client_id=...`"
+            "cannot run the OAuth login for connector '{slug}': {reason} — re-run supplying the OAuth fields, e.g. `mimir connector auth {slug} auth.kind=oauth auth.auth_uri=... auth.token_endpoint=... auth.client_id=...` (confidential clients also pass auth.client_secret=...)"
         ));
     }
     let bundle = run_oauth_flow_with_opener(oauth_config, opener).await;
-    let updated = ingest_oauth_bundle(client, connector_id, &bundle).await;
+    let updated = ingest_oauth_bundle(
+        client,
+        connector_id,
+        &bundle,
+        oauth_config_slice(oauth_config),
+    )
+    .await;
     if json {
         print_json(&updated);
         return;

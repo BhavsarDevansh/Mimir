@@ -373,6 +373,29 @@ pub async fn set_auth_state(
     Ok(row)
 }
 
+/// Replace a connector's persisted `config_json`, stamping `updated_at`.
+/// Returns [`KnowledgeError::ConnectorNotFound`] when no row matches `id`.
+pub async fn update_connector_config(
+    pool: &SqlitePool,
+    id: i32,
+    config_json: &str,
+    now: DateTime<Utc>,
+) -> Result<Connector, KnowledgeError> {
+    let row = sqlx::query_as::<_, Connector>(
+        "UPDATE connectors SET config_json = ?, updated_at = ? WHERE id = ? \
+         RETURNING id, connector_type_id, slug, backend, display_name, config_json, \
+                   status_id, auth_state_id, sync_cursor, durable_state, last_sync_at, last_error, \
+                   created_at, updated_at",
+    )
+    .bind(config_json)
+    .bind(now)
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(KnowledgeError::ConnectorNotFound(id))?;
+    Ok(row)
+}
+
 /// Number of `sources` rows attributed to a connector instance.
 ///
 /// This is the derived "items ingested" metric surfaced by the connector

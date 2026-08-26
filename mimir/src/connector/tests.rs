@@ -16,7 +16,9 @@ use wiremock::{
 
 use super::add::handle_connector_add_with_opener;
 use super::auth::handle_connector_auth_with_opener;
-use super::oauth::{oauth_flow_config, oauth_flow_config_with_secret, oauth_ingest_request};
+use super::oauth::{
+    oauth_config_slice, oauth_flow_config, oauth_flow_config_with_secret, oauth_ingest_request,
+};
 use super::wizard::{
     PromptDriver, build_wizard_config, handle_connector_add_wizard_with_deps, parse_scopes,
     password_prompt, slugify,
@@ -659,17 +661,22 @@ fn oauth_ingest_request_converts_bundle_to_wire() {
         expires_at: Some(chrono::Utc::now()),
         client_secret: Some("s3cret".to_string()),
     };
-    let req = oauth_ingest_request(&bundle);
+    let req = oauth_ingest_request(&bundle, None);
     match req {
         mimir_api_types::IngestTokenRequest::OAuth {
             access_token,
             refresh_token,
             expires_at,
             client_secret,
+            config,
         } => {
             assert_eq!(access_token, "ya29.access");
             assert_eq!(refresh_token.as_deref(), Some("rt"));
             assert_eq!(client_secret.as_deref(), Some("s3cret"));
+            assert!(
+                config.is_none(),
+                "the add path must not attach an oauth config slice"
+            );
             assert!(
                 expires_at
                     .as_ref()
@@ -679,6 +686,67 @@ fn oauth_ingest_request_converts_bundle_to_wire() {
         }
         other => panic!("expected OAuth ingest request, got {other:?}"),
     }
+}
+
+#[test]
+fn oauth_config_slice_extracts_only_non_secret_fields() {
+    let config = serde_json::json!({
+        "host": "imap.example.com",
+        "auth": {
+            "kind": "oauth",
+            "username": "devansh@example.com",
+            "auth_uri": "https://oauth.example.com/authorize",
+            "token_endpoint": "https://oauth.example.com/token",
+            "client_id": "cid",
+            "client_secret": "s3cret",
+            "scopes": ["read", "write"],
+        },
+    });
+    let slice = oauth_config_slice(&config).expect("auth object present");
+    assert_eq!(slice.kind, "oauth");
+    assert_eq!(slice.username.as_deref(), Some("devansh@example.com"));
+    assert_eq!(
+        slice.auth_uri.as_deref(),
+        Some("https://oauth.example.com/authorize")
+    );
+    assert_eq!(
+        slice.token_endpoint.as_deref(),
+        Some("https://oauth.example.com/token")
+    );
+    assert_eq!(slice.client_id.as_deref(), Some("cid"));
+    assert_eq!(
+        slice.scopes.as_deref(),
+        Some(&["read".to_string(), "write".to_string()][..])
+    );
+    let wire = serde_json::to_string(&slice).unwrap();
+    assert!(
+        !wire.contains("s3cret") && !wire.contains("client_secret"),
+        "the persisted slice must never carry the client secret: {wire}"
+    );
+}
+
+#[test]
+fn oauth_config_slice_defaults_kind_for_fallback_configs() {
+    // The interactive "OAuth 2.0" fallback can drive the flow with just the
+    // endpoints (no kind tag); the persisted slice must still declare oauth.
+    let config = serde_json::json!({
+        "auth": {
+            "auth_uri": "https://oauth.example.com/authorize",
+            "token_endpoint": "https://oauth.example.com/token",
+            "client_id": "cid",
+        }
+    });
+    let slice = oauth_config_slice(&config).expect("auth object present");
+    assert_eq!(slice.kind, "oauth");
+    assert_eq!(
+        slice.token_endpoint.as_deref(),
+        Some("https://oauth.example.com/token")
+    );
+}
+
+#[test]
+fn oauth_config_slice_missing_auth_returns_none() {
+    assert!(oauth_config_slice(&serde_json::json!({})).is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -698,6 +766,12 @@ async fn auth_with_oauth_config_runs_pkce_flow_and_ingests_tokens() {
         .and(body_partial_json(serde_json::json!({
             "kind": "oauth",
             "access_token": "ya29.access",
+            "config": {
+                "kind": "oauth",
+                "auth_uri": "https://oauth.example.com/authorize",
+                "token_endpoint": format!("{}/token", token_server.uri()),
+                "client_id": "test-client",
+            },
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
         .mount(&daemon)
@@ -726,6 +800,26 @@ async fn auth_with_oauth_config_runs_pkce_flow_and_ingests_tokens() {
         .filter(|r| r.url.path() == "/connectors/1/tokens")
         .count();
     assert_eq!(token_requests, 1);
+
+    // The request must carry the non-secret config slice for the daemon to
+    // persist alongside the bundle (issue #507 review), and never the
+    // client secret.
+    let bodies = daemon
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .map(|r| r.body)
+        .collect::<Vec<_>>();
+    assert_eq!(bodies.len(), 1);
+    let body = serde_json::from_slice::<serde_json::Value>(&bodies[0]).unwrap();
+    assert_eq!(body["config"]["kind"], "oauth");
+    assert_eq!(body["config"]["client_id"], "test-client");
+    assert!(
+        body.get("client_secret").is_none() && body["config"].get("client_secret").is_none(),
+        "no secret channel may carry the client secret: {body}"
+    );
 }
 
 #[tokio::test]
@@ -793,6 +887,14 @@ async fn auth_with_stored_oauth_config_runs_pkce_flow_without_resupplied_config(
         .and(body_partial_json(serde_json::json!({
             "kind": "oauth",
             "access_token": "ya29.access",
+            "config": {
+                "kind": "oauth",
+                "username": "devansh@example.com",
+                "auth_uri": "https://oauth.example.com/authorize",
+                "token_endpoint": format!("{}/token", token_server.uri()),
+                "client_id": "test-client",
+                "scopes": ["read"],
+            },
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
         .mount(&daemon)
@@ -821,6 +923,26 @@ async fn auth_with_stored_oauth_config_runs_pkce_flow_without_resupplied_config(
         .filter(|r| r.url.path() == "/connectors/1/tokens")
         .count();
     assert_eq!(token_requests, 1);
+
+    // The request must carry the non-secret config slice for the daemon to
+    // persist alongside the bundle (issue #507 review), and never the
+    // client secret.
+    let bodies = daemon
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .map(|r| r.body)
+        .collect::<Vec<_>>();
+    assert_eq!(bodies.len(), 1);
+    let body = serde_json::from_slice::<serde_json::Value>(&bodies[0]).unwrap();
+    assert_eq!(body["config"]["kind"], "oauth");
+    assert_eq!(body["config"]["client_id"], "test-client");
+    assert!(
+        body.get("client_secret").is_none() && body["config"].get("client_secret").is_none(),
+        "no secret channel may carry the client secret: {body}"
+    );
 }
 
 // ---------------------------------------------------------------------------

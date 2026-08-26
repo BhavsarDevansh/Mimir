@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 
 use crate::models::enums::{AutoCompletePolicy, EventType, RecurrenceType};
 use crate::models::event::NewEvent;
+use crate::models::recurrence::RecurrenceSpec;
 // ---------------------------------------------------------------------------
 
 /// Build an event overlay from a normalized fact, if it qualifies.
@@ -12,7 +13,7 @@ use crate::models::event::NewEvent;
 /// (trigger date) AND at least one of: `valid_from` is in the future, the
 /// recurrence is non-`None`, or `requires_user_action` is set.
 pub(super) fn event_from_extraction(
-    recurrence: RecurrenceType,
+    recurrence: RecurrenceSpec,
     requires_user_action: bool,
     entity_id: i32,
     fact_id: i32,
@@ -23,11 +24,11 @@ pub(super) fn event_from_extraction(
     let trigger_date = valid_from?;
 
     let is_future = trigger_date > now;
-    if !is_future && recurrence == RecurrenceType::None && !requires_user_action {
+    if !is_future && recurrence.kind == RecurrenceType::None && !requires_user_action {
         return None;
     }
 
-    let auto_complete_policy = if recurrence != RecurrenceType::None {
+    let auto_complete_policy = if recurrence.kind != RecurrenceType::None {
         AutoCompletePolicy::Recurring
     } else if requires_user_action {
         AutoCompletePolicy::RequiresUserAction
@@ -48,7 +49,10 @@ pub(super) fn event_from_extraction(
         fact_id,
         entity_id,
         trigger_date,
-        recurrence,
+        recurrence: recurrence.kind,
+        recurrence_rule: recurrence.rule,
+        recurrence_interval: recurrence.interval,
+        recurrence_until: recurrence.until,
         event_type,
         auto_complete_policy,
         requires_user_action,

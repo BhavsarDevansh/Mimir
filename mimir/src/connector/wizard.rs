@@ -152,6 +152,30 @@ fn microsoft_tenant_endpoints(tenant: &str) -> (String, String) {
     )
 }
 
+/// Prompt the Microsoft account type and resolve the identity-platform
+/// endpoint pair (issue `#467`). Single-tenant registrations embed the tenant
+/// ID or domain, so the tenant is collected first.
+fn microsoft_account_endpoints(prompts: &dyn PromptDriver) -> Result<(String, String), String> {
+    let options = MICROSOFT_ACCOUNT_TYPE_OPTIONS
+        .map(|account_type| account_type.label().to_string())
+        .to_vec();
+    let account_type =
+        MicrosoftAccountType::from_index(prompts.select("Microsoft account type", &options)?);
+    match account_type.fixed_endpoints() {
+        Some((auth_uri, token_endpoint)) => Ok((auth_uri.to_string(), token_endpoint.to_string())),
+        None => {
+            let tenant = required(
+                prompts.input(
+                    "Tenant ID or domain (the app registration's Entra directory, e.g. contoso.com or a tenant GUID)",
+                    None,
+                ),
+                "tenant ID or domain",
+            )?;
+            Ok(microsoft_tenant_endpoints(&tenant))
+        }
+    }
+}
+
 /// IMAP XOAUTH2 scope for Outlook / Office 365 plus `offline_access` for
 /// refresh tokens (Microsoft's "authenticate an IMAP application by using
 /// OAuth" docs; the connector keeps a refresh token with skew).
@@ -493,32 +517,9 @@ fn email_imap_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredent
         .as_mut()
         .filter(|oauth| oauth.microsoft_account_type_prompt)
     {
-        let options = MICROSOFT_ACCOUNT_TYPE_OPTIONS
-            .map(|account_type| account_type.label().to_string())
-            .to_vec();
-        let account_type =
-            MicrosoftAccountType::from_index(prompts.select("Microsoft account type", &options)?);
-        match account_type.fixed_endpoints() {
-            Some((auth_uri, token_endpoint)) => {
-                oauth.auth_uri = Some(auth_uri.to_string());
-                oauth.token_endpoint = Some(token_endpoint.to_string());
-            }
-            None => {
-                // Single-tenant app registration: both endpoints embed the
-                // tenant ID or domain, so collect it before the endpoint
-                // prompts run.
-                let tenant = required(
-                    prompts.input(
-                        "Tenant ID or domain (the app registration's Entra directory, e.g. contoso.com or a tenant GUID)",
-                        None,
-                    ),
-                    "tenant ID or domain",
-                )?;
-                let (auth_uri, token_endpoint) = microsoft_tenant_endpoints(&tenant);
-                oauth.auth_uri = Some(auth_uri);
-                oauth.token_endpoint = Some(token_endpoint);
-            }
-        }
+        let (auth_uri, token_endpoint) = microsoft_account_endpoints(prompts)?;
+        oauth.auth_uri = Some(auth_uri);
+        oauth.token_endpoint = Some(token_endpoint);
     }
 
     let host_message = if preset.host_help.is_empty() {
@@ -975,31 +976,7 @@ fn calendar_provider_config(
 /// their own app registration (Mimir has no public client ID); the stored
 /// token endpoint matches the registration's audience by construction.
 fn graph_calendar_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredential), String> {
-    // Issue #467: the Microsoft account type selects the identity-platform
-    // endpoints (`/consumers/`, `/organizations/`, `/common/`, or the
-    // tenant ID/domain for single-tenant apps); a mismatch with the app
-    // registration's "Supported account types" fails the authorize request.
-    let options = MICROSOFT_ACCOUNT_TYPE_OPTIONS
-        .map(|account_type| account_type.label().to_string())
-        .to_vec();
-    let account_type =
-        MicrosoftAccountType::from_index(prompts.select("Microsoft account type", &options)?);
-    let (auth_uri, token_endpoint) = match account_type.fixed_endpoints() {
-        Some((auth_uri, token_endpoint)) => (auth_uri.to_string(), token_endpoint.to_string()),
-        None => {
-            // Single-tenant app registration: both endpoints embed the
-            // tenant ID or domain, so collect it before the endpoint
-            // prompts run.
-            let tenant = required(
-                prompts.input(
-                    "Tenant ID or domain (the app registration's Entra directory, e.g. contoso.com or a tenant GUID)",
-                    None,
-                ),
-                "tenant ID or domain",
-            )?;
-            microsoft_tenant_endpoints(&tenant)
-        }
-    };
+    let (auth_uri, token_endpoint) = microsoft_account_endpoints(prompts)?;
     let (auth, credential) = calendar_oauth_questions(
         prompts,
         None,

@@ -213,6 +213,63 @@ async fn confirm_preserves_recurring_event_metadata() {
 }
 
 #[tokio::test]
+async fn confirm_preserves_recurrence_rule_interval_and_until() {
+    // A sensitive recurring fact extracted by a connector carries the full
+    // RRULE (interval and series bounds). Those fields must survive the
+    // confirmation boundary instead of being flattened to a kind-only
+    // recurrence (PR #513 review).
+    let start = DateTime::parse_from_rfc3339("2024-03-15T12:00:00Z")
+        .unwrap()
+        .into();
+    let (kg, _clock, _dir) = fresh_kg_with_clock(start).await;
+    let fact_id = create_pending_event_fact(
+        &kg,
+        "penicillin",
+        Some("2024-06-01T09:00:00Z"),
+        Some("yearly"),
+        None,
+    )
+    .await;
+
+    // The chat path persists kind-only metadata; overwrite it with the full
+    // shape a connector extractor would store.
+    let until = DateTime::parse_from_rfc3339("2026-06-01T09:00:00Z")
+        .unwrap()
+        .into();
+    let new_event = NewEvent {
+        fact_id,
+        entity_id: 1,
+        trigger_date: DateTime::parse_from_rfc3339("2024-06-01T09:00:00Z")
+            .unwrap()
+            .into(),
+        recurrence: RecurrenceType::Yearly,
+        recurrence_rule: Some("FREQ=YEARLY;INTERVAL=2;COUNT=3".to_string()),
+        recurrence_interval: 2,
+        recurrence_until: Some(until),
+        event_type: EventType::Reminder,
+        auto_complete_policy: AutoCompletePolicy::Recurring,
+        requires_user_action: false,
+    };
+    queries::event::insert_pending_event_meta(kg.pool(), fact_id, &new_event)
+        .await
+        .expect("pending meta insert succeeds");
+
+    kg.confirm_fact(fact_id).await.expect("confirm succeeds");
+
+    let event = queries::event::get_by_fact(kg.pool(), fact_id)
+        .await
+        .unwrap()
+        .expect("overlay created on confirm");
+    assert_eq!(event.recurrence(), Some(RecurrenceType::Yearly));
+    assert_eq!(
+        event.recurrence_rule.as_deref(),
+        Some("FREQ=YEARLY;INTERVAL=2;COUNT=3")
+    );
+    assert_eq!(event.recurrence_interval, 2);
+    assert_eq!(event.recurrence_until, Some(until));
+}
+
+#[tokio::test]
 async fn confirm_preserves_user_action_event_metadata() {
     // A sensitive task/deadline must keep `requires_user_action` and the
     // `RequiresUserAction` policy across confirmation, surfacing as overdue

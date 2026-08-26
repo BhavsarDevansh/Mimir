@@ -54,6 +54,9 @@ pub async fn run_upcoming_scan(
             entity_id: ff.entity_id,
             trigger_date: ff.valid_from,
             recurrence: RecurrenceType::None,
+            recurrence_rule: None,
+            recurrence_interval: 1,
+            recurrence_until: None,
             event_type: EventType::Reminder,
             auto_complete_policy: AutoCompletePolicy::AutoCompleteOnDate,
             requires_user_action: false,
@@ -80,7 +83,13 @@ pub async fn run_upcoming_scan(
     let mut advanced = 0usize;
     for ev in recurring {
         let recurrence = ev.recurrence().unwrap_or(RecurrenceType::None);
-        if let Some(next) = next_occurrence(&ev.trigger_date.to_rfc3339(), recurrence, now) {
+        if let Some(next) = next_occurrence(
+            &ev.trigger_date.to_rfc3339(),
+            recurrence,
+            ev.recurrence_interval,
+            ev.recurrence_until,
+            now,
+        ) {
             if next != ev.trigger_date {
                 event::advance_recurring_trigger(pool, ev.id, next).await?;
                 advanced += 1;

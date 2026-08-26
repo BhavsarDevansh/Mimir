@@ -19,6 +19,14 @@ pub struct Event {
     pub entity_id: i32,
     pub trigger_date: DateTime<Utc>,
     pub recurrence_type_id: i16,
+    /// Raw `RRULE` string (interval, day/month constraints, `COUNT`/`UNTIL`)
+    /// when the producer supplied one; `None` for kind-only producers.
+    pub recurrence_rule: Option<String>,
+    /// How often the series repeats (every N periods; 1 = every period).
+    pub recurrence_interval: i32,
+    /// Effective series end (from `UNTIL`, or computed from `COUNT` at
+    /// extraction); `None` = unbounded.
+    pub recurrence_until: Option<DateTime<Utc>>,
     pub event_type_id: i16,
     pub status_id: i16,
     pub auto_complete_policy_id: i16,
@@ -61,6 +69,12 @@ pub struct NewEvent {
     pub entity_id: i32,
     pub trigger_date: DateTime<Utc>,
     pub recurrence: RecurrenceType,
+    /// Raw `RRULE` string when the producer supplied one.
+    pub recurrence_rule: Option<String>,
+    /// How often the series repeats (every N periods; 1 = every period).
+    pub recurrence_interval: i32,
+    /// Effective series end; `None` = unbounded.
+    pub recurrence_until: Option<DateTime<Utc>>,
     pub event_type: EventType,
     pub auto_complete_policy: AutoCompletePolicy,
     pub requires_user_action: bool,

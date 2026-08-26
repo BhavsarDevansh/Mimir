@@ -125,6 +125,9 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
                     trigger_date: valid_from,
                     recurrence: RecurrenceType::try_from(meta.recurrence_type_id)
                         .unwrap_or(RecurrenceType::None),
+                    recurrence_rule: meta.recurrence_rule,
+                    recurrence_interval: meta.recurrence_interval,
+                    recurrence_until: meta.recurrence_until,
                     event_type: EventType::try_from(meta.event_type_id)
                         .unwrap_or(EventType::Reminder),
                     auto_complete_policy: AutoCompletePolicy::try_from(
@@ -160,6 +163,9 @@ pub async fn confirm_fact(kg: &KnowledgeGraph, fact_id: i32) -> Result<Fact, Kno
                         entity_id: updated.subject_id,
                         trigger_date: valid_from,
                         recurrence: RecurrenceType::None,
+                        recurrence_rule: None,
+                        recurrence_interval: 1,
+                        recurrence_until: None,
                         event_type: EventType::Reminder,
                         auto_complete_policy: AutoCompletePolicy::AutoCompleteOnDate,
                         requires_user_action: false,

@@ -676,6 +676,10 @@ fn normalized_fact(
         correction_scope: None,
         category_ids: Vec::new(),
         recurrence: line.recurrence,
+        // The Obsidian format carries the recurrence kind only.
+        recurrence_rule: None,
+        recurrence_interval: 1,
+        recurrence_until: None,
         requires_user_action,
         raw_reference: Some(format!("obsidian:{relative_path}")),
         extraction_method: Some(ExtractionMethod::StructuredParse),

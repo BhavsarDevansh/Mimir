@@ -29,7 +29,7 @@ When the connector extracts your staged events, each one becomes a small cluster
 - **The location** — `<event> located_in <place>`; the venue resolves to a `Place` entity, so events are searchable by where they happen.
 - **The attendees** — `<attendee> attending <event>`; each attendee resolves to a `Person` entity, growing your contact graph from your calendar.
 
-The connector authors these facts as your canonical identity (the `[identity] name` in your config), so calendar events line up with the same "you" the rest of Mimir uses. Recurring events (a weekly standup, a yearly birthday) advance automatically via the events & reminders subsystem — only the `RRULE` frequency maps (daily/weekly/monthly/yearly); richer recurrence rules are a future enhancement. Dates are normalised to UTC, including time-zone-qualified ones.
+The connector authors these facts as your canonical identity (the `[identity] name` in your config), so calendar events line up with the same "you" the rest of Mimir uses. Recurring events (a weekly standup, a yearly birthday) advance automatically via the events & reminders subsystem — the `RRULE` frequency maps to the recurrence kind, and the interval plus series bounds are preserved too, so a fortnightly event advances every two weeks and a bounded series stops after its last occurrence. Dates are normalised to UTC, including time-zone-qualified ones.
 
 ## Write-back (C4 / #198)
 
@@ -54,7 +54,7 @@ Outlook.com and Office 365 calendars cannot be read over CalDAV (Microsoft expos
 
 - **Authentication** — OAuth 2.0 only. The wizard asks which Microsoft account type your app registration targets (personal Outlook.com/Hotmail, work or school, either, or a single tenant) and pre-fills the matching Microsoft login endpoints — it never hardcodes the `/common/` endpoint that silently breaks personal-only or org-only registrations. You bring your own app registration from the Microsoft Entra admin center (Mimir has no public client ID): its "Supported account types" must match the audience you pick, the loopback redirect URI `http://localhost/callback` must be registered, and the app needs the `Calendars.Read` delegated permission. The first login is the same interactive browser flow as the other OAuth connectors; Mimir then refreshes the access token automatically.
 - **What syncs** — events from your default calendar become the same knowledge-graph facts as CalDAV events: `you have_event <event>` (with start/end and recurrence, so future and recurring events surface in **Upcoming**), `<event> located_in <place>`, and `<attendee> attending <event>`. Deleted events are removed from the knowledge graph automatically (recoverable from trash for 30 days).
-- **Read-only** — like every connector today, the Graph backend only imports; write-back (creating/editing events from Mimir) is not implemented for it.
+- **Read-only** — the Graph backend only imports; write-back (creating/editing events from Mimir) is not implemented for it, leaving CalDAV as the only write-capable calendar backend.
 
 ## Use cases
 
@@ -66,4 +66,4 @@ Outlook.com and Office 365 calendars cannot be read over CalDAV (Microsoft expos
 
 - Google's CalDAV sync-token support is non-standard; the generic client works against fully RFC 6578-compliant servers (iCloud, Nextcloud). Google-specific handling is a follow-on.
 - The interactive OAuth login (PKCE) is wired (A4 / #205); Google-specific CalDAV sync-token handling remains a follow-on.
-- Event → knowledge-graph extraction, write-back, and server-side deletion propagation are live (C4 / #198 + #247); richer `RRULE` recurrence rules are a follow-up.
+- Event → knowledge-graph extraction, write-back, and server-side deletion propagation are live (C4 / #198 + #247); the recurrence interval and series bounds (`COUNT`/`UNTIL`) are preserved, while `BYxxx` day/month constraints are retained in the stored rule but not yet used by the advancement engine (a full RFC 5545 expander is a follow-up).

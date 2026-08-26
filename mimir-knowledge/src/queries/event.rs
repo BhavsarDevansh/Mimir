@@ -19,16 +19,19 @@ pub struct FutureFact {
 pub async fn insert_event(pool: &SqlitePool, new: &NewEvent) -> Result<Event, KnowledgeError> {
     let record = sqlx::query_as::<_, Event>(
         "INSERT INTO events \
-         (fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, status_id, \
+         (fact_id, entity_id, trigger_date, recurrence_type_id, recurrence_rule, recurrence_interval, recurrence_until, event_type_id, status_id, \
           auto_complete_policy_id, requires_user_action) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
-         RETURNING id, fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         RETURNING id, fact_id, entity_id, trigger_date, recurrence_type_id, recurrence_rule, recurrence_interval, recurrence_until, event_type_id, \
                    status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at",
     )
     .bind(new.fact_id)
     .bind(new.entity_id)
     .bind(new.trigger_date)
     .bind(new.recurrence as i16)
+    .bind(new.recurrence_rule.clone())
+    .bind(new.recurrence_interval)
+    .bind(new.recurrence_until)
     .bind(new.event_type as i16)
     .bind(EventStatus::Active as i16)
     .bind(new.auto_complete_policy as i16)
@@ -50,12 +53,15 @@ pub async fn insert_event_if_absent(
     new: &NewEvent,
 ) -> Result<Option<Event>, KnowledgeError> {
     let row = sqlx::query_as::<_, Event>(
-        "INSERT INTO events          (fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, status_id,           auto_complete_policy_id, requires_user_action)          VALUES (?, ?, ?, ?, ?, ?, ?, ?)          ON CONFLICT(fact_id) DO NOTHING          RETURNING id, fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id,                    status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at",
+        "INSERT INTO events          (fact_id, entity_id, trigger_date, recurrence_type_id, recurrence_rule, recurrence_interval, recurrence_until, event_type_id, status_id,           auto_complete_policy_id, requires_user_action)          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)          ON CONFLICT(fact_id) DO NOTHING          RETURNING id, fact_id, entity_id, trigger_date, recurrence_type_id, recurrence_rule, recurrence_interval, recurrence_until, event_type_id,                    status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at",
     )
     .bind(new.fact_id)
     .bind(new.entity_id)
     .bind(new.trigger_date)
     .bind(new.recurrence as i16)
+    .bind(new.recurrence_rule.clone())
+    .bind(new.recurrence_interval)
+    .bind(new.recurrence_until)
     .bind(new.event_type as i16)
     .bind(EventStatus::Active as i16)
     .bind(new.auto_complete_policy as i16)
@@ -68,7 +74,7 @@ pub async fn insert_event_if_absent(
 /// Fetch an event overlay by its underlying fact id.
 pub async fn get_by_fact(pool: &SqlitePool, fact_id: i32) -> Result<Option<Event>, KnowledgeError> {
     let row = sqlx::query_as::<_, Event>(
-        "SELECT id, fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, \
+        "SELECT id, fact_id, entity_id, trigger_date, recurrence_type_id, recurrence_rule, recurrence_interval, recurrence_until, event_type_id, \
                 status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at \
          FROM events WHERE fact_id = ?",
     )
@@ -88,7 +94,7 @@ pub async fn get_events_by_entity(
     entity_id: i32,
 ) -> Result<Vec<Event>, KnowledgeError> {
     let rows = sqlx::query_as::<_, Event>(
-        "SELECT id, fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, \
+        "SELECT id, fact_id, entity_id, trigger_date, recurrence_type_id, recurrence_rule, recurrence_interval, recurrence_until, event_type_id, \
                 status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at \
          FROM events \
          WHERE entity_id = ? \
@@ -115,7 +121,7 @@ pub async fn update_status(
     let row = sqlx::query_as::<_, Event>(
         "UPDATE events SET status_id = ?, addressed_at = COALESCE(?, addressed_at) \
          WHERE id = ? \
-         RETURNING id, fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, \
+         RETURNING id, fact_id, entity_id, trigger_date, recurrence_type_id, recurrence_rule, recurrence_interval, recurrence_until, event_type_id, \
                    status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at",
     )
     .bind(status as i16)
@@ -143,7 +149,7 @@ pub async fn advance_recurring_trigger(
 ) -> Result<Event, KnowledgeError> {
     let row = sqlx::query_as::<_, Event>(
         "UPDATE events SET trigger_date = ? WHERE id = ? \
-         RETURNING id, fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, \
+         RETURNING id, fact_id, entity_id, trigger_date, recurrence_type_id, recurrence_rule, recurrence_interval, recurrence_until, event_type_id, \
                    status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at",
     )
     .bind(next_trigger)
@@ -161,7 +167,7 @@ pub async fn get_active_events(
     to: DateTime<Utc>,
 ) -> Result<Vec<Event>, KnowledgeError> {
     let rows = sqlx::query_as::<_, Event>(
-        "SELECT id, fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, \
+        "SELECT id, fact_id, entity_id, trigger_date, recurrence_type_id, recurrence_rule, recurrence_interval, recurrence_until, event_type_id, \
                 status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at \
          FROM events \
          WHERE entity_id = ? AND status_id = ? AND trigger_date >= ? AND trigger_date <= ? \
@@ -183,7 +189,7 @@ pub async fn get_overdue_events(
     now: DateTime<Utc>,
 ) -> Result<Vec<Event>, KnowledgeError> {
     let rows = sqlx::query_as::<_, Event>(
-        "SELECT id, fact_id, entity_id, trigger_date, recurrence_type_id, event_type_id, \
+        "SELECT id, fact_id, entity_id, trigger_date, recurrence_type_id, recurrence_rule, recurrence_interval, recurrence_until, event_type_id, \
                 status_id, auto_complete_policy_id, requires_user_action, addressed_at, created_at \
          FROM events \
          WHERE entity_id = ? AND status_id = ? AND trigger_date < ? \
@@ -212,6 +218,7 @@ pub async fn get_active_recurring(
 ) -> Result<Vec<Event>, KnowledgeError> {
     let rows = sqlx::query_as::<_, Event>(
         "SELECT e.id, e.fact_id, e.entity_id, e.trigger_date, e.recurrence_type_id, \
+                e.recurrence_rule, e.recurrence_interval, e.recurrence_until, \
                 e.event_type_id, e.status_id, e.auto_complete_policy_id, \
                 e.requires_user_action, e.addressed_at, e.created_at \
          FROM events e \
@@ -244,6 +251,7 @@ pub async fn get_past_due_auto_complete(
 ) -> Result<Vec<Event>, KnowledgeError> {
     let rows = sqlx::query_as::<_, Event>(
         "SELECT e.id, e.fact_id, e.entity_id, e.trigger_date, e.recurrence_type_id, \
+                e.recurrence_rule, e.recurrence_interval, e.recurrence_until, \
                 e.event_type_id, e.status_id, e.auto_complete_policy_id, \
                 e.requires_user_action, e.addressed_at, e.created_at \
          FROM events e \
@@ -303,9 +311,16 @@ pub async fn get_future_facts_without_overlay(
 /// Only the shape fields are stored: `trigger_date` comes from the confirmed
 /// fact's `valid_from`, and `fact_id`/`entity_id` from the confirmed fact. The
 /// row is consumed by [`delete_pending_event_meta`] once the overlay is rebuilt.
-#[derive(Debug, Clone, Copy, FromRow)]
+#[derive(Debug, Clone, FromRow)]
 pub struct PendingEventMeta {
     pub recurrence_type_id: i16,
+    /// Raw `RRULE` string when the producer supplied one; `None` for
+    /// kind-only producers.
+    pub recurrence_rule: Option<String>,
+    /// How often the series repeats (every N periods; 1 = every period).
+    pub recurrence_interval: i32,
+    /// Effective series end; `None` = unbounded.
+    pub recurrence_until: Option<DateTime<Utc>>,
     pub event_type_id: i16,
     pub auto_complete_policy_id: i16,
     pub requires_user_action: bool,
@@ -322,16 +337,22 @@ pub async fn insert_pending_event_meta(
 ) -> Result<(), KnowledgeError> {
     sqlx::query(
         "INSERT INTO pending_event_meta \
-         (fact_id, recurrence_type_id, event_type_id, auto_complete_policy_id, requires_user_action) \
-         VALUES (?, ?, ?, ?, ?) \
+         (fact_id, recurrence_type_id, recurrence_rule, recurrence_interval, recurrence_until, event_type_id, auto_complete_policy_id, requires_user_action) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(fact_id) DO UPDATE SET \
           recurrence_type_id = excluded.recurrence_type_id, \
+          recurrence_rule = excluded.recurrence_rule, \
+          recurrence_interval = excluded.recurrence_interval, \
+          recurrence_until = excluded.recurrence_until, \
           event_type_id = excluded.event_type_id, \
           auto_complete_policy_id = excluded.auto_complete_policy_id, \
           requires_user_action = excluded.requires_user_action",
     )
     .bind(fact_id)
     .bind(new.recurrence as i16)
+    .bind(new.recurrence_rule.clone())
+    .bind(new.recurrence_interval)
+    .bind(new.recurrence_until)
     .bind(new.event_type as i16)
     .bind(new.auto_complete_policy as i16)
     .bind(new.requires_user_action)
@@ -349,7 +370,8 @@ pub async fn get_pending_event_meta(
     fact_id: i32,
 ) -> Result<Option<PendingEventMeta>, KnowledgeError> {
     let row = sqlx::query_as::<_, PendingEventMeta>(
-        "SELECT recurrence_type_id, event_type_id, auto_complete_policy_id, requires_user_action \
+        "SELECT recurrence_type_id, recurrence_rule, recurrence_interval, recurrence_until, \
+                event_type_id, auto_complete_policy_id, requires_user_action \
          FROM pending_event_meta WHERE fact_id = ?",
     )
     .bind(fact_id)

@@ -4,6 +4,18 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
 
 use crate::models::enums::RecurrenceType;
 
+/// The recurrence cadence of a fact: the kind, the raw `RRULE` (when the
+/// producer supplied one — interval, day/month constraints, and
+/// `COUNT`/`UNTIL` verbatim), the interval (every N periods), and the
+/// effective series end.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecurrenceSpec {
+    pub kind: RecurrenceType,
+    pub rule: Option<String>,
+    pub interval: i32,
+    pub until: Option<DateTime<Utc>>,
+}
+
 /// Compute the next occurrence of a recurring date on or after `from`.
 ///
 /// - `None` → returns the original `date_value` parsed as a one-time date.
@@ -12,113 +24,121 @@ use crate::models::enums::RecurrenceType;
 /// - `Weekly` → same weekday each week.
 /// - `Daily` → every day (returns `from` truncated to midnight if `date_value` is date-only,
 ///   or `from` if datetime).
+///
+/// `interval` repeats the period every N steps (2 = fortnightly for `Weekly`,
+/// every other month for `Monthly`, ...); `until` bounds the series — once the
+/// next occurrence would fall after it, `None` is returned so the scan stops
+/// advancing the overlay (a bounded series no longer stays active
+/// indefinitely).
 pub fn next_occurrence(
     date_value: &str,
     recurrence: RecurrenceType,
+    interval: i32,
+    until: Option<DateTime<Utc>>,
     from: DateTime<Utc>,
 ) -> Option<DateTime<Utc>> {
     let base = parse_base_datetime(date_value)?;
+    let interval = interval.max(1) as i64;
 
-    match recurrence {
-        RecurrenceType::None => Some(base),
+    let next = match recurrence {
+        RecurrenceType::None => base,
         RecurrenceType::Daily => {
             let base_date = base.date_naive();
             let from_date = from.date_naive();
             if base_date > from_date {
-                Some(base)
+                base
             } else {
                 let days_ahead = (from_date - base_date).num_days();
-                let candidate = base + Duration::days(days_ahead);
-                if candidate >= from {
-                    Some(candidate)
-                } else {
-                    Some(candidate + Duration::days(1))
+                let mut candidate = base + Duration::days((days_ahead / interval) * interval);
+                if candidate < from {
+                    candidate += Duration::days(interval);
                 }
+                candidate
             }
         }
         RecurrenceType::Weekly => {
-            let from_weekday = from.date_naive().weekday().num_days_from_monday() as i64;
-            let base_weekday = base.date_naive().weekday().num_days_from_monday() as i64;
-            let mut days_ahead = (base_weekday - from_weekday + 7) % 7;
-            if days_ahead == 0 && base.time() < from.time() {
-                days_ahead = 7;
+            if from.date_naive() < base.date_naive() {
+                base
+            } else {
+                let from_weekday = from.date_naive().weekday().num_days_from_monday() as i64;
+                let base_weekday = base.date_naive().weekday().num_days_from_monday() as i64;
+                let mut days_ahead = (base_weekday - from_weekday + 7) % 7;
+                if days_ahead == 0 && base.time() < from.time() {
+                    days_ahead = 7;
+                }
+                let mut candidate = from.date_naive() + Duration::days(days_ahead);
+                // Snap to the next valid week (every `interval` weeks from the
+                // base week) so a fortnightly event does not advance weekly.
+                let weeks = (candidate - base.date_naive()).num_days() / 7;
+                if weeks % interval != 0 {
+                    candidate += Duration::days((interval - weeks % interval) * 7);
+                }
+                Utc.from_local_datetime(&candidate.and_time(base.time()))
+                    .single()?
             }
-            Some(from.date_naive() + Duration::days(days_ahead))
-                .and_then(|d| Utc.from_local_datetime(&d.and_time(base.time())).single())
         }
         RecurrenceType::Monthly => {
             let base_date = base.date_naive();
-            let mut candidate_year = from.year();
-            let mut candidate_month = from.month();
-            let candidate_day = std::cmp::min(
-                base_date.day(),
-                days_in_month(candidate_year, candidate_month),
-            );
-            let mut candidate =
-                NaiveDate::from_ymd_opt(candidate_year, candidate_month, candidate_day)?
-                    .and_time(base.time());
-            if candidate < from.naive_utc() {
-                candidate_month += 1;
-                if candidate_month > 12 {
-                    candidate_month = 1;
-                    candidate_year += 1;
+            let months = (from.year() as i64 - base_date.year() as i64) * 12
+                + (from.month() as i64 - base_date.month() as i64);
+            if months < 0 {
+                base
+            } else {
+                let k = months / interval;
+                let mut candidate = month_candidate(base, k * interval)?;
+                if candidate < from {
+                    candidate = month_candidate(base, (k + 1) * interval)?;
                 }
-                let next_day = std::cmp::min(
-                    base_date.day(),
-                    days_in_month(candidate_year, candidate_month),
-                );
-                candidate = NaiveDate::from_ymd_opt(candidate_year, candidate_month, next_day)?
-                    .and_time(base.time());
+                candidate
             }
-            Utc.from_local_datetime(&candidate).single()
         }
         RecurrenceType::Yearly => {
             let base_date = base.date_naive();
-            let candidate_year = from.year();
-            let mut candidate_day = base_date.day();
-            // Feb 29 fallback to Mar 1 in non-leap years.
-            if base_date.month() == 2 && candidate_day == 29 && !is_leap_year(candidate_year) {
-                candidate_day = 1;
-                let candidate = NaiveDate::from_ymd_opt(candidate_year, 3, candidate_day)?
-                    .and_time(base.time());
-                if candidate < from.naive_utc() {
-                    let next_year = candidate_year + 1;
-                    let next_day = if is_leap_year(next_year) { 29 } else { 1 };
-                    let next_month = if is_leap_year(next_year) { 2 } else { 3 };
-                    return Utc
-                        .from_local_datetime(
-                            &NaiveDate::from_ymd_opt(next_year, next_month, next_day)?
-                                .and_time(base.time()),
-                        )
-                        .single();
+            let years = from.year() as i64 - base_date.year() as i64;
+            if years < 0 {
+                base
+            } else {
+                let k = years / interval;
+                let mut candidate = year_candidate(base, k * interval)?;
+                if candidate < from {
+                    candidate = year_candidate(base, (k + 1) * interval)?;
                 }
-                return Utc.from_local_datetime(&candidate).single();
+                candidate
             }
-            let mut candidate =
-                NaiveDate::from_ymd_opt(candidate_year, base_date.month(), candidate_day)?
-                    .and_time(base.time());
-            if candidate < from.naive_utc() {
-                let next_year = candidate_year + 1;
-                let next_day = if base_date.month() == 2
-                    && base_date.day() == 29
-                    && !is_leap_year(next_year)
-                {
-                    1
-                } else {
-                    base_date.day()
-                };
-                let next_month = if base_date.month() == 2 && base_date.day() == 29 && next_day == 1
-                {
-                    3
-                } else {
-                    base_date.month()
-                };
-                candidate =
-                    NaiveDate::from_ymd_opt(next_year, next_month, next_day)?.and_time(base.time());
-            }
-            Utc.from_local_datetime(&candidate).single()
+        }
+    };
+    if let Some(until) = until {
+        if next > until {
+            return None;
         }
     }
+    Some(next)
+}
+
+/// The base day (clamped to the month length) in the month `months_after`
+/// months after the base date.
+fn month_candidate(base: DateTime<Utc>, months_after: i64) -> Option<DateTime<Utc>> {
+    let base_date = base.date_naive();
+    let total = base_date.year() as i64 * 12 + (base_date.month() as i64 - 1) + months_after;
+    let year = (total / 12) as i32;
+    let month = (total % 12) as u32 + 1;
+    let day = std::cmp::min(base_date.day(), days_in_month(year, month));
+    NaiveDate::from_ymd_opt(year, month, day)
+        .and_then(|d| Utc.from_local_datetime(&d.and_time(base.time())).single())
+}
+
+/// The base month/day in the year `years_after` years after the base date;
+/// Feb 29 falls back to Mar 1 in non-leap years.
+fn year_candidate(base: DateTime<Utc>, years_after: i64) -> Option<DateTime<Utc>> {
+    let base_date = base.date_naive();
+    let year = base_date.year() + years_after as i32;
+    let (month, day) = if base_date.month() == 2 && base_date.day() == 29 && !is_leap_year(year) {
+        (3, 1)
+    } else {
+        (base_date.month(), base_date.day())
+    };
+    NaiveDate::from_ymd_opt(year, month, day)
+        .and_then(|d| Utc.from_local_datetime(&d.and_time(base.time())).single())
 }
 
 fn parse_base_datetime(value: &str) -> Option<DateTime<Utc>> {
@@ -162,14 +182,14 @@ mod tests {
     fn next_occurrence_none_returns_base() {
         let base = Utc.with_ymd_and_hms(1990, 5, 15, 0, 0, 0).unwrap();
         let from = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-        let result = next_occurrence("1990-05-15", RecurrenceType::None, from);
+        let result = next_occurrence("1990-05-15", RecurrenceType::None, 1, None, from);
         assert_eq!(result, Some(base));
     }
 
     #[test]
     fn next_occurrence_yearly_same_year() {
         let from = Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap();
-        let result = next_occurrence("1990-05-15", RecurrenceType::Yearly, from);
+        let result = next_occurrence("1990-05-15", RecurrenceType::Yearly, 1, None, from);
         let expected = Utc.with_ymd_and_hms(2024, 5, 15, 0, 0, 0).unwrap();
         assert_eq!(result, Some(expected));
     }
@@ -177,7 +197,7 @@ mod tests {
     #[test]
     fn next_occurrence_yearly_next_year() {
         let from = Utc.with_ymd_and_hms(2024, 8, 1, 0, 0, 0).unwrap();
-        let result = next_occurrence("1990-05-15", RecurrenceType::Yearly, from);
+        let result = next_occurrence("1990-05-15", RecurrenceType::Yearly, 1, None, from);
         let expected = Utc.with_ymd_and_hms(2025, 5, 15, 0, 0, 0).unwrap();
         assert_eq!(result, Some(expected));
     }
@@ -185,7 +205,7 @@ mod tests {
     #[test]
     fn next_occurrence_yearly_leap_year_feb29_to_mar1() {
         let from = Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap();
-        let result = next_occurrence("2000-02-29", RecurrenceType::Yearly, from);
+        let result = next_occurrence("2000-02-29", RecurrenceType::Yearly, 1, None, from);
         let expected = Utc.with_ymd_and_hms(2023, 3, 1, 0, 0, 0).unwrap();
         assert_eq!(result, Some(expected));
     }
@@ -193,7 +213,7 @@ mod tests {
     #[test]
     fn next_occurrence_yearly_leap_year_feb29_keeps_feb29() {
         let from = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-        let result = next_occurrence("2000-02-29", RecurrenceType::Yearly, from);
+        let result = next_occurrence("2000-02-29", RecurrenceType::Yearly, 1, None, from);
         let expected = Utc.with_ymd_and_hms(2024, 2, 29, 0, 0, 0).unwrap();
         assert_eq!(result, Some(expected));
     }
@@ -201,7 +221,7 @@ mod tests {
     #[test]
     fn next_occurrence_monthly_same_month() {
         let from = Utc.with_ymd_and_hms(2024, 3, 10, 0, 0, 0).unwrap();
-        let result = next_occurrence("2020-03-15", RecurrenceType::Monthly, from);
+        let result = next_occurrence("2020-03-15", RecurrenceType::Monthly, 1, None, from);
         let expected = Utc.with_ymd_and_hms(2024, 3, 15, 0, 0, 0).unwrap();
         assert_eq!(result, Some(expected));
     }
@@ -209,7 +229,7 @@ mod tests {
     #[test]
     fn next_occurrence_monthly_next_month() {
         let from = Utc.with_ymd_and_hms(2024, 3, 20, 0, 0, 0).unwrap();
-        let result = next_occurrence("2020-03-15", RecurrenceType::Monthly, from);
+        let result = next_occurrence("2020-03-15", RecurrenceType::Monthly, 1, None, from);
         let expected = Utc.with_ymd_and_hms(2024, 4, 15, 0, 0, 0).unwrap();
         assert_eq!(result, Some(expected));
     }
@@ -217,7 +237,7 @@ mod tests {
     #[test]
     fn next_occurrence_weekly_next_week() {
         let from = Utc.with_ymd_and_hms(2024, 3, 20, 12, 0, 0).unwrap(); // Wednesday noon
-        let result = next_occurrence("2020-03-18", RecurrenceType::Weekly, from); // Wednesday base
+        let result = next_occurrence("2020-03-18", RecurrenceType::Weekly, 1, None, from); // Wednesday base
         let expected = Utc.with_ymd_and_hms(2024, 3, 27, 0, 0, 0).unwrap();
         assert_eq!(result, Some(expected));
     }
@@ -226,7 +246,7 @@ mod tests {
     fn next_occurrence_weekly_from_tuesday_to_wednesday() {
         // from = Tuesday, base = Wednesday → next Wednesday is +1 day
         let from = Utc.with_ymd_and_hms(2024, 3, 19, 12, 0, 0).unwrap(); // Tuesday noon
-        let result = next_occurrence("2020-03-18", RecurrenceType::Weekly, from); // Wednesday base
+        let result = next_occurrence("2020-03-18", RecurrenceType::Weekly, 1, None, from); // Wednesday base
         let expected = Utc.with_ymd_and_hms(2024, 3, 20, 0, 0, 0).unwrap();
         assert_eq!(result, Some(expected));
     }
@@ -235,8 +255,19 @@ mod tests {
     fn next_occurrence_weekly_from_thursday_to_wednesday() {
         // from = Thursday, base = Wednesday → next Wednesday is +6 days
         let from = Utc.with_ymd_and_hms(2024, 3, 21, 12, 0, 0).unwrap(); // Thursday noon
-        let result = next_occurrence("2020-03-18", RecurrenceType::Weekly, from); // Wednesday base
+        let result = next_occurrence("2020-03-18", RecurrenceType::Weekly, 1, None, from); // Wednesday base
         let expected = Utc.with_ymd_and_hms(2024, 3, 27, 0, 0, 0).unwrap();
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn next_occurrence_weekly_from_before_base_returns_base() {
+        // from predates the series start: the first occurrence is the base
+        // date itself, never a date before it (negative week math must not
+        // leak a pre-series candidate).
+        let from = Utc.with_ymd_and_hms(2020, 1, 1, 12, 0, 0).unwrap();
+        let result = next_occurrence("2020-03-18", RecurrenceType::Weekly, 2, None, from);
+        let expected = Utc.with_ymd_and_hms(2020, 3, 18, 0, 0, 0).unwrap();
         assert_eq!(result, Some(expected));
     }
 
@@ -244,7 +275,13 @@ mod tests {
     fn next_occurrence_weekly_same_day_time_already_passed() {
         // from = Wednesday afternoon, base = Wednesday morning → next week
         let from = Utc.with_ymd_and_hms(2024, 3, 20, 14, 0, 0).unwrap(); // Wednesday 14:00
-        let result = next_occurrence("2020-03-18T08:00:00Z", RecurrenceType::Weekly, from); // Wednesday 08:00
+        let result = next_occurrence(
+            "2020-03-18T08:00:00Z",
+            RecurrenceType::Weekly,
+            1,
+            None,
+            from,
+        ); // Wednesday 08:00
         let expected = Utc.with_ymd_and_hms(2024, 3, 27, 8, 0, 0).unwrap();
         assert_eq!(result, Some(expected));
     }
@@ -252,8 +289,66 @@ mod tests {
     #[test]
     fn next_occurrence_daily_next_day() {
         let from = Utc.with_ymd_and_hms(2024, 3, 20, 12, 0, 0).unwrap();
-        let result = next_occurrence("2020-03-18", RecurrenceType::Daily, from);
+        let result = next_occurrence("2020-03-18", RecurrenceType::Daily, 1, None, from);
         let expected = Utc.with_ymd_and_hms(2024, 3, 21, 0, 0, 0).unwrap();
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn next_occurrence_weekly_fortnightly_skips_off_weeks() {
+        // Base Wednesday 2020-03-18; every 2 weeks. From the on-week
+        // Wednesday (2024-03-27) after its 00:00 occurrence has passed, the
+        // next occurrence is the on-week Wednesday two weeks later — the
+        // intervening week is an off week.
+        let from = Utc.with_ymd_and_hms(2024, 3, 27, 12, 0, 0).unwrap(); // Wednesday
+        let result = next_occurrence("2020-03-18", RecurrenceType::Weekly, 2, None, from);
+        let expected = Utc.with_ymd_and_hms(2024, 4, 10, 0, 0, 0).unwrap();
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn next_occurrence_weekly_fortnightly_from_off_weekday() {
+        // From a Tuesday in an on-week (2024-03-19) → the next on-week
+        // Wednesday (2024-03-27); the Wednesday in between is an off week.
+        let from = Utc.with_ymd_and_hms(2024, 3, 19, 12, 0, 0).unwrap(); // Tuesday
+        let result = next_occurrence("2020-03-18", RecurrenceType::Weekly, 2, None, from);
+        let expected = Utc.with_ymd_and_hms(2024, 3, 27, 0, 0, 0).unwrap();
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn next_occurrence_monthly_every_other_month() {
+        // Base 2020-03-15; every 2 months. From March 2024 → May 2024.
+        let from = Utc.with_ymd_and_hms(2024, 3, 20, 0, 0, 0).unwrap();
+        let result = next_occurrence("2020-03-15", RecurrenceType::Monthly, 2, None, from);
+        let expected = Utc.with_ymd_and_hms(2024, 5, 15, 0, 0, 0).unwrap();
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn next_occurrence_daily_every_three_days() {
+        let from = Utc.with_ymd_and_hms(2024, 3, 20, 12, 0, 0).unwrap();
+        let result = next_occurrence("2020-03-18", RecurrenceType::Daily, 3, None, from);
+        let expected = Utc.with_ymd_and_hms(2024, 3, 21, 0, 0, 0).unwrap();
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn next_occurrence_until_stops_advancing_after_series_end() {
+        // Weekly series ending 2024-03-25: the next occurrence (2024-03-27)
+        // lies past the bound, so the scan must stop advancing.
+        let from = Utc.with_ymd_and_hms(2024, 3, 20, 12, 0, 0).unwrap();
+        let until = Utc.with_ymd_and_hms(2024, 3, 25, 0, 0, 0).unwrap();
+        let result = next_occurrence("2020-03-18", RecurrenceType::Weekly, 1, Some(until), from);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn next_occurrence_until_keeps_occurrences_on_or_before_end() {
+        let from = Utc.with_ymd_and_hms(2024, 3, 20, 12, 0, 0).unwrap();
+        let until = Utc.with_ymd_and_hms(2024, 3, 27, 23, 59, 59).unwrap();
+        let result = next_occurrence("2020-03-18", RecurrenceType::Weekly, 1, Some(until), from);
+        let expected = Utc.with_ymd_and_hms(2024, 3, 27, 0, 0, 0).unwrap();
         assert_eq!(result, Some(expected));
     }
 }

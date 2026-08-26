@@ -1,11 +1,14 @@
 //! Sync staging: Graph delta results into the event buffer, `@removed`
 //! deletions into the tombstone buffer, and event-to-fact conversion.
 
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use tracing::debug;
 
 use crate::calendar::graph::GraphCalendarConnector;
-use crate::calendar::graph::client::{GraphAttendee, GraphDateTime, GraphDeltaResult, GraphEvent};
+use crate::calendar::graph::client::{
+    GraphAttendee, GraphDateTime, GraphDeltaResult, GraphEvent, GraphRecurrencePattern,
+    GraphRecurrenceRange,
+};
 use crate::connector::ConnectorError;
 use crate::ical::{RawVEvent, vevent_to_facts};
 use mimir_knowledge::normalize::NormalizedFact;
@@ -15,7 +18,21 @@ impl GraphCalendarConnector {
     /// the number of events staged.
     pub(super) async fn stage(&self, result: GraphDeltaResult) -> Result<u32, ConnectorError> {
         let count = result.events.len() as u32;
-        self.buffer.lock().await.extend(result.events);
+        let mut buffer = self.buffer.lock().await;
+        for event in result.events {
+            // Dedupe by Graph event id: a cycle cancelled after `sync` staged
+            // events but before `extract` drained the buffer reuses the
+            // previous cursor and stages the same delta again (issue #314),
+            // so the pending buffer must keep one entry per event id — the
+            // latest version wins — or `extract` would author one fact
+            // cluster per buffered copy.
+            if let Some(existing) = buffer.iter_mut().find(|e| e.id == event.id) {
+                *existing = event;
+            } else {
+                buffer.push(event);
+            }
+        }
+        drop(buffer);
         for id in result.deleted {
             // Server-side deletions (tombstones): the event id is the
             // `raw_reference` the extractor authors (see `event_to_facts`),
@@ -69,11 +86,10 @@ fn graph_event_to_vevent(event: &GraphEvent) -> RawVEvent {
             .map(str::to_string),
         description: None,
         status: None,
-        recurrence_rule: event
-            .recurrence
-            .as_ref()
-            .and_then(|r| r.pattern.as_ref())
-            .and_then(|p| graph_recurrence_to_rrule(p.pattern_type.as_deref())),
+        recurrence_rule: event.recurrence.as_ref().and_then(|r| {
+            let pattern = r.pattern.as_ref()?;
+            graph_recurrence_to_rrule(pattern, r.range.as_ref())
+        }),
         attendees: event
             .attendees
             .iter()
@@ -105,19 +121,133 @@ fn parse_graph_datetime(dt: &GraphDateTime) -> Option<DateTime<Utc>> {
     Some(Utc.from_utc_datetime(&naive))
 }
 
-/// Map a Graph recurrence pattern type onto an RRULE `FREQ` so the shared
+/// Map a Graph recurrence pattern + range onto a full RRULE so the shared
 /// `vevent_to_facts` recurrence mapping (which reads `RRULE` `FREQ`) can
-/// advance recurring events. `singleInstance` and unknown types map to
-/// `None` (no recurrence).
-fn graph_recurrence_to_rrule(pattern_type: Option<&str>) -> Option<String> {
-    let freq = match pattern_type?.to_ascii_lowercase().as_str() {
+/// advance recurring events. The interval, day/month constraints, and series
+/// bounds (`COUNT` / `UNTIL`) are preserved so a fortnightly event stays
+/// fortnightly and a bounded series stops advancing. `singleInstance` and
+/// unknown types map to `None` (no recurrence).
+fn graph_recurrence_to_rrule(
+    pattern: &GraphRecurrencePattern,
+    range: Option<&GraphRecurrenceRange>,
+) -> Option<String> {
+    let pattern_type = pattern.pattern_type.as_deref()?;
+    let freq = match pattern_type.to_ascii_lowercase().as_str() {
         "daily" => "DAILY",
         "weekly" => "WEEKLY",
         "absolutemonthly" | "relativemonthly" => "MONTHLY",
         "absoluteyearly" | "relativeyearly" => "YEARLY",
         _ => return None,
     };
-    Some(format!("FREQ={freq}"))
+    let mut parts = vec![format!("FREQ={freq}")];
+    if let Some(interval) = pattern.interval.filter(|i| *i > 1) {
+        parts.push(format!("INTERVAL={interval}"));
+    }
+    match pattern_type.to_ascii_lowercase().as_str() {
+        "weekly" => {
+            if let Some(days) = pattern.days_of_week.as_deref().filter(|d| !d.is_empty()) {
+                let byday = days
+                    .iter()
+                    .filter_map(|d| day_of_week_rrule(d))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                if !byday.is_empty() {
+                    parts.push(format!("BYDAY={byday}"));
+                }
+            }
+        }
+        "absolutemonthly" => {
+            if let Some(day) = pattern.day_of_month {
+                parts.push(format!("BYMONTHDAY={day}"));
+            }
+        }
+        "absoluteyearly" => {
+            if let Some(month) = pattern.month {
+                parts.push(format!("BYMONTH={month}"));
+            }
+            if let Some(day) = pattern.day_of_month {
+                parts.push(format!("BYMONTHDAY={day}"));
+            }
+        }
+        "relativemonthly" | "relativeyearly" => {
+            if let Some(index) = pattern.index.as_deref().and_then(relative_index_rrule) {
+                parts.push(format!("BYSETPOS={index}"));
+            }
+            if let Some(days) = pattern.days_of_week.as_deref().filter(|d| !d.is_empty()) {
+                let byday = days
+                    .iter()
+                    .filter_map(|d| day_of_week_rrule(d))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                if !byday.is_empty() {
+                    parts.push(format!("BYDAY={byday}"));
+                }
+            }
+            if pattern_type.eq_ignore_ascii_case("relativeyearly") {
+                if let Some(month) = pattern.month {
+                    parts.push(format!("BYMONTH={month}"));
+                }
+            }
+        }
+        _ => {}
+    }
+    if let Some(range) = range {
+        match range
+            .range_type
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("numbered") => {
+                if let Some(count) = range.number_of_occurrences.filter(|n| *n > 0) {
+                    parts.push(format!("COUNT={count}"));
+                }
+            }
+            Some("enddate") => {
+                if let Some(until) = range.end_date.as_deref().and_then(graph_end_date_to_until) {
+                    parts.push(format!("UNTIL={until}"));
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(parts.join(";"))
+}
+
+/// Map a Graph `daysOfWeek` value onto its RRULE `BYDAY` two-letter code
+/// (`sunday` → `SU`); unknown values map to `None`.
+fn day_of_week_rrule(day: &str) -> Option<String> {
+    let code = match day.trim().to_ascii_lowercase().as_str() {
+        "sunday" => "SU",
+        "monday" => "MO",
+        "tuesday" => "TU",
+        "wednesday" => "WE",
+        "thursday" => "TH",
+        "friday" => "FR",
+        "saturday" => "SA",
+        _ => return None,
+    };
+    Some(code.to_string())
+}
+
+/// Map a Graph relative `index` onto its RRULE `BYSETPOS` value (`first` →
+/// `1`, `last` → `-1`); unknown values map to `None`.
+fn relative_index_rrule(index: &str) -> Option<i32> {
+    match index.trim().to_ascii_lowercase().as_str() {
+        "first" => Some(1),
+        "second" => Some(2),
+        "third" => Some(3),
+        "fourth" => Some(4),
+        "last" => Some(-1),
+        _ => None,
+    }
+}
+
+/// Convert a Graph `endDate` (`YYYY-MM-DD`) into an RRULE `UNTIL` at the end
+/// of that day (UTC), so occurrences on the end date are included.
+fn graph_end_date_to_until(end_date: &str) -> Option<String> {
+    let date = NaiveDate::parse_from_str(end_date.trim(), "%Y-%m-%d").ok()?;
+    Some(format!("{}T235959Z", date.format("%Y%m%d")))
 }
 
 /// Resolve an attendee's display name (the address-book `name`, else the

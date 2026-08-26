@@ -43,7 +43,7 @@ Build the connector framework and implement 3 core connectors: Email, Calendar, 
 - [x] Fact extraction: events, locations, attendees — same shapes as CalDAV (issue #474)
 - [x] Server-side deletions (`@removed`) propagated to the KB fact lifecycle (issue #474)
 - [x] Wizard preset: account-type endpoint selection + `Calendars.Read offline_access` scope (issue #474)
-- [ ] Write support (out of scope — every connector is read-only today)
+- [ ] Write support (out of scope — Graph write support is not planned for this backend)
 
 ### 3.4 Photos Connector
 - [x] Local file system watcher (C1 / #195)

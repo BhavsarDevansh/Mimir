@@ -110,10 +110,13 @@ pub struct GraphEmailAddress {
 /// A Graph `recurrence` object.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct GraphRecurrence {
-    /// The recurrence pattern (the `range` is not needed for fact
-    /// extraction — the events subsystem advances recurring events).
+    /// The recurrence pattern.
     #[serde(default)]
     pub pattern: Option<GraphRecurrencePattern>,
+    /// The recurrence range (series bounds: `endDate`, `numbered`, or
+    /// `noEnd`).
+    #[serde(default)]
+    pub range: Option<GraphRecurrenceRange>,
 }
 
 /// A Graph `recurrence.pattern` object.
@@ -124,6 +127,39 @@ pub struct GraphRecurrencePattern {
     /// `relativeYearly`.
     #[serde(rename = "type", default)]
     pub pattern_type: Option<String>,
+    /// How often the pattern repeats (e.g. `2` = every other week/month).
+    #[serde(default)]
+    pub interval: Option<i32>,
+    /// Which day of the month the event occurs on (`absoluteMonthly` /
+    /// `absoluteYearly`).
+    #[serde(default, rename = "dayOfMonth")]
+    pub day_of_month: Option<i32>,
+    /// Which month of the year the event occurs in (`absoluteYearly` /
+    /// `relativeYearly`).
+    #[serde(default)]
+    pub month: Option<i32>,
+    /// Which days of the week the event occurs on (`weekly` /
+    /// `relativeMonthly` / `relativeYearly`).
+    #[serde(default, rename = "daysOfWeek")]
+    pub days_of_week: Option<Vec<String>>,
+    /// Which occurrence of the day/month the event uses (`first`, `second`,
+    /// `third`, `fourth`, `last` — `relativeMonthly` / `relativeYearly`).
+    #[serde(default)]
+    pub index: Option<String>,
+}
+
+/// A Graph `recurrence.range` object — the series bounds.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct GraphRecurrenceRange {
+    /// Range type: `endDate`, `numbered`, or `noEnd`.
+    #[serde(rename = "type", default)]
+    pub range_type: Option<String>,
+    /// The date the series ends on (`endDate` range), `YYYY-MM-DD`.
+    #[serde(default, rename = "endDate")]
+    pub end_date: Option<String>,
+    /// How many occurrences the series has (`numbered` range).
+    #[serde(default, rename = "numberOfOccurrences")]
+    pub number_of_occurrences: Option<i32>,
 }
 
 /// A Graph `@removed` marker on a delta item.
@@ -296,7 +332,18 @@ impl GraphClient {
         // synchronization. Exactly one restart: a full sync cannot hit the
         // reset path again, so any further reset is a genuine server error.
         let mut restarting = delta_link.is_some();
+        // Defensive bound: a server that repeats `@odata.nextLink` (or returns
+        // an unbounded chain) must not spin this loop forever — the per-request
+        // timeout does not bound the total number of pages.
+        const MAX_PAGES: usize = 1_000;
+        let mut pages = 0usize;
         let new_delta_link = loop {
+            pages += 1;
+            if pages > MAX_PAGES {
+                return Err(ConnectorError::Other(format!(
+                    "Microsoft Graph events delta exceeded {MAX_PAGES} pages"
+                )));
+            }
             let resp = self
                 .authed(self.http.get(&url))
                 // Ask for UTC datetimes so `start.timeZone`/`end.timeZone`

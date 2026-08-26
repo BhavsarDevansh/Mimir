@@ -420,6 +420,68 @@ async fn sync_stages_tombstones_and_extract_deletions_reports_them() {
 }
 
 #[tokio::test]
+async fn repeated_staging_deduplicates_events_by_id() {
+    // A cycle cancelled after `sync` staged events but before `extract`
+    // drained the buffer reuses the previous cursor and stages the same delta
+    // again (issue #314); the buffer must keep one entry per event id so
+    // `extract` authors one fact cluster per event, not one per staged copy.
+    let server = MockServer::start().await;
+    let base = format!("{}/v1.0", server.uri());
+    Mock::given(method("GET"))
+        .and(path("/v1.0/me/events/delta"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(delta_body(&[event_json("evt-1", "Trip to Rome")], None)),
+        )
+        .up_to_n_times(2)
+        .mount(&server)
+        .await;
+
+    let store: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
+    store
+        .store("calendar", &oauth_bundle("t0ken", None))
+        .await
+        .unwrap();
+    let connector = GraphCalendarConnector::from_config_with_http(
+        oauth_config(&base, "https://oauth.example.com/token"),
+        Some(store),
+        Some("Devansh".to_string()),
+        None,
+        Some(http_client()),
+    )
+    .unwrap();
+
+    // Stage the same delta twice without draining the buffer in between.
+    assert_eq!(
+        connector
+            .sync(SyncOptions::default())
+            .await
+            .unwrap()
+            .fetched,
+        1
+    );
+    assert_eq!(
+        connector
+            .sync(SyncOptions::default())
+            .await
+            .unwrap()
+            .fetched,
+        1
+    );
+    let facts = connector.extract().await.unwrap();
+    // One cluster per event id: 1 primary has_event + 1 located_in + 1
+    // attending = 3, never 6.
+    assert_eq!(facts.len(), 3);
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|f| f.relationship_type == "has_event")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn on_cycle_succeeded_adopts_cursor_for_next_incremental_sync() {
     let server = MockServer::start().await;
     let base = format!("{}/v1.0", server.uri());
@@ -437,7 +499,7 @@ async fn on_cycle_succeeded_adopts_cursor_for_next_incremental_sync() {
             &[event_json("evt-1", "Trip to Rome")],
             Some(&delta_link),
         )))
-        .up_to_n_times(1)
+        .up_to_n_times(2)
         .mount(&server)
         .await;
 
@@ -460,6 +522,11 @@ async fn on_cycle_succeeded_adopts_cursor_for_next_incremental_sync() {
     // The in-memory marker must NOT advance until the supervisor confirms
     // the cycle (issue #314): a second sync before `on_cycle_succeeded`
     // re-requests the full delta.
+    let pending = connector.sync(SyncOptions::default()).await.unwrap();
+    assert_eq!(
+        pending.fetched, 1,
+        "marker must not advance before the cycle is confirmed"
+    );
     connector
         .on_cycle_succeeded(first.new_cursor.as_deref())
         .await;
@@ -655,4 +722,82 @@ async fn event_to_facts_maps_recurrence_and_timezone() {
         .find(|f| f.relationship_type == "has_event")
         .expect("primary has_event fact");
     assert_eq!(primary.recurrence, RecurrenceType::Yearly);
+
+    // Fortnightly (weekly + interval 2) → the RRULE keeps INTERVAL so the
+    // events subsystem advances every two weeks, not weekly.
+    let mut fortnightly = event_json("evt-fortnightly", "Standup");
+    fortnightly["recurrence"] = serde_json::json!({
+        "pattern": {"type": "weekly", "interval": 2, "daysOfWeek": ["monday", "wednesday"]},
+        "range": {"type": "noEnd"}
+    });
+    let facts = connector.event_to_facts(&serde_json::from_value(fortnightly).unwrap());
+    let primary = facts
+        .iter()
+        .find(|f| f.relationship_type == "has_event")
+        .expect("primary has_event fact");
+    assert_eq!(primary.recurrence, RecurrenceType::Weekly);
+    assert_eq!(primary.recurrence_interval, 2);
+    assert_eq!(
+        primary.recurrence_rule.as_deref(),
+        Some("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE")
+    );
+    assert_eq!(primary.recurrence_until, None);
+
+    // Relative-monthly (second Tuesday) → BYSETPOS + BYDAY are retained.
+    let mut relative = event_json("evt-relative", "Board meeting");
+    relative["recurrence"] = serde_json::json!({
+        "pattern": {"type": "relativeMonthly", "interval": 1, "index": "second", "daysOfWeek": ["tuesday"]},
+        "range": {"type": "noEnd"}
+    });
+    let facts = connector.event_to_facts(&serde_json::from_value(relative).unwrap());
+    let primary = facts
+        .iter()
+        .find(|f| f.relationship_type == "has_event")
+        .expect("primary has_event fact");
+    assert_eq!(primary.recurrence, RecurrenceType::Monthly);
+    assert_eq!(
+        primary.recurrence_rule.as_deref(),
+        Some("FREQ=MONTHLY;BYSETPOS=2;BYDAY=TU")
+    );
+
+    // Bounded series: a numbered range maps to COUNT, an endDate range to
+    // UNTIL, so the series stops advancing instead of staying active forever.
+    let mut numbered = event_json("evt-numbered", "Course");
+    numbered["recurrence"] = serde_json::json!({
+        "pattern": {"type": "weekly", "interval": 1},
+        "range": {"type": "numbered", "numberOfOccurrences": 10}
+    });
+    let facts = connector.event_to_facts(&serde_json::from_value(numbered).unwrap());
+    let primary = facts
+        .iter()
+        .find(|f| f.relationship_type == "has_event")
+        .expect("primary has_event fact");
+    assert_eq!(
+        primary.recurrence_rule.as_deref(),
+        Some("FREQ=WEEKLY;COUNT=10")
+    );
+    // 10 weekly occurrences from 2025-05-03 → the 10th is 2025-07-05.
+    assert_eq!(
+        primary.recurrence_until,
+        Some(Utc.with_ymd_and_hms(2025, 7, 5, 9, 0, 0).unwrap())
+    );
+
+    let mut end_dated = event_json("evt-enddated", "Season");
+    end_dated["recurrence"] = serde_json::json!({
+        "pattern": {"type": "weekly", "interval": 1},
+        "range": {"type": "endDate", "endDate": "2025-06-30"}
+    });
+    let facts = connector.event_to_facts(&serde_json::from_value(end_dated).unwrap());
+    let primary = facts
+        .iter()
+        .find(|f| f.relationship_type == "has_event")
+        .expect("primary has_event fact");
+    assert_eq!(
+        primary.recurrence_rule.as_deref(),
+        Some("FREQ=WEEKLY;UNTIL=20250630T235959Z")
+    );
+    assert_eq!(
+        primary.recurrence_until,
+        Some(Utc.with_ymd_and_hms(2025, 6, 30, 23, 59, 59).unwrap())
+    );
 }

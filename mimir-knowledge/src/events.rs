@@ -9,7 +9,9 @@
 //! 2. **Auto-complete** — one-time `AutoCompleteOnDate` events whose
 //!    `trigger_date` has passed transition to `Completed`.
 //! 3. **Advance** — recurring events whose `trigger_date` has passed advance
-//!    to their next occurrence via [`next_occurrence`].
+//!    to their next occurrence via [`next_occurrence`]; a series whose next
+//!    occurrence no longer exists (the bound has passed) is retired to
+//!    `Completed` so it stops surfacing and is never scanned again.
 //!
 //! `RequiresUserAction` events are intentionally left untouched; once past
 //! their `trigger_date` they surface as overdue via
@@ -27,7 +29,8 @@ use crate::queries::event;
 pub struct ScanSummary {
     /// One-time overlays created for newly-discovered future facts.
     pub derived: usize,
-    /// One-time events transitioned to `Completed`.
+    /// One-time events transitioned to `Completed`, plus recurring series
+    /// retired because their next occurrence no longer exists.
     pub completed: usize,
     /// Recurring events advanced to their next occurrence.
     pub advanced: usize,
@@ -89,11 +92,19 @@ pub async fn run_upcoming_scan(
             ev.recurrence_interval,
             ev.recurrence_until,
             now,
+            ev.recurrence_rule.as_deref(),
         ) {
             if next != ev.trigger_date {
                 event::advance_recurring_trigger(pool, ev.id, next).await?;
                 advanced += 1;
             }
+        } else {
+            // The series has ended (the next occurrence would fall past
+            // `recurrence_until`, or the rule no longer yields one): retire
+            // the overlay so the scan stops selecting it on every cycle and
+            // it never surfaces as overdue (PR #513 review).
+            event::update_status(pool, ev.id, EventStatus::Completed, now).await?;
+            completed += 1;
         }
     }
 

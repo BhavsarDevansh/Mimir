@@ -1,6 +1,6 @@
 //! Event overlay, recurrence, auto-complete, and upcoming-section integration tests.
 
-use chrono::{TimeZone, Utc};
+use chrono::{TimeZone, Timelike, Utc};
 use mimir_knowledge::KnowledgeGraph;
 use mimir_knowledge::models::entity::EntityType;
 use mimir_knowledge::models::enums::{AutoCompletePolicy, EventType, RecurrenceType};
@@ -189,6 +189,162 @@ async fn test_event_recurring_yearly_advances() {
     let event = kg.get_event_by_fact(fact.id).await.unwrap().unwrap();
     assert_eq!(event.status(), Some(EventStatus::Active));
     // Advanced trigger date is now in the future (next anniversary).
+    assert!(event.trigger_date > now);
+}
+
+#[tokio::test]
+async fn test_recurring_series_retired_after_recurrence_end() {
+    use mimir_knowledge::models::enums::{AutoCompletePolicy, EventStatus, EventType};
+    use mimir_knowledge::models::event::NewEvent;
+
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let entity = kg
+        .create_entity("Grace", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    let fact = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("season".to_string()),
+            valid_from: Some(now - chrono::Duration::days(2)),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    // A bounded weekly series whose last occurrence has already passed: the
+    // next occurrence would fall past `recurrence_until`, so the scan must
+    // retire the overlay instead of leaving it Active with a past trigger
+    // (PR #513 review).
+    kg.insert_event(NewEvent {
+        fact_id: fact.id,
+        entity_id: entity.id,
+        trigger_date: now - chrono::Duration::days(1),
+        recurrence: RecurrenceType::Weekly,
+        recurrence_rule: Some("FREQ=WEEKLY;BYDAY=MO,WE".to_string()),
+        recurrence_interval: 1,
+        recurrence_until: Some(now - chrono::Duration::days(1)),
+        event_type: EventType::Appointment,
+        auto_complete_policy: AutoCompletePolicy::Recurring,
+        requires_user_action: false,
+    })
+    .await
+    .unwrap();
+
+    let summary = kg.run_events_scan(30).await.unwrap();
+    assert_eq!(summary.advanced, 0);
+    assert_eq!(summary.completed, 1);
+
+    let event = kg.get_event_by_fact(fact.id).await.unwrap().unwrap();
+    assert_eq!(event.status(), Some(EventStatus::Completed));
+
+    // The retired overlay no longer surfaces as overdue and is not
+    // re-processed by a later scan.
+    let overdue = kg.get_overdue_events(entity.id).await.unwrap();
+    assert!(overdue.is_empty(), "retired series surfaced as overdue");
+    let summary = kg.run_events_scan(30).await.unwrap();
+    assert_eq!(summary.completed, 0);
+    assert_eq!(summary.advanced, 0);
+}
+
+#[tokio::test]
+async fn test_recurring_multi_day_weekly_advances_with_rule() {
+    use mimir_knowledge::models::enums::{AutoCompletePolicy, EventStatus, EventType};
+    use mimir_knowledge::models::event::NewEvent;
+    use mimir_knowledge::models::recurrence::next_occurrence;
+
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let entity = kg
+        .create_entity("Hank", EntityType::Person, &[])
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    let fact = kg
+        .insert_fact(NewFact {
+            subject_id: entity.id,
+            relationship_type: "is_in".to_string(),
+            object_id: None,
+            object_literal: Some("standup".to_string()),
+            valid_from: Some(now - chrono::Duration::days(2)),
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: Some(0.9),
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    // Whole-second trigger: the scan's `now` drifts a few microseconds past
+    // the test's captured `now`, so a fractional-second trigger would make
+    // the expected occurrence sensitive to that drift.
+    let trigger = Utc.from_utc_datetime(
+        &(now - chrono::Duration::days(1))
+            .naive_utc()
+            .with_nanosecond(0)
+            .unwrap(),
+    );
+    kg.insert_event(NewEvent {
+        fact_id: fact.id,
+        entity_id: entity.id,
+        trigger_date: trigger,
+        recurrence: RecurrenceType::Weekly,
+        recurrence_rule: Some("FREQ=WEEKLY;BYDAY=MO,WE".to_string()),
+        recurrence_interval: 1,
+        recurrence_until: None,
+        event_type: EventType::Appointment,
+        auto_complete_policy: AutoCompletePolicy::Recurring,
+        requires_user_action: false,
+    })
+    .await
+    .unwrap();
+
+    let summary = kg.run_events_scan(30).await.unwrap();
+    assert_eq!(summary.advanced, 1);
+
+    let event = kg.get_event_by_fact(fact.id).await.unwrap().unwrap();
+    assert_eq!(event.status(), Some(EventStatus::Active));
+    // The scan must advance through the stored BYDAY set (Monday/Wednesday),
+    // not just the original start weekday.
+    let expected = next_occurrence(
+        &trigger.to_rfc3339(),
+        RecurrenceType::Weekly,
+        1,
+        None,
+        now,
+        Some("FREQ=WEEKLY;BYDAY=MO,WE"),
+    )
+    .unwrap();
+    assert_eq!(event.trigger_date, expected);
     assert!(event.trigger_date > now);
 }
 
@@ -546,12 +702,12 @@ async fn test_recurrence_next_occurrence_leap_year() {
     use mimir_knowledge::models::recurrence::next_occurrence;
 
     let from = Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap();
-    let result = next_occurrence("2000-02-29", RecurrenceType::Yearly, 1, None, from);
+    let result = next_occurrence("2000-02-29", RecurrenceType::Yearly, 1, None, from, None);
     let expected = Utc.with_ymd_and_hms(2023, 3, 1, 0, 0, 0).unwrap();
     assert_eq!(result, Some(expected));
 
     let from = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-    let result = next_occurrence("2000-02-29", RecurrenceType::Yearly, 1, None, from);
+    let result = next_occurrence("2000-02-29", RecurrenceType::Yearly, 1, None, from, None);
     let expected = Utc.with_ymd_and_hms(2024, 2, 29, 0, 0, 0).unwrap();
     assert_eq!(result, Some(expected));
 }

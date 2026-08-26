@@ -160,6 +160,13 @@ pub struct GraphRecurrenceRange {
     /// How many occurrences the series has (`numbered` range).
     #[serde(default, rename = "numberOfOccurrences")]
     pub number_of_occurrences: Option<i32>,
+    /// The time zone the `startDate`/`endDate` boundaries are expressed in
+    /// (IANA name). Microsoft Graph uses this for both range dates, falling
+    /// back to the event's own time zone when absent; the connector converts
+    /// the inclusive local end-of-day boundary to UTC before emitting
+    /// `UNTIL` (PR #513 review).
+    #[serde(default, rename = "recurrenceTimeZone")]
+    pub recurrence_time_zone: Option<String>,
 }
 
 /// A Graph `@removed` marker on a delta item.

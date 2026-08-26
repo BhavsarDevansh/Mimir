@@ -66,4 +66,4 @@ Outlook.com and Office 365 calendars cannot be read over CalDAV (Microsoft expos
 
 - Google's CalDAV sync-token support is non-standard; the generic client works against fully RFC 6578-compliant servers (iCloud, Nextcloud). Google-specific handling is a follow-on.
 - The interactive OAuth login (PKCE) is wired (A4 / #205); Google-specific CalDAV sync-token handling remains a follow-on.
-- Event → knowledge-graph extraction, write-back, and server-side deletion propagation are live (C4 / #198 + #247); the recurrence interval and series bounds (`COUNT`/`UNTIL`) are preserved, while `BYxxx` day/month constraints are retained in the stored rule but not yet used by the advancement engine (a full RFC 5545 expander is a follow-up).
+- Event → knowledge-graph extraction, write-back, and server-side deletion propagation are live (C4 / #198 + #247); the recurrence interval, series bounds (`COUNT`/`UNTIL`), and `BYxxx` day/month constraints (`BYDAY`, `BYMONTHDAY`, `BYMONTH`, `BYSETPOS`) are preserved and evaluated by the advancement engine, so multi-day weekly and relative monthly/yearly series advance to their constrained dates (a full RFC 5545 expander is a follow-up).

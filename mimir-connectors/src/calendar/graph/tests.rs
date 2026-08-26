@@ -801,3 +801,90 @@ async fn event_to_facts_maps_recurrence_and_timezone() {
         Some(Utc.with_ymd_and_hms(2025, 6, 30, 23, 59, 59).unwrap())
     );
 }
+
+#[tokio::test]
+async fn event_to_facts_end_date_uses_recurrence_range_time_zone() {
+    let connector = GraphCalendarConnector::from_config_with_http(
+        oauth_config(GRAPH_BASE_URL, "https://oauth.example.com/token"),
+        None,
+        Some("Devansh".to_string()),
+        None,
+        None,
+    )
+    .unwrap();
+
+    // The range's `recurrenceTimeZone` anchors the inclusive end-of-day
+    // boundary: 23:59:59 London (BST, UTC+1) on 2025-06-30 is 22:59:59 UTC.
+    let mut london = event_json("evt-london", "Season");
+    london["recurrence"] = serde_json::json!({
+        "pattern": {"type": "weekly", "interval": 1},
+        "range": {"type": "endDate", "endDate": "2025-06-30", "recurrenceTimeZone": "Europe/London"}
+    });
+    let facts = connector.event_to_facts(&serde_json::from_value(london).unwrap());
+    let primary = facts
+        .iter()
+        .find(|f| f.relationship_type == "has_event")
+        .expect("primary has_event fact");
+    assert_eq!(
+        primary.recurrence_rule.as_deref(),
+        Some("FREQ=WEEKLY;UNTIL=20250630T225959Z")
+    );
+    assert_eq!(
+        primary.recurrence_until,
+        Some(Utc.with_ymd_and_hms(2025, 6, 30, 22, 59, 59).unwrap())
+    );
+
+    // A zone ahead of UTC must not leak the next local date into the
+    // series: 23:59:59 Auckland (UTC+12) is 11:59:59 UTC, so the old
+    // UTC-end-of-day bound would have included July 1st local hours.
+    let mut auckland = event_json("evt-auckland", "Season");
+    auckland["recurrence"] = serde_json::json!({
+        "pattern": {"type": "weekly", "interval": 1},
+        "range": {"type": "endDate", "endDate": "2025-06-30", "recurrenceTimeZone": "Pacific/Auckland"}
+    });
+    let facts = connector.event_to_facts(&serde_json::from_value(auckland).unwrap());
+    let primary = facts
+        .iter()
+        .find(|f| f.relationship_type == "has_event")
+        .expect("primary has_event fact");
+    assert_eq!(
+        primary.recurrence_rule.as_deref(),
+        Some("FREQ=WEEKLY;UNTIL=20250630T115959Z")
+    );
+
+    // Without `recurrenceTimeZone` the event time zone is the fallback: the
+    // event starts in Europe/London, so the boundary is London end-of-day.
+    let mut event_tz = event_json("evt-event-tz", "Season");
+    event_tz["start"] =
+        serde_json::json!({"dateTime": "2025-05-03T09:00:00", "timeZone": "Europe/London"});
+    event_tz["recurrence"] = serde_json::json!({
+        "pattern": {"type": "weekly", "interval": 1},
+        "range": {"type": "endDate", "endDate": "2025-06-30"}
+    });
+    let facts = connector.event_to_facts(&serde_json::from_value(event_tz).unwrap());
+    let primary = facts
+        .iter()
+        .find(|f| f.relationship_type == "has_event")
+        .expect("primary has_event fact");
+    assert_eq!(
+        primary.recurrence_rule.as_deref(),
+        Some("FREQ=WEEKLY;UNTIL=20250630T225959Z")
+    );
+
+    // Without any time zone the boundary stays UTC end-of-day (unchanged
+    // behaviour for ranges without a usable zone).
+    let mut utc = event_json("evt-utc", "Season");
+    utc["recurrence"] = serde_json::json!({
+        "pattern": {"type": "weekly", "interval": 1},
+        "range": {"type": "endDate", "endDate": "2025-06-30"}
+    });
+    let facts = connector.event_to_facts(&serde_json::from_value(utc).unwrap());
+    let primary = facts
+        .iter()
+        .find(|f| f.relationship_type == "has_event")
+        .expect("primary has_event fact");
+    assert_eq!(
+        primary.recurrence_rule.as_deref(),
+        Some("FREQ=WEEKLY;UNTIL=20250630T235959Z")
+    );
+}

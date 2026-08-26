@@ -88,7 +88,16 @@ fn graph_event_to_vevent(event: &GraphEvent) -> RawVEvent {
         status: None,
         recurrence_rule: event.recurrence.as_ref().and_then(|r| {
             let pattern = r.pattern.as_ref()?;
-            graph_recurrence_to_rrule(pattern, r.range.as_ref())
+            // The range's `startDate`/`endDate` boundaries are expressed in
+            // `recurrenceTimeZone`, falling back to the event's own time zone
+            // when absent (Microsoft Graph contract); the event time zone is
+            // read from `start` first, then `end`.
+            let event_time_zone = event
+                .start
+                .as_ref()
+                .map(|s| s.time_zone.as_str())
+                .or_else(|| event.end.as_ref().map(|e| e.time_zone.as_str()));
+            graph_recurrence_to_rrule(pattern, r.range.as_ref(), event_time_zone)
         }),
         attendees: event
             .attendees
@@ -130,6 +139,7 @@ fn parse_graph_datetime(dt: &GraphDateTime) -> Option<DateTime<Utc>> {
 fn graph_recurrence_to_rrule(
     pattern: &GraphRecurrencePattern,
     range: Option<&GraphRecurrenceRange>,
+    event_time_zone: Option<&str>,
 ) -> Option<String> {
     let pattern_type = pattern.pattern_type.as_deref()?;
     let freq = match pattern_type.to_ascii_lowercase().as_str() {
@@ -204,7 +214,17 @@ fn graph_recurrence_to_rrule(
                 }
             }
             Some("enddate") => {
-                if let Some(until) = range.end_date.as_deref().and_then(graph_end_date_to_until) {
+                // The end date is an inclusive local boundary in the range's
+                // time zone (falling back to the event time zone, then UTC),
+                // so a zone ahead of UTC does not leak the next local date
+                // into the series and a zone behind UTC does not truncate
+                // the last local day.
+                let time_zone = range.recurrence_time_zone.as_deref().or(event_time_zone);
+                if let Some(until) = range
+                    .end_date
+                    .as_deref()
+                    .and_then(|d| graph_end_date_to_until(d, time_zone))
+                {
                     parts.push(format!("UNTIL={until}"));
                 }
             }
@@ -244,10 +264,30 @@ fn relative_index_rrule(index: &str) -> Option<i32> {
 }
 
 /// Convert a Graph `endDate` (`YYYY-MM-DD`) into an RRULE `UNTIL` at the end
-/// of that day (UTC), so occurrences on the end date are included.
-fn graph_end_date_to_until(end_date: &str) -> Option<String> {
+/// of that day, so occurrences on the end date are included. The boundary is
+/// the inclusive local end-of-day (`23:59:59`) in `time_zone` (the range's
+/// `recurrenceTimeZone`, else the event time zone, else UTC), converted to
+/// UTC — a zone ahead of UTC must not leak the next local date into the
+/// series, and a zone behind UTC must not truncate the last local day.
+fn graph_end_date_to_until(end_date: &str, time_zone: Option<&str>) -> Option<String> {
     let date = NaiveDate::parse_from_str(end_date.trim(), "%Y-%m-%d").ok()?;
-    Some(format!("{}T235959Z", date.format("%Y%m%d")))
+    let end_of_day = date.and_hms_opt(23, 59, 59)?;
+    let utc = match time_zone {
+        Some(tz) if !tz.eq_ignore_ascii_case("UTC") => {
+            if let Ok(tz) = tz.parse::<chrono_tz::Tz>() {
+                tz.from_local_datetime(&end_of_day)
+                    .single()
+                    .map(|local| local.with_timezone(&Utc))
+            } else {
+                // Unknown zone: fall back to reading the boundary as UTC so
+                // a bad zone never drops the series bound (same fallback as
+                // `parse_graph_datetime`).
+                Some(Utc.from_utc_datetime(&end_of_day))
+            }
+        }
+        _ => Some(Utc.from_utc_datetime(&end_of_day)),
+    };
+    utc.map(|dt| format!("{}Z", dt.format("%Y%m%dT%H%M%S")))
 }
 
 /// Resolve an attendee's display name (the address-book `name`, else the

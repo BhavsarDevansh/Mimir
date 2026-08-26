@@ -8,7 +8,7 @@ Every Mimir version is published as a GitHub Release with release notes on the [
 
 - The GitHub Releases page — the canonical full history.
 - `CHANGELOG.md` at the repository root — the most recent versions.
-- `CHANGELOG-archive.md` — entries older than 0.152.0 that were trimmed from the main changelog.
+- `CHANGELOG-archive.md` — entries before 0.152.2 that were trimmed from the main changelog.
 
 ## How versions are numbered
 

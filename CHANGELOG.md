@@ -8,6 +8,7 @@ Release notes for recent versions. Full history: [GitHub Releases](https://githu
 
 - `docs/obsidian-export-import.md` now satisfies the AGENTS.md single-line prose standard: the blockquote field-list at the top (`> **Issue:** #62` / `> **Phase:** ...`) gained the blank `>` separator between entries that `scripts/md-reflow` requires, so `scripts/tests/md-reflow_test.sh` (issue #294) is green again.
 - Issue #514 body refreshed with the accurate diagnosis: the prose paragraphs were already single-line, and the field-list separator was the remaining violation.
+- Archive-boundary references in `docs/release-process.md` and `docs/wiki/releases.md` updated to the new 0.152.2 cutoff.
 - Version bumped 0.152.3 → 0.152.4 (patch — documentation fix).
 
 ## [0.152.3] — 2026-08-26

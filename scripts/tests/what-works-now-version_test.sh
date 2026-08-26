@@ -14,10 +14,22 @@ cd "$SCRIPT_DIR"
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
-workspace_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+workspace_version="$(awk '
+    /^\[workspace\.package\]$/ { in_package = 1; next }
+    /^\[/ { in_package = 0 }
+    in_package && /^version = ".*"$/ {
+        sub(/^version = "/, ""); sub(/"$/, ""); print; exit
+    }
+' Cargo.toml)"
 [[ -n "$workspace_version" ]] || fail "could not read the workspace version from Cargo.toml"
 
-stamp="$(sed -n 's/^> \*\*Version:\*\* \(.*\)$/\1/p' docs/wiki/what-works-now.md | head -1)"
+stamp="$(awk '
+    /^# What Works in Mimir Today$/ { in_header = 1; next }
+    /^## / { in_header = 0 }
+    in_header && /^> \*\*Version:\*\* / {
+        sub(/^> \*\*Version:\*\* /, ""); print; exit
+    }
+' docs/wiki/what-works-now.md)"
 [[ -n "$stamp" ]] || fail "could not read the **Version:** stamp from docs/wiki/what-works-now.md"
 
 [[ "$stamp" == "$workspace_version" ]] || fail "docs/wiki/what-works-now.md stamp is '$stamp', want '$workspace_version'"

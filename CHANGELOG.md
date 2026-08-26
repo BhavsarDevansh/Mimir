@@ -2,6 +2,13 @@
 
 Release notes for recent versions. Full history: [GitHub Releases](https://github.com/BhavsarDevansh/Mimir/releases) and `CHANGELOG-archive.md` (versions before 0.152.2).
 
+## [0.152.7] — 2026-08-26
+
+### Fix: what-works-now version guard scopes both lookups to their sections (PR #521)
+
+- `scripts/tests/what-works-now-version_test.sh` now reads the workspace version only from the `[workspace.package]` block of the root `Cargo.toml` and the `**Version:**` stamp only from the `# What Works in Mimir Today` header section of `docs/wiki/what-works-now.md`, so a future matching field before either section can no longer make the guard compare the wrong values and miss version drift (CodeRabbit review on PR #521).
+- Version bumped 0.152.6 → 0.152.7 (patch — bugfix).
+
 ## [0.152.6] — 2026-08-26
 
 ### Fix: docs/wiki/what-works-now.md version stamp tracks the workspace again (issue #518)

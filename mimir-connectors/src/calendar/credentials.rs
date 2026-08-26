@@ -10,8 +10,10 @@ use crate::secrets::{AuthMethodDiscriminant, SecretBundle, mismatch_error};
 
 impl CalendarConnector {
     /// Turn a [`SecretBundle`] into a [`CalDavAuth`], refreshing an expired
-    /// OAuth token when needed. Returns the auth and the refreshed bundle (if
-    /// a refresh happened) for the caller to persist.
+    /// OAuth token when needed. `force_refresh = true` (the supervisor's
+    /// one-shot retry path, issue #507) refreshes unconditionally, bypassing
+    /// the skew window. Returns the auth and the refreshed bundle (if a
+    /// refresh happened) for the caller to persist.
     pub(super) async fn resolve_auth(
         &self,
         bundle: &SecretBundle,

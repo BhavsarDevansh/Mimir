@@ -527,6 +527,18 @@ pub(super) async fn run_cycle(
                         continue;
                     }
                     Ok(_) => return CycleOutcome::AuthExpired(message),
+                    // A transient refresh failure (network / malformed token
+                    // response) is a recoverable cycle error: the supervisor
+                    // backs off and retries, and a later cycle can still
+                    // recover. Only an auth-level refresh rejection (e.g.
+                    // `invalid_grant` — a revoked refresh token) pauses,
+                    // carrying the provider's message (issue #507 review).
+                    Err(ConnectorError::Network(message)) => {
+                        return CycleOutcome::Err(message);
+                    }
+                    Err(ConnectorError::Parse(message)) => {
+                        return CycleOutcome::Err(message);
+                    }
                     Err(error) => return CycleOutcome::AuthExpired(error.to_string()),
                 }
             }
@@ -842,12 +854,14 @@ mod tests {
 
     /// How a test connector's forced refresh resolves (issue #507): recover
     /// (the refresh fixes the credential), unchanged (no refresh possible,
-    /// e.g. an app-password connector), or fail with the provider's error.
+    /// e.g. an app-password connector), fail with the provider's auth error,
+    /// or fail with a transient network error.
     #[derive(Clone, Copy, PartialEq)]
     enum RefreshOutcome {
         Recover,
         Unchanged,
         Fail,
+        NetworkFail,
     }
 
     /// Delegating connector whose health probe reports `AuthExpired` on its
@@ -894,6 +908,9 @@ mod tests {
                 RefreshOutcome::Unchanged => Ok(ConnectorAuthState::Expired),
                 RefreshOutcome::Fail => Err(ConnectorError::Authentication(
                     "token refresh failed: invalid_grant: refresh token revoked".to_string(),
+                )),
+                RefreshOutcome::NetworkFail => Err(ConnectorError::Network(
+                    "token refresh failed: connection refused".to_string(),
                 )),
             }
         }
@@ -1081,6 +1098,61 @@ mod tests {
             ),
             _ => {
                 panic!("expected AuthExpired with the refresh error, got a non-AuthExpired outcome")
+            }
+        }
+    }
+
+    /// Issue #507 review: a transient network failure during the forced
+    /// refresh must not pause the connector — it is a recoverable cycle error
+    /// (backoff + retry), so a later cycle can still recover once the network
+    /// is back.
+    #[tokio::test]
+    async fn auth_expired_with_network_refresh_failure_retries_instead_of_pausing() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+                .await
+                .unwrap(),
+        );
+        let row = kg
+            .upsert_connector(UpsertConnectorInput {
+                connector_type: ConnectorType::Email,
+                slug: "refresh-net-fail".to_string(),
+                backend: "mock".to_string(),
+                display_name: "Refresh Net Fail".to_string(),
+                config_json: "{}".to_string(),
+                status: None,
+                auth_state: None,
+            })
+            .await
+            .unwrap();
+        let connector = Arc::new(ForceRefreshConnector {
+            inner: MockConnector::from_config(json!({
+                "__slug": "refresh-net-fail",
+                "mode": "polling",
+                "interval_ms": 1,
+                "jitter_ms": 0,
+            }))
+            .unwrap(),
+            probes: AtomicU32::new(0),
+            outcome: RefreshOutcome::NetworkFail,
+        });
+
+        let outcome = run_cycle(
+            connector,
+            kg,
+            row.id,
+            ConnectorType::Email,
+            SyncOptions::default(),
+        )
+        .await;
+        match outcome {
+            CycleOutcome::Err(message) => assert_eq!(
+                message, "token refresh failed: connection refused",
+                "a transient refresh failure must be a recoverable cycle error"
+            ),
+            _ => {
+                panic!("expected a recoverable Err, got a non-Err outcome")
             }
         }
     }

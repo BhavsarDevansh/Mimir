@@ -237,7 +237,10 @@ pub(crate) async fn refresh_token(
 /// does not force a refresh on every cycle — that would triple the POSTs
 /// against the token endpoint and invite rate limiting. The token is reused
 /// as-is; if it is actually expired the provider returns 401 and the next
-/// cycle re-authenticates.
+/// cycle re-authenticates. `force = true` (the supervisor's one-shot retry
+/// path, issue #507) bypasses the skew window and refreshes unconditionally,
+/// so a service-rejected access token is replaced even when it is not yet
+/// expired.
 ///
 /// Only called by the Calendar and Email backends and the module's unit
 /// tests, so it is cfg-gated to those callers (issues #351, #374).

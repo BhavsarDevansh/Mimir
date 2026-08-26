@@ -493,8 +493,10 @@ pub(super) fn backoff_delay(config: SupervisorConfig, failures: u32) -> Duration
 /// A single ingestion cycle, isolated in its own task for panic containment.
 ///
 /// Health-probes, syncs (with the caller-supplied [`SyncOptions`]), extracts,
-/// inserts through the shared pipeline, and persists the cursor. Returns a
-/// [`CycleOutcome`] for the runner to act on.
+/// inserts through the shared pipeline, and persists the cursor (plus the
+/// restored auth state when a mid-cycle forced refresh recovers an
+/// `AuthExpired` probe — issue #516). Returns a [`CycleOutcome`] for the
+/// runner to act on.
 pub(super) async fn run_cycle(
     connector: Arc<dyn Connector>,
     kg: Arc<KnowledgeGraph>,
@@ -524,6 +526,22 @@ pub(super) async fn run_cycle(
                             connector_id = instance_id,
                             "connector auth rejected; forced refresh succeeded, retrying the cycle"
                         );
+                        // Issue #516: the refresh already persisted the new
+                        // token bundle, so flip the row's auth state back to
+                        // `Authenticated` too — otherwise `mimir connector
+                        // status` keeps reporting `expired` until the runner
+                        // is respawned, even though the connector is syncing
+                        // with fresh credentials.
+                        if let Err(error) = kg
+                            .set_auth_state(instance_id, ConnectorAuthState::Authenticated)
+                            .await
+                        {
+                            warn!(
+                                connector_id = instance_id,
+                                %error,
+                                "failed to persist recovered auth state"
+                            );
+                        }
                         continue;
                     }
                     Ok(_) => return CycleOutcome::AuthExpired(message),
@@ -941,7 +959,9 @@ mod tests {
 
     /// Issue #507: a single auth rejection must not pause an OAuth connector
     /// whose forced refresh succeeds — the cycle is re-probed with the fresh
-    /// credential and proceeds.
+    /// credential and proceeds. Issue #516: the recovery must also flip the
+    /// persisted auth state back to `Authenticated`, so a connector that
+    /// recovered mid-cycle no longer reports `expired` until a restart.
     #[tokio::test]
     async fn auth_expired_recovers_via_forced_refresh_and_runs_the_cycle() {
         let dir = tempfile::tempdir().unwrap();
@@ -958,7 +978,7 @@ mod tests {
                 display_name: "OAuth Recover".to_string(),
                 config_json: "{}".to_string(),
                 status: None,
-                auth_state: None,
+                auth_state: Some(ConnectorAuthState::Expired),
             })
             .await
             .unwrap();
@@ -990,6 +1010,12 @@ mod tests {
             connector.probes.load(Ordering::SeqCst),
             2,
             "the probe must run twice: once rejected, once with the refreshed credential"
+        );
+        let persisted = kg.get_connector(row.id).await.unwrap().unwrap();
+        assert_eq!(
+            persisted.auth_state(),
+            Some(ConnectorAuthState::Authenticated),
+            "a successful in-cycle forced refresh must persist the recovered auth state"
         );
     }
 

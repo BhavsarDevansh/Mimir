@@ -78,7 +78,7 @@ static EMAIL_EXTRACTION_TOOL_SCHEMA: LazyLock<serde_json::Value> = LazyLock::new
                                 },
                                 "relationship_type": {
                                     "type": "string",
-                                    "description": "The relationship or property being asserted, from the canonical predicate vocabulary (e.g. has_flight, has_event, has_appointment)."
+                                    "description": "The relationship or property being asserted. Must be one of the canonical predicates listed in the system prompt (the full vocabulary is listed there); a fact with any other predicate is dropped."
                                 },
                                 "object": {
                                     "type": "string",
@@ -145,8 +145,30 @@ pub(super) fn email_extraction_tool_schema() -> &'static serde_json::Value {
     &EMAIL_EXTRACTION_TOOL_SCHEMA
 }
 
+/// The canonical relationship-type vocabulary the model must stay within
+/// (issue #508), rendered from the same
+/// [`mimir_knowledge::CANONICAL_PREDICATES`] const the Rust validator
+/// checks, so the prompt and the validator cannot drift apart. The open
+/// `favourite_<thing>` family is accepted too, mirroring
+/// [`mimir_knowledge::is_canonical_predicate_name`].
+pub(super) fn predicate_vocabulary() -> &'static str {
+    PREDICATE_VOCABULARY.as_str()
+}
+
+/// The rendered vocabulary, built once (issue #508): the string is identical
+/// for every email, so rebuilding it per extraction would be a steady stream
+/// of identical allocations during a long sync (mirroring the static tool
+/// schema above).
+static PREDICATE_VOCABULARY: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{}\n(plus the open favourite_<thing> family)",
+        mimir_knowledge::CANONICAL_PREDICATES.join(", ")
+    )
+});
+
 pub(super) fn build_system_prompt(user_identity: Option<&str>) -> String {
     let owner = user_identity.unwrap_or("the mailbox owner");
+    let vocabulary = predicate_vocabulary();
     format!(
         "You are Mimir's email fact extractor. Read the provided email and \
 extract the real-world facts it conveys about {owner} — appointments, flights, \
@@ -156,6 +178,10 @@ event or thing, not the email itself (do not emit 'received email from' \
 facts). If the email is marketing, a newsletter, or carries no real-world \
 facts about {owner}, return an empty facts array. For facts about {owner}, \
 use the exact name '{owner}' as the subject. Emit the facts via the \
-extract_email_facts tool."
+extract_email_facts tool.\n\n\
+Predicate vocabulary: the relationship_type of every fact must be one of the \
+canonical predicates listed below (or a favourite_<thing> form). A fact whose \
+predicate is not in this vocabulary is dropped and never reaches the \
+knowledge graph:\n{vocabulary}"
     )
 }

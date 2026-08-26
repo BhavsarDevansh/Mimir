@@ -73,6 +73,8 @@ fn print_connector_table(connectors: &[ConnectorResponse]) {
         status: String,
         auth: String,
         items: i64,
+        accepted: i64,
+        dropped: i64,
         last_sync: String,
     }
 
@@ -87,6 +89,8 @@ fn print_connector_table(connectors: &[ConnectorResponse]) {
             status: c.status.clone(),
             auth: c.auth_state.clone(),
             items: c.item_count,
+            accepted: c.facts_accepted,
+            dropped: c.facts_dropped,
             last_sync: c.last_sync_at.as_deref().unwrap_or("-").to_string(),
         })
         .collect();
@@ -110,6 +114,8 @@ fn print_connector_detail(conn: &ConnectorResponse) {
         conn.auth.as_ref().map(|a| a.kind.as_str()).unwrap_or("-")
     );
     println!("Items:         {}", conn.item_count);
+    println!("Facts accepted: {}", conn.facts_accepted);
+    println!("Facts dropped: {}", conn.facts_dropped);
     if let Some(cursor) = &conn.sync_cursor {
         println!("Sync cursor:   {cursor}");
     }

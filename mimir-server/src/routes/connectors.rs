@@ -190,6 +190,8 @@ async fn to_response(
         created_at: row.created_at.to_rfc3339(),
         updated_at: row.updated_at.to_rfc3339(),
         item_count,
+        facts_accepted: row.facts_accepted,
+        facts_dropped: row.facts_dropped,
         auth,
     })
 }
@@ -220,6 +222,8 @@ fn to_response_with_count(
         created_at: row.created_at.to_rfc3339(),
         updated_at: row.updated_at.to_rfc3339(),
         item_count,
+        facts_accepted: row.facts_accepted,
+        facts_dropped: row.facts_dropped,
         auth,
     }
 }

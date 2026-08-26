@@ -74,6 +74,14 @@ pub(crate) use crate::email::llm::retry::{
 };
 use crate::email::llm::schema::{build_system_prompt, email_extraction_tool_schema};
 
+/// Outcome of one prose extraction run: the validated facts plus the number
+/// of LLM-emitted facts rejected by Rust-side validation (issue #508), so
+/// the hook can surface the acceptance rate instead of dropping silently.
+pub(crate) struct ProseExtractionOutcome {
+    pub facts: Vec<NormalizedFact>,
+    pub dropped: usize,
+}
+
 pub(crate) async fn extract_prose_facts(
     backend: &Arc<dyn LlmBackend>,
     user_identity: Option<&str>,
@@ -81,11 +89,14 @@ pub(crate) async fn extract_prose_facts(
     raw_ref: &str,
     internal_date: Option<DateTime<FixedOffset>>,
     mailbox_address: Option<&str>,
-) -> Result<Vec<NormalizedFact>, ConnectorError> {
+) -> Result<ProseExtractionOutcome, ConnectorError> {
     let envelope = EmailEnvelope::from_message(message, internal_date, mailbox_address);
     if envelope.is_spam {
         debug!(raw_ref, from = ?envelope.from, "skipping LLM layer: bulk-marketing sender");
-        return Ok(Vec::new());
+        return Ok(ProseExtractionOutcome {
+            facts: Vec::new(),
+            dropped: 0,
+        });
     }
 
     // The envelope already ran the body pass for the forwarded-body check;
@@ -97,7 +108,10 @@ pub(crate) async fn extract_prose_facts(
             raw_ref,
             "no decodable text body for LLM extraction; skipping"
         );
-        return Ok(Vec::new());
+        return Ok(ProseExtractionOutcome {
+            facts: Vec::new(),
+            dropped: 0,
+        });
     };
 
     let prompt = build_system_prompt(user_identity);
@@ -150,21 +164,26 @@ pub(crate) async fn extract_prose_facts(
     let output = parse_output(assistant)?;
 
     let mut facts = Vec::with_capacity(output.facts.len());
+    let mut dropped = 0usize;
     for fact in output.facts {
         match build_fact(fact, user_identity, raw_ref) {
             Ok(mut f) => {
                 bind_prose_fact(&mut f, &envelope);
                 facts.push(f);
             }
-            Err(error) => warn!(raw_ref, "dropping invalid LLM email fact: {error}"),
+            Err(error) => {
+                dropped += 1;
+                warn!(raw_ref, "dropping invalid LLM email fact: {error}");
+            }
         }
     }
     debug!(
         raw_ref,
         n = facts.len(),
+        dropped,
         "LLM email extraction produced facts"
     );
-    Ok(facts)
+    Ok(ProseExtractionOutcome { facts, dropped })
 }
 
 /// Cap the body sent to the LLM to bound token cost. 8 KiB of prose is far more

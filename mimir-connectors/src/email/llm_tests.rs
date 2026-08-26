@@ -312,7 +312,8 @@ async fn old_actionable_email_binds_past_valid_until() {
         Some("devansh@example.com"),
     )
     .await
-    .expect("extract");
+    .expect("extract")
+    .facts;
 
     assert_eq!(facts.len(), 1);
     let fact = &facts[0];
@@ -366,7 +367,8 @@ async fn forwarded_email_facts_are_not_actionable() {
         Some("devansh@example.com"),
     )
     .await
-    .expect("extract");
+    .expect("extract")
+    .facts;
 
     assert_eq!(facts.len(), 1);
     assert!(
@@ -414,7 +416,8 @@ async fn wrong_recipient_email_facts_are_not_actionable() {
         Some("devansh@example.com"),
     )
     .await
-    .expect("extract");
+    .expect("extract")
+    .facts;
 
     assert_eq!(facts.len(), 1);
     assert!(
@@ -585,6 +588,16 @@ async fn llm_layer_drops_facts_with_non_canonical_predicates() {
         !has_fact(&env.kg, "owes", "the bank").await,
         "non-canonical predicate must be dropped"
     );
+    // The drop must be visible, not silent: the connector row records the
+    // cumulative dropped-fact counter (issue #508).
+    let row = env
+        .kg
+        .get_connector_by_slug("gmail-test")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.facts_accepted, 0);
+    assert_eq!(row.facts_dropped, 1);
 }
 
 #[tokio::test]
@@ -920,4 +933,39 @@ fn llm_tool_message(json: &str) -> mimir_core::llm::Message {
         }]),
         tool_call_id: None,
     }
+}
+
+#[tokio::test]
+async fn llm_layer_records_accepted_and_dropped_fact_counters() {
+    // The hook must persist cumulative accepted/dropped fact counters on the
+    // connector row (issue #508) so `mimir connector list` / `status` shows
+    // the acceptance rate instead of hiding dropped facts behind `items`.
+    let mock = llm_tool_response(
+        r#"{"facts": [
+                {"subject": "the user", "subject_type": "Person", "relationship_type": "has_appointment", "object": "Dentist check-up", "object_is_entity": true, "object_type": "Event"},
+                {"subject": "the user", "subject_type": "Person", "relationship_type": "owes", "object": "the bank", "object_is_entity": false}
+        ]}"#,
+    );
+    let env = hook_env(Some(mock.clone()), None).await;
+    stage(&env.connector, prose_email()).await;
+    env.connector.extract().await.expect("extract");
+    wait_for(|| has_fact(&env.kg, "has_appointment", "Dentist check-up")).await;
+    wait_for(|| async {
+        env.kg
+            .get_connector_by_slug("gmail-test")
+            .await
+            .unwrap()
+            .unwrap()
+            .facts_dropped
+            == 1
+    })
+    .await;
+    let row = env
+        .kg
+        .get_connector_by_slug("gmail-test")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.facts_accepted, 1);
+    assert_eq!(row.facts_dropped, 1);
 }

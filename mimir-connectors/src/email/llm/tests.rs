@@ -147,7 +147,8 @@ async fn spam_email_skips_llm_call_entirely() {
     let msg = parse(&bytes);
     let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:1", None, None)
         .await
-        .expect("spam -> empty facts");
+        .expect("spam -> empty facts")
+        .facts;
     assert!(facts.is_empty());
     // No LLM call was made (the mock would error with no queued response
     // if the call had been issued, and system_chat_calls stays empty).
@@ -166,7 +167,8 @@ async fn no_fact_email_yields_empty_facts_array() {
     let msg = parse(&bytes);
     let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:2", None, None)
         .await
-        .expect("no-fact -> empty facts");
+        .expect("no-fact -> empty facts")
+        .facts;
     assert!(facts.is_empty());
     // The call routed through the system queue, not the user queue.
     assert_eq!(mock.system_chat_calls().len(), 1);
@@ -196,7 +198,8 @@ async fn dentist_appointment_produces_typed_fact() {
     let msg = parse(&bytes);
     let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:42", None, None)
         .await
-        .expect("typed fact");
+        .expect("typed fact")
+        .facts;
     assert_eq!(facts.len(), 1, "{facts:?}");
     let f = &facts[0];
     assert_eq!(f.subject, "Devansh", "subject canonicalised to identity");
@@ -228,7 +231,8 @@ async fn invalid_event_type_hint_is_dropped_not_trusted() {
     let msg = parse(&bytes);
     let facts = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:3", None, None)
         .await
-        .expect("dropped event_type");
+        .expect("dropped event_type")
+        .facts;
     assert_eq!(facts.len(), 1);
     assert_eq!(facts[0].event_type, None, "unrecognised event_type dropped");
     assert_eq!(mock.system_chat_calls().len(), 1);
@@ -250,7 +254,8 @@ async fn invalid_subject_type_drops_the_fact() {
     let msg = parse(&bytes);
     let facts = extract_prose_facts(&backend, None, &msg, "17:4", None, None)
         .await
-        .expect("dropped subject_type");
+        .expect("dropped subject_type")
+        .facts;
     assert!(facts.is_empty(), "invalid subject_type drops the fact");
     assert_eq!(mock.system_chat_calls().len(), 1);
 }
@@ -282,4 +287,69 @@ async fn llm_backend_error_is_a_retryable_error() {
     let msg = parse(&bytes);
     let result = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:6", None, None).await;
     assert!(result.is_err());
+}
+
+#[test]
+fn system_prompt_lists_the_full_canonical_predicate_vocabulary() {
+    // The model must be able to see the vocabulary it is expected to stay
+    // within (issue #508): a prompt that names only three example predicates
+    // invites invented predicates, which are then dropped by validation.
+    // The prompt must list every canonical predicate, and every listed
+    // predicate must be accepted by the Rust validator so the prompt and
+    // the validator cannot drift apart.
+    let prompt = build_system_prompt(Some("Devansh"));
+    for predicate in mimir_knowledge::CANONICAL_PREDICATES {
+        assert!(
+            prompt.contains(predicate),
+            "system prompt must list canonical predicate {predicate:?}"
+        );
+    }
+    assert!(
+        mimir_knowledge::CANONICAL_PREDICATES
+            .iter()
+            .all(|p| mimir_knowledge::is_canonical_predicate_name(p)),
+        "every predicate the prompt lists must be accepted by the validator"
+    );
+}
+
+#[test]
+fn relationship_type_schema_points_at_the_vocabulary() {
+    // The wire schema must not contradict the prompt: the field description
+    // states that only canonical predicates are accepted and that anything
+    // else is dropped, so a model reading the schema cannot assume open
+    // predicates survive (issue #508).
+    let schema = email_extraction_tool_schema();
+    let description = schema["function"]["parameters"]["properties"]["facts"]
+        ["items"]["properties"]["relationship_type"]["description"]
+        .as_str()
+        .expect("relationship_type description");
+    assert!(
+        description.contains("canonical predicate"),
+        "schema must point the model at the canonical vocabulary: {description}"
+    );
+    assert!(
+        description.contains("dropped"),
+        "schema must warn that non-canonical predicates are dropped: {description}"
+    );
+}
+
+#[tokio::test]
+async fn extract_prose_facts_reports_the_dropped_fact_count() {
+    // One canonical fact and one invented predicate: the outcome must carry
+    // the validated facts and the drop count so the hook can surface the
+    // acceptance rate instead of losing it silently (issue #508).
+    let mock = Arc::new(mock_with_tool_response(
+        r#"{"facts": [
+                {"subject": "the user", "subject_type": "Person", "relationship_type": "has_appointment", "object": "Dentist", "object_is_entity": true, "object_type": "Event"},
+                {"subject": "the user", "subject_type": "Person", "relationship_type": "owes", "object": "the bank", "object_is_entity": false}
+        ]}"#,
+    ));
+    let backend: Arc<dyn LlmBackend> = mock.clone();
+    let bytes = email("a@example.com", "Hi", "body");
+    let msg = parse(&bytes);
+    let outcome = extract_prose_facts(&backend, Some("Devansh"), &msg, "17:8", None, None)
+        .await
+        .expect("extraction");
+    assert_eq!(outcome.facts.len(), 1, "canonical fact kept");
+    assert_eq!(outcome.dropped, 1, "non-canonical fact counted as dropped");
 }

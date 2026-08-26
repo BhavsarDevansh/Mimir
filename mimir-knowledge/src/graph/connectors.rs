@@ -177,6 +177,26 @@ impl KnowledgeGraph {
         queries::connector::update_connector_config(&self.pool, id, config_json, self.now()).await
     }
 
+    /// Increment a connector's cumulative fact-acceptance counters (issue
+    /// #508): `accepted` validated LLM facts vs `dropped` LLM facts rejected
+    /// by Rust-side validation. Called by the email prose-extraction hook so
+    /// `mimir connector list` / `status` can surface the acceptance rate.
+    pub async fn record_connector_fact_counts(
+        &self,
+        id: i32,
+        accepted: i64,
+        dropped: i64,
+    ) -> Result<(), KnowledgeError> {
+        queries::connector::record_connector_fact_counts(
+            &self.pool,
+            id,
+            accepted,
+            dropped,
+            self.now(),
+        )
+        .await
+    }
+
     /// Number of `sources` rows attributed to a connector instance — the
     /// derived "items ingested" metric for the connector status endpoint
     /// (issue #202 / Phase 3 A1).

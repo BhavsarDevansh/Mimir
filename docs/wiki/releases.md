@@ -18,5 +18,7 @@ Mimir follows Semantic Versioning: patch releases (0.152.1 → 0.152.2) cover ba
 
 - Add a changelog entry for every change before the release, following the format of recent entries.
 - Run `scripts/new-release.sh --dry-run` to preview what will be published before actually releasing.
+- Commit the version bump and changelog entry before releasing: a real release refuses a dirty working tree, while `--dry-run` only warns.
+- If a release command fails after pushing the tag, run it again — the script resumes from the pushed tag and publishes the missing release.
 - Publish a release as soon as the version changes instead of letting entries accumulate.
 - Keep `CHANGELOG.md` short by archiving older sections into `CHANGELOG-archive.md` when it grows.

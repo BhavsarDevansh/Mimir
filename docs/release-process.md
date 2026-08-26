@@ -15,9 +15,10 @@ Mimir has no CI/CD pipeline: a release is a local, one-command step. `scripts/ne
 `scripts/new-release.sh [--dry-run] [--version VER] [VERSION]`:
 
 - The version defaults to the root `Cargo.toml` version; `--version VER` or a positional VERSION overrides it.
-- The script extracts the `## [VERSION]` section from `CHANGELOG.md` (override with `$CHANGELOG_FILE` and `$CARGO_MANIFEST`) and refuses to publish when the section is missing, the version is malformed, or the tag `vVERSION` already exists.
+- The script extracts the `## [VERSION]` section from `CHANGELOG.md` (override with `$CHANGELOG_FILE` and `$CARGO_MANIFEST`) and refuses to publish when the section is missing, the version is malformed, the tag `vVERSION` already exists locally or on `origin` at another commit, or the working tree is dirty.
 - `--dry-run` validates everything and prints the plan (version, tag, notes size) plus a warning if the working tree is dirty, without touching the repository or GitHub.
-- Publishing creates the annotated tag `vVERSION`, pushes it to the `origin` remote, and runs `gh release create vVERSION --title vVERSION --notes-file <section>`; `gh` must be installed and authenticated (`gh auth login`).
+- Publishing creates the annotated tag `vVERSION`, pushes it to the `origin` remote, and runs `gh release create vVERSION --title vVERSION --notes-file <section>`; `gh` must be installed and authenticated (`gh auth login`), and the working tree must be clean.
+- Publication is resumable: if a run pushes the tag but `gh release create` fails, re-running the script validates the tag target and publishes the missing release instead of aborting; an already-published release is a no-op.
 
 ## Changelog maintenance
 

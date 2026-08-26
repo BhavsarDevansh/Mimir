@@ -1,10 +1,10 @@
 # Calendar Connector (CalDAV) — `mimir-connectors::calendar`
 
-> **Phase:** 3 — Connectors (C3 / issue #197, C4 / issue #198)
+> **Phase:** 3 — Connectors (C3 / issue #197, C4 / issue #198, issue #474)
 >
 > **Feature flag:** `calendar` (default). Framework + mock stay built without it.
 >
-> **Status:** Implemented (library + daemon/CLI integration). C3 (#197) delivers transport + read/sync; C4 (#198) adds event → KB fact extraction, events-subsystem (#74) integration, and CalDAV write-back (`act`). Issue #247 propagates server-side deletions (tombstones) to the KB fact lifecycle; issue #314 makes the in-memory sync-token advance failure-safe (a cycle that fails after `sync` re-processes the staged window on the next in-process cycle). The daemon `AppState` wiring (A1 / #202), action routes (A2 / #203), the `mimir connector …` CLI (A3 / #204), and the interactive OAuth PKCE login (A4 / #205) are integrated.
+> **Status:** Implemented (library + daemon/CLI integration). C3 (#197) delivers transport + read/sync; C4 (#198) adds event → KB fact extraction, events-subsystem (#74) integration, and CalDAV write-back (`act`). Issue #247 propagates server-side deletions (tombstones) to the KB fact lifecycle; issue #314 makes the in-memory sync-token advance failure-safe (a cycle that fails after `sync` re-processes the staged window on the next in-process cycle). Issue #474 adds the Microsoft Graph calendar backend (`(Calendar, graph)`) for Outlook / Office 365 — OAuth-only, delta-sync transport, the same fact cluster, no write-back — plus the wizard preset. The daemon `AppState` wiring (A1 / #202), action routes (A2 / #203), the `mimir connector …` CLI (A3 / #204), and the interactive OAuth PKCE login (A4 / #205) are integrated.
 >
 > **Design source of truth:** `VISION/09-Roadmap/Phase-3-Plan.md`
 
@@ -96,6 +96,51 @@ The Calendar connector is the first backend that needs credentials, so it extend
 
 C4 (#198) extends the same context with the canonical **user identity name** (`ConnectorContext::user_identity` / `ConnectorSupervisor::with_user_identity`) so the connector authors `user has_event <event>` against the same entity the daemon resolves as `user_entity_id` (and the event surfaces in the user's "Upcoming" section). The Photos connector was aligned with the same shared identity in #246: it authors `took_photo_at` / `took_photo` facts against the injected identity, keeping `owner_name` only as a `None`-identity fallback.
 
+## Microsoft Graph backend (Outlook / Office 365) — issue #474
+
+The CalDAV backend cannot sync Outlook / Office 365 calendars because Microsoft exposes no public CalDAV endpoint, so issue #474 adds a second Calendar backend, `(Calendar, graph)`, registered in the existing multi-backend factory (F7 / #184 — a new factory registration, no database change). It is OAuth-only (Microsoft retired app passwords for Graph), read-only (no `act()` write-back — every connector is read-only today), and emits the **same fact cluster** as the CalDAV backend by mapping each Graph event onto the shared `RawVEvent` shape and delegating to `crate::ical::vevent_to_facts` (DRY: `user has_event <event>` with `EventType::Appointment` + recurrence, `<event> located_in <place>`, `<attendee> attending <event>`; no LLM extraction).
+
+### Transport
+
+`mimir_connectors::calendar::graph::GraphClient` wraps the workspace `reqwest` 0.13 client and speaks the Microsoft Graph events delta query:
+
+- **Full sync** — `GET /me/events/delta?$select=id,subject,start,end,location,attendees,recurrence,isCancelled` with a `Prefer: outlook.timezone="UTC"` header (deterministic UTC datetimes). The response's final `@odata.deltaLink` (which carries the `$deltatoken`) is the incremental cursor.
+- **Incremental sync** — the stored `@odata.deltaLink` is re-requested verbatim; the server returns only the changes since that token.
+- **Paging** — `@odata.nextLink` (`$skiptoken`) pages are followed until the final `@odata.deltaLink` is reached.
+- **Deletions** — events with an `@removed` property are staged as tombstones keyed by the event id (the `raw_reference` the extractor authors), so the supervisor trashes exactly the facts this instance authored for the deleted event (issue #247, same lifecycle as CalDAV tombstones).
+- **Auth failures** — HTTP 401 maps to `ConnectorError::NotAuthenticated`, so the supervisor surfaces an expired/revoked token as `AuthExpired` and runs the one-shot forced-refresh retry (issue #507).
+
+**Security properties:** the client never follows redirects (the shared client is built with `redirect::Policy::none()`), and every server-supplied link (`@odata.nextLink` / `@odata.deltaLink`) is origin-checked against the configured service root (scheme, host, port, and path prefix) before it is requested, so a malicious or compromised response cannot redirect the bearer token to another host (mirrors the CalDAV `ensure_in_calendar` check). The service root defaults to `https://graph.microsoft.com/v1.0` and can be overridden via `base_url` for national clouds or test servers.
+
+### Event → facts
+
+Each Graph event maps onto the shared `RawVEvent` shape: `subject` → `SUMMARY`, `start`/`end` (`dateTime` + `timeZone`, resolved to UTC via `chrono-tz` with the same unknown-zone fallback the iCalendar parser uses) → `DTSTART`/`DTEND`, `location.displayName` → `LOCATION`, `attendees[].emailAddress` (display name, else address) → `ATTENDEE`s, and `recurrence.pattern.type` → an RRULE `FREQ` (`daily`/`weekly`/`absoluteMonthly`/`relativeMonthly`/`absoluteYearly`/`relativeYearly`; `singleInstance` and unknown types → no recurrence). The `raw_reference` is the Graph event id. Cancelled events (`isCancelled`) are not treated specially today — the same gap the CalDAV backend has for `STATUS:CANCELLED` (a future CANCEL lifecycle pass).
+
+### Auth
+
+OAuth 2.0 only, via the shared PKCE loopback flow (A4 / #205) and the connector-side refresh machinery (`oauth::resolve_access_token`, issue #240). The wizard preset pre-fills the Microsoft identity-platform authorize/token endpoints chosen by account type (issue #467: `/consumers/`, `/organizations/`, `/common/`, or tenant-specific endpoints for single-tenant registrations — never a hardcoded `/common/` trap) and the scope `https://graph.microsoft.com/Calendars.Read offline_access`. The user brings their own app registration (Mimir has no public client ID); the registration's "Supported account types" must match the picked audience, the loopback redirect URI `http://localhost/callback` must be registered, and the app needs the `Calendars.Read` delegated permission. The stored token endpoint matches the registration's audience by construction.
+
+### Config
+
+Stored as `config_json` on the `connectors` row (with `__slug` / `__cursor` injected by the supervisor):
+
+```json
+{
+  "auth": {
+    "kind": "oauth",
+    "auth_uri": "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize",
+    "token_endpoint": "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
+    "client_id": "mimir-client",
+    "scopes": ["https://graph.microsoft.com/Calendars.Read", "offline_access"]
+  },
+  "poll_interval_secs": 900,
+  "poll_jitter_secs": 60,
+  "display_name": "Outlook Calendar"
+}
+```
+
+`base_url` is optional (defaults to `https://graph.microsoft.com/v1.0`). An `app_password` auth config is rejected at construction with a clear error.
+
 ## Dependencies
 
 All optional, gated by the `calendar` feature:
@@ -143,6 +188,7 @@ OAuth variant:
 ## Tests
 
 - Unit (`src/calendar/caldav/`): sync-collection full/incremental parse, 401 handling, PROPFIND resourcetype calendar detection, `icalendar` field extraction + recurrence, invalid-payload resilience — all against a `wiremock` mock CalDAV server.
+- Unit (`src/calendar/graph/`, issue #474): delta full/incremental sync, `@odata.nextLink` paging, `@removed` tombstones, 401 → `NotAuthenticated`, foreign-link origin rejection, the health probe, the full sync → extract fact cluster (recurrence + timezone mapping), tombstone staging/acknowledgement, the failure-safe cursor handoff (`on_cycle_succeeded`), OAuth refresh-on-expiry with bundle persistence, `authenticate` 401 → `Expired`, and app-password config rejection — all against `wiremock` mock Graph + token servers.
 - Integration (`tests/calendar_sync_tests.rs`): app-password sync, incremental sync-token, `full`-sync cursor reset, OAuth refresh-on-expiry + bundle persistence, health (online / not-configured / auth-expired), factory construction + config round-trip, and a full `ConnectorSupervisor` round-trip asserting the cursor is persisted on the connector row.
 - Integration (`tests/calendar_kb_tests.rs`): `ConnectorSupervisor` round-trips against a wiremock CalDAV server — the initial cycle surfaces a future event in the KB (`has_event` fact + `Appointment` overlay, secondary facts carrying no overlay), and a server-side tombstone trashes the event's facts and hides it from Upcoming (#247). The tests wait deterministically on the events overlay (`get_event_by_fact`) rather than the bare fact list — the overlay is inserted by `insert_event_if_absent` in a separate transaction after the fact commits (issues #320, #367) — and drive the tombstone cycle via `trigger_sync_by_slug` with a long poll interval so no automatic cycle races the single-use wiremock windows.
 

@@ -2,7 +2,7 @@
 
 > **Phase:** 3 — Connectors
 >
-> **Status:** Implemented (library + daemon/CLI) — C3 (#197) transport + read/sync, C4 (#198) event → knowledge-graph extraction, events-subsystem integration, write-back, and the interactive OAuth PKCE login (A4 / #205). Server-side deletions (tombstones) are propagated to the KB fact lifecycle (#247).
+> **Status:** Implemented (library + daemon/CLI) — C3 (#197) transport + read/sync, C4 (#198) event → knowledge-graph extraction, events-subsystem integration, write-back, and the interactive OAuth PKCE login (A4 / #205). Server-side deletions (tombstones) are propagated to the KB fact lifecycle (#247). Issue #474 adds the Microsoft Graph backend for Outlook / Office 365 calendars (OAuth-only, read-only, same fact shapes).
 
 ## What it is
 
@@ -47,6 +47,14 @@ Deleting an event on the server (in another client) also removes the correspondi
 - **OAuth (Google)** — the connector stores your access + refresh token and **refreshes** the access token automatically before each sync when it expires. The initial sign-in is the interactive OAuth PKCE dance (A4 / #205): `mimir connector add calendar … auth.kind=oauth …` opens the provider's authorize URL in your browser, receives the redirect on a loopback listener, and stores the exchanged token bundle.
 
 Mimir can also write back to your calendar: creating, updating, or deleting remote events via CalDAV `PUT`/`DELETE` (added in C4 / #198). This is the only connector with write support.
+
+## Microsoft Graph (Outlook / Office 365) — issue #474
+
+Outlook.com and Office 365 calendars cannot be read over CalDAV (Microsoft exposes no public CalDAV endpoint), so Mimir's calendar connector has a second backend for them: **Microsoft Graph**. You pick `Calendar (graph)` in the wizard (or `mimir connector add calendar --backend graph`), and Mimir syncs your default calendar through Microsoft's Graph API using **delta sync** — the first sync imports your events, and every later sync fetches only what changed since the last one, so syncs stay cheap.
+
+- **Authentication** — OAuth 2.0 only. The wizard asks which Microsoft account type your app registration targets (personal Outlook.com/Hotmail, work or school, either, or a single tenant) and pre-fills the matching Microsoft login endpoints — it never hardcodes the `/common/` endpoint that silently breaks personal-only or org-only registrations. You bring your own app registration from the Microsoft Entra admin center (Mimir has no public client ID): its "Supported account types" must match the audience you pick, the loopback redirect URI `http://localhost/callback` must be registered, and the app needs the `Calendars.Read` delegated permission. The first login is the same interactive browser flow as the other OAuth connectors; Mimir then refreshes the access token automatically.
+- **What syncs** — events from your default calendar become the same knowledge-graph facts as CalDAV events: `you have_event <event>` (with start/end and recurrence, so future and recurring events surface in **Upcoming**), `<event> located_in <place>`, and `<attendee> attending <event>`. Deleted events are removed from the knowledge graph automatically (recoverable from trash for 30 days).
+- **Read-only** — like every connector today, the Graph backend only imports; write-back (creating/editing events from Mimir) is not implemented for it.
 
 ## Use cases
 

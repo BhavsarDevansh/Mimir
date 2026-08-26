@@ -35,6 +35,7 @@
 //! endpoint, persisting the refreshed bundle back to the store.
 
 pub mod caldav;
+pub mod graph;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -233,6 +234,8 @@ mod credentials;
 mod payload;
 mod sync;
 mod trait_impl;
+
+pub use graph::{GraphCalendarConnector, GraphCalendarConnectorFactory};
 
 #[cfg(test)]
 #[path = "config_tests.rs"]

@@ -131,10 +131,14 @@ pub mod test_utils;
 #[cfg(feature = "photos")]
 pub mod photos;
 
-/// CalDAV calendar connector (Phase 3 C3 / #197), gated by the `calendar`
-/// feature. A `CalDavClient` (PROPFIND + sync-collection REPORT, sync-token
-/// incremental sync, icalendar VEVENT parsing) backs a `CalendarConnector`
-/// implementing the two-step ingestion model in `Polling` mode.
+/// Calendar connectors (Phase 3 C3 / #197, C4 / #198, issue #474), gated
+/// by the `calendar` feature. Two backends share the `Calendar` connector
+/// type: the CalDAV backend — a `CalDavClient` (PROPFIND + sync-collection
+/// REPORT, sync-token incremental sync, icalendar VEVENT parsing) backing a
+/// `CalendarConnector` in `Polling` mode, with write-back — and the
+/// Microsoft Graph backend (issue #474) — a `GraphClient` (events delta
+/// query, `$deltatoken` cursor) backing a `GraphCalendarConnector` for
+/// Outlook / Office 365, OAuth-only and read-only.
 #[cfg(feature = "calendar")]
 pub mod calendar;
 
@@ -165,6 +169,7 @@ pub use photos::{PhotosConnector, PhotosConnectorFactory, PhotosCursor};
 #[cfg(feature = "calendar")]
 pub use calendar::{
     CalendarAuthMethod, CalendarConfigDto, CalendarConnector, CalendarConnectorFactory,
+    GraphCalendarConnector, GraphCalendarConnectorFactory,
 };
 
 #[cfg(feature = "email")]

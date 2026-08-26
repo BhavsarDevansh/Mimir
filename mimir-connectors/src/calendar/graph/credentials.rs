@@ -1,0 +1,78 @@
+//! Credential resolution and OAuth token refresh for the Microsoft Graph
+//! calendar connector.
+
+use crate::calendar::CalendarAuthMethod;
+use crate::calendar::graph::GraphCalendarConnector;
+use crate::connector::ConnectorError;
+use crate::oauth;
+use crate::secrets::{AuthMethodDiscriminant, SecretBundle, mismatch_error};
+
+impl GraphCalendarConnector {
+    /// Turn a [`SecretBundle`] into a live bearer token, refreshing an
+    /// expired OAuth token when needed. `force_refresh = true` (the
+    /// supervisor's one-shot retry path, issue #507) refreshes
+    /// unconditionally, bypassing the skew window. Returns the token and
+    /// the refreshed bundle (if a refresh happened) for the caller to
+    /// persist.
+    pub(super) async fn resolve_auth(
+        &self,
+        bundle: &SecretBundle,
+        force_refresh: bool,
+    ) -> Result<(String, Option<SecretBundle>), ConnectorError> {
+        match (&self.config.auth, bundle) {
+            (
+                CalendarAuthMethod::OAuth {
+                    auth_uri: _,
+                    token_endpoint,
+                    client_id,
+                    client_secret,
+                    scopes,
+                },
+                SecretBundle::OAuth { .. },
+            ) => {
+                // Resolve a live access token through the shared OAuth refresh
+                // path (issue #240: `oauth2` 5.0.0 over the workspace reqwest
+                // 0.13 client). Returns the token to use and, when a refresh
+                // happened, the refreshed bundle for the caller to persist.
+                let http = self.oauth_http.as_ref().ok_or_else(|| {
+                    ConnectorError::Config(
+                        "OAuth auth method configured without an OAuth HTTP client".into(),
+                    )
+                })?;
+                let (token, refreshed) = oauth::resolve_access_token(
+                    http,
+                    token_endpoint,
+                    client_id,
+                    client_secret.as_deref(),
+                    scopes.as_deref(),
+                    bundle,
+                    force_refresh,
+                )
+                .await?;
+                Ok((token, refreshed))
+            }
+            // Construction rejects app-password configs, so this arm is
+            // unreachable in practice; keep it explicit so a config edited
+            // behind the daemon's back fails with the same clear message.
+            (CalendarAuthMethod::AppPassword { .. }, _) => Err(ConnectorError::Config(
+                "Microsoft Graph calendar requires OAuth auth (kind=oauth); app passwords are not supported by the Graph API".into(),
+            )),
+            // Auth method / bundle kind mismatch — e.g. an app-password
+            // bundle configured as OAuth, or vice versa.
+            _ => Err(mismatch_error(self.config.auth.discriminant())),
+        }
+    }
+
+    /// Persist a refreshed OAuth bundle back to the secret store.
+    pub(super) async fn persist_refreshed(
+        &self,
+        bundle: &SecretBundle,
+    ) -> Result<(), ConnectorError> {
+        if let Some(store) = &self.secret_store {
+            store.store(&self.slug, bundle).await.map_err(|e| {
+                ConnectorError::Authentication(format!("secret persist failed: {e}"))
+            })?;
+        }
+        Ok(())
+    }
+}

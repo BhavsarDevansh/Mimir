@@ -157,6 +157,11 @@ fn microsoft_tenant_endpoints(tenant: &str) -> (String, String) {
 /// OAuth" docs; the connector keeps a refresh token with skew).
 const MICROSOFT_IMAP_SCOPE: &str =
     "https://outlook.office.com/IMAP.AccessAsUser.All offline_access";
+/// Microsoft Graph calendar scope for Outlook / Office 365 plus
+/// `offline_access` for refresh tokens (Microsoft Graph docs; the connector
+/// keeps a refresh token with skew).
+const MICROSOFT_GRAPH_CALENDAR_SCOPE: &str =
+    "https://graph.microsoft.com/Calendars.Read offline_access";
 /// Email provider presets offered by the wizard (issue #400): each entry
 /// pre-fills IMAP defaults + provider guidance; `Custom IMAP` keeps the
 /// free-form flow. Presets are wizard-side defaults only — the backend stays
@@ -169,10 +174,12 @@ const EMAIL_PROVIDER_OPTIONS: [&str; 6] = [
     "iCloud",
     "Custom IMAP",
 ];
-/// Calendar provider presets offered by the wizard (issue #400). Outlook /
-/// Office 365 is deliberately absent: Microsoft exposes no public CalDAV
-/// endpoint (the roadmap defers a Microsoft Graph calendar backend as a
-/// follow-on), so a preset would always produce a broken connector.
+/// CalDAV calendar provider presets offered by the wizard (issue #400).
+/// Outlook / Office 365 is deliberately absent from this list: Microsoft
+/// exposes no public CalDAV endpoint, so a CalDAV preset would always
+/// produce a broken connector — the Microsoft Graph calendar backend
+/// (issue #474) is the Outlook path, with its own wizard profile under the
+/// `(calendar, graph)` pair.
 const CALENDAR_PROVIDER_OPTIONS: [&str; 4] =
     ["Google Calendar", "iCloud", "Yahoo", "Custom CalDAV"];
 /// Wizard sync-mode choices for the email IMAP profile (issue #397):
@@ -456,6 +463,7 @@ pub(crate) fn build_wizard_config(
     match (entry.connector_type.as_str(), entry.backend.as_str()) {
         ("email", "imap") => email_imap_config(prompts),
         ("calendar", "caldav") => calendar_provider_config(prompts),
+        ("calendar", "graph") => graph_calendar_config(prompts),
         ("photos", "local") => photos_config(slug, prompts),
         (connector_type, backend) => Err(format!(
             "no interactive profile for '{connector_type}/{backend}' yet — use the flag form instead, e.g. `mimir connector add {connector_type} --backend {backend} --config-json '{{...}}'`"
@@ -879,10 +887,11 @@ fn calendar_provider_config(
             )?;
             let (auth, credential) = calendar_oauth_questions(
                 prompts,
-                &username,
+                Some(&username),
                 GOOGLE_AUTH_URI,
                 GOOGLE_TOKEN_ENDPOINT,
                 "OAuth client ID (Google Cloud Console → Credentials → OAuth client)",
+                CALDAV_SCOPE,
             )?;
             Ok((
                 json!({ "calendar_url": calendar_url, "auth": auth }),
@@ -933,10 +942,11 @@ fn calendar_provider_config(
                 )?;
                 let (auth, credential) = calendar_oauth_questions(
                     prompts,
-                    &username,
+                    Some(&username),
                     &auth_uri,
                     &token_endpoint,
                     "OAuth client ID",
+                    CALDAV_SCOPE,
                 )?;
                 Ok((
                     json!({ "calendar_url": calendar_url, "auth": auth }),
@@ -954,6 +964,51 @@ fn calendar_provider_config(
             }
         }
     }
+}
+
+/// Microsoft Graph calendar wizard profile (issue #474): the `(calendar,
+/// graph)` backend has exactly one provider — Outlook / Office 365 — so
+/// there is no provider list. The wizard asks which Microsoft account type
+/// the app registration targets (reusing the #467 endpoint mapping so the
+/// preset never ships the `/common/` trap) and pre-fills the matching
+/// authorize/token endpoints plus the Graph calendar scope. The user brings
+/// their own app registration (Mimir has no public client ID); the stored
+/// token endpoint matches the registration's audience by construction.
+fn graph_calendar_config(prompts: &dyn PromptDriver) -> Result<(Value, WizardCredential), String> {
+    // Issue #467: the Microsoft account type selects the identity-platform
+    // endpoints (`/consumers/`, `/organizations/`, `/common/`, or the
+    // tenant ID/domain for single-tenant apps); a mismatch with the app
+    // registration's "Supported account types" fails the authorize request.
+    let options = MICROSOFT_ACCOUNT_TYPE_OPTIONS
+        .map(|account_type| account_type.label().to_string())
+        .to_vec();
+    let account_type =
+        MicrosoftAccountType::from_index(prompts.select("Microsoft account type", &options)?);
+    let (auth_uri, token_endpoint) = match account_type.fixed_endpoints() {
+        Some((auth_uri, token_endpoint)) => (auth_uri.to_string(), token_endpoint.to_string()),
+        None => {
+            // Single-tenant app registration: both endpoints embed the
+            // tenant ID or domain, so collect it before the endpoint
+            // prompts run.
+            let tenant = required(
+                prompts.input(
+                    "Tenant ID or domain (the app registration's Entra directory, e.g. contoso.com or a tenant GUID)",
+                    None,
+                ),
+                "tenant ID or domain",
+            )?;
+            microsoft_tenant_endpoints(&tenant)
+        }
+    };
+    let (auth, credential) = calendar_oauth_questions(
+        prompts,
+        None,
+        &auth_uri,
+        &token_endpoint,
+        "OAuth client ID (Entra ID app registration; 'Supported account types' must match the Microsoft account type chosen in this wizard — single-tenant 'this organizational directory only' apps need the tenant ID or domain too; register the loopback redirect URI http://localhost/callback; grant the Calendars.Read delegated permission)",
+        MICROSOFT_GRAPH_CALENDAR_SCOPE,
+    )?;
+    Ok((json!({ "auth": auth }), credential))
 }
 
 /// Shared app-password CalDAV arm (iCloud, Yahoo): prompt the collection
@@ -982,19 +1037,23 @@ fn caldav_app_password_provider(
     ))
 }
 
-/// Prompt the OAuth client credentials for a CalDAV flow and assemble the
-/// auth block; the client secret never enters `config_json` — it travels in
-/// the credential bundle. Shared by the Google Calendar preset (endpoints
-/// pre-filled) and the custom CalDAV flow (user-supplied endpoints). A blank
-/// scopes answer keeps the [`CALDAV_SCOPE`] default, but a non-blank answer
-/// that parses to zero scopes (e.g. `", ,"`) is rejected so a scope-less
-/// authorize request is never built (mirrors `email_oauth_questions`).
+/// Prompt the OAuth client credentials for a calendar flow and assemble
+/// the auth block; the client secret never enters `config_json` — it
+/// travels in the credential bundle. Shared by the Google Calendar preset
+/// (endpoints pre-filled), the custom CalDAV flow (user-supplied
+/// endpoints), and the Microsoft Graph calendar profile (issue #474). A
+/// blank scopes answer keeps the caller's `default_scopes` (the Google
+/// [`CALDAV_SCOPE`] or the Graph `Calendars.Read offline_access` scope),
+/// but a non-blank answer that parses to zero scopes (e.g. `", ,"`) is
+/// rejected so a scope-less authorize request is never built (mirrors
+/// `email_oauth_questions`).
 fn calendar_oauth_questions(
     prompts: &dyn PromptDriver,
-    username: &str,
+    username: Option<&str>,
     auth_uri: &str,
     token_endpoint: &str,
     client_id_help: &str,
+    default_scopes: &str,
 ) -> Result<(Value, WizardCredential), String> {
     let client_id = required(prompts.input(client_id_help, None), "OAuth client ID")?;
     let client_secret = prompts.password("OAuth client secret (blank if none)")?;
@@ -1005,17 +1064,23 @@ fn calendar_oauth_questions(
     };
     let scopes_raw = prompts.input(
         "OAuth scopes (comma or space-separated)",
-        Some(CALDAV_SCOPE),
+        Some(default_scopes),
     )?;
     let scopes = parse_scopes_required(&scopes_raw)?;
-    let auth = json!({
+    let mut auth = json!({
         "kind": "oauth",
-        "username": username,
         "auth_uri": auth_uri,
         "token_endpoint": token_endpoint,
         "client_id": client_id,
         "scopes": scopes,
     });
+    // The username is only meaningful for CalDAV presets (the Google
+    // collection URL embeds the account email); the Microsoft Graph
+    // backend identifies the user via the token, so the key is omitted
+    // when no username applies.
+    if let Some(username) = username {
+        auth["username"] = json!(username);
+    }
     Ok((auth, WizardCredential::OAuth { client_secret }))
 }
 

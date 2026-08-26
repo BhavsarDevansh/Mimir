@@ -1,6 +1,16 @@
 # Changelog Archive
 
-Archived changelog entries for Mimir versions before 0.152.1. Newer entries live in `CHANGELOG.md`, and the full release history is published on [GitHub Releases](https://github.com/BhavsarDevansh/Mimir/releases).
+Archived changelog entries for Mimir versions before 0.152.2. Newer entries live in `CHANGELOG.md`, and the full release history is published on [GitHub Releases](https://github.com/BhavsarDevansh/Mimir/releases).
+
+## [0.152.1] — 2026-08-26
+
+### Fix: PR #513 review round 2 — recurrence constraints, range time zones, and series retirement (issue #474)
+
+- The events-subsystem occurrence engine now evaluates the stored `RRULE` day/month constraints instead of advancing only by kind/interval: `BYDAY` selects the weekdays of a weekly series (multi-day weekly events advance to the next constrained weekday, respecting `INTERVAL` weeks), `BYMONTHDAY` the day of an absolute monthly/yearly series, `BYMONTH` the month of a yearly series, and `BYDAY` + `BYSETPOS` the Nth weekday of a relative monthly/yearly series (including `last`). `next_occurrence` takes the raw rule, and occurrence-level tests cover multi-day weekly, fortnightly multi-day, absolute/relative monthly, and absolute/relative yearly patterns.
+- The Graph `endDate` range now preserves `recurrenceTimeZone`: `UNTIL` is the inclusive local end-of-day (`23:59:59`) in the range's time zone (falling back to the event time zone, then UTC), converted to UTC — a zone ahead of UTC no longer leaks the next local date into the series and a zone behind UTC no longer truncates the last local day.
+- The upcoming scan retires a recurring overlay when its series ends: when `next_occurrence` returns `None` (the next occurrence would fall past `recurrence_until`, or the rule no longer yields one), the overlay transitions to `Completed` so the scan stops selecting it on every cycle and it never surfaces as overdue. Regression tests cover a past final occurrence and rule-driven advancement through the scan.
+- Docs updated (`docs/events-reminders.md`, `docs/calendar-connector.md`, `docs/wiki/calendar-connector.md`, `Mimir-Implementation-Context.md`).
+- Version bumped 0.152.0 → 0.152.1 (patch — backwards-compatible bugfixes).
 
 ## [0.152.0] — 2026-08-26
 

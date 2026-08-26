@@ -11,7 +11,7 @@ use mimir_connectors::test_utils::{mount_token_endpoint, self_callback_opener};
 use crate::transport::DaemonTransport;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{body_json, body_partial_json, method, path},
+    matchers::{body_json, body_partial_json, header, method, path},
 };
 
 use super::add::handle_connector_add_with_opener;
@@ -942,6 +942,99 @@ async fn auth_with_stored_oauth_config_runs_pkce_flow_without_resupplied_config(
     assert!(
         body.get("client_secret").is_none() && body["config"].get("client_secret").is_none(),
         "no secret channel may carry the client secret: {body}"
+    );
+}
+
+#[tokio::test]
+async fn auth_with_stored_oauth_and_resupplied_client_secret_uses_it_in_exchange() {
+    // Issue #511 review: a confidential client re-supplies only
+    // `auth.client_secret=...` on a stored-config OAuth connector. The
+    // kind-less merged config must not discard the secret: the stored
+    // endpoints / client id / scopes stay the driving base, the supplied
+    // secret reaches the PKCE exchange (HTTP Basic auth) and the credential
+    // bundle, and never the persisted config slice.
+    let daemon = MockServer::start().await;
+    let token_server = MockServer::start().await;
+    let mut conn = connector_fixture(1, "calendar");
+    conn.auth = Some(ConnectorAuthConfig {
+        kind: "oauth".to_string(),
+        username: Some("devansh@example.com".to_string()),
+        auth_uri: Some("https://oauth.example.com/authorize".to_string()),
+        token_endpoint: Some(format!("{}/token", token_server.uri())),
+        client_id: Some("test-client".to_string()),
+        scopes: Some(vec!["read".to_string()]),
+    });
+    mount_list(&daemon, vec![conn.clone()]).await;
+    let mut authenticated = conn;
+    authenticated.auth_state = "authenticated".to_string();
+    Mock::given(method("POST"))
+        .and(path("/connectors/1/tokens"))
+        .and(body_partial_json(serde_json::json!({
+            "kind": "oauth",
+            "access_token": "ya29.access",
+            "client_secret": "client-secret",
+            "config": {
+                "kind": "oauth",
+                "username": "devansh@example.com",
+                "auth_uri": "https://oauth.example.com/authorize",
+                "token_endpoint": format!("{}/token", token_server.uri()),
+                "client_id": "test-client",
+                "scopes": ["read"],
+            },
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&authenticated))
+        .mount(&daemon)
+        .await;
+    // The oauth2 `BasicClient` sends the client secret via HTTP Basic auth
+    // (base64 of `client_id:client_secret`), matching the shared PKCE unit
+    // test's expectation.
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(header(
+            "authorization",
+            "Basic dGVzdC1jbGllbnQ6Y2xpZW50LXNlY3JldA==",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "ya29.access",
+            "token_type": "Bearer",
+            "refresh_token": "rt",
+            "expires_in": 3600,
+        })))
+        .expect(1)
+        .mount(&token_server)
+        .await;
+
+    handle_connector_auth_with_opener(
+        "calendar".to_string(),
+        vec!["auth.client_secret=client-secret".to_string()],
+        None,
+        None,
+        false,
+        None,
+        false,
+        true,
+        &DaemonTransport::Tcp(daemon.uri()),
+        &self_callback_opener("auth-code"),
+    )
+    .await;
+
+    // The bundle carries the secret; the persisted config slice never does.
+    let bodies = daemon
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/connectors/1/tokens")
+        .map(|r| r.body)
+        .collect::<Vec<_>>();
+    assert_eq!(bodies.len(), 1);
+    let body = serde_json::from_slice::<serde_json::Value>(&bodies[0]).unwrap();
+    assert_eq!(body["config"]["kind"], "oauth");
+    assert_eq!(body["config"]["client_id"], "test-client");
+    assert_eq!(body["client_secret"], "client-secret");
+    assert!(
+        body["config"].get("client_secret").is_none(),
+        "client_secret must never be persisted into config_json: {body}"
     );
 }
 

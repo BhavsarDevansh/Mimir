@@ -196,7 +196,10 @@ pub enum IngestTokenRequest {
         /// (kind, username, endpoints, client id, scopes — never the
         /// `client_secret`), so a connector re-authed through the
         /// interactive fallback declares OAuth before its next
-        /// construction; absent for plain token refreshes.
+        /// construction; the daemon rejects (`400`) an OAuth request whose
+        /// slice declares a non-OAuth kind, so incompatible credentials and
+        /// config can never be persisted together. Absent for plain token
+        /// refreshes.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         config: Box<Option<ConnectorAuthConfig>>,
     },

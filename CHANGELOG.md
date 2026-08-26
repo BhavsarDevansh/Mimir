@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.151.1] — 2026-08-26
+
+### Fix: PR #511 review — OAuth ingest validation and confidential-client re-auth
+
+- The token-ingest route (`POST /connectors/{id}/tokens`) now rejects an OAuth bundle whose non-secret `config` slice declares a non-OAuth kind (`app_password` / `api_token`) with a `400` before persisting anything — previously it stored incompatible credentials + config and reported `Authenticated`, only to fail credential-kind resolution at the next connector construction.
+- Stored-config OAuth re-authentication now merges re-supplied OAuth fields onto the stored non-secret metadata instead of discarding them: a confidential client that re-supplies only `auth.client_secret=...` keeps the stored endpoints / client id / scopes, the secret reaches the PKCE exchange and the credential bundle, and `oauth_config_slice` still excludes it from persisted `config_json`.
+- Tests cover both fixes: a route test asserting the mixed-kind request is rejected with nothing persisted, and a CLI regression test proving the re-supplied client secret is used in the PKCE exchange (HTTP Basic auth) while never landing in `config_json`.
+- Version bumped 0.151.0 → 0.151.1 (patch — backwards-compatible bugfixes).
+
 ## [0.151.0] — 2026-08-26
 
 ### Fix: OAuth connector re-auth and auth-expiry retry (issue #507)

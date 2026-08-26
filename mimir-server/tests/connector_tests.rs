@@ -793,6 +793,78 @@ async fn test_connector_tokens_oauth_ingest_persists_non_secret_config() {
 }
 
 #[tokio::test]
+async fn test_connector_tokens_oauth_rejects_mixed_kind_config() {
+    // Issue #511 review: an OAuth bundle carrying a non-OAuth config slice
+    // (kind `app_password` / `api_token`) must be rejected before anything is
+    // persisted — storing incompatible credentials and config and reporting
+    // `Authenticated` would only fail credential-kind resolution at the next
+    // construction.
+    for kind in ["app_password", "api_token"] {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = mimir_server::build_app(state.clone());
+        let created = create_test_connector(
+            &app,
+            &format!("oauth-mixed-{kind}"),
+            serde_json::json!({"host": "imap.example.com"}),
+        )
+        .await;
+
+        let resp = connector_sub_post(
+            app.clone(),
+            created.id,
+            "tokens",
+            Some(serde_json::json!({
+                "kind": "oauth",
+                "access_token": "at",
+                "refresh_token": "rt",
+                "config": {"kind": kind, "username": "u@example.com"},
+            })),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Nothing persisted: no credential bundle, config untouched, and the
+        // connector stays unauthenticated.
+        let secret_store = state.connector_supervisor.secret_store().unwrap();
+        let loaded = secret_store
+            .load(&format!("oauth-mixed-{kind}"))
+            .await
+            .unwrap();
+        assert!(
+            loaded.is_none(),
+            "mixed-kind request must not store a credential bundle"
+        );
+        let stored = state
+            .knowledge_graph
+            .get_connector(created.id)
+            .await
+            .unwrap()
+            .expect("connector row exists");
+        let config: serde_json::Value = serde_json::from_str(&stored.config_json).unwrap();
+        assert!(
+            config.get("auth").is_none(),
+            "mixed-kind request must not merge config: {config}"
+        );
+        assert_eq!(config["host"], "imap.example.com");
+        let resp = app
+            .oneshot(
+                authed_request()
+                    .uri(format!("/connectors/{}", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let shown: mimir_api_types::ConnectorResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(shown.auth_state, "unauthenticated");
+    }
+}
+
+#[tokio::test]
 async fn test_connector_actions_dispatch() {
     let mock = Arc::new(MockLlmClient::builder().build());
     let (state, _temp) = test_state(mock).await;

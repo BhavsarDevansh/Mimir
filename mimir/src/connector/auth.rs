@@ -94,12 +94,18 @@ pub(crate) async fn handle_connector_auth_with_opener(
 
     // OAuth: the interactive PKCE flow replaces the credential prompt. The
     // driving config is the re-supplied one when it declares OAuth, else the
-    // stored non-secret config, else (interactive "OAuth 2.0" selection) the
-    // re-supplied config which must then carry the endpoints.
+    // stored non-secret config with any re-supplied OAuth fields overlaid
+    // (issue #511 review: a confidential client that re-supplies only
+    // `auth.client_secret` keeps the stored endpoints / client id / scopes
+    // while the secret reaches the PKCE exchange), else (interactive "OAuth
+    // 2.0" selection) the re-supplied config which must then carry the
+    // endpoints.
     let oauth_config = if credential_kind_for(&merged) == CredentialKind::OAuth {
         merged.clone()
+    } else if let Some(stored) = &stored_oauth {
+        overlay_oauth_fields(stored, &merged)
     } else {
-        stored_oauth.clone().unwrap_or_else(|| merged.clone())
+        merged.clone()
     };
     if matches!(kind, CredentialKind::OAuth) {
         reauth_oauth(
@@ -277,6 +283,33 @@ fn stored_oauth_config(auth: &ConnectorAuthConfig) -> serde_json::Value {
         oauth.insert("scopes".to_string(), serde_json::json!(scopes));
     }
     serde_json::json!({ "auth": oauth })
+}
+
+/// Overlay re-supplied OAuth `auth` fields onto the stored non-secret OAuth
+/// config (issue #511 review). The stored slice is the base — endpoints,
+/// client id, and scopes survive a kind-less re-supply such as
+/// `auth.client_secret=...` — while every re-supplied field (notably the
+/// secret, which lives in the credential bundle, never `config_json`) takes
+/// precedence. `kind` is never overlaid: the stored slice already declares
+/// `oauth`, and the fallback path only runs when the re-supplied config
+/// declares no recognized kind.
+fn overlay_oauth_fields(
+    stored: &serde_json::Value,
+    supplied: &serde_json::Value,
+) -> serde_json::Value {
+    let mut auth = stored
+        .pointer("/auth")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    if let Some(supplied_auth) = supplied.pointer("/auth").and_then(|v| v.as_object()) {
+        for (key, value) in supplied_auth {
+            if key != "kind" {
+                auth.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    serde_json::json!({ "auth": auth })
 }
 
 /// Ask which credential kind the connector uses. Non-terminal stdin aborts

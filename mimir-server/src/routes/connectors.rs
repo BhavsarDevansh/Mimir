@@ -499,9 +499,14 @@ pub async fn connector_resume_handler(
 
 /// Convert a wire [`mimir_api_types::IngestTokenRequest`] into the
 /// [`mimir_connectors::SecretBundle`] it mirrors, parsing the RFC-3339 OAuth
-/// expiry into a `DateTime<Utc>`. Returns an error *message* (not a `Response`)
-/// on a malformed expiry so the caller maps it onto a `400` — keeping the
-/// `Result` small and avoiding `clippy::result_large_err`.
+/// expiry into a `DateTime<Utc>`. An OAuth request whose non-secret `config`
+/// slice declares a non-OAuth kind (e.g. `app_password` / `api_token`) is
+/// rejected as a mixed-kind request: persisting an OAuth bundle alongside
+/// incompatible config would report `Authenticated` and then fail
+/// credential-kind resolution at the next construction. Returns an error
+/// *message* (not a `Response`) on a malformed expiry or mixed kind so the
+/// caller maps it onto a `400` — keeping the `Result` small and avoiding
+/// `clippy::result_large_err`.
 fn to_secret_bundle(
     req: mimir_api_types::IngestTokenRequest,
 ) -> Result<(mimir_connectors::SecretBundle, Option<ConnectorAuthConfig>), String> {
@@ -521,6 +526,14 @@ fn to_secret_bundle(
                 ),
                 None => None,
             };
+            if let Some(config) = config.as_ref() {
+                if config.kind != "oauth" {
+                    return Err(format!(
+                        "OAuth token request requires config.kind \"oauth\", got \"{}\"",
+                        config.kind
+                    ));
+                }
+            }
             (
                 mimir_connectors::SecretBundle::OAuth {
                     access_token,

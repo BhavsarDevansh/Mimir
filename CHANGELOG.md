@@ -2,6 +2,14 @@
 
 Release notes for recent versions. Full history: [GitHub Releases](https://github.com/BhavsarDevansh/Mimir/releases) and `CHANGELOG-archive.md` (versions before 0.152.2).
 
+## [0.152.5] — 2026-08-26
+
+### Fix: in-cycle OAuth forced refresh now persists the recovered auth state (issue #516)
+
+- A connector whose health probe reports `AuthExpired` and whose one-shot forced refresh succeeds (issue #507 recovery) now flips the persisted `auth_state` back to `authenticated` in the same cycle, so `mimir connector status` reflects the recovery immediately instead of staying `expired` until the runner is respawned or credentials are re-ingested.
+- The cycle-recovery test now starts from a stale `Expired` row and asserts the persisted state becomes `Authenticated` after the forced refresh; docs updated (`docs/connectors-framework.md`, `docs/wiki/connectors.md`).
+- Version bumped 0.152.4 → 0.152.5 (patch — bugfix).
+
 ## [0.152.4] — 2026-08-26
 
 ### Fix: md-reflow guard passes on docs/obsidian-export-import.md (issue #514)

@@ -87,6 +87,7 @@ fn connector_fixture(id: i32, slug: &str) -> ConnectorResponse {
         created_at: "2026-08-11T00:00:00Z".to_string(),
         updated_at: "2026-08-11T00:00:00Z".to_string(),
         item_count: 0,
+        auth: None,
     }
 }
 

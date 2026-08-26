@@ -237,7 +237,10 @@ pub(crate) async fn refresh_token(
 /// does not force a refresh on every cycle — that would triple the POSTs
 /// against the token endpoint and invite rate limiting. The token is reused
 /// as-is; if it is actually expired the provider returns 401 and the next
-/// cycle re-authenticates.
+/// cycle re-authenticates. `force = true` (the supervisor's one-shot retry
+/// path, issue #507) bypasses the skew window and refreshes unconditionally,
+/// so a service-rejected access token is replaced even when it is not yet
+/// expired.
 ///
 /// Only called by the Calendar and Email backends and the module's unit
 /// tests, so it is cfg-gated to those callers (issues #351, #374).
@@ -249,6 +252,7 @@ pub(crate) async fn resolve_access_token(
     client_secret: Option<&str>,
     scopes: Option<&[String]>,
     bundle: &SecretBundle,
+    force: bool,
 ) -> Result<(String, Option<SecretBundle>), ConnectorError> {
     let SecretBundle::OAuth {
         access_token,
@@ -261,16 +265,23 @@ pub(crate) async fn resolve_access_token(
             "OAuth auth method requires an OAuth secret bundle".into(),
         ));
     };
-    let needs_refresh = expires_at
-        .map(|exp| exp <= Utc::now() + chrono::Duration::seconds(REFRESH_SKEW_SECS))
-        .unwrap_or(false);
+    // `force` (issue #507) bypasses the skew window: the supervisor calls the
+    // forced path once when a health probe reports `AuthExpired`, so a stale
+    // or transiently rejected access token is refreshed and retried instead
+    // of pausing the connector.
+    let needs_refresh = force
+        || expires_at
+            .map(|exp| exp <= Utc::now() + chrono::Duration::seconds(REFRESH_SKEW_SECS))
+            .unwrap_or(false);
     if !needs_refresh {
         return Ok((access_token.clone(), None));
     }
     let stored_refresh_token = stored_refresh_token.clone().ok_or_else(|| {
-        ConnectorError::Authentication(
-            "OAuth access token expired and no refresh token is stored".into(),
-        )
+        ConnectorError::Authentication(if force {
+            "OAuth access token was rejected and no refresh token is stored".into()
+        } else {
+            "OAuth access token expired and no refresh token is stored".into()
+        })
     })?;
     let refreshed = refresh_token(
         http,
@@ -742,7 +753,7 @@ mod tests {
             client_secret: None,
         };
         let (token, refreshed) =
-            resolve_access_token(&client(), TOKEN_ENDPOINT, "cid", None, None, &bundle)
+            resolve_access_token(&client(), TOKEN_ENDPOINT, "cid", None, None, &bundle, false)
                 .await
                 .expect("no refresh needed");
         assert_eq!(token, "ya29.access");
@@ -761,7 +772,7 @@ mod tests {
             client_secret: None,
         };
         let (token, refreshed) =
-            resolve_access_token(&client(), TOKEN_ENDPOINT, "cid", None, None, &bundle)
+            resolve_access_token(&client(), TOKEN_ENDPOINT, "cid", None, None, &bundle, false)
                 .await
                 .expect("unknown expiry must not force a refresh");
         assert_eq!(token, "ya29.access");
@@ -796,6 +807,7 @@ mod tests {
             Some("config-secret"),
             None,
             &bundle,
+            false,
         )
         .await
         .expect("refresh");
@@ -828,9 +840,10 @@ mod tests {
             expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
             client_secret: None,
         };
-        let err = resolve_access_token(&client(), TOKEN_ENDPOINT, "cid", None, None, &bundle)
-            .await
-            .expect_err("expired without refresh token must fail");
+        let err =
+            resolve_access_token(&client(), TOKEN_ENDPOINT, "cid", None, None, &bundle, false)
+                .await
+                .expect_err("expired without refresh token must fail");
         assert!(
             matches!(err, ConnectorError::Authentication(_)),
             "got {err:?}"
@@ -843,12 +856,54 @@ mod tests {
         let bundle = SecretBundle::AppPassword {
             password: "hunter2".into(),
         };
-        let err = resolve_access_token(&client(), TOKEN_ENDPOINT, "cid", None, None, &bundle)
-            .await
-            .expect_err("non-OAuth bundle must fail");
+        let err =
+            resolve_access_token(&client(), TOKEN_ENDPOINT, "cid", None, None, &bundle, false)
+                .await
+                .expect_err("non-OAuth bundle must fail");
         assert!(
             matches!(err, ConnectorError::Authentication(_)),
             "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_access_token_force_refreshes_unexpired_token() {
+        // Issue #507: the supervisor's forced path must refresh even when the
+        // stored token is still inside its lifetime — a health probe may have
+        // been rejected by the service despite a not-yet-expired token.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("grant_type=refresh_token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "fresh",
+                "token_type": "Bearer",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let bundle = SecretBundle::OAuth {
+            access_token: "ya29.access".into(),
+            refresh_token: Some("rt".into()),
+            // An hour of lifetime left — the skew path would reuse it.
+            expires_at: Some(Utc::now() + chrono::Duration::hours(1)),
+            client_secret: None,
+        };
+        let (token, refreshed) = resolve_access_token(
+            &client(),
+            &format!("{}/token", server.uri()),
+            "cid",
+            None,
+            None,
+            &bundle,
+            true,
+        )
+        .await
+        .expect("forced refresh");
+        assert_eq!(token, "fresh");
+        assert!(
+            refreshed.is_some(),
+            "a forced refresh must return a refreshed bundle to persist"
         );
     }
 }

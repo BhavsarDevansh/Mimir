@@ -30,8 +30,8 @@ use axum::{
 };
 
 use mimir_api_types::{
-    AddConnectorRequest, ConnectorCatalogEntry, ConnectorCatalogResponse, ConnectorListResponse,
-    ConnectorResponse,
+    AddConnectorRequest, ConnectorAuthConfig, ConnectorCatalogEntry, ConnectorCatalogResponse,
+    ConnectorListResponse, ConnectorResponse,
 };
 use mimir_knowledge::models::connector::UpsertConnectorInput;
 use mimir_knowledge::models::enums::ConnectorType;
@@ -63,6 +63,79 @@ fn auth_state_string(row: &mimir_knowledge::models::connector::Connector) -> Str
     row.auth_state()
         .map(|s| s.as_str().to_string())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Derive the non-secret `auth` slice of a connector's stored config for the
+/// wire response (issue #507). Only whitelisted fields are ever surfaced —
+/// `client_secret`, passwords, and tokens stay in the secret store and are
+/// never echoed, so a future config field cannot leak by omission. `None`
+/// when the config has no `auth` object or its `kind` is not a string.
+fn sanitized_auth_config(config_json: &str) -> Option<ConnectorAuthConfig> {
+    let config: serde_json::Value = serde_json::from_str(config_json).ok()?;
+    let auth = config.get("auth")?.as_object()?;
+    let kind = auth.get("kind")?.as_str()?.to_string();
+    Some(ConnectorAuthConfig {
+        kind,
+        username: auth
+            .get("username")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        auth_uri: auth
+            .get("auth_uri")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        token_endpoint: auth
+            .get("token_endpoint")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        client_id: auth
+            .get("client_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        scopes: auth.get("scopes").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        }),
+    })
+}
+
+/// Merge a non-secret OAuth `auth` slice into a connector's stored
+/// `config_json` (issue #507 review): the token-ingest route persists the
+/// driving OAuth config alongside the bundle so a connector re-authed
+/// through the interactive fallback declares OAuth before its next
+/// construction. Only whitelisted fields are written — `client_secret`
+/// never leaves the credential bundle, and every other top-level config
+/// key (host, calendar URL, …) is preserved.
+fn merge_oauth_config(config_json: &str, auth: &ConnectorAuthConfig) -> String {
+    let mut config = match serde_json::from_str::<serde_json::Value>(config_json) {
+        Ok(serde_json::Value::Object(map)) => map,
+        // A missing or non-object stored config is treated as empty: the
+        // OAuth `auth` slice alone is enough to rebuild the row's auth.
+        _ => serde_json::Map::new(),
+    };
+    let mut oauth = serde_json::Map::new();
+    oauth.insert("kind".to_string(), serde_json::json!(auth.kind));
+    if let Some(username) = &auth.username {
+        oauth.insert("username".to_string(), serde_json::json!(username));
+    }
+    if let Some(auth_uri) = &auth.auth_uri {
+        oauth.insert("auth_uri".to_string(), serde_json::json!(auth_uri));
+    }
+    if let Some(token_endpoint) = &auth.token_endpoint {
+        oauth.insert(
+            "token_endpoint".to_string(),
+            serde_json::json!(token_endpoint),
+        );
+    }
+    if let Some(client_id) = &auth.client_id {
+        oauth.insert("client_id".to_string(), serde_json::json!(client_id));
+    }
+    if let Some(scopes) = &auth.scopes {
+        oauth.insert("scopes".to_string(), serde_json::json!(scopes));
+    }
+    config.insert("auth".to_string(), serde_json::Value::Object(oauth));
+    serde_json::Value::Object(config).to_string()
 }
 
 fn connector_type_string(row: &mimir_knowledge::models::connector::Connector) -> String {
@@ -101,6 +174,7 @@ async fn to_response(
     let status = status_string(&row);
     let auth_state = auth_state_string(&row);
     let mode = resolved_mode_string(state, &row);
+    let auth = sanitized_auth_config(&row.config_json);
     Ok(ConnectorResponse {
         id: row.id,
         connector_type,
@@ -116,6 +190,7 @@ async fn to_response(
         created_at: row.created_at.to_rfc3339(),
         updated_at: row.updated_at.to_rfc3339(),
         item_count,
+        auth,
     })
 }
 
@@ -129,6 +204,7 @@ fn to_response_with_count(
     let connector_type = connector_type_string(&row);
     let status = status_string(&row);
     let auth_state = auth_state_string(&row);
+    let auth = sanitized_auth_config(&row.config_json);
     ConnectorResponse {
         id: row.id,
         connector_type,
@@ -144,6 +220,7 @@ fn to_response_with_count(
         created_at: row.created_at.to_rfc3339(),
         updated_at: row.updated_at.to_rfc3339(),
         item_count,
+        auth,
     }
 }
 
@@ -385,8 +462,8 @@ pub async fn connector_sync_handler(
             fetched,
             new_cursor,
         },
-        mimir_connectors::TriggerOutcome::AuthExpired => {
-            mimir_api_types::SyncConnectorResponse::AuthExpired
+        mimir_connectors::TriggerOutcome::AuthExpired(message) => {
+            mimir_api_types::SyncConnectorResponse::AuthExpired { message }
         }
         mimir_connectors::TriggerOutcome::Failed(message) => {
             mimir_api_types::SyncConnectorResponse::Failed { message }
@@ -422,18 +499,24 @@ pub async fn connector_resume_handler(
 
 /// Convert a wire [`mimir_api_types::IngestTokenRequest`] into the
 /// [`mimir_connectors::SecretBundle`] it mirrors, parsing the RFC-3339 OAuth
-/// expiry into a `DateTime<Utc>`. Returns an error *message* (not a `Response`)
-/// on a malformed expiry so the caller maps it onto a `400` — keeping the
-/// `Result` small and avoiding `clippy::result_large_err`.
+/// expiry into a `DateTime<Utc>`. An OAuth request whose non-secret `config`
+/// slice declares a non-OAuth kind (e.g. `app_password` / `api_token`) is
+/// rejected as a mixed-kind request: persisting an OAuth bundle alongside
+/// incompatible config would report `Authenticated` and then fail
+/// credential-kind resolution at the next construction. Returns an error
+/// *message* (not a `Response`) on a malformed expiry or mixed kind so the
+/// caller maps it onto a `400` — keeping the `Result` small and avoiding
+/// `clippy::result_large_err`.
 fn to_secret_bundle(
     req: mimir_api_types::IngestTokenRequest,
-) -> Result<mimir_connectors::SecretBundle, String> {
+) -> Result<(mimir_connectors::SecretBundle, Option<ConnectorAuthConfig>), String> {
     Ok(match req {
         mimir_api_types::IngestTokenRequest::OAuth {
             access_token,
             refresh_token,
             expires_at,
             client_secret,
+            config,
         } => {
             let expires_at = match expires_at {
                 Some(s) => Some(
@@ -443,19 +526,31 @@ fn to_secret_bundle(
                 ),
                 None => None,
             };
-            mimir_connectors::SecretBundle::OAuth {
-                access_token,
-                refresh_token,
-                expires_at,
-                client_secret,
+            if let Some(config) = config.as_ref() {
+                if config.kind != "oauth" {
+                    return Err(format!(
+                        "OAuth token request requires config.kind \"oauth\", got \"{}\"",
+                        config.kind
+                    ));
+                }
             }
+            (
+                mimir_connectors::SecretBundle::OAuth {
+                    access_token,
+                    refresh_token,
+                    expires_at,
+                    client_secret,
+                },
+                *config,
+            )
         }
         mimir_api_types::IngestTokenRequest::ApiToken { token } => {
-            mimir_connectors::SecretBundle::ApiToken { token }
+            (mimir_connectors::SecretBundle::ApiToken { token }, None)
         }
-        mimir_api_types::IngestTokenRequest::AppPassword { password } => {
-            mimir_connectors::SecretBundle::AppPassword { password }
-        }
+        mimir_api_types::IngestTokenRequest::AppPassword { password } => (
+            mimir_connectors::SecretBundle::AppPassword { password },
+            None,
+        ),
     })
 }
 
@@ -465,6 +560,10 @@ fn to_secret_bundle(
 /// the store — meaning *credentials are present*, not that they have been
 /// validated. The actual handshake runs at the next sync; a credential kind
 /// the backend rejects surfaces there as `NotAuthenticated` / `Expired`.
+/// An OAuth request may carry the driving non-secret `config` slice (issue
+/// #507 review), which is merged into `config_json` so a connector re-authed
+/// through the interactive fallback declares OAuth before its next
+/// construction; `client_secret` is never part of that slice.
 pub async fn connector_tokens_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
@@ -477,7 +576,7 @@ pub async fn connector_tokens_handler(
         .map_err(error::knowledge_error)?
         .ok_or_else(|| error::not_found("connector not found"))?;
 
-    let bundle = to_secret_bundle(body).map_err(error::bad_request)?;
+    let (bundle, oauth_config) = to_secret_bundle(body).map_err(error::bad_request)?;
     let secret_store = state
         .connector_supervisor
         .secret_store()
@@ -486,6 +585,19 @@ pub async fn connector_tokens_handler(
         .store(&row.slug, &bundle)
         .await
         .map_err(error::secret_error)?;
+
+    // Persist the non-secret OAuth config alongside the bundle (issue #507
+    // review): a connector re-authed through the interactive fallback must
+    // declare OAuth in `config_json` before its next construction, or the
+    // backend rejects the stored bundle as a credential-kind mismatch.
+    if let Some(config) = oauth_config {
+        let merged = merge_oauth_config(&row.config_json, &config);
+        state
+            .knowledge_graph
+            .update_connector_config(id, &merged)
+            .await
+            .map_err(error::knowledge_error)?;
+    }
 
     // Credentials are now present; flip auth_state to Authenticated.
     state
@@ -611,4 +723,56 @@ pub async fn connector_forget_handler(
     Ok(Json(mimir_api_types::ForgetConnectorResponse {
         forgotten_count: result.forgotten_count,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn oauth_auth() -> ConnectorAuthConfig {
+        ConnectorAuthConfig {
+            kind: "oauth".to_string(),
+            username: Some("devansh@example.com".to_string()),
+            auth_uri: Some("https://oauth.example.com/authorize".to_string()),
+            token_endpoint: Some("https://oauth.example.com/token".to_string()),
+            client_id: Some("cid".to_string()),
+            scopes: Some(vec!["read".to_string(), "write".to_string()]),
+        }
+    }
+
+    #[test]
+    fn merge_oauth_config_replaces_auth_keeping_other_keys() {
+        let merged = merge_oauth_config(
+            r#"{"host":"imap.example.com","auth":{"kind":"app_password","username":"u"}}"#,
+            &oauth_auth(),
+        );
+        let value: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["host"], "imap.example.com");
+        assert_eq!(value["auth"]["kind"], "oauth");
+        assert_eq!(value["auth"]["username"], "devansh@example.com");
+        assert_eq!(
+            value["auth"]["token_endpoint"],
+            "https://oauth.example.com/token"
+        );
+        assert_eq!(value["auth"]["client_id"], "cid");
+        assert_eq!(value["auth"]["scopes"][1], "write");
+    }
+
+    #[test]
+    fn merge_oauth_config_never_writes_client_secret() {
+        let merged = merge_oauth_config("{}", &oauth_auth());
+        let value: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["auth"]["kind"], "oauth");
+        assert!(
+            value["auth"].get("client_secret").is_none(),
+            "client_secret must never be persisted into config_json: {merged}"
+        );
+    }
+
+    #[test]
+    fn merge_oauth_config_treats_unparsable_stored_config_as_empty() {
+        let merged = merge_oauth_config("not-json", &oauth_auth());
+        let value: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["auth"]["kind"], "oauth");
+    }
 }

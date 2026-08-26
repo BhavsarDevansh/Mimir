@@ -369,5 +369,8 @@ async fn health_reports_auth_expired_on_401() {
         None,
     );
     use mimir_connectors::HealthStatus;
-    assert_eq!(connector.health().await.unwrap(), HealthStatus::AuthExpired);
+    assert_eq!(
+        connector.health().await.unwrap(),
+        HealthStatus::AuthExpired("CalDAV server rejected the credentials (HTTP 401)".to_string())
+    );
 }

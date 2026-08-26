@@ -224,7 +224,7 @@ async fn auth_method_mismatch_is_an_error() {
     };
     assert_eq!(
         connector
-            .resolve_auth(&bundle)
+            .resolve_auth(&bundle, false)
             .await
             .unwrap_err()
             .to_string(),
@@ -248,7 +248,7 @@ async fn auth_method_mismatch_oauth_config_with_app_password_bundle() {
     };
     assert_eq!(
         connector
-            .resolve_auth(&bundle)
+            .resolve_auth(&bundle, false)
             .await
             .unwrap_err()
             .to_string(),
@@ -262,7 +262,7 @@ async fn resolve_auth_app_password_builds_login() {
     let bundle = SecretBundle::AppPassword {
         password: "hunter2".into(),
     };
-    let (auth, refreshed) = connector.resolve_auth(&bundle).await.expect("ok");
+    let (auth, refreshed) = connector.resolve_auth(&bundle, false).await.expect("ok");
     assert!(refreshed.is_none());
     match auth {
         ImapAuth::Login { username, password } => {
@@ -290,7 +290,7 @@ async fn resolve_auth_oauth_reuses_unexpired_token() {
         expires_at: Some(Utc::now() + chrono::Duration::hours(1)),
         client_secret: None,
     };
-    let (auth, refreshed) = connector.resolve_auth(&bundle).await.expect("ok");
+    let (auth, refreshed) = connector.resolve_auth(&bundle, false).await.expect("ok");
     assert!(refreshed.is_none(), "no refresh expected for a live token");
     match auth {
         ImapAuth::Xoauth2 {
@@ -340,7 +340,10 @@ async fn resolve_auth_oauth_refreshes_expired_token() {
         expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
         client_secret: Some("secret".into()),
     };
-    let (auth, refreshed) = connector.resolve_auth(&bundle).await.expect("refresh");
+    let (auth, refreshed) = connector
+        .resolve_auth(&bundle, false)
+        .await
+        .expect("refresh");
     match auth {
         ImapAuth::Xoauth2 {
             username,
@@ -364,6 +367,60 @@ async fn resolve_auth_oauth_refreshes_expired_token() {
         refresh_token.as_deref(),
         Some("rt"),
         "prior refresh token retained"
+    );
+}
+
+#[tokio::test]
+async fn resolve_auth_oauth_force_refreshes_unexpired_token() {
+    // Issue #507: the supervisor's forced path refreshes even when the stored
+    // token is still inside its lifetime, so a service-rejected access token
+    // is replaced before the cycle is retried.
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "fresh",
+            "token_type": "Bearer",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut cfg = app_config();
+    cfg["auth"] = serde_json::json!({
+        "kind": "oauth",
+        "username": "devansh@example.com",
+        "auth_uri": "https://oauth.example.com/authorize",
+        "token_endpoint": format!("{}/token", server.uri()),
+        "client_id": "cid",
+    });
+    let connector = EmailConnector::from_config(cfg, None, None).expect("config");
+    let bundle = SecretBundle::OAuth {
+        access_token: "ya29.access".into(),
+        refresh_token: Some("rt".into()),
+        expires_at: Some(Utc::now() + chrono::Duration::hours(1)),
+        client_secret: None,
+    };
+    let (auth, refreshed) = connector
+        .resolve_auth(&bundle, true)
+        .await
+        .expect("forced refresh");
+    match auth {
+        ImapAuth::Xoauth2 {
+            username,
+            access_token,
+        } => {
+            assert_eq!(username, "devansh@example.com");
+            assert_eq!(access_token, "fresh");
+        }
+        other => panic!("expected Xoauth2, got {other:?}"),
+    }
+    assert!(
+        refreshed.is_some(),
+        "a forced refresh must return a refreshed bundle to persist"
     );
 }
 

@@ -93,7 +93,7 @@ impl CalendarConnector {
             .await
             .map_err(|e| ConnectorError::Authentication(format!("secret load failed: {e}")))?
             .ok_or(ConnectorError::NotAuthenticated)?;
-        let (auth, refreshed) = self.resolve_auth(&bundle).await?;
+        let (auth, refreshed) = self.resolve_auth(&bundle, false).await?;
         Ok((CalDavClient::new(self.http.clone(), auth), refreshed))
     }
 }

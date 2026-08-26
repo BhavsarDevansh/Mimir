@@ -63,7 +63,7 @@ fn health_status_renamed_variants_exist() {
     let _ = HealthStatus::Online;
     let _ = HealthStatus::Offline;
     let _ = HealthStatus::Degraded;
-    let _ = HealthStatus::AuthExpired;
+    let _ = HealthStatus::AuthExpired("auth rejected".to_string());
     let _ = HealthStatus::NotConfigured;
 }
 

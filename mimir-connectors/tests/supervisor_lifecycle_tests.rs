@@ -297,7 +297,10 @@ async fn auth_expired_pauses_connector_and_exits() {
     );
     input.config_json = with_slug(
         "expired",
-        json!({ "__ctype": ConnectorType::Photos as i64, "health": "auth_expired" }),
+        json!({
+            "__ctype": ConnectorType::Photos as i64,
+            "health": { "auth_expired": "mock auth rejection" },
+        }),
     );
     let row = kg.upsert_connector(input).await.unwrap();
     let kg = Arc::new(kg);
@@ -314,6 +317,7 @@ async fn auth_expired_pauses_connector_and_exits() {
                 .map(|c| {
                     c.status() == Some(ConnectorStatus::Paused)
                         && c.auth_state() == Some(ConnectorAuthState::Expired)
+                        && c.last_error.as_deref() == Some("mock auth rejection")
                 })
                 .unwrap_or(false)
         },

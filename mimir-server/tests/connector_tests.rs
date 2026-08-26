@@ -118,6 +118,93 @@ async fn test_connector_add_list_show_remove_round_trip() {
 }
 
 #[tokio::test]
+async fn test_connector_response_exposes_sanitized_auth_config() {
+    // Issue #507: the wire response surfaces the stored non-secret auth
+    // config (so `mimir connector auth` can re-run the PKCE flow) but must
+    // never echo `client_secret` or other secret material.
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock).await;
+    let app = mimir_server::build_app(state.clone());
+
+    let resp = connector_post(
+        app.clone(),
+        serde_json::json!({
+            "connector_type": "email",
+            "backend": "test",
+            "slug": "oauth-conn",
+            "display_name": "OAuth Conn",
+            "config_json": {
+                "host": "imap.example.com",
+                "auth": {
+                    "kind": "oauth",
+                    "username": "devansh@example.com",
+                    "auth_uri": "https://oauth.example.com/authorize",
+                    "token_endpoint": "https://oauth.example.com/token",
+                    "client_id": "cid",
+                    "client_secret": "super-secret-client-secret",
+                    "scopes": ["read", "write"],
+                },
+            },
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: mimir_api_types::ConnectorResponse = serde_json::from_slice(&bytes).unwrap();
+    let auth = created
+        .auth
+        .clone()
+        .expect("stored oauth config must be exposed");
+    assert_eq!(auth.kind, "oauth");
+    assert_eq!(auth.username.as_deref(), Some("devansh@example.com"));
+    assert_eq!(
+        auth.auth_uri.as_deref(),
+        Some("https://oauth.example.com/authorize")
+    );
+    assert_eq!(
+        auth.token_endpoint.as_deref(),
+        Some("https://oauth.example.com/token")
+    );
+    assert_eq!(auth.client_id.as_deref(), Some("cid"));
+    assert_eq!(
+        auth.scopes.as_deref(),
+        Some(&["read".to_string(), "write".to_string()][..])
+    );
+    let raw = serde_json::to_string(&created).unwrap();
+    assert!(
+        !raw.contains("super-secret-client-secret"),
+        "client_secret must never appear in the wire response: {raw}"
+    );
+    assert!(
+        !raw.contains("client_secret"),
+        "the client_secret key must be stripped from the wire response: {raw}"
+    );
+
+    // The list route must expose the same sanitized slice.
+    let resp = app
+        .oneshot(
+            authed_request()
+                .uri("/connectors")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let list: mimir_api_types::ConnectorListResponse = serde_json::from_slice(&bytes).unwrap();
+    let listed = list
+        .connectors
+        .iter()
+        .find(|c| c.slug == "oauth-conn")
+        .unwrap();
+    assert_eq!(listed.auth.as_ref().map(|a| a.kind.as_str()), Some("oauth"));
+}
+
+#[tokio::test]
 async fn test_connector_catalog_lists_registered_backend_pairs() {
     let mock = Arc::new(MockLlmClient::builder().build());
     let (state, _temp) = test_state(mock).await;
@@ -615,6 +702,165 @@ async fn test_connector_tokens_oauth_ingest_stores_client_secret_in_bundle() {
             assert_eq!(client_secret.as_deref(), Some("s3cret"));
         }
         other => panic!("expected OAuth bundle, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_connector_tokens_oauth_ingest_persists_non_secret_config() {
+    // Issue #507 review: re-authing a connector whose stored config does not
+    // declare OAuth (the interactive fallback) must persist the driving
+    // non-secret OAuth slice into config_json alongside the bundle, or the
+    // next construction rejects the OAuth bundle as a credential-kind
+    // mismatch. Secrets never reach config_json.
+    let mock = Arc::new(MockLlmClient::builder().build());
+    let (state, _temp) = test_state(mock).await;
+    let app = mimir_server::build_app(state.clone());
+    let created = create_test_connector(
+        &app,
+        "oauth-config",
+        serde_json::json!({
+            "host": "imap.example.com",
+            "auth": {"kind": "app_password", "username": "old@example.com"},
+        }),
+    )
+    .await;
+
+    let resp = connector_sub_post(
+        app.clone(),
+        created.id,
+        "tokens",
+        Some(serde_json::json!({
+            "kind": "oauth",
+            "access_token": "at",
+            "refresh_token": "rt",
+            "client_secret": "s3cret",
+            "config": {
+                "kind": "oauth",
+                "username": "devansh@example.com",
+                "auth_uri": "https://oauth.example.com/authorize",
+                "token_endpoint": "https://oauth.example.com/token",
+                "client_id": "cid",
+                "scopes": ["read"],
+            },
+        })),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let stored = state
+        .knowledge_graph
+        .get_connector(created.id)
+        .await
+        .unwrap()
+        .expect("connector row exists");
+    let config: serde_json::Value = serde_json::from_str(&stored.config_json).unwrap();
+    assert_eq!(config["host"], "imap.example.com", "other keys preserved");
+    assert_eq!(config["auth"]["kind"], "oauth");
+    assert_eq!(config["auth"]["username"], "devansh@example.com");
+    assert_eq!(
+        config["auth"]["token_endpoint"],
+        "https://oauth.example.com/token"
+    );
+    assert_eq!(config["auth"]["client_id"], "cid");
+    assert_eq!(config["auth"]["scopes"][0], "read");
+    assert!(
+        config["auth"].get("client_secret").is_none(),
+        "client_secret must never be persisted into config_json: {config}"
+    );
+
+    // The wire response also surfaces the now-declared OAuth slice.
+    let resp = app
+        .oneshot(
+            authed_request()
+                .uri(format!("/connectors/{}", created.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let shown: mimir_api_types::ConnectorResponse = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(shown.auth.as_ref().map(|a| a.kind.as_str()), Some("oauth"));
+    assert_eq!(
+        shown
+            .auth
+            .as_ref()
+            .and_then(|a| a.token_endpoint.as_deref()),
+        Some("https://oauth.example.com/token")
+    );
+}
+
+#[tokio::test]
+async fn test_connector_tokens_oauth_rejects_mixed_kind_config() {
+    // Issue #511 review: an OAuth bundle carrying a non-OAuth config slice
+    // (kind `app_password` / `api_token`) must be rejected before anything is
+    // persisted — storing incompatible credentials and config and reporting
+    // `Authenticated` would only fail credential-kind resolution at the next
+    // construction.
+    for kind in ["app_password", "api_token"] {
+        let mock = Arc::new(MockLlmClient::builder().build());
+        let (state, _temp) = test_state(mock).await;
+        let app = mimir_server::build_app(state.clone());
+        let created = create_test_connector(
+            &app,
+            &format!("oauth-mixed-{kind}"),
+            serde_json::json!({"host": "imap.example.com"}),
+        )
+        .await;
+
+        let resp = connector_sub_post(
+            app.clone(),
+            created.id,
+            "tokens",
+            Some(serde_json::json!({
+                "kind": "oauth",
+                "access_token": "at",
+                "refresh_token": "rt",
+                "config": {"kind": kind, "username": "u@example.com"},
+            })),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Nothing persisted: no credential bundle, config untouched, and the
+        // connector stays unauthenticated.
+        let secret_store = state.connector_supervisor.secret_store().unwrap();
+        let loaded = secret_store
+            .load(&format!("oauth-mixed-{kind}"))
+            .await
+            .unwrap();
+        assert!(
+            loaded.is_none(),
+            "mixed-kind request must not store a credential bundle"
+        );
+        let stored = state
+            .knowledge_graph
+            .get_connector(created.id)
+            .await
+            .unwrap()
+            .expect("connector row exists");
+        let config: serde_json::Value = serde_json::from_str(&stored.config_json).unwrap();
+        assert!(
+            config.get("auth").is_none(),
+            "mixed-kind request must not merge config: {config}"
+        );
+        assert_eq!(config["host"], "imap.example.com");
+        let resp = app
+            .oneshot(
+                authed_request()
+                    .uri(format!("/connectors/{}", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let shown: mimir_api_types::ConnectorResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(shown.auth_state, "unauthenticated");
     }
 }
 

@@ -42,8 +42,10 @@ pub enum TriggerOutcome {
         /// Updated sync cursor the supervisor persisted, or `None` if unchanged.
         new_cursor: Option<String>,
     },
-    /// The service reported expired auth; the connector has been paused.
-    AuthExpired,
+    /// The service reported expired, revoked, or rejected auth; the connector
+    /// has been paused. Carries the underlying auth rejection message
+    /// (issue #507).
+    AuthExpired(String),
     /// The cycle failed with a recoverable error.
     Failed(String),
 }

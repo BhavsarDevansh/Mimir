@@ -23,15 +23,18 @@ impl EmailConnector {
             .await
             .map_err(|e| ConnectorError::Authentication(format!("secret load failed: {e}")))?
             .ok_or(ConnectorError::NotAuthenticated)?;
-        self.resolve_auth(&bundle).await
+        self.resolve_auth(&bundle, false).await
     }
 
     /// Turn a [`SecretBundle`] into [`ImapAuth`], refreshing an expired OAuth
-    /// access token when needed. Returns the auth and the refreshed bundle (if
-    /// a refresh happened) for the caller to persist.
+    /// access token when needed. `force_refresh = true` (the supervisor's
+    /// one-shot retry path, issue #507) refreshes unconditionally, bypassing
+    /// the skew window. Returns the auth and the refreshed bundle (if a
+    /// refresh happened) for the caller to persist.
     pub(crate) async fn resolve_auth(
         &self,
         bundle: &SecretBundle,
+        force_refresh: bool,
     ) -> Result<(ImapAuth, Option<SecretBundle>), ConnectorError> {
         match (&self.config.auth, bundle) {
             (EmailAuthMethod::AppPassword { username }, SecretBundle::AppPassword { password }) => {
@@ -70,6 +73,7 @@ impl EmailConnector {
                     client_secret.as_deref(),
                     scopes.as_deref(),
                     bundle,
+                    force_refresh,
                 )
                 .await?;
                 let auth = ImapAuth::Xoauth2 {

@@ -8,7 +8,7 @@
 //! the daemon's token-ingest route (`POST /connectors/{id}/tokens`, A2 /
 //! #203) — the daemon never runs a transient HTTP server.
 
-use mimir_api_types::IngestTokenRequest;
+use mimir_api_types::{ConnectorAuthConfig, IngestTokenRequest};
 use mimir_connectors::SecretBundle;
 use mimir_connectors::oauth::{
     DEFAULT_FLOW_TIMEOUT, OAuthHttpClient, PkceFlowConfig, run_pkce_flow,
@@ -106,7 +106,14 @@ pub(crate) async fn run_oauth_flow_with_opener_and_secret(
 
 /// Convert an exchanged [`SecretBundle`] into the daemon's wire request
 /// (`IngestTokenRequest::OAuth`), serialising the expiry as RFC-3339.
-pub(crate) fn oauth_ingest_request(bundle: &SecretBundle) -> IngestTokenRequest {
+/// `config` is the non-secret OAuth slice the daemon persists into
+/// `config_json` alongside the bundle (issue #507 review); `None` keeps the
+/// stored config untouched (the `add` path, whose config already declares
+/// OAuth).
+pub(crate) fn oauth_ingest_request(
+    bundle: &SecretBundle,
+    config: Option<ConnectorAuthConfig>,
+) -> IngestTokenRequest {
     let SecretBundle::OAuth {
         access_token,
         refresh_token,
@@ -121,18 +128,57 @@ pub(crate) fn oauth_ingest_request(bundle: &SecretBundle) -> IngestTokenRequest 
         refresh_token: refresh_token.clone(),
         expires_at: expires_at.map(|dt| dt.to_rfc3339()),
         client_secret: client_secret.clone(),
+        config: Box::new(config),
     }
 }
 
 /// Ingest an OAuth bundle for a connector, exiting with a clear message on
-/// failure. Shared by `add` and `auth`.
+/// failure. Shared by `add` and `auth`; `config` carries the driving
+/// non-secret OAuth slice for `auth` to persist (see [`oauth_ingest_request`]).
 pub(crate) async fn ingest_oauth_bundle(
     client: &mimir_client::MimirClient,
     id: i32,
     bundle: &SecretBundle,
+    config: Option<ConnectorAuthConfig>,
 ) -> mimir_api_types::ConnectorResponse {
     client
-        .connector_tokens(id, oauth_ingest_request(bundle))
+        .connector_tokens(id, oauth_ingest_request(bundle, config))
         .await
         .unwrap_or_else(|e| exit_with_error(super::render_client_error(e)))
+}
+
+/// Extract the whitelisted non-secret OAuth `auth` slice from a driving
+/// config value for persistence alongside the bundle (issue #507 review).
+/// Only the fields the daemon's sanitized surface exposes are sent —
+/// `client_secret` never leaves the credential bundle. `None` when the
+/// config has no `auth` object.
+pub(crate) fn oauth_config_slice(config: &serde_json::Value) -> Option<ConnectorAuthConfig> {
+    let auth = config.pointer("/auth")?.as_object()?;
+    Some(ConnectorAuthConfig {
+        // The PKCE flow only ever runs for OAuth clients, so the persisted
+        // slice always declares `oauth` even when the driving config omitted
+        // the kind tag (the interactive fallback path).
+        kind: "oauth".to_string(),
+        username: auth
+            .get("username")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        auth_uri: auth
+            .get("auth_uri")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        token_endpoint: auth
+            .get("token_endpoint")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        client_id: auth
+            .get("client_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        scopes: auth.get("scopes").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        }),
+    })
 }

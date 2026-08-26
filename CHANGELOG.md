@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.151.1] — 2026-08-26
+
+### Fix: PR #511 review — OAuth ingest validation and confidential-client re-auth
+
+- The token-ingest route (`POST /connectors/{id}/tokens`) now rejects an OAuth bundle whose non-secret `config` slice declares a non-OAuth kind (`app_password` / `api_token`) with a `400` before persisting anything — previously it stored incompatible credentials + config and reported `Authenticated`, only to fail credential-kind resolution at the next connector construction.
+- Stored-config OAuth re-authentication now merges re-supplied OAuth fields onto the stored non-secret metadata instead of discarding them: a confidential client that re-supplies only `auth.client_secret=...` keeps the stored endpoints / client id / scopes, the secret reaches the PKCE exchange and the credential bundle, and `oauth_config_slice` still excludes it from persisted `config_json`.
+- Tests cover both fixes: a route test asserting the mixed-kind request is rejected with nothing persisted, and a CLI regression test proving the re-supplied client secret is used in the PKCE exchange (HTTP Basic auth) while never landing in `config_json`.
+- Version bumped 0.151.0 → 0.151.1 (patch — backwards-compatible bugfixes).
+
+## [0.151.0] — 2026-08-26
+
+### Fix: OAuth connector re-auth and auth-expiry retry (issue #507)
+
+- `mimir connector auth <slug>` can now re-auth an OAuth connector without re-supplying the OAuth fields: the daemon reads the stored non-secret auth config (`ConnectorResponse.auth` — kind, `username`, `auth_uri`, `token_endpoint`, `client_id`, `scopes`, with `client_secret`/passwords/tokens always stripped), and the CLI re-runs the PKCE flow from the stored endpoints when the stored kind is `oauth`; the interactive credential-kind prompt also offers an "OAuth 2.0" fallback that guides the user to the required config pairs when the stored config does not declare OAuth. Config-free re-authentication serves **public PKCE clients** — a confidential client re-supplies `auth.client_secret` with the config, and the secret is carried in the credential bundle and never persisted to `config_json`. The token-ingest route now persists the driving non-secret OAuth slice into `config_json` alongside the bundle, so a connector re-authed through the fallback declares OAuth before its next construction instead of failing with a credential-kind mismatch (issue #507 review).
+- A single auth rejection no longer pauses an OAuth connector outright: the supervisor runs one forced refresh (`Connector::force_refresh`, bypassing the 60 s refresh-skew window via `resolve_access_token(..., force = true)`) and re-probes with the fresh credential; only a second rejection or an auth-level refresh failure (e.g. a revoked refresh token) pauses — a transient refresh failure (network / malformed response) is a recoverable cycle error that backs off and retries — and the pause now persists and logs the actual rejection message (IMAP `BAD`/`NO` text, `invalid_grant` description, or the CalDAV 401) as `last_error` instead of the generic "auth expired" — `HealthStatus::AuthExpired` carries the message end-to-end through `TriggerOutcome` and the `SyncConnectorResponse::AuthExpired { message }` wire shape, so `mimir connector sync` reports it too.
+- Transient secret-store availability failures (`SecretError::Io` / `Keyring` / `KeyringTask`) at the forced-refresh boundary now map to a recoverable `ConnectorError::Network` (backoff + retry) instead of `ConnectorError::Authentication`, so an unavailable disk or OS keychain no longer pauses a connector as an auth rejection (issue #507 review).
+- Tests cover the forced-refresh unit path (email + calendar + shared OAuth helper), the supervisor retry-once/pause-with-detail cycle outcomes, the daemon's sanitized auth-config response (list + read, secret-strip assertions) and its OAuth-config persistence on token ingest, the CLI stored-config PKCE re-auth against a mocked daemon, and the real daemon E2E re-auth round trip against the mock OAuth server; docs updated (`docs/cli.md`, `docs/connector-management.md`, `docs/connectors-framework.md`, `docs/oauth-client.md`, `docs/email-connector.md`, `docs/wiki/cli-commands.md`, `docs/wiki/connectors.md`, `Mimir-Implementation-Context.md`).
+- Version bumped 0.150.0 → 0.151.0 (minor — breaking public wire-type change: `SyncConnectorResponse::AuthExpired` gained its required `message` field, so consumers of the former unit variant must be updated; `IngestTokenRequest::OAuth` gained the optional `config` slice).
+
 ## [0.150.0] — 2026-08-25
 
 ### Feature: LLM semantic entity dedup + merge-queue review (issue #282)

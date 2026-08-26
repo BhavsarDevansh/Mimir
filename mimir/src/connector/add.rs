@@ -194,7 +194,7 @@ pub(crate) async fn register_and_ingest(
     // Credential ingest (secret already resolved pre-create).
     match (kind, oauth_bundle, secret) {
         (CredentialKind::OAuth, Some(bundle), _) => {
-            output = ingest_oauth_bundle(client, id, &bundle).await;
+            output = ingest_oauth_bundle(client, id, &bundle, None).await;
         }
         (CredentialKind::AppPassword, None, Some(secret)) => {
             output = client

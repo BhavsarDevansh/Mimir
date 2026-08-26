@@ -53,7 +53,7 @@ async fn resolve_auth_mismatch_reports_config_discriminant() {
     };
     assert_eq!(
         connector
-            .resolve_auth(&bundle)
+            .resolve_auth(&bundle, false)
             .await
             .unwrap_err()
             .to_string(),
@@ -71,7 +71,7 @@ async fn resolve_auth_mismatch_oauth_config_with_app_password_bundle() {
     };
     assert_eq!(
         connector
-            .resolve_auth(&bundle)
+            .resolve_auth(&bundle, false)
             .await
             .unwrap_err()
             .to_string(),
@@ -119,7 +119,10 @@ async fn resolve_auth_oauth_refreshes_expired_token() {
     )
     .expect("config");
     let bundle = oauth_bundle("stale", Some(Utc::now() - chrono::Duration::seconds(1)));
-    let (auth, refreshed) = connector.resolve_auth(&bundle).await.expect("refresh");
+    let (auth, refreshed) = connector
+        .resolve_auth(&bundle, false)
+        .await
+        .expect("refresh");
     match auth {
         CalDavAuth::Bearer { token } => assert_eq!(token, "fresh"),
         other => panic!("expected Bearer auth, got {other:?}"),
@@ -146,10 +149,47 @@ async fn resolve_auth_oauth_reuses_unexpired_token() {
         CalendarConnector::from_config(oauth_config("https://oauth.example.com/token"), None, None)
             .expect("config");
     let bundle = oauth_bundle("ya29.access", Some(Utc::now() + chrono::Duration::hours(1)));
-    let (auth, refreshed) = connector.resolve_auth(&bundle).await.expect("ok");
+    let (auth, refreshed) = connector.resolve_auth(&bundle, false).await.expect("ok");
     assert!(refreshed.is_none(), "no refresh expected for a live token");
     match auth {
         CalDavAuth::Bearer { token } => assert_eq!(token, "ya29.access"),
         other => panic!("expected Bearer auth, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn resolve_auth_oauth_force_refreshes_unexpired_token() {
+    // Issue #507: the supervisor's forced path refreshes even when the stored
+    // token is still inside its lifetime, so a service-rejected access token
+    // is replaced before the cycle is retried.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "fresh",
+            "token_type": "Bearer",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let connector = CalendarConnector::from_config(
+        oauth_config(&format!("{}/token", server.uri())),
+        None,
+        None,
+    )
+    .expect("config");
+    let bundle = oauth_bundle("ya29.access", Some(Utc::now() + chrono::Duration::hours(1)));
+    let (auth, refreshed) = connector
+        .resolve_auth(&bundle, true)
+        .await
+        .expect("forced refresh");
+    match auth {
+        CalDavAuth::Bearer { token } => assert_eq!(token, "fresh"),
+        other => panic!("expected Bearer auth, got {other:?}"),
+    }
+    assert!(
+        refreshed.is_some(),
+        "a forced refresh must return a refreshed bundle to persist"
+    );
 }

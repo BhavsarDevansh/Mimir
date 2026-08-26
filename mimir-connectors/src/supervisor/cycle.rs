@@ -106,8 +106,10 @@ pub(super) enum CycleOutcome {
     /// connector's [`SyncOutcome`] so a triggered cycle can report stats back
     /// to the caller of [`ConnectorSupervisor::trigger_sync`].
     Ok(SyncOutcome),
-    /// The service reported expired auth; the connector must be paused.
-    AuthExpired,
+    /// The service reported expired, revoked, or rejected auth; the connector
+    /// must be paused. Carries the underlying auth rejection message so it
+    /// can be logged and persisted as `last_error` (issue #507).
+    AuthExpired(String),
     /// The cycle failed with a recoverable error.
     Err(String),
 }
@@ -115,7 +117,7 @@ pub(super) enum CycleOutcome {
 /// Classified result of awaiting a cycle's [`JoinHandle`].
 pub(super) enum CycleResult {
     Ok(SyncOutcome),
-    AuthExpired,
+    AuthExpired(String),
     Err(String),
     /// The cycle task panicked (counted as a failure).
     Panic,
@@ -136,7 +138,7 @@ impl CycleResult {
                 fetched: outcome.fetched,
                 new_cursor: outcome.new_cursor.clone(),
             },
-            CycleResult::AuthExpired => TriggerOutcome::AuthExpired,
+            CycleResult::AuthExpired(message) => TriggerOutcome::AuthExpired(message.clone()),
             CycleResult::Err(message) => TriggerOutcome::Failed(message.clone()),
             CycleResult::Panic => TriggerOutcome::Failed("connector task panicked".to_string()),
             CycleResult::Cancelled => TriggerOutcome::Failed("cycle cancelled".to_string()),
@@ -286,7 +288,7 @@ pub(super) async fn run_connector(
             tokio::select! {
                 res = &mut *handle => match res {
                     Ok(CycleOutcome::Ok(outcome)) => CycleResult::Ok(outcome),
-                    Ok(CycleOutcome::AuthExpired) => CycleResult::AuthExpired,
+                    Ok(CycleOutcome::AuthExpired(message)) => CycleResult::AuthExpired(message),
                     Ok(CycleOutcome::Err(message)) => CycleResult::Err(message),
                     Err(join) if join.is_panic() => CycleResult::Panic,
                     Err(_) => CycleResult::Cancelled,
@@ -329,20 +331,17 @@ pub(super) async fn run_connector(
                 failures = 0;
                 last_failed = false;
             }
-            CycleResult::AuthExpired => {
+            CycleResult::AuthExpired(message) => {
                 warn!(
                     connector_id = instance_id,
+                    error = %message,
                     "connector auth expired; pausing"
                 );
                 let _ = kg
                     .set_auth_state(instance_id, ConnectorAuthState::Expired)
                     .await;
                 let _ = kg
-                    .set_connector_status(
-                        instance_id,
-                        ConnectorStatus::Paused,
-                        Some(Some("auth expired".to_string())),
-                    )
+                    .set_connector_status(instance_id, ConnectorStatus::Paused, Some(Some(message)))
                     .await;
                 return;
             }
@@ -504,14 +503,51 @@ pub(super) async fn run_cycle(
     options: SyncOptions,
 ) -> CycleOutcome {
     // Health probe — maps the transient status onto lifecycle decisions.
-    match connector.health().await {
-        Ok(HealthStatus::Online) | Ok(HealthStatus::Degraded) => {}
-        Ok(HealthStatus::Offline) => {
-            return CycleOutcome::Err("service offline".to_string());
+    // Issue #507: an auth rejection is probed twice at most. The first probe
+    // runs one forced refresh (OAuth connectors with a valid refresh token)
+    // and re-probes with the fresh credential, so a stale or transiently
+    // rejected access token is retried instead of pausing the connector; only
+    // a second rejection — or a refresh failure — pauses, carrying the actual
+    // auth error message for `last_error` and the logs.
+    let mut auth_retry = true;
+    loop {
+        match connector.health().await {
+            Ok(HealthStatus::Online) | Ok(HealthStatus::Degraded) => break,
+            Ok(HealthStatus::Offline) => {
+                return CycleOutcome::Err("service offline".to_string());
+            }
+            Ok(HealthStatus::AuthExpired(message)) if auth_retry => {
+                auth_retry = false;
+                match connector.force_refresh().await {
+                    Ok(ConnectorAuthState::Authenticated) => {
+                        info!(
+                            connector_id = instance_id,
+                            "connector auth rejected; forced refresh succeeded, retrying the cycle"
+                        );
+                        continue;
+                    }
+                    Ok(_) => return CycleOutcome::AuthExpired(message),
+                    // A transient refresh failure (network / malformed token
+                    // response) is a recoverable cycle error: the supervisor
+                    // backs off and retries, and a later cycle can still
+                    // recover. Only an auth-level refresh rejection (e.g.
+                    // `invalid_grant` — a revoked refresh token) pauses,
+                    // carrying the provider's message (issue #507 review).
+                    Err(ConnectorError::Network(message)) => {
+                        return CycleOutcome::Err(message);
+                    }
+                    Err(ConnectorError::Parse(message)) => {
+                        return CycleOutcome::Err(message);
+                    }
+                    Err(error) => return CycleOutcome::AuthExpired(error.to_string()),
+                }
+            }
+            Ok(HealthStatus::AuthExpired(message)) => return CycleOutcome::AuthExpired(message),
+            Ok(HealthStatus::NotConfigured) => {
+                return CycleOutcome::Err("not configured".to_string());
+            }
+            Err(error) => return CycleOutcome::Err(error.to_string()),
         }
-        Ok(HealthStatus::AuthExpired) => return CycleOutcome::AuthExpired,
-        Ok(HealthStatus::NotConfigured) => return CycleOutcome::Err("not configured".to_string()),
-        Err(error) => return CycleOutcome::Err(error.to_string()),
     }
 
     // Fetch raw items into the connector buffer.
@@ -814,6 +850,311 @@ mod tests {
             connector.extract_deletions().await.unwrap().is_empty(),
             "the acknowledged tombstones are dropped after a successful cycle"
         );
+    }
+
+    /// How a test connector's forced refresh resolves (issue #507): recover
+    /// (the refresh fixes the credential), unchanged (no refresh possible,
+    /// e.g. an app-password connector), fail with the provider's auth error,
+    /// or fail with a transient network error.
+    #[derive(Clone, Copy, PartialEq)]
+    enum RefreshOutcome {
+        Recover,
+        Unchanged,
+        Fail,
+        NetworkFail,
+    }
+
+    /// Delegating connector whose health probe reports `AuthExpired` on its
+    /// first call and then delegates to the wrapped mock, simulating an OAuth
+    /// connector whose access token was transiently rejected. The forced
+    /// refresh resolves per [`RefreshOutcome`].
+    struct ForceRefreshConnector {
+        inner: MockConnector,
+        probes: AtomicU32,
+        outcome: RefreshOutcome,
+    }
+
+    #[async_trait::async_trait]
+    impl Connector for ForceRefreshConnector {
+        fn id(&self) -> &str {
+            self.inner.id()
+        }
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+        fn connector_type(&self) -> ConnectorType {
+            self.inner.connector_type()
+        }
+        fn mode(&self) -> ConnectorMode {
+            self.inner.mode()
+        }
+        fn config_schema(&self) -> serde_json::Value {
+            self.inner.config_schema()
+        }
+        async fn authenticate(&self) -> Result<ConnectorAuthState, ConnectorError> {
+            self.inner.authenticate().await
+        }
+        async fn health(&self) -> Result<HealthStatus, ConnectorError> {
+            if self.probes.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Ok(HealthStatus::AuthExpired(
+                    "IMAP auth rejected (BAD): invalid token".to_string(),
+                ));
+            }
+            self.inner.health().await
+        }
+        async fn force_refresh(&self) -> Result<ConnectorAuthState, ConnectorError> {
+            match self.outcome {
+                RefreshOutcome::Recover => Ok(ConnectorAuthState::Authenticated),
+                RefreshOutcome::Unchanged => Ok(ConnectorAuthState::Expired),
+                RefreshOutcome::Fail => Err(ConnectorError::Authentication(
+                    "token refresh failed: invalid_grant: refresh token revoked".to_string(),
+                )),
+                RefreshOutcome::NetworkFail => Err(ConnectorError::Network(
+                    "token refresh failed: connection refused".to_string(),
+                )),
+            }
+        }
+        async fn sync(&self, options: SyncOptions) -> Result<SyncOutcome, ConnectorError> {
+            self.inner.sync(options).await
+        }
+        async fn extract(
+            &self,
+        ) -> Result<Vec<mimir_knowledge::normalize::NormalizedFact>, ConnectorError> {
+            self.inner.extract().await
+        }
+        async fn extract_deletions(&self) -> Result<Vec<String>, ConnectorError> {
+            self.inner.extract_deletions().await
+        }
+        async fn acknowledge_deletions(&self, deleted: &[String]) -> Result<(), ConnectorError> {
+            self.inner.acknowledge_deletions(deleted).await
+        }
+        async fn act(
+            &self,
+            action: crate::connector::ConnectorAction,
+        ) -> Result<crate::connector::ActionResult, ConnectorError> {
+            self.inner.act(action).await
+        }
+        async fn forget(&self) -> Result<(), ConnectorError> {
+            self.inner.forget().await
+        }
+    }
+
+    /// Issue #507: a single auth rejection must not pause an OAuth connector
+    /// whose forced refresh succeeds — the cycle is re-probed with the fresh
+    /// credential and proceeds.
+    #[tokio::test]
+    async fn auth_expired_recovers_via_forced_refresh_and_runs_the_cycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+                .await
+                .unwrap(),
+        );
+        let row = kg
+            .upsert_connector(UpsertConnectorInput {
+                connector_type: ConnectorType::Email,
+                slug: "oauth-recover".to_string(),
+                backend: "mock".to_string(),
+                display_name: "OAuth Recover".to_string(),
+                config_json: "{}".to_string(),
+                status: None,
+                auth_state: None,
+            })
+            .await
+            .unwrap();
+        let connector = Arc::new(ForceRefreshConnector {
+            inner: MockConnector::from_config(json!({
+                "__slug": "oauth-recover",
+                "mode": "polling",
+                "interval_ms": 1,
+                "jitter_ms": 0,
+            }))
+            .unwrap(),
+            probes: AtomicU32::new(0),
+            outcome: RefreshOutcome::Recover,
+        });
+
+        let outcome = run_cycle(
+            connector.clone(),
+            kg.clone(),
+            row.id,
+            ConnectorType::Email,
+            SyncOptions::default(),
+        )
+        .await;
+        assert!(
+            matches!(outcome, CycleOutcome::Ok(_)),
+            "a successful forced refresh must retry the cycle instead of pausing"
+        );
+        assert_eq!(
+            connector.probes.load(Ordering::SeqCst),
+            2,
+            "the probe must run twice: once rejected, once with the refreshed credential"
+        );
+    }
+
+    /// Issue #507: a connector with nothing to refresh (app password / API
+    /// token) pauses as before, but the persisted outcome now carries the
+    /// probe's actual rejection message instead of the generic "auth expired".
+    #[tokio::test]
+    async fn auth_expired_without_refresh_preserves_probe_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+                .await
+                .unwrap(),
+        );
+        let row = kg
+            .upsert_connector(UpsertConnectorInput {
+                connector_type: ConnectorType::Email,
+                slug: "no-refresh".to_string(),
+                backend: "mock".to_string(),
+                display_name: "No Refresh".to_string(),
+                config_json: "{}".to_string(),
+                status: None,
+                auth_state: None,
+            })
+            .await
+            .unwrap();
+        let connector = Arc::new(ForceRefreshConnector {
+            inner: MockConnector::from_config(json!({
+                "__slug": "no-refresh",
+                "mode": "polling",
+                "interval_ms": 1,
+                "jitter_ms": 0,
+            }))
+            .unwrap(),
+            probes: AtomicU32::new(0),
+            outcome: RefreshOutcome::Unchanged,
+        });
+
+        let outcome = run_cycle(
+            connector,
+            kg,
+            row.id,
+            ConnectorType::Email,
+            SyncOptions::default(),
+        )
+        .await;
+        match outcome {
+            CycleOutcome::AuthExpired(message) => assert_eq!(
+                message, "IMAP auth rejected (BAD): invalid token",
+                "the probe's rejection message must survive to the pause"
+            ),
+            _ => {
+                panic!("expected AuthExpired with the probe message, got a non-AuthExpired outcome")
+            }
+        }
+    }
+
+    /// Issue #507: a failed forced refresh pauses with the provider's error
+    /// (e.g. `invalid_grant`) so the persisted `last_error` names the actual
+    /// cause instead of the generic "auth expired".
+    #[tokio::test]
+    async fn auth_expired_with_failed_refresh_pauses_with_refresh_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+                .await
+                .unwrap(),
+        );
+        let row = kg
+            .upsert_connector(UpsertConnectorInput {
+                connector_type: ConnectorType::Email,
+                slug: "refresh-fail".to_string(),
+                backend: "mock".to_string(),
+                display_name: "Refresh Fail".to_string(),
+                config_json: "{}".to_string(),
+                status: None,
+                auth_state: None,
+            })
+            .await
+            .unwrap();
+        let connector = Arc::new(ForceRefreshConnector {
+            inner: MockConnector::from_config(json!({
+                "__slug": "refresh-fail",
+                "mode": "polling",
+                "interval_ms": 1,
+                "jitter_ms": 0,
+            }))
+            .unwrap(),
+            probes: AtomicU32::new(0),
+            outcome: RefreshOutcome::Fail,
+        });
+
+        let outcome = run_cycle(
+            connector,
+            kg,
+            row.id,
+            ConnectorType::Email,
+            SyncOptions::default(),
+        )
+        .await;
+        match outcome {
+            CycleOutcome::AuthExpired(message) => assert_eq!(
+                message,
+                "authentication failed: token refresh failed: invalid_grant: refresh token revoked",
+                "the refresh failure message must become the pause detail"
+            ),
+            _ => {
+                panic!("expected AuthExpired with the refresh error, got a non-AuthExpired outcome")
+            }
+        }
+    }
+
+    /// Issue #507 review: a transient network failure during the forced
+    /// refresh must not pause the connector — it is a recoverable cycle error
+    /// (backoff + retry), so a later cycle can still recover once the network
+    /// is back.
+    #[tokio::test]
+    async fn auth_expired_with_network_refresh_failure_retries_instead_of_pausing() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = Arc::new(
+            KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+                .await
+                .unwrap(),
+        );
+        let row = kg
+            .upsert_connector(UpsertConnectorInput {
+                connector_type: ConnectorType::Email,
+                slug: "refresh-net-fail".to_string(),
+                backend: "mock".to_string(),
+                display_name: "Refresh Net Fail".to_string(),
+                config_json: "{}".to_string(),
+                status: None,
+                auth_state: None,
+            })
+            .await
+            .unwrap();
+        let connector = Arc::new(ForceRefreshConnector {
+            inner: MockConnector::from_config(json!({
+                "__slug": "refresh-net-fail",
+                "mode": "polling",
+                "interval_ms": 1,
+                "jitter_ms": 0,
+            }))
+            .unwrap(),
+            probes: AtomicU32::new(0),
+            outcome: RefreshOutcome::NetworkFail,
+        });
+
+        let outcome = run_cycle(
+            connector,
+            kg,
+            row.id,
+            ConnectorType::Email,
+            SyncOptions::default(),
+        )
+        .await;
+        match outcome {
+            CycleOutcome::Err(message) => assert_eq!(
+                message, "token refresh failed: connection refused",
+                "a transient refresh failure must be a recoverable cycle error"
+            ),
+            _ => {
+                panic!("expected a recoverable Err, got a non-Err outcome")
+            }
+        }
     }
 
     /// Delegating connector that reports a canned durable state after every

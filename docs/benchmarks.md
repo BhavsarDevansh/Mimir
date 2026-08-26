@@ -128,3 +128,58 @@ cargo bench -p mimir-core --bench pure_helpers
 cargo bench -p mimir-knowledge --bench pure_helpers
 ```
   Uses a fixed `2024-06-15T14:30:00Z` reference time for reproducible baselines. |
+
+## Test-suite performance baselines (v0.153.0)
+
+The performance investigation (2026-08-26) added four benchmark suites that quantify the costs the test suite pays repeatedly, plus a script that measures the whole suite. Every open performance issue (#523–#537) names the benchmarks to watch; the fix branches must run them before/after and report the delta.
+
+### `mimir-knowledge` — `kg_write_benchmarks`
+
+| Benchmark | What it measures | Baseline |
+|-----------|------------------|----------|
+| `kg_schema_init` | Fresh `KnowledgeGraph::init` incl. all 58 migrations (per-test setup cost) | 65.8 ms |
+| `kg_fact_insert_small_graph` | 10 fact inserts into a 6-entity graph (~0.92 ms/insert) | 9.15 ms |
+| `kg_fact_insert_same_subject_growth` | 1 insert with 30 pre-existing facts on the subject (overlap-scan cost) | 2.43 ms |
+| `kg_entity_create_with_aliases` | 5 entity creates with 3 aliases each | 2.41 ms |
+| `kg_optimization_dedup_pass_100` | Nightly dedup pass over 100 facts (50 duplicate pairs) | 42.7 ms |
+| `kg_traverse_star_300_node_cap_200` | BFS traversal of a 300-node star, cap 200 | 4.2 ms |
+
+```bash
+cargo bench -p mimir-knowledge --bench kg_write_benchmarks
+```
+
+### `mimir-core` — `db_init` and `mock_llm`
+
+| Benchmark | What it measures | Baseline |
+|-----------|------------------|----------|
+| `context_schema_init` | Fresh `ContextManager::new` (schema + FTS5 triggers) | 4.24 ms |
+| `job_queue_schema_init` | Fresh `JobQueue::init` | 1.63 ms |
+| `mock_llm_chat_call` | One `MockLlmClient::chat_message` (lock traffic) | 8.16 µs |
+| `mock_llm_records_clone_100` | `chat_calls()` clone of 100 recorded calls | 34.96 µs |
+
+```bash
+cargo bench -p mimir-core --bench db_init --bench mock_llm
+```
+
+### `mimir-server` — `state_build`
+
+| Benchmark | What it measures | Baseline |
+|-----------|------------------|----------|
+| `app_state_from_config_with_llm_build` | Full daemon `AppState` build (context + KG + job queue + hooks + scheduler + connectors) | 81 ms |
+| `app_state_from_config_with_llm_build_shutdown` | Build + `state.shutdown()`; the 5 s is the hook-exit timeout when the dispatch loop never started (issue #536) | 5.08 s |
+
+```bash
+cargo bench -p mimir-server --bench state_build
+```
+
+### Whole-suite baseline
+
+`scripts/perf-baseline.sh` runs the workspace suite with cargo-nextest (falling back to `cargo test --workspace` wall-time only) and prints the wall clock, the sum of per-test durations, and the 25 slowest tests.
+
+```bash
+scripts/perf-baseline.sh
+```
+
+Baseline on 2026-08-26 (cargo-nextest 0.9.143, cargo 1.97.1, debug profile): 2315 tests, 189.3 s wall, 755.9 s summed durations. The slowest tests are the connector E2E suite (12.9 s), `daemon_guard::tests::test_start_timeout` (10.4 s, issue #530), `optimization_tests::concurrent_full_runs...` (8.2 s), and `kg_traverse_tests::test_kg_traverse_node_cap` (8.0 s). Manual measurements: `mimir stop` takes 2.2 s because of a hard-coded 2 s sleep (issue #523), and `mimir-knowledge` fact-heavy seeding pays ~0.9 ms per insert (issues #526, #527).
+
+Open performance issues tracked by these benchmarks: #523 (CLI stop sleep), #524/#525 (SQLite pragmas), #526 (fact-insert overhead), #527 (composite index), #528 (dedup O(n²)), #529 (alias batch insert), #530 (daemon-guard timeout), #531 (retry backoff), #532–#534 (fixed sleeps in tests), #535 (migration template), #536 (hook-exit timeout), #537 (supervisor poll loop).

@@ -19,6 +19,7 @@ A `tests-and-benchmarks` pass massively expanded Mimir's automated test and benc
 cargo test --workspace                 # all unit + integration tests
 cargo bench --workspace                # all benchmarks (slow)
 cargo bench -p mimir-core --bench pure_helpers
+scripts/perf-baseline.sh               # suite wall-time + slowest tests (needs cargo-nextest)
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
@@ -29,7 +30,7 @@ cargo fmt --all -- --check
 - Three new pure-helper benchmark suites cover pathways that were previously unbenchmarked.
 - Security-relevant tests now lock in that internal error details (LLM upstream text, context IDs, memory I/O messages, KG internal variants) are masked from HTTP clients with stable error codes.
 - The calendar knowledge-graph integration tests are deterministic under parallel load: they wait for the events-subsystem overlay (`get_event_by_fact`) instead of the bare fact list, and drive the tombstone cycle via `trigger_sync_by_slug` — closing the initial-cycle and tombstone-cycle races that previously made `calendar_kb_tests` flaky in full-suite runs (issues #320, #367).
-- The workspace suite is isolated from the developer's real install (issue #384): the daemon-down CLI tests probe the never-bindable loopback port 0 with temp HOME/XDG instead of the default base URL, every daemon-spawning test runs against temp DBs with an injected API token, and the in-process `TestDaemon` / server-task fixtures kill their server on drop so a panicking test cannot leak a daemon that locks the real `knowledge.db`/`jobs.db` or holds a port. The full compiled suite runs in about a minute.
+- The workspace suite is isolated from the developer's real install (issue #384): the daemon-down CLI tests probe the never-bindable loopback port 0 with temp HOME/XDG instead of the default base URL, every daemon-spawning test runs against temp DBs with an injected API token, and the in-process `TestDaemon` / server-task fixtures kill their server on drop so a panicking test cannot leak a daemon that locks the real `knowledge.db`/`jobs.db` or holds a port.
 
 ## Use cases
 
@@ -46,6 +47,10 @@ cargo fmt --all -- --check
 ## Follow-up issues
 
 See GitHub issues #160–#168 for prescriptive refactoring, performance, and security improvements identified during the pass.
+
+## Performance baselines (v0.153.0)
+
+The performance investigation (2026-08-26) added criterion suites for the write/setup paths the tests pay repeatedly (`mimir-knowledge kg_write_benchmarks`, `mimir-core db_init` + `mock_llm`, `mimir-server state_build`) and a `scripts/perf-baseline.sh` script that times the whole suite with cargo-nextest. Baseline on 2026-08-26: 2315 tests in 189.3 s wall (755.9 s summed durations). Every finding from the audit is tracked as its own GitHub issue (#523–#537), each naming the benchmark to watch; see `docs/benchmarks.md` for the baseline table and reproduction commands. When fixing one of these issues, capture the baseline, apply the fix, and report the delta in the PR.
 
 ## Review-fix refinements (v0.54.5)
 

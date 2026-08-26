@@ -66,3 +66,11 @@ harness = false
 [[bench]]
 name = "pure_helpers"
 harness = false
+
+[[bench]]
+name = "db_init"
+harness = false
+
+[[bench]]
+name = "mock_llm"
+harness = false

@@ -38,3 +38,7 @@ harness = false
 [[bench]]
 name = "pure_helpers"
 harness = false
+
+[[bench]]
+name = "kg_write_benchmarks"
+harness = false

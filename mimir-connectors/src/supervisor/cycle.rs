@@ -493,8 +493,10 @@ pub(super) fn backoff_delay(config: SupervisorConfig, failures: u32) -> Duration
 /// A single ingestion cycle, isolated in its own task for panic containment.
 ///
 /// Health-probes, syncs (with the caller-supplied [`SyncOptions`]), extracts,
-/// inserts through the shared pipeline, and persists the cursor. Returns a
-/// [`CycleOutcome`] for the runner to act on.
+/// inserts through the shared pipeline, and persists the cursor (plus the
+/// restored auth state when a mid-cycle forced refresh recovers an
+/// `AuthExpired` probe — issue #516). Returns a [`CycleOutcome`] for the
+/// runner to act on.
 pub(super) async fn run_cycle(
     connector: Arc<dyn Connector>,
     kg: Arc<KnowledgeGraph>,

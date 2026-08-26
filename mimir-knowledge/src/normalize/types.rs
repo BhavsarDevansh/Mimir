@@ -157,6 +157,14 @@ pub struct NormalizedFact {
     /// Already-parsed catalogue category IDs; validated against the DB.
     pub category_ids: Vec<i32>,
     pub recurrence: RecurrenceType,
+    /// Raw `RRULE` string (interval, day/month constraints, `COUNT`/`UNTIL`)
+    /// when the producer supplied one; `None` for kind-only producers.
+    pub recurrence_rule: Option<String>,
+    /// How often the series repeats (every N periods; 1 = every period).
+    pub recurrence_interval: i32,
+    /// Effective series end (from `UNTIL`, or computed from `COUNT` at
+    /// extraction); `None` = unbounded.
+    pub recurrence_until: Option<DateTime<Utc>>,
     pub requires_user_action: bool,
     /// Native id of the source item (e.g. an email UID, a calendar event id).
     /// Required when [`Provenance::connector_instance_id`] is set.

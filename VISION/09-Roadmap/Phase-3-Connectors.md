@@ -28,7 +28,7 @@ Build the connector framework and implement 3 core connectors: Email, Calendar, 
 - [x] Extract: flight confirmations, bookings, dates, contacts (C6 / #200, #249, C7 / #201)
 - [x] Incremental sync (track last UID) (C5 / #199)
 - [x] Envelope-context extraction: facts bound by the email's dates, sender, recipients, and spam signals (#398)
-- [x] Wizard provider presets: Gmail, Outlook / Office 365, Yahoo, Proton Mail (Bridge), iCloud, Custom IMAP (email) + Google Calendar, iCloud, Yahoo, Custom CalDAV (calendar); the IMAP mail type is the generic `Email` type (legacy `gmail` accepted as an alias) (#400); the Outlook preset asks which Microsoft account type applies and pre-fills the matching identity-platform tenant (`/consumers/`, `/organizations/`, or `/common/`) (#467)
+- [x] Wizard provider presets: Gmail, Outlook / Office 365, Yahoo, Proton Mail (Bridge), iCloud, Custom IMAP (email) + Google Calendar, iCloud, Yahoo, Custom CalDAV (calendar); the IMAP mail type is the generic `Email` type (legacy `gmail` accepted as an alias) (#400); the Outlook preset asks which Microsoft account type applies and pre-fills the matching identity-platform tenant (`/consumers/`, `/organizations/`, or `/common/`) (#467); the Microsoft Graph calendar backend (issue #474) adds `(Calendar, graph)` — OAuth-only delta sync over `GET /me/events/delta`, the same fact cluster as CalDAV, no write-back — with a wizard profile that reuses the #467 account-type endpoint mapping and pre-fills the `Calendars.Read offline_access` scope
 
 ### 3.3 Google Calendar / CalDAV Connector
 - [x] OAuth 2.0 or app password auth (C3 / #197)
@@ -36,6 +36,14 @@ Build the connector framework and implement 3 core connectors: Email, Calendar, 
 - [x] Fact extraction: events, locations, attendees (C4 / #198)
 - [x] Write support: add/update/delete events (C4 / #198)
 - [x] Incremental sync (track sync token) (C3 / #197)
+
+### 3.3b Microsoft Graph Calendar Connector (Outlook / Office 365)
+- [x] OAuth 2.0 authentication (issue #474) — PKCE loopback + connector-side refresh, user-supplied app registration
+- [x] Event fetching with delta sync (`$deltatoken` cursor) (issue #474)
+- [x] Fact extraction: events, locations, attendees — same shapes as CalDAV (issue #474)
+- [x] Server-side deletions (`@removed`) propagated to the KB fact lifecycle (issue #474)
+- [x] Wizard preset: account-type endpoint selection + `Calendars.Read offline_access` scope (issue #474)
+- [ ] Write support (out of scope — Graph write support is not planned for this backend)
 
 ### 3.4 Photos Connector
 - [x] Local file system watcher (C1 / #195)

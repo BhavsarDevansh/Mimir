@@ -348,10 +348,11 @@ fn connector_catalog_advertises_feature_gated_backends() {
     let daemon = TestDaemon::start();
 
     // The test daemon builds mimir-server with the default features plus
-    // `mock-connector`, so the catalog must advertise exactly the four
+    // `mock-connector`, so the catalog must advertise exactly the five
     // registered pairs — proving the route reflects the daemon's actual
     // feature-gated registrations rather than a hard-coded list (issue
-    // #271).
+    // #271). The `(calendar, graph)` pair is the Microsoft Graph calendar
+    // backend (issue #474).
     let catalog = daemon.run_cli_json(&["connector", "catalog", "--json"]);
     let entries = catalog["entries"].as_array().unwrap();
     let pairs: Vec<(String, String)> = entries
@@ -367,6 +368,7 @@ fn connector_catalog_advertises_feature_gated_backends() {
         pairs,
         vec![
             ("calendar".to_string(), "caldav".to_string()),
+            ("calendar".to_string(), "graph".to_string()),
             ("email".to_string(), "imap".to_string()),
             ("email".to_string(), "test".to_string()),
             ("photos".to_string(), "local".to_string()),

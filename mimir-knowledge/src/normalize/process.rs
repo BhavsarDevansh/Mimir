@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 
 use crate::models::entity::EntityType;
 use crate::models::fact::{Fact, NewFact};
+use crate::models::recurrence::RecurrenceSpec;
 use crate::normalize::corrections::handle_correction;
 use crate::normalize::entities::resolve_entity;
 use crate::normalize::events::event_from_extraction;
@@ -145,6 +146,9 @@ async fn process_normalized_fact(
         ref correction_scope,
         ref category_ids,
         recurrence,
+        recurrence_rule,
+        recurrence_interval,
+        recurrence_until,
         requires_user_action,
         ref raw_reference,
         extraction_method,
@@ -316,7 +320,12 @@ async fn process_normalized_fact(
         // overlay from the extracted recurrence/event_type/policy/
         // requires_user_action instead of synthesising one-time defaults.
         if let Some(new_event) = event_from_extraction(
-            recurrence,
+            RecurrenceSpec {
+                kind: recurrence,
+                rule: recurrence_rule,
+                interval: recurrence_interval,
+                until: recurrence_until,
+            },
             requires_user_action,
             subject.id,
             fact.id,
@@ -349,7 +358,12 @@ async fn process_normalized_fact(
     // Events subsystem (#74): create a lifecycle overlay when the fact is
     // time-bound (future date), recurring, or requires user action.
     if let Some(new_event) = event_from_extraction(
-        recurrence,
+        RecurrenceSpec {
+            kind: recurrence,
+            rule: recurrence_rule,
+            interval: recurrence_interval,
+            until: recurrence_until,
+        },
         requires_user_action,
         subject.id,
         fact.id,

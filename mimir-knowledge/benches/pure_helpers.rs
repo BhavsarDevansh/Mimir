@@ -148,7 +148,7 @@ fn bench_next_occurrence(c: &mut Criterion) {
     c.bench_function("next_occurrence_mixed", |b| {
         b.iter(|| {
             for (date, rec) in cases {
-                black_box(next_occurrence(date, rec, from));
+                black_box(next_occurrence(date, rec, 1, None, from, None));
             }
         })
     });

@@ -2274,6 +2274,116 @@ fn wizard_calendar_google_preset_uses_google_endpoints_and_computed_url() {
 }
 
 #[test]
+fn wizard_calendar_graph_outlook_preset_uses_account_type_endpoints_and_scope() {
+    // Issue #474: the (calendar, graph) profile pre-fills the Microsoft
+    // Graph authorize/token endpoints chosen by account type (issue #467)
+    // and the Graph calendar scope; the config carries no calendar_url
+    // (Graph has no collection URL) and no username (the token identifies
+    // the user).
+    let entry = mimir_api_types::ConnectorCatalogEntry {
+        connector_type: "calendar".to_string(),
+        backend: "graph".to_string(),
+    };
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(0), // Microsoft account type — personal
+        ScriptedAnswer::Input("client-ms-123".to_string()),
+        ScriptedAnswer::Password(String::new()), // client secret → none
+        ScriptedAnswer::Input(String::new()),    // scopes → default
+    ]);
+    let (config, credential) = build_wizard_config(&entry, "outlook-cal", &prompts).unwrap();
+    assert!(matches!(
+        credential,
+        super::wizard::WizardCredential::OAuth {
+            client_secret: None
+        }
+    ));
+    assert!(
+        config.get("calendar_url").is_none(),
+        "Graph has no collection URL"
+    );
+    assert_eq!(config["auth"]["kind"], "oauth");
+    assert!(config["auth"].get("username").is_none());
+    assert_eq!(
+        config["auth"]["auth_uri"],
+        "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize"
+    );
+    assert_eq!(
+        config["auth"]["token_endpoint"],
+        "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+    );
+    assert_eq!(
+        config["auth"]["scopes"],
+        serde_json::json!([
+            "https://graph.microsoft.com/Calendars.Read",
+            "offline_access"
+        ])
+    );
+}
+
+#[test]
+fn wizard_calendar_graph_single_tenant_prompts_for_tenant_and_builds_endpoints() {
+    let entry = mimir_api_types::ConnectorCatalogEntry {
+        connector_type: "calendar".to_string(),
+        backend: "graph".to_string(),
+    };
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(3), // Microsoft account type — single-tenant
+        ScriptedAnswer::Input("contoso.com".to_string()),
+        ScriptedAnswer::Input("client-ms-123".to_string()),
+        ScriptedAnswer::Password(String::new()),
+        ScriptedAnswer::Input(String::new()), // scopes → default
+    ]);
+    let (config, _) = build_wizard_config(&entry, "outlook-cal", &prompts).unwrap();
+    assert_eq!(
+        config["auth"]["auth_uri"],
+        "https://login.microsoftonline.com/contoso.com/oauth2/v2.0/authorize"
+    );
+    assert_eq!(
+        config["auth"]["token_endpoint"],
+        "https://login.microsoftonline.com/contoso.com/oauth2/v2.0/token"
+    );
+}
+
+#[test]
+fn wizard_calendar_graph_account_type_prompt_and_client_id_help_are_pinned() {
+    // Issue #474: the (calendar, graph) profile must ask which Microsoft
+    // account type applies (the `/common/` trap, issue #467), and the
+    // client-ID guidance must state the audience requirement plus the
+    // loopback redirect URI that must be registered.
+    let entry = mimir_api_types::ConnectorCatalogEntry {
+        connector_type: "calendar".to_string(),
+        backend: "graph".to_string(),
+    };
+    let prompts = ScriptedPrompt::new(vec![
+        ScriptedAnswer::Select(0), // Microsoft account type — personal
+        ScriptedAnswer::Input("client-ms-123".to_string()),
+        ScriptedAnswer::Password(String::new()),
+        ScriptedAnswer::Input(String::new()), // scopes → default
+    ]);
+    build_wizard_config(&entry, "outlook-cal", &prompts).unwrap();
+
+    let messages = prompts.messages();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message == "Microsoft account type"),
+        "the wizard must ask the Microsoft account type, got: {messages:?}"
+    );
+    let client_id_prompt = messages
+        .iter()
+        .find(|message| message.starts_with("OAuth client ID"))
+        .unwrap_or_else(|| panic!("no client-ID prompt in: {messages:?}"));
+    assert!(
+        client_id_prompt.contains("Supported account types"),
+        "client-ID help must state the audience requirement: {client_id_prompt}"
+    );
+    assert!(
+        client_id_prompt.contains("http://localhost/callback"),
+        "client-ID help must mention the loopback redirect URI: {client_id_prompt}"
+    );
+}
+
+#[test]
 fn wizard_calendar_icloud_preset_uses_icloud_url_and_app_password() {
     let entry = mimir_api_types::ConnectorCatalogEntry {
         connector_type: "calendar".to_string(),

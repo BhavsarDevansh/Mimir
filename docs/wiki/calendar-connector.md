@@ -2,7 +2,7 @@
 
 > **Phase:** 3 — Connectors
 >
-> **Status:** Implemented (library + daemon/CLI) — C3 (#197) transport + read/sync, C4 (#198) event → knowledge-graph extraction, events-subsystem integration, write-back, and the interactive OAuth PKCE login (A4 / #205). Server-side deletions (tombstones) are propagated to the KB fact lifecycle (#247).
+> **Status:** Implemented (library + daemon/CLI) — C3 (#197) transport + read/sync, C4 (#198) event → knowledge-graph extraction, events-subsystem integration, write-back, and the interactive OAuth PKCE login (A4 / #205). Server-side deletions (tombstones) are propagated to the KB fact lifecycle (#247). Issue #474 adds the Microsoft Graph backend for Outlook / Office 365 calendars (OAuth-only, read-only, same fact shapes).
 
 ## What it is
 
@@ -29,7 +29,7 @@ When the connector extracts your staged events, each one becomes a small cluster
 - **The location** — `<event> located_in <place>`; the venue resolves to a `Place` entity, so events are searchable by where they happen.
 - **The attendees** — `<attendee> attending <event>`; each attendee resolves to a `Person` entity, growing your contact graph from your calendar.
 
-The connector authors these facts as your canonical identity (the `[identity] name` in your config), so calendar events line up with the same "you" the rest of Mimir uses. Recurring events (a weekly standup, a yearly birthday) advance automatically via the events & reminders subsystem — only the `RRULE` frequency maps (daily/weekly/monthly/yearly); richer recurrence rules are a future enhancement. Dates are normalised to UTC, including time-zone-qualified ones.
+The connector authors these facts as your canonical identity (the `[identity] name` in your config), so calendar events line up with the same "you" the rest of Mimir uses. Recurring events (a weekly standup, a yearly birthday) advance automatically via the events & reminders subsystem — the `RRULE` frequency maps to the recurrence kind, and the interval plus series bounds are preserved too, so a fortnightly event advances every two weeks and a bounded series stops after its last occurrence. Dates are normalised to UTC, including time-zone-qualified ones.
 
 ## Write-back (C4 / #198)
 
@@ -48,6 +48,14 @@ Deleting an event on the server (in another client) also removes the correspondi
 
 Mimir can also write back to your calendar: creating, updating, or deleting remote events via CalDAV `PUT`/`DELETE` (added in C4 / #198). This is the only connector with write support.
 
+## Microsoft Graph (Outlook / Office 365) — issue #474
+
+Outlook.com and Office 365 calendars cannot be read over CalDAV (Microsoft exposes no public CalDAV endpoint), so Mimir's calendar connector has a second backend for them: **Microsoft Graph**. You pick `Calendar (graph)` in the wizard (or `mimir connector add calendar --backend graph`), and Mimir syncs your default calendar through Microsoft's Graph API using **delta sync** — the first sync imports your events, and every later sync fetches only what changed since the last one, so syncs stay cheap. If Microsoft ever invalidates the stored sync cursor (delta tokens expire, and the service may reset them), Mimir detects the reset and automatically re-runs a full sync, so the connector heals itself instead of failing forever.
+
+- **Authentication** — OAuth 2.0 only. The wizard asks which Microsoft account type your app registration targets (personal Outlook.com/Hotmail, work or school, either, or a single tenant) and pre-fills the matching Microsoft login endpoints — it never hardcodes the `/common/` endpoint that silently breaks personal-only or org-only registrations. You bring your own app registration from the Microsoft Entra admin center (Mimir has no public client ID): its "Supported account types" must match the audience you pick, the loopback redirect URI `http://localhost/callback` must be registered, and the app needs the `Calendars.Read` delegated permission. The first login is the same interactive browser flow as the other OAuth connectors; Mimir then refreshes the access token automatically.
+- **What syncs** — events from your default calendar become the same knowledge-graph facts as CalDAV events: `you have_event <event>` (with start/end and recurrence, so future and recurring events surface in **Upcoming**), `<event> located_in <place>`, and `<attendee> attending <event>`. Deleted events are removed from the knowledge graph automatically (recoverable from trash for 30 days).
+- **Read-only** — the Graph backend only imports; write-back (creating/editing events from Mimir) is not implemented for it, leaving CalDAV as the only write-capable calendar backend.
+
 ## Use cases
 
 - "What do I have on Thursday?" — your calendar events become queryable knowledge, cross-referenced with everything else Mimir knows.
@@ -58,4 +66,4 @@ Mimir can also write back to your calendar: creating, updating, or deleting remo
 
 - Google's CalDAV sync-token support is non-standard; the generic client works against fully RFC 6578-compliant servers (iCloud, Nextcloud). Google-specific handling is a follow-on.
 - The interactive OAuth login (PKCE) is wired (A4 / #205); Google-specific CalDAV sync-token handling remains a follow-on.
-- Event → knowledge-graph extraction, write-back, and server-side deletion propagation are live (C4 / #198 + #247); richer `RRULE` recurrence rules are a follow-up.
+- Event → knowledge-graph extraction, write-back, and server-side deletion propagation are live (C4 / #198 + #247); the recurrence interval, series bounds (`COUNT`/`UNTIL`), and `BYxxx` day/month constraints (`BYDAY`, `BYMONTHDAY`, `BYMONTH`, `BYSETPOS`) are preserved and evaluated by the advancement engine, so multi-day weekly and relative monthly/yearly series advance to their constrained dates (a full RFC 5545 expander is a follow-up).

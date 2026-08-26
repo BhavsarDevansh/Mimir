@@ -194,6 +194,11 @@ pub(super) fn parse_extracted_fact(
         correction_scope: extracted.correction_scope.clone(),
         category_ids,
         recurrence,
+        // LLM extraction emits the recurrence kind only — no RRULE, interval,
+        // or series bounds (the connector extractors supply those).
+        recurrence_rule: None,
+        recurrence_interval: 1,
+        recurrence_until: None,
         requires_user_action,
         // Conversational facts have no native source item id.
         raw_reference: None,

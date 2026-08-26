@@ -707,13 +707,23 @@ pub(super) async fn init_connector_framework(
     }
     #[cfg(feature = "calendar")]
     {
-        use mimir_connectors::CalendarConnectorFactory;
+        use mimir_connectors::{CalendarConnectorFactory, GraphCalendarConnectorFactory};
         if let Err(e) = connector_registry.register(
             mimir_knowledge::models::enums::ConnectorType::Calendar,
             "caldav".to_string(),
             CalendarConnectorFactory,
         ) {
             tracing::warn!("Failed to register Calendar connector factory: {e}");
+        }
+        // Microsoft Graph calendar backend (issue #474): OAuth-only, delta
+        // sync over the Graph events API. A new factory registration — no
+        // schema change (F7 / #184).
+        if let Err(e) = connector_registry.register(
+            mimir_knowledge::models::enums::ConnectorType::Calendar,
+            "graph".to_string(),
+            GraphCalendarConnectorFactory,
+        ) {
+            tracing::warn!("Failed to register Graph calendar connector factory: {e}");
         }
     }
     #[cfg(feature = "email")]

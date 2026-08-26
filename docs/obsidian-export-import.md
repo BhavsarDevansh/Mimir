@@ -3,6 +3,7 @@
 > **Scope:** `mimir kb export` and `mimir kb import` — Obsidian-compatible Markdown exchange with the knowledge graph.
 >
 > **Issue:** #62
+>
 > **Phase:** 2 (manual export/import; bidirectional file-watcher sync is deferred to Phase 3)
 
 ## Overview

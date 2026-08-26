@@ -2,7 +2,7 @@
 
 ## Overview
 
-Mimir has no CI/CD pipeline: a release is a local, one-command step. `scripts/new-release.sh` reads the version, takes the matching `## [VERSION]` section from `CHANGELOG.md` as the release body, creates an annotated tag, pushes it, and publishes a GitHub release via the `gh` CLI. The full release history lives on [GitHub Releases](https://github.com/BhavsarDevansh/Mimir/releases), with the most recent versions in `CHANGELOG.md` and everything before 0.152.0 archived in `CHANGELOG-archive.md`.
+Mimir has no CI/CD pipeline: a release is a local, one-command step. `scripts/new-release.sh` reads the version, takes the matching `## [VERSION]` section from `CHANGELOG.md` as the release body, creates an annotated tag, pushes it, and publishes a GitHub release via the `gh` CLI. The full release history lives on [GitHub Releases](https://github.com/BhavsarDevansh/Mimir/releases), with the most recent versions in `CHANGELOG.md` and everything before 0.152.2 archived in `CHANGELOG-archive.md`.
 
 ## Before releasing
 

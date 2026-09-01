@@ -20,7 +20,8 @@ use crate::normalize::{OverlayJob, start_location_overlay_worker};
 
 impl KnowledgeGraph {
     /// Initialise the knowledge graph: ensure parent directories exist, open
-    /// the SQLite pool (WAL + foreign keys), and run pending migrations.
+    /// the SQLite pool (WAL, foreign keys, bounded page cache, and bounded
+    /// optimize-on-close), and run pending migrations.
     pub async fn init(db_path: &Path) -> Result<Self, KnowledgeError> {
         Self::init_with_clock(db_path, Arc::new(RealClock)).await
     }

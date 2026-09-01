@@ -1,8 +1,8 @@
 # What Works in Mimir Today
 
-> **Last updated:** 2026-08-26
+> **Last updated:** 2026-09-01
 >
-> **Version:** 0.152.8
+> **Version:** 0.153.2
 >
 > This file is the **feature-level roadmap**: for every feature it records what exists, what is still pending to make it robust, and the GitHub issue tracking each step. The phase-level roadmap lives in `VISION/09-Roadmap/` and the release history in GitHub Releases; this file deliberately does not repeat either.
 

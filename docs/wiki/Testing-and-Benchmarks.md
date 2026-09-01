@@ -22,6 +22,7 @@ cargo bench -p mimir-core --bench pure_helpers
 scripts/perf-baseline.sh               # suite wall-time + slowest tests (needs cargo-nextest)
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
+scripts/tests/rustdoc_test.sh
 ```
 
 ## What got better
@@ -43,6 +44,7 @@ cargo fmt --all -- --check
 - Keep new tests deterministic and parallel-safe — never mutate process-global state (no `std::env::set_var`); use dependency injection or temp dirs.
 - Prefer pure unit tests for edge cases; reserve integration tests for DB/HTTP pathways.
 - Add a benchmark whenever you make a non-trivial pure helper that could become a hotpath.
+- Keep public intra-doc labels free of redundant explicit targets; the guard fails redundant-explicit-links warnings before merge.
 
 ## Follow-up issues
 

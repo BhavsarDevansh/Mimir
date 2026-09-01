@@ -110,6 +110,7 @@ struct RelationshipTypeCache {
     name_to_id: HashMap<String, i16>,
     id_to_name: HashMap<i16, String>,
     alias_to_id: HashMap<String, i16>,
+    default_memory_priority_id: HashMap<i16, i16>,
 }
 
 impl RelationshipTypeCache {
@@ -118,6 +119,7 @@ impl RelationshipTypeCache {
             name_to_id: HashMap::new(),
             id_to_name: HashMap::new(),
             alias_to_id: HashMap::new(),
+            default_memory_priority_id: HashMap::new(),
         }
     }
 }

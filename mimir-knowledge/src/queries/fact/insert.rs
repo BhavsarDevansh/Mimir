@@ -9,7 +9,6 @@ use crate::models::audit_log::{ChangeType, ChangedBy};
 use crate::models::enums::RelationType;
 use crate::models::fact::{Fact, NewFact};
 use crate::models::source::{ExtractionMethod, SourceType};
-use crate::queries::fact::status::ranges_overlap;
 use crate::{MULTI_VALUED_PREDICATES, is_favourite_family_predicate};
 
 // ---------------------------------------------------------------------------
@@ -43,6 +42,24 @@ pub(super) fn changed_by_for_source_type(source_type: SourceType) -> ChangedBy {
     }
 }
 
+pub(crate) async fn memory_priority_id_in_tx<'a, E>(
+    executor: E,
+    relationship_type_id: i16,
+) -> Result<i16, sqlx::Error>
+where
+    E: sqlx::Executor<'a, Database = sqlx::Sqlite>,
+{
+    sqlx::query_scalar(
+        "SELECT COALESCE(r.default_memory_priority_id, p.id) \
+         FROM relationship_types r \
+         CROSS JOIN memory_priorities p \
+         WHERE r.id = ? AND p.name = 'Normal'",
+    )
+    .bind(relationship_type_id)
+    .fetch_one(executor)
+    .await
+}
+
 /// Fetch a single fact by id within an in-flight transaction.
 pub(super) async fn fact_by_id_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -73,6 +90,43 @@ pub(super) fn same_object_as(
     }
 }
 
+/// Fetch facts that participate in overlap conflict handling.
+pub(super) async fn overlapping_facts_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    new_fact: &NewFact,
+    relationship_type_id: i16,
+    relationship_type_name: &str,
+) -> Result<Vec<Fact>, KnowledgeError> {
+    let is_multi_valued = MULTI_VALUED_PREDICATES.contains(&relationship_type_name)
+        || is_favourite_family_predicate(relationship_type_name);
+    sqlx::query_as::<_, Fact>(
+        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
+         valid_from, valid_until, confidence, fact_status_id, inferred, \
+         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
+         FROM facts \
+         WHERE subject_id = ?1 AND relationship_type_id = ?2 \
+         AND (?7 = 0 OR CASE \
+           WHEN ?3 IS NOT NULL THEN object_id = ?3 \
+           WHEN ?4 IS NOT NULL THEN object_literal = ?4 \
+         ELSE object_id IS NULL AND object_literal IS NULL \
+        END) \
+         AND (valid_from IS NULL OR valid_until IS NULL OR valid_from < valid_until) \
+         AND (?5 IS NULL OR ?6 IS NULL OR ?5 < ?6) \
+         AND (valid_from IS NULL OR ?6 IS NULL OR valid_from < ?6) \
+         AND (?5 IS NULL OR valid_until IS NULL OR ?5 < valid_until)",
+    )
+    .bind(new_fact.subject_id)
+    .bind(relationship_type_id)
+    .bind(new_fact.object_id)
+    .bind(new_fact.object_literal.as_deref())
+    .bind(new_fact.valid_from)
+    .bind(new_fact.valid_until)
+    .bind(is_multi_valued)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(KnowledgeError::from)
+}
+
 // ---------------------------------------------------------------------------
 // Insert
 // ---------------------------------------------------------------------------
@@ -94,12 +148,14 @@ pub async fn insert_fact(
     now: DateTime<Utc>,
 ) -> Result<Fact, KnowledgeError> {
     let mut tx = pool.begin().await?;
+    let memory_priority_id = memory_priority_id_in_tx(&mut *tx, relationship_type_id).await?;
     let fact = insert_fact_in_tx(
         &mut tx,
         new_fact,
         relationship_type_id,
         &new_fact.relationship_type,
         confidence,
+        memory_priority_id,
         now,
     )
     .await?;
@@ -113,6 +169,7 @@ pub async fn insert_fact_in_tx(
     relationship_type_id: i16,
     relationship_type_name: &str,
     confidence: f32,
+    memory_priority_id: i16,
     now: DateTime<Utc>,
 ) -> Result<Fact, KnowledgeError> {
     // 0. Validate time range ordering.
@@ -138,42 +195,9 @@ pub async fn insert_fact_in_tx(
     .await?;
 
     // 1. Temporal overlap check against same subject + predicate.
-    let existing: Vec<Fact> = sqlx::query_as::<_, Fact>(
-        "SELECT id, subject_id, relationship_type_id, object_id, object_literal, \
-         valid_from, valid_until, confidence, fact_status_id, inferred, \
-         inference_depth, stale_confidence, pending_confirmation, memory_priority_id, created_at, updated_at \
-         FROM facts \
-         WHERE subject_id = ? AND relationship_type_id = ?",
-    )
-    .bind(new_fact.subject_id)
-    .bind(relationship_type_id)
-    .fetch_all(&mut **tx)
-    .await?;
-
-    // Collect all overlapping facts.
-    // For multi-valued predicates (e.g. hobby, has_sibling) and the open
-    // `favourite_<thing>` family, facts with different objects are independent
-    // and should not supersede each other. The same allow-list and family
-    // helper drive the extraction list splitter (`split_list_objects`), so the
-    // split set and the multi-valued coexist semantics cannot drift apart.
-    let is_multi_valued = MULTI_VALUED_PREDICATES.contains(&relationship_type_name)
-        || is_favourite_family_predicate(relationship_type_name);
-    let overlaps: Vec<&Fact> = existing
-        .iter()
-        .filter(|ef| {
-            let same_object =
-                same_object_as(new_fact.object_id, new_fact.object_literal.as_deref(), ef);
-            if !same_object && is_multi_valued {
-                return false;
-            }
-            ranges_overlap(
-                ef.valid_from,
-                ef.valid_until,
-                new_fact.valid_from,
-                new_fact.valid_until,
-            )
-        })
-        .collect();
+    let existing =
+        overlapping_facts_in_tx(tx, new_fact, relationship_type_id, relationship_type_name).await?;
+    let overlaps = existing.as_slice();
 
     let is_explicit_source = matches!(
         new_fact.source_type,
@@ -181,25 +205,14 @@ pub async fn insert_fact_in_tx(
     );
 
     if let Some(existing_fact) =
-        super::corroboration::handle_corroboration(tx, new_fact, &overlaps, now).await?
+        super::corroboration::handle_corroboration(tx, new_fact, overlaps, now).await?
     {
         return Ok(existing_fact);
     }
 
     let (fact_status, facts_to_supersede, contradicts_pairs) =
-        super::conflict::resolve_overlap_conflict(tx, new_fact, &overlaps, is_explicit_source, now)
+        super::conflict::resolve_overlap_conflict(tx, new_fact, overlaps, is_explicit_source, now)
             .await?;
-
-    // 2. Resolve memory priority from relationship type.
-    let memory_priority_id: i16 = sqlx::query_scalar(
-        "SELECT COALESCE(r.default_memory_priority_id, p.id) \
-         FROM relationship_types r \
-         CROSS JOIN memory_priorities p \
-         WHERE r.id = ? AND p.name = 'Normal'",
-    )
-    .bind(relationship_type_id)
-    .fetch_one(&mut **tx)
-    .await?;
 
     // 3. Insert the fact.
     let fact_id: i64 = sqlx::query_scalar(
@@ -252,24 +265,25 @@ pub async fn insert_fact_in_tx(
     .await?;
 
     // 6. Write created audit entry (column-only snapshot).
-    let new_value = serde_json::json!({
-        "fact_id": fact_id,
-        "confidence": confidence,
-        "fact_status_id": fact_status as i16,
-        "valid_from": new_fact.valid_from,
-        "valid_until": new_fact.valid_until,
-    })
-    .to_string();
-
     sqlx::query(
         "INSERT INTO fact_audit_log \
          (fact_id, change_type_id, old_value, new_value, changed_at, changed_by_id, reason) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, json_object( \
+           'fact_id', ?, \
+           'confidence', ?, \
+           'fact_status_id', ?, \
+           'valid_from', ?, \
+           'valid_until', ? \
+         ), ?, ?, ?)",
     )
     .bind(fact_id)
     .bind(ChangeType::Created as i16)
     .bind(None::<&str>)
-    .bind(new_value)
+    .bind(fact_id)
+    .bind(confidence)
+    .bind(fact_status as i16)
+    .bind(new_fact.valid_from)
+    .bind(new_fact.valid_until)
     .bind(now)
     .bind(changed_by_for_source_type(new_fact.source_type) as i16)
     .bind(None::<&str>)
@@ -330,6 +344,223 @@ pub async fn insert_fact_in_tx(
     .await?;
 
     Ok(fact)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::KnowledgeGraph;
+    use crate::models::entity::EntityType;
+    use crate::models::fact::FactStatus;
+
+    struct SeedFact {
+        subject_id: i32,
+        relationship_type_id: i16,
+        memory_priority_id: i16,
+        now: DateTime<Utc>,
+        object_id: i32,
+        valid_from: Option<DateTime<Utc>>,
+        valid_until: Option<DateTime<Utc>>,
+    }
+
+    async fn seed(
+        tx: &mut sqlx::SqliteTransaction<'_>,
+        fact: &SeedFact,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO facts \
+             (subject_id, relationship_type_id, object_id, valid_from, valid_until, \
+              confidence, fact_status_id, inferred, inference_depth, pending_confirmation, \
+              memory_priority_id, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, 0.8, ?, 0, 0, 0, ?, ?, ?)",
+        )
+        .bind(fact.subject_id)
+        .bind(fact.relationship_type_id)
+        .bind(fact.object_id)
+        .bind(fact.valid_from)
+        .bind(fact.valid_until)
+        .bind(FactStatus::Active as i16)
+        .bind(fact.memory_priority_id)
+        .bind(fact.now)
+        .bind(fact.now)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn overlap_query_returns_only_comparable_facts() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+            .await
+            .unwrap();
+        let subject = kg
+            .create_entity("Alice", EntityType::Person, &[])
+            .await
+            .unwrap()
+            .id;
+        let object_one = kg
+            .create_entity("Chess", EntityType::Activity, &[])
+            .await
+            .unwrap()
+            .id;
+        let object_two = kg
+            .create_entity("Rowing", EntityType::Activity, &[])
+            .await
+            .unwrap()
+            .id;
+        let predicate = kg.ensure_relationship_type("likes").await.unwrap();
+        let memory_priority_id: i16 =
+            sqlx::query_scalar("SELECT id FROM memory_priorities WHERE name = 'Normal'")
+                .fetch_one(kg.pool())
+                .await
+                .unwrap();
+        let now = chrono::Utc::now();
+        let parse = |value: &str| {
+            DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .with_timezone(&Utc)
+        };
+        let seeds = [
+            SeedFact {
+                subject_id: subject,
+                relationship_type_id: predicate,
+                memory_priority_id,
+                now,
+                object_id: object_two,
+                valid_from: None,
+                valid_until: None,
+            },
+            SeedFact {
+                subject_id: subject,
+                relationship_type_id: predicate,
+                memory_priority_id,
+                now,
+                object_id: object_one,
+                valid_from: Some(parse("2024-01-01T00:00:00Z")),
+                valid_until: Some(parse("2024-01-31T00:00:00Z")),
+            },
+            SeedFact {
+                subject_id: subject,
+                relationship_type_id: predicate,
+                memory_priority_id,
+                now,
+                object_id: object_one,
+                valid_from: Some(parse("2024-01-15T00:00:00Z")),
+                valid_until: None,
+            },
+        ];
+        let mut tx = kg.pool().begin().await.unwrap();
+        for fact in &seeds {
+            seed(&mut tx, fact).await.unwrap();
+        }
+
+        let new_fact = NewFact {
+            subject_id: subject,
+            relationship_type: "likes".to_string(),
+            object_id: Some(object_one),
+            object_literal: None,
+            valid_from: seeds[2].valid_from,
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        };
+
+        let overlaps = overlapping_facts_in_tx(&mut tx, &new_fact, predicate, "likes")
+            .await
+            .unwrap();
+
+        assert_eq!(overlaps.len(), 2);
+        assert!(
+            overlaps
+                .iter()
+                .all(|fact| fact.object_id == Some(object_one))
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_interval_does_not_supersede_unbounded_fact() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+            .await
+            .unwrap();
+        let subject = kg
+            .create_entity("Alice", EntityType::Person, &[])
+            .await
+            .unwrap()
+            .id;
+        let object = kg
+            .create_entity("Chess", EntityType::Activity, &[])
+            .await
+            .unwrap()
+            .id;
+        let predicate = kg.ensure_relationship_type("likes").await.unwrap();
+        let memory_priority_id: i16 =
+            sqlx::query_scalar("SELECT id FROM memory_priorities WHERE name = 'Normal'")
+                .fetch_one(kg.pool())
+                .await
+                .unwrap();
+        let now = chrono::Utc::now();
+        let existing = SeedFact {
+            subject_id: subject,
+            relationship_type_id: predicate,
+            memory_priority_id,
+            now,
+            object_id: object,
+            valid_from: None,
+            valid_until: None,
+        };
+        let mut tx = kg.pool().begin().await.unwrap();
+        seed(&mut tx, &existing).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let new_fact = NewFact {
+            subject_id: subject,
+            relationship_type: "likes".to_string(),
+            object_id: Some(object),
+            object_literal: None,
+            valid_from: Some(now),
+            valid_until: Some(now),
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        };
+        let inserted = insert_fact(kg.pool(), &new_fact, predicate, 0.8, now)
+            .await
+            .unwrap();
+
+        let facts = sqlx::query_as::<_, (FactStatus, Option<DateTime<Utc>>)>(
+            "SELECT fact_status_id, valid_until FROM facts \
+             WHERE subject_id = ? AND relationship_type_id = ? \
+             ORDER BY id ASC",
+        )
+        .bind(subject)
+        .bind(predicate)
+        .fetch_all(kg.pool())
+        .await
+        .unwrap();
+
+        assert_eq!(facts.len(), 2);
+        assert_eq!(facts[0].0, FactStatus::Active);
+        assert_eq!(facts[0].1, None);
+        assert_eq!(inserted.valid_from, Some(now));
+        assert_eq!(inserted.valid_until, Some(now));
+    }
 }
 
 // ---------------------------------------------------------------------------

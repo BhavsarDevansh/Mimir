@@ -549,3 +549,65 @@ async fn ensure_relationship_type_creates_new_type_and_self_alias() {
         "new canonical type should register its normalized name as a self-alias"
     );
 }
+
+#[tokio::test]
+async fn existing_relationship_type_priority_is_not_replaced_by_upsert() {
+    use mimir_knowledge::models::entity::EntityType;
+    use mimir_knowledge::models::fact::NewFact;
+    use mimir_knowledge::models::relationship_type::NewRelationshipType;
+    use mimir_knowledge::models::source::SourceType;
+
+    let (_dir, kg) = setup().await;
+    let created = kg
+        .insert_relationship_type(NewRelationshipType {
+            name: "test_cached_priority".to_string(),
+            description: None,
+            sensitive: false,
+            default_memory_priority_id: Some(2),
+            parent_ids: vec![],
+            aliases: vec![],
+        })
+        .await
+        .unwrap();
+
+    let _updated = kg
+        .insert_relationship_type(NewRelationshipType {
+            name: "test_cached_priority".to_string(),
+            description: None,
+            sensitive: false,
+            default_memory_priority_id: Some(4),
+            parent_ids: vec![],
+            aliases: vec![],
+        })
+        .await
+        .unwrap();
+
+    let subject = kg
+        .create_entity("Alice", EntityType::Person, &[])
+        .await
+        .unwrap();
+    let fact = kg
+        .insert_fact(NewFact {
+            subject_id: subject.id,
+            relationship_type: "test_cached_priority".to_string(),
+            object_id: None,
+            object_literal: Some("unbounded".to_string()),
+            valid_from: None,
+            valid_until: None,
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: vec![],
+            category_ids: vec![],
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(fact.relationship_type_id, created.id);
+    assert_eq!(fact.memory_priority_id, 2);
+}

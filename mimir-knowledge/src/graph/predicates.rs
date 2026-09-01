@@ -326,6 +326,31 @@ impl KnowledgeGraph {
         Ok(id)
     }
 
+    /// Resolve the fact memory priority for a relationship type, caching the
+    /// constant result for subsequent inserts.
+    pub(crate) async fn default_memory_priority_id_in_tx(
+        &self,
+        tx: &mut sqlx::SqliteTransaction<'_>,
+        relationship_type_id: i16,
+    ) -> Result<i16, KnowledgeError> {
+        {
+            let cache = self.relationship_type_cache.read().await;
+            if let Some(&priority_id) = cache.default_memory_priority_id.get(&relationship_type_id)
+            {
+                return Ok(priority_id);
+            }
+        }
+
+        let priority_id =
+            crate::queries::fact::memory_priority_id_in_tx(&mut **tx, relationship_type_id).await?;
+
+        let mut cache = self.relationship_type_cache.write().await;
+        cache
+            .default_memory_priority_id
+            .insert(relationship_type_id, priority_id);
+        Ok(priority_id)
+    }
+
     /// Look up a relationship type id by name without creating it.
     ///
     /// The alias table is the single source of truth: aliases resolve to their

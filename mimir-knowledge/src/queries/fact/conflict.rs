@@ -18,7 +18,7 @@ use crate::models::fact::{Fact, FactStatus, NewFact};
 pub(super) async fn resolve_overlap_conflict(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     new_fact: &NewFact,
-    overlaps: &[&Fact],
+    overlaps: &[Fact],
     is_explicit_source: bool,
     now: DateTime<Utc>,
 ) -> Result<(FactStatus, Vec<i32>, Vec<i32>), KnowledgeError> {

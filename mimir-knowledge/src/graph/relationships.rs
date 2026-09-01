@@ -233,8 +233,11 @@ impl KnowledgeGraph {
             )));
         }
 
-        let id: i64 = sqlx::query_scalar(
-            "INSERT INTO relationship_types (name, description, sensitive, default_memory_priority_id)              VALUES (?, ?, ?, ?)              ON CONFLICT (name) DO UPDATE SET name = relationship_types.name RETURNING id",
+        let (id, database_priority_id): (i64, i16) = sqlx::query_as(
+            "INSERT INTO relationship_types (name, description, sensitive, default_memory_priority_id) \
+             VALUES (?, ?, ?, ?) \
+             ON CONFLICT (name) DO UPDATE SET name = relationship_types.name \
+             RETURNING id, default_memory_priority_id",
         )
         .bind(&new.name)
         .bind(new.description.as_deref())
@@ -243,6 +246,7 @@ impl KnowledgeGraph {
         .fetch_one(&mut *tx)
         .await?;
         let id = id as i16;
+        let default_memory_priority_id = database_priority_id;
 
         for parent_id in &new.parent_ids {
             if *parent_id == id {
@@ -282,6 +286,12 @@ impl KnowledgeGraph {
         }
 
         tx.commit().await?;
+
+        self.relationship_type_cache
+            .write()
+            .await
+            .default_memory_priority_id
+            .insert(id, default_memory_priority_id);
 
         Ok(crate::models::relationship_type::RelationshipType {
             id,

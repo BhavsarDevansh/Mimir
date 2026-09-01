@@ -29,7 +29,7 @@ use crate::queries::fact::insert::{
 pub(super) async fn handle_corroboration(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     new_fact: &NewFact,
-    overlaps: &[&Fact],
+    overlaps: &[Fact],
     now: DateTime<Utc>,
 ) -> Result<Option<Fact>, KnowledgeError> {
     // A new non-explicit fact covering the same claim as an existing

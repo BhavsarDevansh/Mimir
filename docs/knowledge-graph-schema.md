@@ -193,6 +193,9 @@ Migrations are strictly ordered by foreign-key dependencies:
 ## SQLite Configuration
 
 - **Journal mode:** WAL (write-ahead logging) for concurrency and durability.
+- **Synchronous mode:** NORMAL, which avoids a full fsync on every WAL commit while retaining WAL consistency.
+- **Page cache:** 10,000 pages per connection (approximately 40 MB at the default 4 KB page size) to reduce repeated reads on graph queries and migrations.
+- **Shutdown analysis:** `PRAGMA optimize` runs on connection close with an analysis limit of 400 rows per index so planner statistics are refreshed without an unbounded table scan.
 - **Foreign keys:** Enabled on every connection.
 - **Max connections:** 5 (SQLite single-writer; pool smooths async access).
 

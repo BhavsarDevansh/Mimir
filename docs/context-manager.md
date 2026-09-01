@@ -59,7 +59,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 );
 ```
 
-- **SQLite connection settings** configure every connection with WAL mode, `synchronous=NORMAL`, and a 10,000-page cache, so normal chat writes avoid SQLite's full-fsync default while retaining WAL-safe durability (issue #525).
+- **SQLite connection settings** configure every connection with WAL mode, `synchronous=NORMAL`, and a 10,000-page cache, so normal chat writes avoid SQLite's full-fsync default while WAL preserves database consistency; a power loss can still roll back recent committed chat writes (issue #525).
 - **Search semantics:** `search_messages` tokenises the query (splitting on any run of non-alphanumeric characters, mirroring the FTS5 unicode61 tokenizer) and AND-combines the quoted tokens, so every term must match in any order and hyphenated forms like `check-in` match `check in`. A query wrapped in double quotes keeps exact-phrase semantics. Each token is quoted before building the `MATCH` expression, so FTS5 operators cannot inject syntax. Snippets use a 30-token context window on each side of the hit (issue #493). The session-filtered and unfiltered paths share a single `QueryBuilder`-assembled statement (issue #500): the SELECT list, snippet call, join, and ordering exist once, and the optional `m.session_id = ?` clause is appended only when a session filter is supplied, so the query shape can no longer drift between the two paths.
 - **Cascading delete** ensures `DELETE FROM sessions` removes all messages.
 - `summary` holds the LLM summary of compacted turns (issue #279); it is written by the compaction pipeline, injected into `export_messages` as a clearly labelled user-role context block, and surfaced by the session list / resume flow.

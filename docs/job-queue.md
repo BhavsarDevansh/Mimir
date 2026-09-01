@@ -36,6 +36,7 @@ pub enum DaemonJob {
 ### JobQueue
 
 - `JobQueue::init(path)` — create or open the queue database.
+- Queue connections use SQLite WAL mode, `synchronous=NORMAL`, and a 10,000-page cache so status writes avoid SQLite's full-fsync default while WAL preserves database consistency; a power loss can still roll back recent committed queue-status writes (issue #525).
 - `JobQueue::register(job)` — persist a job definition and store its handler.
 - `JobQueue::run_now(job_id)` — execute a job immediately, recording the run.
 - `JobQueue::cancel(job_id)` — request cancellation of a running job (returns whether one was found).

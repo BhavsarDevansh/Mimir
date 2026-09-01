@@ -18,6 +18,12 @@ async fn create_session_returns_i64() {
 }
 
 #[tokio::test]
+async fn sqlite_connection_pragmas() {
+    let (mgr, _dir) = setup_manager().await;
+    crate::sqlite::assert_connection_pragmas(mgr.pool.as_ref()).await;
+}
+
+#[tokio::test]
 async fn ensure_session_exists_populates_cache_and_rejects_unknown() {
     let (mgr, _dir) = setup_manager().await;
     let id = mgr

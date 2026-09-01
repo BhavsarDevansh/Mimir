@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use sqlx::{Row, SqlitePool, sqlite::SqliteConnectOptions};
+use sqlx::{Row, SqlitePool};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -15,6 +15,7 @@ use crate::job_queue::{
     DailySchedule, Job, JobContext, JobError, JobHandler, JobPriority, JobResourceLimits,
     JobRunStatus, JobRunSummary, JobStatus, ResourceGuard,
 };
+use crate::sqlite::connect_options;
 
 /// A registered job definition plus its in-process handler.
 #[derive(Clone)]
@@ -56,13 +57,8 @@ impl JobQueue {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let options = SqliteConnectOptions::new()
-            .filename(path)
-            .create_if_missing(true);
+        let options = connect_options(path);
         let pool = SqlitePool::connect_with(options).await?;
-        sqlx::query("PRAGMA journal_mode = WAL;")
-            .execute(&pool)
-            .await?;
         Self::init_schema(&pool).await?;
 
         Ok(Self {
@@ -383,5 +379,17 @@ impl JobQueue {
             .execute(pool)
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn sqlite_connection_pragmas() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = JobQueue::init(dir.path().join("jobs.db")).await.unwrap();
+        crate::sqlite::assert_connection_pragmas(&queue.pool).await;
     }
 }

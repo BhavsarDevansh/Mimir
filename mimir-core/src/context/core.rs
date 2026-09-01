@@ -3,8 +3,8 @@
 use crate::context::ContextError;
 use crate::context::ContextManager;
 use crate::context::path::expand_tilde;
+use crate::sqlite::connect_options;
 use sqlx::SqlitePool;
-use sqlx::sqlite::SqliteConnectOptions;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -19,15 +19,9 @@ impl ContextManager {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let options = SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true);
+        let options = connect_options(&path);
 
         let pool = SqlitePool::connect_with(options).await?;
-
-        sqlx::query("PRAGMA journal_mode = WAL;")
-            .execute(&pool)
-            .await?;
 
         Self::init_schema(&pool).await?;
 

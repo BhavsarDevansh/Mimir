@@ -8,6 +8,8 @@ Mimir runs maintenance tasks in the background so your knowledge graph stays cle
 
 Background work runs through two subsystems with different rules: the scheduler for scheduled jobs, and the hooks engine for event-driven hooks.
 
+Queue database connections use SQLite WAL mode with `synchronous=NORMAL` and a 10,000-page cache, so frequent job-status writes avoid SQLite's full-fsync default while retaining WAL-safe durability.
+
 **Scheduled jobs** (nightly optimization, pending-fact cleanup, events scan) all follow the same lifecycle:
 
 1. **Deduplication** — if a job is already waiting or running, it is not queued again.

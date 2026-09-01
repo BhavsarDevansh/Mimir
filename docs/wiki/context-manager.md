@@ -66,7 +66,7 @@ You can change the defaults in three ways (highest priority last):
 
 - **Sessions survive restarts.**  If you close and reopen Mimir, your conversation picks up where it left off.
 - **Sessions are deleted** only when you explicitly call `delete_session` or erase the database file.
-- **WAL mode** is enabled for safe concurrent reads and writes.
+- **SQLite connection settings** use WAL mode for safe concurrent reads and writes, `synchronous=NORMAL` for WAL-appropriate durability, and a 10,000-page cache for faster chat writes.
 
 ## Ephemeral vs. Stored Data
 

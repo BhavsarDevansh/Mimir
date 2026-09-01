@@ -14,6 +14,7 @@ pub mod paths;
 pub mod personality;
 pub mod scheduler;
 pub mod skills;
+mod sqlite;
 pub mod systemd;
 pub mod tools;
 

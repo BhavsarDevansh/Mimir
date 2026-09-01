@@ -18,6 +18,32 @@ async fn create_session_returns_i64() {
 }
 
 #[tokio::test]
+async fn sqlite_connection_pragmas() {
+    let (mgr, _dir) = setup_manager().await;
+
+    let (journal_mode,): (String,) = sqlx::query_as("PRAGMA journal_mode")
+        .fetch_one(mgr.pool.as_ref())
+        .await
+        .unwrap();
+    assert_eq!(journal_mode.to_lowercase(), "wal");
+
+    let (synchronous,): (i64,) = sqlx::query_as("PRAGMA synchronous")
+        .fetch_one(mgr.pool.as_ref())
+        .await
+        .unwrap();
+    assert_eq!(synchronous, 1, "WAL databases must use synchronous=NORMAL");
+
+    let (cache_size,): (i64,) = sqlx::query_as("PRAGMA cache_size")
+        .fetch_one(mgr.pool.as_ref())
+        .await
+        .unwrap();
+    assert_eq!(
+        cache_size, 10_000,
+        "SQLite page cache must be preconfigured"
+    );
+}
+
+#[tokio::test]
 async fn ensure_session_exists_populates_cache_and_rejects_unknown() {
     let (mgr, _dir) = setup_manager().await;
     let id = mgr

@@ -108,8 +108,10 @@ pub(super) async fn overlapping_facts_in_tx(
          AND (?7 = 0 OR CASE \
            WHEN ?3 IS NOT NULL THEN object_id = ?3 \
            WHEN ?4 IS NOT NULL THEN object_literal = ?4 \
-           ELSE object_id IS NULL AND object_literal IS NULL \
-         END) \
+         ELSE object_id IS NULL AND object_literal IS NULL \
+        END) \
+         AND (valid_from IS NULL OR valid_until IS NULL OR valid_from < valid_until) \
+         AND (?5 IS NULL OR ?6 IS NULL OR ?5 < ?6) \
          AND (valid_from IS NULL OR ?6 IS NULL OR valid_from < ?6) \
          AND (?5 IS NULL OR valid_until IS NULL OR ?5 < valid_until)",
     )
@@ -482,6 +484,82 @@ mod tests {
                 .iter()
                 .all(|fact| fact.object_id == Some(object_one))
         );
+    }
+
+    #[tokio::test]
+    async fn empty_interval_does_not_supersede_unbounded_fact() {
+        let dir = tempfile::tempdir().unwrap();
+        let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+            .await
+            .unwrap();
+        let subject = kg
+            .create_entity("Alice", EntityType::Person, &[])
+            .await
+            .unwrap()
+            .id;
+        let object = kg
+            .create_entity("Chess", EntityType::Activity, &[])
+            .await
+            .unwrap()
+            .id;
+        let predicate = kg.ensure_relationship_type("likes").await.unwrap();
+        let memory_priority_id: i16 =
+            sqlx::query_scalar("SELECT id FROM memory_priorities WHERE name = 'Normal'")
+                .fetch_one(kg.pool())
+                .await
+                .unwrap();
+        let now = chrono::Utc::now();
+        let existing = SeedFact {
+            subject_id: subject,
+            relationship_type_id: predicate,
+            memory_priority_id,
+            now,
+            object_id: object,
+            valid_from: None,
+            valid_until: None,
+        };
+        let mut tx = kg.pool().begin().await.unwrap();
+        seed(&mut tx, &existing).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let new_fact = NewFact {
+            subject_id: subject,
+            relationship_type: "likes".to_string(),
+            object_id: Some(object),
+            object_literal: None,
+            valid_from: Some(now),
+            valid_until: Some(now),
+            source_type: SourceType::UserEdit,
+            connector_instance_id: None,
+            connector_type: None,
+            raw_reference: None,
+            extraction_method: None,
+            inferred: false,
+            inference_depth: 0,
+            confidence: None,
+            parent_fact_ids: Vec::new(),
+            category_ids: Vec::new(),
+        };
+        let inserted = insert_fact(kg.pool(), &new_fact, predicate, 0.8, now)
+            .await
+            .unwrap();
+
+        let facts = sqlx::query_as::<_, (FactStatus, Option<DateTime<Utc>>)>(
+            "SELECT fact_status_id, valid_until FROM facts \
+             WHERE subject_id = ? AND relationship_type_id = ? \
+             ORDER BY id ASC",
+        )
+        .bind(subject)
+        .bind(predicate)
+        .fetch_all(kg.pool())
+        .await
+        .unwrap();
+
+        assert_eq!(facts.len(), 2);
+        assert_eq!(facts[0].0, FactStatus::Active);
+        assert_eq!(facts[0].1, None);
+        assert_eq!(inserted.valid_from, Some(now));
+        assert_eq!(inserted.valid_until, Some(now));
     }
 }
 

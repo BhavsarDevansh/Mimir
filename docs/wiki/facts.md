@@ -34,6 +34,8 @@ Mimir understands that facts can change over time without contradicting each oth
 
 Mimir applies this overlap check in SQLite rather than loading every fact for a subject. Multi-valued predicates only treat the same object as comparable; single-valued predicates may replace any overlapping value. This keeps timelines fast as a subject accumulates more facts while preserving the conflict behaviour above.
 
+Empty half-open intervals (`valid_from == valid_until`) are not treated as overlaps, so they cannot supersede an existing active fact.
+
 ---
 
 ## Confidence

@@ -60,6 +60,7 @@ When inserting a fact with the same `subject_id + predicate_id` as existing fact
 3. **Any other overlap** — the new fact is inserted as `Disputed`.
 
 Overlap is checked with interval semantics (`[from, until)` where `None` = unbounded).
+Empty half-open intervals (`valid_from == valid_until`) never participate in overlap handling for either the stored fact or the incoming fact.
 
 The overlap scan applies its object and time-interval predicates in SQL before materialising facts. Multi-valued predicates still require the same object, while single-valued predicates may supersede any overlapping value on that subject and predicate. This keeps conflict semantics deterministic while preventing subjects with many independent facts from loading every row in Rust. Created audit snapshots are built by SQLite `json_object` using already-bound column values rather than allocating an intermediate JSON value in Rust.
 

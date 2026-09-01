@@ -283,6 +283,12 @@ impl KnowledgeGraph {
 
         tx.commit().await?;
 
+        self.relationship_type_cache
+            .write()
+            .await
+            .default_memory_priority_id
+            .insert(id, default_memory_priority_id);
+
         Ok(crate::models::relationship_type::RelationshipType {
             id,
             name: new.name,

@@ -323,7 +323,40 @@ impl KnowledgeGraph {
         let mut cache = self.relationship_type_cache.write().await;
         cache.name_to_id.insert(normalized.clone(), id);
         cache.alias_to_id.insert(normalized, id);
+        cache.default_memory_priority_id.insert(id, 3);
         Ok(id)
+    }
+
+    /// Resolve the fact memory priority for a relationship type, caching the
+    /// constant result for subsequent inserts.
+    pub(crate) async fn default_memory_priority_id_in_tx(
+        &self,
+        tx: &mut sqlx::SqliteTransaction<'_>,
+        relationship_type_id: i16,
+    ) -> Result<i16, KnowledgeError> {
+        {
+            let cache = self.relationship_type_cache.read().await;
+            if let Some(&priority_id) = cache.default_memory_priority_id.get(&relationship_type_id)
+            {
+                return Ok(priority_id);
+            }
+        }
+
+        let priority_id: i16 = sqlx::query_scalar(
+            "SELECT COALESCE(r.default_memory_priority_id, p.id) \
+             FROM relationship_types r \
+             CROSS JOIN memory_priorities p \
+             WHERE r.id = ? AND p.name = 'Normal'",
+        )
+        .bind(relationship_type_id)
+        .fetch_one(&mut **tx)
+        .await?;
+
+        let mut cache = self.relationship_type_cache.write().await;
+        cache
+            .default_memory_priority_id
+            .insert(relationship_type_id, priority_id);
+        Ok(priority_id)
     }
 
     /// Look up a relationship type id by name without creating it.

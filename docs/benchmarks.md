@@ -148,6 +148,8 @@ The performance investigation (2026-08-26) added four benchmark suites that quan
 cargo bench -p mimir-knowledge --bench kg_write_benchmarks
 ```
 
+Issue #526 follow-up on v0.153.6: `kg_fact_insert_small_graph` measured 7.48 ms and `kg_fact_insert_same_subject_growth` measured 1.94 ms on the same host, versus the original 9.15 ms and 2.43 ms baselines.
+
 ### `mimir-core` — `db_init` and `mock_llm`
 
 | Benchmark | What it measures | Baseline |

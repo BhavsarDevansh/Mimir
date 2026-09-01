@@ -129,6 +129,9 @@ impl KnowledgeGraph {
                 new_fact.source_type,
                 connector_score,
             );
+            let memory_priority_id = self
+                .default_memory_priority_id_in_tx(&mut tx, relationship_type_id)
+                .await?;
 
             let fact = queries::fact::insert_fact_in_tx(
                 &mut tx,
@@ -136,6 +139,7 @@ impl KnowledgeGraph {
                 relationship_type_id,
                 &new_fact.relationship_type,
                 confidence,
+                memory_priority_id,
                 now,
             )
             .await?;
@@ -243,6 +247,9 @@ impl KnowledgeGraph {
             }
 
             let mut tx = self.pool.begin().await?;
+            let memory_priority_id = self
+                .default_memory_priority_id_in_tx(&mut tx, relationship_type_id)
+                .await?;
 
             let fact = queries::fact::insert_fact_in_tx(
                 &mut tx,
@@ -250,6 +257,7 @@ impl KnowledgeGraph {
                 relationship_type_id,
                 &new_fact.relationship_type,
                 confidence,
+                memory_priority_id,
                 self.now(),
             )
             .await?;

@@ -29,6 +29,7 @@ pub use browse::{
     count_facts_by_subject_filtered, get_audit_log, get_facts_by_relationship_subtree,
     get_facts_by_subject_filtered,
 };
+pub(crate) use insert::memory_priority_id_in_tx;
 pub use insert::{insert_fact, insert_fact_in_tx};
 pub use pending::{PendingFactRow, list_pending};
 pub use read::{

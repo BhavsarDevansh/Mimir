@@ -42,6 +42,24 @@ pub(super) fn changed_by_for_source_type(source_type: SourceType) -> ChangedBy {
     }
 }
 
+pub(crate) async fn memory_priority_id_in_tx<'a, E>(
+    executor: E,
+    relationship_type_id: i16,
+) -> Result<i16, sqlx::Error>
+where
+    E: sqlx::Executor<'a, Database = sqlx::Sqlite>,
+{
+    sqlx::query_scalar(
+        "SELECT COALESCE(r.default_memory_priority_id, p.id) \
+         FROM relationship_types r \
+         CROSS JOIN memory_priorities p \
+         WHERE r.id = ? AND p.name = 'Normal'",
+    )
+    .bind(relationship_type_id)
+    .fetch_one(executor)
+    .await
+}
+
 /// Fetch a single fact by id within an in-flight transaction.
 pub(super) async fn fact_by_id_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -128,15 +146,7 @@ pub async fn insert_fact(
     now: DateTime<Utc>,
 ) -> Result<Fact, KnowledgeError> {
     let mut tx = pool.begin().await?;
-    let memory_priority_id: i16 = sqlx::query_scalar(
-        "SELECT COALESCE(r.default_memory_priority_id, p.id) \
-         FROM relationship_types r \
-         CROSS JOIN memory_priorities p \
-         WHERE r.id = ? AND p.name = 'Normal'",
-    )
-    .bind(relationship_type_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let memory_priority_id = memory_priority_id_in_tx(&mut *tx, relationship_type_id).await?;
     let fact = insert_fact_in_tx(
         &mut tx,
         new_fact,
@@ -185,7 +195,7 @@ pub async fn insert_fact_in_tx(
     // 1. Temporal overlap check against same subject + predicate.
     let existing =
         overlapping_facts_in_tx(tx, new_fact, relationship_type_id, relationship_type_name).await?;
-    let overlaps: Vec<&Fact> = existing.iter().collect();
+    let overlaps = existing.as_slice();
 
     let is_explicit_source = matches!(
         new_fact.source_type,
@@ -193,13 +203,13 @@ pub async fn insert_fact_in_tx(
     );
 
     if let Some(existing_fact) =
-        super::corroboration::handle_corroboration(tx, new_fact, &overlaps, now).await?
+        super::corroboration::handle_corroboration(tx, new_fact, overlaps, now).await?
     {
         return Ok(existing_fact);
     }
 
     let (fact_status, facts_to_supersede, contradicts_pairs) =
-        super::conflict::resolve_overlap_conflict(tx, new_fact, &overlaps, is_explicit_source, now)
+        super::conflict::resolve_overlap_conflict(tx, new_fact, overlaps, is_explicit_source, now)
             .await?;
 
     // 3. Insert the fact.

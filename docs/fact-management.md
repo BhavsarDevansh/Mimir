@@ -63,6 +63,8 @@ Overlap is checked with interval semantics (`[from, until)` where `None` = unbou
 
 The overlap scan applies its object and time-interval predicates in SQL before materialising facts. Multi-valued predicates still require the same object, while single-valued predicates may supersede any overlapping value on that subject and predicate. This keeps conflict semantics deterministic while preventing subjects with many independent facts from loading every row in Rust. Created audit snapshots are built by SQLite `json_object` using already-bound column values rather than allocating an intermediate JSON value in Rust.
 
+Memory priority is resolved once per relationship type and cached on the `KnowledgeGraph`; relationship-type upserts cache the database's returned value so an existing priority is never replaced by a stale request value.
+
 ---
 
 ## Confidence

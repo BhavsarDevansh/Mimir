@@ -323,7 +323,6 @@ impl KnowledgeGraph {
         let mut cache = self.relationship_type_cache.write().await;
         cache.name_to_id.insert(normalized.clone(), id);
         cache.alias_to_id.insert(normalized, id);
-        cache.default_memory_priority_id.insert(id, 3);
         Ok(id)
     }
 
@@ -342,15 +341,8 @@ impl KnowledgeGraph {
             }
         }
 
-        let priority_id: i16 = sqlx::query_scalar(
-            "SELECT COALESCE(r.default_memory_priority_id, p.id) \
-             FROM relationship_types r \
-             CROSS JOIN memory_priorities p \
-             WHERE r.id = ? AND p.name = 'Normal'",
-        )
-        .bind(relationship_type_id)
-        .fetch_one(&mut **tx)
-        .await?;
+        let priority_id =
+            crate::queries::fact::memory_priority_id_in_tx(&mut **tx, relationship_type_id).await?;
 
         let mut cache = self.relationship_type_cache.write().await;
         cache

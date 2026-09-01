@@ -8,6 +8,10 @@
 - `mimir-knowledge/src/graph/predicates.rs`
 - `mimir-knowledge/src/graph/relationships.rs`
 - `mimir-knowledge/src/queries/fact/insert.rs`
+- `mimir-knowledge/src/queries/fact/corroboration.rs`
+- `mimir-knowledge/src/queries/fact/conflict.rs`
+- `mimir-knowledge/src/queries/fact/mod.rs`
+- `mimir-knowledge/tests/relationship_type_dag_test.rs`
 - `docs/fact-management.md`
 - `docs/wiki/facts.md`
 - `docs/wiki/what-works-now.md`
@@ -31,6 +35,9 @@
 
 - Moved the test module to the end of `insert.rs` to satisfy `clippy::items_after_test_module`.
 - Replaced the eight-argument test helper with a typed seed record to satisfy `clippy::too_many_arguments`.
+- Replaced the materialised reference list with a borrowed fact slice and removed the needless indirection.
+- Centralised the memory-priority lookup and made relationship-type upserts cache the priority returned by SQLite.
+- Added a regression test proving an existing relationship type's database priority is retained when its name is upserted.
 - Re-ran `cargo fmt`, the workspace test suite, and workspace Clippy after the fixes.
 - Ran the two fact-insert write benchmarks and recorded the comparison in `docs/benchmarks.md`.
 

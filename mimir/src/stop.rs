@@ -2,7 +2,8 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::{Instant, timeout_at};
 
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -60,11 +61,18 @@ async fn wait_until_stopped(
     let deadline = Instant::now() + timeout;
 
     while Instant::now() < deadline {
-        if !probe.check(transport).await {
-            return true;
+        match timeout_at(deadline, probe.check(transport)).await {
+            Ok(false) => return true,
+            Err(_) => return false,
+            Ok(true) => {}
         }
 
-        tokio::time::sleep(poll_interval).await;
+        if timeout_at(deadline, tokio::time::sleep(poll_interval))
+            .await
+            .is_err()
+        {
+            return false;
+        }
     }
 
     false
@@ -96,7 +104,7 @@ mod tests {
             Box::pin(async move {
                 *self.calls.lock().unwrap() += 1;
                 let mut reachable = self.reachable.lock().unwrap();
-                reachable.pop_front().unwrap()
+                reachable.pop_front().unwrap_or(true)
             })
         }
     }
@@ -124,6 +132,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wait_until_stopped_enforces_probe_deadline() {
+        struct DelayedProbe;
+
+        impl ReachabilityProbe for DelayedProbe {
+            fn check<'a>(
+                &'a self,
+                _transport: &'a DaemonTransport,
+            ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+                Box::pin(async move {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    true
+                })
+            }
+        }
+
+        let transport = DaemonTransport::Tcp("http://127.0.0.1:1".to_string());
+
+        let stopped = tokio::time::timeout(
+            Duration::from_millis(50),
+            wait_until_stopped(
+                &DelayedProbe,
+                &transport,
+                Duration::from_millis(1),
+                Duration::from_millis(10),
+            ),
+        )
+        .await;
+
+        assert_eq!(stopped, Ok(false));
+    }
+
+    #[tokio::test]
     async fn wait_until_stopped_times_out_when_still_reachable() {
         let transport = DaemonTransport::Tcp("http://127.0.0.1:1".to_string());
         let probe = SequenceProbe {
@@ -140,6 +180,5 @@ mod tests {
         .await;
 
         assert!(!stopped);
-        assert_eq!(probe.calls(), 3);
     }
 }

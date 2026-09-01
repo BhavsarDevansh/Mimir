@@ -27,7 +27,7 @@
 //!
 //! Per the [`crate::secrets`] design, the non-secret OAuth client config
 //! lives in `config_json`; the secret (the OAuth token bundle) lives in the
-//! shared [`SecretStore`](crate::secrets::SecretStore) under the connector
+//! shared [`SecretStore`] under the connector
 //! slug. The connector loads it by slug (the `__slug` the supervisor
 //! injects) and refreshes an expired access token against the configured
 //! token endpoint, persisting the refreshed bundle back to the store.

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Regression guard for issues #276, #310, #337, #348 and #443: mimir-connectors,
-# mimir-knowledge, mimir-core and mimir-server rustdoc must build with zero
-# warnings so broken and private-target intra-doc links are caught at review time.
+# Regression guard for issues #276, #310, #337, #348, #443 and #522:
+# mimir-connectors, mimir-knowledge, mimir-core and mimir-server rustdoc must
+# build with zero warnings so broken, private-target, and redundant-explicit
+# intra-doc links are caught at review time.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$SCRIPT_DIR"

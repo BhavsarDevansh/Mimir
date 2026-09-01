@@ -9,8 +9,8 @@
 //! supersession / inference, the sensitivity gate, and the events overlay.
 //!
 //! Format specification: `docs/obsidian-export-import.md`. The grammar lives
-//! in [`grammar`] (shared by render and parse so the two directions cannot
-//! drift); [`render`] snapshots the graph; [`import`] plans and applies an
+//! in `grammar` (shared by render and parse so the two directions cannot
+//! drift); `render` snapshots the graph; `import` plans and applies an
 //! import with dry-run support.
 
 mod grammar;

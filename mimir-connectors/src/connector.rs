@@ -75,7 +75,7 @@ pub struct ConnectorContext {
     /// at construction/sync time (Calendar C3 / #197, Email C5). `None` when
     /// no store is configured (the daemon initialises a `FileSecretStore` in
     /// `mimir-server`; tests inject an `InMemorySecretStore`). Connectors
-    /// load their [`SecretBundle`](crate::secrets::SecretBundle) by slug
+    /// load their [`SecretBundle`] by slug
     /// (the `__slug` injected by the supervisor).
     pub secret_store: Option<std::sync::Arc<dyn SecretStore>>,
 

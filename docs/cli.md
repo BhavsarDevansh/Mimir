@@ -74,7 +74,7 @@ Interactive REPL with:
 
 ### `mimir` help metadata
 
-Clap derive uses the `cli.rs` command doc comments as user-facing help descriptions. A workspace unit test traverses the generated clap command tree and checks every command and argument help description, including short and long help, for the `issue #` pattern. That guard keeps implementation tracking out of terminal help while allowing issue references in source comments and technical documentation.
+Clap derive uses the `cli.rs` command doc comments as user-facing help descriptions. A binary unit test traverses the generated clap command tree and checks every command and argument help description, including short and long help, for numeric issue references. That guard keeps implementation tracking out of terminal help while allowing issue references in source comments and technical documentation.
 
 ### `mimir status`
 

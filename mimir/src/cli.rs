@@ -589,10 +589,20 @@ pub enum ConnectorCommands {
 #[cfg(test)]
 mod tests {
     use super::Cli;
+    use clap::builder::StyledStr;
     use clap::{Command, CommandFactory};
 
-    fn has_issue_number(description: Option<&clap::builder::StyledStr>) -> bool {
-        description.is_some_and(|description| description.to_string().contains("issue #"))
+    fn has_issue_number(description: Option<&StyledStr>) -> bool {
+        description.is_some_and(|description| {
+            description.to_string().split_whitespace().any(|word| {
+                word.split('#').nth(1).is_some_and(|issue_number| {
+                    issue_number
+                        .chars()
+                        .next()
+                        .is_some_and(|first_char| first_char.is_ascii_digit())
+                })
+            })
+        })
     }
 
     fn assert_help_has_no_issue_numbers(command: &Command) {
@@ -632,5 +642,19 @@ mod tests {
     #[test]
     fn cli_help_descriptions_omit_issue_numbers() {
         assert_help_has_no_issue_numbers(&Cli::command());
+    }
+
+    #[test]
+    fn help_guard_matches_parenthesized_issue_numbers() {
+        let description = StyledStr::from("(issue #62)");
+
+        assert!(has_issue_number(Some(&description)));
+    }
+
+    #[test]
+    fn help_guard_matches_bare_issue_numbers() {
+        let description = StyledStr::from("#520");
+
+        assert!(has_issue_number(Some(&description)));
     }
 }

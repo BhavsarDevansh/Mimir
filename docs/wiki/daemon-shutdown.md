@@ -4,7 +4,7 @@
 
 The Mimir daemon can be shut down gracefully in three ways:
 
-- **CLI command**: `mimir stop` sends an HTTP signal to the daemon and waits up to 2 seconds to verify it has exited.
+- **CLI command**: `mimir stop` sends an HTTP signal to the daemon and polls for up to 5 seconds to verify it has exited.
 - **Ctrl-C**: Pressing `Ctrl-C` while the daemon is running in the foreground triggers graceful shutdown.
 - **SIGTERM**: On Unix systems, sending `SIGTERM` (e.g. from `systemctl stop mimir` or `kill -TERM`) also triggers graceful shutdown.
 
@@ -16,12 +16,12 @@ mimir stop
 
 What happens:
 
-1. The CLI checks if the daemon is reachable on the configured TCP address.
+1. The CLI checks if the daemon is reachable on the configured transport.
 2. If unreachable, it prints `Mimir is not running.` to stderr and exits with code `1`.
 3. If reachable, it sends `POST /stop` to the daemon.
-4. It waits 2 seconds, then probes again.
+4. It polls reachability every 100 ms, returning as soon as the daemon is unreachable.
 5. If the daemon is no longer reachable, it prints `Mimir daemon stopped.` and exits `0`.
-6. If the daemon is still reachable, it prints a warning to stderr and exits `1`.
+6. If the daemon is still reachable after 5 seconds, it prints a warning to stderr and exits `1`.
 
 ## What Graceful Shutdown Means
 

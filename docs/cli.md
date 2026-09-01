@@ -7,7 +7,7 @@ The `mimir` binary provides a command-line interface for interacting with Mimir.
 - **Daemon mode** (`mimir start`): runs the persistent HTTP server in the foreground
 - **Client mode** (`mimir ask`, `mimir chat`, etc.): interacts with Mimir's subsystems
 
-All client-mode commands talk to the daemon over HTTP through `mimir-client` — `ask`, `chat`, `kb`, `connector`, `memory`, and `status` all route through the daemon's Axum server (the daemon-guard auto-starts it when it is not running). The one exception is `mimir personality list`, which reads local preset files and needs no daemon. No other client-mode command touches the knowledge graph, memory, or LLM directly.
+All client-mode commands talk to the daemon over HTTP through `mimir-client` — `ask`, `chat`, `kb`, `connector`, `memory`, and `status` all route through the daemon's Axum server (the daemon-guard auto-starts it when it is not running). Two commands are exceptions: `mimir personality list` reads local preset files and needs no daemon, while `mimir stop` exits with an error when the daemon is unavailable rather than starting it. `mimir stop` posts the shutdown request and then polls daemon reachability every 100 ms for up to 5 s, so normal shutdowns return as soon as the daemon exits.
 
 ## Architecture
 
@@ -26,6 +26,7 @@ mimir (single binary)
  ├── memory_cmd.rs   — Memory viewer
  ├── personality_cmd.rs — Personality preset discovery
  ├── init.rs         — First-run bootstrap
+ ├── stop.rs          — Graceful stop and exit verification
  └── daemon_guard.rs — Shared helper to ensure the daemon is running
 ```
 

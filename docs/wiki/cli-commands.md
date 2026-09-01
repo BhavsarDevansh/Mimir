@@ -49,7 +49,9 @@ mimir stop
 # Output: Mimir daemon stopped.
 ```
 
-If the daemon is not running, the command will prompt to start it (see [Daemon Auto-Start](daemon-auto-start.md)).
+The command polls every 100 ms for up to 5 seconds and reports success as soon as the daemon stops. If the daemon remains reachable after 5 seconds, it exits with an error.
+
+If the daemon is not running, the command exits with an error rather than starting it (see [Daemon Auto-Start](daemon-auto-start.md)).
 
 ## `mimir ask` — Single-Shot Queries
 

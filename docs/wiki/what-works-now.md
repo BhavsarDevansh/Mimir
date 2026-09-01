@@ -158,7 +158,7 @@ All client commands talk to the daemon over HTTP except `mimir personality list`
 
 | Feature | Status | Notes & pending work |
 |---------|--------|----------------------|
-| Knowledge graph memory | ✅ Works | Live condensed memory (~2,500 chars) ranked from the knowledge graph (confidence × category × temporal boost × priority × centrality) and injected into every system prompt. |
+| Knowledge graph memory | ✅ Works | Live condensed memory (~2,500 chars) ranked from the knowledge graph (confidence × category × temporal boost × priority × centrality) and injected into every system prompt; fact scans use the migration 059 subject/relationship composite index. |
 | Hook-driven learning | ✅ Works | The `remember.chat` background hook extracts facts after each non-incognito turn, debounced per session and idle-gated ([#386](https://github.com/BhavsarDevansh/Mimir/issues/386)); supersedes the LLM-orchestrated `remember` tool ([#137](https://github.com/BhavsarDevansh/Mimir/issues/137)) and the Librarian fallback ([#156](https://github.com/BhavsarDevansh/Mimir/issues/156)). |
 | Frozen snapshots | ✅ Works | Condensed memory is read from `system_state` once per session; changes don't affect the current chat. |
 | Knowledge-graph managed | ✅ Works | Memory is a ranked view of the graph; no `memory.md` file. |

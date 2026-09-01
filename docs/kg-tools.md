@@ -101,7 +101,7 @@ Stop conditions: `depth >= max_depth`, `visited.len() >= max_nodes`, or empty fr
 
 ## Performance
 
-- **Composite index:** `idx_facts_tool_query ON facts(subject_id, pending_confirmation, fact_status_id, confidence DESC)` covers the hot path for all three tools.
+- **Composite indexes:** `idx_facts_tool_query ON facts(subject_id, pending_confirmation, fact_status_id, confidence DESC)` covers the hot path for all three tools, while `idx_facts_subject_relationship ON facts(subject_id, relationship_type_id)` backs subject-plus-predicate scans used by insertion, traversal, and deduplication.
 - **SQL pagination:** `kg_query` never fetches all rows into Rust memory.
 - **FTS5-level limiting:** `kg_search` applies `LIMIT` inside the FTS5 subquery.
 - **No N+1:** `kg_search` batch-fetches facts and object names; `kg_related` batch-resolves entity names per BFS level.

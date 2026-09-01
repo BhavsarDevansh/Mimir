@@ -137,7 +137,7 @@ The performance investigation (2026-08-26) added four benchmark suites that quan
 
 | Benchmark | What it measures | Baseline | Issue #524 |
 |-----------|------------------|----------|------------|
-| `kg_schema_init` | Fresh `KnowledgeGraph::init` incl. all 58 migrations (per-test setup cost) | 65.8 ms | 62.6 ms |
+| `kg_schema_init` | Fresh `KnowledgeGraph::init` incl. all 59 migrations (per-test setup cost) | 65.8 ms | 62.6 ms |
 | `kg_fact_insert_small_graph` | 10 fact inserts into a 6-entity graph (~0.92 ms/insert) | 9.15 ms | 7.48 ms |
 | `kg_fact_insert_same_subject_growth` | 1 insert with 30 pre-existing facts on the subject (overlap-scan cost) | 2.43 ms | 2.01 ms |
 | `kg_entity_create_with_aliases` | 5 entity creates with 3 aliases each | 2.41 ms | 2.22 ms |
@@ -149,6 +149,8 @@ cargo bench -p mimir-knowledge --bench kg_write_benchmarks
 ```
 
 Issue #526 follow-up on v0.153.6: `kg_fact_insert_small_graph` measured 7.48 ms and `kg_fact_insert_same_subject_growth` measured 1.94 ms on the same host, versus the original 9.15 ms and 2.43 ms baselines.
+
+Issue #527 follow-up on v0.153.8: migration 059 adds the two-column `facts(subject_id, relationship_type_id)` index. A short 10-sample comparison measured `kg_fact_insert_same_subject_growth` at 2.10 ms before and 1.96 ms after, `kg_traverse_star_300_node_cap_200` at 4.00 ms before and 3.82 ms after, and `kg_optimization_dedup_pass_100` unchanged at 36.5 ms; the insert and traversal deltas overlap zero at that sample size.
 
 ### `mimir-core` — `db_init` and `mock_llm`
 
@@ -184,4 +186,4 @@ scripts/perf-baseline.sh
 
 Baseline on 2026-08-26 (cargo-nextest 0.9.143, cargo 1.97.1, debug profile): 2315 tests, 189.3 s wall, 755.9 s summed durations. The slowest tests are the connector E2E suite (12.9 s), `daemon_guard::tests::test_start_timeout` (10.4 s, issue #530), `optimization_tests::concurrent_full_runs...` (8.2 s), and `kg_traverse_tests::test_kg_traverse_node_cap` (8.0 s). Manual measurements: `mimir stop` takes 2.2 s because of a hard-coded 2 s sleep (issue #523), and `mimir-knowledge` fact-heavy seeding pays ~0.9 ms per insert (issues #526, #527).
 
-Open performance issues tracked by these benchmarks: #523 (CLI stop sleep), #524/#525 (SQLite pragmas), #526 (fact-insert overhead), #527 (composite index), #528 (dedup O(n²)), #529 (alias batch insert), #530 (daemon-guard timeout), #531 (retry backoff), #532–#534 (fixed sleeps in tests), #535 (migration template), #536 (hook-exit timeout), #537 (supervisor poll loop).
+Open performance issues tracked by these benchmarks: #523 (CLI stop sleep), #524/#525 (SQLite pragmas), #526 (fact-insert overhead), #528 (dedup O(n²)), #529 (alias batch insert), #530 (daemon-guard timeout), #531 (retry backoff), #532–#534 (fixed sleeps in tests), #535 (migration template), #536 (hook-exit timeout), #537 (supervisor poll loop).

@@ -360,6 +360,45 @@ async fn migration_051_merges_pre_existing_resides_in_row() {
 }
 
 #[tokio::test]
+async fn migration_059_uses_subject_relationship_index_for_overlap_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let kg = KnowledgeGraph::init(&dir.path().join("knowledge.db"))
+        .await
+        .unwrap();
+
+    let index: Option<(String,)> = sqlx::query_as(
+        "SELECT name FROM sqlite_master \
+         WHERE type = 'index' AND tbl_name = 'facts' AND name = ?",
+    )
+    .bind("idx_facts_subject_relationship")
+    .fetch_optional(kg.pool())
+    .await
+    .unwrap();
+    assert!(
+        index.is_some(),
+        "facts must have a subject/relationship composite index"
+    );
+
+    let plans: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+        "EXPLAIN QUERY PLAN \
+         SELECT id FROM facts \
+         WHERE subject_id = ? AND relationship_type_id = ?",
+    )
+    .bind(1i32)
+    .bind(1i16)
+    .fetch_all(kg.pool())
+    .await
+    .unwrap();
+    let details: Vec<String> = plans.into_iter().map(|(_, _, _, detail)| detail).collect();
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("idx_facts_subject_relationship")),
+        "overlap scan must use idx_facts_subject_relationship; plans = {details:?}"
+    );
+}
+
+#[tokio::test]
 async fn fts5_virtual_table_exists() {
     let dir = tempfile::tempdir().unwrap();
     let db_path: PathBuf = dir.path().join("knowledge.db");

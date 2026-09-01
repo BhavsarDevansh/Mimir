@@ -390,26 +390,6 @@ mod tests {
     async fn sqlite_connection_pragmas() {
         let dir = tempfile::tempdir().unwrap();
         let queue = JobQueue::init(dir.path().join("jobs.db")).await.unwrap();
-
-        let (journal_mode,): (String,) = sqlx::query_as("PRAGMA journal_mode")
-            .fetch_one(&queue.pool)
-            .await
-            .unwrap();
-        assert_eq!(journal_mode.to_lowercase(), "wal");
-
-        let (synchronous,): (i64,) = sqlx::query_as("PRAGMA synchronous")
-            .fetch_one(&queue.pool)
-            .await
-            .unwrap();
-        assert_eq!(synchronous, 1, "WAL databases must use synchronous=NORMAL");
-
-        let (cache_size,): (i64,) = sqlx::query_as("PRAGMA cache_size")
-            .fetch_one(&queue.pool)
-            .await
-            .unwrap();
-        assert_eq!(
-            cache_size, 10_000,
-            "SQLite page cache must be preconfigured"
-        );
+        crate::sqlite::assert_connection_pragmas(&queue.pool).await;
     }
 }

@@ -14,7 +14,7 @@ All client-mode commands talk to the daemon over HTTP through `mimir-client` —
 ```text
 mimir (single binary)
  ├── main.rs         — Dispatch: daemon or client based on subcommand
- ├── cli.rs          — Command definitions (clap)
+ ├── cli.rs          — Command definitions and help-metadata tests (clap)
  ├── commands.rs     — Tool & Skill subcommand handlers
  ├── cli_util.rs     — Shared CLI helpers (exit, client, JSON output)
  ├── start.rs        — Daemon launcher (in-process Axum server)
@@ -71,6 +71,10 @@ Interactive REPL with:
 - Runtime slash-commands: `/model [m]`, `/personality [p]`, `/incognito [on|off]`, `/verbose [on|off]` to show or toggle per-session state
 - Ctrl+C during input exits, Ctrl+C during streaming aborts
 - Conversation context managed via `ContextManager`
+
+### `mimir` help metadata
+
+Clap derive uses the `cli.rs` command doc comments as user-facing help descriptions. A workspace unit test traverses the generated clap command tree and checks every command and argument help description, including short and long help, for the `issue #` pattern. That guard keeps implementation tracking out of terminal help while allowing issue references in source comments and technical documentation.
 
 ### `mimir status`
 

@@ -143,7 +143,7 @@ pub enum KbCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Export the knowledge graph as Obsidian Markdown files (issue #62).
+    /// Export the knowledge graph as Obsidian Markdown files.
     Export {
         /// Destination directory; overrides `knowledge.export_dir`
         /// (default `~/AgentKnowledge`).
@@ -157,7 +157,7 @@ pub enum KbCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Import an Obsidian vault directory into the knowledge graph (issue #62).
+    /// Import an Obsidian vault directory into the knowledge graph.
     Import {
         /// Vault directory containing Markdown files.
         path: PathBuf,
@@ -249,7 +249,7 @@ pub enum KbCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Review and resolve LLM-flagged entity merges (issue #282).
+    /// Review and resolve LLM-flagged entity merges.
     Merges {
         #[command(subcommand)]
         command: MergeCommands,
@@ -584,4 +584,53 @@ pub enum ConnectorCommands {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::{Command, CommandFactory};
+
+    fn has_issue_number(description: Option<&clap::builder::StyledStr>) -> bool {
+        description.is_some_and(|description| description.to_string().contains("issue #"))
+    }
+
+    fn assert_help_has_no_issue_numbers(command: &Command) {
+        for description in [
+            command.get_about(),
+            command.get_long_about(),
+            command.get_after_help(),
+            command.get_after_long_help(),
+            command.get_before_help(),
+            command.get_before_long_help(),
+        ] {
+            assert!(
+                !has_issue_number(description),
+                "command `{}` has an issue number in help: {}",
+                command.get_name(),
+                description.map_or_else(String::new, ToString::to_string)
+            );
+        }
+
+        for argument in command.get_arguments() {
+            for description in [argument.get_help(), argument.get_long_help()] {
+                assert!(
+                    !has_issue_number(description),
+                    "argument `{}` in command `{}` has an issue number in help: {}",
+                    argument.get_id(),
+                    command.get_name(),
+                    description.map_or_else(String::new, ToString::to_string)
+                );
+            }
+        }
+
+        for subcommand in command.get_subcommands() {
+            assert_help_has_no_issue_numbers(subcommand);
+        }
+    }
+
+    #[test]
+    fn cli_help_descriptions_omit_issue_numbers() {
+        assert_help_has_no_issue_numbers(&Cli::command());
+    }
 }

@@ -2,6 +2,8 @@
 
 Mimir provides a command-line interface for direct interaction with the LLM and system management. The `mimir` binary operates in two modes: daemon mode (`mimir start`) and client mode (all other commands).
 
+Command help is written for users: run `mimir <command> --help` for concise syntax and options, or `mimir --help` to browse command groups. Internal issue numbers are not shown in help output.
+
 ## Quick Start
 
 ```bash

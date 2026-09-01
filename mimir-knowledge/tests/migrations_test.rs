@@ -411,7 +411,7 @@ async fn connector_type_lookup_seed_matches_enum() {
 }
 
 #[tokio::test]
-async fn wal_and_foreign_keys_enabled() {
+async fn sqlite_connection_pragmas() {
     let dir = tempfile::tempdir().unwrap();
     let db_path: PathBuf = dir.path().join("knowledge.db");
     let kg = KnowledgeGraph::init(&db_path).await.unwrap();
@@ -427,6 +427,21 @@ async fn wal_and_foreign_keys_enabled() {
         .await
         .unwrap();
     assert_eq!(fk_enabled, 1);
+
+    let (synchronous,): (i64,) = sqlx::query_as("PRAGMA synchronous")
+        .fetch_one(kg.pool())
+        .await
+        .unwrap();
+    assert_eq!(synchronous, 1, "WAL databases must use synchronous=NORMAL");
+
+    let (cache_size,): (i64,) = sqlx::query_as("PRAGMA cache_size")
+        .fetch_one(kg.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        cache_size, 10_000,
+        "SQLite page cache must be preconfigured"
+    );
 }
 
 #[tokio::test]

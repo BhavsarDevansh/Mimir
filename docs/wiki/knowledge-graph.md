@@ -74,6 +74,7 @@ Mimir automatically detects and resolves duplicate entities:
 - **Backend:** SQLite single-file database.
 - **Location:** `~/.local/share/mimir/knowledge.db`
 - **Access:** Only the Mimir daemon reads or writes the database. CLI commands talk to the daemon via HTTP; they never touch the DB directly.
+- **Performance:** WAL mode uses `synchronous=NORMAL`, a 40 MB per-connection page cache, and automatic `PRAGMA optimize` on close to keep local reads and writes responsive. `synchronous=NORMAL` protects database integrity but may discard very recent commits after power failure.
 - **Search:** Full-text search over entity names and aliases via SQLite FTS5.
 
 ---
